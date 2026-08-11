@@ -73,5 +73,36 @@ class EmbedderClient(Protocol):
     ) -> EmbeddingResult: ...
 
 
+@dataclass(frozen=True)
+class EnhancementRequestSegment:
+    """One transcript segment sent for enhancement, identified by its index."""
+
+    segment_index: int
+    text: str
+    diarization_label: str | None = None
+
+
+@dataclass(frozen=True)
+class SpeakerNameHint:
+    """A name the LLM heard attached to a diarization label — evidence for a
+    human, never an identity claim (``llm_hint`` proposals are never grounded)."""
+
+    diarization_label: str
+    name: str
+    kind: str  # "self" (speaker states own name) | "other" (someone names them)
+
+
+@dataclass(frozen=True)
+class EnhancementBatchResult:
+    """ID-keyed batch outcome: ``enhanced`` holds exactly one entry per
+    requested ``segment_index`` — adapters must reject misaligned responses
+    outright rather than return a partially trusted batch."""
+
+    enhanced: dict[int, str]
+    name_hints: tuple[SpeakerNameHint, ...] = ()
+
+
 class LLMClient(Protocol):
-    def enhance(self, text: str, context: str) -> str: ...
+    def enhance_segments(
+        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+    ) -> EnhancementBatchResult: ...

@@ -357,6 +357,19 @@ class SpeakerAssignment(Base):
             "NOT grounded OR (speaker_id IS NOT NULL AND method = 'cosine')",
             name="speaker_assignments_grounded_check",
         ),
+        # Method shapes: a cosine proposal names a roster speaker and carries no
+        # free-text name; an llm_hint carries only a name — never a speaker_id,
+        # never grounded.
+        CheckConstraint(
+            "method != 'cosine' OR (speaker_id IS NOT NULL AND proposed_name IS NULL)",
+            name="speaker_assignments_cosine_shape_check",
+        ),
+        CheckConstraint(
+            "method != 'llm_hint' OR (speaker_id IS NULL AND NOT grounded"
+            " AND confidence IS NULL"  # model-reported confidence is not calibrated
+            " AND proposed_name IS NOT NULL AND length(trim(proposed_name)) > 0)",
+            name="speaker_assignments_llm_hint_shape_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -365,6 +378,8 @@ class SpeakerAssignment(Base):
     speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
     method: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
+    # llm_hint only: the explicitly spoken name the LLM heard for this label.
+    proposed_name: Mapped[str | None] = mapped_column(Text)
     # named != grounded: a name proposed by an LLM is NOT grounded until it has
     # embedding-level evidence or a human ruling.
     grounded: Mapped[bool] = mapped_column(Boolean, default=False)

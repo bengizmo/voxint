@@ -10,19 +10,32 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from tests.fakes import FAKE_EMBEDDING_SPACE, FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+from tests.fakes import (
+    FAKE_EMBEDDING_SPACE,
+    FailingLLM,
+    FakeASR,
+    FakeDiarizer,
+    FakeEmbedder,
+    FakeLLM,
+)
+from voxint.clients.base import SpeakerNameHint
 from voxint.db.models import (
     ArtifactKind,
+    AssignmentMethod,
     AudioArtifact,
     DiarizationTurn,
     MediaItem,
     RunStatus,
+    Speaker,
+    SpeakerAssignment,
+    SpeakerEmbedding,
     TranscriptSegment,
 )
 from voxint.media.normalize import TARGET_CHANNELS, TARGET_SAMPLE_RATE, probe_audio
 from voxint.pipeline.engine import execute_run, submit
 from voxint.pipeline.stages import diarize_embed
 from voxint.pipeline.stages.context import StageContext, build_stage_fns
+from voxint.speakers.matching import MatchingGates
 
 pytestmark = pytest.mark.skipif(
     shutil.which("ffmpeg") is None, reason="ffmpeg not installed"
@@ -192,6 +205,86 @@ def test_enhance_without_llm_leaves_null(
         segments = session.execute(select(TranscriptSegment)).scalars().all()
         assert segments
         assert all(s.enhanced_text is None for s in segments)
+
+
+def test_failing_llm_degrades_without_failing_the_run(
+    session_factory: sessionmaker[Session], ctx: StageContext
+) -> None:
+    """An unreachable optional endpoint never fails a run — enhanced_text just
+    stays NULL while everything else lands."""
+    run_id = submit_media(session_factory, "incoming/e2e.wav")
+    degraded = StageContext(
+        asr=ctx.asr,
+        diarizer=ctx.diarizer,
+        embedder=ctx.embedder,
+        llm=FailingLLM(),
+        media_root=ctx.media_root,
+    )
+    final = execute_run(session_factory, run_id, build_stage_fns(degraded))
+    assert final.status is RunStatus.COMPLETED
+    with session_factory() as session:
+        segments = session.execute(select(TranscriptSegment)).scalars().all()
+        assert segments
+        assert all(s.enhanced_text is None for s in segments)
+        assert all(s.raw_text for s in segments)
+
+
+def test_cosine_and_name_hint_proposals_persist_end_to_end(
+    session_factory: sessionmaker[Session], ctx: StageContext, media_root: Path
+) -> None:
+    # Enroll a speaker whose embedding points where FakeEmbedder's vectors do
+    # (constant positive components — one shared direction).
+    with session_factory() as session:
+        speaker = Speaker(display_name="Alice")
+        session.add(speaker)
+        session.flush()
+        session.add(
+            SpeakerEmbedding(
+                speaker_id=speaker.id,
+                embedding_space=FAKE_EMBEDDING_SPACE,
+                embedding=[1.0] * 192,
+            )
+        )
+        alice = speaker.id
+        session.commit()
+
+    hinted = StageContext(
+        asr=ctx.asr,
+        diarizer=ctx.diarizer,
+        embedder=ctx.embedder,
+        llm=FakeLLM(
+            name_hints=(
+                SpeakerNameHint(diarization_label="SPEAKER_00", name="Jane", kind="self"),
+            )
+        ),
+        media_root=media_root,
+        # The 2 s fixture yields one short eligible turn per label; relax the
+        # evidence gates so cosine proposals exist at e2e scale.
+        matching_gates=MatchingGates(min_turns=1, min_seconds=3.0),
+    )
+    run_id = submit_media(session_factory, "incoming/e2e.wav")
+    final = execute_run(session_factory, run_id, build_stage_fns(hinted))
+    assert final.status is RunStatus.COMPLETED
+
+    with session_factory() as session:
+        rows = (
+            session.execute(
+                select(SpeakerAssignment).where(SpeakerAssignment.pipeline_run_id == run_id)
+            )
+            .scalars()
+            .all()
+        )
+        cosine_rows = [r for r in rows if r.method == AssignmentMethod.COSINE.value]
+        hint_rows = [r for r in rows if r.method == AssignmentMethod.LLM_HINT.value]
+        assert {r.diarization_label for r in cosine_rows} == {"SPEAKER_00", "SPEAKER_01"}
+        assert all(r.speaker_id == alice for r in cosine_rows)
+        assert all(r.proposed_name is None for r in cosine_rows)
+        # Single short turns: proposable evidence, never grounding evidence.
+        assert all(r.grounded is False for r in cosine_rows)
+        assert len(hint_rows) == 1
+        assert hint_rows[0].proposed_name == "Jane"
+        assert hint_rows[0].speaker_id is None
+        assert hint_rows[0].grounded is False
 
 
 def test_prepare_rejects_source_outside_media_root(

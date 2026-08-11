@@ -5,8 +5,16 @@ hardcoded elsewhere. Values come from the environment (or an ``.env`` file in de
 """
 
 from pathlib import Path
+from typing import Annotated
 
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# NaN silently disables a threshold (every comparison is False), so all gate
+# floats are finite and range-constrained at the settings boundary.
+PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
+Ratio = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+Cosine = Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)]
 
 
 class Settings(BaseSettings):
@@ -38,11 +46,41 @@ class Settings(BaseSettings):
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
 
-    # LLM transcript enhancement (optional; any OpenAI-compatible endpoint)
+    # LLM transcript enhancement (optional; any OpenAI-compatible endpoint).
+    # Enhancement is best-effort: failures degrade to NULL enhanced_text and
+    # never fail the run, so these budgets bound wasted time, not correctness.
     llm_enabled: bool = False
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str = ""
+    llm_timeout_seconds: PositiveSeconds = 90.0  # per attempt (read/write)
+    llm_attempts_per_batch: int = Field(default=2, ge=1)
+    llm_batch_max_segments: int = Field(default=32, ge=1)
+    llm_batch_max_chars: int = Field(default=12000, ge=1)
+    # Hard ceiling on total LLM wall-time per run; must sit well below the
+    # enhance_match stage lease (stage_lease_seconds) so matching + persistence
+    # always fit inside the lease even when the endpoint is slow.
+    llm_run_budget_seconds: PositiveSeconds = 14400.0  # 4 h
+    # Consecutive failed batches before the stage stops calling the LLM for
+    # this run (remaining segments stay NULL; matching still runs).
+    llm_consecutive_failure_limit: int = Field(default=3, ge=1)
+
+    # Speaker matching gates (see docs/quality-gates.md). Similarities are raw
+    # cosine in [-1, 1]; stored confidence is (cosine + 1) / 2 — a transformed
+    # similarity, NOT a calibrated probability. Defaults are conservative
+    # titanet-large starting values; calibrate against adjudicated pairs.
+    match_max_overlap_ratio: Ratio = 0.20  # turn eligibility
+    match_turn_weight_cap_seconds: PositiveSeconds = 10.0
+    match_min_turns: int = Field(default=2, ge=1)
+    match_min_seconds: PositiveSeconds = 6.0
+    match_min_cosine: Cosine = 0.60
+    match_min_margin: Ratio = 0.05  # top-1 vs top-2 separation
+    match_min_vote_agreement: Ratio = 0.60
+    grounded_min_turns: int = Field(default=3, ge=1)
+    grounded_min_seconds: PositiveSeconds = 10.0
+    grounded_min_cosine: Cosine = 0.70
+    grounded_min_margin: Ratio = 0.08
+    grounded_min_vote_agreement: Ratio = 0.67
 
     # Pipeline
     # How long a worker may hold a stage before recovery may reclaim it.
@@ -70,6 +108,46 @@ class Settings(BaseSettings):
 
     # Domain pack (defaults to the bundled generic pack when unset)
     domain_pack_path: Path | None = None
+
+    @model_validator(mode="after")
+    def _llm_budget_fits_stage_lease(self) -> "Settings":
+        # The budget is checked before each attempt, so one in-flight batch can
+        # overrun by up to attempts x timeout. Budget plus that worst case must
+        # stay below the lease or recovery could reclaim enhance_match
+        # mid-flight — catch the misconfiguration at startup, not in production.
+        if self.llm_enabled:
+            worst_case = self.llm_run_budget_seconds + (
+                self.llm_attempts_per_batch * self.llm_timeout_seconds
+            )
+            if worst_case >= self.stage_lease_seconds:
+                raise ValueError(
+                    f"llm_run_budget_seconds + attempts x timeout ({worst_case})"
+                    f" must be below stage_lease_seconds ({self.stage_lease_seconds})"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _grounding_gates_at_least_as_strict(self) -> "Settings":
+        lax = [
+            name
+            for name, proposal, grounded in (
+                ("min_turns", self.match_min_turns, self.grounded_min_turns),
+                ("min_seconds", self.match_min_seconds, self.grounded_min_seconds),
+                ("min_cosine", self.match_min_cosine, self.grounded_min_cosine),
+                ("min_margin", self.match_min_margin, self.grounded_min_margin),
+                (
+                    "min_vote_agreement",
+                    self.match_min_vote_agreement,
+                    self.grounded_min_vote_agreement,
+                ),
+            )
+            if grounded < proposal
+        ]
+        if lax:
+            raise ValueError(
+                f"grounding gates must be at least as strict as proposal gates: {lax}"
+            )
+        return self
 
 
 def get_settings() -> Settings:

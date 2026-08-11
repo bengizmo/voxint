@@ -8,7 +8,7 @@ resets exactly the rows it owns for the run before writing them again.
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
 
@@ -19,9 +19,12 @@ from voxint.clients.asr import HttpASRClient
 from voxint.clients.base import ASRClient, DiarizerClient, EmbedderClient, LLMClient
 from voxint.clients.diarize import HttpDiarizerClient
 from voxint.clients.embed import HttpEmbedderClient
+from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
 from voxint.db.models import ArtifactKind, AudioArtifact, Stage
+from voxint.domain_packs.base import DomainPack, load_default
 from voxint.pipeline.engine import StageFn
+from voxint.speakers.matching import MatchingGates
 
 
 class StageDataError(Exception):
@@ -30,29 +33,79 @@ class StageDataError(Exception):
 
 
 @dataclass(frozen=True)
+class LLMPolicy:
+    """Batching, retry, and budget bounds for best-effort LLM enhancement."""
+
+    attempts_per_batch: int = 2
+    batch_max_segments: int = 32
+    batch_max_chars: int = 12000
+    run_budget_seconds: float = 14400.0
+    consecutive_failure_limit: int = 3
+
+
+@dataclass(frozen=True)
 class StageContext:
     asr: ASRClient
     diarizer: DiarizerClient
     embedder: EmbedderClient
-    # None until P4 wires the real enhancement adapter (llm_enabled=False):
-    # enhance_match then leaves enhanced_text NULL.
+    # None when llm_enabled=False: enhance_match then leaves enhanced_text NULL.
     llm: LLMClient | None
     media_root: Path
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
+    llm_policy: LLMPolicy = LLMPolicy()
+    # Domain-pack prompt fragment appended to the enhancement system prompt.
+    enhancement_context: str = ""
+    matching_gates: MatchingGates = field(default_factory=MatchingGates)
 
 
 def build_stage_context(settings: Settings) -> StageContext:
     """Production wiring: long-lived HTTP clients sized for media-length calls."""
     timeout = settings.gpu_http_timeout_seconds
+    pack = (
+        DomainPack.load(settings.domain_pack_path)
+        if settings.domain_pack_path is not None
+        else load_default()
+    )
     return StageContext(
         asr=HttpASRClient(settings.asr_url, settings.media_root, timeout),
         diarizer=HttpDiarizerClient(settings.diarizer_url, settings.media_root, timeout),
         embedder=HttpEmbedderClient(settings.embedder_url, settings.media_root, timeout),
-        llm=None,  # P4
+        llm=(
+            HttpLLMClient(
+                settings.llm_base_url,
+                settings.llm_model,
+                settings.llm_api_key,
+                settings.llm_timeout_seconds,
+            )
+            if settings.llm_enabled
+            else None
+        ),
         media_root=settings.media_root,
         ffmpeg_bin=settings.ffmpeg_bin,
         ffprobe_bin=settings.ffprobe_bin,
+        llm_policy=LLMPolicy(
+            attempts_per_batch=settings.llm_attempts_per_batch,
+            batch_max_segments=settings.llm_batch_max_segments,
+            batch_max_chars=settings.llm_batch_max_chars,
+            run_budget_seconds=settings.llm_run_budget_seconds,
+            consecutive_failure_limit=settings.llm_consecutive_failure_limit,
+        ),
+        enhancement_context=pack.prompt_fragments.get("enhancement_context", ""),
+        matching_gates=MatchingGates(
+            max_overlap_ratio=settings.match_max_overlap_ratio,
+            turn_weight_cap_seconds=settings.match_turn_weight_cap_seconds,
+            min_turns=settings.match_min_turns,
+            min_seconds=settings.match_min_seconds,
+            min_cosine=settings.match_min_cosine,
+            min_margin=settings.match_min_margin,
+            min_vote_agreement=settings.match_min_vote_agreement,
+            grounded_min_turns=settings.grounded_min_turns,
+            grounded_min_seconds=settings.grounded_min_seconds,
+            grounded_min_cosine=settings.grounded_min_cosine,
+            grounded_min_margin=settings.grounded_min_margin,
+            grounded_min_vote_agreement=settings.grounded_min_vote_agreement,
+        ),
     )
 
 

@@ -54,7 +54,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0002)
+## Data model (alembic revisions 0001–0003)
 
 | Table | Role |
 |---|---|
@@ -67,7 +67,7 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
 | `speakers` | the grown speaker roster |
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag |
-| `speaker_assignments` | **machine proposals** (method, confidence, grounded flag) |
+| `speaker_assignments` | **machine proposals** (method, confidence, grounded flag; `llm_hint` rows carry `proposed_name`, method-shape CHECKs keep the two shapes disjoint) |
 | `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key) |
 
 Three invariants worth naming:
@@ -90,8 +90,12 @@ ASR, diarizer, embedder, and LLM sit behind typed protocols
 (`/v1/transcribe`, `/v1/diarize`, `/v1/embed`, `/healthz`) and share a
 `MEDIA_ROOT` volume with the workers — no multipart uploads. The LLM stage
 targets any OpenAI-compatible endpoint and is optional (`LLM_ENABLED=false`
-by default). Test fakes satisfy the same protocols, which is how the
-end-to-end contract tests run without a GPU.
+by default); enhancement is **best-effort** — bounded ID-keyed batches, one
+retry, a circuit breaker, and a wall-clock budget inside the stage lease, with
+failures degrading to NULL `enhanced_text` rather than failing the run (see
+`docs/quality-gates.md`). Speaker matching always runs and its invariant
+violations DO fail the stage. Test fakes satisfy the same protocols, which is
+how the end-to-end contract tests run without a GPU.
 
 ## Worker orchestration (P3)
 

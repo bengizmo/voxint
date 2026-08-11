@@ -7,9 +7,13 @@ from voxint.clients.base import (
     DiarizationTurn,
     EmbeddingEntry,
     EmbeddingResult,
+    EnhancementBatchResult,
+    EnhancementRequestSegment,
+    SpeakerNameHint,
     TranscriptionResult,
     TranscriptionSegment,
 )
+from voxint.clients.llm import LLMError
 
 FAKE_EMBEDDING_SPACE = "fake-192-v1"
 
@@ -61,5 +65,27 @@ class FakeEmbedder:
 
 
 class FakeLLM:
-    def enhance(self, text: str, context: str) -> str:
-        return text.capitalize()
+    """Capitalizes each segment; optionally emits canned name hints once."""
+
+    def __init__(self, name_hints: tuple[SpeakerNameHint, ...] = ()) -> None:
+        self._name_hints = name_hints
+        self.calls: list[tuple[EnhancementRequestSegment, ...]] = []
+
+    def enhance_segments(
+        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+    ) -> EnhancementBatchResult:
+        self.calls.append(segments)
+        hints = self._name_hints if len(self.calls) == 1 else ()
+        return EnhancementBatchResult(
+            enhanced={s.segment_index: s.text.capitalize() for s in segments},
+            name_hints=hints,
+        )
+
+
+class FailingLLM:
+    """Every call raises — exercises the degraded-success path."""
+
+    def enhance_segments(
+        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+    ) -> EnhancementBatchResult:
+        raise LLMError("endpoint down")
