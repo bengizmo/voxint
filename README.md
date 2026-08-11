@@ -37,8 +37,16 @@ docker compose up -d          # Postgres+pgvector, Redis, API + review UI, worke
 curl http://127.0.0.1:8080/healthz
 ```
 
-The GPU model services (`compose.gpu.yaml`) are under extraction and not yet runnable —
-see `services/*/README.md`.
+To run the GPU model services too (one NVIDIA GPU assumed):
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml up -d
+```
+
+The pyannote service needs `HF_TOKEN` in `.env` (its diarization weights are
+HF-gated — see `services/pyannote/README.md`). Per-service details, env
+tunables, and image matrices: `services/*/README.md`; wire contracts:
+[docs/gpu-contracts.md](docs/gpu-contracts.md).
 
 For development without Docker:
 

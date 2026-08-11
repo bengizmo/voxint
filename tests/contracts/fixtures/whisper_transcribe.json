@@ -1,0 +1,38 @@
+{
+  "request": {
+    "path": "items/1234/audio.16khz.wav",
+    "language": "en",
+    "initial_prompt": null,
+    "vad_filter": true
+  },
+  "response": {
+    "language": "en",
+    "duration_seconds": 3712.4,
+    "transcript": "hello and welcome class class class class class",
+    "confidence": 0.93,
+    "segments": [
+      {
+        "start_seconds": 0.0,
+        "end_seconds": 7.4,
+        "text": "hello and welcome",
+        "confidence": 0.95,
+        "suspect": false,
+        "suspect_score": null,
+        "suspect_span": null
+      },
+      {
+        "start_seconds": 7.4,
+        "end_seconds": 12.0,
+        "text": "class class class class class",
+        "confidence": 0.41,
+        "suspect": true,
+        "suspect_score": 1.0,
+        "suspect_span": "class class class class class"
+      }
+    ],
+    "words": [
+      {"start_seconds": 0.0, "end_seconds": 0.4, "word": "hello", "confidence": 0.99}
+    ],
+    "suspect_segment_count": 1
+  }
+}

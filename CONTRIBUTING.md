@@ -9,9 +9,16 @@ uv sync --extra dev          # install everything (Python >= 3.11)
 uv run ruff check .          # lint
 uv run mypy                  # strict type-checking
 uv run pytest tests/unit     # unit tests
+uv run pytest tests/contracts  # GPU-service contract tests (CPU-only, no GPU deps)
 ```
 
 Integration tests need the compose stack: `docker compose up -d postgres redis`.
+
+The contract tests exercise the GPU services' schemas, path containment, error
+mapping, and route behavior without torch or model weights — they load each
+service's torch-free modules straight from `services/*/app/`. The main package
+targets Python >= 3.11; the service images pin their own interpreters
+independently (currently Python 3.10, dictated by the CUDA base images).
 
 ## Ground rules
 

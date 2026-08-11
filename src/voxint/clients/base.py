@@ -1,6 +1,7 @@
 """Provider protocols — the modularity seams.
 
-The pipeline depends only on these protocols; concrete HTTP clients (P2) and the
+The pipeline depends only on these protocols; concrete HTTP clients (with the
+pipeline wiring, P3) and the
 test fakes both satisfy them. Result types are deliberately minimal: they carry
 what downstream stages consume, nothing provider-specific.
 """
@@ -38,10 +39,21 @@ class DiarizationResult:
 
 
 @dataclass(frozen=True)
+class EmbeddingEntry:
+    """Per-window embedding outcome. Exactly one of embedding / skip_reason is set:
+    a skipped window (too short, too noisy) carries the reason instead of a
+    low-quality vector, so downstream quality policy stays auditable."""
+
+    embedding: tuple[float, ...] | None
+    snr_db: float | None = None
+    skip_reason: str | None = None  # "too_short" | "low_snr" when embedding is None
+
+
+@dataclass(frozen=True)
 class EmbeddingResult:
     embedding_space: str
-    # One embedding per requested (start, end) window, same order.
-    embeddings: tuple[tuple[float, ...], ...] = field(default_factory=tuple)
+    # Exactly one entry per requested (start, end) window, same order.
+    entries: tuple[EmbeddingEntry, ...] = field(default_factory=tuple)
 
 
 class ASRClient(Protocol):

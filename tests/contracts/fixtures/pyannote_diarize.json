@@ -1,0 +1,32 @@
+{
+  "request": {
+    "path": "items/1234/audio.16khz.wav",
+    "min_speakers": 1,
+    "max_speakers": 10,
+    "min_turn_seconds": 0.5
+  },
+  "response": {
+    "duration_seconds": 3712.4,
+    "num_speakers": 2,
+    "turns": [
+      {
+        "start_seconds": 12.1,
+        "end_seconds": 18.9,
+        "label": "SPEAKER_00",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 18.5,
+        "end_seconds": 25.0,
+        "label": "SPEAKER_01",
+        "overlap": true,
+        "overlap_seconds": 0.4
+      }
+    ],
+    "speakers": [
+      {"label": "SPEAKER_00", "total_seconds": 6.8, "num_turns": 1},
+      {"label": "SPEAKER_01", "total_seconds": 6.5, "num_turns": 1}
+    ]
+  }
+}

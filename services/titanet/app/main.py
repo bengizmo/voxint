@@ -1,0 +1,143 @@
+"""TitaNet GPU service — /v1/embed + /healthz. See docs/gpu-contracts.md."""
+
+import logging
+import os
+import threading
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
+
+from app.embedding import DecodeError, TitanetEmbedder
+from app.errors import (
+    file_not_found,
+    inference_failed,
+    invalid_media,
+    model_unavailable,
+    path_violation,
+    saturated,
+)
+from app.paths import PathNotFound, PathViolation, resolve_media_path
+from app.schemas import (
+    CONTRACT_VERSION,
+    EMBEDDING_SPACE,
+    SERVICE_NAME,
+    EmbedRequest,
+    EmbedResponse,
+    HealthResponse,
+    WindowResult,
+)
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+SERVICE_VERSION = "1.0.0"
+
+MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "/data/media"))
+MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
+
+embedder = TitanetEmbedder()
+
+_pending = 0
+_pending_lock = threading.Lock()
+
+
+def _admit() -> bool:
+    global _pending
+    with _pending_lock:
+        if _pending >= MAX_PENDING_REQUESTS:
+            return False
+        _pending += 1
+        return True
+
+
+def _release() -> None:
+    global _pending
+    with _pending_lock:
+        _pending -= 1
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    logger.info("Loading TitaNet model at startup")
+    await run_in_threadpool(embedder.load_model)
+    yield
+
+
+app = FastAPI(
+    title="Voxint titanet service",
+    description="TitaNet-Large speaker embeddings (192-dim, titanet-large-v1)",
+    version=SERVICE_VERSION,
+    lifespan=lifespan,
+)
+
+
+@app.get("/healthz", response_model=HealthResponse)
+async def healthz() -> HealthResponse | JSONResponse:
+    loaded = embedder.model_loaded
+    body = HealthResponse(
+        status="ok" if loaded else "degraded",
+        service=SERVICE_NAME,
+        version=SERVICE_VERSION,
+        contract_version=CONTRACT_VERSION,
+        model=embedder.model_name if loaded else None,
+        device=embedder.device_name,
+        model_loaded=loaded,
+    )
+    if not loaded:
+        return JSONResponse(status_code=503, content=body.model_dump())
+    return body
+
+
+@app.post("/v1/embed", response_model=EmbedResponse)
+async def embed(request: EmbedRequest) -> EmbedResponse:
+    if not embedder.model_loaded:
+        raise model_unavailable()
+    try:
+        audio_path = resolve_media_path(MEDIA_ROOT, request.path)
+    except PathNotFound as exc:
+        raise file_not_found(str(exc)) from exc
+    except PathViolation as exc:
+        raise path_violation(str(exc)) from exc
+
+    if not _admit():
+        raise saturated()
+    start = time.time()
+    try:
+        outcomes = await run_in_threadpool(
+            embedder.embed_windows,
+            str(audio_path),
+            [(w.start_seconds, w.end_seconds) for w in request.windows],
+        )
+    except DecodeError as exc:
+        raise invalid_media(str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Embedding extraction failed for %s", request.path)
+        raise inference_failed(f"Embedding extraction failed: {exc}") from exc
+    finally:
+        _release()
+        embedder.cleanup_memory()
+
+    embedded = sum(1 for o in outcomes if o.embedding is not None)
+    logger.info(
+        "Embedded %s: %d/%d windows in %.2fs",
+        request.path,
+        embedded,
+        len(outcomes),
+        time.time() - start,
+    )
+    return EmbedResponse(
+        embedding_space=EMBEDDING_SPACE,
+        results=[
+            WindowResult(
+                embedding=o.embedding, snr_db=o.snr_db, skip_reason=o.skip_reason
+            )
+            for o in outcomes
+        ],
+    )

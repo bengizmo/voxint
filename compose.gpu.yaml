@@ -1,7 +1,7 @@
 # Voxint GPU model services — overlay on compose.yaml:
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d
-# One NVIDIA GPU assumed; all three share it. Contracts: /v1/transcribe, /v1/diarize, /v1/embed, /healthz.
-# NOTE: the services/ images land in P2 — until then this overlay is a wiring reference, not runnable.
+# One NVIDIA GPU assumed; all three share it. Contracts: /v1/transcribe, /v1/diarize, /v1/embed, /healthz
+# (docs/gpu-contracts.md). pyannote requires HF_TOKEN in .env for its HF-gated weights.
 services:
   # Inside the compose network the model services are reached by service DNS name,
   # overriding the localhost defaults meant for bare-host development.
@@ -22,7 +22,7 @@ services:
     environment:
       MEDIA_ROOT: /data/media
     volumes:
-      - ${MEDIA_ROOT:-./media}:/data/media
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:
       - "127.0.0.1:8022:8022"
     deploy:
@@ -39,7 +39,9 @@ services:
       MEDIA_ROOT: /data/media
       HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
     volumes:
-      - ${MEDIA_ROOT:-./media}:/data/media
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+      # Gated weights download at first startup; persist them across recreates.
+      - pyannote-models:/app/models
     ports:
       - "127.0.0.1:8024:8024"
     deploy:
@@ -55,7 +57,7 @@ services:
     environment:
       MEDIA_ROOT: /data/media
     volumes:
-      - ${MEDIA_ROOT:-./media}:/data/media
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:
       - "127.0.0.1:8021:8021"
     deploy:
@@ -65,3 +67,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+volumes:
+  pyannote-models:

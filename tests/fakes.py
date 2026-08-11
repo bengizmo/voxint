@@ -5,6 +5,7 @@ from pathlib import Path
 from voxint.clients.base import (
     DiarizationResult,
     DiarizationTurn,
+    EmbeddingEntry,
     EmbeddingResult,
     TranscriptionResult,
     TranscriptionSegment,
@@ -41,9 +42,16 @@ class FakeEmbedder:
     ) -> EmbeddingResult:
         return EmbeddingResult(
             embedding_space=FAKE_EMBEDDING_SPACE,
-            embeddings=tuple(
-                tuple(float(i + 1) / 192.0 for _ in range(192))
-                for i, _ in enumerate(windows)
+            entries=tuple(
+                # Sub-second windows are skipped, mirroring the titanet service's
+                # quality gate, so pipeline code must handle skipped entries.
+                EmbeddingEntry(embedding=None, snr_db=None, skip_reason="too_short")
+                if (end - start) < 1.0
+                else EmbeddingEntry(
+                    embedding=tuple(float(i + 1) / 192.0 for _ in range(192)),
+                    snr_db=20.0,
+                )
+                for i, (start, end) in enumerate(windows)
             ),
         )
 

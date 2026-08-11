@@ -1,0 +1,18 @@
+{
+  "request": {
+    "path": "items/1234/audio.16khz.wav",
+    "windows": [
+      {"start_seconds": 12.1, "end_seconds": 18.9},
+      {"start_seconds": 20.0, "end_seconds": 20.5},
+      {"start_seconds": 30.0, "end_seconds": 45.0}
+    ]
+  },
+  "response": {
+    "embedding_space": "titanet-large-v1",
+    "results": [
+      {"embedding": "__FILL_192__", "snr_db": 21.4, "skip_reason": null},
+      {"embedding": null, "snr_db": null, "skip_reason": "too_short"},
+      {"embedding": null, "snr_db": 3.1, "skip_reason": "low_snr"}
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+# Pinned, known-good with the cu124 base image (cuDNN 9 symlinked to 8 for CTranslate2).
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
+faster-whisper==1.2.1
+numpy==1.24.3
+soundfile==0.12.1
+
+# torch is required by the Silero VAD inside faster-whisper (cu121 wheels run
+# fine on the CUDA 12.4 runtime image).
+torch==2.1.1
+torchaudio==2.1.1

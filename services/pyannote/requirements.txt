@@ -1,0 +1,27 @@
+# Pinned, known-good stack for pyannote.audio 3.1.1 on CUDA 11.8.
+# torch is installed separately from the cu118 index in the Dockerfile.
+numpy==1.24.3
+
+librosa==0.10.1
+soundfile==0.12.1
+scipy==1.11.4
+numba==0.58.1
+
+speechbrain==0.5.16
+asteroid-filterbanks==0.4.0
+torch-audiomentations==0.11.0
+pytorch-metric-learning==2.3.0
+scikit-learn==1.3.2
+
+# huggingface_hub MUST be <0.26 — pyannote 3.1.1 calls hf_hub_download with
+# use_auth_token=, removed in huggingface_hub 0.26+. 0.23.4 keeps
+# Pipeline.from_pretrained() working.
+huggingface_hub==0.23.4
+pyannote.audio==3.1.1
+pyannote.core==5.0.0
+pyannote.database==5.0.1
+pyannote.pipeline==3.0.1
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0

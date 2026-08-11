@@ -57,7 +57,10 @@ def build_stage_fns() -> dict[Stage, StageFn]:
                     seg.diarization_label = turn.label
         windows = tuple((t.start_seconds, t.end_seconds) for t in turns)
         embedding = embedder.embed(AUDIO, windows)
-        for turn, vec in zip(turns, embedding.embeddings, strict=True):
+        assert len(embedding.entries) == len(windows)
+        for turn, entry in zip(turns, embedding.entries, strict=True):
+            if entry.embedding is None:
+                continue  # skipped window (too_short / low_snr) — no vector persisted
             speaker = Speaker(display_name=f"unmatched-{run_id}-{turn.label}")
             session.add(speaker)
             session.flush()
@@ -65,7 +68,7 @@ def build_stage_fns() -> dict[Stage, StageFn]:
                 SpeakerEmbedding(
                     speaker_id=speaker.id,
                     embedding_space=embedding.embedding_space,
-                    embedding=list(vec),
+                    embedding=list(entry.embedding),
                     source_pipeline_run_id=run_id,
                 )
             )
