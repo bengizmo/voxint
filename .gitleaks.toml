@@ -1,0 +1,35 @@
+# Voxint secret + clean-room provenance scanning.
+# Extends the gitleaks default ruleset with rules that enforce the copy-discipline for code
+# transplanted from the private upstream monorepo: no private IPs, internal hostnames,
+# NAS paths, or upstream-domain strings may land in this repository.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "voxint-rfc1918-address"
+description = "Private RFC1918 IP address (internal infrastructure leak)"
+regex = '''\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b'''
+
+[[rules]]
+id = "voxint-internal-hostname"
+description = "Internal hostname or service DNS from the private upstream environment"
+regex = '''(?i)\b(thinktank|darkboi|smolboi|worker-node-beast|gpu-workstation-1|ben-control-plane|tealmaker|compendium[-_](core|av|ai|classification|scrapers)|\.svc\.cluster\.local)\b'''
+
+[[rules]]
+id = "voxint-nas-path"
+description = "Private NAS / node filesystem path"
+regex = '''(/mnt/nas2?/|/mnt/audio-ssd|/volume[0-9]/app_data)'''
+
+[[rules]]
+id = "voxint-upstream-domain-strings"
+description = "Upstream private-domain strings (project identity / IP leak)"
+regex = '''(?i)\b(hvac|fullstackhvac|compendium)\b'''
+[rules.allowlist]
+paths = ['''^\.gitleaks\.toml$''']
+
+[allowlist]
+description = "Repo-level allowlist"
+paths = [
+    '''^\.gitleaks\.toml$''',
+    '''(^|/)uv\.lock$''',
+]

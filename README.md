@@ -1,0 +1,72 @@
+# Voxint
+
+**From sound to intelligence: end-to-end transcription, diarization, and speaker identity with
+human-grade quality gates.**
+
+Voxint turns any audio or video file into an enhanced, speaker-attributed transcript:
+
+```
+media file → preprocess → transcribe (Whisper) + diarize (pyannote) + embed (TitaNet)
+           → LLM transcript enhancement → speaker matching → human adjudication
+```
+
+What makes it different is the orchestration "glue" most pipelines skip:
+
+- **Quality gates at every stage** — non-speech/digital-silence triage before you burn GPU time,
+  hallucination soft-tagging and stripping, chunk-completeness checks, outage-vs-data-defect
+  taxonomy with explicit retry budgets.
+- **Durable state, not vibes** — a compare-and-swap'd run/stage state machine in Postgres; a crash
+  at any stage is recoverable, and human pauses are database state, never a held task.
+- **Speaker identity done honestly** — pgvector cosine matching against a grown speaker roster,
+  a strict *named ≠ grounded* invariant, and machine proposals kept separate from human rulings.
+- **A built-in adjudication web UI** — review queue, guarded slot workbench, and an immutable
+  decision ledger, served as Jinja + htmx from the same FastAPI app (no Node toolchain).
+- **Measurement harnesses** — name-accuracy scoring (McNemar / bootstrap / Wilson) and a
+  golden-dataset agreement labeler, runnable as CLIs.
+
+## Status
+
+**Pre-alpha — under active extraction.** APIs, schema, and layout will change without notice
+until `v0.1.0`.
+
+## Quickstart
+
+```bash
+cp .env.example .env          # then edit at least VOXINT_PASSWORD
+docker compose up -d          # Postgres+pgvector, Redis, API + review UI, worker
+curl http://127.0.0.1:8080/healthz
+```
+
+The GPU model services (`compose.gpu.yaml`) are under extraction and not yet runnable —
+see `services/*/README.md`.
+
+For development without Docker:
+
+```bash
+uv sync --extra dev
+uv run pytest tests/unit
+uv run uvicorn voxint.api.app:app --reload
+```
+
+## Deployment model
+
+Docker-compose-first on a single Linux machine with one NVIDIA GPU:
+
+- `compose.yaml` — Postgres (+pgvector), Redis, API (+ review UI), Celery worker
+- `compose.gpu.yaml` — the GPU model services: faster-whisper, pyannote, TitaNet
+
+Kubernetes is explicitly **not** required (a future optional enhancement).
+
+## Modularity
+
+ASR, diarizer, embedder, and LLM providers sit behind typed protocols with versioned HTTP
+contracts (`/v1/transcribe`, `/v1/diarize`, `/v1/embed`). The LLM enhancement stage speaks to any
+OpenAI-compatible endpoint and is optional (`LLM_ENABLED=false` by default). Domain-specific
+vocabulary and prompts load from a swappable **domain pack** (`DOMAIN_PACK_PATH`); a neutral
+meeting/podcast pack ships as the default.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) — model weights (e.g. pyannote's
+HF-gated checkpoints) are subject to their own terms and are downloaded with **your** credentials;
+Voxint never vendors them.

@@ -1,0 +1,67 @@
+# Voxint GPU model services — overlay on compose.yaml:
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d
+# One NVIDIA GPU assumed; all three share it. Contracts: /v1/transcribe, /v1/diarize, /v1/embed, /healthz.
+# NOTE: the services/ images land in P2 — until then this overlay is a wiring reference, not runnable.
+services:
+  # Inside the compose network the model services are reached by service DNS name,
+  # overriding the localhost defaults meant for bare-host development.
+  api:
+    environment:
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  worker:
+    environment:
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  whisper:
+    build: services/whisper
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    ports:
+      - "127.0.0.1:8022:8022"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  pyannote:
+    build: services/pyannote
+    environment:
+      MEDIA_ROOT: /data/media
+      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    ports:
+      - "127.0.0.1:8024:8024"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  titanet:
+    build: services/titanet
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    ports:
+      - "127.0.0.1:8021:8021"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

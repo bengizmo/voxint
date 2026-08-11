@@ -1,0 +1,17 @@
+Voxint
+Copyright 2026 Voxint contributors
+
+This product includes software developed as part of the Voxint project
+(Apache License 2.0).
+
+Voxint orchestrates third-party models and libraries that are licensed
+separately and are NOT distributed with this repository:
+
+- faster-whisper / OpenAI Whisper weights (MIT) — downloaded at build/run time
+- pyannote.audio and its speaker-diarization pipeline weights — gated on
+  Hugging Face; users must accept the model terms and supply their own
+  HF token. Voxint never vendors or redistributes these weights.
+- NVIDIA NeMo TitaNet-Large (CC-BY-4.0 model license) — downloaded at
+  build/run time
+
+Consult each upstream project for its exact license terms.

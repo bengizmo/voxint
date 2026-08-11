@@ -1,0 +1,43 @@
+# Runs on GitHub Actions and Forgejo Actions (both read .github/workflows).
+# Gitleaks is invoked as a pinned CLI (not gitleaks-action) so the same step works on both platforms.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  GITLEAKS_VERSION: "8.24.3"
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --frozen --extra dev
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Mypy
+        run: uv run mypy
+      - name: Pytest (unit)
+        run: uv run pytest tests/unit --cov
+
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        run: |
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+      - name: Gitleaks (history + worktree)
+        run: |
+          gitleaks git --config .gitleaks.toml --redact --verbose .
+          gitleaks dir --config .gitleaks.toml --redact --verbose .

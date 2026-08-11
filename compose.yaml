@@ -1,0 +1,78 @@
+# Voxint core stack — Postgres+pgvector, Redis, API (+ review UI), Celery worker.
+# GPU model services live in compose.gpu.yaml:
+#   docker compose -f compose.yaml -f compose.gpu.yaml up -d
+name: voxint
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voxint}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voxint}
+      POSTGRES_DB: ${POSTGRES_DB:-voxint}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U voxint"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: .
+    command: uvicorn voxint.api.app:app --host 0.0.0.0 --port 8080
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
+      REDIS_URL: redis://redis:6379/0
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: celery -A voxint.worker.app worker --loglevel=INFO
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
+      REDIS_URL: redis://redis:6379/0
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:

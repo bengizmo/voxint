@@ -1,0 +1,12 @@
+name: generic
+description: >
+  Neutral meeting/podcast domain pack. No specialized vocabulary — a safe default
+  for arbitrary spoken-word content. Point DOMAIN_PACK_PATH at your own pack to
+  supply domain vocabulary, name seeds, and prompt fragments.
+vocabulary: []
+name_seeds: []
+prompt_fragments:
+  enhancement_context: >
+    The transcript is general spoken-word audio (meeting, interview, or podcast).
+    Preserve the speakers' wording; fix only clear transcription errors,
+    punctuation, and casing.
