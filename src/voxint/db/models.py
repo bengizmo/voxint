@@ -1,12 +1,352 @@
-"""SQLAlchemy models — fresh Base, no upstream lineage.
+"""SQLAlchemy models — the v1 schema, owned by the alembic chain from revision 0001.
 
-The v1 schema (~9 tables: media_items, pipeline_runs, stage_runs, audio_artifacts,
-audio_chunks, transcript_segments, speakers, speaker_embeddings vector(192),
-speaker_assignments, adjudication_decisions) lands in P1 alongside alembic revision 0001.
+Design notes (see docs/architecture.md when it lands):
+
+- Media identity (``media_items``) is split from execution state (``pipeline_runs`` +
+  ``stage_runs``). Runs carry an explicit ``revision`` for compare-and-swap updates.
+- Statuses are text + CHECK constraints in the DB, ``StrEnum`` in Python.
+- ``transcript_segments`` preserves raw ASR text forever; enhancement writes
+  ``enhanced_text`` beside it, never over it.
+- ``speaker_assignments`` are machine proposals; ``adjudication_decisions`` is the
+  immutable human ledger. The two are never merged.
+- ``speaker_embeddings`` carry an ``embedding_space`` tag; vectors from different
+  spaces must never be compared (enforced in ``speakers/matching.py`` queries).
 """
 
-from sqlalchemy.orm import DeclarativeBase
+import enum
+import uuid
+from datetime import datetime
+from typing import Any, ClassVar
+
+from pgvector.sqlalchemy import Vector
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+EMBEDDING_DIM = 192
 
 
 class Base(DeclarativeBase):
-    pass
+    type_annotation_map: ClassVar = {
+        dict[str, Any]: JSON().with_variant(JSONB(), "postgresql")
+    }
+
+
+class RunStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    AWAITING_ADJUDICATION = "awaiting_adjudication"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class Stage(enum.StrEnum):
+    PREPARE = "prepare"
+    TRANSCRIBE = "transcribe"
+    DIARIZE_EMBED = "diarize_embed"
+    ENHANCE_MATCH = "enhance_match"
+    FINALIZE = "finalize"
+
+
+STAGE_ORDER: tuple[Stage, ...] = (
+    Stage.PREPARE,
+    Stage.TRANSCRIBE,
+    Stage.DIARIZE_EMBED,
+    Stage.ENHANCE_MATCH,
+    Stage.FINALIZE,
+)
+
+
+class StageStatus(enum.StrEnum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class ArtifactKind(enum.StrEnum):
+    PREPROCESSED_AUDIO = "preprocessed_audio"
+    CHUNK = "chunk"
+    TRANSCRIPT_EXPORT = "transcript_export"
+
+
+class AssignmentMethod(enum.StrEnum):
+    COSINE = "cosine"
+    LLM_HINT = "llm_hint"
+
+
+class Decision(enum.StrEnum):
+    ASSIGN = "assign"
+    EXCLUDE = "exclude"
+    UNKNOWN = "unknown"
+
+
+def _enum_values(e: type[enum.StrEnum]) -> str:
+    return ", ".join(f"'{m.value}'" for m in e)
+
+
+class MediaItem(Base):
+    __tablename__ = "media_items"
+    __table_args__ = (
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds >= 0",
+            name="media_items_duration_nonneg_check",
+        ),
+        CheckConstraint(
+            "size_bytes IS NULL OR size_bytes >= 0", name="media_items_size_nonneg_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    source_path: Mapped[str] = mapped_column(Text, unique=True)
+    media_type: Mapped[str | None] = mapped_column(Text)
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    sha256: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
+
+
+class PipelineRun(Base):
+    __tablename__ = "pipeline_runs"
+    __table_args__ = (
+        CheckConstraint(
+            f"status IN ({_enum_values(RunStatus)})", name="pipeline_runs_status_check"
+        ),
+        CheckConstraint(
+            f"current_stage IS NULL OR current_stage IN ({_enum_values(Stage)})",
+            name="pipeline_runs_current_stage_check",
+        ),
+        CheckConstraint("revision >= 0", name="pipeline_runs_revision_nonneg_check"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    media_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_items.id"), index=True)
+    status: Mapped[str] = mapped_column(Text, default=RunStatus.QUEUED.value, index=True)
+    current_stage: Mapped[str | None] = mapped_column(Text)
+    # Optimistic-concurrency token: every state change goes through CAS on this column.
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    media_item: Mapped[MediaItem] = relationship(back_populates="runs")
+    stage_runs: Mapped[list["StageRun"]] = relationship(back_populates="pipeline_run")
+
+
+class StageRun(Base):
+    """One attempt at one stage — doubles as the stage execution claim.
+
+    A worker inserts a RUNNING row (with its ``worker_id`` and a lease) *before*
+    executing the stage body; the ``(pipeline_run_id, stage, attempt)`` unique
+    constraint arbitrates concurrent claims. Recovery may only touch claims whose
+    lease has expired.
+    """
+
+    __tablename__ = "stage_runs"
+    __table_args__ = (
+        UniqueConstraint("pipeline_run_id", "stage", "attempt", name="stage_runs_attempt_key"),
+        CheckConstraint(f"stage IN ({_enum_values(Stage)})", name="stage_runs_stage_check"),
+        CheckConstraint(
+            f"status IN ({_enum_values(StageStatus)})", name="stage_runs_status_check"
+        ),
+        CheckConstraint("attempt >= 1", name="stage_runs_attempt_positive_check"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    stage: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=StageStatus.RUNNING.value)
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    worker_id: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error: Mapped[str | None] = mapped_column(Text)
+    metrics: Mapped[dict[str, Any] | None] = mapped_column()
+
+    pipeline_run: Mapped[PipelineRun] = relationship(back_populates="stage_runs")
+
+
+class AudioArtifact(Base):
+    __tablename__ = "audio_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            f"kind IN ({_enum_values(ArtifactKind)})", name="audio_artifacts_kind_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    kind: Mapped[str] = mapped_column(Text)
+    path: Mapped[str] = mapped_column(Text)
+    meta: Mapped[dict[str, Any] | None] = mapped_column()
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AudioChunk(Base):
+    __tablename__ = "audio_chunks"
+    __table_args__ = (
+        UniqueConstraint("pipeline_run_id", "chunk_index", name="audio_chunks_index_key"),
+        CheckConstraint("chunk_index >= 0", name="audio_chunks_index_nonneg_check"),
+        CheckConstraint(
+            "start_seconds >= 0 AND end_seconds > start_seconds",
+            name="audio_chunks_interval_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    path: Mapped[str] = mapped_column(Text)
+
+
+class TranscriptSegment(Base):
+    __tablename__ = "transcript_segments"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id", "segment_index", name="transcript_segments_index_key"
+        ),
+        CheckConstraint("segment_index >= 0", name="transcript_segments_index_nonneg_check"),
+        CheckConstraint(
+            "start_seconds >= 0 AND end_seconds >= start_seconds",
+            name="transcript_segments_interval_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    segment_index: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    # Raw ASR output is immutable; enhancement writes enhanced_text, never over raw_text.
+    raw_text: Mapped[str] = mapped_column(Text)
+    enhanced_text: Mapped[str | None] = mapped_column(Text)
+    # Local diarization label within this run (e.g. "SPEAKER_00"), not a speaker identity.
+    diarization_label: Mapped[str | None] = mapped_column(Text)
+
+
+class Speaker(Base):
+    __tablename__ = "speakers"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    display_name: Mapped[str] = mapped_column(Text, unique=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SpeakerEmbedding(Base):
+    __tablename__ = "speaker_embeddings"
+    __table_args__ = (
+        CheckConstraint(
+            "length(embedding_space) > 0", name="speaker_embeddings_space_nonempty_check"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    speaker_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("speakers.id"), index=True)
+    # Cosine comparisons are only valid within one embedding_space (e.g. "titanet-large-v1").
+    embedding_space: Mapped[str] = mapped_column(Text, index=True)
+    embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM))
+    source_pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class SpeakerAssignment(Base):
+    """Machine proposals only — human rulings live in ``adjudication_decisions``."""
+
+    __tablename__ = "speaker_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "diarization_label",
+            "method",
+            name="speaker_assignments_proposal_key",
+        ),
+        CheckConstraint(
+            f"method IN ({_enum_values(AssignmentMethod)})",
+            name="speaker_assignments_method_check",
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="speaker_assignments_confidence_check",
+        ),
+        # named != grounded, enforced: only a cosine proposal with a concrete
+        # speaker can claim grounding; an LLM name hint never can.
+        CheckConstraint(
+            "NOT grounded OR (speaker_id IS NOT NULL AND method = 'cosine')",
+            name="speaker_assignments_grounded_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    diarization_label: Mapped[str] = mapped_column(Text)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
+    method: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # named != grounded: a name proposed by an LLM is NOT grounded until it has
+    # embedding-level evidence or a human ruling.
+    grounded: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AdjudicationDecision(Base):
+    """Immutable human ledger — rows are only ever inserted, never updated or deleted."""
+
+    __tablename__ = "adjudication_decisions"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="adjudication_decisions_idempotency_key"),
+        CheckConstraint(
+            f"decision IN ({_enum_values(Decision)})", name="adjudication_decisions_check"
+        ),
+        CheckConstraint(
+            "(decision = 'assign') = (speaker_id IS NOT NULL)",
+            name="adjudication_decisions_assign_speaker_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    diarization_label: Mapped[str] = mapped_column(Text)
+    decision: Mapped[str] = mapped_column(Text)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
+    operator: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

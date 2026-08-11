@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str = ""
 
+    # Pipeline
+    # How long a worker may hold a stage before recovery may reclaim it.
+    # Must exceed the longest realistic single-stage duration.
+    stage_lease_seconds: int = 21600  # 6 h
+
     # Domain pack (defaults to the bundled generic pack when unset)
     domain_pack_path: Path | None = None
 

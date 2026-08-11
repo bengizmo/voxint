@@ -13,6 +13,20 @@ env:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: voxint
+          POSTGRES_PASSWORD: voxint
+          POSTGRES_DB: voxint_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voxint"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -24,8 +38,10 @@ jobs:
         run: uv run ruff check .
       - name: Mypy
         run: uv run mypy
-      - name: Pytest (unit)
-        run: uv run pytest tests/unit --cov
+      - name: Pytest (unit + integration)
+        env:
+          VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
+        run: uv run pytest tests --cov
 
   secrets-scan:
     runs-on: ubuntu-latest
