@@ -54,19 +54,19 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0003)
+## Data model (alembic revisions 0001–0004)
 
 | Table | Role |
 |---|---|
 | `media_items` | media identity — one row per source file |
-| `pipeline_runs` | execution state + CAS revision |
+| `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
 | `audio_chunks` | chunk boundaries for long-file processing |
 | `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag |
 | `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
 | `speakers` | the grown speaker roster |
-| `speaker_embeddings` | `vector(192)` + `embedding_space` tag |
+| `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
 | `speaker_assignments` | **machine proposals** (method, confidence, grounded flag; `llm_hint` rows carry `proposed_name`, method-shape CHECKs keep the two shapes disjoint) |
 | `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key) |
 
@@ -96,6 +96,45 @@ failures degrading to NULL `enhanced_text` rather than failing the run (see
 `docs/quality-gates.md`). Speaker matching always runs and its invariant
 violations DO fail the stage. Test fakes satisfy the same protocols, which is
 how the end-to-end contract tests run without a GPU.
+
+## Review console (P5)
+
+Adjudication is **post-hoc**: runs complete normally and the console works a
+queue over COMPLETED runs. A run needs review while any diarization label has
+neither an effective human decision nor a *grounded* cosine proposal.
+(`AWAITING_ADJUDICATION` stays in the state machine, reserved for a future
+flow that genuinely blocks downstream processing — nothing enters it today.)
+
+- **One resolver** (`adjudication/resolver.py`) settles attribution at read
+  time for the workbench, the queue, and the transcript export alike:
+  effective human decision (newest ledger row per label — corrections are
+  appends) beats grounded cosine beats nothing. `llm_hint` names render as
+  evidence, never as identity; `exclude` suppresses attribution, never text.
+- **Reviewer slot**: claim columns on `pipeline_runs`, guarded by the same CAS
+  `revision` as pipeline transitions. The claim token is an opaque per-claim
+  secret required on every mutation; a re-claim rotates it, so a stale tab
+  gets 409 instead of acting on a slot someone else holds. Claims expire on a
+  TTL — an abandoned tab never dams the queue.
+- **Decisions** POST through the existing idempotent ledger append. Each
+  rendered form carries a fresh server-issued nonce as the idempotency key:
+  htmx retries are harmless replays, new submissions are new (superseding)
+  rulings.
+- **Enrollment** turns an unmatched voice into a roster identity atomically:
+  a `speakers` row, one duration-weighted centroid in `speaker_embeddings`
+  (same eligibility rules and centroid math as matching, imported from
+  `speakers/matching.py` so they cannot drift), and the `assign` ruling.
+  Raw per-turn vectors stay in `diarization_turns`; the centroid is
+  re-derivable. Provenance columns plus a unique constraint on the source
+  decision make duplicate enrollment structurally impossible.
+- **Auth**: single-operator HTTP Basic (constant-time compare) on every route
+  but `/healthz` — fragments and media included; operator identity comes only
+  from credentials. Startup refuses to bind off-loopback with the default
+  password.
+- **Media**: audio streams through a gate that requires the file to be
+  DB-referenced, to resolve inside `MEDIA_ROOT` (symlink escapes rejected),
+  and to carry a decodable audio stream per ffprobe (bounded subprocess,
+  cached per path/size/mtime). Single-range HTTP semantics: 206/416,
+  open-ended and suffix forms; multipart ranges are ignored per RFC.
 
 ## Worker orchestration (P3)
 

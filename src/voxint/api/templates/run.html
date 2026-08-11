@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Voxint — review {{ run.media_item.source_path }}{% endblock %}
+{% block body %}
+<p><a href="/review">← queue</a></p>
+<h1>{{ run.media_item.source_path }}</h1>
+
+{% if token %}
+<p class="muted">
+  Claimed by you.
+  <a href="/review/{{ run.id }}/export.txt">Export transcript</a>
+</p>
+<form method="post" action="/review/{{ run.id }}/release" class="inline">
+  <input type="hidden" name="token" value="{{ token }}">
+  <button type="submit">Release claim</button>
+</form>
+<audio controls preload="metadata" src="/media/{{ run.id }}"></audio>
+{% else %}
+<p class="muted">
+  Not claimed by this tab — decisions are disabled.
+  <a href="/review/{{ run.id }}/export.txt">Export transcript</a>
+</p>
+<form method="post" action="/review/{{ run.id }}/claim" class="inline">
+  <button type="submit">Claim for review</button>
+</form>
+{% endif %}
+
+<div id="labels">
+  {% include "fragments/labels.html" %}
+</div>
+{% endblock %}

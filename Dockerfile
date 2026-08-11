@@ -20,4 +20,8 @@ RUN useradd --create-home voxint
 USER voxint
 
 EXPOSE 8080
-CMD ["uvicorn", "voxint.api.app:app", "--host", "0.0.0.0", "--port", "8080"]
+# `voxint serve` binds from settings, so the password validator sees the real
+# bind address. The image default stays loopback (unpublishable but safe);
+# a deployment that wants the port published sets API_HOST=0.0.0.0 AND a real
+# VOXINT_PASSWORD — compose.yaml does exactly that for the api service.
+CMD ["voxint", "serve"]

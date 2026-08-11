@@ -118,6 +118,18 @@ def _requeue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _serve(args: argparse.Namespace) -> int:
+    """Run the review console. The bind host/port come from Settings, so the
+    default-credentials-off-loopback refusal inspects the REAL bind address —
+    containers set API_HOST=0.0.0.0 and must therefore set a password."""
+    del args
+    import uvicorn
+
+    settings = get_settings()  # validators run here, before any socket opens
+    uvicorn.run("voxint.api.app:app", host=settings.api_host, port=settings.api_port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -134,6 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
     requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
     requeue_p.add_argument("run_id")
     requeue_p.set_defaults(fn=_requeue)
+
+    serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
+    serve_p.set_defaults(fn=_serve)
 
     return parser
 

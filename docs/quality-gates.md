@@ -83,3 +83,34 @@ writer — `voxint.speakers.matching.replace_run_proposals` — through which
 every proposal insert passes. One hint per label: an explicit
 self-introduction ("I'm Jane…") beats being named by someone else; within a
 kind, the earliest heard wins.
+
+## Adjudication precedence (P5)
+
+Attribution is resolved at read time, everywhere, by one rule
+(`adjudication/resolver.py`):
+
+1. **Effective human decision** — the newest `adjudication_decisions` row per
+   (run, label), ordered `created_at DESC, id DESC`. Corrections are new
+   appends; nothing is edited (the table's trigger forbids it).
+2. **Grounded cosine proposal** — machine identity stands only at grounding
+   strength.
+3. Otherwise the label is **unresolved** and the run sits in the review queue.
+
+`exclude` suppresses speaker attribution, never transcript text. `unknown` is
+a terminal human answer — the label leaves the queue without an identity.
+`llm_hint` names are displayed as evidence and never resolve attribution.
+
+Speaker **enrollment** builds its centroid from exactly the matching-side
+eligibility rules and duration-capped weighting (imported from
+`speakers/matching.py`); a label with no eligible embedded turns cannot be
+enrolled — rule it `unknown` or assign it to an existing speaker instead.
+
+### Accepted risk: enrollment provenance is code-enforced
+
+`speaker_embeddings.source_*` provenance consistency (decision is an `assign`
+for the same run/label/speaker) is guaranteed by the single writer
+(`adjudication/enrollment.py`) plus the unique constraint on the source
+decision id — not by cross-table DB triggers. A constraint trigger would be
+the only way to make it structurally airtight and is deliberately omitted as
+disproportionate for a single-writer path; revisit if a second writer ever
+appears.

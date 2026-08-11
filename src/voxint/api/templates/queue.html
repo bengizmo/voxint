@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Voxint — adjudication queue{% endblock %}
+{% block body %}
+<h1>Adjudication queue</h1>
+<p class="muted">Completed runs with voices still needing a human ruling. Signed in as {{ operator }}.</p>
+{% if not entries %}
+<p>Nothing to review — every completed run is fully resolved. 🎉</p>
+{% else %}
+<table>
+  <thead>
+    <tr><th>Media</th><th>Unresolved</th><th>Labels</th><th>Claimed by</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for e in entries %}
+    <tr>
+      <td><code>{{ e.source_path }}</code></td>
+      <td>{{ e.unresolved_labels }}</td>
+      <td>{{ e.total_labels }}</td>
+      <td>{{ e.claimed_by or "—" }}</td>
+      <td>
+        <form method="post" action="/review/{{ e.run_id }}/claim">
+          <button type="submit">Review</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

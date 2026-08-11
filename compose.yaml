@@ -32,7 +32,7 @@ services:
 
   api:
     build: .
-    command: uvicorn voxint.api.app:app --host 0.0.0.0 --port 8080
+    command: voxint serve
     env_file:
       - path: .env
         required: false
@@ -40,6 +40,10 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
       REDIS_URL: redis://redis:6379/0
       MEDIA_ROOT: /data/media
+      # In-container bind is all-interfaces (published to host loopback
+      # below); the settings validator therefore REQUIRES a real password.
+      API_HOST: 0.0.0.0
+      VOXINT_PASSWORD: ${VOXINT_PASSWORD:?set VOXINT_PASSWORD in .env (see .env.example)}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media
     ports:

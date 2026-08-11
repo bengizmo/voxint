@@ -134,6 +134,14 @@ class PipelineRun(Base):
             name="pipeline_runs_current_stage_check",
         ),
         CheckConstraint("revision >= 0", name="pipeline_runs_revision_nonneg_check"),
+        # The reviewer claim is one unit: either a run is unclaimed (all NULL)
+        # or fully claimed (all set) — no half-claimed states to reason about.
+        CheckConstraint(
+            "(review_claim_token IS NULL) = (review_claimed_by IS NULL)"
+            " AND (review_claim_token IS NULL) = (review_claimed_at IS NULL)"
+            " AND (review_claim_token IS NULL) = (review_claim_expires_at IS NULL)",
+            name="pipeline_runs_review_claim_shape_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -143,6 +151,13 @@ class PipelineRun(Base):
     # Optimistic-concurrency token: every state change goes through CAS on this column.
     revision: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[str | None] = mapped_column(Text)
+    # Reviewer slot (P5): one adjudication claim per run, guarded by the same
+    # CAS revision as pipeline transitions. The token is an opaque per-claim
+    # secret so a stale browser tab can never act on a newer claim.
+    review_claim_token: Mapped[uuid.UUID | None] = mapped_column()
+    review_claimed_by: Mapped[str | None] = mapped_column(Text)
+    review_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -317,6 +332,12 @@ class SpeakerEmbedding(Base):
         CheckConstraint(
             "length(embedding_space) > 0", name="speaker_embeddings_space_nonempty_check"
         ),
+        # One enrollment centroid per human decision — a replayed enrollment
+        # POST can never mint a second embedding row.
+        UniqueConstraint(
+            "source_adjudication_decision_id",
+            name="speaker_embeddings_source_decision_key",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -326,6 +347,12 @@ class SpeakerEmbedding(Base):
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM))
     source_pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id")
+    )
+    # Enrollment provenance (P5): which local label and which human ruling
+    # produced this centroid. Raw per-turn vectors stay in diarization_turns.
+    source_diarization_label: Mapped[str | None] = mapped_column(Text)
+    source_adjudication_decision_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("adjudication_decisions.id")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

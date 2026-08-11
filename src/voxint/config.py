@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     api_port: int = 8080
     voxint_user: str = "admin"
     voxint_password: str = "change-me"
+    # How long a reviewer holds a run before the slot self-releases. Long
+    # enough for one careful listen-through; short enough that a closed tab
+    # doesn't dam the queue.
+    review_claim_ttl_seconds: int = Field(default=1800, ge=60)
+    # Hard bound on the ffprobe gate in the media-serving request path.
+    media_probe_timeout_seconds: PositiveSeconds = 30.0
+    # Transcript preview length per label in the workbench.
+    review_preview_segments: int = Field(default=8, ge=1)
 
     # GPU model services
     asr_url: str = "http://localhost:8022"
@@ -124,6 +132,22 @@ class Settings(BaseSettings):
                     f"llm_run_budget_seconds + attempts x timeout ({worst_case})"
                     f" must be below stage_lease_seconds ({self.stage_lease_seconds})"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _no_default_credentials_off_loopback(self) -> "Settings":
+        # Loopback + default credentials is a fine dev setup; exposing the
+        # review UI beyond loopback with the shipped (or an empty) password is
+        # not — refuse at startup rather than serve an effectively
+        # unauthenticated console. `voxint serve` and the container entrypoint
+        # bind from these settings, so this check sees the real bind address.
+        if self.api_host not in ("127.0.0.1", "::1", "localhost") and (
+            self.voxint_password in ("change-me", "")
+        ):
+            raise ValueError(
+                "voxint_password must be set to a real value before binding"
+                f" the API to non-loopback host {self.api_host!r}"
+            )
         return self
 
     @model_validator(mode="after")

@@ -1,0 +1,83 @@
+{# The label list — full-page include and htmx post-decision refresh target. #}
+{% for s in states %}
+<div class="label-card">
+  <h2>
+    {{ s.label }}
+    {% if s.resolution.value == "unresolved" %}
+      <span class="pill unresolved">needs ruling</span>
+    {% elif s.resolution.value == "grounded_cosine" %}
+      <span class="pill grounded">machine: {{ s.speaker_name }}</span>
+    {% elif s.resolution.value == "human_assign" %}
+      <span class="pill human">assigned: {{ s.speaker_name }}</span>
+    {% elif s.resolution.value == "human_exclude" %}
+      <span class="pill human">excluded</span>
+    {% else %}
+      <span class="pill human">unknown</span>
+    {% endif %}
+  </h2>
+  <p class="muted">
+    {{ s.turn_count }} turns, {{ "%.0f"|format(s.total_seconds) }}s.
+    {% if s.cosine_speaker_name %}
+      Cosine suggestion: {{ s.cosine_speaker_name }}
+      ({{ "%.2f"|format(s.cosine_confidence or 0) }}{{ ", grounded" if s.cosine_grounded }}).
+    {% endif %}
+    {% if s.llm_hint_name %}
+      Heard name (unverified): “{{ s.llm_hint_name }}”.
+    {% endif %}
+  </p>
+  {% for seg in previews.get(s.label, []) %}
+  <div class="preview">
+    <span class="t">{{ "%.1f"|format(seg.start_seconds) }}s</span>
+    {{ seg.enhanced_text or seg.raw_text }}
+  </div>
+  {% endfor %}
+
+  {% if token %}
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-post="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="hidden" name="action" value="assign">
+    <select name="speaker_id" required>
+      <option value="" disabled selected>— existing speaker —</option>
+      {% for sp in speakers %}
+      <option value="{{ sp.id }}">{{ sp.display_name }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Assign</button>
+  </form>
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/enroll"
+        hx-post="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/enroll"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="text" name="display_name" placeholder="new speaker name"
+           minlength="1" maxlength="120" required>
+    <button type="submit">Enroll new</button>
+  </form>
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-post="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="hidden" name="action" value="exclude">
+    <button type="submit">Exclude</button>
+  </form>
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-post="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="hidden" name="action" value="unknown">
+    <button type="submit">Unknown</button>
+  </form>
+  {% endif %}
+</div>
+{% else %}
+<p class="muted">This run has no diarization labels.</p>
+{% endfor %}

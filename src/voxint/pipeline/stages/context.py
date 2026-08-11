@@ -24,7 +24,7 @@ from voxint.config import Settings
 from voxint.db.models import ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
 from voxint.pipeline.engine import StageFn
-from voxint.speakers.matching import MatchingGates
+from voxint.speakers.matching import MatchingGates, gates_from_settings
 
 
 class StageDataError(Exception):
@@ -92,20 +92,7 @@ def build_stage_context(settings: Settings) -> StageContext:
             consecutive_failure_limit=settings.llm_consecutive_failure_limit,
         ),
         enhancement_context=pack.prompt_fragments.get("enhancement_context", ""),
-        matching_gates=MatchingGates(
-            max_overlap_ratio=settings.match_max_overlap_ratio,
-            turn_weight_cap_seconds=settings.match_turn_weight_cap_seconds,
-            min_turns=settings.match_min_turns,
-            min_seconds=settings.match_min_seconds,
-            min_cosine=settings.match_min_cosine,
-            min_margin=settings.match_min_margin,
-            min_vote_agreement=settings.match_min_vote_agreement,
-            grounded_min_turns=settings.grounded_min_turns,
-            grounded_min_seconds=settings.grounded_min_seconds,
-            grounded_min_cosine=settings.grounded_min_cosine,
-            grounded_min_margin=settings.grounded_min_margin,
-            grounded_min_vote_agreement=settings.grounded_min_vote_agreement,
-        ),
+        matching_gates=gates_from_settings(settings),
     )
 
 

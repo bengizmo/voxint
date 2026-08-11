@@ -30,15 +30,25 @@ class AudioInfo:
     codec: str
 
 
-def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+def _run(
+    cmd: list[str], *, timeout_seconds: float | None = None
+) -> subprocess.CompletedProcess[str]:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, check=False)
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_seconds
+        )
     except OSError as exc:  # missing binary, permissions
         raise NormalizationError(f"failed to execute {cmd[0]}: {exc}") from exc
 
 
-def probe_audio(path: Path, *, ffprobe_bin: str = "ffprobe") -> AudioInfo:
-    """Inspect the first audio stream; raises if the file has none."""
+def probe_audio(
+    path: Path, *, ffprobe_bin: str = "ffprobe", timeout_seconds: float | None = None
+) -> AudioInfo:
+    """Inspect the first audio stream; raises if the file has none.
+
+    ``timeout_seconds`` bounds the probe (request-path callers must set it;
+    pipeline callers may block). TimeoutExpired propagates to the caller.
+    """
     proc = _run(
         [
             ffprobe_bin,
@@ -53,7 +63,8 @@ def probe_audio(path: Path, *, ffprobe_bin: str = "ffprobe") -> AudioInfo:
             "-of",
             "json",
             str(path),
-        ]
+        ],
+        timeout_seconds=timeout_seconds,
     )
     if proc.returncode != 0:
         raise NormalizationError(

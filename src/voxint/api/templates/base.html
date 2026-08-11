@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Voxint review{% endblock %}</title>
+  <script src="/static/htmx.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem;
+           padding: 0 1rem; line-height: 1.45; }
+    h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8884; }
+    .label-card { border: 1px solid #8886; border-radius: .5rem; padding: .8rem 1rem;
+                  margin: .8rem 0; }
+    .pill { display: inline-block; border-radius: 1rem; padding: .05rem .6rem;
+            font-size: .8rem; border: 1px solid #8888; }
+    .pill.unresolved { background: #c332; border-color: #c33; }
+    .pill.human { background: #2823; border-color: #282; }
+    .pill.grounded { background: #22a3; border-color: #26a; }
+    .preview { font-size: .9rem; opacity: .85; margin: .4rem 0; }
+    .preview .t { opacity: .6; font-variant-numeric: tabular-nums; margin-right: .4rem; }
+    form.inline { display: inline-flex; gap: .4rem; align-items: center; margin-right: 1rem; }
+    .muted { opacity: .65; }
+    audio { width: 100%; margin: .6rem 0 1rem; }
+    .error { color: #c33; }
+  </style>
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

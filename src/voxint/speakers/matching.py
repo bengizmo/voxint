@@ -25,6 +25,7 @@ import logging
 import math
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -36,6 +37,9 @@ from voxint.db.models import (
     SpeakerAssignment,
     SpeakerEmbedding,
 )
+
+if TYPE_CHECKING:
+    from voxint.config import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +62,24 @@ class MatchingGates:
     grounded_min_cosine: float = 0.70
     grounded_min_margin: float = 0.08
     grounded_min_vote_agreement: float = 0.67
+
+
+def gates_from_settings(settings: "Settings") -> MatchingGates:
+    """The one Settings -> MatchingGates mapping (worker and review UI share it)."""
+    return MatchingGates(
+        max_overlap_ratio=settings.match_max_overlap_ratio,
+        turn_weight_cap_seconds=settings.match_turn_weight_cap_seconds,
+        min_turns=settings.match_min_turns,
+        min_seconds=settings.match_min_seconds,
+        min_cosine=settings.match_min_cosine,
+        min_margin=settings.match_min_margin,
+        min_vote_agreement=settings.match_min_vote_agreement,
+        grounded_min_turns=settings.grounded_min_turns,
+        grounded_min_seconds=settings.grounded_min_seconds,
+        grounded_min_cosine=settings.grounded_min_cosine,
+        grounded_min_margin=settings.grounded_min_margin,
+        grounded_min_vote_agreement=settings.grounded_min_vote_agreement,
+    )
 
 
 @dataclass(frozen=True)
@@ -86,10 +108,12 @@ def confidence_from_similarity(similarity: float) -> float:
     return min(1.0, max(0.0, (similarity + 1.0) / 2.0))
 
 
-def match_speakers(
+def eligible_label_vectors(
     session: Session, run_id: uuid.UUID, gates: MatchingGates
-) -> tuple[CosineProposal, ...]:
-    """Propose roster speakers for this run's diarization labels."""
+) -> dict[str, tuple[str, list[tuple[np.ndarray, float]]]]:
+    """Per label: its embedding space and eligible (unit vector, usable seconds)
+    pairs. The single definition of turn eligibility — matching and P5 speaker
+    enrollment both build centroids from exactly this."""
     turns = (
         session.execute(
             select(DiarizationTurn)
@@ -126,6 +150,25 @@ def match_speakers(
     for label in mixed_space_labels:
         logger.error("run %s label %s spans embedding spaces; skipped", run_id, label)
         del by_label[label]
+    return by_label
+
+
+def label_centroid(
+    entries: list[tuple[np.ndarray, float]], cap_seconds: float
+) -> np.ndarray | None:
+    """Duration-weighted unit centroid of a label's eligible vectors (per-turn
+    weight capped so one long monologue can't dominate)."""
+    weighted = [(v, min(usable, cap_seconds)) for v, usable in entries]
+    return _unit(
+        sum((v * w for v, w in weighted), start=np.zeros_like(weighted[0][0]))
+    )
+
+
+def match_speakers(
+    session: Session, run_id: uuid.UUID, gates: MatchingGates
+) -> tuple[CosineProposal, ...]:
+    """Propose roster speakers for this run's diarization labels."""
+    by_label = eligible_label_vectors(session, run_id, gates)
 
     rosters: dict[str, dict[uuid.UUID, np.ndarray]] = {}
     proposals: list[CosineProposal] = []
@@ -144,9 +187,7 @@ def match_speakers(
         weighted = [
             (v, min(usable, gates.turn_weight_cap_seconds)) for v, usable in entries
         ]
-        centroid = _unit(
-            sum((v * w for v, w in weighted), start=np.zeros_like(weighted[0][0]))
-        )
+        centroid = label_centroid(entries, gates.turn_weight_cap_seconds)
         if centroid is None:
             continue
 
