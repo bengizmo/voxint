@@ -31,6 +31,9 @@ class DiarizationTurn:
     start_seconds: float
     end_seconds: float
     label: str  # local label within one file, e.g. "SPEAKER_00"
+    # Summed intersection with other speakers' turns; quality gates threshold on it.
+    overlap: bool = False
+    overlap_seconds: float = 0.0
 
 
 @dataclass(frozen=True)

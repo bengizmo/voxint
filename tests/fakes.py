@@ -32,6 +32,10 @@ class FakeDiarizer:
             turns=(
                 DiarizationTurn(0.0, 4.0, "SPEAKER_00"),
                 DiarizationTurn(4.0, 9.0, "SPEAKER_01"),
+                # Repeated label + sub-second window: exercises the skip path
+                # and proves labels may repeat across turns (real diarization
+                # always produces many turns per speaker).
+                DiarizationTurn(8.5, 9.0, "SPEAKER_00", overlap=True, overlap_seconds=0.5),
             )
         )
 

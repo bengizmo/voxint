@@ -22,7 +22,7 @@ Concurrency contract:
 import os
 import socket
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -31,17 +31,33 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.config import get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
-from voxint.pipeline.transitions import RunSnapshot, cas_update_run, next_stage, snapshot
+from voxint.pipeline.transitions import (
+    RunSnapshot,
+    StaleRevisionError,
+    cas_update_run,
+    next_stage,
+    snapshot,
+)
 
 # A stage body receives the session and the run id; whatever it persists is its own business.
 StageFn = Callable[[Session, uuid.UUID], None]
 
+# Error prefix marking attempts killed by lease expiry rather than the stage
+# itself failing — the retry budget filters these out by prefix.
+INTERRUPTED_PREFIX = "interrupted:"
+
 
 class StageFailedError(Exception):
-    def __init__(self, stage: Stage, cause: Exception) -> None:
+    def __init__(
+        self, stage: Stage, cause: Exception, failed_snapshot: "RunSnapshot | None" = None
+    ) -> None:
         super().__init__(f"stage {stage.value} failed: {cause}")
         self.stage = stage
         self.cause = cause
+        # The run's state as this failure left it. A retry handler must CAS
+        # against exactly this revision — matching on (FAILED, stage) alone is
+        # an ABA bug: a *newer* failure at the same stage looks identical.
+        self.failed_snapshot = failed_snapshot
 
 
 def default_worker_id() -> str:
@@ -66,13 +82,31 @@ def _latest_claim(session: Session, run_id: uuid.UUID, stage: Stage) -> StageRun
 
 def _claim_stage(
     session_factory: sessionmaker[Session],
-    run_id: uuid.UUID,
+    expected: RunSnapshot,
     stage: Stage,
     worker_id: str,
     lease_seconds: int,
 ) -> uuid.UUID | None:
-    """Commit a RUNNING stage_run claim; None if another worker holds an active one."""
+    """Commit a RUNNING stage_run claim; None if another worker holds an active
+    one or the run has moved past the snapshot this worker is executing for.
+
+    The run row is locked while the claim is inserted: between a worker's CAS
+    advance and its claim there is an unclaimed instant that recovery may
+    legitimately requeue — verifying (status, stage, revision) under the lock
+    ensures a worker never starts expensive work for an obsolete revision.
+    """
+    run_id = expected.id
     with session_factory() as session:
+        run = session.execute(
+            select(PipelineRun).where(PipelineRun.id == run_id).with_for_update()
+        ).scalar_one_or_none()
+        if (
+            run is None
+            or run.status != RunStatus.RUNNING.value
+            or run.current_stage != stage.value
+            or run.revision != expected.revision
+        ):
+            return None  # the run moved on without us
         latest = _latest_claim(session, run_id, stage)
         now = datetime.now(tz=UTC)
         if (
@@ -112,13 +146,25 @@ def _finish_claim(
     claim.error = error
 
 
+def default_stage_leases() -> dict[Stage, int]:
+    """Per-stage lease budgets from settings.
+
+    diarize_embed gets its own: one diarization call plus every embedding
+    batch must fit inside the lease, or a healthy worker gets robbed mid-stage.
+    """
+    settings = get_settings()
+    leases = {stage: settings.stage_lease_seconds for stage in Stage}
+    leases[Stage.DIARIZE_EMBED] = settings.diarize_embed_lease_seconds
+    return leases
+
+
 def execute_run(
     session_factory: sessionmaker[Session],
     run_id: uuid.UUID,
     stage_fns: dict[Stage, StageFn],
     *,
     worker_id: str | None = None,
-    lease_seconds: int | None = None,
+    lease_seconds: int | Mapping[Stage, int] | None = None,
 ) -> RunSnapshot:
     """Advance a QUEUED (or requeued) run through all stages to COMPLETED.
 
@@ -129,7 +175,10 @@ def execute_run(
     consistent, resumable run.
     """
     worker = worker_id or default_worker_id()
-    lease = lease_seconds if lease_seconds is not None else get_settings().stage_lease_seconds
+    if lease_seconds is None:
+        leases: Mapping[Stage, int] | int = default_stage_leases()
+    else:
+        leases = lease_seconds
 
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
@@ -139,8 +188,17 @@ def execute_run(
         if held.status is RunStatus.QUEUED:
             # A requeued run retries its interrupted stage; a fresh run starts at the top.
             stage = held.current_stage or next_stage(None)
-            held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=stage)
-            session.commit()
+            try:
+                held = cas_update_run(
+                    session, held, status=RunStatus.RUNNING, current_stage=stage
+                )
+                session.commit()
+            except StaleRevisionError:
+                # Duplicate dispatch of the same QUEUED run (sweep + pending
+                # retry can race here legitimately): the other invocation won
+                # the entry CAS. Fall through and re-read — the claim step
+                # arbitrates from there.
+                session.rollback()
 
     while True:
         with session_factory() as session:
@@ -151,21 +209,26 @@ def execute_run(
                 return held
             stage = held.current_stage
 
-        claim_id = _claim_stage(session_factory, run_id, stage, worker, lease)
+        lease = leases[stage] if isinstance(leases, Mapping) else leases
+        claim_id = _claim_stage(session_factory, held, stage, worker, lease)
         if claim_id is None:
             return held  # another worker owns this stage right now
 
         with session_factory() as session:
             try:
                 stage_fns[stage](session, run_id)
+                # Surface deferred constraint violations HERE, not during the
+                # claim/CAS bookkeeping below — an autoflush failure outside
+                # this block would leave a RUNNING claim with no failure record.
+                session.flush()
             except Exception as exc:
                 session.rollback()
                 _finish_claim(session, claim_id, StageStatus.FAILED, str(exc))
-                cas_update_run(
+                failed = cas_update_run(
                     session, held, status=RunStatus.FAILED, current_stage=stage, error=str(exc)
                 )
                 session.commit()
-                raise StageFailedError(stage, exc) from exc
+                raise StageFailedError(stage, exc, failed) from exc
             _finish_claim(session, claim_id, StageStatus.COMPLETED)
             upcoming = next_stage(stage)
             if upcoming is None:
@@ -178,11 +241,17 @@ def execute_run(
             session.commit()
 
 
-def recover_interrupted_runs(session: Session) -> list[uuid.UUID]:
+def recover_interrupted_runs(
+    session: Session, *, max_attempts: int | None = None
+) -> list[uuid.UUID]:
     """Requeue RUNNING runs whose stage claim lease has expired (or never existed).
 
     Runs with an unexpired RUNNING claim belong to a live worker and are left
     alone. The interrupted attempt is marked failed so the ledger records it.
+    With ``max_attempts``, a run whose current stage already burned that many
+    attempts is parked FAILED instead of requeued — otherwise repeated worker
+    deaths grant unlimited retries that the retry path's budget never sees.
+    A run that another worker moves mid-sweep is skipped, not fatal.
     """
     now = datetime.now(tz=UTC)
     recovered: list[uuid.UUID] = []
@@ -202,15 +271,24 @@ def recover_interrupted_runs(session: Session) -> list[uuid.UUID]:
         ):
             continue  # live worker — do not steal
         if claim is not None and claim.status == StageStatus.RUNNING.value:
-            _finish_claim(session, claim.id, StageStatus.FAILED, "interrupted: lease expired")
-        # RUNNING -> FAILED -> QUEUED keeps the transition map honest about what happened.
-        held = cas_update_run(
-            session,
-            held,
-            status=RunStatus.FAILED,
-            current_stage=held.current_stage,
-            error="interrupted: worker died mid-stage",
-        )
-        cas_update_run(session, held, status=RunStatus.QUEUED, current_stage=held.current_stage)
+            _finish_claim(
+                session, claim.id, StageStatus.FAILED, f"{INTERRUPTED_PREFIX} lease expired"
+            )
+        try:
+            # RUNNING -> FAILED -> QUEUED keeps the transition map honest.
+            held = cas_update_run(
+                session,
+                held,
+                status=RunStatus.FAILED,
+                current_stage=held.current_stage,
+                error=f"{INTERRUPTED_PREFIX} worker died mid-stage",
+            )
+            if max_attempts is not None and claim is not None and claim.attempt >= max_attempts:
+                continue  # budget exhausted — parked FAILED for the failure lane
+            cas_update_run(
+                session, held, status=RunStatus.QUEUED, current_stage=held.current_stage
+            )
+        except StaleRevisionError:
+            continue  # someone else moved it mid-sweep; their view wins
         recovered.append(held.id)
     return recovered

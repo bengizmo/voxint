@@ -54,7 +54,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revision 0001)
+## Data model (alembic revisions 0001–0002)
 
 | Table | Role |
 |---|---|
@@ -63,7 +63,8 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
 | `audio_chunks` | chunk boundaries for long-file processing |
-| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it |
+| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag |
+| `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
 | `speakers` | the grown speaker roster |
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag |
 | `speaker_assignments` | **machine proposals** (method, confidence, grounded flag) |
@@ -91,3 +92,35 @@ ASR, diarizer, embedder, and LLM sit behind typed protocols
 targets any OpenAI-compatible endpoint and is optional (`LLM_ENABLED=false`
 by default). Test fakes satisfy the same protocols, which is how the
 end-to-end contract tests run without a GPU.
+
+## Worker orchestration (P3)
+
+One Celery task, `voxint.run_pipeline`, drives a run through all stages via
+the engine (task-per-stage would open an unclaimed window between handoffs
+that recovery misreads as a crash; the engine already resumes an interrupted
+run at its current stage). Failure handling is two-lane:
+
+- **Transient** (`retryable` service errors: `saturated`, `model_unavailable`,
+  transport failures) — the failed attempt stays in the `stage_runs` ledger,
+  the run is CAS-requeued at the same stage — against the exact revision that
+  failure produced, so a stale callback can never requeue a newer failure —
+  and the task retries itself with exponential backoff. The attempt budget
+  (`STAGE_MAX_ATTEMPTS`) counts transient *service* failures from the
+  persisted ledger (restarts and broker loss never reset it); lease-expiry
+  interruptions don't eat it, and the sweep applies the same ceiling to
+  crash loops separately.
+- **Deterministic** (`inference_failed`, protocol violations, bad media) —
+  the run stays FAILED for the failure lane; `voxint requeue` is the explicit
+  human override.
+
+A beat task (`voxint.recovery_sweep`, every `RECOVERY_SWEEP_SECONDS`)
+requeues runs whose stage lease expired and re-enqueues QUEUED runs whose
+task evaporated with the broker (`QUEUED_RUN_STALE_SECONDS` grace so pending
+retry countdowns aren't stepped on). Duplicate enqueues are safe by design —
+claims and CAS arbitrate.
+
+Timeout ordering that must hold: HTTP client timeout
+(`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`, which
+covers a whole stage — diarize_embed makes several sequential calls) **<**
+Redis visibility timeout (`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which covers a
+whole run).

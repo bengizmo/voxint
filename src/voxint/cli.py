@@ -1,16 +1,151 @@
-"""Voxint CLI: submit, status, requeue, score."""
+"""Voxint CLI: submit media, inspect runs, requeue failures.
+
+Commands talk to the database directly and hand execution to the Celery
+worker by enqueueing ``voxint.run_pipeline`` — the CLI never runs a stage
+itself. Harness scoring commands land with the harness port (P5).
+"""
 
 import argparse
+import uuid
+from pathlib import Path
+
+from sqlalchemy import select
 
 from voxint import __version__
+from voxint.config import get_settings
+from voxint.db.models import MediaItem, PipelineRun, RunStatus, StageRun
+from voxint.db.session import build_engine, build_session_factory, session_scope
+
+
+def _submit(args: argparse.Namespace) -> int:
+    settings = get_settings()
+    media_root = settings.media_root.resolve()
+    source = Path(args.path)
+    resolved = (media_root / source).resolve()
+    try:
+        relative = resolved.relative_to(media_root)
+    except ValueError:
+        print(f"error: {source} is outside media root {media_root}")
+        return 2
+    if not resolved.is_file():
+        print(f"error: {resolved} is not a regular file")
+        return 2
+
+    from voxint.pipeline.engine import submit
+    from voxint.worker.tasks import run_pipeline
+
+    factory = build_session_factory(build_engine())
+    with session_scope(factory) as session:
+        existing = session.execute(
+            select(MediaItem).where(MediaItem.source_path == str(relative))
+        ).scalar_one_or_none()
+        media = existing or MediaItem(source_path=str(relative))
+        if existing is None:
+            session.add(media)
+            session.flush()
+        run_id = submit(session, media.id).id
+    run_pipeline.delay(str(run_id))
+    print(run_id)
+    return 0
+
+
+def _status(args: argparse.Namespace) -> int:
+    factory = build_session_factory(build_engine())
+    run_id = uuid.UUID(args.run_id)
+    with factory() as session:
+        run = session.get(PipelineRun, run_id)
+        if run is None:
+            print(f"error: no run {run_id}")
+            return 2
+        print(f"status: {run.status}")
+        print(f"stage: {run.current_stage or '-'}")
+        if run.error:
+            print(f"error: {run.error}")
+        attempts = (
+            session.execute(
+                select(StageRun)
+                .where(StageRun.pipeline_run_id == run_id)
+                .order_by(StageRun.started_at)
+            )
+            .scalars()
+            .all()
+        )
+        for attempt in attempts:
+            line = f"  {attempt.stage} #{attempt.attempt}: {attempt.status}"
+            if attempt.error:
+                line += f" — {attempt.error}"
+            print(line)
+    return 0
+
+
+def _requeue(args: argparse.Namespace) -> int:
+    from voxint.pipeline.transitions import (
+        InvalidTransitionError,
+        StaleRevisionError,
+        cas_update_run,
+        snapshot,
+    )
+    from voxint.worker.tasks import run_pipeline
+
+    factory = build_session_factory(build_engine())
+    run_id = uuid.UUID(args.run_id)
+    with session_scope(factory) as session:
+        run = session.get(PipelineRun, run_id)
+        if run is None:
+            print(f"error: no run {run_id}")
+            return 2
+        held = snapshot(run)
+        if held.status is not RunStatus.FAILED:
+            print(f"error: run is {held.status.value}, only failed runs can be requeued")
+            return 2
+        if held.current_stage is None:
+            # A FAILED run always carries its failed stage; None means the
+            # state machine was violated — surface it, never guess a stage.
+            print(f"error: run {run_id} is FAILED with no current_stage; refusing to guess")
+            return 2
+        try:
+            cas_update_run(
+                session,
+                held,
+                status=RunStatus.QUEUED,
+                current_stage=held.current_stage,
+            )
+        except (StaleRevisionError, InvalidTransitionError) as exc:
+            print(f"error: {exc}")
+            return 2
+    run_pipeline.delay(str(run_id))
+    print(f"requeued {run_id}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
+    parser.add_argument("--version", action="version", version=f"voxint {__version__}")
+    sub = parser.add_subparsers(dest="command")
+
+    submit_p = sub.add_parser("submit", help="submit a media file (path relative to MEDIA_ROOT)")
+    submit_p.add_argument("path")
+    submit_p.set_defaults(fn=_submit)
+
+    status_p = sub.add_parser("status", help="show a run's state and stage ledger")
+    status_p.add_argument("run_id")
+    status_p.set_defaults(fn=_status)
+
+    requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
+    requeue_p.add_argument("run_id")
+    requeue_p.set_defaults(fn=_requeue)
+
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
-    parser.add_argument("--version", action="version", version=f"voxint {__version__}")
-    parser.parse_args(argv)
-    parser.print_help()
-    return 0
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not hasattr(args, "fn"):
+        parser.print_help()
+        return 0
+    result: int = args.fn(args)
+    return result
 
 
 if __name__ == "__main__":

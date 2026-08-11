@@ -250,6 +250,54 @@ class TranscriptSegment(Base):
     enhanced_text: Mapped[str | None] = mapped_column(Text)
     # Local diarization label within this run (e.g. "SPEAKER_00"), not a speaker identity.
     diarization_label: Mapped[str | None] = mapped_column(Text)
+    # ASR hallucination soft-tag, preserved verbatim from the service; gates weight it.
+    suspect: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class DiarizationTurn(Base):
+    """Run-scoped observation ledger: one row per diarization turn.
+
+    Carries the turn interval, local label, overlap info, and that window's
+    embedding outcome — either a vector (with its ``embedding_space``) or a
+    ``skip_reason`` (``too_short`` / ``low_snr``), never both. Skips stay
+    auditable instead of vanishing; P4 speaker matching consumes these rows.
+    Labels repeat across turns — identity lives in ``speakers``, not here.
+    """
+
+    __tablename__ = "diarization_turns"
+    __table_args__ = (
+        UniqueConstraint("pipeline_run_id", "turn_index", name="diarization_turns_index_key"),
+        CheckConstraint("turn_index >= 0", name="diarization_turns_index_nonneg_check"),
+        CheckConstraint(
+            "start_seconds >= 0 AND end_seconds > start_seconds",
+            name="diarization_turns_interval_check",
+        ),
+        CheckConstraint(
+            "overlap_seconds >= 0", name="diarization_turns_overlap_nonneg_check"
+        ),
+        # Exactly one of embedding / skip_reason, mirroring the titanet contract.
+        CheckConstraint(
+            "(embedding IS NULL) != (skip_reason IS NULL)",
+            name="diarization_turns_embedding_xor_skip_check",
+        ),
+        CheckConstraint(
+            "embedding IS NULL OR embedding_space IS NOT NULL",
+            name="diarization_turns_embedding_space_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    turn_index: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    label: Mapped[str] = mapped_column(Text)
+    overlap: Mapped[bool] = mapped_column(Boolean, default=False)
+    overlap_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    snr_db: Mapped[float | None] = mapped_column(Float)
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    embedding_space: Mapped[str | None] = mapped_column(Text)
 
 
 class Speaker(Base):
