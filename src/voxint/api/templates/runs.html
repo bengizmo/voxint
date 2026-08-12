@@ -34,7 +34,7 @@
   <tbody>
     {% for it in page.items %}
     <tr>
-      <td><code>{{ it.run_id.hex[:8] }}</code></td>
+      <td><a href="/runs/{{ it.run_id }}"><code>{{ it.run_id.hex[:8] }}</code></a></td>
       <td><span class="pill {{ it.status }}">{{ it.status }}</span></td>
       <td>
         {% if it.status == "completed" %}

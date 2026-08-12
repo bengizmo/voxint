@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Voxint — run {{ run.id.hex[:8] }}{% endblock %}
+{% block body %}
+<p><a href="/runs">← runs</a></p>
+<h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
+<p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+
+<dl>
+  <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span></dd>
+  <dt>Current stage</dt><dd>{{ run.current_stage or "—" }}</dd>
+  <dt>Revision</dt><dd>{{ run.revision }}</dd>
+  <dt>Created</dt><dd>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
+  <dt>Updated</dt><dd>{{ run.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
+</dl>
+{% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
+
+<p>
+  {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
+  {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
+  {% if run.status == "completed" %}<a href="/review/{{ run.id }}">Review</a>{% endif %}
+  {% if not audio_available and not transcript_available %}
+    <span class="muted">No audio or transcript yet.</span>
+  {% endif %}
+</p>
+
+<h2>Stage ledger</h2>
+{% if not stage_runs %}
+<p class="muted">No stage attempts recorded yet.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th>Stage</th><th>Attempt</th><th>Status</th><th>Worker</th>
+      <th>Started</th><th>Finished</th><th>Lease expires</th><th>Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in stage_runs %}
+    <tr>
+      <td>{{ s.stage }}</td>
+      <td>{{ s.attempt }}</td>
+      <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
+      <td>{{ s.worker_id or "—" }}</td>
+      <td>{{ s.started_at.strftime("%Y-%m-%d %H:%M:%S") if s.started_at else "—" }}</td>
+      <td>{{ s.finished_at.strftime("%Y-%m-%d %H:%M:%S") if s.finished_at else "—" }}</td>
+      <td>{{ s.lease_expires_at.strftime("%Y-%m-%d %H:%M:%S") if s.lease_expires_at else "—" }}</td>
+      <td>{% if s.error %}<span class="error">{{ s.error }}</span>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

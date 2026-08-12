@@ -23,7 +23,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from voxint import __version__
@@ -42,6 +42,11 @@ from voxint.adjudication.slots import (
     release_run,
     verify_claim,
 )
+from voxint.adjudication.transcript import (
+    TranscriptText,
+    attributed_transcript,
+    parse_transcript_text,
+)
 from voxint.api.auth import require_operator
 from voxint.api.runs_query import (
     Cursor,
@@ -53,7 +58,14 @@ from voxint.api.runs_query import (
     runs_url,
 )
 from voxint.config import Settings, get_settings
-from voxint.db.models import Decision, PipelineRun, RunStatus, Speaker, TranscriptSegment
+from voxint.db.models import (
+    Decision,
+    PipelineRun,
+    RunStatus,
+    Speaker,
+    StageRun,
+    TranscriptSegment,
+)
 from voxint.db.session import build_engine, build_session_factory
 from voxint.media.serving import (
     MediaGate,
@@ -262,6 +274,74 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
 
+    @app.get("/runs/{run_id}")
+    def run_detail(
+        run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        run = _run_or_404(session, run_id)
+        # The attempt ledger, chronological — matches `voxint status`.
+        stage_runs = list(
+            session.execute(
+                select(StageRun)
+                .where(StageRun.pipeline_run_id == run_id)
+                .order_by(StageRun.started_at)
+            ).scalars()
+        )
+        settings: Settings = request.app.state.settings
+        # Present-only links, decided in Postgres (no filesystem on the read path).
+        # Audio reuses the SAME exactly-one-artifact predicate /media serves through
+        # (normalized_audio_path resolves iff there is exactly one preprocessed-audio
+        # row), so the link never promises a page that would 404; a transcript link
+        # needs only that TRANSCRIBE wrote at least one segment.
+        try:
+            normalized_audio_path(session, run_id, settings.media_root)
+            audio_available = True
+        except StageDataError:
+            audio_available = False
+        transcript_available = bool(
+            session.scalar(
+                select(exists().where(TranscriptSegment.pipeline_run_id == run_id))
+            )
+        )
+        return templates.TemplateResponse(
+            request,
+            "run_detail.html",
+            {
+                "request": request,
+                "run": run,
+                "stage_runs": stage_runs,
+                "audio_available": audio_available,
+                "transcript_available": transcript_available,
+                "active_nav": "runs",
+            },
+        )
+
+    @app.get("/runs/{run_id}/transcript")
+    def run_transcript(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+    ) -> Response:
+        run = _run_or_404(session, run_id)
+        try:
+            variant = parse_transcript_text(text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return templates.TemplateResponse(
+            request,
+            "transcript.html",
+            {
+                "request": request,
+                "run": run,
+                "lines": attributed_transcript(session, run_id, text=variant),
+                "text": variant,
+                "variants": list(TranscriptText),
+                "active_nav": "runs",
+            },
+        )
+
     @app.get("/review")
     def review_queue(
         request: Request, operator: OperatorDep, session: SessionDep
@@ -403,21 +483,14 @@ def _register_routes(app: FastAPI) -> None:
     def export_transcript(
         run_id: uuid.UUID, operator: OperatorDep, session: SessionDep
     ) -> PlainTextResponse:
-        run = _run_or_404(session, run_id)
-        states = {s.label: s for s in label_states(session, run.id)}
-        segments = session.execute(
-            select(TranscriptSegment)
-            .where(TranscriptSegment.pipeline_run_id == run_id)
-            .order_by(TranscriptSegment.segment_index)
-        ).scalars()
-        lines: list[str] = []
-        for seg in segments:
-            lines.append(
-                f"[{seg.start_seconds:9.2f} {seg.end_seconds:9.2f}]"
-                f" {_display_name(states.get(seg.diarization_label or ''), seg)}:"
-                f" {seg.enhanced_text or seg.raw_text}"
-            )
-        return PlainTextResponse("\n".join(lines) + ("\n" if lines else ""))
+        _run_or_404(session, run_id)
+        lines = attributed_transcript(session, run_id, text=TranscriptText.ENHANCED)
+        body = "\n".join(
+            f"[{line.start_seconds:9.2f} {line.end_seconds:9.2f}]"
+            f" {line.speaker}: {line.text}"
+            for line in lines
+        )
+        return PlainTextResponse(body + ("\n" if lines else ""))
 
     @app.get("/media/{run_id}")
     @app.head("/media/{run_id}")
@@ -457,19 +530,6 @@ def _register_routes(app: FastAPI) -> None:
         return StreamingResponse(
             _stream_file(fh, start, length), status_code=status, headers=headers
         )
-
-
-def _display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
-    label = seg.diarization_label or "(no speaker)"
-    if state is None:
-        return label
-    if state.resolution in (Resolution.HUMAN_ASSIGN, Resolution.GROUNDED_COSINE):
-        return state.speaker_name or label
-    if state.resolution is Resolution.HUMAN_EXCLUDE:
-        return f"(excluded) {label}"
-    if state.resolution is Resolution.HUMAN_UNKNOWN:
-        return f"Unknown ({label})"
-    return label
 
 
 def _stream_file(fh: BinaryIO, start: int, length: int) -> Iterator[bytes]:

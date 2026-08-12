@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,18 +25,23 @@ from voxint.adjudication.resolver import (
     unresolved_label_count,
     unresolved_label_exists,
 )
+from voxint.adjudication.transcript import TranscriptText, parse_transcript_text
 from voxint.api.app import create_app
 from voxint.api.runs_query import Cursor, list_runs
 from voxint.config import Settings
 from voxint.db.models import (
     EMBEDDING_DIM,
     AdjudicationDecision,
+    ArtifactKind,
+    AudioArtifact,
     DiarizationTurn,
     MediaItem,
     PipelineRun,
     RunStatus,
     Speaker,
     SpeakerAssignment,
+    StageRun,
+    TranscriptSegment,
 )
 
 CREDS = ("reviewer", "s3cret")
@@ -73,12 +79,18 @@ def make_run(
     orphan_decisions: Iterable[str] = (),
     orphan_grounded: Iterable[str] = (),
     claim: str | None = None,
+    stages: Iterable[dict[str, Any]] = (),
+    segments: Iterable[tuple[str | None, str, str | None]] = (),
+    audio: bool = False,
 ) -> uuid.UUID:
     """Seed one media item + run with controllable review state.
 
     ``labels`` become diarization turns. ``decided`` get a human decision,
     ``grounded``/``ungrounded`` a cosine proposal. ``orphan_*`` attach evidence
     for a label with NO turn (must be ignored). ``claim`` ∈ {None, live, expired}.
+    ``stages`` are ``StageRun`` kwargs (the attempt ledger); ``segments`` are
+    ``(diarization_label, raw_text, enhanced_text)`` transcript rows; ``audio``
+    attaches a PREPROCESSED_AUDIO artifact row (path only — no file written).
     """
     media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
     session.add(media)
@@ -131,6 +143,28 @@ def make_run(
                 method="cosine",
                 confidence=0.9,
                 grounded=label not in set(ungrounded),
+            )
+        )
+    for spec in stages:
+        session.add(StageRun(pipeline_run_id=run.id, **spec))
+    for index, (seg_label, raw_text, enhanced_text) in enumerate(segments):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=float(index * 10),
+                end_seconds=float(index * 10 + 8),
+                raw_text=raw_text,
+                enhanced_text=enhanced_text,
+                diarization_label=seg_label,
+            )
+        )
+    if audio:
+        session.add(
+            AudioArtifact(
+                pipeline_run_id=run.id,
+                kind=ArtifactKind.PREPROCESSED_AUDIO.value,
+                path=f"artifacts/{run.id}/normalized.wav",
             )
         )
     session.commit()
@@ -367,3 +401,284 @@ def test_empty_filters_render_all(
     # A blank select submission sends status=&review= — must mean "all", not 422.
     resp = client.get("/runs", params={"status": "", "review": ""})
     assert resp.status_code == 200
+
+
+# --- run detail + stage ledger ------------------------------------------------
+
+
+def test_run_detail_shows_stage_ledger(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    base = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0"],
+            grounded=["S0"],
+            stages=[
+                {
+                    "stage": "prepare",
+                    "status": "completed",
+                    "attempt": 1,
+                    "worker_id": "worker-a",
+                    "started_at": base,
+                    "finished_at": base + timedelta(seconds=5),
+                },
+                {
+                    "stage": "transcribe",
+                    "status": "failed",
+                    "attempt": 1,
+                    "worker_id": "worker-a",
+                    "started_at": base + timedelta(seconds=10),
+                    "error": "asr exploded",
+                },
+                {
+                    "stage": "transcribe",
+                    "status": "completed",
+                    "attempt": 2,
+                    "worker_id": "worker-b",
+                    "started_at": base + timedelta(seconds=20),
+                },
+            ],
+        )
+    resp = client.get(f"/runs/{run_id}")
+    assert resp.status_code == 200
+    body = resp.text
+    assert "prepare" in body and "transcribe" in body
+    assert "asr exploded" in body  # the failed attempt's error surfaces
+    assert "worker-a" in body and "worker-b" in body  # both attempts' workers
+    # Chronological by started_at — prepare precedes the transcribe attempts.
+    assert body.index("prepare") < body.index("transcribe")
+
+
+def test_run_detail_unknown_run_404(client: TestClient) -> None:
+    assert client.get(f"/runs/{uuid.uuid4()}").status_code == 404
+
+
+def test_run_detail_present_only_links(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        full = make_run(
+            session,
+            labels=["S0"],
+            grounded=["S0"],
+            audio=True,
+            segments=[("S0", "hello", None)],
+        )
+        bare = make_run(session, status=RunStatus.FAILED, labels=[])
+
+    full_body = client.get(f"/runs/{full}").text
+    assert f"/media/{full}" in full_body
+    assert f"/runs/{full}/transcript" in full_body
+    assert f"/review/{full}" in full_body  # completed → adjudication link
+
+    bare_body = client.get(f"/runs/{bare}").text
+    assert f"/media/{bare}" not in bare_body
+    assert f"/runs/{bare}/transcript" not in bare_body
+    assert f"/review/{bare}" not in bare_body  # failed → no adjudication link
+    assert "No audio or transcript yet." in bare_body
+
+
+def test_runs_list_links_to_detail(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, labels=["S0"], grounded=["S0"])
+    assert f'href="/runs/{run_id}"' in client.get("/runs").text
+
+
+# --- transcript (shared resolver-attributed presenter) ------------------------
+
+
+def test_parse_transcript_text_defaults_and_rejects() -> None:
+    assert parse_transcript_text(None) is TranscriptText.ENHANCED
+    assert parse_transcript_text("") is TranscriptText.ENHANCED
+    assert parse_transcript_text("raw") is TranscriptText.RAW
+    assert parse_transcript_text("enhanced") is TranscriptText.ENHANCED
+    with pytest.raises(ValueError):
+        parse_transcript_text("sideways")
+
+
+def test_transcript_variants_select_text(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            decided=["S1"],  # exclude
+            segments=[
+                ("S0", "raw hello", "enhanced hello"),
+                ("S1", "raw goodbye", None),  # no enhancement → raw fallback
+            ],
+        )
+    enhanced = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"})
+    assert enhanced.status_code == 200
+    assert "enhanced hello" in enhanced.text
+    assert "raw goodbye" in enhanced.text  # enhanced NULL → falls back to raw
+    assert "(excluded) S1" in enhanced.text
+    # The requested variant's tab is marked current; the other is not.
+    assert 'aria-current="page">enhanced' in enhanced.text
+    assert 'aria-current="page">raw' not in enhanced.text
+
+    raw = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
+    assert "raw hello" in raw
+    assert "enhanced hello" not in raw  # raw view ignores enhancement
+    assert "raw goodbye" in raw
+
+
+def test_transcript_defaults_to_enhanced(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0"],
+            grounded=["S0"],
+            segments=[("S0", "raw only", "enhanced only")],
+        )
+    body = client.get(f"/runs/{run_id}/transcript").text  # no text= → enhanced
+    assert "enhanced only" in body
+    assert "raw only" not in body
+
+
+def test_transcript_attribution_and_export_agree(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1", "S2", "S3"],
+            grounded=["S0"],  # grounded cosine → speaker name
+            decided=["S1"],  # exclude → "(excluded) S1"
+            segments=[
+                ("S0", "s0 raw", "s0 enh"),
+                ("S1", "s1 raw", None),
+                ("S2", "s2 raw", None),
+                ("S3", "s3 raw", None),
+                ("GHOST", "ghost raw", None),  # label with no turn → state None
+                (None, "nameless raw", None),  # NULL label → "(no speaker)"
+            ],
+        )
+        session.add(  # S2 gets an 'unknown' ruling; S3 stays unresolved
+            AdjudicationDecision(
+                pipeline_run_id=run_id,
+                diarization_label="S2",
+                decision="unknown",
+                operator="reviewer",
+                idempotency_key=uuid.uuid4().hex,
+            )
+        )
+        session.commit()
+        s0_name = session.execute(
+            select(Speaker.display_name)
+            .join(SpeakerAssignment, SpeakerAssignment.speaker_id == Speaker.id)
+            .where(
+                SpeakerAssignment.pipeline_run_id == run_id,
+                SpeakerAssignment.diarization_label == "S0",
+            )
+        ).scalar_one()
+
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    assert s0_name in body  # GROUNDED_COSINE
+    assert "(excluded) S1" in body  # HUMAN_EXCLUDE
+    assert "Unknown (S2)" in body  # HUMAN_UNKNOWN
+    assert "S3:" in body  # UNRESOLVED → bare label
+    assert "GHOST:" in body  # segment label with no turn → state None
+    assert "(no speaker)" in body  # NULL diarization label
+
+    # Shared presenter: export.txt attributes every label identically.
+    export = client.get(f"/review/{run_id}/export.txt").text
+    for speaker in (s0_name, "(excluded) S1", "Unknown (S2)", "(no speaker)"):
+        assert speaker in export
+
+
+def test_transcript_unknown_text_is_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, labels=["S0"], grounded=["S0"])
+    resp = client.get(f"/runs/{run_id}/transcript", params={"text": "sideways"})
+    assert resp.status_code == 422
+
+
+def test_transcript_unknown_run_404(client: TestClient) -> None:
+    assert client.get(f"/runs/{uuid.uuid4()}/transcript").status_code == 404
+
+
+def test_transcript_unknown_run_beats_bad_text(client: TestClient) -> None:
+    # Run lookup precedes text parsing: an unknown run with invalid text is a
+    # 404 (run-not-found), never a 422 (bad text) — the spec's ordering claim.
+    resp = client.get(f"/runs/{uuid.uuid4()}/transcript", params={"text": "sideways"})
+    assert resp.status_code == 404
+
+
+def test_run_detail_multi_artifact_hides_audio_link(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Two PREPROCESSED_AUDIO rows: /media requires exactly one and 404s, so the
+    # detail page must not offer an Audio link it cannot serve. audio_available
+    # reuses the same exactly-one predicate, so the link is withheld.
+    with session_factory() as session:
+        run_id = make_run(session, labels=["S0"], grounded=["S0"], audio=True)
+        session.add(
+            AudioArtifact(
+                pipeline_run_id=run_id,
+                kind=ArtifactKind.PREPROCESSED_AUDIO.value,
+                path=f"artifacts/{run_id}/normalized-2.wav",
+            )
+        )
+        session.commit()
+    assert f"/media/{run_id}" not in client.get(f"/runs/{run_id}").text
+
+
+def test_export_bytes_exact_and_html_shares_lines(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Byte-exact export (the presenter refactor must not shift a single space or
+    # the trailing newline), and the same attributed lines land in the HTML view.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            decided=["S1"],  # exclude
+            segments=[("S0", "s0 raw", "s0 enh"), ("S1", "s1 raw", None)],
+        )
+        s0 = session.execute(
+            select(Speaker.display_name)
+            .join(SpeakerAssignment, SpeakerAssignment.speaker_id == Speaker.id)
+            .where(
+                SpeakerAssignment.pipeline_run_id == run_id,
+                SpeakerAssignment.diarization_label == "S0",
+            )
+        ).scalar_one()
+    # Seg 0 @ [0,8] enhanced; seg 1 @ [10,18] excluded, enhanced NULL → raw.
+    expected = (
+        f"[{0.0:9.2f} {8.0:9.2f}] {s0}: s0 enh\n"
+        f"[{10.0:9.2f} {18.0:9.2f}] (excluded) S1: s1 raw\n"
+    )
+    export = client.get(f"/review/{run_id}/export.txt")
+    assert export.content == expected.encode()  # byte-exact, incl. trailing NL
+
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    assert s0 in body and "s0 enh" in body
+    assert "(excluded) S1" in body and "s1 raw" in body
+
+
+def test_transcript_html_escaped(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    payload = "<script>alert(1)</script>"
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0"],
+            grounded=["S0"],
+            segments=[("S0", payload, None)],
+        )
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
+    assert payload not in body
+    assert "&lt;script&gt;" in body
