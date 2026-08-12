@@ -23,6 +23,7 @@ from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
 from voxint.db.models import ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
+from voxint.media.ytdlp import Downloader, build_ytdlp_downloader
 from voxint.pipeline.engine import StageFn
 from voxint.speakers.matching import MatchingGates, gates_from_settings
 
@@ -51,6 +52,14 @@ class StageContext:
     # None when llm_enabled=False: enhance_match then leaves enhanced_text NULL.
     llm: LLMClient | None
     media_root: Path
+    # URL acquisition (ACQUIRE stage). None ⇒ no downloader wired: a URL run then
+    # fails loudly rather than silently no-oping past an un-acquired source. The
+    # no-op path (source_url IS NULL) never touches these, so isolated no-op tests
+    # can leave them at their defaults.
+    downloader: Downloader | None = None
+    # Authoritative post-download size cap the stage re-checks (also handed to the
+    # downloader as an early --max-filesize hint).
+    ytdlp_max_bytes: int = 5 * 1024**3
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     llm_policy: LLMPolicy = LLMPolicy()
@@ -82,6 +91,11 @@ def build_stage_context(settings: Settings) -> StageContext:
             else None
         ),
         media_root=settings.media_root,
+        downloader=build_ytdlp_downloader(
+            timeout_seconds=settings.acquire_timeout_seconds,
+            socket_timeout_seconds=settings.ytdlp_socket_timeout_seconds,
+        ),
+        ytdlp_max_bytes=settings.ytdlp_max_bytes,
         ffmpeg_bin=settings.ffmpeg_bin,
         ffprobe_bin=settings.ffprobe_bin,
         llm_policy=LLMPolicy(

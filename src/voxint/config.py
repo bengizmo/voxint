@@ -48,6 +48,22 @@ class Settings(BaseSettings):
     # a lying header can never write past it. 5 GB fits long-form podcast media.
     upload_max_bytes: int = Field(default=5 * 1024**3, gt=0)
 
+    # yt-dlp URL acquisition (the ACQUIRE stage; only the worker downloads). These
+    # are the minimal knobs the slice-6c downloader consumes; the ACQUIRE lease,
+    # the "acquire_timeout + margin < lease" validator, the six-stage visibility
+    # recompute, and proxy/cookies/enabled land in slice 6d.
+    # Authoritative ceiling on a downloaded file: passed to yt-dlp as an early
+    # --max-filesize hint AND re-checked on the produced file before it is
+    # published, so a hint yt-dlp fails to honour cannot write an oversized source.
+    ytdlp_max_bytes: int = Field(default=5 * 1024**3, gt=0)
+    # Hard wall-clock bound on the whole yt-dlp subprocess. socket_timeout alone
+    # cannot cap a download that keeps trickling just under the socket deadline,
+    # so the process group is killed on expiry. Must sit below the ACQUIRE stage
+    # lease (that ordering validator is wired in 6d with acquire_lease_seconds).
+    acquire_timeout_seconds: PositiveSeconds = 3600.0  # 1 h
+    # Per-socket connect/read timeout handed to yt-dlp (--socket-timeout).
+    ytdlp_socket_timeout_seconds: PositiveSeconds = 30.0
+
     # GPU model services
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"

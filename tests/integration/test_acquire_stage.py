@@ -103,17 +103,6 @@ def test_acquire_completes_and_advances_through_engine(
         assert acquire_claims[0].attempt == 1
 
 
-def test_acquire_refuses_url_run_until_downloader(
-    session_factory: sessionmaker[Session],
-) -> None:
-    run_id = _make_run(session_factory, source_url="https://example.com/video")
-    with (
-        session_factory() as session,
-        pytest.raises(StageDataError, match="not yet implemented"),
-    ):
-        acquire.run(_ctx(), session, run_id)
-
-
 def test_acquire_missing_run_raises(
     session_factory: sessionmaker[Session],
 ) -> None:

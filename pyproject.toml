@@ -31,6 +31,7 @@ dependencies = [
     "numpy>=1.26",
     "scipy>=1.13",
     "pyyaml>=6.0",
+    "yt-dlp>=2024.8",
 ]
 
 [project.optional-dependencies]
