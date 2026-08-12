@@ -50,11 +50,32 @@ from voxint.ingest.service import UrlValidationError, validate_ingest_url
         "http://[::1]/v",  # IPv6 loopback
         "http://[fe80::1]/v",  # IPv6 link-local
         "http://[fc00::1]/v",  # IPv6 unique-local (private)
+        # Multicast literals: is_global is True for these, so is_multicast must
+        # reject them explicitly (regression for the codex/Claude review).
+        "http://224.0.0.1/v",  # IPv4 local multicast
+        "http://239.255.255.250/v",  # IPv4 SSDP multicast
+        "http://[ff02::1]/v",  # IPv6 multicast
+        # Trailing DNS root dot must not side-step the localhost/literal checks.
+        "http://localhost./v",
+        "http://sub.localhost./v",
+        "http://127.0.0.1./v",
+        "http://./v",  # a host of only dots normalizes to empty
+        # Parser-differential / ambiguous authorities.
+        "http://127.0.0.1\\/v",  # backslash (browsers read "\" as "/")
+        "http://[v1.foo]/v",  # bracketed IPvFuture, not a valid IPv6 literal
     ],
 )
 def test_rejects_unsafe_urls(url: str) -> None:
     with pytest.raises(UrlValidationError):
         validate_ingest_url(url)
+
+
+def test_rejects_non_utf8_url_with_typed_error() -> None:
+    """A str carrying an unpaired surrogate must raise UrlValidationError, not a
+    bare UnicodeEncodeError — the validator's typed-error contract holds for any
+    ``str`` input (regression for the codex review)."""
+    with pytest.raises(UrlValidationError):
+        validate_ingest_url("http://example.com/\ud800")
 
 
 @pytest.mark.parametrize(

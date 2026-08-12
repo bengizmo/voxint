@@ -250,17 +250,27 @@ def validate_ingest_url(url: str) -> str:
     rebind before the worker fetches it, so the authoritative "resolves to a
     public address" check is re-done worker-side at download time (slice 6g).
     A DNS *name* therefore passes here (only ``localhost`` is refused by name);
-    an IP *literal* is checked now because it needs no resolution. Error messages
-    never echo the URL, so a signed/secret query string cannot leak into a 422
-    body or the logs.
+    an IP *literal* is checked now because it needs no resolution — except the
+    IPv4-in-IPv6 embeddings (deprecated ``::a.b.c.d`` and NAT64) that Python's
+    ``is_global`` mis-classifies, which the worker's re-resolution (6g) catches.
+    Error messages never echo the URL, so a signed/secret query string cannot
+    leak into a 422 body or the logs.
     """
     candidate = (url or "").strip()
     if not candidate:
         raise UrlValidationError("ingest URL is empty")
-    if len(candidate.encode("utf-8")) > _MAX_URL_BYTES:
+    try:
+        url_bytes = len(candidate.encode("utf-8"))
+    except UnicodeEncodeError as exc:  # e.g. an unpaired surrogate — uphold the typed contract
+        raise UrlValidationError("ingest URL is not valid UTF-8") from exc
+    if url_bytes > _MAX_URL_BYTES:
         raise UrlValidationError(f"ingest URL exceeds {_MAX_URL_BYTES} bytes")
     if _URL_WHITESPACE.search(candidate) or _CONTROL_CHARS.search(candidate):
         raise UrlValidationError("ingest URL contains whitespace or control characters")
+    if "\\" in candidate:
+        # urlsplit keeps backslashes in the authority, but browsers/yt-dlp may
+        # treat "\" as "/" — a parser split we refuse rather than try to model.
+        raise UrlValidationError("ingest URL must not contain a backslash")
     try:
         parts = urlsplit(candidate)
         # .port is lazily parsed; touch it so a bad port (":abc"/out-of-range)
@@ -275,15 +285,31 @@ def validate_ingest_url(url: str) -> str:
     host = parts.hostname
     if not host:
         raise UrlValidationError("ingest URL has no host")
+    # A trailing DNS root dot ("localhost.", "127.0.0.1.") resolves identically to
+    # the un-dotted form, so strip it before the policy checks — otherwise a lone
+    # dot side-steps both the localhost denylist and the IP-literal parse.
+    host = host.rstrip(".")
+    if not host:
+        raise UrlValidationError("ingest URL has no host")
+    bracketed = "[" in parts.netloc  # the authority was an IPv6/IPvFuture literal
     if host == "localhost" or host.endswith(".localhost"):
         # urlsplit lowercases .hostname, so a plain case check is exhaustive.
         raise UrlValidationError("ingest URL host is not permitted")
     try:
         ip = ipaddress.ip_address(host)
     except ValueError:
+        if bracketed:
+            # A bracketed authority that is not a valid IPv6 literal (e.g. an
+            # IPvFuture "[v1.foo]") is ambiguous across parsers — refuse it rather
+            # than let it fall through to the DNS-name branch.
+            raise UrlValidationError("ingest URL has an invalid IPv6 host") from None
         return candidate  # a DNS name — public-address check deferred to the worker (6g)
-    if not ip.is_global:
+    if not ip.is_global or ip.is_multicast:
         # Loopback/private/link-local/reserved/unspecified/multicast literals.
+        # is_global alone admits multicast (224/4, ff00::/8), so reject it too.
+        # (IPv4-in-IPv6 embeddings — deprecated ::a.b.c.d and RFC 6052 NAT64 —
+        # can still evade is_global; the worker re-resolves the host at fetch
+        # time (slice 6g), which is the authoritative public-address gate.)
         raise UrlValidationError("ingest URL host is not permitted")
     return candidate
 
