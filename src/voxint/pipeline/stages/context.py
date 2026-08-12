@@ -98,6 +98,7 @@ def build_stage_context(settings: Settings) -> StageContext:
 
 def build_stage_fns(ctx: StageContext) -> dict[Stage, StageFn]:
     from voxint.pipeline.stages import (
+        acquire,
         diarize_embed,
         enhance_match,
         finalize,
@@ -106,6 +107,7 @@ def build_stage_fns(ctx: StageContext) -> dict[Stage, StageFn]:
     )
 
     return {
+        Stage.ACQUIRE: partial(acquire.run, ctx),
         Stage.PREPARE: partial(prepare.run, ctx),
         Stage.TRANSCRIBE: partial(transcribe.run, ctx),
         Stage.DIARIZE_EMBED: partial(diarize_embed.run, ctx),

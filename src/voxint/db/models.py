@@ -54,6 +54,10 @@ class RunStatus(enum.StrEnum):
 
 
 class Stage(enum.StrEnum):
+    # ACQUIRE is the universal first stage: a no-op success for local/uploaded
+    # media (source_url IS NULL), a yt-dlp download for URL runs. Enum order
+    # mirrors STAGE_ORDER so ``_enum_values`` and ``list(Stage)`` agree with it.
+    ACQUIRE = "acquire"
     PREPARE = "prepare"
     TRANSCRIBE = "transcribe"
     DIARIZE_EMBED = "diarize_embed"
@@ -62,6 +66,7 @@ class Stage(enum.StrEnum):
 
 
 STAGE_ORDER: tuple[Stage, ...] = (
+    Stage.ACQUIRE,
     Stage.PREPARE,
     Stage.TRANSCRIBE,
     Stage.DIARIZE_EMBED,
@@ -112,6 +117,11 @@ class MediaItem(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     source_path: Mapped[str] = mapped_column(Text, unique=True)
+    # Provenance for URL-ingested media (nullable, non-unique): the origin URL a
+    # run was fetched from. NULL means local/uploaded media that already sits at
+    # source_path, so the ACQUIRE stage no-ops. Set only by the URL submission
+    # service; source_path stays the unique file identity in every case.
+    source_url: Mapped[str | None] = mapped_column(Text)
     media_type: Mapped[str | None] = mapped_column(Text)
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)

@@ -18,7 +18,8 @@ def snap(status: RunStatus, stage: Stage | None, revision: int = 0) -> RunSnapsh
 
 
 def test_stage_order_walk() -> None:
-    assert next_stage(None) is Stage.PREPARE
+    assert next_stage(None) is Stage.ACQUIRE
+    assert next_stage(Stage.ACQUIRE) is Stage.PREPARE
     walked = []
     stage = next_stage(None)
     while stage is not None:
@@ -42,9 +43,11 @@ def test_every_status_has_a_policy() -> None:
 
 def test_fresh_run_must_start_at_first_stage() -> None:
     held = snap(RunStatus.QUEUED, None)
-    validate_transition(held, RunStatus.RUNNING, Stage.PREPARE)
-    with pytest.raises(InvalidTransitionError):
-        validate_transition(held, RunStatus.RUNNING, Stage.FINALIZE)
+    validate_transition(held, RunStatus.RUNNING, Stage.ACQUIRE)
+    # PREPARE is no longer the first stage — a fresh run must start at ACQUIRE.
+    for bad in (Stage.PREPARE, Stage.FINALIZE):
+        with pytest.raises(InvalidTransitionError):
+            validate_transition(held, RunStatus.RUNNING, bad)
 
 
 def test_requeued_run_must_resume_at_its_stage() -> None:
@@ -58,6 +61,14 @@ def test_advance_must_be_exactly_one_stage_forward() -> None:
     held = snap(RunStatus.RUNNING, Stage.PREPARE)
     validate_transition(held, RunStatus.RUNNING, Stage.TRANSCRIBE)
     for bad in (Stage.PREPARE, Stage.DIARIZE_EMBED, None):
+        with pytest.raises(InvalidTransitionError):
+            validate_transition(held, RunStatus.RUNNING, bad)
+
+
+def test_acquire_advances_only_to_prepare() -> None:
+    held = snap(RunStatus.RUNNING, Stage.ACQUIRE)
+    validate_transition(held, RunStatus.RUNNING, Stage.PREPARE)
+    for bad in (Stage.ACQUIRE, Stage.TRANSCRIBE, None):
         with pytest.raises(InvalidTransitionError):
             validate_transition(held, RunStatus.RUNNING, bad)
 

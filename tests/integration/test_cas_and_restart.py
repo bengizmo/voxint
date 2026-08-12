@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
+    STAGE_ORDER,
     MediaItem,
     PipelineRun,
     RunStatus,
@@ -48,8 +49,10 @@ def advance_to(
         run = session.get(PipelineRun, run_id)
         assert run is not None
         held = snapshot(run)
-        held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=Stage.PREPARE)
-        stage = Stage.PREPARE
+        # A fresh QUEUED run must enter at STAGE_ORDER[0] (ACQUIRE); walk from
+        # there through the canonical order to the requested target stage.
+        held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=STAGE_ORDER[0])
+        stage = STAGE_ORDER[0]
         while stage is not target:
             following = list(Stage)[list(Stage).index(stage) + 1]
             held = cas_update_run(
@@ -70,8 +73,8 @@ def test_cas_conflict_raises_stale_revision(
         run = session.get(PipelineRun, run_id)
         assert run is not None
         held = snapshot(run)
-        # First writer wins...
-        cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=Stage.PREPARE)
+        # First writer wins... (a fresh run enters at STAGE_ORDER[0] = ACQUIRE)
+        cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=STAGE_ORDER[0])
         session.commit()
         # ...second writer holding the stale snapshot must NOT clobber.
         with pytest.raises(StaleRevisionError):
