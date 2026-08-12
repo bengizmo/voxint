@@ -6,6 +6,7 @@ so the process-group timeout kill and the flag lockdown are tested deterministic
 """
 
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -13,6 +14,8 @@ import pytest
 
 from voxint.media.ytdlp import (
     AcquisitionError,
+    _isolate_child,
+    _kill_process_group,
     build_ytdlp_downloader,
     run_download_command,
 )
@@ -37,9 +40,27 @@ def test_missing_binary_raises() -> None:
         run_download_command(["/nonexistent/yt-dlp-xyz"], timeout_seconds=5)
 
 
+def _read_pid(pidfile: Path) -> int:
+    deadline = time.time() + 5
+    while time.time() < deadline and not pidfile.exists():
+        time.sleep(0.02)
+    return int(pidfile.read_text().strip())
+
+
+def _wait_gone(pid: int, *, timeout: float = 5.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
+
+
 def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     """A wall-clock timeout terminates the child's entire process group, so a
-    grandchild the download spawned (a muxer, a fragment fetcher) cannot outlive
+    descendant the download spawned (a muxer, a fragment fetcher) cannot outlive
     the lease. The shell backgrounds a long sleep, records its pid, and waits;
     after the timeout the recorded pid must be gone."""
     pidfile = tmp_path / "child.pid"
@@ -48,23 +69,51 @@ def test_timeout_kills_the_whole_process_group(tmp_path: Path) -> None:
     with pytest.raises(AcquisitionError, match="wall-clock"):
         run_download_command(argv, timeout_seconds=0.5)
 
-    # The pidfile is written within milliseconds of launch; wait for it defensively.
-    deadline = time.time() + 5
-    while time.time() < deadline and not pidfile.exists():
-        time.sleep(0.02)
-    child_pid = int(pidfile.read_text().strip())
+    assert _wait_gone(_read_pid(pidfile)), "descendant survived the process-group kill"
 
-    # The group kill should have reaped the grandchild sleep.
-    deadline = time.time() + 5
-    gone = False
-    while time.time() < deadline:
-        try:
-            os.kill(child_pid, 0)
-        except ProcessLookupError:
-            gone = True
-            break
-        time.sleep(0.05)
-    assert gone, f"grandchild pid {child_pid} survived the process-group kill"
+
+def test_timeout_kills_group_even_when_leader_exits_first(tmp_path: Path) -> None:
+    """Regression for the getpgid race: the shell backgrounds a long sleep and
+    exits immediately, so the group LEADER is gone (and reaped) before the timeout
+    fires. Signalling proc.pid directly must still reap the surviving descendant —
+    os.getpgid on the reaped leader would fail and silently leave it running."""
+    pidfile = tmp_path / "child.pid"
+    argv = ["sh", "-c", f'sleep 30 & echo $! > "{pidfile}"; exit 0']
+
+    with pytest.raises(AcquisitionError, match="wall-clock"):
+        run_download_command(argv, timeout_seconds=0.5)
+
+    assert _wait_gone(_read_pid(pidfile)), (
+        "descendant survived after the group leader exited first"
+    )
+
+
+def test_kill_process_group_escalates_to_sigkill(tmp_path: Path) -> None:
+    """A process group that ignores SIGTERM is reaped by the SIGKILL escalation
+    after the grace period (exercised with a short grace to stay fast)."""
+    trap = tmp_path / "trap.sh"
+    pidfile = tmp_path / "child.pid"
+    trap.write_text(
+        "#!/bin/sh\n"
+        'trap "" TERM\n'  # the leader ignores SIGTERM
+        "sh -c 'trap \"\" TERM; while :; do sleep 1; done' &\n"  # so does the child
+        f'echo $! > "{pidfile}"\n'
+        "wait\n"
+    )
+    trap.chmod(0o755)
+    proc = subprocess.Popen(
+        [str(trap)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        preexec_fn=_isolate_child,
+    )
+    child_pid = _read_pid(pidfile)
+
+    _kill_process_group(proc, grace_seconds=0.3)  # SIGTERM ignored → SIGKILL fires
+
+    assert _wait_gone(child_pid), "SIGTERM-ignoring group survived the SIGKILL escalation"
+    proc.wait(timeout=5)
 
 
 def test_downloader_argv_locks_down_yt_dlp(tmp_path: Path) -> None:

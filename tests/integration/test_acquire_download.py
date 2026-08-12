@@ -194,6 +194,55 @@ def test_empty_output_is_rejected(
         acquire.run(ctx, session, run_id)
 
 
+def test_publish_never_overwrites_a_concurrently_published_source(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A superseded ("zombie") attempt that finishes after a live attempt already
+    published must NOT overwrite the published bytes, and the committed row must
+    record the hash of the bytes actually on disk — never its own stale bytes.
+    The racing downloader simulates a live attempt publishing source_path while
+    this (zombie) attempt is still 'downloading'."""
+    run_id, media_id, sp = _make_url_run(session_factory)
+    dest = tmp_path / sp
+    live_bytes = b"bytes-from-the-live-attempt"
+    zombie_bytes = b"bytes-from-the-zombie-attempt"
+
+    def racing_downloader(url: str, dest_dir: Path, max_bytes: int) -> None:
+        (dest_dir / "source.m4a").write_bytes(zombie_bytes)  # this attempt's output
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(live_bytes)  # a live attempt published first, mid-download
+
+    ctx = _ctx(tmp_path, downloader=racing_downloader)
+    with session_factory() as session:
+        acquire.run(ctx, session, run_id)
+        session.commit()
+
+    assert dest.read_bytes() == live_bytes  # the zombie did NOT clobber it
+    media = _media_for(session_factory, media_id)
+    assert media.sha256 == hashlib.sha256(live_bytes).hexdigest()
+    assert media.size_bytes == len(live_bytes)
+
+
+def test_symlink_output_is_rejected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A symlink is never a valid sole output — publishing it would leave
+    source_path pointing outside the temp dir, dangling after cleanup."""
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"payload")
+    run_id, _media_id, sp = _make_url_run(session_factory)
+
+    def symlink_downloader(url: str, dest_dir: Path, max_bytes: int) -> None:
+        (dest_dir / "source.m4a").symlink_to(outside)
+
+    ctx = _ctx(tmp_path, downloader=symlink_downloader)
+    with session_factory() as session, pytest.raises(
+        AcquisitionError, match="exactly one"
+    ):
+        acquire.run(ctx, session, run_id)
+    assert not (tmp_path / sp).exists()
+
+
 def test_replay_populates_row_without_redownloading(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

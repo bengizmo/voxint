@@ -24,6 +24,7 @@ cookies is deliberately light here and hardened in slice 6e.
 """
 
 import contextlib
+import ctypes
 import os
 import signal
 import subprocess
@@ -43,6 +44,28 @@ _STDERR_LIMIT = 2000
 # Grace for a SIGTERM'd process group to exit before we SIGKILL it.
 _KILL_GRACE_SECONDS = 5.0
 
+# PR_SET_PDEATHSIG (Linux): ask the kernel to SIGKILL the download if THIS worker
+# process dies (an OOM-kill or crash) while a download is in flight, so a killed
+# worker cannot orphan a yt-dlp process that keeps downloading into an abandoned
+# temp dir. The parent-death signal survives execve for a non-privileged binary,
+# so it stays in effect on the yt-dlp process itself. libc is loaded once here,
+# before any fork, so the post-fork hook does no dlopen in that fragile context.
+_PR_SET_PDEATHSIG = 1
+try:
+    _libc: "ctypes.CDLL | None" = ctypes.CDLL("libc.so.6", use_errno=True)
+except OSError:  # pragma: no cover - non-glibc platform; the group-kill still applies
+    _libc = None
+
+
+def _isolate_child() -> None:  # pragma: no cover - runs post-fork, pre-exec in the child
+    """Child-side setup between fork and exec: lead a new session/process group so
+    a timeout can group-kill the whole download tree, and request SIGKILL-on-
+    parent-death so a worker crash can't leave the download orphaned. Deliberately
+    minimal — no Python-level locks, no dlopen (libc is cached at import)."""
+    os.setsid()
+    if _libc is not None:
+        _libc.prctl(_PR_SET_PDEATHSIG, signal.SIGKILL)
+
 
 class AcquisitionError(Exception):
     """A URL acquisition failed terminally (download error, timeout, or the
@@ -55,25 +78,24 @@ class AcquisitionError(Exception):
     """
 
 
-def _kill_process_group(proc: "subprocess.Popen[str]") -> None:
-    """SIGTERM then SIGKILL the child's whole process group; tolerate races.
+def _kill_process_group(
+    proc: "subprocess.Popen[str]", *, grace_seconds: float = _KILL_GRACE_SECONDS
+) -> None:
+    """SIGTERM then SIGKILL the child's whole process group on timeout.
 
-    The child leads its own session/group (``start_new_session=True``), so the
-    group id equals its pid — but read it via ``getpgid`` rather than assuming,
-    and swallow ``ProcessLookupError`` throughout since the child (or the whole
-    group) may exit between any two calls.
+    The child leads its own session/group (see :func:`_isolate_child`), so the
+    process-group id equals its pid — signal ``proc.pid`` directly rather than
+    calling ``os.getpgid``, which FAILS once the group *leader* exits even while
+    descendants (a fragment fetcher, a muxer) are still alive, silently leaving
+    them running. Escalate to SIGKILL after the grace period regardless of whether
+    the leader itself has reaped, so a descendant that ignored SIGTERM cannot
+    outlive us. ``ProcessLookupError`` (an already-empty group) is benign.
     """
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
+    pgid = proc.pid
     with contextlib.suppress(ProcessLookupError):
         os.killpg(pgid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=_KILL_GRACE_SECONDS)
-        return
-    except subprocess.TimeoutExpired:
-        pass
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=grace_seconds)
     with contextlib.suppress(ProcessLookupError):
         os.killpg(pgid, signal.SIGKILL)
 
@@ -91,10 +113,13 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
     try:
         proc = subprocess.Popen(
             argv,
-            stdout=subprocess.PIPE,
+            # stdout is written to disk via -o; we never read it, so discard it
+            # rather than buffer an unbounded stream in memory.
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,
+            # New session/group + SIGKILL-on-worker-death; see _isolate_child.
+            preexec_fn=_isolate_child,
         )
     except OSError as exc:  # missing binary, permission denied
         raise AcquisitionError(f"failed to execute {argv[0]}: {exc}") from exc

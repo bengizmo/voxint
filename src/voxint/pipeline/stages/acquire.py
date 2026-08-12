@@ -92,13 +92,25 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
             raise AcquisitionError(
                 f"downloaded {size} bytes exceeds the {ctx.ytdlp_max_bytes}-byte limit"
             )
-        sha256 = _sha256(produced)
-        # Atomic publish within the same directory (same filesystem). Compute the
-        # hash on the temp file FIRST so the row's sha256 always describes exactly
-        # the bytes now at source_path, even if a crash follows the rename.
-        os.replace(produced, dest)
-        media.size_bytes = size
-        media.sha256 = sha256
+        # Publish atomically and ONLY if source_path is still absent. os.link raises
+        # FileExistsError rather than overwriting, so a superseded ("zombie")
+        # attempt whose lease already expired can never clobber the bytes a live
+        # attempt published — the published file is immutable once written. The
+        # committing attempt then records the hash of the ACTUAL bytes on disk, so
+        # the row can never describe different bytes than source_path. (os.replace
+        # would unconditionally overwrite, reopening that race — see the dual-review
+        # zombie-overwrite finding.) The hash is taken AFTER the link: dest is now
+        # fixed, so a crash before commit is repaired identically by the replay path.
+        try:
+            os.link(produced, dest)
+        except FileExistsError:
+            # Another attempt won the publish; adopt its file as authoritative.
+            media.size_bytes = dest.stat().st_size
+            media.sha256 = _sha256(dest)
+        else:
+            # produced and dest are the same inode ⇒ this hash matches disk exactly.
+            media.size_bytes = size
+            media.sha256 = _sha256(produced)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -108,9 +120,16 @@ def _single_output(tmp_dir: Path) -> Path:
 
     ACQUIRE must publish exactly one source file. A playlist or format-merge that
     left several files, an extractor that wrote none, or a zero-byte artifact are
-    all terminal acquisition failures — never a silent pick-the-first.
+    all terminal acquisition failures — never a silent pick-the-first. Symlinks are
+    excluded (``is_file()`` follows them): the download comes from an untrusted
+    remote, so ACQUIRE only ever publishes a genuine regular file, never a link
+    whose target could point outside the temp dir (and be deleted by cleanup).
     """
-    files = [entry for entry in tmp_dir.iterdir() if entry.is_file()]
+    files = [
+        entry
+        for entry in tmp_dir.iterdir()
+        if entry.is_file() and not entry.is_symlink()
+    ]
     if len(files) != 1:
         raise AcquisitionError(
             f"expected exactly one downloaded file, found {len(files)}"
