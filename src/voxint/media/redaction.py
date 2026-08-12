@@ -159,8 +159,9 @@ def provenance_host(source_url: str | None) -> str | None:
 
     Fail-closed via the shared :func:`_split_authority` core: ``None`` in (a run
     with no ``source_url``), a malformed URL, a bad port, or a missing host all
-    return ``None`` — never the raw string — which the template renders as a
-    neutral placeholder. A stored ``source_url`` has already passed
+    return ``None`` — never the raw string. The caller renders no provenance for
+    ``None`` (the run-detail view omits its "Source" line entirely rather than
+    printing a placeholder). A stored ``source_url`` has already passed
     ``validate_ingest_url`` (absolute http/https), so in practice only ``None``
     is hit; the structural fail-closed guards a future non-validated caller.
     """

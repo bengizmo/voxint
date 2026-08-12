@@ -1,3 +1,5 @@
+import io
+
 import pytest
 
 from voxint import __version__
@@ -31,3 +33,22 @@ def test_fetch_refuses_when_ytdlp_disabled(
     monkeypatch.setattr(db_session, "build_engine", _no_db)
     assert main(["fetch", "https://www.example.com/video"]) == 2
     assert "disabled" in capsys.readouterr().out
+
+
+def test_fetch_with_no_url_argument_or_stdin_errors(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A URL can be piped in instead of passed positionally (which would leak a
+    # signed URL to ps/proc and shell history). With ingestion enabled but no
+    # positional URL and empty stdin, the CLI errors (exit 2) BEFORE opening a DB
+    # session — proven by making build_engine explode if reached.
+    monkeypatch.setenv("YTDLP_ENABLED", "true")
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    import voxint.db.session as db_session
+
+    def _no_db(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("build_engine must not run when no URL was provided")
+
+    monkeypatch.setattr(db_session, "build_engine", _no_db)
+    assert main(["fetch"]) == 2
+    assert "no URL provided" in capsys.readouterr().out

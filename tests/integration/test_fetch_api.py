@@ -254,6 +254,24 @@ def test_run_detail_shows_host_not_raw_url(
     assert secret_url not in detail  # the raw URL never reaches the view
 
 
+def test_run_detail_local_run_omits_the_source_line(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A local/uploaded run has no source_url; provenance_host returns None and the
+    # detail view must OMIT the "Source" line entirely (never render "Source: None").
+    from voxint.pipeline.engine import submit
+
+    with session_factory() as session:
+        media = MediaItem(source_path="incoming/local/clip.wav")  # source_url is None
+        session.add(media)
+        session.flush()
+        run_id = submit(session, media.id).id
+        session.commit()
+
+    detail = client.get(f"/runs/{run_id}").text
+    assert "Source:" not in detail  # the provenance line is absent, not "Source: None"
+
+
 # --- broker-down degradation --------------------------------------------------
 
 

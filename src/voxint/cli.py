@@ -7,6 +7,7 @@ exception: file-based offline scoring that never touches settings or the DB.
 """
 
 import argparse
+import sys
 import uuid
 from pathlib import Path
 
@@ -129,6 +130,16 @@ def _fetch(args: argparse.Namespace) -> int:
         print("error: URL ingestion is disabled (ytdlp_enabled is off)")
         return 2
 
+    # Resolve the URL from argv or, when the positional is omitted, one line of
+    # stdin. A URL passed positionally is exposed in ps / /proc/<pid>/cmdline and
+    # persisted in shell history; a signed URL therefore leaks the same way the
+    # rest of this arc works to prevent. Piping it (`… | voxint fetch`) keeps it
+    # off both. submit_url still validates it either way.
+    url = args.url if args.url is not None else sys.stdin.readline().strip()
+    if not url:
+        print("error: no URL provided (pass it as an argument or on stdin)")
+        return 2
+
     # Celery import stays lazy in the caller — the ingest service is broker-free,
     # so we commit the durable run first, then publish (commit-before-publish).
     from voxint.worker.tasks import run_pipeline
@@ -139,7 +150,7 @@ def _fetch(args: argparse.Namespace) -> int:
     submission_id = uuid.uuid4().hex
     try:
         with session_scope(factory) as session:
-            run_id = submit_url(session, url=args.url, submission_id=submission_id).id
+            run_id = submit_url(session, url=url, submission_id=submission_id).id
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
         return 2
@@ -180,7 +191,12 @@ def build_parser() -> argparse.ArgumentParser:
     requeue_p.set_defaults(fn=_requeue)
 
     fetch_p = sub.add_parser("fetch", help="submit a URL for yt-dlp acquisition + transcription")
-    fetch_p.add_argument("url")
+    fetch_p.add_argument(
+        "url",
+        nargs="?",
+        help="URL to fetch; omit to read one line from stdin (keeps a signed "
+        "URL out of argv and shell history)",
+    )
     fetch_p.set_defaults(fn=_fetch)
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")

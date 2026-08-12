@@ -1,5 +1,6 @@
 """CLI commands against real Postgres; the broker is stubbed at the task seam."""
 
+import io
 import uuid
 from pathlib import Path
 
@@ -96,6 +97,26 @@ def test_fetch_bad_url_errors_without_enqueue(
     with session_factory() as session:
         assert session.execute(select(PipelineRun)).first() is None
         assert session.execute(select(MediaItem)).first() is None
+
+
+def test_fetch_reads_url_from_stdin_when_omitted(
+    session_factory: sessionmaker[Session],
+    enqueued: list[str],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Piping the URL (no positional arg) keeps a signed URL off argv and shell
+    # history; the stdin path creates the same source_url run as the positional.
+    url = "https://podcast.example.com/ep/42.mp3"
+    monkeypatch.setattr("sys.stdin", io.StringIO(url + "\n"))
+    assert main(["fetch"]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert enqueued == [printed]
+    with session_factory() as session:
+        run = session.get(PipelineRun, uuid.UUID(printed))
+        assert run is not None
+        media = session.execute(select(MediaItem)).scalar_one()
+        assert media.source_url == url
 
 
 def test_status_shows_run_and_ledger(
