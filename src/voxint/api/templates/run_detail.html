@@ -5,6 +5,14 @@
 <h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
 
+{# Gate on the live status too: a bookmarked/refreshed ?enqueue=deferred URL
+   must not keep asserting "is queued" after the sweep already republished it. #}
+{% if enqueue_deferred and run.status == "queued" %}
+<p class="notice">The initial enqueue was deferred because the task broker was
+unavailable. This run is queued and will start automatically once the broker
+recovers — no action needed.</p>
+{% endif %}
+
 <dl>
   <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span></dd>
   <dt>Current stage</dt><dd>{{ run.current_stage or "—" }}</dd>
@@ -13,6 +21,15 @@
   <dt>Updated</dt><dd>{{ run.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
 </dl>
 {% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
+
+{% if run.status == "failed" %}
+<form method="post" action="/runs/{{ run.id }}/requeue" class="requeue">
+  {# Carry the revision we rendered so a stale tab's requeue 409s (exact-revision CAS). #}
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <button type="submit">Requeue</button>
+  <span class="muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
+</form>
+{% endif %}
 
 <p>
   {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}

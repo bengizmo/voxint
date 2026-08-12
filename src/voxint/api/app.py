@@ -9,6 +9,7 @@ harmless replay, while a new submission is a new decision (corrections are
 appends; the newest ruling per label wins at read time).
 """
 
+import logging
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -67,11 +68,15 @@ from voxint.db.models import (
     StageRun,
     TranscriptSegment,
 )
-from voxint.db.session import build_engine, build_session_factory
+from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.ingest import (
+    MissingStageError,
+    RunNotFailedError,
+    RunNotFoundError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
+    requeue_failed_run,
     submit_upload,
 )
 from voxint.media.serving import (
@@ -81,7 +86,10 @@ from voxint.media.serving import (
     parse_range,
 )
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
+from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 from voxint.speakers.matching import gates_from_settings
+
+logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _MEDIA_CHUNK_BYTES = 256 * 1024
@@ -175,31 +183,75 @@ def create_app(
 
 
 def _get_session(request: Request) -> Iterator[Session]:
+    # Delegates the commit-on-success / rollback-on-exception body to the single
+    # session_scope contextmanager rather than duplicating it: FastAPI resumes a
+    # yield-dependency past its `yield` on success and throws the route's
+    # exception back in on failure, which is exactly the control flow the `with`
+    # needs to drive session_scope's commit/rollback. Mutations that commit
+    # before publishing (POST /submit, /runs/{id}/requeue) make the trailing
+    # commit here a harmless no-op — nothing is left pending.
     factory = request.app.state.session_factory
     if factory is None:
         factory = build_session_factory(build_engine(request.app.state.settings.database_url))
         request.app.state.session_factory = factory
-    session = factory()
-    try:
+    with session_scope(factory) as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 def _publish_run(run_id: uuid.UUID) -> None:
     """Enqueue the pipeline for a freshly-committed run (commit-before-publish).
 
     The Celery/broker import stays out of the module top level so the read path
-    — and any DB-less import — never pulls in the broker. This is the
-    straightforward publish; Slice 5 hardens the broker-down case (here a failed
-    enqueue surfaces as a 500, leaving the durable QUEUED run behind)."""
+    — and any DB-less import — never pulls in the broker.
+
+    ``ignore_result=True``: nothing in Voxint consumes ``run_pipeline``'s return
+    value (no ``.get()``/``AsyncResult`` anywhere; the status string is only for
+    logs), so registering a pending result is pure waste. It also makes a
+    dead-broker publish fail *precisely*: with a Redis result backend, plain
+    ``.delay()`` on a down broker raises a vague ``RuntimeError`` from the result
+    consumer's reconnect loop, whereas ignoring the result surfaces the broker
+    connect failure itself as ``kombu.exceptions.OperationalError`` — the exact
+    exception ``_publish_or_defer`` catches."""
     from voxint.worker.tasks import run_pipeline
 
-    run_pipeline.delay(str(run_id))
+    run_pipeline.apply_async((str(run_id),), ignore_result=True)
+
+
+def _publish_or_defer(run_id: uuid.UUID) -> bool:
+    """Publish the run's task, returning ``False`` (never raising) if the broker
+    is unreachable so the request can degrade cleanly.
+
+    Commit-before-publish means the durable QUEUED run already exists, so a Redis
+    outage is non-fatal: leaving the run QUEUED lets the beat recovery sweep
+    re-enqueue it once the broker returns. Only ``OperationalError`` — kombu's
+    wrapper for every transport/connection failure — is swallowed, so a genuine
+    bug in the publish path still raises rather than being silently deferred."""
+    # celery re-exports kombu's OperationalError as the same class; importing it
+    # from celery keeps the broker types under the existing celery.* mypy override
+    # and stays lazy so the read path never pulls the broker in.
+    from celery.exceptions import OperationalError
+
+    try:
+        _publish_run(run_id)
+    except OperationalError:
+        logger.warning(
+            "pipeline enqueue deferred (broker unavailable); run %s stays QUEUED "
+            "for the recovery sweep",
+            run_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _run_redirect(run_id: uuid.UUID, *, published: bool) -> RedirectResponse:
+    """303 back to the run detail; a deferred publish flags the QUEUED banner.
+
+    The ``enqueue=deferred`` marker is read only as a boolean by the detail
+    route — never echoed — and worded historically there, since a refresh or
+    bookmark can carry the parameter past the point the sweep already published."""
+    suffix = "" if published else "?enqueue=deferred"
+    return RedirectResponse(f"/runs/{run_id}{suffix}", status_code=303)
 
 
 def _get_media_gate(request: Request) -> MediaGate:
@@ -391,10 +443,10 @@ def _register_routes(app: FastAPI) -> None:
         run_id = run.id
         # Commit-before-publish: the durable QUEUED run must exist before the
         # enqueue, so commit here rather than leaning on the dependency's
-        # post-return commit (which would run after publish).
+        # post-return commit (which would run after publish). A broker outage is
+        # then non-fatal — the run stays QUEUED and the recovery sweep republishes.
         session.commit()
-        _publish_run(run_id)
-        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+        return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
     @app.get("/runs/{run_id}")
     def run_detail(
@@ -434,6 +486,9 @@ def _register_routes(app: FastAPI) -> None:
                 "stage_runs": stage_runs,
                 "audio_available": audio_available,
                 "transcript_available": transcript_available,
+                # Read as a bare boolean (never echoed): a submit/requeue whose
+                # enqueue was deferred by a broker outage redirects here with it.
+                "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
                 "active_nav": "runs",
             },
         )
@@ -463,6 +518,33 @@ def _register_routes(app: FastAPI) -> None:
                 "active_nav": "runs",
             },
         )
+
+    @app.post("/runs/{run_id}/requeue")
+    def requeue_run(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        revision: Annotated[int, Form()],
+    ) -> RedirectResponse:
+        # Exact-revision CAS from the form's hidden field: a stale browser tab
+        # holding an older revision 409s rather than requeuing a run that already
+        # moved on. FAILED-only, at the failed stage (the service enforces both).
+        try:
+            requeue_failed_run(session, run_id, expected_revision=revision)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RunNotFailedError, MissingStageError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (StaleRevisionError, InvalidTransitionError) as exc:
+            # StaleRevisionError: the tab's revision lost the CAS.
+            # InvalidTransitionError: defensive — this FAILED→QUEUED-same-stage
+            # path cannot trip it, but the CAS contract permits it.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Commit-before-publish, mirroring /submit: the durable QUEUED run must
+        # exist before the enqueue, and a broker outage leaves it QUEUED for the
+        # recovery sweep rather than failing the request.
+        session.commit()
+        return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
     @app.get("/review")
     def review_queue(

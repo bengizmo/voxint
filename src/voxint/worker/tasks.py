@@ -107,7 +107,15 @@ def requeue_failed_stage(factory: sessionmaker[Session], failed: RunSnapshot) ->
         return True
 
 
-@app.task(bind=True, name="voxint.run_pipeline", max_retries=None)  # type: ignore[misc, untyped-decorator, unused-ignore]
+# ignore_result=True: nothing consumes run_pipeline's return value, so storing
+# it wastes a Redis write. It also matters for degraded publishing — with a Redis
+# result backend, enqueuing onto a DOWN broker otherwise raises a vague
+# RuntimeError from the result consumer's reconnect loop instead of the broker's
+# own kombu OperationalError, which is what the API's _publish_or_defer catches.
+# Setting it on the task (not just per apply_async) makes self.retry(), the CLI's
+# .delay(), and the recovery sweep's re-publish all inherit the policy — a
+# per-call flag is not propagated by Celery's Task.retry().
+@app.task(bind=True, name="voxint.run_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def run_pipeline(self: object, run_id_str: str) -> str:
     """Advance one run to COMPLETED (or park it FAILED / adjudication-paused)."""
     factory, stage_fns = _runtime()

@@ -16,6 +16,7 @@ import wave
 from pathlib import Path
 
 import pytest
+from celery.exceptions import OperationalError
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -121,6 +122,46 @@ def test_runs_page_offers_the_upload_form(client: TestClient) -> None:
     assert 'action="/submit"' in body
     assert 'name="submission_id"' in body
     assert 'enctype="multipart/form-data"' in body
+
+
+# --- broker-down degradation --------------------------------------------------
+
+
+def test_broker_down_submit_leaves_run_queued_and_flags_banner(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Commit-before-publish means a broker outage at enqueue time is non-fatal:
+    # the upload succeeds, the durable run stays QUEUED (never FAILED, no error),
+    # and the redirect flags the deferred-enqueue banner. The recovery sweep
+    # republishes it later. Simulated by making the publish raise the exact broker
+    # exception _publish_or_defer catches.
+    def _broker_down(_run_id: uuid.UUID) -> None:
+        raise OperationalError("Error 111 connecting to redis. Connection refused.")
+
+    monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)
+
+    sub = uuid.uuid4().hex
+    resp = client.post(
+        "/submit",
+        files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
+        data={"submission_id": sub},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("?enqueue=deferred")
+    run_id = _run_id_from_redirect(resp.headers["location"].split("?", 1)[0])
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.QUEUED.value  # never FAILED
+        assert run.error is None  # a broker outage is not a stage failure
+
+    # The detail page tells the operator the run is queued and self-healing.
+    detail = client.get(f"/runs/{run_id}?enqueue=deferred").text
+    assert "enqueue was deferred" in detail
 
 
 # --- size cap -----------------------------------------------------------------
