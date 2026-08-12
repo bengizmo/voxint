@@ -14,7 +14,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     PlainTextResponse,
@@ -25,6 +25,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from voxint import __version__
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
@@ -67,6 +68,12 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory
+from voxint.ingest import (
+    UploadConflictError,
+    UploadTooLargeError,
+    UploadValidationError,
+    submit_upload,
+)
 from voxint.media.serving import (
     MediaGate,
     MediaNotServableError,
@@ -78,6 +85,63 @@ from voxint.speakers.matching import gates_from_settings
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _MEDIA_CHUNK_BYTES = 256 * 1024
+# Slack over the per-file upload cap for multipart framing (boundaries,
+# Content-Disposition headers, the submission_id field) so the coarse
+# Content-Length gate never rejects a legitimately max-sized file; the exact
+# per-file cap is enforced while streaming in submit_upload.
+_UPLOAD_ENVELOPE_ALLOWANCE = 1024 * 1024
+
+
+class _RequestSizeLimitMiddleware:
+    """Reject an over-cap ``Content-Length`` before the request body is read.
+
+    FastAPI parses a multipart body (spooling file parts to a temp) *before* a
+    route's dependencies run, so a per-route check cannot gate body reception —
+    by the time the handler executes, the whole body is already spooled. This
+    ASGI middleware inspects only the ``Content-Length`` header and returns 413
+    before Starlette consumes the body, so an *honestly-declared* oversized upload
+    is rejected early ("reject oversized Content-Length early" is real). The
+    authoritative per-file cap is still enforced while streaming in
+    ``submit_upload``.
+
+    Residual (NOT covered here): a chunked request with no ``Content-Length``, or
+    a transport that permits an understated one, is still fully multipart-spooled
+    by Starlette before the streaming cap runs — so pre-body spooling is bounded
+    only for honest declared lengths, not universally. A truly-bounded streaming
+    multipart parse (and moving Basic auth ahead of body parsing, which a per-route
+    ``OperatorDep`` cannot, given FastAPI's dispatch order) is deferred to the
+    security slice. For single-operator home-IP hosting that residual is low-risk.
+    """
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
+        self._app = app
+        self._max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            for name, value in scope["headers"]:
+                if name != b"content-length":
+                    continue
+                try:
+                    length = int(value)
+                except ValueError:
+                    break  # unparseable → let the streaming cap be authoritative
+                if length > self._max_bytes:
+                    await self._reject(send)
+                    return
+                break
+        await self._app(scope, receive, send)
+
+    @staticmethod
+    async def _reject(send: Send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [(b"content-type", b"text/plain; charset=utf-8")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"request entity too large"})
 
 
 def create_app(
@@ -93,11 +157,19 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
-    app.state.settings = settings or get_settings()
+    resolved = settings or get_settings()
+    app.state.settings = resolved
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory
     app.state.media_gate = None
+    # Coarse, header-only body-size gate that runs before any route parses the
+    # body (see _RequestSizeLimitMiddleware); the streaming per-file cap stays
+    # authoritative. Envelope allowance keeps a max-sized file from tripping it.
+    app.add_middleware(
+        _RequestSizeLimitMiddleware,
+        max_bytes=resolved.upload_max_bytes + _UPLOAD_ENVELOPE_ALLOWANCE,
+    )
     _register_routes(app)
     return app
 
@@ -116,6 +188,18 @@ def _get_session(request: Request) -> Iterator[Session]:
         raise
     finally:
         session.close()
+
+
+def _publish_run(run_id: uuid.UUID) -> None:
+    """Enqueue the pipeline for a freshly-committed run (commit-before-publish).
+
+    The Celery/broker import stays out of the module top level so the read path
+    — and any DB-less import — never pulls in the broker. This is the
+    straightforward publish; Slice 5 hardens the broker-down case (here a failed
+    enqueue surfaces as a 500, leaving the durable QUEUED run behind)."""
+    from voxint.worker.tasks import run_pipeline
+
+    run_pipeline.delay(str(run_id))
 
 
 def _get_media_gate(request: Request) -> MediaGate:
@@ -270,9 +354,47 @@ def _register_routes(app: FastAPI) -> None:
                 "statuses": list(RunStatus),
                 "reviews": list(ReviewFilter),
                 "next_url": next_url,
+                # Server-issued per-render id: namespaces the upload path and makes
+                # a double-submit of this form idempotent (see POST /submit).
+                "submission_id": uuid.uuid4().hex,
                 "active_nav": "runs",
             },
         )
+
+    @app.post("/submit")
+    def submit_media_upload(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        file: Annotated[UploadFile, File()],
+        submission_id: Annotated[str, Form()],
+    ) -> RedirectResponse:
+        settings: Settings = request.app.state.settings
+        # An over-cap Content-Length was already rejected before the body was read
+        # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
+        # cap authoritatively while streaming (covers a lying/absent length).
+        try:
+            run = submit_upload(
+                session,
+                stream=file.file,
+                filename=file.filename or "",
+                submission_id=submission_id,
+                media_root=settings.media_root,
+                max_bytes=settings.upload_max_bytes,
+            )
+        except UploadTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except UploadValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except UploadConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        run_id = run.id
+        # Commit-before-publish: the durable QUEUED run must exist before the
+        # enqueue, so commit here rather than leaning on the dependency's
+        # post-return commit (which would run after publish).
+        session.commit()
+        _publish_run(run_id)
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @app.get("/runs/{run_id}")
     def run_detail(

@@ -4,6 +4,14 @@
 <h1>Runs</h1>
 <p class="muted">Execution history, newest first. Review state applies to completed runs.</p>
 
+<form method="post" action="/submit" enctype="multipart/form-data" class="upload">
+  <input type="hidden" name="submission_id" value="{{ submission_id }}">
+  <label>Upload media
+    <input type="file" name="file" required>
+  </label>
+  <button type="submit">Submit for transcription</button>
+</form>
+
 <form method="get" action="/runs" class="filters">
   <label>Status
     <select name="status">

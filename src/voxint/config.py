@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     review_preview_segments: int = Field(default=8, ge=1)
     # Bounded page size for the /runs execution-history browser (keyset paged).
     runs_page_size: int = Field(default=50, ge=1, le=500)
+    # Hard ceiling on a browser upload (POST /submit), enforced authoritatively
+    # while streaming — an oversized Content-Length is rejected early, but the
+    # stream copy stops and unlinks its temp the moment it crosses this bound, so
+    # a lying header can never write past it. 5 GB fits long-form podcast media.
+    upload_max_bytes: int = Field(default=5 * 1024**3, gt=0)
 
     # GPU model services
     asr_url: str = "http://localhost:8022"

@@ -9,8 +9,12 @@ from voxint.ingest.service import (
     MissingStageError,
     RunNotFailedError,
     RunNotFoundError,
+    UploadConflictError,
+    UploadTooLargeError,
+    UploadValidationError,
     requeue_failed_run,
     submit_media_item,
+    submit_upload,
 )
 from voxint.pipeline.transitions import RunSnapshot
 
@@ -20,6 +24,10 @@ __all__ = [
     "RunNotFailedError",
     "RunNotFoundError",
     "RunSnapshot",
+    "UploadConflictError",
+    "UploadTooLargeError",
+    "UploadValidationError",
     "requeue_failed_run",
     "submit_media_item",
+    "submit_upload",
 ]
