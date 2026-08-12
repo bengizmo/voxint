@@ -18,11 +18,9 @@ from voxint import __version__
 
 
 def _submit(args: argparse.Namespace) -> int:
-    from sqlalchemy import select
-
     from voxint.config import get_settings
-    from voxint.db.models import MediaItem
     from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import submit_media_item
 
     settings = get_settings()
     media_root = settings.media_root.resolve()
@@ -37,19 +35,13 @@ def _submit(args: argparse.Namespace) -> int:
         print(f"error: {resolved} is not a regular file")
         return 2
 
-    from voxint.pipeline.engine import submit
+    # Celery import stays lazy in the caller — the ingest service is broker-free,
+    # so we commit the durable run first, then publish (commit-before-publish).
     from voxint.worker.tasks import run_pipeline
 
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
-        existing = session.execute(
-            select(MediaItem).where(MediaItem.source_path == str(relative))
-        ).scalar_one_or_none()
-        media = existing or MediaItem(source_path=str(relative))
-        if existing is None:
-            session.add(media)
-            session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit_media_item(session, str(relative)).id
     run_pipeline.delay(str(run_id))
     print(run_id)
     return 0
@@ -90,42 +82,24 @@ def _status(args: argparse.Namespace) -> int:
 
 
 def _requeue(args: argparse.Namespace) -> int:
-    from voxint.db.models import PipelineRun, RunStatus
     from voxint.db.session import build_engine, build_session_factory, session_scope
-    from voxint.pipeline.transitions import (
-        InvalidTransitionError,
-        StaleRevisionError,
-        cas_update_run,
-        snapshot,
-    )
+    from voxint.ingest import IngestError, requeue_failed_run
+    from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+
+    # Celery import stays lazy in the caller — the ingest service is broker-free.
     from voxint.worker.tasks import run_pipeline
 
     factory = build_session_factory(build_engine())
     run_id = uuid.UUID(args.run_id)
-    with session_scope(factory) as session:
-        run = session.get(PipelineRun, run_id)
-        if run is None:
-            print(f"error: no run {run_id}")
-            return 2
-        held = snapshot(run)
-        if held.status is not RunStatus.FAILED:
-            print(f"error: run is {held.status.value}, only failed runs can be requeued")
-            return 2
-        if held.current_stage is None:
-            # A FAILED run always carries its failed stage; None means the
-            # state machine was violated — surface it, never guess a stage.
-            print(f"error: run {run_id} is FAILED with no current_stage; refusing to guess")
-            return 2
-        try:
-            cas_update_run(
-                session,
-                held,
-                status=RunStatus.QUEUED,
-                current_stage=held.current_stage,
-            )
-        except (StaleRevisionError, InvalidTransitionError) as exc:
-            print(f"error: {exc}")
-            return 2
+    try:
+        with session_scope(factory) as session:
+            requeue_failed_run(session, run_id)
+    # InvalidTransitionError can't arise on this FAILED->QUEUED-same-stage path,
+    # but cas_update_run's contract permits it — caught as defense-in-depth so a
+    # future transition-map change surfaces as exit 2, never an uncaught traceback.
+    except (IngestError, StaleRevisionError, InvalidTransitionError) as exc:
+        print(f"error: {exc}")
+        return 2
     run_pipeline.delay(str(run_id))
     print(f"requeued {run_id}")
     return 0

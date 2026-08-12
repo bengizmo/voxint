@@ -94,6 +94,9 @@ def test_requeue_only_failed_runs(
         session.commit()
 
     assert main(["requeue", str(run_id)]) == 2  # queued, not failed
+    assert capsys.readouterr().out.strip() == (
+        "error: run is queued, only failed runs can be requeued"
+    )
     assert enqueued == []
 
     with session_factory() as session:
@@ -104,9 +107,88 @@ def test_requeue_only_failed_runs(
         session.commit()
 
     assert main(["requeue", str(run_id)]) == 0
+    assert capsys.readouterr().out.strip() == f"requeued {run_id}"
     assert enqueued == [str(run_id)]
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)
         assert run is not None
         assert run.status == RunStatus.QUEUED.value
         assert run.current_stage == Stage.TRANSCRIBE.value
+
+
+def test_requeue_unknown_run_errors_without_enqueue(
+    session_factory: sessionmaker[Session],
+    enqueued: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = uuid.uuid4()
+    assert main(["requeue", str(missing)]) == 2
+    assert capsys.readouterr().out.strip() == f"error: no run {missing}"
+    assert enqueued == []
+
+
+def test_requeue_failed_without_stage_refuses_to_guess(
+    session_factory: sessionmaker[Session],
+    enqueued: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with session_factory() as session:
+        media = MediaItem(source_path="incoming/corrupt.wav")
+        session.add(media)
+        session.flush()
+        run_id = submit(session, media.id).id
+        session.commit()
+    with session_factory() as session:  # fabricate the impossible FAILED-with-no-stage state
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.status = RunStatus.FAILED.value
+        run.current_stage = None
+        session.commit()
+
+    assert main(["requeue", str(run_id)]) == 2
+    assert capsys.readouterr().out.strip() == (
+        f"error: run {run_id} is FAILED with no current_stage; refusing to guess"
+    )
+    assert enqueued == []
+
+
+def test_submit_publishes_only_after_commit(
+    session_factory: sessionmaker[Session],
+    media_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the broker publish runs, the run must already be durably committed —
+    an independent session opened from inside delay() sees it as QUEUED."""
+    from voxint.worker import tasks
+
+    seen: dict[str, str | None] = {}
+
+    def fake_delay(run_id: str) -> None:
+        with session_factory() as session:
+            run = session.get(PipelineRun, uuid.UUID(run_id))
+            seen["status"] = run.status if run is not None else None
+
+    monkeypatch.setattr(tasks.run_pipeline, "delay", fake_delay)
+    assert main(["submit", "incoming/a.wav"]) == 0
+    assert seen["status"] == RunStatus.QUEUED.value
+
+
+def test_submit_keeps_committed_run_when_publish_fails(
+    session_factory: sessionmaker[Session],
+    media_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A broker outage at publish time must not roll back the durable run: the
+    QUEUED row survives so the recovery sweep can re-enqueue it."""
+    from voxint.worker import tasks
+
+    def boom(run_id: str) -> None:
+        raise RuntimeError("broker unreachable")
+
+    monkeypatch.setattr(tasks.run_pipeline, "delay", boom)
+    with pytest.raises(RuntimeError):
+        main(["submit", "incoming/a.wav"])
+
+    with session_factory() as session:
+        run = session.execute(select(PipelineRun)).scalar_one()
+        assert run.status == RunStatus.QUEUED.value
