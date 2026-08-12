@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.config import get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
+from voxint.media.redaction import cap_length
 from voxint.pipeline.transitions import (
     RunSnapshot,
     StaleRevisionError,
@@ -143,7 +144,10 @@ def _finish_claim(
     assert claim is not None
     claim.status = status.value
     claim.finished_at = datetime.now(tz=UTC)
-    claim.error = error
+    # General length cap for every StageRun.error write (any stage, any caller):
+    # keeps a pathological diagnostic from bloating the ledger. Redaction of the
+    # ACQUIRE stderr tail happens upstream at the raise site (born clean).
+    claim.error = cap_length(error) if error is not None else None
 
 
 def default_stage_leases() -> dict[Stage, int]:

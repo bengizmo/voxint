@@ -19,8 +19,11 @@ a download that keeps trickling bytes just under the socket deadline.
 All terminal failures raise :class:`AcquisitionError`, which is **not** a
 ``ServiceError``, so the worker's retry classifier treats it as deterministic:
 the run parks FAILED @ acquire for a manual Requeue rather than auto-retrying a
-bot-block forever. Error-message redaction of signed query params / proxy /
-cookies is deliberately light here and hardened in slice 6e.
+bot-block forever. Every message this module builds from the subprocess is
+passed through :func:`voxint.media.redaction.redact` at the raise site, so a
+signed source URL (or, once slice 6g wires them in, a proxy string / cookie
+path) that yt-dlp echoes into stderr is scrubbed before it can reach the error
+message, the ledger, or the logs — the exception is born clean.
 """
 
 import contextlib
@@ -30,6 +33,8 @@ import signal
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+
+from voxint.media.redaction import redact
 
 # A downloader materializes the media for ``url`` into ``dest_dir`` (an existing,
 # attempt-unique directory) and returns nothing; the stage discovers the produced
@@ -73,8 +78,9 @@ class AcquisitionError(Exception):
 
     Deterministic for a given input, so the pipeline's failure lane owns it —
     NOT the retry path. It deliberately does not subclass ``ServiceError`` so
-    the worker never auto-retries it; the operator Requeues instead. (Full
-    stderr/URL redaction lands in slice 6e.)
+    the worker never auto-retries it; the operator Requeues instead. The
+    subprocess wrapper raises it with a redacted message (see the module
+    docstring), so the URL/stderr it carries is already scrubbed.
     """
 
 
@@ -122,7 +128,10 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
             preexec_fn=_isolate_child,
         )
     except OSError as exc:  # missing binary, permission denied
-        raise AcquisitionError(f"failed to execute {argv[0]}: {exc}") from exc
+        # argv[0] is the yt-dlp binary and the OSError names it, not a URL, but
+        # redact anyway so every message this module builds from a subprocess is
+        # scrubbed at one boundary rather than trusted case by case.
+        raise AcquisitionError(redact(f"failed to execute {argv[0]}: {exc}")) from exc
     try:
         _, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
@@ -134,7 +143,11 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
             f"acquisition exceeded the {timeout_seconds:g}s wall-clock timeout"
         ) from exc
     if proc.returncode != 0:
-        tail = (stderr or "")[-_STDERR_LIMIT:]
+        # Redact BEFORE slicing: yt-dlp echoes the full source URL (signed query
+        # params, embedded creds) into stderr. Slicing first could keep a
+        # schemeless "?token=..." tail the redactor no longer recognises, so the
+        # whole blob is scrubbed and only then trimmed to the tail limit.
+        tail = redact(stderr or "")[-_STDERR_LIMIT:]
         raise AcquisitionError(
             f"download command failed (exit {proc.returncode}): {tail}"
         )

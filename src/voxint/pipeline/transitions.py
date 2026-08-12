@@ -20,6 +20,7 @@ from sqlalchemy import CursorResult, update
 from sqlalchemy.orm import Session
 
 from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
+from voxint.media.redaction import cap_length
 
 ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
@@ -140,7 +141,9 @@ def cas_update_run(
             .values(
                 status=status.value,
                 current_stage=current_stage.value if current_stage else None,
-                error=error,
+                # General length cap for every PipelineRun.error write; the
+                # ACQUIRE stderr tail is already redacted at its raise site.
+                error=cap_length(error) if error is not None else None,
                 revision=held.revision + 1,
             )
         ),

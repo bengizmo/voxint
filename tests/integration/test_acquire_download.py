@@ -8,6 +8,7 @@ authoritative size cap, sha256, atomic publish, row population).
 """
 
 import hashlib
+import shlex
 import uuid
 from pathlib import Path
 
@@ -25,7 +26,8 @@ from voxint.db.models import (
     StageStatus,
 )
 from voxint.ingest.service import requeue_failed_run
-from voxint.media.ytdlp import AcquisitionError, Downloader
+from voxint.media.redaction import MAX_STORED_ERROR_CHARS
+from voxint.media.ytdlp import AcquisitionError, Downloader, run_download_command
 from voxint.pipeline.engine import StageFailedError, StageFn, execute_run, submit
 from voxint.pipeline.stages import acquire
 from voxint.pipeline.stages.context import StageContext, StageDataError
@@ -376,3 +378,81 @@ def test_requeue_after_failure_creates_next_acquire_attempt(
     assert (tmp_path / sp).read_bytes() == data
     media = _media_for(session_factory, media_id)
     assert media.sha256 == hashlib.sha256(data).hexdigest()
+
+
+# A unique token planted in the fake yt-dlp stderr; the redaction property is
+# asserted structurally by its ABSENCE from the persisted error columns.
+_LEAK_SENTINEL = "ACQUIRE-LEAK-SENTINEL-c0ffee"
+_SIGNED_URL = f"https://cdn.example.com/media.mp3?token={_LEAK_SENTINEL}&sig=deadbeef"
+
+
+def _stderr_leaking_downloader(url: str, dest_dir: Path, max_bytes: int) -> None:
+    """A downloader that exercises the REAL subprocess boundary (so its born-clean
+    redaction runs) with a harmless stub echoing a signed URL to stderr then
+    failing nonzero — exactly the shape yt-dlp produces on a blocked download."""
+    blob = f"ERROR: unable to download {_SIGNED_URL}: HTTP Error 403: Forbidden"
+    run_download_command(
+        ["sh", "-c", f"printf '%s' {shlex.quote(blob)} 1>&2; exit 1"],
+        timeout_seconds=10,
+    )
+
+
+def test_acquire_failure_persists_redacted_error(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A failed download surfaces yt-dlp's stderr (which echoes the signed source
+    URL). The persisted StageRun.error AND PipelineRun.error must carry NO raw
+    URL / token / query, while still naming the failure and the host."""
+    run_id, media_id, sp = _make_url_run(session_factory)
+    ctx = _ctx(tmp_path, downloader=_stderr_leaking_downloader)
+
+    with pytest.raises(StageFailedError) as excinfo:
+        execute_run(session_factory, run_id, _fns(ctx))
+    assert excinfo.value.stage is Stage.ACQUIRE
+
+    claims = _acquire_claims(session_factory, run_id)
+    assert [c.status for c in claims] == [StageStatus.FAILED.value]
+    stage_error = claims[0].error
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.FAILED.value
+        run_error = run.error
+
+    for label, err in (("StageRun.error", stage_error), ("PipelineRun.error", run_error)):
+        assert err is not None, label
+        assert _LEAK_SENTINEL not in err, label  # the signed token is gone
+        assert "token=" not in err and "sig=" not in err, label
+        assert "deadbeef" not in err, label
+        assert "<redacted>" in err, label  # redaction demonstrably ran
+        assert "exit 1" in err, label  # the failure class is still legible
+        assert "cdn.example.com" in err, label  # host kept as a diagnostic
+    # A failed download publishes nothing and records no hash.
+    assert not (tmp_path / sp).exists()
+    media = _media_for(session_factory, media_id)
+    assert media.sha256 is None
+
+
+def test_persisted_stage_error_is_length_capped(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A pathologically long error is length-capped in BOTH ledger columns by the
+    engine's general persistence cap, regardless of the stage."""
+    run_id, _media_id, _sp = _make_url_run(session_factory)
+    huge = "E" * (MAX_STORED_ERROR_CHARS + 5000)
+    ctx = _ctx(tmp_path, downloader=_raiser(AcquisitionError(huge)))
+
+    with pytest.raises(StageFailedError):
+        execute_run(session_factory, run_id, _fns(ctx))
+
+    claims = _acquire_claims(session_factory, run_id)
+    stage_error = claims[0].error
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run_error = run.error
+
+    for err in (stage_error, run_error):
+        assert err is not None
+        assert len(err) <= MAX_STORED_ERROR_CHARS
+        assert err.endswith("[truncated]")
