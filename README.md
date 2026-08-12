@@ -25,6 +25,17 @@ What makes it different is the orchestration "glue" most pipelines skip:
   golden-dataset agreement labeler, runnable as CLIs (worked example under
   [`examples/`](examples/README.md)).
 
+## The adjudication console
+
+Machine proposals stay separate from human rulings: the review queue lists completed runs
+with voices still needing a ruling, and the slot workbench shows each voice's evidence —
+grounded cosine matches, unverified LLM-heard names, transcript previews — with
+assign / enroll / exclude / unknown actions. (Synthetic demo data pictured.)
+
+![Adjudication queue](docs/images/review-queue.png)
+
+![Slot workbench](docs/images/slot-workbench.png)
+
 ## Status
 
 **Pre-alpha — under active extraction.** APIs, schema, and layout will change without notice
