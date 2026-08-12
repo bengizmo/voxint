@@ -114,3 +114,10 @@ decision id — not by cross-table DB triggers. A constraint trigger would be
 the only way to make it structurally airtight and is deliberately omitted as
 disproportionate for a single-writer path; revisit if a second writer ever
 appears.
+
+## Offline measurement
+
+The quality gates above act at pipeline time. The *measurement* layer — name
+accuracy against ground truth, acoustic agreement verdicts, two-voter fusion,
+regression gate metrics — is the offline harness, documented in
+[harness.md](harness.md) and exposed as `voxint score …` (file-based, DB-free).

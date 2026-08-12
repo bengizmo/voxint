@@ -2,22 +2,28 @@
 
 Commands talk to the database directly and hand execution to the Celery
 worker by enqueueing ``voxint.run_pipeline`` — the CLI never runs a stage
-itself. Harness scoring commands land with the harness port (P5).
+itself. The ``score`` group (:mod:`voxint.harness.score_cli`) is the
+exception: file-based offline scoring that never touches settings or the DB.
 """
 
 import argparse
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select
-
 from voxint import __version__
-from voxint.config import get_settings
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, StageRun
-from voxint.db.session import build_engine, build_session_factory, session_scope
+
+# Operational imports (settings, SQLAlchemy, DB models) live inside the
+# handlers: `voxint score …` is file-only and must not pay for — or be able to
+# touch — any of them.
 
 
 def _submit(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.config import get_settings
+    from voxint.db.models import MediaItem
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+
     settings = get_settings()
     media_root = settings.media_root.resolve()
     source = Path(args.path)
@@ -50,6 +56,11 @@ def _submit(args: argparse.Namespace) -> int:
 
 
 def _status(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.db.models import PipelineRun, StageRun
+    from voxint.db.session import build_engine, build_session_factory
+
     factory = build_session_factory(build_engine())
     run_id = uuid.UUID(args.run_id)
     with factory() as session:
@@ -79,6 +90,8 @@ def _status(args: argparse.Namespace) -> int:
 
 
 def _requeue(args: argparse.Namespace) -> int:
+    from voxint.db.models import PipelineRun, RunStatus
+    from voxint.db.session import build_engine, build_session_factory, session_scope
     from voxint.pipeline.transitions import (
         InvalidTransitionError,
         StaleRevisionError,
@@ -125,6 +138,8 @@ def _serve(args: argparse.Namespace) -> int:
     del args
     import uvicorn
 
+    from voxint.config import get_settings
+
     settings = get_settings()  # validators run here, before any socket opens
     uvicorn.run("voxint.api.app:app", host=settings.api_host, port=settings.api_port)
     return 0
@@ -149,6 +164,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)
+
+    # File-based scoring harness: no settings, no DB, no worker (docs/harness.md).
+    from voxint.harness import score_cli
+
+    score_cli.register(sub)
 
     return parser
 
