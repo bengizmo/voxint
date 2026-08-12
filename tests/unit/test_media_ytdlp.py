@@ -8,6 +8,7 @@ so the process-group timeout kill and the flag lockdown are tested deterministic
 import os
 import subprocess
 import time
+import traceback
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,30 @@ def test_timeout_kills_group_even_when_leader_exits_first(tmp_path: Path) -> Non
     assert _wait_gone(_read_pid(pidfile)), (
         "descendant survived after the group leader exited first"
     )
+
+
+def test_timeout_error_does_not_leak_argv_in_traceback() -> None:
+    """The timeout AcquisitionError must NOT chain the raw TimeoutExpired, whose
+    __str__ embeds the whole argv (the signed source URL). Assert the sentinel is
+    absent from the ENTIRE rendered traceback and that the cause is suppressed —
+    str(exc) alone would false-pass since the top-level message is already clean.
+    """
+    sentinel = "TIMEOUT-ARGV-SENTINEL-abc123"
+    url = f"https://cdn.example.com/media.mp3?token={sentinel}&sig=deadbeef"
+    argv = ["sh", "-c", "sleep 30", "--", url]
+
+    try:
+        run_download_command(argv, timeout_seconds=0.5)
+    except AcquisitionError as exc:
+        rendered = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        assert exc.__cause__ is None  # TimeoutExpired cause suppressed
+        assert sentinel not in rendered
+        assert sentinel not in str(exc)
+        assert "wall-clock" in str(exc)  # still names the failure
+    else:  # pragma: no cover - the sleep must outlast the 0.5s timeout
+        raise AssertionError("expected an AcquisitionError from the timeout")
 
 
 def test_kill_process_group_escalates_to_sigkill(tmp_path: Path) -> None:

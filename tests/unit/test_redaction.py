@@ -121,6 +121,51 @@ def test_scheme_only_token_is_fully_redacted() -> None:
     assert "<redacted-url>" in out
 
 
+def test_url_glued_to_preceding_text_is_still_redacted() -> None:
+    # No leading word boundary: a URL abutting prose with no separator must not
+    # slip through with its signed query intact.
+    out = redact(f"ERROR:retryhttps://cdn.example.com/a?token={_SENTINEL}")
+    assert _SENTINEL not in out
+    assert "token=" not in out
+
+
+def test_ipv6_host_with_port_is_kept_bracketed() -> None:
+    out = redact(f"https://[2001:db8::1]:8443/dl?sig={_SENTINEL}")
+    assert _SENTINEL not in out
+    assert "https://[2001:db8::1]:8443/<redacted>" in out
+
+
+def test_non_numeric_port_fails_closed() -> None:
+    # A bogus "port" that is really leaked text must not be preserved as a port.
+    out = redact(f"https://example.com:{_SENTINEL}/path")
+    assert _SENTINEL not in out
+    assert "<redacted-url>" in out
+
+
+def test_malformed_ipv6_authority_does_not_raise_and_is_redacted() -> None:
+    # An unterminated IPv6 literal makes urlsplit raise; the callback must fail
+    # closed to <redacted-url> instead of throwing out of re.sub.
+    out = redact(f"https://[2001:db8::{_SENTINEL}/x")
+    assert _SENTINEL not in out
+    assert "<redacted-url>" in out
+
+
+def test_host_starting_with_invalid_char_fails_closed() -> None:
+    # A host whose first character cannot belong to an authority is stripped to
+    # empty and must collapse to <redacted-url>, never leak the query.
+    out = redact(f"https://~weird/x?token={_SENTINEL}")
+    assert _SENTINEL not in out
+    assert "<redacted-url>" in out
+
+
+def test_quoted_flag_value_with_spaces_is_fully_redacted() -> None:
+    # A cookie path with spaces is one shell-quoted token; the whole quoted run
+    # must be redacted, not just up to the first space.
+    out = redact(f"--cookies '/secrets/My Cookies/{_SENTINEL}.txt'")
+    assert _SENTINEL not in out
+    assert "--cookies <redacted>" in out
+
+
 def test_cap_length_passes_through_within_limit() -> None:
     text = "short error"
     assert cap_length(text, max_len=100) == text
@@ -142,6 +187,12 @@ def test_cap_length_truncates_over_limit_with_marker() -> None:
 def test_cap_length_tiny_limit_stays_bounded() -> None:
     out = cap_length("abcdefghij", max_len=3)
     assert len(out) <= 3
+
+
+def test_cap_length_non_positive_limit_yields_empty() -> None:
+    # A zero or negative cap has no room for any content or marker.
+    assert cap_length("abcdef", max_len=0) == ""
+    assert cap_length("abcdef", max_len=-5) == ""
 
 
 def test_cap_length_default_bound() -> None:

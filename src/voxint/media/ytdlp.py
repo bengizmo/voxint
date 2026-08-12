@@ -128,20 +128,27 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
             preexec_fn=_isolate_child,
         )
     except OSError as exc:  # missing binary, permission denied
-        # argv[0] is the yt-dlp binary and the OSError names it, not a URL, but
-        # redact anyway so every message this module builds from a subprocess is
-        # scrubbed at one boundary rather than trusted case by case.
+        # argv[0] is the yt-dlp binary and the OSError names only it (never the
+        # full argv), so chaining it leaks nothing; redact the message anyway so
+        # every message this module builds from a subprocess is scrubbed at one
+        # boundary. `from exc` is safe here precisely because the cause names
+        # argv[0], unlike the timeout cause below which carries the whole argv.
         raise AcquisitionError(redact(f"failed to execute {argv[0]}: {exc}")) from exc
     try:
         _, stderr = proc.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         _kill_process_group(proc)
         # Reap the (now-terminated) group so no zombie/pipe is left behind.
         with contextlib.suppress(Exception):
             proc.communicate(timeout=_KILL_GRACE_SECONDS)
+        # `from None`, NOT `from exc`: subprocess.TimeoutExpired.__str__ embeds
+        # the ENTIRE argv — including the source URL as its last token — so
+        # chaining it would leak the signed URL (and, once 6g wires them in, the
+        # proxy/cookie args) into any rendered traceback or Celery task log, even
+        # though this message is clean. Suppress the cause so no sink sees argv.
         raise AcquisitionError(
             f"acquisition exceeded the {timeout_seconds:g}s wall-clock timeout"
-        ) from exc
+        ) from None
     if proc.returncode != 0:
         # Redact BEFORE slicing: yt-dlp echoes the full source URL (signed query
         # params, embedded creds) into stderr. Slicing first could keep a
