@@ -19,12 +19,14 @@ The two ``cas_update_run`` errors (:class:`StaleRevisionError`,
 
 import contextlib
 import hashlib
+import ipaddress
 import os
 import re
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -47,6 +49,16 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # ext4/xfs cap a single path component at 255 bytes; stay under it with margin
 # for the ``.upload-XXXX.part`` sibling temp name mkstemp writes alongside it.
 _MAX_FILENAME_BYTES = 200
+
+# yt-dlp URL ingestion is an http(s)-only capability; anything else (file:, data:,
+# ftp:, a bare scheme-relative //host) is rejected at the string level.
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+# A pasted URL that runs to kilobytes is almost certainly hostile or malformed;
+# 2048 is the de-facto interoperable URL length ceiling.
+_MAX_URL_BYTES = 2048
+# A well-formed URL carries no raw whitespace (spaces/tabs/newlines must be
+# percent-encoded); an unencoded whitespace char is a splitting/smuggling smell.
+_URL_WHITESPACE = re.compile(r"\s")
 
 
 class IngestError(Exception):
@@ -104,6 +116,17 @@ class UploadConflictError(IngestError):
     def __init__(self, source_path: str) -> None:
         super().__init__(f"submission already exists with different content: {source_path}")
         self.source_path = source_path
+
+
+class UrlValidationError(IngestError):
+    """A submitted ingest URL failed string-level validation (maps to HTTP 422).
+
+    Raised by :func:`validate_ingest_url` for a URL that is not an absolute
+    http/https URL with a plain hostname — bad scheme, missing host, embedded
+    credentials, whitespace/control characters, over-length, or a non-public IP
+    literal. The message is deliberately generic (never echoes the offending URL)
+    so a validation error can't leak a signed/secret query string into logs.
+    """
 
 
 def submit_media_item(session: Session, source_path: str) -> PipelineRun:
@@ -212,6 +235,57 @@ def sanitize_upload_filename(filename: str) -> str:
     if os.path.basename(name) != name:
         raise UploadValidationError("upload filename must be a bare basename")
     return name
+
+
+def validate_ingest_url(url: str) -> str:
+    """Validate an ingest URL at the string level, returning it whitespace-trimmed.
+
+    Enforces the shape yt-dlp is permitted to fetch: an absolute http/https URL
+    with a plain hostname, no embedded credentials, no whitespace/control
+    characters, under the length ceiling, and — when the host is an IP literal —
+    a globally routable address (loopback/private/link-local/reserved/multicast
+    literals are refused). This is the FIRST SSRF guard and gates row creation.
+
+    It deliberately does **not** resolve DNS: a name that looks public now can
+    rebind before the worker fetches it, so the authoritative "resolves to a
+    public address" check is re-done worker-side at download time (slice 6g).
+    A DNS *name* therefore passes here (only ``localhost`` is refused by name);
+    an IP *literal* is checked now because it needs no resolution. Error messages
+    never echo the URL, so a signed/secret query string cannot leak into a 422
+    body or the logs.
+    """
+    candidate = (url or "").strip()
+    if not candidate:
+        raise UrlValidationError("ingest URL is empty")
+    if len(candidate.encode("utf-8")) > _MAX_URL_BYTES:
+        raise UrlValidationError(f"ingest URL exceeds {_MAX_URL_BYTES} bytes")
+    if _URL_WHITESPACE.search(candidate) or _CONTROL_CHARS.search(candidate):
+        raise UrlValidationError("ingest URL contains whitespace or control characters")
+    try:
+        parts = urlsplit(candidate)
+        # .port is lazily parsed; touch it so a bad port (":abc"/out-of-range)
+        # surfaces here rather than as an obscure failure deeper in the worker.
+        _ = parts.port
+    except ValueError as exc:  # malformed IPv6 literal, un-castable/out-of-range port
+        raise UrlValidationError("ingest URL is malformed") from exc
+    if parts.scheme not in _ALLOWED_URL_SCHEMES:
+        raise UrlValidationError("ingest URL must be an absolute http/https URL")
+    if parts.username is not None or parts.password is not None:
+        raise UrlValidationError("ingest URL must not embed credentials")
+    host = parts.hostname
+    if not host:
+        raise UrlValidationError("ingest URL has no host")
+    if host == "localhost" or host.endswith(".localhost"):
+        # urlsplit lowercases .hostname, so a plain case check is exhaustive.
+        raise UrlValidationError("ingest URL host is not permitted")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return candidate  # a DNS name — public-address check deferred to the worker (6g)
+    if not ip.is_global:
+        # Loopback/private/link-local/reserved/unspecified/multicast literals.
+        raise UrlValidationError("ingest URL host is not permitted")
+    return candidate
 
 
 def _submission_dir(submission_id: str) -> str:
@@ -352,3 +426,76 @@ def submit_upload(
         if not published:
             with contextlib.suppress(FileNotFoundError):
                 temp_path.unlink()
+
+
+def _replay_url_run(
+    session: Session, media: MediaItem, *, source_url: str
+) -> PipelineRun:
+    """Resolve a same-``submission_id`` URL re-POST to its original run, or 409.
+
+    The uuid-namespaced ``source_path`` (``incoming/{uuid}/source``) already
+    exists, so this is a form replay. The first submission's URL wins: a replay
+    carrying the SAME url returns the run created the first time (idempotent, no
+    duplicate run); a replay carrying a DIFFERENT url is refused, because
+    silently acquiring a URL the operator never pasted is the same divergence the
+    upload path refuses on mismatched bytes (hence the shared
+    :class:`UploadConflictError`, keyed on the stable ``source_path``). A stored
+    MediaItem with no run is a partially-completed first attempt — heal it by
+    submitting.
+    """
+    if media.source_url != source_url:
+        raise UploadConflictError(media.source_path)
+    run = session.execute(
+        select(PipelineRun)
+        .where(PipelineRun.media_item_id == media.id)
+        .order_by(PipelineRun.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return run if run is not None else submit(session, media.id)
+
+
+def submit_url(
+    session: Session,
+    *,
+    url: str,
+    submission_id: str,
+) -> PipelineRun:
+    """Register a URL for acquisition as an immutable MediaItem and queue a run.
+
+    The origin ``url`` is validated (:func:`validate_ingest_url`) and stored as
+    ``MediaItem.source_url``; ``source_path`` is PRE-ASSIGNED to the uuid-
+    namespaced ``incoming/{submission_id}/source`` — unique by construction, so
+    no schema relaxation is needed and the file the worker's ACQUIRE stage
+    downloads (slice 6c) lands there. No filesystem write happens here: unlike an
+    upload, the bytes do not exist yet, so ``source_path`` is an *intended*
+    location until ACQUIRE materializes it.
+
+    The server-issued ``submission_id`` makes a form re-POST idempotent: the same
+    id + same url returns the run created the first time; the same id + a
+    DIFFERENT url is a conflict (see :func:`_replay_url_run`). **This module never
+    invokes yt-dlp — only the worker's ACQUIRE stage does.**
+
+    Broker-free: the caller commits, then lazily publishes ``voxint.run_pipeline``
+    (commit-before-publish). Raises :class:`UrlValidationError` (bad url) or
+    :class:`UploadValidationError` (bad submission id) — both HTTP 422 — or
+    :class:`UploadConflictError` (replayed id, different url) — HTTP 409.
+    """
+    validated_url = validate_ingest_url(url)
+    sub = _submission_dir(submission_id)
+    rel = str(PurePosixPath("incoming") / sub / "source")
+
+    # Claim the uuid-namespaced source_path row; a re-POST of the same
+    # submission_id collides on the UNIQUE constraint and routes through
+    # _replay_url_run. (SAVEPOINT so the conflict rolls back only the insert, not
+    # the caller's transaction — mirrors _get_or_create_media / submit_upload.)
+    try:
+        with session.begin_nested():
+            media = MediaItem(source_path=rel, source_url=validated_url)
+            session.add(media)
+            session.flush()
+    except IntegrityError:
+        winner = session.execute(
+            select(MediaItem).where(MediaItem.source_path == rel)
+        ).scalar_one()
+        return _replay_url_run(session, winner, source_url=validated_url)
+    return submit(session, media.id)

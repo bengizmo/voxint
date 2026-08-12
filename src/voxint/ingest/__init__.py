@@ -12,9 +12,12 @@ from voxint.ingest.service import (
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
+    UrlValidationError,
     requeue_failed_run,
     submit_media_item,
     submit_upload,
+    submit_url,
+    validate_ingest_url,
 )
 from voxint.pipeline.transitions import RunSnapshot
 
@@ -27,7 +30,10 @@ __all__ = [
     "UploadConflictError",
     "UploadTooLargeError",
     "UploadValidationError",
+    "UrlValidationError",
     "requeue_failed_run",
     "submit_media_item",
     "submit_upload",
+    "submit_url",
+    "validate_ingest_url",
 ]

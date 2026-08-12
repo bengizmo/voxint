@@ -17,8 +17,12 @@ from voxint.ingest import (
     MissingStageError,
     RunNotFailedError,
     RunNotFoundError,
+    UploadConflictError,
+    UploadValidationError,
+    UrlValidationError,
     requeue_failed_run,
     submit_media_item,
+    submit_url,
 )
 from voxint.pipeline.transitions import (
     RunSnapshot,
@@ -248,3 +252,136 @@ def test_requeue_two_operators_second_sees_run_no_longer_failed(
     finally:
         first.close()
         second.close()
+
+
+# --- submit_url: URL ingestion registration (slice 6b) ------------------------
+# submit_url stays broker-free like the rest of the service: it only registers a
+# MediaItem (source_url set, source_path pre-assigned) + a QUEUED run; the worker's
+# ACQUIRE stage does the yt-dlp download later (slice 6c). No file is written here.
+
+_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+
+def test_submit_url_creates_media_with_source_url_and_queued_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    submission_id = str(uuid.uuid4())
+    with session_factory() as session:
+        run = submit_url(session, url=_URL, submission_id=submission_id)
+        session.commit()
+        run_id = run.id
+
+    with session_factory() as session:
+        media = session.execute(select(MediaItem)).scalar_one()
+        assert media.source_url == _URL
+        # source_path is uuid-namespaced (unique) and not yet materialized on disk.
+        assert media.source_path == f"incoming/{uuid.UUID(submission_id).hex}/source"
+        assert media.size_bytes is None and media.sha256 is None
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.QUEUED.value
+        assert stored.current_stage is None  # fresh run resolves to STAGE_ORDER[0] = acquire
+        assert stored.media_item_id == media.id
+
+
+def test_submit_url_distinct_submission_ids_mint_distinct_runs(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """source_url is non-unique: the SAME url under two submission_ids yields two
+    independent immutable MediaItems + runs (distinct uuid-namespaced paths)."""
+    with session_factory() as session:
+        first = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).id
+        second = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).id
+        session.commit()
+
+    assert first != second
+    with session_factory() as session:
+        assert len(session.execute(select(MediaItem)).scalars().all()) == 2
+        assert len(session.execute(select(PipelineRun)).scalars().all()) == 2
+
+
+def test_submit_url_same_submission_id_same_url_is_idempotent(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A form re-POST (same server-issued submission_id, same url) returns the run
+    created the first time — no duplicate MediaItem, no duplicate run."""
+    submission_id = str(uuid.uuid4())
+    with session_factory() as session:
+        first = submit_url(session, url=_URL, submission_id=submission_id).id
+        session.commit()
+    with session_factory() as session:
+        second = submit_url(session, url=_URL, submission_id=submission_id).id
+        session.commit()
+
+    assert first == second
+    with session_factory() as session:
+        assert len(session.execute(select(MediaItem)).scalars().all()) == 1
+        assert len(session.execute(select(PipelineRun)).scalars().all()) == 1
+
+
+def test_submit_url_same_submission_id_different_url_conflicts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Reusing a submission_id with a DIFFERENT url is refused (409): silently
+    acquiring a URL the operator never pasted is the divergence we reject, and the
+    first submission's url wins. Nothing is written on the conflicting attempt."""
+    submission_id = str(uuid.uuid4())
+    with session_factory() as session:
+        submit_url(session, url=_URL, submission_id=submission_id)
+        session.commit()
+    with session_factory() as session:
+        with pytest.raises(UploadConflictError):
+            submit_url(session, url="https://example.com/other.mp3", submission_id=submission_id)
+        session.rollback()
+
+    with session_factory() as session:
+        media = session.execute(select(MediaItem)).scalar_one()
+        assert media.source_url == _URL  # unchanged — first url wins
+        assert len(session.execute(select(PipelineRun)).scalars().all()) == 1
+
+
+def test_submit_url_replay_heals_media_with_no_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A stored MediaItem whose run never materialized (a partial first attempt)
+    is healed on replay: the same url mints the missing run rather than 409-ing."""
+    submission_id = str(uuid.uuid4())
+    rel = f"incoming/{uuid.UUID(submission_id).hex}/source"
+    with session_factory() as session:
+        session.add(MediaItem(source_path=rel, source_url=_URL))  # media, but no run
+        session.commit()
+
+    with session_factory() as session:
+        run = submit_url(session, url=_URL, submission_id=submission_id)
+        session.commit()
+        run_id = run.id
+
+    with session_factory() as session:
+        assert len(session.execute(select(MediaItem)).scalars().all()) == 1
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.QUEUED.value
+
+
+def test_submit_url_invalid_url_writes_nothing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        with pytest.raises(UrlValidationError):
+            submit_url(session, url="ftp://example.com/f.mp3", submission_id=str(uuid.uuid4()))
+        session.rollback()
+    with session_factory() as session:
+        assert session.execute(select(MediaItem)).scalars().all() == []
+        assert session.execute(select(PipelineRun)).scalars().all() == []
+
+
+def test_submit_url_invalid_submission_id_writes_nothing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        with pytest.raises(UploadValidationError):
+            submit_url(session, url=_URL, submission_id="not-a-uuid")
+        session.rollback()
+    with session_factory() as session:
+        assert session.execute(select(MediaItem)).scalars().all() == []
+        assert session.execute(select(PipelineRun)).scalars().all() == []
