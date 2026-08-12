@@ -1,0 +1,6 @@
+{"item_id": "ep-001", "slots": {"SPEAKER_00": {"assigned_name": "Dana Fox", "truth": "Dana Fox", "confidence": 0.9, "duration": 412.5}, "SPEAKER_01": {"assigned_name": null, "truth": "__ABSTAIN__", "duration": 610.2}}}
+{"item_id": "ep-002", "slots": {"SPEAKER_00": {"assigned_name": null, "truth": "Daniela Fox", "duration": 300.0}, "SPEAKER_01": {"assigned_name": "Lee Waters", "truth": "Lee Waters", "confidence": 0.85, "duration": 505.4}}}
+{"item_id": "ep-003", "slots": {"SPEAKER_00": {"assigned_name": "Sam Ortiz", "truth": "Lee Waters", "confidence": 0.7, "duration": 640.0}}}
+{"item_id": "ep-004", "slots": {"SPEAKER_00": {"assigned_name": "Dana Fox", "truth": "__ABSTAIN__", "confidence": 0.6, "duration": 120.0}, "SPEAKER_01": {"assigned_name": null, "truth": "Sam Ortiz", "duration": 340.0}}}
+{"item_id": "ep-005", "slots": {"SPEAKER_00": {"assigned_name": "speaker_00", "truth": "Sam Ortiz", "duration": 280.0}, "SPEAKER_01": {"assigned_name": null, "truth": "__NEITHER_DETERMINABLE__", "duration": 45.0}}}
+{"item_id": "ep-006", "slots": {"SPEAKER_00": {"assigned_name": "Sam Ortiz", "truth": "Lee Waters", "confidence": 0.66, "duration": 500.0}}}

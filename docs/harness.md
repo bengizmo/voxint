@@ -12,7 +12,8 @@ record. Unknown extra fields are ignored; missing/malformed required fields —
 including non-finite numbers and negative durations — are an error reported
 with file and line number, exit code 2. Reports are written atomically (temp
 file + rename) with deterministic key ordering, so identical inputs produce
-byte-identical outputs.
+byte-identical outputs. A small synthetic dataset exercising all three
+commands lives in [`examples/`](../examples/README.md).
 
 ## Why these scorers exist
 

@@ -22,7 +22,8 @@ What makes it different is the orchestration "glue" most pipelines skip:
 - **A built-in adjudication web UI** — review queue, guarded slot workbench, and an immutable
   decision ledger, served as Jinja + htmx from the same FastAPI app (no Node toolchain).
 - **Measurement harnesses** — name-accuracy scoring (McNemar / bootstrap / Wilson) and a
-  golden-dataset agreement labeler, runnable as CLIs.
+  golden-dataset agreement labeler, runnable as CLIs (worked example under
+  [`examples/`](examples/README.md)).
 
 ## Status
 

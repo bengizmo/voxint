@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "embedding_space": "ecapa-tdnn-v2",
+  "dims": 8,
+  "voiceprints": {
+    "host-dana": {
+      "embedding": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+      "enrollment_items": 5,
+      "held_out": true,
+      "source_item_ids": ["seed-01", "seed-02"]
+    },
+    "host-lee": {
+      "embedding": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+      "enrollment_items": 4,
+      "held_out": true,
+      "source_item_ids": ["seed-03"]
+    }
+  }
+}
