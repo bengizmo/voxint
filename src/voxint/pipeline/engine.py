@@ -149,12 +149,16 @@ def _finish_claim(
 def default_stage_leases() -> dict[Stage, int]:
     """Per-stage lease budgets from settings.
 
-    diarize_embed gets its own: one diarization call plus every embedding
-    batch must fit inside the lease, or a healthy worker gets robbed mid-stage.
+    Two stages get dedicated leases; the rest share stage_lease_seconds.
+    diarize_embed: one diarization call plus every embedding batch must fit
+    inside the lease, or a healthy worker gets robbed mid-stage. acquire: the
+    yt-dlp download timeout plus its kill/hash/publish tail must fit, so its
+    lease is sized against acquire_timeout_seconds, not a GPU call.
     """
     settings = get_settings()
     leases = {stage: settings.stage_lease_seconds for stage in Stage}
     leases[Stage.DIARIZE_EMBED] = settings.diarize_embed_lease_seconds
+    leases[Stage.ACQUIRE] = settings.acquire_lease_seconds
     return leases
 
 

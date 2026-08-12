@@ -4,6 +4,7 @@ Every endpoint, path, credential, and tunable enters the system here — nothing
 hardcoded elsewhere. Values come from the environment (or an ``.env`` file in dev).
 """
 
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -15,6 +16,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 PositiveSeconds = Annotated[float, Field(gt=0, allow_inf_nan=False)]
 Ratio = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
 Cosine = Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)]
+
+# Headroom the ACQUIRE lease must keep over acquire_timeout_seconds. After the
+# download timeout fires, the yt-dlp process group still needs its SIGTERM->
+# SIGKILL grace (media.ytdlp._KILL_GRACE_SECONDS, 5 s) and — on a successful
+# download — the produced file must be hashed and atomically published before
+# the stage commits. If that tail could outlast the lease, recovery might
+# reclaim ACQUIRE mid-publish. 300 s comfortably covers hashing a multi-GiB
+# file plus the kill grace and the commit.
+ACQUIRE_CLEANUP_MARGIN_SECONDS = 300.0
 
 
 class Settings(BaseSettings):
@@ -48,21 +58,38 @@ class Settings(BaseSettings):
     # a lying header can never write past it. 5 GB fits long-form podcast media.
     upload_max_bytes: int = Field(default=5 * 1024**3, gt=0)
 
-    # yt-dlp URL acquisition (the ACQUIRE stage; only the worker downloads). These
-    # are the minimal knobs the slice-6c downloader consumes; the ACQUIRE lease,
-    # the "acquire_timeout + margin < lease" validator, the six-stage visibility
-    # recompute, and proxy/cookies/enabled land in slice 6d.
+    # yt-dlp URL acquisition (the ACQUIRE stage; only the worker downloads).
+    # URL ingestion is an authenticated admin egress capability, on by default.
+    # This flag is enforced at the *submission* surface (the fetch route/CLI
+    # refuse when it is off, wired in a later slice); the worker's ACQUIRE stage
+    # never consults it, so a run that already exists stays processable.
+    ytdlp_enabled: bool = True
     # Authoritative ceiling on a downloaded file: passed to yt-dlp as an early
     # --max-filesize hint AND re-checked on the produced file before it is
     # published, so a hint yt-dlp fails to honour cannot write an oversized source.
     ytdlp_max_bytes: int = Field(default=5 * 1024**3, gt=0)
     # Hard wall-clock bound on the whole yt-dlp subprocess. socket_timeout alone
     # cannot cap a download that keeps trickling just under the socket deadline,
-    # so the process group is killed on expiry. Must sit below the ACQUIRE stage
-    # lease (that ordering validator is wired in 6d with acquire_lease_seconds).
-    acquire_timeout_seconds: PositiveSeconds = 3600.0  # 1 h
+    # so the process group is killed on expiry. 2 h: the ceiling is 5 GiB and a
+    # slow home uplink (~1 MB/s) needs ~90 min for a full-ceiling download, so a
+    # 1 h bound would spuriously fail large but legitimate sources. Must sit below
+    # acquire_lease_seconds by ACQUIRE_CLEANUP_MARGIN_SECONDS (validated below).
+    acquire_timeout_seconds: PositiveSeconds = 7200.0  # 2 h
+    # How long a worker may hold the ACQUIRE stage before recovery reclaims it.
+    # ACQUIRE's analogue of stage_lease_seconds; it must outlast the download
+    # timeout plus the kill/hash/publish tail (ACQUIRE_CLEANUP_MARGIN_SECONDS).
+    acquire_lease_seconds: int = 10800  # 3 h
     # Per-socket connect/read timeout handed to yt-dlp (--socket-timeout).
     ytdlp_socket_timeout_seconds: PositiveSeconds = 30.0
+    # Optional outbound proxy for yt-dlp. Introduced here as config only; it is
+    # NOT yet wired into the downloader argv (that hardened lockdown is a later
+    # slice) — setting it today has no effect on downloads.
+    ytdlp_proxy: str = ""
+    # Optional cookies file (Netscape format) for yt-dlp. Validated below as a
+    # readable regular file so a typo fails at startup, not mid-download. Like
+    # ytdlp_proxy it is config only here and NOT yet passed to yt-dlp; treat its
+    # path and contents as a credential (never surfaced in errors).
+    ytdlp_cookies_file: Path | None = None
 
     # GPU model services
     asr_url: str = "http://localhost:8022"
@@ -134,8 +161,12 @@ class Settings(BaseSettings):
     # (covers pending retry countdowns; keep it above retry_backoff_max_seconds).
     queued_run_stale_seconds: int = 3600
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
-    # possible run_pipeline execution (all stages back to back).
-    celery_visibility_timeout_seconds: int = 108000  # 30 h ~= 5 stages x 6 h lease
+    # possible run_pipeline execution — one task runs all SIX stages back to
+    # back, so the horizon has to clear the sum of every stage lease. With
+    # default leases that sum is ~39 h (acquire 3 h + prepare/transcribe/
+    # enhance_match/finalize 4x6 h + diarize_embed 12 h). 48 h keeps headroom;
+    # _celery_visibility_covers_all_leases enforces the floor if leases change.
+    celery_visibility_timeout_seconds: int = 172800  # 48 h
 
     # Domain pack (defaults to the bundled generic pack when unset)
     domain_pack_path: Path | None = None
@@ -193,6 +224,57 @@ class Settings(BaseSettings):
         if lax:
             raise ValueError(
                 f"grounding gates must be at least as strict as proposal gates: {lax}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _acquire_timeout_fits_lease(self) -> "Settings":
+        # A stale ("zombie") ACQUIRE attempt whose lease expired while a fresh
+        # attempt runs is the failure the slice-6c os.link publish closes on the
+        # data side; this closes it on the timing side. The download is bounded
+        # by acquire_timeout_seconds, after which the process group is killed and
+        # — on success — the file is hashed and atomically published before the
+        # stage commits. If timeout plus that tail could reach the lease,
+        # recovery might reclaim ACQUIRE mid-publish. Refuse the overlap at
+        # startup so it can't be opened by misconfiguration.
+        worst_case = self.acquire_timeout_seconds + ACQUIRE_CLEANUP_MARGIN_SECONDS
+        if worst_case >= self.acquire_lease_seconds:
+            raise ValueError(
+                f"acquire_timeout_seconds + cleanup margin ({worst_case}) must be"
+                f" below acquire_lease_seconds ({self.acquire_lease_seconds})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _ytdlp_cookies_file_readable(self) -> "Settings":
+        # If a cookies file is configured it must exist as a readable regular
+        # file now, so a typo fails fast at startup instead of mid-download.
+        # Never put the path (or its contents) in the error — a cookies file is
+        # a credential.
+        cookies = self.ytdlp_cookies_file
+        if cookies is not None and not (cookies.is_file() and os.access(cookies, os.R_OK)):
+            raise ValueError("ytdlp_cookies_file must point to a readable regular file")
+        return self
+
+    @model_validator(mode="after")
+    def _celery_visibility_covers_all_leases(self) -> "Settings":
+        # acks-late redelivery must not fire while a run is still legitimately
+        # working. run_pipeline is a single task that advances through every
+        # stage, so the visibility horizon has to outlast all stage leases held
+        # back to back. Mirror default_stage_leases() (engine.py) inline —
+        # importing it would cycle config <- engine <- config. ACQUIRE and
+        # DIARIZE_EMBED carry dedicated leases; PREPARE, TRANSCRIBE,
+        # ENHANCE_MATCH and FINALIZE (four stages) each use stage_lease_seconds.
+        all_stage_leases = (
+            self.acquire_lease_seconds
+            + self.diarize_embed_lease_seconds
+            + 4 * self.stage_lease_seconds
+        )
+        if self.celery_visibility_timeout_seconds < all_stage_leases:
+            raise ValueError(
+                "celery_visibility_timeout_seconds"
+                f" ({self.celery_visibility_timeout_seconds}) must be at least the sum"
+                f" of all six stage leases ({all_stage_leases})"
             )
         return self
 
