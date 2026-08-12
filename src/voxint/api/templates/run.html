@@ -20,6 +20,7 @@
   <a href="/review/{{ run.id }}/export.txt">Export transcript</a>
 </p>
 <form method="post" action="/review/{{ run.id }}/claim" class="inline">
+  <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
   <button type="submit">Claim for review</button>
 </form>
 {% endif %}

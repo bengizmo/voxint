@@ -55,6 +55,12 @@ from voxint.ingest.service import UrlValidationError, validate_ingest_url
         "http://224.0.0.1/v",  # IPv4 local multicast
         "http://239.255.255.250/v",  # IPv4 SSDP multicast
         "http://[ff02::1]/v",  # IPv6 multicast
+        # IPv6 forms is_global alone mis-judges as global (shared ip_is_public
+        # unwraps the embedded IPv4 / rejects site-local — slice 6g review fix):
+        "http://[fec0::1]/v",  # deprecated site-local
+        "http://[::127.0.0.1]/v",  # IPv4-compatible embedding loopback
+        "http://[64:ff9b::127.0.0.1]/v",  # NAT64 embedding loopback
+        "http://[64:ff9b::169.254.169.254]/v",  # NAT64 embedding cloud metadata
         # Trailing DNS root dot must not side-step the localhost/literal checks.
         "http://localhost./v",
         "http://sub.localhost./v",

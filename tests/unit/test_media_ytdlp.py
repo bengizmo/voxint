@@ -191,13 +191,14 @@ def _record_argv(
     return argfile.read_text().splitlines()
 
 
-def test_downloader_argv_adds_6g_lockdown_and_omits_unset_egress(tmp_path: Path) -> None:
-    """Slice 6g lockdown: plugin dirs cleared and post-processor exec neutralised,
-    and the optional proxy/cookies flags are ABSENT when unset."""
+def test_downloader_argv_adds_6g_lockdown_and_pins_direct_egress(tmp_path: Path) -> None:
+    """Slice 6g lockdown: plugin dirs cleared, post-processor exec neutralised, and
+    --proxy pinned to an explicit empty string (direct) even when unset — so an
+    ambient HTTP(S)_PROXY can't reroute egress. --cookies is absent when unset."""
     args = _record_argv(tmp_path)
     assert "--no-plugin-dirs" in args  # no local/remote plugin loading
     assert "--no-exec" in args  # no post-processor command execution
-    assert "--proxy" not in args
+    assert args[args.index("--proxy") + 1] == ""  # explicit direct, not omitted
     assert "--cookies" not in args
 
 

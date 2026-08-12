@@ -205,6 +205,19 @@ def test_extra_secrets_scrub_a_prose_proxy_string() -> None:
     assert _SENTINEL not in out
 
 
+def test_extra_secret_url_prefix_does_not_expose_target_query() -> None:
+    # A proxy value that is ALSO a URL prefix of the signed target URL must not
+    # strip the scheme _URL_RE needs. Literal-first would yield
+    # "<redacted>/media?token=..." (scheme gone → query survives); structural URL
+    # redaction runs FIRST, dropping the query before the literal pass.
+    proxy = "https://proxy.example:443"
+    out = redact(
+        f"ERROR {proxy}/media?token={_SENTINEL}&sig=abcd", extra_secrets=(proxy,)
+    )
+    assert _SENTINEL not in out
+    assert "token=" not in out and "sig=" not in out
+
+
 def test_extra_secrets_empty_values_are_skipped() -> None:
     # An unset proxy/cookies ("") must not splice the redaction marker into text.
     text = "download command failed (exit 1): ERROR: Forbidden"

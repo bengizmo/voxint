@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_CLAIM, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import (
     EMBEDDING_DIM,
@@ -31,6 +32,7 @@ from voxint.db.models import (
 
 CREDS = ("reviewer", "s3cret")
 SPACE = "titanet-large-v1"
+_CSRF_KEY = "review-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
 
 
 def write_wav(path: Path, seconds: float = 0.5) -> None:
@@ -64,6 +66,7 @@ def client(
         voxint_password=CREDS[1],
         media_root=media_root,
         review_claim_ttl_seconds=600,
+        csrf_secret=_CSRF_KEY,
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
@@ -143,10 +146,26 @@ def seed_run(session: Session, media_root: Path) -> uuid.UUID:
 
 
 def claim_token(client: TestClient, run_id: uuid.UUID) -> str:
-    resp = client.post(f"/review/{run_id}/claim", follow_redirects=False)
+    resp = client.post(
+        f"/review/{run_id}/claim",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303
     location = resp.headers["location"]
     return location.split("token=")[1]
+
+
+def test_claim_rejected_without_csrf_token(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # /review/{id}/claim mints the run's claim token, so it has no unguessable
+    # token of its own — a CSRF token gates a forged cross-site claim. No token ⇒
+    # 403 before claim_run touches the DB (the run stays unclaimed).
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    resp = client.post(f"/review/{run_id}/claim", follow_redirects=False)
+    assert resp.status_code == 403
 
 
 def test_full_review_flow(

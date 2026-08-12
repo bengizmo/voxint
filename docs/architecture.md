@@ -92,8 +92,12 @@ URL ingestion is an authenticated **admin egress** capability (`ytdlp_enabled`,
 on by default), **not a sandbox**, and is documented as such.
 
 **Two SSRF gates, one policy.** A submitted URL is checked at two independent
-points that share a single per-address rule (`media.netcheck.ip_is_public`:
-globally-routable and not multicast), so they can never diverge:
+points that share a single per-address rule (`media.netcheck.ip_is_public`).
+That rule is stricter than the stdlib `is_global`: it rejects IPv6 **site-local**
+(`fec0::/10`) and unwraps **IPv4-in-IPv6 embeddings** (deprecated `::a.b.c.d`, RFC
+6052 NAT64 `64:ff9b::/96`, IPv4-mapped/6to4/Teredo) to judge the embedded IPv4 —
+so `[64:ff9b::127.0.0.1]` is refused, which `is_global` alone would pass. The two
+gates:
 
 1. **String gate (submit time)** — `ingest.validate_ingest_url` requires an
    absolute http/https URL with a plain host, no embedded credentials, no
@@ -102,10 +106,10 @@ globally-routable and not multicast), so they can never diverge:
    public now can rebind before the worker fetches it.
 2. **Resolved-host gate (download time)** — `media.netcheck.assert_host_resolves_public`
    re-resolves the host (A + AAAA) in the worker immediately before the download
-   and rejects it if *any* resolved address is non-public. This is the
-   authoritative gate; it also catches the IPv4-in-IPv6 embeddings (`::a.b.c.d`,
-   NAT64) that `is_global` mis-classifies as literals. On refusal the run parks
-   FAILED @ acquire for a manual Requeue, with a host-only (URL-free) error.
+   and rejects it (via the same `ip_is_public`) if *any* resolved address is
+   non-public — closing the rebind-after-submit window for DNS *names*. It
+   fail-closes on an unresolvable/empty/unparseable result. On refusal the run
+   parks FAILED @ acquire for a manual Requeue, with a host-only (URL-free) error.
 
 **yt-dlp lockdown** (`media.ytdlp`, verified against yt-dlp 2026.07.04): the argv
 runs with `--no-config`, `--no-plugin-dirs` (no local/remote plugin loading),

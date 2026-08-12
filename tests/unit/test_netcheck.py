@@ -26,6 +26,7 @@ from voxint.media.netcheck import (
         "1.1.1.1",
         "93.184.216.34",
         "2606:4700:4700::1111",  # a globally-routable IPv6 literal
+        "64:ff9b::8.8.8.8",  # NAT64 wrapping a PUBLIC IPv4 stays public (only tightens)
     ],
 )
 def test_ip_is_public_true_for_global_unicast(address: str) -> None:
@@ -49,6 +50,14 @@ def test_ip_is_public_true_for_global_unicast(address: str) -> None:
         "fc00::1",  # IPv6 unique-local (private)
         "ff02::1",  # IPv6 multicast
         "2001:db8::1",  # IPv6 documentation range (reserved)
+        # is_global mis-judges these as global — the regression this fix closes:
+        "fec0::1",  # deprecated IPv6 site-local
+        "::127.0.0.1",  # deprecated IPv4-compatible embedding loopback
+        "::192.0.2.1",  # IPv4-compatible embedding a non-global IPv4 (TEST-NET-1)
+        "::ffff:127.0.0.1",  # IPv4-mapped loopback
+        "2002:7f00:1::",  # 6to4 embedding loopback
+        "64:ff9b::127.0.0.1",  # RFC 6052 NAT64 embedding loopback
+        "64:ff9b::169.254.169.254",  # NAT64 embedding the cloud metadata endpoint
     ],
 )
 def test_ip_is_public_false_for_non_public(address: str) -> None:
@@ -76,13 +85,35 @@ def test_public_host_passes() -> None:
 
 @pytest.mark.parametrize(
     "address",
-    ["127.0.0.1", "192.0.2.1", "169.254.169.254", "::1", "fe80::1", "ff02::1"],
+    [
+        "127.0.0.1",
+        "192.0.2.1",
+        "169.254.169.254",
+        "::1",
+        "fe80::1",
+        "ff02::1",
+        # A name resolving to an embedded/site-local IPv6 is caught too (the same
+        # ip_is_public), not just literal IPv4/IPv6.
+        "64:ff9b::127.0.0.1",
+        "fec0::1",
+        "::127.0.0.1",
+    ],
 )
 def test_non_public_resolution_is_rejected(address: str) -> None:
     with pytest.raises(HostNotPublicError, match="non-public"):
         assert_host_resolves_public(
             "rebinding.example.com", resolver=_resolver_returning(address)
         )
+
+
+def test_empty_resolution_fails_closed() -> None:
+    # A resolver that returns no addresses (without raising) must fail closed, not
+    # sail through the skipped loop as a success.
+    def _empty(host: str, *args: object, **kwargs: object) -> list[object]:
+        return []
+
+    with pytest.raises(HostNotPublicError, match="no addresses"):
+        assert_host_resolves_public("empty.example.com", resolver=_empty)
 
 
 def test_rejects_on_first_non_public_among_many() -> None:

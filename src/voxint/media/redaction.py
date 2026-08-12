@@ -132,24 +132,27 @@ def redact(text: str, *, extra_secrets: Iterable[str] = ()) -> str:
     values of credential-bearing yt-dlp flags replaced with ``<redacted>``.
 
     ``extra_secrets`` are caller-known secret literals — the configured
-    ``--proxy`` value and ``--cookies`` path — scrubbed verbatim FIRST, before the
-    structural passes. That is the only way to remove a secret a tool prints as
-    *prose* with neither an http(s)/socks scheme nor a known flag in front of it
-    (e.g. yt-dlp echoing the cookies file path in an ``[Errno 2]`` message): a bare
-    filesystem path is indistinguishable from other text structurally, so it must
-    be matched literally. Empty values are skipped.
+    ``--proxy`` value and ``--cookies`` path — scrubbed verbatim, which is the only
+    way to remove a secret a tool prints as *prose* with neither an http(s)/socks
+    scheme nor a known flag in front of it (e.g. yt-dlp echoing the cookies file
+    path in an ``[Errno 2]`` message): a bare filesystem path is indistinguishable
+    from other text structurally, so it must be matched literally. Empty values are
+    skipped. The literal pass runs LAST, AFTER the structural URL/flag passes: a
+    literal that is itself a URL prefix (a proxy ``https://host:port`` that also
+    prefixes the signed target URL) would otherwise strip the scheme the URL regex
+    needs, leaving the target's ``?token=...`` tail exposed.
 
     Pure and idempotent-friendly: a string with nothing to redact is returned
     unchanged. Apply it BEFORE truncating an untrusted blob — truncating first
     could split a URL and leave a schemeless ``?token=...`` fragment this would
     no longer recognise.
     """
-    scrubbed = text
+    scrubbed = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", text)
+    scrubbed = _URL_RE.sub(_redact_url, scrubbed)
     for secret in extra_secrets:
         if secret:  # never replace() the empty string (would splice the marker in)
             scrubbed = scrubbed.replace(secret, _REDACTED)
-    scrubbed = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", scrubbed)
-    return _URL_RE.sub(_redact_url, scrubbed)
+    return scrubbed
 
 
 def cap_length(text: str, max_len: int = MAX_STORED_ERROR_CHARS) -> str:

@@ -19,6 +19,7 @@
       <td>{{ e.claimed_by or "—" }}</td>
       <td>
         <form method="post" action="/review/{{ e.run_id }}/claim">
+          <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
           <button type="submit">Review</button>
         </form>
       </td>

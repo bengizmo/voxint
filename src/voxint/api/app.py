@@ -52,6 +52,7 @@ from voxint.adjudication.transcript import (
 )
 from voxint.api.auth import require_operator
 from voxint.api.csrf import (
+    CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
     CSRF_SUBMIT,
@@ -352,6 +353,8 @@ def _workbench_context(
         "token": token,
         "resolution": Resolution,
         "nonce": lambda: uuid.uuid4().hex,
+        # CSRF token for the (re)claim form shown when the run is not claimed here.
+        "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
     }
 
 
@@ -657,14 +660,25 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "entries": adjudication_queue(session),
                 "operator": operator,
+                # CSRF token for the per-row claim forms.
+                "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
                 "active_nav": "review",
             },
         )
 
     @app.post("/review/{run_id}/claim")
     def claim(
-        run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> RedirectResponse:
+        # Claim mints the run's claim token, so — unlike the other workbench
+        # mutations — it has no unguessable token of its own to gate a forged POST.
+        # A CSRF token closes that (a cross-site claim would otherwise pin a run to
+        # the victim for the claim TTL). Verified before claim_run touches the DB.
+        _require_csrf(request, CSRF_CLAIM, csrf_token)
         settings: Settings = request.app.state.settings
         _run_or_404(session, run_id)
         try:

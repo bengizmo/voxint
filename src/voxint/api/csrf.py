@@ -39,6 +39,7 @@ _NONCE_BYTES = 16
 CSRF_SUBMIT = "submit"
 CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
+CSRF_CLAIM = "claim"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:

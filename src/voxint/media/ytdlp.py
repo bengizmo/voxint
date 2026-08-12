@@ -195,10 +195,15 @@ def build_ytdlp_downloader(
     - ``file:`` URLs need no flag: yt-dlp disables them by default (we never pass
       ``--enable-file-urls``), so a ``file:`` input/redirect is already refused.
 
-    Optional egress config, appended ONLY when set (empty ⇒ omitted): ``proxy`` →
-    ``--proxy``, ``cookies_file`` → ``--cookies``. Both are credentials, so their
-    literal values are passed to ``run_download_command`` as ``extra_secrets`` and
-    scrubbed verbatim from any surfaced error, even in prose yt-dlp emits.
+    Egress config: ``--proxy`` is passed ALWAYS — with the configured ``proxy`` or
+    an empty string, which yt-dlp reads as an explicit *direct* connection. That is
+    deliberate: omitting ``--proxy`` lets yt-dlp fall back to an ambient
+    ``HTTP(S)_PROXY`` / ``ALL_PROXY`` in the worker env, silently rerouting egress
+    (and its DNS) around the intended path, so egress is pinned to exactly what is
+    configured. ``cookies_file`` → ``--cookies`` is appended only when set. A
+    non-empty proxy and the cookies path are credentials: their literal values go
+    to ``run_download_command`` as ``extra_secrets`` and are scrubbed verbatim from
+    any surfaced error, even in prose yt-dlp emits.
 
     Residual (NOT closed by a userland flag, documented in docs/architecture.md):
     yt-dlp re-resolves the host independently and its generic extractor follows
@@ -229,9 +234,12 @@ def build_ytdlp_downloader(
             "1",
         ]
         # Egress options ride among the flags, before the ``--`` URL terminator.
+        # --proxy is ALWAYS passed (empty string = explicit direct) so an ambient
+        # HTTP(S)_PROXY in the worker env can never silently reroute egress; only a
+        # non-empty value is a credential to scrub.
         secret_values: list[str] = []
+        argv += ["--proxy", proxy]
         if proxy:
-            argv += ["--proxy", proxy]
             secret_values.append(proxy)
         if cookies_file is not None:
             cookies_path = str(cookies_file)

@@ -251,11 +251,11 @@ def validate_ingest_url(url: str) -> str:
     rebind before the worker fetches it, so the authoritative "resolves to a
     public address" check is re-done worker-side at download time (slice 6g).
     A DNS *name* therefore passes here (only ``localhost`` is refused by name);
-    an IP *literal* is checked now because it needs no resolution — except the
-    IPv4-in-IPv6 embeddings (deprecated ``::a.b.c.d`` and NAT64) that Python's
-    ``is_global`` mis-classifies, which the worker's re-resolution (6g) catches.
-    Error messages never echo the URL, so a signed/secret query string cannot
-    leak into a 422 body or the logs.
+    an IP *literal* is checked now because it needs no resolution — including the
+    IPv4-in-IPv6 embeddings (deprecated ``::a.b.c.d``, NAT64) and site-local that
+    ``is_global`` alone mis-classifies, which the shared :func:`ip_is_public`
+    unwraps/rejects here just as the worker gate does. Error messages never echo
+    the URL, so a signed/secret query string cannot leak into a 422 body or logs.
     """
     candidate = (url or "").strip()
     if not candidate:
@@ -306,13 +306,12 @@ def validate_ingest_url(url: str) -> str:
             raise UrlValidationError("ingest URL has an invalid IPv6 host") from None
         return candidate  # a DNS name — public-address check deferred to the worker (6g)
     if not ip_is_public(ip):
-        # Loopback/private/link-local/reserved/unspecified/multicast literals.
-        # ip_is_public (media.netcheck) is the SINGLE per-address policy shared
-        # with the worker's resolved-host gate, so the literal check here and the
-        # DNS re-resolution there can never diverge on what "public" means.
-        # (IPv4-in-IPv6 embeddings — deprecated ::a.b.c.d and RFC 6052 NAT64 —
-        # can still evade is_global as literals; the worker re-resolves the host
-        # at fetch time (slice 6g), which is the authoritative public-address gate.)
+        # Loopback/private/link-local/reserved/unspecified/multicast literals, plus
+        # site-local and the IPv4-in-IPv6 embeddings (::a.b.c.d, NAT64) that
+        # is_global alone mis-judges. ip_is_public (media.netcheck) is the SINGLE
+        # per-address policy shared with the worker's resolved-host gate, so the
+        # literal check here and the DNS re-resolution there can never diverge on
+        # what "public" means.
         raise UrlValidationError("ingest URL host is not permitted")
     return candidate
 

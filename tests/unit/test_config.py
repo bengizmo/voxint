@@ -64,6 +64,16 @@ def test_ytdlp_and_acquire_defaults() -> None:
     assert s.celery_visibility_timeout_seconds == 172800
 
 
+def test_csrf_secret_empty_is_allowed() -> None:
+    # Empty is the "mint an auto per-process secret" signal — not a validation error.
+    assert Settings(_env_file=None, csrf_secret="").csrf_secret == ""
+
+
+def test_csrf_secret_too_short_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="at least 16 characters"):
+        Settings(_env_file=None, csrf_secret="short")
+
+
 def test_acquire_timeout_must_fit_lease() -> None:
     # timeout + cleanup margin must stay strictly below the lease, or a stale
     # ACQUIRE attempt could overrun into a live one.

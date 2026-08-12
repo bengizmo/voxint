@@ -98,10 +98,12 @@ class Settings(BaseSettings):
     acquire_lease_seconds: int = Field(default=10800, gt=0)  # 3 h
     # Per-socket connect/read timeout handed to yt-dlp (--socket-timeout).
     ytdlp_socket_timeout_seconds: PositiveSeconds = 30.0
-    # Optional outbound proxy for yt-dlp, wired to --proxy when non-empty (slice
-    # 6g). Its literal value is a credential: it is scrubbed verbatim from any
-    # surfaced error (redact(extra_secrets=...)) as well as by the --proxy flag
-    # redaction. Empty ⇒ direct connection (the flag is omitted).
+    # Optional outbound proxy for yt-dlp (slice 6g). --proxy is passed ALWAYS: with
+    # this value, or an empty string that yt-dlp reads as explicit DIRECT — so an
+    # ambient HTTP(S)_PROXY/ALL_PROXY in the worker env can never silently reroute
+    # egress (set this to use a proxy on purpose). A non-empty value is a credential:
+    # scrubbed verbatim from errors (redact(extra_secrets=...)) and by --proxy flag
+    # redaction.
     ytdlp_proxy: str = ""
     # Optional cookies file (Netscape format) for yt-dlp, wired to --cookies when
     # set (slice 6g). Validated below as a readable regular file so a typo fails at
@@ -273,6 +275,18 @@ class Settings(BaseSettings):
         cookies = self.ytdlp_cookies_file
         if cookies is not None and not (cookies.is_file() and os.access(cookies, os.R_OK)):
             raise ValueError("ytdlp_cookies_file must point to a readable regular file")
+        return self
+
+    @model_validator(mode="after")
+    def _csrf_secret_strong_enough(self) -> "Settings":
+        # An empty csrf_secret is the "mint a random per-process secret" signal
+        # (create_app handles it); a SET secret keys an HMAC, so a 1-char
+        # CSRF_SECRET would be trivially brute-forceable. Guard the footgun without
+        # forcing config on the zero-config localhost path.
+        if self.csrf_secret and len(self.csrf_secret) < 16:
+            raise ValueError(
+                "csrf_secret must be empty (auto per-process) or at least 16 characters"
+            )
         return self
 
     @model_validator(mode="after")
