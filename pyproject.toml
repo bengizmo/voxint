@@ -1,6 +1,6 @@
 [project]
 name = "voxint"
-version = "0.0.1"
+version = "0.1.0"
 description = "From sound to intelligence: end-to-end transcription, diarization, and speaker identity with human-grade quality gates."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -48,7 +48,9 @@ dev = [
 voxint = "voxint.cli:main"
 
 [project.urls]
-# Homepage / Repository / Documentation URLs added at first public release.
+Repository = "https://github.com/bengizmo/voxint"
+Issues = "https://github.com/bengizmo/voxint/issues"
+Documentation = "https://github.com/bengizmo/voxint/tree/main/docs"
 
 [build-system]
 requires = ["hatchling"]

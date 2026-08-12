@@ -3,6 +3,16 @@
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d
 name: voxint
 
+# The default stack runs the pinned RELEASE image below — even on a `main`
+# checkout. To run the code you have checked out, layer compose.build.yaml
+# (and compose.gpu.build.yaml for the model services). Exactly-pinned version,
+# never `latest`: an unpinned quickstart re-resolves under users' feet.
+# One shared image for migrate/api/worker/beat; VOXINT_IMAGE_TAG in .env
+# overrides the pin (e.g. to run a newer release without editing this file).
+x-voxint-app: &voxint-app
+  image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.1.0}
+  pull_policy: missing
+
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -38,7 +48,7 @@ services:
   #   docker compose logs migrate
   # Manual fallback: docker compose run --rm migrate
   migrate:
-    build: .
+    <<: *voxint-app
     command: alembic upgrade head
     restart: "no"
     environment:
@@ -48,7 +58,7 @@ services:
         condition: service_healthy
 
   api:
-    build: .
+    <<: *voxint-app
     command: voxint serve
     env_file:
       - path: .env
@@ -81,7 +91,7 @@ services:
         condition: service_healthy
 
   worker:
-    build: .
+    <<: *voxint-app
     command: celery -A voxint.worker.app worker --loglevel=INFO
     env_file:
       - path: .env
@@ -105,7 +115,7 @@ services:
   # scheduler down with it. `-s` points the schedule file somewhere the
   # unprivileged container user can write.
   beat:
-    build: .
+    <<: *voxint-app
     command: celery -A voxint.worker.app beat --loglevel=INFO -s /tmp/celerybeat-schedule
     environment:
       REDIS_URL: redis://redis:6379/0

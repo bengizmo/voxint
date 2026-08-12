@@ -18,7 +18,8 @@ services:
       EMBEDDER_URL: http://titanet:8021
 
   whisper:
-    build: services/whisper
+    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.1.0}
+    pull_policy: missing
     environment:
       MEDIA_ROOT: /data/media
     volumes:
@@ -34,7 +35,8 @@ services:
               capabilities: [gpu]
 
   pyannote:
-    build: services/pyannote
+    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.1.0}
+    pull_policy: missing
     environment:
       MEDIA_ROOT: /data/media
       HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
@@ -53,7 +55,8 @@ services:
               capabilities: [gpu]
 
   titanet:
-    build: services/titanet
+    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.1.0}
+    pull_policy: missing
     environment:
       MEDIA_ROOT: /data/media
     volumes:

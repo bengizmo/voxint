@@ -1,0 +1,27 @@
+# Build-from-source overlay for the app image (development on a checkout):
+#   docker compose -f compose.yaml -f compose.build.yaml build api
+#   docker compose -f compose.yaml -f compose.build.yaml up -d
+# Only `api` owns the build; migrate/worker/beat consume the tag it produces
+# (a shared image: tag on multiple build: services races concurrent BuildKit
+# writers — "already exists" — so exactly one service may declare build:).
+# Build BEFORE up: services without build: fail fast if voxint-app:dev is
+# missing (pull_policy: never), rather than pulling something wrong.
+# GPU services from source: add compose.gpu.build.yaml after compose.gpu.yaml.
+
+x-local-app: &local-app
+  image: voxint-app:dev
+  pull_policy: never
+
+services:
+  api:
+    <<: *local-app
+    build: .
+
+  migrate:
+    <<: *local-app
+
+  worker:
+    <<: *local-app
+
+  beat:
+    <<: *local-app

@@ -1,0 +1,27 @@
+# Build-from-source overlay for the GPU model services. Layer it AFTER
+# compose.gpu.yaml (it only overrides image/build; the service definitions —
+# GPU reservations, ports, volumes — live in compose.gpu.yaml):
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#                  -f compose.build.yaml -f compose.gpu.build.yaml \
+#                  build api whisper pyannote titanet
+#   docker compose -f compose.yaml -f compose.gpu.yaml \
+#                  -f compose.build.yaml -f compose.gpu.build.yaml up -d
+# Kept separate from compose.build.yaml so a core-only dev stack doesn't
+# accidentally gain (CPU-less, GPU-less) model services: an overlay service
+# absent from the base files would be ADDED, not ignored.
+
+services:
+  whisper:
+    image: voxint-whisper:dev
+    pull_policy: never
+    build: services/whisper
+
+  pyannote:
+    image: voxint-pyannote:dev
+    pull_policy: never
+    build: services/pyannote
+
+  titanet:
+    image: voxint-titanet:dev
+    pull_policy: never
+    build: services/titanet

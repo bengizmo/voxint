@@ -38,8 +38,7 @@ assign / enroll / exclude / unknown actions. (Synthetic demo data pictured.)
 
 ## Status
 
-**Pre-alpha — under active extraction.** APIs, schema, and layout will change without notice
-until `v0.1.0`.
+**Pre-alpha.** APIs, schema, and layout may change without notice through the 0.x series.
 
 ## Quickstart
 
@@ -47,28 +46,46 @@ Requires Docker Engine with the **Compose plugin ≥ 2.24** (`docker compose
 version` — the legacy v1 `docker-compose` binary cannot parse this stack).
 
 ```bash
+git clone https://github.com/bengizmo/voxint.git && cd voxint
 cp .env.example .env          # then edit at least VOXINT_PASSWORD
 mkdir -p media                # media mount; pre-create so it isn't root-owned
+docker compose pull           # prebuilt release images from GHCR
 docker compose up -d          # Postgres+pgvector, Redis, migrate, API + review UI, worker, beat
 curl http://127.0.0.1:8080/healthz   # default port; matches API_PORT if you changed it
 ```
 
-A one-shot `migrate` service brings the schema to head before the API and
-worker start — it showing `Exited (0)` in `docker compose ps -a` is success,
-not a crash. If a default port is already in use on your host, override the
-published side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `API_PORT`). Details
-and day-2 operations: [docs/operations.md](docs/operations.md).
+The default compose files run the **pinned release images** — even from a
+`main` checkout (set `VOXINT_IMAGE_TAG` in `.env` to run a different
+release). A one-shot `migrate` service brings the schema to head before the
+API and worker start — it showing `Exited (0)` in `docker compose ps -a` is
+success, not a crash. If a default port is already in use on your host,
+override the published side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`,
+`API_PORT`). Details and day-2 operations:
+[docs/operations.md](docs/operations.md).
 
-To run the GPU model services too (one NVIDIA GPU assumed):
+To run the GPU model services too (one NVIDIA GPU assumed), first set
+`HF_TOKEN` in `.env` — the pyannote service's diarization weights are
+HF-gated, so you need a Hugging Face token with access to the pyannote
+models accepted (see `services/pyannote/README.md`); compose refuses the GPU
+overlay without it. Then:
 
 ```bash
+docker compose -f compose.yaml -f compose.gpu.yaml pull
 docker compose -f compose.yaml -f compose.gpu.yaml up -d
 ```
 
-The pyannote service needs `HF_TOKEN` in `.env` (its diarization weights are
-HF-gated — see `services/pyannote/README.md`). Per-service details, env
-tunables, and image matrices: `services/*/README.md`; wire contracts:
+Per-service details, env tunables, and image matrices:
+`services/*/README.md`; wire contracts:
 [docs/gpu-contracts.md](docs/gpu-contracts.md).
+
+To run the source you checked out instead of the release images, layer the
+build overlays (exactly one service owns each build — see
+[docs/operations.md](docs/operations.md)):
+
+```bash
+docker compose -f compose.yaml -f compose.build.yaml build api
+docker compose -f compose.yaml -f compose.build.yaml up -d
+```
 
 For development without Docker:
 

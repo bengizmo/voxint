@@ -1,6 +1,6 @@
 # Contributing to Voxint
 
-Thanks for your interest! Voxint is pre-alpha; expect churn until `v0.1.0`.
+Thanks for your interest! Voxint is pre-alpha; expect churn through the 0.x series.
 
 ## Development setup
 

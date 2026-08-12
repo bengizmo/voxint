@@ -23,6 +23,30 @@ Everything publishes on `127.0.0.1` only. If a default port is already taken
 on the host, override the published side in `.env` (`POSTGRES_PORT`,
 `REDIS_PORT`, `API_PORT`) — container-internal ports never change.
 
+### Release images vs. building from source
+
+The default compose files run the **pinned release images** from GHCR
+(`ghcr.io/bengizmo/voxint*`), even on a `main` checkout — `VOXINT_IMAGE_TAG`
+in `.env` overrides the pin. To run the code you actually checked out, layer
+the build overlays (build first, then up — services that don't own the build
+use `pull_policy: never` on the local tag and fail fast if it's missing):
+
+```bash
+# app image only (core stack):
+docker compose -f compose.yaml -f compose.build.yaml build api
+docker compose -f compose.yaml -f compose.build.yaml up -d
+# app + GPU model services:
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.build.yaml -f compose.gpu.build.yaml \
+               build api whisper pyannote titanet
+docker compose -f compose.yaml -f compose.gpu.yaml \
+               -f compose.build.yaml -f compose.gpu.build.yaml up -d
+```
+
+Exactly one service (`api`) declares the app `build:`; migrate/worker/beat
+consume the tag it produces. Do not give several `build:` services a shared
+`image:` tag — concurrent BuildKit writers race on it ("already exists").
+
 ### Schema migrations
 
 A one-shot `migrate` service runs `alembic upgrade head` after Postgres is
