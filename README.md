@@ -6,9 +6,16 @@ human-grade quality gates.**
 Voxint turns any audio or video file into an enhanced, speaker-attributed transcript:
 
 ```
-media file → preprocess → transcribe (Whisper) + diarize (pyannote) + embed (TitaNet)
-           → LLM transcript enhancement → speaker matching → human adjudication
+local file · upload · URL → acquire → preprocess
+    → transcribe (Whisper) + diarize (pyannote) + embed (TitaNet)
+    → LLM transcript enhancement → speaker matching → human adjudication
 ```
+
+Point it at a local file (`voxint submit`), upload one through the browser, or hand it a
+URL (`voxint fetch` / `POST /fetch`) — a yt-dlp download runs as the pipeline's first stage.
+URL ingestion is authenticated **admin egress, not a sandbox**: fetch only trusted URLs
+unless you run the worker with restricted egress (no route to private / link-local /
+metadata addresses). See [docs/operations.md](docs/operations.md#url-ingestion--egress-security).
 
 What makes it different is the orchestration "glue" most pipelines skip:
 
@@ -21,6 +28,10 @@ What makes it different is the orchestration "glue" most pipelines skip:
   a strict *named ≠ grounded* invariant, and machine proposals kept separate from human rulings.
 - **A built-in adjudication web UI** — review queue, guarded slot workbench, and an immutable
   decision ledger, served as Jinja + htmx from the same FastAPI app (no Node toolchain).
+- **Operable from the browser** — a keyset-paged `/runs` execution-history browser (with a
+  per-stage attempt ledger), bounded file upload, and yt-dlp URL ingestion, from the same app.
+  Submission is durable-first: a broker outage leaves the run queued for the recovery sweep,
+  never lost. The console is append-only — no delete, no cancel.
 - **Measurement harnesses** — name-accuracy scoring (McNemar / bootstrap / Wilson) and a
   golden-dataset agreement labeler, runnable as CLIs (worked example under
   [`examples/`](examples/README.md)).
@@ -62,6 +73,12 @@ success, not a crash. If a default port is already in use on your host,
 override the published side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`,
 `API_PORT`). Details and day-2 operations:
 [docs/operations.md](docs/operations.md).
+
+With the stack up, browse runs at `http://127.0.0.1:8080/runs` and adjudicate at
+`/review` (HTTP Basic, the `VOXINT_USER` / `VOXINT_PASSWORD` you set). Feed it work by
+uploading a file, pointing it at a URL (`docker compose exec api voxint fetch <url>`), or
+submitting a local path (`docker compose exec api voxint submit path/to/file.mp3`, relative
+to `MEDIA_ROOT`).
 
 To run the GPU model services too (one NVIDIA GPU assumed), first set
 `HF_TOKEN` in `.env` — the pyannote service's diarization weights are

@@ -3,6 +3,45 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes between minors).
 
+## [0.2.0] — 2026-08-12
+
+Browser operability and URL ingestion.
+
+### Added
+- **Browser console** served from the same FastAPI app: a keyset-paged `/runs`
+  execution-history browser (orthogonal `status=` / `review=` filters), a
+  `/runs/{id}` run-detail page with the per-stage attempt ledger, and a
+  resolver-attributed transcript view (`raw`/`enhanced`).
+- **File upload** (`POST /submit`): bounded, streamed enforcement of
+  `UPLOAD_MAX_BYTES` (default 5 GiB); each upload lands under a server-issued,
+  uuid-namespaced immutable path, with idempotent form replay.
+- **URL ingestion** via yt-dlp: `voxint fetch <url>` and `POST /fetch` register a
+  `MediaItem.source_url` and enqueue a run. A new **ACQUIRE** stage —
+  `STAGE_ORDER[0]`, a no-op for local/uploaded media — downloads it on the worker
+  (alembic revision 0005 adds `source_url` and the `acquire` stage). Toggle with
+  `YTDLP_ENABLED` (default on).
+- **CAS requeue route** (`POST /runs/{id}/requeue`): the browser equivalent of
+  `voxint requeue`, guarded by exact-revision compare-and-swap.
+
+### Security
+- **Two-gate SSRF model** for URL ingestion: a string-level check at submit and a
+  host re-resolution check in the worker before download, sharing one
+  public-address rule that unwraps IPv4-in-IPv6 embeddings and rejects site-local.
+  Documented as authenticated admin egress with a residual that needs network
+  policy (see `docs/architecture.md`).
+- **yt-dlp lockdown**: `--no-config`, `--no-plugin-dirs`, `--no-exec`,
+  `--no-playlist --max-downloads 1`, a size cap, hard wall-clock timeouts, and
+  explicit proxy handling; proxy/cookies are treated as credentials and scrubbed
+  from surfaced errors.
+- **CSRF** on the mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
+  and `POST /review/{id}/claim`): a stateless, action-bound HMAC token keyed by a
+  dedicated `CSRF_SECRET`.
+
+### Changed
+- Submission mutations are **durable-first**: the run is committed before the
+  Celery task is published, so a broker outage leaves the run `QUEUED` (never
+  `FAILED`) for the recovery sweep instead of failing the request.
+
 ## [0.1.0] — 2026-08-12
 
 First public release.
@@ -26,4 +65,5 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
+[0.2.0]: https://github.com/bengizmo/voxint/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bengizmo/voxint/releases/tag/v0.1.0

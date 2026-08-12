@@ -71,15 +71,47 @@ Media lives under `MEDIA_ROOT` (compose mounts `./media` by default). The
 CLI runs inside the api/worker image or on a bare host with the same env:
 
 ```bash
-docker compose exec api voxint submit path/to/file.mp3   # path relative to MEDIA_ROOT; prints run id
+docker compose exec api voxint submit path/to/file.mp3   # local path relative to MEDIA_ROOT; prints run id
+docker compose exec api voxint fetch <url>               # yt-dlp URL ingestion (reads the URL from stdin if omitted)
 docker compose exec api voxint status <run-id>           # run state + per-stage attempt ledger
 docker compose exec api voxint requeue <run-id>          # re-enter a FAILED run at its failed stage
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
-worker — the CLI never executes a stage itself. `status` shows the run's
-current state plus every stage attempt with its error, straight from the
-persisted ledger.
+worker — the CLI never executes a stage itself. `fetch` does the same for a
+remote URL, recording it as `MediaItem.source_url`; the worker's ACQUIRE stage
+downloads it (see below). `status` shows the run's current state plus every
+stage attempt with its error, straight from the persisted ledger.
+
+### The browser console
+
+The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
+`VOXINT_PASSWORD`) for operators who prefer not to shell into a container:
+
+- **`GET /runs`** — an execution-history browser: newest-first, keyset-paged
+  (`RUNS_PAGE_SIZE`, default 50), with **orthogonal** filters `status=` and
+  `review=needed|resolved|claimed`. **`GET /runs/{id}`** shows the run detail and
+  the per-stage attempt ledger (the same data as `voxint status`), with
+  transcript and audio links when present.
+- **`POST /submit`** — a bounded **file upload**. `UPLOAD_MAX_BYTES` (default
+  5 GiB) is enforced *while streaming* (never a single unbounded read); the file
+  lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,
+  so re-uploading a name yields a distinct immutable media item and never
+  overwrites history. A hidden `submission_id` makes form replay idempotent.
+- **`POST /fetch`** — the browser equivalent of `voxint fetch` (URL ingestion).
+- **`POST /runs/{id}/requeue`** — an exact-revision (CAS) requeue of a FAILED run,
+  the browser equivalent of `voxint requeue` (covers failed downloads).
+
+The console is deliberately **append-only**: there is no delete, no cancel, and
+no speaker-roster editing from these pages (roster changes happen only through
+adjudication). The pipeline-state surface (`/runs*`) and the adjudication surface
+(`/review*`) stay separate.
+
+**Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
+commit the durable run *before* publishing the Celery task. If Redis is down at
+that moment the mutation still succeeds — the run stays `QUEUED` (never `FAILED`)
+with a clear linked note, and the recovery sweep re-enqueues it once the broker
+returns. Read pages (`/runs*`) render from Postgres only and never touch Redis.
 
 ### Failure lanes and recovery
 
@@ -104,9 +136,12 @@ until a beat/sweep runs, not just on deterministic failures.
 `voxint fetch <url>` / `POST /fetch` download a URL with yt-dlp on the worker
 (the ACQUIRE stage). Toggle the capability with `YTDLP_ENABLED` (default on); when
 off, the fetch route/CLI/form refuse and no row is created (an already-queued URL
-run still completes). Optional `YTDLP_PROXY` / `YTDLP_COOKIES_FILE` are wired to
-yt-dlp only when set and are treated as **credentials** — never surfaced in errors,
-so keep them out of logs and shared configs.
+run still completes). yt-dlp is always run with `--proxy`: `YTDLP_PROXY` when set,
+otherwise an empty value meaning explicit direct egress — so an ambient
+`HTTP(S)_PROXY` in the worker env is **ignored** (set `YTDLP_PROXY` to route
+through a proxy on purpose). `YTDLP_COOKIES_FILE` is wired only when set. Both are
+treated as **credentials** — never surfaced in errors, so keep them out of logs
+and shared configs.
 
 Voxint applies two SSRF gates (string-level at submit, host re-resolution in the
 worker before download; see architecture.md) that reject non-public **resolved**
@@ -118,8 +153,10 @@ to RFC1918 / link-local / `169.254.169.254` (egress firewall or dedicated egress
 network). A blocked/refused download is a clean FAILED @ acquire the operator
 **Requeues**; it never loops.
 
-The three mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`) require a
-CSRF token. Set `CSRF_SECRET` to a persistent random value
+The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
+`/runs/{id}/requeue`, and `POST /review/{id}/claim` (claiming mints the run's claim
+token, so it has none of its own to gate a forged POST). Set `CSRF_SECRET` to a
+persistent random value
 (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) — otherwise a
 random per-process secret is used, which invalidates open forms on restart and
 mismatches across multiple workers.
@@ -144,11 +181,22 @@ reviewer credential):
 4. **Release / export** — release the claim for the next reviewer, or export
    the speaker-attributed transcript (`/review/{run_id}/export.txt`).
 
-### HTTP endpoints
+## HTTP endpoints
+
+Every route but `/healthz` sits behind HTTP Basic; four mutation forms
+(`POST /submit`, `/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim`)
+additionally require a CSRF token (see above), and the remaining review-workbench
+mutations are gated by their per-run claim token.
 
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access — schema readiness is the migrate gate's job) |
+| `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
+| `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
+| `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML) |
+| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item |
+| `POST /fetch` | yt-dlp URL ingestion (create media item + run, enqueue) |
+| `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `GET /review` | Review queue |
 | `POST /review/{run_id}/claim` · `/release` | Claim / release an exclusive review slot |
 | `GET /review/{run_id}` | Adjudication workbench |

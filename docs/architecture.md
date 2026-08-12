@@ -3,17 +3,26 @@
 ## Pipeline shape
 
 ```
-media file ──▶ prepare ──▶ transcribe ──▶ diarize_embed ──▶ enhance_match ──▶ finalize
-              (ffmpeg      (ASR)          (diarization +     (LLM enhance +
-               16 kHz,                     speaker            speaker matching)
-               gates)                      embeddings)
+input ──▶ acquire ──▶ prepare ──▶ transcribe ──▶ diarize_embed ──▶ enhance_match ──▶ finalize
+          (yt-dlp     (ffmpeg      (ASR)          (diarization +     (LLM enhance +
+           URL         16 kHz,                     speaker            speaker matching)
+           download;   gates)                      embeddings)
+           no-op when
+           local)
 ```
 
-Five coarse stages, executed as pure functions driven by a small engine
-(`voxint.pipeline.engine`). The engine owns everything the stages should not care
+Six coarse stages, executed as self-contained (idempotent) stage functions driven
+by a small engine (`voxint.pipeline.engine`). The engine owns everything the stages should not care
 about: state transitions, per-stage transactions, attempt bookkeeping, and crash
 recovery. Stage bodies own the science. Celery tasks are thin wrappers around the
 engine — there is no orchestration logic hiding in task code.
+
+**ACQUIRE** (`STAGE_ORDER[0]`) is the universal first stage: a successful no-op for
+local or uploaded media (`source_url IS NULL`), and a yt-dlp download for URL runs
+(`voxint fetch` / `POST /fetch`). Making it the first stage — rather than a special
+submit-time step — keeps the "every fresh run starts at `STAGE_ORDER[0]`" invariant
+intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op and
+`submit()` keeps its signature. Download mechanics and the SSRF model are below.
 
 ## State machine
 
@@ -54,11 +63,11 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0004)
+## Data model (alembic revisions 0001–0005)
 
 | Table | Role |
 |---|---|
-| `media_items` | media identity — one row per source file |
+| `media_items` | media identity — one row per source file; `source_path` (UNIQUE) — already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs — plus a nullable, non-unique `source_url` for URL provenance (revision 0005) |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
@@ -115,9 +124,11 @@ gates:
 runs with `--no-config`, `--no-plugin-dirs` (no local/remote plugin loading),
 `--no-exec` (no post-processor command), `--no-playlist --max-downloads 1`, a
 size cap, and hard wall-clock timeouts; `file://` URLs are refused by yt-dlp's
-own default (we never pass `--enable-file-urls`). An optional `ytdlp_proxy` /
-`ytdlp_cookies_file` is wired to `--proxy` / `--cookies` **only when set**, and
-both are treated as credentials — scrubbed verbatim from any surfaced error.
+own default (we never pass `--enable-file-urls`). `--proxy` is passed **always**
+— the configured `ytdlp_proxy` when set, otherwise an empty value that means
+"explicit direct connection", so an ambient `HTTP(S)_PROXY` in the worker env can
+never silently reroute egress. `--cookies` is passed only when `ytdlp_cookies_file`
+is set. Both are treated as credentials — scrubbed verbatim from any surfaced error.
 
 **Residual — needs network policy, not a userland check.** yt-dlp re-resolves the
 host *independently* when it connects, and its generic extractor follows HTTP
@@ -129,11 +140,13 @@ metadata endpoint** (egress firewall or a dedicated egress). The resolved-host
 gate raises the bar and closes the literal / rebind-at-check-time holes; it is not
 a substitute for egress control.
 
-**CSRF.** The three mutation forms — `POST /submit`, `/fetch`,
-`/runs/{id}/requeue` — carry a stateless, action-bound HMAC token (`api.csrf`,
-keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. The review-workbench
-mutations are instead gated by their unguessable per-run claim token.
+**CSRF.** Four mutation forms — `POST /submit`, `/fetch`, `/runs/{id}/requeue`,
+and `POST /review/{id}/claim` — carry a stateless, action-bound HMAC token
+(`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
+missing/mis-signed token is refused before any state change. `/claim` needs its
+own because claiming is what *mints* the run's claim token — it has no unguessable
+token of its own yet. The remaining review-workbench mutations (release, decision,
+enroll) are instead gated by that per-run claim token.
 
 ## Provider seams
 
@@ -220,8 +233,11 @@ retry countdowns aren't stepped on). Duplicate enqueues are safe by design —
 claims and CAS arbitrate.
 
 Timeout ordering that must hold: HTTP client timeout
-(`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`; the
-diarize_embed stage gets its own longer `DIARIZE_EMBED_LEASE_SECONDS` because
-it makes one diarization call plus several sequential embedding batches)
-**<** Redis visibility timeout (`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which
-covers a whole run).
+(`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`; two
+stages carry their own longer lease — `DIARIZE_EMBED_LEASE_SECONDS` because it
+makes one diarization call plus several sequential embedding batches, and
+`ACQUIRE_LEASE_SECONDS` (3 h) because a URL download runs under a wall-clock
+`ACQUIRE_TIMEOUT_SECONDS` (2 h) that must itself sit below the lease by a
+cleanup margin, validated at startup) **<** Redis visibility timeout
+(`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which covers a whole run and is sized to
+the six-stage worst case — 48 h).
