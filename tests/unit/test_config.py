@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from voxint.config import Settings
+from voxint.config import Settings, SettingsError, get_settings
 
 
 def test_defaults_are_localhost_and_llm_disabled() -> None:
@@ -90,10 +90,47 @@ def test_ytdlp_cookies_file_must_be_readable_regular_file(tmp_path: Path) -> Non
 
     # A missing file fails fast at startup, not mid-download.
     missing = tmp_path / "does-not-exist.txt"
-    with pytest.raises(ValidationError) as exc:
+    with pytest.raises(ValidationError, match="readable regular file"):
         Settings(_env_file=None, ytdlp_cookies_file=missing)
-    # The path is a credential locator — it must never appear in the error.
-    assert str(missing) not in str(exc.value)
+
+
+def test_get_settings_redacts_credential_paths_from_errors(
+    monkeypatch,  # type: ignore[no-untyped-def]
+    tmp_path: Path,
+) -> None:
+    # get_settings() is the single production construction point and its
+    # ValidationError -> SettingsError sanitization is the real "never expose the
+    # cookies path" guarantee. Probe it structurally: pydantic attaches the raw
+    # value to .errors()['input']/.json() (hide_input_in_errors only cleans
+    # str()), and this basename is short enough to survive str() truncation, so a
+    # weak assertion could false-pass. Assert on str + repr + args together.
+    secret_basename = "topsecret-cookies.txt"
+    missing = tmp_path / secret_basename
+    monkeypatch.chdir(tmp_path)  # no ambient .env leaks in
+    monkeypatch.setenv("YTDLP_COOKIES_FILE", str(missing))
+
+    with pytest.raises(SettingsError) as exc:
+        get_settings()
+
+    surfaced = "".join((str(exc.value), repr(exc.value), repr(exc.value.args)))
+    assert secret_basename not in surfaced
+    assert str(missing) not in surfaced
+    assert str(tmp_path) not in surfaced
+    # It still tells the operator which setting is at fault, just not its value.
+    assert "ytdlp_cookies_file" in surfaced
+
+
+def test_get_settings_returns_settings_when_valid(
+    monkeypatch,  # type: ignore[no-untyped-def]
+    tmp_path: Path,
+) -> None:
+    # A readable cookies file loads cleanly through the sanitizing wrapper.
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("YTDLP_COOKIES_FILE", str(cookies))
+    settings = get_settings()
+    assert settings.ytdlp_cookies_file == cookies
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses file permission bits")

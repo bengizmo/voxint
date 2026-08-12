@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # NaN silently disables a threshold (every comparison is False), so all gate
@@ -28,7 +28,15 @@ ACQUIRE_CLEANUP_MARGIN_SECONDS = 300.0
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # hide_input_in_errors keeps offending values out of a ValidationError's
+    # printed form: settings inputs include credentials (llm_api_key,
+    # voxint_password, database_url, ytdlp_cookies_file), and a bad one must not
+    # land in a startup traceback. This only sanitizes str(err); the structured
+    # .errors()/.json() still carry the raw input, so get_settings() re-raises a
+    # sanitized SettingsError as the real production guarantee.
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     # Core services
     database_url: str = "postgresql+psycopg://voxint:voxint@localhost:5432/voxint"
@@ -78,7 +86,7 @@ class Settings(BaseSettings):
     # How long a worker may hold the ACQUIRE stage before recovery reclaims it.
     # ACQUIRE's analogue of stage_lease_seconds; it must outlast the download
     # timeout plus the kill/hash/publish tail (ACQUIRE_CLEANUP_MARGIN_SECONDS).
-    acquire_lease_seconds: int = 10800  # 3 h
+    acquire_lease_seconds: int = Field(default=10800, gt=0)  # 3 h
     # Per-socket connect/read timeout handed to yt-dlp (--socket-timeout).
     ytdlp_socket_timeout_seconds: PositiveSeconds = 30.0
     # Optional outbound proxy for yt-dlp. Introduced here as config only; it is
@@ -279,5 +287,36 @@ class Settings(BaseSettings):
         return self
 
 
+class SettingsError(Exception):
+    """Raised when settings fail to load or validate.
+
+    Its message carries only each failing field's location and constraint
+    message — never the offending value. That matters because a Settings input
+    can be a credential (llm_api_key, voxint_password, database_url, and the
+    ytdlp_cookies_file path), and pydantic otherwise attaches the whole input to
+    every error via ``.errors()[*]['input']`` and ``.json()`` (which
+    ``hide_input_in_errors`` does not strip).
+    """
+
+
+def _sanitized_settings_error(exc: ValidationError) -> str:
+    # Build the message from locations + messages only. Never read 'input' — for
+    # a model-level validator that field is the entire settings dict, credentials
+    # included. pydantic's own constraint messages describe the rule, not the
+    # value, so they are safe to surface.
+    parts = []
+    for err in exc.errors(include_url=False, include_input=False):
+        loc = ".".join(str(x) for x in err["loc"]) or "settings"
+        parts.append(f"{loc}: {err['msg']}")
+    return "invalid settings — " + "; ".join(parts)
+
+
 def get_settings() -> Settings:
-    return Settings()
+    # The single production construction point (CLI, worker boot, API, engine all
+    # route through here), so sanitizing the failure here covers every entrypoint.
+    # `from None` drops the original ValidationError so its input can't ride along
+    # in the traceback.
+    try:
+        return Settings()
+    except ValidationError as exc:
+        raise SettingsError(_sanitized_settings_error(exc)) from None
