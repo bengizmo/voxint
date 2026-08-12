@@ -19,8 +19,18 @@ import enum
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TypeAlias
 
-from sqlalchemy import func, select
+from sqlalchemy import (
+    ColumnElement,
+    ColumnExpressionArgument,
+    Exists,
+    ScalarSelect,
+    and_,
+    distinct,
+    func,
+    select,
+)
 from sqlalchemy.orm import Session
 
 from voxint.db.models import (
@@ -33,6 +43,87 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
 )
+
+# A run-id the correlated SQL predicates accept: either a literal UUID (single
+# run) or an outer column such as ``PipelineRun.id`` (correlated per row).
+RunIdRef: TypeAlias = "ColumnExpressionArgument[uuid.UUID] | uuid.UUID"
+
+
+def _label_unresolved(
+    run_id: RunIdRef, label: ColumnExpressionArgument[str]
+) -> ColumnElement[bool]:
+    """SQL mirror of ``label_states``' resolved/unresolved binary for one label.
+
+    A (run, label) is UNRESOLVED when it has neither a human decision nor a
+    grounded cosine proposal. *Any* decision kind (assign/exclude/unknown)
+    resolves the label, so the append-only newest-wins precedence is irrelevant
+    to this binary — presence of a single decision row is enough. Kept beside
+    the Python resolver so the two definitions move together.
+    """
+    # Explicit multi-level correlation is required: without it SQLAlchemy
+    # reintroduces ``pipeline_runs`` into each inner EXISTS FROM, turning the
+    # ``pipeline_run_id == run_id`` guard into a cross-run join — a decision or
+    # grounding for a label on *any* run would then resolve that label on
+    # *every* run. ``correlate`` pins these to the outer run + turn instead.
+    has_decision = (
+        select(1)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.diarization_label == label,
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+    has_grounded_cosine = (
+        select(1)
+        .where(
+            SpeakerAssignment.pipeline_run_id == run_id,
+            SpeakerAssignment.diarization_label == label,
+            SpeakerAssignment.method == AssignmentMethod.COSINE.value,
+            SpeakerAssignment.grounded.is_(True),
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+    return and_(~has_decision, ~has_grounded_cosine)
+
+
+def unresolved_label_exists(run_id: RunIdRef) -> Exists:
+    """EXISTS a diarization-turn label of ``run_id`` that needs a human ruling.
+
+    Labels are anchored in ``diarization_turns`` exactly as ``label_states``
+    does — a decision or proposal whose label has no turn is not a label of the
+    run and is ignored here too.
+    """
+    return (
+        select(1)
+        .where(
+            DiarizationTurn.pipeline_run_id == run_id,
+            _label_unresolved(run_id, DiarizationTurn.label),
+        )
+        .exists()
+    )
+
+
+def unresolved_label_count(run_id: RunIdRef) -> ScalarSelect[int]:
+    """Count of distinct unresolved turn-labels for ``run_id`` (for display)."""
+    return (
+        select(func.count(distinct(DiarizationTurn.label)))
+        .where(
+            DiarizationTurn.pipeline_run_id == run_id,
+            _label_unresolved(run_id, DiarizationTurn.label),
+        )
+        .scalar_subquery()
+    )
+
+
+def label_count(run_id: RunIdRef) -> ScalarSelect[int]:
+    """Count of distinct diarization-turn labels for ``run_id`` (for display)."""
+    return (
+        select(func.count(distinct(DiarizationTurn.label)))
+        .where(DiarizationTurn.pipeline_run_id == run_id)
+        .scalar_subquery()
+    )
 
 
 class Resolution(enum.StrEnum):

@@ -25,9 +25,24 @@
     .muted { opacity: .65; }
     audio { width: 100%; margin: .6rem 0 1rem; }
     .error { color: #c33; }
+    nav.top { display: flex; gap: 1rem; margin-bottom: 1.5rem; padding-bottom: .6rem;
+              border-bottom: 1px solid #8884; font-size: .95rem; }
+    nav.top a[aria-current="page"] { font-weight: 600; }
+    form.filters { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
+                   margin: 1rem 0; }
+    form.filters label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
+    .pill.running { background: #26a3; border-color: #26a; }
+    .pill.completed { background: #2823; border-color: #282; }
+    .pill.failed { background: #c332; border-color: #c33; }
+    .pill.queued, .pill.awaiting_adjudication { background: #8882; }
+    .pill.cancelled { background: #8881; opacity: .7; }
   </style>
 </head>
 <body>
+  <nav class="top">
+    <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
+    <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
+  </nav>
   {% block body %}{% endblock %}
 </body>
 </html>

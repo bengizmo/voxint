@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     media_probe_timeout_seconds: PositiveSeconds = 30.0
     # Transcript preview length per label in the workbench.
     review_preview_segments: int = Field(default=8, ge=1)
+    # Bounded page size for the /runs execution-history browser (keyset paged).
+    runs_page_size: int = Field(default=50, ge=1, le=500)
 
     # GPU model services
     asr_url: str = "http://localhost:8022"

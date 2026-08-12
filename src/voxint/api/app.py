@@ -43,8 +43,17 @@ from voxint.adjudication.slots import (
     verify_claim,
 )
 from voxint.api.auth import require_operator
+from voxint.api.runs_query import (
+    Cursor,
+    InvalidCursorError,
+    ReviewFilter,
+    list_runs,
+    parse_review_filter,
+    parse_status_filter,
+    runs_url,
+)
 from voxint.config import Settings, get_settings
-from voxint.db.models import Decision, PipelineRun, Speaker, TranscriptSegment
+from voxint.db.models import Decision, PipelineRun, RunStatus, Speaker, TranscriptSegment
 from voxint.db.session import build_engine, build_session_factory
 from voxint.media.serving import (
     MediaGate,
@@ -203,6 +212,56 @@ def _register_routes(app: FastAPI) -> None:
             media_type="text/javascript",
         )
 
+    @app.get("/runs")
+    def runs(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        status: str | None = None,
+        review: str | None = None,
+        cursor: str | None = None,
+    ) -> Response:
+        settings: Settings = request.app.state.settings
+        try:
+            status_filter = parse_status_filter(status)
+            review_filter = parse_review_filter(review)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        parsed_cursor: Cursor | None = None
+        # A blank cursor means "start at page 1", mirroring blank status/review
+        # meaning "all"; only a non-empty but malformed token is a 400.
+        if cursor:
+            try:
+                parsed_cursor = Cursor.decode(cursor)
+            except InvalidCursorError as exc:
+                raise HTTPException(status_code=400, detail="invalid cursor") from exc
+        page = list_runs(
+            session,
+            status=status_filter,
+            review=review_filter,
+            cursor=parsed_cursor,
+            page_size=settings.runs_page_size,
+        )
+        next_url = (
+            runs_url(status=status_filter, review=review_filter, cursor=page.next_cursor)
+            if page.next_cursor
+            else None
+        )
+        return templates.TemplateResponse(
+            request,
+            "runs.html",
+            {
+                "request": request,
+                "page": page,
+                "status": status_filter,
+                "review": review_filter,
+                "statuses": list(RunStatus),
+                "reviews": list(ReviewFilter),
+                "next_url": next_url,
+                "active_nav": "runs",
+            },
+        )
+
     @app.get("/review")
     def review_queue(
         request: Request, operator: OperatorDep, session: SessionDep
@@ -214,6 +273,7 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "entries": adjudication_queue(session),
                 "operator": operator,
+                "active_nav": "review",
             },
         )
 

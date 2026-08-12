@@ -23,6 +23,7 @@ def test_healthz_is_open(client: TestClient) -> None:
     ("method", "path"),
     [
         ("GET", "/"),
+        ("GET", "/runs"),
         ("GET", "/review"),
         ("GET", "/review/00000000-0000-0000-0000-000000000000"),
         ("POST", "/review/00000000-0000-0000-0000-000000000000/claim"),

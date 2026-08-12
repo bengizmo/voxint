@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Voxint — runs{% endblock %}
+{% block body %}
+<h1>Runs</h1>
+<p class="muted">Execution history, newest first. Review state applies to completed runs.</p>
+
+<form method="get" action="/runs" class="filters">
+  <label>Status
+    <select name="status">
+      <option value="">all</option>
+      {% for s in statuses %}
+      <option value="{{ s.value }}"{% if status == s %} selected{% endif %}>{{ s.value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Review
+    <select name="review">
+      <option value="">all</option>
+      {% for r in reviews %}
+      <option value="{{ r.value }}"{% if review == r %} selected{% endif %}>{{ r.value }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+</form>
+
+{% if not page.items %}
+<p>No runs match these filters.</p>
+{% else %}
+<table>
+  <thead>
+    <tr><th>Run</th><th>Status</th><th>Review</th><th>Media</th><th>Created</th></tr>
+  </thead>
+  <tbody>
+    {% for it in page.items %}
+    <tr>
+      <td><code>{{ it.run_id.hex[:8] }}</code></td>
+      <td><span class="pill {{ it.status }}">{{ it.status }}</span></td>
+      <td>
+        {% if it.status == "completed" %}
+          {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>
+          {% elif it.unresolved_count > 0 %}<span class="pill unresolved">needs ruling ({{ it.unresolved_count }})</span>
+          {% else %}<span class="pill human">resolved</span>{% endif %}
+        {% else %}<span class="muted">—</span>{% endif %}
+        {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
+      </td>
+      <td><code>{{ it.source_path }}</code></td>
+      <td>{{ it.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if next_url %}
+<p><a href="{{ next_url }}">Older →</a></p>
+{% endif %}
+{% endblock %}
