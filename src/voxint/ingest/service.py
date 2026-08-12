@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.media.netcheck import ip_is_public
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
     RunSnapshot,
@@ -304,12 +305,14 @@ def validate_ingest_url(url: str) -> str:
             # than let it fall through to the DNS-name branch.
             raise UrlValidationError("ingest URL has an invalid IPv6 host") from None
         return candidate  # a DNS name — public-address check deferred to the worker (6g)
-    if not ip.is_global or ip.is_multicast:
+    if not ip_is_public(ip):
         # Loopback/private/link-local/reserved/unspecified/multicast literals.
-        # is_global alone admits multicast (224/4, ff00::/8), so reject it too.
+        # ip_is_public (media.netcheck) is the SINGLE per-address policy shared
+        # with the worker's resolved-host gate, so the literal check here and the
+        # DNS re-resolution there can never diverge on what "public" means.
         # (IPv4-in-IPv6 embeddings — deprecated ::a.b.c.d and RFC 6052 NAT64 —
-        # can still evade is_global; the worker re-resolves the host at fetch
-        # time (slice 6g), which is the authoritative public-address gate.)
+        # can still evade is_global as literals; the worker re-resolves the host
+        # at fetch time (slice 6g), which is the authoritative public-address gate.)
         raise UrlValidationError("ingest URL host is not permitted")
     return candidate
 

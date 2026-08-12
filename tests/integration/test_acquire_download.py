@@ -9,6 +9,7 @@ authoritative size cap, sha256, atomic publish, row population).
 
 import hashlib
 import shlex
+import socket
 import uuid
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from voxint.db.models import (
     StageStatus,
 )
 from voxint.ingest.service import requeue_failed_run
+from voxint.media.netcheck import Resolver
 from voxint.media.redaction import MAX_STORED_ERROR_CHARS
 from voxint.media.ytdlp import AcquisitionError, Downloader, run_download_command
 from voxint.pipeline.engine import StageFailedError, StageFn, execute_run, submit
@@ -35,8 +37,32 @@ from voxint.pipeline.stages.context import StageContext, StageDataError
 _URL = "https://example.com/podcast"
 
 
+def _resolver_returning(*addresses: str) -> Resolver:
+    """A fake ``getaddrinfo`` returning fixed address strings — no real DNS, so the
+    worker-side SSRF gate is exercised deterministically and offline in CI."""
+
+    def resolve(host: str, *args: object, **kwargs: object) -> list[
+        tuple[int, int, int, str, tuple[str, int]]
+    ]:
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 0))
+            for addr in addresses
+        ]
+
+    return resolve
+
+
+# example.com's real global unicast address — the gate sees a public answer and
+# lets every existing URL-run test proceed to its FAKE downloader without network.
+_PUBLIC_RESOLVER = _resolver_returning("93.184.216.34")
+
+
 def _ctx(
-    media_root: Path, *, downloader: Downloader | None, max_bytes: int = 1024
+    media_root: Path,
+    *,
+    downloader: Downloader | None,
+    max_bytes: int = 1024,
+    resolver: Resolver = _PUBLIC_RESOLVER,
 ) -> StageContext:
     return StageContext(
         asr=FakeASR(),
@@ -45,6 +71,7 @@ def _ctx(
         llm=FakeLLM(),
         media_root=media_root,
         downloader=downloader,
+        resolver=resolver,
         ytdlp_max_bytes=max_bytes,
     )
 
@@ -456,3 +483,121 @@ def test_persisted_stage_error_is_length_capped(
         assert err is not None
         assert len(err) <= MAX_STORED_ERROR_CHARS
         assert err.endswith("[truncated]")
+
+
+# --- worker-side DNS re-resolution SSRF gate (slice 6g) -----------------------
+# validate_ingest_url gated row creation at submit but did NOT resolve DNS; the
+# worker re-resolves the host here and refuses any non-public answer BEFORE the
+# download. TEST-NET literals (192.0.2/198.51.100/203.0.113) stand in for a host
+# that rebinds to a private address — all non-global, so the gate rejects them.
+
+_SIGNED_SSRF_URL = "https://cdn.example.com/media.mp3?token=SSRF-REBIND-SENTINEL"
+
+
+def _failing_resolver(host: str, *args: object, **kwargs: object) -> list[object]:
+    raise socket.gaierror("Name or service not known")
+
+
+def test_host_resolving_non_public_is_rejected_before_download(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A host that resolves to a non-public address is refused before the download
+    even runs (the FAKE downloader would AssertionError if called), and the error
+    names only the host — never the URL / its signed token."""
+    run_id, media_id, sp = _make_url_run(session_factory, source_url=_SIGNED_SSRF_URL)
+    ctx = _ctx(
+        tmp_path,
+        downloader=_forbidden(),  # must NOT be called: the gate rejects first
+        resolver=_resolver_returning("192.0.2.9"),  # TEST-NET-1, non-global
+    )
+    with session_factory() as session, pytest.raises(AcquisitionError) as exc:
+        acquire.run(ctx, session, run_id)
+
+    message = str(exc.value)
+    assert "non-public" in message
+    assert "cdn.example.com" in message  # host kept as a diagnostic
+    assert "SSRF-REBIND-SENTINEL" not in message  # the signed token is absent
+    assert "token=" not in message and _SIGNED_SSRF_URL not in message
+    # Nothing published, no hash recorded (the gate rejects before any dir is made).
+    assert not (tmp_path / sp).exists()
+    media = _media_for(session_factory, media_id)
+    assert media.sha256 is None and media.size_bytes is None
+
+
+def test_any_non_public_answer_rejects(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Rejection is on the FIRST non-public address, not "all private": a host that
+    answers with a public AND a private address (a rebinding / split-horizon trick)
+    is refused."""
+    run_id, _media_id, sp = _make_url_run(session_factory)
+    ctx = _ctx(
+        tmp_path,
+        downloader=_forbidden(),
+        resolver=_resolver_returning("93.184.216.34", "198.51.100.7"),
+    )
+    with session_factory() as session, pytest.raises(AcquisitionError, match="non-public"):
+        acquire.run(ctx, session, run_id)
+    assert not (tmp_path / sp).exists()
+
+
+def test_unresolvable_host_is_rejected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Fail-closed: a host that does not resolve is terminal (never proof of a
+    public address), so the worker refuses it rather than hand it to yt-dlp."""
+    run_id, _media_id, sp = _make_url_run(session_factory)
+    ctx = _ctx(tmp_path, downloader=_forbidden(), resolver=_failing_resolver)
+    with session_factory() as session, pytest.raises(
+        AcquisitionError, match="could not be resolved"
+    ):
+        acquire.run(ctx, session, run_id)
+    assert not (tmp_path / sp).exists()
+
+
+def test_source_url_without_host_is_rejected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Defensive: the worker re-parses source_url ITSELF and refuses a stored URL
+    with no host rather than resolving an empty string (don't trust a stored
+    parse). The FAKE downloader must not be called."""
+    run_id, _media_id, sp = _make_url_run(
+        session_factory, source_url="http:///no-host/path"
+    )
+    ctx = _ctx(tmp_path, downloader=_forbidden())
+    with session_factory() as session, pytest.raises(AcquisitionError, match="no host"):
+        acquire.run(ctx, session, run_id)
+    assert not (tmp_path / sp).exists()
+
+
+def test_non_public_host_parks_run_failed_at_acquire(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """End to end: a non-public-resolving URL run parks FAILED @ acquire (a
+    deterministic AcquisitionError, not auto-retried) with a persisted error that
+    carries the host but no raw URL / token."""
+    run_id, media_id, sp = _make_url_run(session_factory, source_url=_SIGNED_SSRF_URL)
+    ctx = _ctx(
+        tmp_path, downloader=_forbidden(), resolver=_resolver_returning("203.0.113.4")
+    )
+
+    with pytest.raises(StageFailedError) as excinfo:
+        execute_run(session_factory, run_id, _fns(ctx))
+    assert excinfo.value.stage is Stage.ACQUIRE
+
+    claims = _acquire_claims(session_factory, run_id)
+    assert [c.status for c in claims] == [StageStatus.FAILED.value]
+    stage_error = claims[0].error
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.FAILED.value
+        assert run.current_stage == Stage.ACQUIRE.value
+        run_error = run.error
+    for err in (stage_error, run_error):
+        assert err is not None
+        assert "SSRF-REBIND-SENTINEL" not in err and "token=" not in err
+        assert "cdn.example.com" in err  # host survives as a diagnostic
+    assert not (tmp_path / sp).exists()
+    media = _media_for(session_factory, media_id)
+    assert media.sha256 is None

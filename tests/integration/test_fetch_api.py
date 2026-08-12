@@ -22,11 +22,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_FETCH, CSRF_SUBMIT, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 
 CREDS = ("reviewer", "s3cret")
 _URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+_CSRF_KEY = "fetch-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
+
+
+def _fd(**kwargs: str) -> dict[str, str]:
+    """Form data with a valid /fetch CSRF token merged in (the real forms carry
+    one; posting without it is 403 — see test_fetch_rejected_without_csrf_token)."""
+    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH), **kwargs}
 
 
 def make_client(
@@ -36,6 +44,7 @@ def make_client(
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         ytdlp_enabled=ytdlp_enabled,
+        csrf_secret=_CSRF_KEY,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -70,7 +79,7 @@ def test_fetch_creates_source_url_run_and_publishes(
 ) -> None:
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data={"url": _URL, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert resp.status_code == 303
     run_id = _run_id_from_redirect(resp.headers["location"])
@@ -116,7 +125,7 @@ def test_fetch_bad_url_is_422_and_creates_nothing(
 ) -> None:
     resp = client.post(
         "/fetch",
-        data={"url": "ftp://example.com/f.mp3", "submission_id": uuid.uuid4().hex},
+        data=_fd(url="ftp://example.com/f.mp3", submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
     assert resp.status_code == 422
@@ -133,10 +142,10 @@ def test_fetch_error_body_never_echoes_the_url(client: TestClient) -> None:
     secret = "SUPERSECRETSIGNATURE"
     resp = client.post(
         "/fetch",
-        data={
-            "url": f"http://192.0.2.9/media?token={secret}",
-            "submission_id": uuid.uuid4().hex,
-        },
+        data=_fd(
+            url=f"http://192.0.2.9/media?token={secret}",
+            submission_id=uuid.uuid4().hex,
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 422
@@ -148,11 +157,61 @@ def test_fetch_non_uuid_submission_id_is_422(
 ) -> None:
     resp = client.post(
         "/fetch",
-        data={"url": _URL, "submission_id": "not-a-uuid"},
+        data=_fd(url=_URL, submission_id="not-a-uuid"),
         follow_redirects=False,
     )
     assert resp.status_code == 422
     assert published == []
+
+
+# --- CSRF ---------------------------------------------------------------------
+
+
+def test_fetch_rejected_without_csrf_token(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # No csrf_token field ⇒ 403 before any DB write (a forged cross-site POST).
+    resp = client.post(
+        "/fetch",
+        data={"url": _URL, "submission_id": uuid.uuid4().hex},  # NB: no _fd() token
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+    with session_factory() as session:
+        assert session.execute(select(PipelineRun)).first() is None
+        assert session.execute(select(MediaItem)).first() is None
+
+
+def test_fetch_rejected_with_wrong_action_token(
+    client: TestClient, published: list[uuid.UUID]
+) -> None:
+    # A token minted for /submit is not valid on /fetch (action binding).
+    resp = client.post(
+        "/fetch",
+        data={
+            "url": _URL,
+            "submission_id": uuid.uuid4().hex,
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT),
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+
+
+def test_runs_page_renders_fetch_csrf_token(client: TestClient) -> None:
+    # The fetch form carries a hidden csrf_token that verifies for /fetch.
+    body = client.get("/runs").text
+    match = re.search(
+        r'action="/fetch".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
+    )
+    assert match is not None
+    from voxint.api.csrf import verify_csrf_token
+
+    assert verify_csrf_token(_CSRF_KEY, CSRF_FETCH, match.group(1))
 
 
 # --- replay idempotency -------------------------------------------------------
@@ -165,10 +224,10 @@ def test_fetch_replay_same_url_returns_same_run(
 ) -> None:
     sub = uuid.uuid4().hex
     first = client.post(
-        "/fetch", data={"url": _URL, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     second = client.post(
-        "/fetch", data={"url": _URL, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert first.status_code == second.status_code == 303
     run_id = _run_id_from_redirect(first.headers["location"])
@@ -187,14 +246,14 @@ def test_fetch_replay_different_url_conflicts(
 ) -> None:
     sub = uuid.uuid4().hex
     first = client.post(
-        "/fetch", data={"url": _URL, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert first.status_code == 303
     run_id = _run_id_from_redirect(first.headers["location"])
 
     clash = client.post(
         "/fetch",
-        data={"url": "https://example.com/other.mp3", "submission_id": sub},
+        data=_fd(url="https://example.com/other.mp3", submission_id=sub),
         follow_redirects=False,
     )
     assert clash.status_code == 409
@@ -215,7 +274,7 @@ def test_fetch_refused_when_ytdlp_disabled(
     client = make_client(session_factory, ytdlp_enabled=False)
     resp = client.post(
         "/fetch",
-        data={"url": _URL, "submission_id": uuid.uuid4().hex},
+        data=_fd(url=_URL, submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
     assert resp.status_code == 403
@@ -243,7 +302,7 @@ def test_run_detail_shows_host_not_raw_url(
     secret_url = "https://cdn.example.com/media.mp3?token=SUPERSECRETSIGNATURE"
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data={"url": secret_url, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=secret_url, submission_id=sub), follow_redirects=False
     )
     run_id = _run_id_from_redirect(resp.headers["location"])
 
@@ -289,7 +348,7 @@ def test_broker_down_fetch_leaves_run_queued(
     monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)
     sub = uuid.uuid4().hex
     resp = client.post(
-        "/fetch", data={"url": _URL, "submission_id": sub}, follow_redirects=False
+        "/fetch", data=_fd(url=_URL, submission_id=sub), follow_redirects=False
     )
     assert resp.status_code == 303
     assert resp.headers["location"].endswith("?enqueue=deferred")

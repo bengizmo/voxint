@@ -31,6 +31,7 @@ recovers — no action needed.</p>
 <form method="post" action="/runs/{{ run.id }}/requeue" class="requeue">
   {# Carry the revision we rendered so a stale tab's requeue 409s (exact-revision CAS). #}
   <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_requeue }}">
   <button type="submit">Requeue</button>
   <span class="muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
 </form>

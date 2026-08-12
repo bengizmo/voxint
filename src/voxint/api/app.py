@@ -10,6 +10,7 @@ appends; the newest ruling per label wins at read time).
 """
 
 import logging
+import secrets
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -50,6 +51,13 @@ from voxint.adjudication.transcript import (
     parse_transcript_text,
 )
 from voxint.api.auth import require_operator
+from voxint.api.csrf import (
+    CSRF_FETCH,
+    CSRF_REQUEUE,
+    CSRF_SUBMIT,
+    mint_csrf_token,
+    verify_csrf_token,
+)
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
@@ -170,6 +178,17 @@ def create_app(
     )
     resolved = settings or get_settings()
     app.state.settings = resolved
+    # CSRF signing secret: the configured value (persistent, shared by every
+    # worker) or a random per-process fallback so the console works with zero
+    # config. A per-process secret invalidates open forms on restart and mismatches
+    # across workers, so warn when we fall back — see voxint.api.csrf.
+    app.state.csrf_secret = resolved.csrf_secret or secrets.token_urlsafe(32)
+    if not resolved.csrf_secret:
+        logger.warning(
+            "csrf_secret is unset; using a random per-process CSRF secret. Open "
+            "forms will break on restart and across workers. Set csrf_secret to a "
+            "persistent random value to avoid this."
+        )
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory
@@ -281,6 +300,15 @@ def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
     if run is None:
         raise HTTPException(status_code=404, detail=f"no run {run_id}")
     return run
+
+
+def _require_csrf(request: Request, action: str, token: str | None) -> None:
+    """403 unless ``token`` is a valid CSRF token for ``action`` — call before any
+    state change. A missing token and a mis-signed one BOTH 403 (the field is
+    Optional, so FastAPI never turns an absent token into a 422), giving a forged
+    cross-site POST one uniform refusal before the DB is touched."""
+    if not verify_csrf_token(request.app.state.csrf_secret, action, token):
+        raise HTTPException(status_code=403, detail="invalid or missing CSRF token")
 
 
 def _label_previews(
@@ -415,6 +443,12 @@ def _register_routes(app: FastAPI) -> None:
                 # submissions can never collide on a shared source_path.
                 "submission_id": uuid.uuid4().hex,
                 "fetch_submission_id": uuid.uuid4().hex,
+                # Per-form CSRF tokens, each bound to its own action so one form's
+                # token is not valid on the other's route (or on /requeue).
+                "csrf_submit": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_SUBMIT
+                ),
+                "csrf_fetch": mint_csrf_token(request.app.state.csrf_secret, CSRF_FETCH),
                 # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
                 # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
                 "ytdlp_enabled": settings.ytdlp_enabled,
@@ -429,7 +463,14 @@ def _register_routes(app: FastAPI) -> None:
         session: SessionDep,
         file: Annotated[UploadFile, File()],
         submission_id: Annotated[str, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> RedirectResponse:
+        # CSRF before anything: a forged cross-site upload is refused before the DB
+        # write / file finalize. (FastAPI spools the multipart file part before this
+        # body runs — the pre-body spool is bounded by _RequestSizeLimitMiddleware +
+        # the streaming cap, so a forgery cannot write past those; the DB and the
+        # os.replace publish are still gated here.)
+        _require_csrf(request, CSRF_SUBMIT, csrf_token)
         settings: Settings = request.app.state.settings
         # An over-cap Content-Length was already rejected before the body was read
         # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
@@ -464,7 +505,11 @@ def _register_routes(app: FastAPI) -> None:
         session: SessionDep,
         url: Annotated[str, Form()],
         submission_id: Annotated[str, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> RedirectResponse:
+        # CSRF first — reject a forged cross-site fetch before any other check, so
+        # a forgery is refused regardless of the ytdlp_enabled flag's state.
+        _require_csrf(request, CSRF_FETCH, csrf_token)
         # URL ingestion is an authenticated egress capability gated at the
         # submission surface: refuse before touching the DB when it is off, so no
         # row is created and nothing is published. (The worker's ACQUIRE stage
@@ -537,6 +582,10 @@ def _register_routes(app: FastAPI) -> None:
                 # Read as a bare boolean (never echoed): a submit/requeue whose
                 # enqueue was deferred by a broker outage redirects here with it.
                 "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
+                # CSRF token for the requeue form (rendered only when FAILED).
+                "csrf_requeue": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_REQUEUE
+                ),
                 "active_nav": "runs",
             },
         )
@@ -570,10 +619,13 @@ def _register_routes(app: FastAPI) -> None:
     @app.post("/runs/{run_id}/requeue")
     def requeue_run(
         run_id: uuid.UUID,
+        request: Request,
         operator: OperatorDep,
         session: SessionDep,
         revision: Annotated[int, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
     ) -> RedirectResponse:
+        _require_csrf(request, CSRF_REQUEUE, csrf_token)
         # Exact-revision CAS from the form's hidden field: a stale browser tab
         # holding an older revision 409s rather than requeuing a run that already
         # moved on. FAILED-only, at the failed stage (the service enforces both).

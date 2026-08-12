@@ -83,6 +83,54 @@ Three invariants worth naming:
   single `embedding_space`; all vector SQL lives in one module and always filters
   by space.
 
+## URL ingestion & SSRF (the ACQUIRE stage)
+
+`voxint fetch <url>` / `POST /fetch` register a URL as a `MediaItem.source_url`
+and queue a run; the pipeline's first stage, **ACQUIRE**, downloads it with
+yt-dlp on the worker (a no-op when `source_url IS NULL` — local/uploaded media).
+URL ingestion is an authenticated **admin egress** capability (`ytdlp_enabled`,
+on by default), **not a sandbox**, and is documented as such.
+
+**Two SSRF gates, one policy.** A submitted URL is checked at two independent
+points that share a single per-address rule (`media.netcheck.ip_is_public`:
+globally-routable and not multicast), so they can never diverge:
+
+1. **String gate (submit time)** — `ingest.validate_ingest_url` requires an
+   absolute http/https URL with a plain host, no embedded credentials, no
+   whitespace/control chars, under a length ceiling, and — for an IP *literal* —
+   a public address. It deliberately does **not** resolve DNS: a name that looks
+   public now can rebind before the worker fetches it.
+2. **Resolved-host gate (download time)** — `media.netcheck.assert_host_resolves_public`
+   re-resolves the host (A + AAAA) in the worker immediately before the download
+   and rejects it if *any* resolved address is non-public. This is the
+   authoritative gate; it also catches the IPv4-in-IPv6 embeddings (`::a.b.c.d`,
+   NAT64) that `is_global` mis-classifies as literals. On refusal the run parks
+   FAILED @ acquire for a manual Requeue, with a host-only (URL-free) error.
+
+**yt-dlp lockdown** (`media.ytdlp`, verified against yt-dlp 2026.07.04): the argv
+runs with `--no-config`, `--no-plugin-dirs` (no local/remote plugin loading),
+`--no-exec` (no post-processor command), `--no-playlist --max-downloads 1`, a
+size cap, and hard wall-clock timeouts; `file://` URLs are refused by yt-dlp's
+own default (we never pass `--enable-file-urls`). An optional `ytdlp_proxy` /
+`ytdlp_cookies_file` is wired to `--proxy` / `--cookies` **only when set**, and
+both are treated as credentials — scrubbed verbatim from any surfaced error.
+
+**Residual — needs network policy, not a userland check.** yt-dlp re-resolves the
+host *independently* when it connects, and its generic extractor follows HTTP
+redirects and constructs URLs. So a host that rebinds between our re-resolution
+and yt-dlp's fetch, an HTTP redirect to a private address, or an
+extractor-constructed private URL is **beyond** these gates. Closing that requires
+running the worker where it has **no route to RFC1918 / link-local / the cloud
+metadata endpoint** (egress firewall or a dedicated egress). The resolved-host
+gate raises the bar and closes the literal / rebind-at-check-time holes; it is not
+a substitute for egress control.
+
+**CSRF.** The three mutation forms — `POST /submit`, `/fetch`,
+`/runs/{id}/requeue` — carry a stateless, action-bound HMAC token (`api.csrf`,
+keyed by `csrf_secret`, independent of the Basic-auth password); a
+missing/mis-signed token is refused before any state change. The review-workbench
+mutations are instead gated by their unguessable per-run claim token.
+
 ## Provider seams
 
 ASR, diarizer, embedder, and LLM sit behind typed protocols

@@ -6,6 +6,7 @@
 
 <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
   <input type="hidden" name="submission_id" value="{{ submission_id }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
   <label>Upload media
     <input type="file" name="file" required>
   </label>
@@ -17,6 +18,7 @@
   {# Independent submission id from the upload form's, so the two never collide
      on a shared source_path; a double-submit of this form stays idempotent. #}
   <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_fetch }}">
   <label>Fetch from URL
     <input type="url" name="url" placeholder="https://…" required>
   </label>

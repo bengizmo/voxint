@@ -169,6 +169,54 @@ def test_quoted_flag_value_with_spaces_is_fully_redacted() -> None:
     assert "--cookies <redacted>" in out
 
 
+# --- slice 6g: socks-scheme widening + extra_secrets verbatim scrub -----------
+
+
+def test_socks_proxy_url_in_prose_is_redacted() -> None:
+    # A socks5:// proxy string echoed as prose (no --proxy flag in front, so
+    # _SECRET_FLAG_RE misses it) must still lose its userinfo — _URL_RE now matches
+    # socks schemes, not only http(s).
+    out = redact(f"Unable to connect to proxy socks5://bob:{_SENTINEL}@203.0.113.5:1080")
+    assert _SENTINEL not in out
+    assert "bob" not in out
+    assert "socks5://203.0.113.5:1080/<redacted>" in out
+
+
+def test_socks4_and_socks5h_schemes_are_redacted() -> None:
+    for scheme in ("socks4", "socks5h"):
+        out = redact(f"proxy {scheme}://{_SENTINEL}@198.51.100.9:1080 failed")
+        assert _SENTINEL not in out
+        assert f"{scheme}://198.51.100.9:1080/<redacted>" in out
+
+
+def test_extra_secrets_scrub_a_prose_cookie_path() -> None:
+    # A cookies path echoed WITHOUT the --cookies flag (yt-dlp's "[Errno 2]" prose)
+    # is a bare path no scheme/flag regex can catch — extra_secrets removes it.
+    path = f"/secrets/{_SENTINEL}/cookies.txt"
+    out = redact(f"Could not load cookies [Errno 2]: '{path}'", extra_secrets=(path,))
+    assert _SENTINEL not in out
+    assert path not in out
+    assert "<redacted>" in out
+
+
+def test_extra_secrets_scrub_a_prose_proxy_string() -> None:
+    proxy = f"socks5://user:{_SENTINEL}@203.0.113.5:1080"
+    out = redact(f"connecting via {proxy} timed out", extra_secrets=(proxy,))
+    assert _SENTINEL not in out
+
+
+def test_extra_secrets_empty_values_are_skipped() -> None:
+    # An unset proxy/cookies ("") must not splice the redaction marker into text.
+    text = "download command failed (exit 1): ERROR: Forbidden"
+    assert redact(text, extra_secrets=("", "")) == text
+
+
+def test_redact_without_extra_secrets_is_unchanged_behaviour() -> None:
+    out = redact(f"https://cdn.example.com/a?token={_SENTINEL}")
+    assert _SENTINEL not in out
+    assert "https://cdn.example.com/<redacted>" in out
+
+
 def test_cap_length_passes_through_within_limit() -> None:
     text = "short error"
     assert cap_length(text, max_len=100) == text

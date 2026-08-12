@@ -50,6 +50,15 @@ class Settings(BaseSettings):
     api_port: int = 8080
     voxint_user: str = "admin"
     voxint_password: str = "change-me"
+    # Secret keying the stateless CSRF token on the mutation forms (POST /submit,
+    # /fetch, /runs/{id}/requeue). Independent of voxint_password ON PURPOSE: a
+    # human-memorable password would turn every rendered token into a fast offline
+    # password-verification oracle. Empty ⇒ create_app() mints a random per-process
+    # secret (fine for a single-operator localhost console, but open forms break on
+    # restart / across workers); set a persistent random value
+    # (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) to make
+    # tokens stable across restarts and multiple workers.
+    csrf_secret: str = ""
     # How long a reviewer holds a run before the slot self-releases. Long
     # enough for one careful listen-through; short enough that a closed tab
     # doesn't dam the queue.
@@ -89,14 +98,16 @@ class Settings(BaseSettings):
     acquire_lease_seconds: int = Field(default=10800, gt=0)  # 3 h
     # Per-socket connect/read timeout handed to yt-dlp (--socket-timeout).
     ytdlp_socket_timeout_seconds: PositiveSeconds = 30.0
-    # Optional outbound proxy for yt-dlp. Introduced here as config only; it is
-    # NOT yet wired into the downloader argv (that hardened lockdown is a later
-    # slice) — setting it today has no effect on downloads.
+    # Optional outbound proxy for yt-dlp, wired to --proxy when non-empty (slice
+    # 6g). Its literal value is a credential: it is scrubbed verbatim from any
+    # surfaced error (redact(extra_secrets=...)) as well as by the --proxy flag
+    # redaction. Empty ⇒ direct connection (the flag is omitted).
     ytdlp_proxy: str = ""
-    # Optional cookies file (Netscape format) for yt-dlp. Validated below as a
-    # readable regular file so a typo fails at startup, not mid-download. Like
-    # ytdlp_proxy it is config only here and NOT yet passed to yt-dlp; treat its
-    # path and contents as a credential (never surfaced in errors).
+    # Optional cookies file (Netscape format) for yt-dlp, wired to --cookies when
+    # set (slice 6g). Validated below as a readable regular file so a typo fails at
+    # startup, not mid-download. Treat its path and contents as a credential: the
+    # path is scrubbed verbatim from errors (redact(extra_secrets=...)) and never
+    # surfaced by the config validators.
     ytdlp_cookies_file: Path | None = None
 
     # GPU model services

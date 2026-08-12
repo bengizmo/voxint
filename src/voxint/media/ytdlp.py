@@ -106,7 +106,9 @@ def _kill_process_group(
         os.killpg(pgid, signal.SIGKILL)
 
 
-def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
+def run_download_command(
+    argv: list[str], *, timeout_seconds: float, extra_secrets: "tuple[str, ...]" = ()
+) -> None:
     """Run a download argument vector under a hard wall-clock timeout.
 
     Spawns ``argv`` in its own process group, waits up to ``timeout_seconds``,
@@ -115,6 +117,12 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
     exit or a failure to even launch the binary is a terminal
     :class:`AcquisitionError`. The output directory is inspected by the caller,
     not here.
+
+    ``extra_secrets`` are caller-known secret literals (the configured
+    ``--proxy`` value and ``--cookies`` path) scrubbed verbatim from any surfaced
+    message, so a proxy string or cookie path yt-dlp echoes into stderr as *prose*
+    — with neither an http(s) scheme nor our flag in front of it, which the
+    structural :func:`redact` cannot otherwise catch — is removed too.
     """
     try:
         proc = subprocess.Popen(
@@ -133,7 +141,9 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
         # every message this module builds from a subprocess is scrubbed at one
         # boundary. `from exc` is safe here precisely because the cause names
         # argv[0], unlike the timeout cause below which carries the whole argv.
-        raise AcquisitionError(redact(f"failed to execute {argv[0]}: {exc}")) from exc
+        raise AcquisitionError(
+            redact(f"failed to execute {argv[0]}: {exc}", extra_secrets=extra_secrets)
+        ) from exc
     try:
         _, stderr = proc.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired:
@@ -154,7 +164,7 @@ def run_download_command(argv: list[str], *, timeout_seconds: float) -> None:
         # params, embedded creds) into stderr. Slicing first could keep a
         # schemeless "?token=..." tail the redactor no longer recognises, so the
         # whole blob is scrubbed and only then trimmed to the tail limit.
-        tail = redact(stderr or "")[-_STDERR_LIMIT:]
+        tail = redact(stderr or "", extra_secrets=extra_secrets)[-_STDERR_LIMIT:]
         raise AcquisitionError(
             f"download command failed (exit {proc.returncode}): {tail}"
         )
@@ -165,6 +175,8 @@ def build_ytdlp_downloader(
     timeout_seconds: float,
     socket_timeout_seconds: float,
     ytdlp_bin: str = "yt-dlp",
+    proxy: str = "",
+    cookies_file: "Path | None" = None,
 ) -> Downloader:
     """Build the production yt-dlp downloader bound to the given timeouts.
 
@@ -172,16 +184,34 @@ def build_ytdlp_downloader(
     16 kHz mono WAV, so no extraction/transcode here) into ``dest_dir`` under a
     hard wall-clock timeout, keeping yt-dlp's own retries small and explicit.
     ``--no-playlist``/``--max-downloads 1`` keep a single item; the *authoritative*
-    single-output guard is the stage's "exactly one file" check. The full yt-dlp
-    lockdown (``file:``/remote-component/config-file, proxy, cookies, DNS
-    re-resolution) lands in slices 6d/6g; ``--no-config`` is included now because
-    honouring an ambient user config in a worker is never intended.
+    single-output guard is the stage's "exactly one file" check.
+
+    yt-dlp lockdown (verified against yt-dlp 2026.07.04):
+    - ``--no-config`` — never honour an ambient user config in a worker.
+    - ``--no-plugin-dirs`` — clear ALL plugin directories, defaults included, so a
+      dropped-in local/remote plugin cannot execute.
+    - ``--no-exec`` — neutralise any ``--exec`` post-processor command (we never
+      set one; belt-and-suspenders against a future/injected one).
+    - ``file:`` URLs need no flag: yt-dlp disables them by default (we never pass
+      ``--enable-file-urls``), so a ``file:`` input/redirect is already refused.
+
+    Optional egress config, appended ONLY when set (empty ⇒ omitted): ``proxy`` →
+    ``--proxy``, ``cookies_file`` → ``--cookies``. Both are credentials, so their
+    literal values are passed to ``run_download_command`` as ``extra_secrets`` and
+    scrubbed verbatim from any surfaced error, even in prose yt-dlp emits.
+
+    Residual (NOT closed by a userland flag, documented in docs/architecture.md):
+    yt-dlp re-resolves the host independently and its generic extractor follows
+    redirects, so a redirect / extractor-constructed URL to a private address is
+    beyond this process's reach — that needs network policy.
     """
 
     def download(url: str, dest_dir: Path, max_bytes: int) -> None:
         argv = [
             ytdlp_bin,
             "--no-config",
+            "--no-plugin-dirs",
+            "--no-exec",
             "--no-playlist",
             "--max-downloads",
             "1",
@@ -197,12 +227,25 @@ def build_ytdlp_downloader(
             "2",
             "--extractor-retries",
             "1",
+        ]
+        # Egress options ride among the flags, before the ``--`` URL terminator.
+        secret_values: list[str] = []
+        if proxy:
+            argv += ["--proxy", proxy]
+            secret_values.append(proxy)
+        if cookies_file is not None:
+            cookies_path = str(cookies_file)
+            argv += ["--cookies", cookies_path]
+            secret_values.append(cookies_path)
+        argv += [
             "--no-progress",
             "--output",
             str(dest_dir / "source.%(ext)s"),
             "--",
             url,
         ]
-        run_download_command(argv, timeout_seconds=timeout_seconds)
+        run_download_command(
+            argv, timeout_seconds=timeout_seconds, extra_secrets=tuple(secret_values)
+        )
 
     return download

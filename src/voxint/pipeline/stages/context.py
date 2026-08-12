@@ -7,6 +7,7 @@ at-least-once (engine contract), so every one is idempotent: it deletes or
 resets exactly the rows it owns for the run before writing them again.
 """
 
+import socket
 import uuid
 from dataclasses import dataclass, field
 from functools import partial
@@ -23,6 +24,7 @@ from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
 from voxint.db.models import ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
+from voxint.media.netcheck import Resolver
 from voxint.media.ytdlp import Downloader, build_ytdlp_downloader
 from voxint.pipeline.engine import StageFn
 from voxint.speakers.matching import MatchingGates, gates_from_settings
@@ -57,6 +59,11 @@ class StageContext:
     # no-op path (source_url IS NULL) never touches these, so isolated no-op tests
     # can leave them at their defaults.
     downloader: Downloader | None = None
+    # DNS resolver for the ACQUIRE stage's worker-side SSRF gate: it re-resolves a
+    # URL run's host and rejects non-public addresses before the download. Injected
+    # (defaults to socket.getaddrinfo) so tests never touch real DNS — the no-op
+    # path (source_url IS NULL) never calls it.
+    resolver: Resolver = socket.getaddrinfo
     # Authoritative post-download size cap the stage re-checks (also handed to the
     # downloader as an early --max-filesize hint).
     ytdlp_max_bytes: int = 5 * 1024**3
@@ -94,6 +101,8 @@ def build_stage_context(settings: Settings) -> StageContext:
         downloader=build_ytdlp_downloader(
             timeout_seconds=settings.acquire_timeout_seconds,
             socket_timeout_seconds=settings.ytdlp_socket_timeout_seconds,
+            proxy=settings.ytdlp_proxy,
+            cookies_file=settings.ytdlp_cookies_file,
         ),
         ytdlp_max_bytes=settings.ytdlp_max_bytes,
         ffmpeg_bin=settings.ffmpeg_bin,

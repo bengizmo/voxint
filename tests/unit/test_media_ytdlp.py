@@ -6,6 +6,7 @@ so the process-group timeout kill and the flag lockdown are tested deterministic
 """
 
 import os
+import shlex
 import subprocess
 import time
 import traceback
@@ -166,6 +167,67 @@ def test_downloader_argv_locks_down_yt_dlp(tmp_path: Path) -> None:
     assert str(dest / "source.%(ext)s") in args
     # The URL is the final token, guarded by the argument terminator.
     assert args[-2:] == ["--", "https://example.com/video"]
+
+
+def _record_argv(
+    tmp_path: Path, *, proxy: str = "", cookies_file: "Path | None" = None
+) -> list[str]:
+    """Build the production downloader against a recorder stub and return the argv
+    it was invoked with (no network, no real yt-dlp)."""
+    recorder = tmp_path / "record.sh"
+    argfile = tmp_path / "args.txt"
+    recorder.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{argfile}"\n')
+    recorder.chmod(0o755)
+    dest = tmp_path / "out"
+    dest.mkdir()
+    downloader = build_ytdlp_downloader(
+        timeout_seconds=10,
+        socket_timeout_seconds=7.0,
+        ytdlp_bin=str(recorder),
+        proxy=proxy,
+        cookies_file=cookies_file,
+    )
+    downloader("https://example.com/video", dest, 4242)
+    return argfile.read_text().splitlines()
+
+
+def test_downloader_argv_adds_6g_lockdown_and_omits_unset_egress(tmp_path: Path) -> None:
+    """Slice 6g lockdown: plugin dirs cleared and post-processor exec neutralised,
+    and the optional proxy/cookies flags are ABSENT when unset."""
+    args = _record_argv(tmp_path)
+    assert "--no-plugin-dirs" in args  # no local/remote plugin loading
+    assert "--no-exec" in args  # no post-processor command execution
+    assert "--proxy" not in args
+    assert "--cookies" not in args
+
+
+def test_downloader_argv_wires_proxy_and_cookies_only_when_set(tmp_path: Path) -> None:
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    args = _record_argv(tmp_path, proxy="socks5://203.0.113.5:1080", cookies_file=cookies)
+    assert args[args.index("--proxy") + 1] == "socks5://203.0.113.5:1080"
+    assert args[args.index("--cookies") + 1] == str(cookies)
+    # Egress options ride among the flags, before the ``--`` URL terminator.
+    term = args.index("--")
+    assert args.index("--proxy") < term and args.index("--cookies") < term
+    assert args[-2:] == ["--", "https://example.com/video"]
+
+
+def test_run_download_command_scrubs_extra_secret_from_stderr() -> None:
+    """A cookies path echoed as prose in stderr (no --cookies flag) is scrubbed via
+    the extra_secrets channel the downloader threads through — the structural
+    redactor alone could not catch a bare path."""
+    path = "/secrets/COOKIE-PATH-SENTINEL/cookies.txt"
+    blob = f"ERROR: unable to load cookies [Errno 2]: '{path}'"
+    with pytest.raises(AcquisitionError) as exc:
+        run_download_command(
+            ["sh", "-c", f"printf '%s' {shlex.quote(blob)} 1>&2; exit 1"],
+            timeout_seconds=10,
+            extra_secrets=(path,),
+        )
+    assert "COOKIE-PATH-SENTINEL" not in str(exc.value)
+    assert path not in str(exc.value)
+    assert "exit 1" in str(exc.value)  # the failure class is still legible
 
 
 def test_build_stage_context_wires_the_real_downloader() -> None:

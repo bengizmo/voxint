@@ -29,10 +29,12 @@ import os
 import shutil
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
 from voxint.db.models import MediaItem, PipelineRun
+from voxint.media.netcheck import HostNotPublicError, assert_host_resolves_public
 from voxint.media.ytdlp import AcquisitionError
 from voxint.pipeline.stages.context import StageContext, StageDataError
 
@@ -75,6 +77,22 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
         raise StageDataError(
             f"run {run_id}: no downloader configured for URL acquisition"
         )
+
+    # Authoritative SSRF gate (slice 6g): re-resolve the host NOW and refuse it if
+    # any address is non-public. validate_ingest_url gated row creation at submit
+    # but did NOT resolve DNS — a name that looked public then can rebind before
+    # this download. Re-parse source_url here rather than trusting a stored parse.
+    # On refusal raise AcquisitionError (deterministic → FAILED @ acquire → manual
+    # Requeue) with a host-only message; `from None` keeps the URL out of any
+    # chained traceback (the HostNotPublicError names only the host, but stay
+    # uniform with the module's born-clean discipline).
+    host = urlsplit(media.source_url).hostname
+    if not host:  # defensive: a stored source_url always has a host (validated)
+        raise AcquisitionError("URL acquisition source has no host")
+    try:
+        assert_host_resolves_public(host.rstrip("."), resolver=ctx.resolver)
+    except HostNotPublicError as exc:
+        raise AcquisitionError(str(exc)) from None
 
     canonical_dir = dest.parent
     canonical_dir.mkdir(parents=True, exist_ok=True)

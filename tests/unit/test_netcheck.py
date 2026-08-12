@@ -1,0 +1,118 @@
+"""Worker-side SSRF gate: the shared IP policy and the DNS re-resolution check.
+
+Pure/DI-only — the resolver is injected so no test touches real DNS. Non-public
+fixtures use the IETF documentation ranges (TEST-NET-1/2/3, 2001:db8::/32) and the
+well-known special literals (loopback / link-local / multicast / unspecified / IPv6
+ULA), never an RFC1918 / internal-network literal.
+"""
+
+import ipaddress
+import socket
+
+import pytest
+
+from voxint.media.netcheck import (
+    HostNotPublicError,
+    Resolver,
+    assert_host_resolves_public,
+    ip_is_public,
+)
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "8.8.8.8",  # a globally-routable IPv4 literal
+        "1.1.1.1",
+        "93.184.216.34",
+        "2606:4700:4700::1111",  # a globally-routable IPv6 literal
+    ],
+)
+def test_ip_is_public_true_for_global_unicast(address: str) -> None:
+    assert ip_is_public(ipaddress.ip_address(address)) is True
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "127.0.0.1",  # loopback
+        "0.0.0.0",  # unspecified
+        "169.254.0.1",  # link-local
+        "192.0.2.1",  # TEST-NET-1 (reserved, stands in for RFC1918)
+        "198.51.100.7",  # TEST-NET-2
+        "203.0.113.9",  # TEST-NET-3
+        "169.254.169.254",  # cloud metadata endpoint (classic SSRF target)
+        "224.0.0.1",  # IPv4 local multicast (is_global True → is_multicast rejects)
+        "239.255.255.250",  # IPv4 SSDP multicast
+        "::1",  # IPv6 loopback
+        "fe80::1",  # IPv6 link-local
+        "fc00::1",  # IPv6 unique-local (private)
+        "ff02::1",  # IPv6 multicast
+        "2001:db8::1",  # IPv6 documentation range (reserved)
+    ],
+)
+def test_ip_is_public_false_for_non_public(address: str) -> None:
+    assert ip_is_public(ipaddress.ip_address(address)) is False
+
+
+def _resolver_returning(*addresses: str) -> Resolver:
+    def resolve(host: str, *args: object, **kwargs: object) -> list[
+        tuple[int, int, int, str, tuple[str, int]]
+    ]:
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 0))
+            for addr in addresses
+        ]
+
+    return resolve
+
+
+def test_public_host_passes() -> None:
+    # A host that resolves to a global address returns cleanly (no raise).
+    assert_host_resolves_public(
+        "cdn.example.com", resolver=_resolver_returning("93.184.216.34")
+    )
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["127.0.0.1", "192.0.2.1", "169.254.169.254", "::1", "fe80::1", "ff02::1"],
+)
+def test_non_public_resolution_is_rejected(address: str) -> None:
+    with pytest.raises(HostNotPublicError, match="non-public"):
+        assert_host_resolves_public(
+            "rebinding.example.com", resolver=_resolver_returning(address)
+        )
+
+
+def test_rejects_on_first_non_public_among_many() -> None:
+    # A host answering with a public AND a private address is refused.
+    with pytest.raises(HostNotPublicError, match="non-public"):
+        assert_host_resolves_public(
+            "split.example.com",
+            resolver=_resolver_returning("93.184.216.34", "198.51.100.7"),
+        )
+
+
+def test_unresolvable_host_fails_closed() -> None:
+    def _boom(host: str, *args: object, **kwargs: object) -> list[object]:
+        raise socket.gaierror("Name or service not known")
+
+    with pytest.raises(HostNotPublicError, match="could not be resolved"):
+        assert_host_resolves_public("nx.example.com", resolver=_boom)
+
+
+def test_unparseable_answer_fails_closed() -> None:
+    with pytest.raises(HostNotPublicError, match="unparseable"):
+        assert_host_resolves_public(
+            "weird.example.com", resolver=_resolver_returning("not-an-ip")
+        )
+
+
+def test_error_message_names_only_the_host() -> None:
+    # The message carries the host (not a secret) but no address detail beyond it.
+    with pytest.raises(HostNotPublicError) as exc:
+        assert_host_resolves_public(
+            "host.example.com", resolver=_resolver_returning("192.0.2.5")
+        )
+    assert "host.example.com" in str(exc.value)

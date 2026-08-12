@@ -25,14 +25,18 @@ provenance in the console):
 
 The redaction is deliberately conservative and structural, not a classifier: it
 does NOT try to tell a bot-block from a transient failure (the pipeline parks
-such a run FAILED for a manual Requeue regardless). Freeform secrets that a
-tool might print outside a URL or a known flag (a bare signature line, a cookie
-path echoed in prose) are out of scope here — the injection points Voxint
-*controls* (the URL and the proxy/cookie flags) are covered; broader coverage
-needs the yt-dlp lockdown in slice 6g.
+such a run FAILED for a manual Requeue regardless). The three injection points
+Voxint *controls* are all covered: the source URL and any proxy/cookie **flag**
+value structurally, and — since slice 6g wired ``--proxy``/``--cookies`` — the
+configured proxy string and cookies path **verbatim** via
+:func:`redact`'s ``extra_secrets``, which catches them even when a tool prints
+them as prose (a bare path with no scheme and no flag). A *truly* freeform secret
+Voxint never configured and cannot recognise (an arbitrary signature line a
+remote emits) is still out of scope — structural redaction is not a classifier.
 """
 
 import re
+from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 _REDACTED = "<redacted>"
@@ -44,15 +48,18 @@ _REDACTED_URL = "<redacted-url>"
 MAX_STORED_ERROR_CHARS = 4000
 _TRUNCATION_MARKER = "… [truncated]"
 
-# A run of non-space characters starting at an http(s) scheme. URL structure
-# guarantees every credential-bearing part (userinfo, path, query, fragment)
-# sits AFTER the authority, so keeping only scheme+host and dropping the rest
-# cannot leak a signed token hiding inside the bare host. No leading boundary:
+# A run of non-space characters starting at an http(s) OR socks proxy scheme.
+# URL structure guarantees every credential-bearing part (userinfo, path, query,
+# fragment) sits AFTER the authority, so keeping only scheme+host and dropping the
+# rest cannot leak a signed token hiding inside the bare host. No leading boundary:
 # a URL glued to preceding text ("...forhttps://host/x?token=...") must still be
 # caught — anchoring on the literal scheme keeps the real scheme in the output.
-# (Non-http schemes — e.g. a "socks5://user:pass@" proxy echoed in prose — are
-# not matched here; they cannot reach stderr until slice 6g wires proxy args.)
-_URL_RE = re.compile(r"(?i)https?://\S+")
+# socks[45]h? is included (slice 6g wires --proxy): a "socks5://user:pass@host"
+# proxy string yt-dlp echoes into stderr as PROSE (no --proxy flag in front, so
+# _SECRET_FLAG_RE misses it) still loses its userinfo. The flagged form stays
+# covered by _SECRET_FLAG_RE; a configured proxy/cookies value is ALSO scrubbed
+# verbatim via redact(extra_secrets=...).
+_URL_RE = re.compile(r"(?i)(?:https?|socks[45]h?)://\S+")
 
 # Trailing punctuation the greedy \S+ may have swallowed onto an authority that
 # has no path/query delimiter (e.g. "https://host," or "https://host)."). The
@@ -120,16 +127,28 @@ def _redact_url(match: "re.Match[str]") -> str:
     return f"{scheme}://{authority}/{_REDACTED}"
 
 
-def redact(text: str) -> str:
+def redact(text: str, *, extra_secrets: Iterable[str] = ()) -> str:
     """Return ``text`` with URLs reduced to ``scheme://host/<redacted>`` and the
     values of credential-bearing yt-dlp flags replaced with ``<redacted>``.
+
+    ``extra_secrets`` are caller-known secret literals — the configured
+    ``--proxy`` value and ``--cookies`` path — scrubbed verbatim FIRST, before the
+    structural passes. That is the only way to remove a secret a tool prints as
+    *prose* with neither an http(s)/socks scheme nor a known flag in front of it
+    (e.g. yt-dlp echoing the cookies file path in an ``[Errno 2]`` message): a bare
+    filesystem path is indistinguishable from other text structurally, so it must
+    be matched literally. Empty values are skipped.
 
     Pure and idempotent-friendly: a string with nothing to redact is returned
     unchanged. Apply it BEFORE truncating an untrusted blob — truncating first
     could split a URL and leave a schemeless ``?token=...`` fragment this would
     no longer recognise.
     """
-    scrubbed = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", text)
+    scrubbed = text
+    for secret in extra_secrets:
+        if secret:  # never replace() the empty string (would splice the marker in)
+            scrubbed = scrubbed.replace(secret, _REDACTED)
+    scrubbed = _SECRET_FLAG_RE.sub(lambda m: f"{m.group(1)}{_REDACTED}", scrubbed)
     return _URL_RE.sub(_redact_url, scrubbed)
 
 

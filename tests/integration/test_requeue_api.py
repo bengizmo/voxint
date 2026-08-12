@@ -6,6 +6,7 @@ its HTTP status mapping, the exact-revision form guard, commit-before-publish, t
 broker-down degradation it shares with /submit, and the failed-only Requeue button.
 """
 
+import re
 import uuid
 
 import pytest
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_FETCH, CSRF_REQUEUE, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
 from voxint.ingest import submit_media_item
@@ -24,11 +26,20 @@ from voxint.pipeline.transitions import (
 )
 
 CREDS = ("reviewer", "s3cret")
+_CSRF_KEY = "requeue-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
+
+
+def _rd(**kwargs: str) -> dict[str, str]:
+    """Form fields (revision, …) with a valid /requeue CSRF token merged in — the
+    real requeue form carries one; posting without it is 403."""
+    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_REQUEUE), **kwargs}
 
 
 @pytest.fixture()
 def client(session_factory: sessionmaker[Session]) -> TestClient:
-    settings = Settings(voxint_user=CREDS[0], voxint_password=CREDS[1])
+    settings = Settings(
+        voxint_user=CREDS[0], voxint_password=CREDS[1], csrf_secret=_CSRF_KEY
+    )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
     return test_client
@@ -83,7 +94,7 @@ def test_requeue_failed_run_returns_queued_and_publishes(
 
     resp = client.post(
         f"/runs/{run_id}/requeue",
-        data={"revision": str(revision)},
+        data=_rd(revision=str(revision)),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -110,7 +121,7 @@ def test_requeue_with_stale_revision_conflicts_and_leaves_run_failed(
 
     resp = client.post(
         f"/runs/{run_id}/requeue",
-        data={"revision": str(revision - 1)},
+        data=_rd(revision=str(revision - 1)),
         follow_redirects=False,
     )
     assert resp.status_code == 409
@@ -135,7 +146,7 @@ def test_requeue_non_failed_run_conflicts(
 
     resp = client.post(
         f"/runs/{run_id}/requeue",
-        data={"revision": str(revision)},
+        data=_rd(revision=str(revision)),
         follow_redirects=False,
     )
     assert resp.status_code == 409
@@ -147,11 +158,69 @@ def test_requeue_missing_run_is_404(
 ) -> None:
     resp = client.post(
         f"/runs/{uuid.uuid4()}/requeue",
-        data={"revision": "1"},
+        data=_rd(revision="1"),
         follow_redirects=False,
     )
     assert resp.status_code == 404
     assert published == []
+
+
+# --- CSRF ---------------------------------------------------------------------
+
+
+def test_requeue_rejected_without_csrf_token(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # No csrf_token ⇒ 403 before the CAS runs; the run stays FAILED, untouched.
+    run_id, revision = _make_failed_run(session_factory)
+    resp = client.post(
+        f"/runs/{run_id}/requeue",
+        data={"revision": str(revision)},  # NB: no csrf_token
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.FAILED.value
+
+
+def test_requeue_rejected_with_wrong_action_token(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # A token minted for /fetch is not valid on /requeue (action binding).
+    run_id, revision = _make_failed_run(session_factory)
+    resp = client.post(
+        f"/runs/{run_id}/requeue",
+        data={
+            "revision": str(revision),
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH),
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+
+
+def test_requeue_form_renders_valid_csrf_token(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    from voxint.api.csrf import verify_csrf_token
+
+    run_id, _revision = _make_failed_run(session_factory)
+    body = client.get(f"/runs/{run_id}").text
+    match = re.search(
+        r'action="/runs/[^"]+/requeue".*?name="csrf_token" value="([^"]+)"',
+        body,
+        re.DOTALL,
+    )
+    assert match is not None
+    assert verify_csrf_token(_CSRF_KEY, CSRF_REQUEUE, match.group(1))
 
 
 # --- broker-down degradation --------------------------------------------------
@@ -173,7 +242,7 @@ def test_broker_down_requeue_stays_queued_and_flags_banner(
 
     resp = client.post(
         f"/runs/{run_id}/requeue",
-        data={"revision": str(revision)},
+        data=_rd(revision=str(revision)),
         follow_redirects=False,
     )
     # The CAS already moved the run to QUEUED and committed; only the enqueue was

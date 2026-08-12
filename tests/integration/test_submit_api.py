@@ -9,6 +9,7 @@ submission-id replay idempotency (same bytes → same run) and its conflict
 
 import hashlib
 import io
+import re
 import threading
 import time
 import uuid
@@ -22,11 +23,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.app import _UPLOAD_ENVELOPE_ALLOWANCE, create_app
+from voxint.api.csrf import CSRF_FETCH, CSRF_SUBMIT, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
 from voxint.ingest.service import UploadConflictError, UploadTooLargeError, submit_upload
 
 CREDS = ("reviewer", "s3cret")
+_CSRF_KEY = "submit-api-test-csrf-key"  # low-entropy; a known secret lets tests mint
+
+
+def _sd(**kwargs: str) -> dict[str, str]:
+    """Form fields (submission_id, …) with a valid /submit CSRF token merged in —
+    the real upload form carries one; posting without it is 403."""
+    return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT), **kwargs}
 
 
 def wav_bytes(seconds: float = 0.02) -> bytes:
@@ -53,6 +62,7 @@ def make_client(
         voxint_password=CREDS[1],
         media_root=media_root,
         upload_max_bytes=max_bytes,
+        csrf_secret=_CSRF_KEY,
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
@@ -93,7 +103,7 @@ def test_upload_creates_namespaced_media_and_publishes(
     resp = client.post(
         "/submit",
         files={"file": ("episode 5.wav", body, "audio/wav")},
-        data={"submission_id": sub},
+        data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -124,6 +134,55 @@ def test_runs_page_offers_the_upload_form(client: TestClient) -> None:
     assert 'enctype="multipart/form-data"' in body
 
 
+# --- CSRF ---------------------------------------------------------------------
+
+
+def test_upload_form_renders_valid_csrf_token(client: TestClient) -> None:
+    from voxint.api.csrf import verify_csrf_token
+
+    body = client.get("/runs").text
+    match = re.search(
+        r'action="/submit".*?name="csrf_token" value="([^"]+)"', body, re.DOTALL
+    )
+    assert match is not None
+    assert verify_csrf_token(_CSRF_KEY, CSRF_SUBMIT, match.group(1))
+
+
+def test_submit_rejected_without_csrf_token(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # No csrf_token ⇒ 403 before the file is finalized / any row is written.
+    resp = client.post(
+        "/submit",
+        files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
+        data={"submission_id": uuid.uuid4().hex},  # NB: no csrf_token
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+    with session_factory() as session:
+        assert session.execute(select(MediaItem)).first() is None
+
+
+def test_submit_rejected_with_wrong_action_token(
+    client: TestClient, published: list[uuid.UUID]
+) -> None:
+    # A token minted for /fetch is not valid on /submit (action binding).
+    resp = client.post(
+        "/submit",
+        files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
+        data={
+            "submission_id": uuid.uuid4().hex,
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_FETCH),
+        },
+        follow_redirects=False,
+    )
+    assert resp.status_code == 403
+    assert published == []
+
+
 # --- broker-down degradation --------------------------------------------------
 
 
@@ -146,7 +205,7 @@ def test_broker_down_submit_leaves_run_queued_and_flags_banner(
     resp = client.post(
         "/submit",
         files={"file": ("ep.wav", wav_bytes(), "audio/wav")},
-        data={"submission_id": sub},
+        data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -178,7 +237,7 @@ def test_oversized_upload_rejected_and_no_run(
     resp = client.post(
         "/submit",
         files={"file": ("big.wav", wav_bytes(seconds=0.1), "audio/wav")},
-        data={"submission_id": uuid.uuid4().hex},
+        data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
     assert resp.status_code == 413
@@ -201,7 +260,7 @@ def test_oversized_content_length_rejected_before_auth_and_body(
     resp = client.post(
         "/submit",
         files={"file": ("big.wav", b"x" * (threshold + 1024), "audio/wav")},
-        data={"submission_id": uuid.uuid4().hex},
+        data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
     assert resp.status_code == 413
@@ -339,7 +398,7 @@ def test_traversal_filenames_rejected(
     resp = client.post(
         "/submit",
         files={"file": (bad, wav_bytes(), "audio/wav")},
-        data={"submission_id": uuid.uuid4().hex},
+        data=_sd(submission_id=uuid.uuid4().hex),
         follow_redirects=False,
     )
     assert resp.status_code == 422
@@ -354,7 +413,7 @@ def test_non_uuid_submission_id_rejected(
     resp = client.post(
         "/submit",
         files={"file": ("ok.wav", wav_bytes(), "audio/wav")},
-        data={"submission_id": "not-a-uuid"},
+        data=_sd(submission_id="not-a-uuid"),
         follow_redirects=False,
     )
     assert resp.status_code == 422
@@ -373,12 +432,12 @@ def test_replay_same_bytes_returns_same_run(
     sub = uuid.uuid4().hex
     files = {"file": ("ep.wav", body, "audio/wav")}
     first = client.post(
-        "/submit", files=files, data={"submission_id": sub}, follow_redirects=False
+        "/submit", files=files, data=_sd(submission_id=sub), follow_redirects=False
     )
     second = client.post(
         "/submit",
         files={"file": ("ep.wav", body, "audio/wav")},
-        data={"submission_id": sub},
+        data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert first.status_code == second.status_code == 303
@@ -403,7 +462,7 @@ def test_replay_different_bytes_conflicts(
     first = client.post(
         "/submit",
         files={"file": ("ep.wav", wav_bytes(seconds=0.02), "audio/wav")},
-        data={"submission_id": sub},
+        data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert first.status_code == 303
@@ -412,7 +471,7 @@ def test_replay_different_bytes_conflicts(
     clash = client.post(
         "/submit",
         files={"file": ("ep.wav", wav_bytes(seconds=0.05), "audio/wav")},
-        data={"submission_id": sub},
+        data=_sd(submission_id=sub),
         follow_redirects=False,
     )
     assert clash.status_code == 409

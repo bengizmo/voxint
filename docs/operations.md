@@ -99,6 +99,31 @@ therefore automatic **as long as `beat` is running** — a bare-host deployment
 without a beat process has no automatic recovery; a run is then stranded
 until a beat/sweep runs, not just on deterministic failures.
 
+### URL ingestion & egress security
+
+`voxint fetch <url>` / `POST /fetch` download a URL with yt-dlp on the worker
+(the ACQUIRE stage). Toggle the capability with `YTDLP_ENABLED` (default on); when
+off, the fetch route/CLI/form refuse and no row is created (an already-queued URL
+run still completes). Optional `YTDLP_PROXY` / `YTDLP_COOKIES_FILE` are wired to
+yt-dlp only when set and are treated as **credentials** — never surfaced in errors,
+so keep them out of logs and shared configs.
+
+Voxint applies two SSRF gates (string-level at submit, host re-resolution in the
+worker before download; see architecture.md) that reject non-public **resolved**
+addresses. They are **not** a sandbox: yt-dlp re-resolves independently and its
+generic extractor follows redirects, so a rebind-after-check, an HTTP redirect to
+a private address, or an extractor-constructed private URL is **not** covered.
+**For untrusted-URL ingestion, run the worker with restricted egress** — no route
+to RFC1918 / link-local / `169.254.169.254` (egress firewall or dedicated egress
+network). A blocked/refused download is a clean FAILED @ acquire the operator
+**Requeues**; it never loops.
+
+The three mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`) require a
+CSRF token. Set `CSRF_SECRET` to a persistent random value
+(`python -c "import secrets; print(secrets.token_urlsafe(32))"`) — otherwise a
+random per-process secret is used, which invalidates open forms on restart and
+mismatches across multiple workers.
+
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your
