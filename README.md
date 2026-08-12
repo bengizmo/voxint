@@ -31,11 +31,21 @@ until `v0.1.0`.
 
 ## Quickstart
 
+Requires Docker Engine with the **Compose plugin ≥ 2.24** (`docker compose
+version` — the legacy v1 `docker-compose` binary cannot parse this stack).
+
 ```bash
 cp .env.example .env          # then edit at least VOXINT_PASSWORD
-docker compose up -d          # Postgres+pgvector, Redis, API + review UI, worker
-curl http://127.0.0.1:8080/healthz
+mkdir -p media                # media mount; pre-create so it isn't root-owned
+docker compose up -d          # Postgres+pgvector, Redis, migrate, API + review UI, worker, beat
+curl http://127.0.0.1:8080/healthz   # default port; matches API_PORT if you changed it
 ```
+
+A one-shot `migrate` service brings the schema to head before the API and
+worker start — it showing `Exited (0)` in `docker compose ps -a` is success,
+not a crash. If a default port is already in use on your host, override the
+published side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `API_PORT`). Details
+and day-2 operations: [docs/operations.md](docs/operations.md).
 
 To run the GPU model services too (one NVIDIA GPU assumed):
 

@@ -97,6 +97,11 @@ failures degrading to NULL `enhanced_text` rather than failing the run (see
 violations DO fail the stage. Test fakes satisfy the same protocols, which is
 how the end-to-end contract tests run without a GPU.
 
+Domain-specific vocabulary and prompts are their own seam: a **domain pack**
+(`voxint.domain_packs`, selected via `DOMAIN_PACK_PATH`) supplies ASR
+vocabulary hints, name seeds, and LLM prompt fragments; a neutral
+meeting/podcast pack ships as the default.
+
 ## Review console (P5)
 
 Adjudication is **post-hoc**: runs complete normally and the console works a
@@ -163,7 +168,8 @@ retry countdowns aren't stepped on). Duplicate enqueues are safe by design —
 claims and CAS arbitrate.
 
 Timeout ordering that must hold: HTTP client timeout
-(`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`, which
-covers a whole stage — diarize_embed makes several sequential calls) **<**
-Redis visibility timeout (`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which covers a
-whole run).
+(`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`; the
+diarize_embed stage gets its own longer `DIARIZE_EMBED_LEASE_SECONDS` because
+it makes one diarization call plus several sequential embedding batches)
+**<** Redis visibility timeout (`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which
+covers a whole run).

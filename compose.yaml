@@ -13,9 +13,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U voxint"]
+      # $$ defers expansion to the container shell, where POSTGRES_USER/DB are set.
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -23,12 +24,28 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot: brings the schema to alembic head, then exits. `Exited (0)` in
+  # `docker compose ps -a` is the SUCCESS state, not a crash — api/worker only
+  # start after it completes (see their depends_on). Re-runs on every `up` and
+  # no-ops when already at head. Diagnose failures with:
+  #   docker compose logs migrate
+  # Manual fallback: docker compose run --rm migrate
+  migrate:
+    build: .
+    command: alembic upgrade head
+    restart: "no"
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   api:
     build: .
@@ -43,11 +60,14 @@ services:
       # In-container bind is all-interfaces (published to host loopback
       # below); the settings validator therefore REQUIRES a real password.
       API_HOST: 0.0.0.0
+      # Container-internal port is pinned; API_PORT from .env moves the HOST
+      # side of the publish below (and the bare-host bind), never this bind.
+      API_PORT: "8080"
       VOXINT_PASSWORD: ${VOXINT_PASSWORD:?set VOXINT_PASSWORD in .env (see .env.example)}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${API_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
       interval: 15s
@@ -55,8 +75,8 @@ services:
       retries: 5
       start_period: 10s
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
 
@@ -73,8 +93,23 @@ services:
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media
     depends_on:
-      postgres:
+      migrate:
+        condition: service_completed_successfully
+      redis:
         condition: service_healthy
+
+  # Celery beat: schedules the periodic recovery sweep that reclaims expired
+  # stage leases and broker-lost QUEUED runs (the worker executes the sweep).
+  # Without this process, crash recovery never happens. A dedicated service —
+  # not `worker --beat` — so a worker restart can't silently take the
+  # scheduler down with it. `-s` points the schedule file somewhere the
+  # unprivileged container user can write.
+  beat:
+    build: .
+    command: celery -A voxint.worker.app beat --loglevel=INFO -s /tmp/celerybeat-schedule
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
       redis:
         condition: service_healthy
 
