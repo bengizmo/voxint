@@ -2,8 +2,8 @@
 
 A tiny synthetic dataset exercising all three scoring-harness commands. The
 harness is pure and DB-free, so everything here runs on any machine with the
-package installed — no database, no GPU services, no compose stack. Contracts:
-[`docs/harness.md`](../docs/harness.md).
+package installed (`pip install voxint`) — no database, no GPU services, no
+compose stack. Contracts: [`docs/harness.md`](../docs/harness.md).
 
 All names, voices, and embeddings are fabricated. Embeddings are 8-dimensional
 toy vectors (real speaker embeddings are 192-d+); the harness only requires

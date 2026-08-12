@@ -3,7 +3,8 @@
 The harness (`src/voxint/harness/`) is the offline quality-measurement layer:
 pure, DB-free cores plus file-based CLI adapters. Nothing in it touches
 settings, the database, or the worker — `voxint score …` runs on any machine
-against plain JSON/JSONL files.
+against plain JSON/JSONL files (`pip install voxint` is all it needs; no
+Docker stack).
 
 All JSON documents (aliases, enrollment, thresholds) and all *output* records
 carry `"schema_version": 1`; *input* JSONL streams (name-accuracy items,

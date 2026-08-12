@@ -95,12 +95,18 @@ uv run pytest tests/unit
 uv run uvicorn voxint.api.app:app --reload
 ```
 
+The scoring harness needs none of the stack — `pip install voxint` gives you
+the `voxint score` CLI (pure file-in/file-out, no database or GPU services);
+see [`examples/`](examples/README.md).
+
 ## Deployment model
 
 Docker-compose-first on a single Linux machine with one NVIDIA GPU:
 
-- `compose.yaml` — Postgres (+pgvector), Redis, API (+ review UI), Celery worker
+- `compose.yaml` — Postgres (+pgvector), Redis, one-shot `migrate`, API (+ review UI),
+  Celery worker, Celery beat (crash-recovery sweep scheduler)
 - `compose.gpu.yaml` — the GPU model services: faster-whisper, pyannote, TitaNet
+- `compose.build.yaml` / `compose.gpu.build.yaml` — build-from-source overlays for development
 
 Kubernetes is explicitly **not** required (a future optional enhancement).
 

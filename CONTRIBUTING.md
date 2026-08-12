@@ -14,6 +14,11 @@ uv run pytest tests/contracts  # GPU-service contract tests (CPU-only, no GPU de
 
 Integration tests need the compose stack: `docker compose up -d postgres redis`.
 
+To run your checked-out code as the full stack (the default compose files run
+the pinned *release* images, not your working tree), layer the build overlays —
+see "Release images vs. building from source" in
+[docs/operations.md](docs/operations.md).
+
 The contract tests exercise the GPU services' schemas, path containment, error
 mapping, and route behavior without torch or model weights — they load each
 service's torch-free modules straight from `services/*/app/`. The main package
