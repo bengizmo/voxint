@@ -12,6 +12,20 @@
   <button type="submit">Submit for transcription</button>
 </form>
 
+{% if ytdlp_enabled %}
+<form method="post" action="/fetch" class="upload">
+  {# Independent submission id from the upload form's, so the two never collide
+     on a shared source_path; a double-submit of this form stays idempotent. #}
+  <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
+  <label>Fetch from URL
+    <input type="url" name="url" placeholder="https://…" required>
+  </label>
+  <button type="submit">Fetch &amp; transcribe</button>
+</form>
+{% else %}
+<p class="muted">URL ingestion is disabled.</p>
+{% endif %}
+
 <form method="get" action="/runs" class="filters">
   <label>Status
     <select name="status">

@@ -65,6 +65,39 @@ def test_submit_rejects_escape_and_missing(
     assert enqueued == []
 
 
+def test_fetch_creates_source_url_run_and_enqueues(
+    session_factory: sessionmaker[Session],
+    enqueued: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    url = "https://www.youtube.com/watch?v=abc"
+    assert main(["fetch", url]) == 0
+    printed = capsys.readouterr().out.strip()
+    assert enqueued == [printed]  # commit-before-publish: enqueued after commit
+    with session_factory() as session:
+        run = session.get(PipelineRun, uuid.UUID(printed))
+        assert run is not None
+        assert run.status == RunStatus.QUEUED.value
+        media = session.execute(select(MediaItem)).scalar_one()
+        assert media.source_url == url
+        assert media.source_path.endswith("/source")  # pre-assigned, no file yet
+
+
+def test_fetch_bad_url_errors_without_enqueue(
+    session_factory: sessionmaker[Session],
+    enqueued: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A rejected URL exits 2 with a URL-free message and writes no rows; the
+    # rollback in session_scope leaves nothing behind, and nothing is enqueued.
+    assert main(["fetch", "ftp://example.com/f.mp3"]) == 2
+    assert "error:" in capsys.readouterr().out
+    assert enqueued == []
+    with session_factory() as session:
+        assert session.execute(select(PipelineRun)).first() is None
+        assert session.execute(select(MediaItem)).first() is None
+
+
 def test_status_shows_run_and_ledger(
     session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
 ) -> None:

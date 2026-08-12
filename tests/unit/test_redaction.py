@@ -7,9 +7,12 @@ synthetic data is neutral — ``example.com`` and the IETF documentation ranges
 (TEST-NET-1/2/3) — never a private/internal host.
 """
 
+import pytest
+
 from voxint.media.redaction import (
     MAX_STORED_ERROR_CHARS,
     cap_length,
+    provenance_host,
     redact,
 )
 
@@ -200,3 +203,60 @@ def test_cap_length_default_bound() -> None:
     out = cap_length(text)
     assert len(out) <= MAX_STORED_ERROR_CHARS
     assert out.endswith("[truncated]")
+
+
+# --- provenance_host: display-only host extraction ----------------------------
+# The display analogue of redact(): reduce a stored source_url to a bare host so
+# the console shows *where* a URL run came from, never the raw URL (whose query
+# could carry a signed token). Bare host = no port, no path/query/fragment.
+
+
+def test_provenance_host_returns_bare_host() -> None:
+    assert provenance_host("https://www.youtube.com/watch?v=abc") == "www.youtube.com"
+
+
+def test_provenance_host_drops_signed_query_and_credentials() -> None:
+    # A planted token in the query and userinfo must be absent from the host.
+    url = f"https://user:{_SENTINEL}@cdn.example.com/media.mp3?sig={_SENTINEL}"
+    out = provenance_host(url)
+    assert out == "cdn.example.com"
+    assert out is not None and _SENTINEL not in out
+
+
+def test_provenance_host_omits_the_port() -> None:
+    # Unlike _redact_url (which keeps the port as a failure diagnostic),
+    # provenance is "where from", so the port is noise and is dropped.
+    assert provenance_host("https://example.com:8443/dl") == "example.com"
+
+
+def test_provenance_host_ipv4_literal() -> None:
+    assert provenance_host("https://203.0.113.7/dl") == "203.0.113.7"
+
+
+def test_provenance_host_ipv6_literal_is_rebracketed_without_port() -> None:
+    assert provenance_host("https://[2001:db8::1]:8443/dl") == "[2001:db8::1]"
+
+
+def test_provenance_host_none_input_returns_none() -> None:
+    # A local/uploaded run has no source_url; the template renders None as "—".
+    assert provenance_host(None) is None
+
+
+@pytest.mark.parametrize(
+    "garbage",
+    [
+        "",  # empty
+        "not-a-url",  # no scheme/host
+        "https://",  # scheme but no host
+        "https://example.com:notaport/dl",  # non-numeric port fails closed
+        "https://[2001:db8::/dl",  # malformed IPv6 literal fails closed
+        "ftp://example.com/x",  # returns the host regardless of scheme…
+    ],
+)
+def test_provenance_host_fails_closed_to_none_or_safe_host(garbage: str) -> None:
+    out = provenance_host(garbage)
+    # Fail-closed contract: it never returns the raw string, and never leaks a
+    # path/query. It is either None or a plain host token with no separators.
+    assert out != garbage
+    if out is not None:
+        assert "/" not in out and "?" not in out and " " not in out

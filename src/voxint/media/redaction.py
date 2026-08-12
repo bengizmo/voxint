@@ -1,8 +1,9 @@
-"""Error-text hygiene for values persisted to the ledger and surfaced in logs.
+"""URL hygiene for values persisted to the ledger, logged, or shown to the operator.
 
-Two pure, DB-free, network-free primitives applied at the boundaries where
-operator-facing error text is *produced* (the yt-dlp subprocess wrapper) or
-*stored* (the pipeline engine's error-persistence path):
+Three pure, DB-free, network-free primitives applied at the boundaries where
+operator-facing text is *produced* (the yt-dlp subprocess wrapper), *stored*
+(the pipeline engine's error-persistence path), or *displayed* (a run's URL
+provenance in the console):
 
 - :func:`redact` scrubs anything credential-ish that untrusted remote content —
   a yt-dlp ``stderr`` tail — can carry into an error message. A full
@@ -16,6 +17,11 @@ operator-facing error text is *produced* (the yt-dlp subprocess wrapper) or
 - :func:`cap_length` bounds an error string's length before it is written to
   ``StageRun.error`` / ``PipelineRun.error`` so a pathological diagnostic can
   never bloat the ledger.
+- :func:`provenance_host` reduces a stored ``MediaItem.source_url`` to its bare
+  host for display, so the console can show *where* a URL run came from without
+  ever rendering the raw URL (whose path/query could carry a signed token). It
+  shares :func:`redact`'s URL-parsing core so display and error text can never
+  disagree on what the "host" of a URL is.
 
 The redaction is deliberately conservative and structural, not a classifier: it
 does NOT try to tell a bot-block from a transient failure (the pipeline parks
@@ -67,26 +73,47 @@ _SECRET_FLAG_RE = re.compile(
 )
 
 
+def _split_authority(url: str) -> "tuple[str, str, int | None] | None":
+    """Parse ``url`` into ``(scheme, bare_host, port)``, or ``None`` fail-closed.
+
+    ``bare_host`` is the hostname with userinfo, port, and IPv6 brackets already
+    stripped by the stdlib parser, then trimmed of any junk the greedy URL regex
+    glued on (``_HOST_TAIL_RE``); an IPv6 literal is returned *unbracketed* so
+    each caller can re-bracket it as it needs. Returns ``None`` — never raises —
+    for any authority the parser rejects (a malformed IPv6 literal, a non-numeric
+    or out-of-range port) or that yields no scheme/host: the shared fail-closed
+    core both :func:`_redact_url` (untrusted stderr) and :func:`provenance_host`
+    (a stored URL) rely on to never leak arbitrary text.
+    """
+    try:
+        parts = urlsplit(url)
+        scheme = parts.scheme
+        host = parts.hostname  # drops userinfo + port + IPv6 brackets, lowercased
+        port = parts.port  # raises ValueError on a non-numeric/out-of-range port
+    except ValueError:
+        return None
+    if not scheme or not host:
+        return None
+    host = _HOST_TAIL_RE.sub("", host)
+    if not host:
+        return None
+    return scheme, host, port
+
+
 def _redact_url(match: "re.Match[str]") -> str:
     """Reduce one matched URL to ``scheme://host[:port]/<redacted>``.
 
-    TOTAL and fail-closed: any authority the stdlib parser rejects (a malformed
-    IPv6 literal, a non-numeric port) or that yields no host collapses to
-    ``<redacted-url>`` rather than raising or preserving arbitrary text — stderr
-    is untrusted, so the callback must never throw out of ``re.sub``.
+    TOTAL and fail-closed: any authority :func:`_split_authority` rejects (a
+    malformed IPv6 literal, a non-numeric port) or that yields no host collapses
+    to ``<redacted-url>`` rather than raising or preserving arbitrary text —
+    stderr is untrusted, so the callback must never throw out of ``re.sub``. The
+    port is *kept* here (it is a useful, non-secret diagnostic of which endpoint
+    failed); the display-side :func:`provenance_host` drops it.
     """
-    try:
-        parts = urlsplit(match.group(0))
-        scheme = parts.scheme
-        host = parts.hostname  # drops userinfo + port + IPv6 brackets, lowercased
-        port = parts.port  # raises ValueError on a non-numeric port
-    except ValueError:
+    parsed = _split_authority(match.group(0))
+    if parsed is None:
         return _REDACTED_URL
-    if not scheme or not host:
-        return _REDACTED_URL
-    host = _HOST_TAIL_RE.sub("", host)
-    if not host:
-        return _REDACTED_URL
+    scheme, host, port = parsed
     if ":" in host:  # IPv6 literal needs its brackets back before a port
         host = f"[{host}]"
     authority = f"{host}:{port}" if port is not None else host
@@ -116,3 +143,33 @@ def cap_length(text: str, max_len: int = MAX_STORED_ERROR_CHARS) -> str:
         # max_len too small to fit the marker; a non-positive cap yields "".
         return _TRUNCATION_MARKER[:max_len] if max_len > 0 else ""
     return text[:keep] + _TRUNCATION_MARKER
+
+
+def provenance_host(source_url: str | None) -> str | None:
+    """Reduce a stored ``source_url`` to its bare host for display, or ``None``.
+
+    Returns just the host — ``cdn.example.com`` for a DNS/IPv4 authority,
+    ``[2001:db8::1]`` for an IPv6 literal (re-bracketed so it reads as a host) —
+    with the **port omitted**: "provenance" answers *where from*, not *which
+    endpoint*, so the authority's port is noise here (unlike :func:`_redact_url`,
+    which keeps it as a failure diagnostic). Everything after the authority — the
+    path, query, and fragment that can carry a signed token — is dropped, so this
+    is the only value a template should ever see for a URL run; the raw
+    ``source_url`` must never reach the view.
+
+    Fail-closed via the shared :func:`_split_authority` core: ``None`` in (a run
+    with no ``source_url``), a malformed URL, a bad port, or a missing host all
+    return ``None`` — never the raw string — which the template renders as a
+    neutral placeholder. A stored ``source_url`` has already passed
+    ``validate_ingest_url`` (absolute http/https), so in practice only ``None``
+    is hit; the structural fail-closed guards a future non-validated caller.
+    """
+    if source_url is None:
+        return None
+    parsed = _split_authority(source_url)
+    if parsed is None:
+        return None
+    _scheme, host, _port = parsed
+    if ":" in host:  # IPv6 literal → re-bracket so it displays as a host
+        host = f"[{host}]"
+    return host

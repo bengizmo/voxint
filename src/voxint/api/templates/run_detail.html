@@ -4,6 +4,11 @@
 <p><a href="/runs">← runs</a></p>
 <h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+{% if provenance %}
+{# URL runs only: the acquisition source, shown as a bare host — never the raw
+   source_url, whose query could carry a signed token. #}
+<p class="muted">Source: <code>{{ provenance }}</code></p>
+{% endif %}
 
 {# Gate on the live status too: a bookmarked/refreshed ?enqueue=deferred URL
    must not keep asserting "is queued" after the sweep already republished it. #}

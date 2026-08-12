@@ -76,9 +76,12 @@ from voxint.ingest import (
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
+    UrlValidationError,
     requeue_failed_run,
     submit_upload,
+    submit_url,
 )
+from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
     MediaGate,
     MediaNotServableError,
@@ -406,9 +409,15 @@ def _register_routes(app: FastAPI) -> None:
                 "statuses": list(RunStatus),
                 "reviews": list(ReviewFilter),
                 "next_url": next_url,
-                # Server-issued per-render id: namespaces the upload path and makes
-                # a double-submit of this form idempotent (see POST /submit).
+                # Server-issued per-render ids: each namespaces its form's path and
+                # makes a double-submit idempotent (see POST /submit, POST /fetch).
+                # The upload and fetch forms get INDEPENDENT ids so the two unrelated
+                # submissions can never collide on a shared source_path.
                 "submission_id": uuid.uuid4().hex,
+                "fetch_submission_id": uuid.uuid4().hex,
+                # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
+                # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
+                "ytdlp_enabled": settings.ytdlp_enabled,
                 "active_nav": "runs",
             },
         )
@@ -448,6 +457,40 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
+    @app.post("/fetch")
+    def fetch_media_url(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        url: Annotated[str, Form()],
+        submission_id: Annotated[str, Form()],
+    ) -> RedirectResponse:
+        # URL ingestion is an authenticated egress capability gated at the
+        # submission surface: refuse before touching the DB when it is off, so no
+        # row is created and nothing is published. (The worker's ACQUIRE stage
+        # never consults the flag — an already-queued URL run still completes.)
+        settings: Settings = request.app.state.settings
+        if not settings.ytdlp_enabled:
+            # Generic message — never echo the submitted URL into an error body.
+            raise HTTPException(status_code=403, detail="URL ingestion is disabled")
+        # Mirrors POST /submit: the ingest service is broker-free and does its own
+        # SSRF/replay handling; map its typed errors to status codes. The error
+        # text is URL-free by construction (UrlValidationError never echoes the
+        # URL; a conflict names only the internal source_path), so a signed query
+        # string can't leak into a 4xx body.
+        try:
+            run = submit_url(session, url=url, submission_id=submission_id)
+        except (UrlValidationError, UploadValidationError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except UploadConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        run_id = run.id
+        # Commit-before-publish, exactly as /submit: the durable QUEUED run must
+        # exist before the enqueue, so a broker outage leaves it QUEUED for the
+        # recovery sweep rather than failing the request.
+        session.commit()
+        return _run_redirect(run_id, published=_publish_or_defer(run_id))
+
     @app.get("/runs/{run_id}")
     def run_detail(
         run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
@@ -484,6 +527,11 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "run": run,
                 "stage_runs": stage_runs,
+                # Provenance for a URL run, reduced to a bare host — the raw
+                # source_url (which can carry a signed token in its query) is
+                # NEVER passed to the template; None for a local/uploaded run
+                # renders as a neutral placeholder.
+                "provenance": provenance_host(run.media_item.source_url),
                 "audio_available": audio_available,
                 "transcript_available": transcript_available,
                 # Read as a bare boolean (never echoed): a submit/requeue whose

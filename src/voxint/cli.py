@@ -105,6 +105,49 @@ def _requeue(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fetch(args: argparse.Namespace) -> int:
+    """Register a URL for acquisition and enqueue its run (mirrors ``_submit``).
+
+    Refuses up front when ``ytdlp_enabled`` is off — URL ingestion is an
+    authenticated egress capability gated at the submission surface (the worker's
+    ACQUIRE stage never consults the flag, so an already-queued URL run still
+    completes). A validation/conflict error prints a message and exits 2; the
+    error text is URL-free by construction, so a signed query string can't leak
+    to the terminal. The download itself happens later in the worker's ACQUIRE
+    stage — this only creates the durable QUEUED run.
+    """
+    from voxint.config import get_settings
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.ingest import (
+        UploadConflictError,
+        UploadValidationError,
+        UrlValidationError,
+        submit_url,
+    )
+
+    if not get_settings().ytdlp_enabled:
+        print("error: URL ingestion is disabled (ytdlp_enabled is off)")
+        return 2
+
+    # Celery import stays lazy in the caller — the ingest service is broker-free,
+    # so we commit the durable run first, then publish (commit-before-publish).
+    from voxint.worker.tasks import run_pipeline
+
+    factory = build_session_factory(build_engine())
+    # No form here, so mint the idempotency id per invocation; it namespaces the
+    # pre-assigned source_path the worker's ACQUIRE stage will download into.
+    submission_id = uuid.uuid4().hex
+    try:
+        with session_scope(factory) as session:
+            run_id = submit_url(session, url=args.url, submission_id=submission_id).id
+    except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
+        print(f"error: {exc}")
+        return 2
+    run_pipeline.delay(str(run_id))
+    print(run_id)
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -135,6 +178,10 @@ def build_parser() -> argparse.ArgumentParser:
     requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
     requeue_p.add_argument("run_id")
     requeue_p.set_defaults(fn=_requeue)
+
+    fetch_p = sub.add_parser("fetch", help="submit a URL for yt-dlp acquisition + transcription")
+    fetch_p.add_argument("url")
+    fetch_p.set_defaults(fn=_fetch)
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)
