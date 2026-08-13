@@ -270,10 +270,8 @@ reference is the pinned NeMo checkpoint.
 
 Bit-identity is not the bar — it is already false across CUDA hardware
 generations. An alternative implementation may keep `titanet-large-v1` **iff**
-it passes the 3-level parity gate (`tests/parity/test_titanet_onnx.py`; the
-harness lands together with the first alternative implementation — until then
-this section is the binding policy it must implement) against reference
-outputs produced by the NeMo/CUDA implementation
+it passes the 3-level parity gate (`tests/parity/test_titanet_onnx.py`)
+against reference outputs produced by the NeMo/CUDA implementation
 (fixtures: `tests/parity/fixtures/`):
 
 - **mel level** — the reimplemented front-end matches the NeMo-internal
@@ -289,6 +287,49 @@ outputs produced by the NeMo/CUDA implementation
 
 A failed gate means a new space id (`titanet-large-v2`) plus a re-embed
 migration — never shipping a drifted implementation under the old id.
+
+#### Verdict — ONNX Runtime engine: PASS (2026-08-13, amd64)
+
+The ONNX engine (`app/engine_onnx.py`: self-exported opset-16 graph, see
+`tests/parity/fixtures/onnx/provenance.json`, + the reimplemented mel
+front-end `app/mel.py`) **keeps `titanet-large-v1`**. Measured on thinktank
+(amd64, onnxruntime CPU EP) against the 0.3.0 CUDA references, full golden
+corpus (92 embedded / 107 windows, 465 labeled pairs):
+
+| Level | Measured | Ratcheted gate |
+|---|---|---|
+| mel max abs diff | 2.2e-4 | 1e-3 |
+| vector cosine (min / p50) | 0.9999966 / 0.9999993 | ≥ 0.9995 |
+| `skip_reason` mismatches | 0 | 0 |
+| `snr_db` max diff | 0.0 dB | ±0.5 dB |
+| pair-cosine drift (max) | 4.6e-4 | ≤ 2e-3 |
+| 0.60/0.70 gate crossings | 0 | 0 |
+| top-1 flips / margin drift (max) | 0 / 3.5e-4 | 0 / ≤ 2e-3 |
+
+arm64 is not yet measured — the same harness must pass there before any
+arm64 image ships (Phase 2 release gate).
+
+Two normative findings from the spike, binding on every non-NeMo runtime:
+
+1. **Exact-length mel features.** `model.export()` replaces NeMo's masked
+   convolutions with regular convolutions ("Turned off 25 masked
+   convolutions"), so the exported graph does not mask activations past
+   `length`. NeMo's `pad_to: 16` zero-padding therefore must NOT be
+   reproduced: padded frames leak into every convolution near the window's
+   end (measured: 0.988 cosine on a 1 s window with padding vs ≥ 0.999999
+   without). Non-masking runtimes feed exactly `floor(samples/160) + 1`
+   frames.
+2. **Dither is training-only.** NeMo applies the config's `dither: 1e-5`
+   only under `self.training`; eval-mode extraction is deterministic and the
+   reimplemented front-end omits dither entirely (verified against the
+   installed NeMo 1.22 source; recorded in the export provenance).
+
+Attribution controls recorded for reference: NeMo-on-CPU reproduces the CUDA
+references at cosine ≥ 0.9999992 (hardware variance is negligible for this
+model), TF32 on/off changes nothing, the temp-wav round-trip in the NeMo
+serving path is lossless in effect (PCM_16 quantization does not move any
+window ≥ 1e-6), and the self-exported graph agrees with sherpa-onnx's
+independently published export at cosine 0.99999994 on identical features.
 
 Request (unknown fields rejected):
 
