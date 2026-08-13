@@ -1,0 +1,62 @@
+# Voxint CPU-tier model services — overlay on compose.yaml:
+#   docker compose -f compose.yaml -f compose.cpu.yaml up -d
+# No GPU required, any amd64/arm64 host (Apple Silicon via Docker Desktop,
+# AMD boxes, plain servers). Same /v1 + /healthz contracts as the GPU stack
+# (docs/gpu-contracts.md); pyannote still needs HF_TOKEN in .env.
+#
+# Honest expectation: CPU inference is SLOW — long recordings take hours.
+# COMPUTE_TIER=cpu below is load-bearing, not cosmetic: it scales the default
+# inference timeouts / stage leases / Celery visibility horizon so a healthy
+# 4-hour transcription is never reclaimed as hung mid-stage
+# (docs/timeouts-and-leases.md). Explicitly-set timeout env vars are never
+# scaled.
+services:
+  api:
+    environment:
+      COMPUTE_TIER: cpu
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  worker:
+    environment:
+      COMPUTE_TIER: cpu
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  whisper:
+    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.4.0}-cpu
+    pull_policy: missing
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+    ports:
+      - "127.0.0.1:8022:8022"
+
+  pyannote:
+    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.4.0}-cpu
+    pull_policy: missing
+    environment:
+      MEDIA_ROOT: /data/media
+      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+      # Gated weights download at first startup; persist them across recreates.
+      - pyannote-models:/app/models
+    ports:
+      - "127.0.0.1:8024:8024"
+
+  titanet:
+    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.4.0}-cpu
+    pull_policy: missing
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+    ports:
+      - "127.0.0.1:8021:8021"
+
+volumes:
+  pyannote-models:

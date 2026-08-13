@@ -14,6 +14,7 @@ from tests.contracts.conftest import load_service_module
 
 detector = load_service_module("whisper", "transcription")
 postprocess = load_service_module("pyannote", "postprocess")
+diarizer = load_service_module("pyannote", "diarizer")
 embedding = load_service_module("titanet", "embedding")
 preprocess = load_service_module("titanet", "preprocess")
 
@@ -190,6 +191,71 @@ class TestResolveDeviceName:
         assert embedding.resolve_device_name("cuda") == "rocm"
 
 
+class TestDeviceCascade:
+    """pyannote's cuda → mps → cpu selection, every candidate probe-gated."""
+
+    @staticmethod
+    def _fake_torch(*, cuda: bool, mps: bool | None) -> SimpleNamespace:
+        # mps=None models a torch build without the mps backend attribute.
+        backends = SimpleNamespace()
+        if mps is not None:
+            backends.mps = SimpleNamespace(is_available=lambda: mps)
+        return SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: cuda),
+            backends=backends,
+        )
+
+    def test_cuda_wins_when_probe_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=True, mps=False)
+        )
+        monkeypatch.setattr(diarizer, "probe_device", lambda name: True)
+        assert diarizer.select_device() == "cuda"
+
+    def test_probe_failure_falls_through_to_cpu(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=True, mps=True)
+        )
+        probed: list[str] = []
+
+        def failing_probe(name: str) -> bool:
+            probed.append(name)
+            return False
+
+        monkeypatch.setattr(diarizer, "probe_device", failing_probe)
+        assert diarizer.select_device() == "cpu"
+        assert probed == ["cuda", "mps"]
+
+    def test_mps_selected_without_cuda(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=True)
+        )
+        monkeypatch.setattr(diarizer, "probe_device", lambda name: name == "mps")
+        assert diarizer.select_device() == "mps"
+
+    def test_cpu_floor_never_probed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=False)
+        )
+
+        def boom(name: str) -> bool:
+            raise AssertionError("cpu floor must not be probed")
+
+        monkeypatch.setattr(diarizer, "probe_device", boom)
+        assert diarizer.select_device() == "cpu"
+
+    def test_torch_without_mps_backend_attribute(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=None)
+        )
+        monkeypatch.setattr(diarizer, "probe_device", lambda name: True)
+        assert diarizer.select_device() == "cpu"
+
+
 class TestEngineFactory:
     """EMBED_ENGINE selects the engine and fails fast on unknown values."""
 
@@ -298,3 +364,56 @@ class TestMelEdgeCases:
             ).read_text()
         )
         assert cfg["dither"] == pytest.approx(1e-5)
+
+
+class TestCpuImageProvenance:
+    """The CPU image must bake exactly the artifact + pins the parity verdict
+    was measured against — drift here is silent embedding-space drift."""
+
+    def test_dockerfile_onnx_sha_matches_provenance(self) -> None:
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        dockerfile = (REPO_ROOT / "services" / "titanet" / "Dockerfile.cpu").read_text()
+        match = re.search(r"ARG TITANET_ONNX_SHA256=([0-9a-f]{64})", dockerfile)
+        assert match is not None, "Dockerfile.cpu lost its TITANET_ONNX_SHA256 default"
+        provenance = json.loads(
+            (
+                REPO_ROOT / "tests" / "parity" / "fixtures" / "onnx" / "provenance.json"
+            ).read_text()
+        )
+        assert match.group(1) == provenance["onnx_sha256"]
+
+    def test_cpu_requirements_mirror_cuda_preprocess_pins(self) -> None:
+        from tests.contracts.conftest import REPO_ROOT
+
+        def pins(path: str) -> dict[str, str]:
+            out: dict[str, str] = {}
+            for line in (REPO_ROOT / "services" / "titanet" / path).read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if "==" in line:
+                    name, version = line.split("==", 1)
+                    out[name.strip().lower()] = version.strip()
+            return out
+
+        cuda, cpu = pins("requirements.txt"), pins("requirements.cpu.txt")
+        # The full preprocessing chain that DEFINES titanet-large-v1, plus its
+        # numerics substrate — every one must match the CUDA image exactly.
+        for pkg in ("numpy", "librosa", "soundfile", "scipy", "numba",
+                    "pyloudnorm", "noisereduce"):
+            assert cpu[pkg] == cuda[pkg], f"{pkg}: cpu {cpu[pkg]} != cuda {cuda[pkg]}"
+
+    def test_cpu_onnxruntime_matches_export_provenance(self) -> None:
+        import json
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        provenance = json.loads(
+            (
+                REPO_ROOT / "tests" / "parity" / "fixtures" / "onnx" / "provenance.json"
+            ).read_text()
+        )
+        reqs = (REPO_ROOT / "services" / "titanet" / "requirements.cpu.txt").read_text()
+        assert f"onnxruntime=={provenance['onnxruntime_version']}" in reqs

@@ -1,0 +1,70 @@
+# Voxint whisper service — CPU flavor (multi-arch: amd64 + arm64).
+# Same engine as the CUDA image (faster-whisper / CTranslate2 int8, large-v2
+# baked at build); only the torch flavor and base image differ. Contract:
+# docs/gpu-contracts.md (POST /v1/transcribe, GET /healthz).
+#
+# Expect CPU-tier speed: long media takes hours, not minutes. Run the stack
+# with COMPUTE_TIER=cpu (compose.cpu.yaml) so stage leases / visibility
+# timeouts scale accordingly — see docs/timeouts-and-leases.md.
+
+FROM python:3.11-slim AS builder
+
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /build
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+# torch first, pinned to the CPU wheel index on BOTH arches: on amd64 the
+# PyPI default torch drags the full CUDA runtime into a CPU image, and the
+# explicit index keeps the two arches on the same build. requirements.txt's
+# torch pin is then already satisfied (2.1.1+cpu / 2.1.1 aarch64 == 2.1.1),
+# mirroring how the CUDA Dockerfile layers cu121 wheels under the same file.
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir torch==2.1.1 torchaudio==2.1.1 \
+        --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Bake the model at build time so the image needs no network at runtime.
+# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md.
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v2', device='cpu', download_root='/opt/whisper_models')"
+
+FROM python:3.11-slim AS runtime
+
+ENV PYTHONUNBUFFERED=1
+ENV HF_HOME=/app/.cache/huggingface
+ENV XDG_CACHE_HOME=/app/.cache
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libsndfile1 ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/whisper_models /app/.cache/whisper
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+RUN mkdir -p /app/.cache/huggingface && chown -R voxint:voxint /app
+COPY --chown=voxint:voxint app/ /app/app/
+
+USER voxint
+ENV HOME=/app
+
+ENV MEDIA_ROOT=/data/media
+ENV WHISPER_MODEL=large-v2
+ENV WHISPER_DOWNLOAD_ROOT=/app/.cache/whisper
+ENV DEVICE=cpu
+ENV COMPUTE_TYPE=int8
+# CPU inference cannot sustain GPU-sized batches; CT2 threading defaults to
+# the visible cores, which is the right call here — no OMP override.
+ENV BATCH_SIZE=4
+ENV PORT=8022
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/healthz || exit 1
+
+EXPOSE 8022
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

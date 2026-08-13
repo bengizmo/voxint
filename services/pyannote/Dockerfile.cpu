@@ -1,0 +1,58 @@
+# Voxint pyannote service — CPU flavor (multi-arch: amd64 + arm64).
+# Same app code and pyannote.audio 3.1.1 pin as the CUDA image; only the base
+# image and torch flavor differ (the diarizer's cuda → mps → cpu cascade lands
+# on cpu in this container). Contract: docs/gpu-contracts.md
+# (POST /v1/diarize, GET /healthz).
+#
+# The image ships NO model weights: they are HF-gated. Supply HF_TOKEN at
+# runtime after accepting the conditions of BOTH
+# pyannote/speaker-diarization-3.1 and pyannote/segmentation-3.0 on HF.
+#
+# Expect CPU-tier speed: run the stack with COMPUTE_TIER=cpu
+# (compose.cpu.yaml) so stage leases scale — see docs/timeouts-and-leases.md.
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libsndfile1 ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
+
+# setuptools pinned <81: pyannote.database imports pkg_resources at startup,
+# which setuptools 81 removed. (The CUDA image's unpinned upgrade predates 81
+# — rebuild it and it hits the same wall.)
+RUN pip3 install --no-cache-dir --upgrade pip wheel "setuptools>=70,<81"
+
+# numpy first, then torch pinned to the CPU wheel index on BOTH arches (PyPI's
+# default amd64 torch drags the CUDA runtime into a CPU image), then everything
+# else — the order prevents the resolver from dragging in incompatible builds.
+RUN pip3 install --no-cache-dir "numpy==1.24.3"
+RUN pip3 install --no-cache-dir \
+    torch==2.5.0 torchaudio==2.5.0 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+
+WORKDIR /app
+# HF weights cache — populated at first startup using the runtime HF_TOKEN.
+RUN mkdir -p /app/models && chown -R voxint:voxint /app
+COPY --chown=voxint:voxint app/ /app/app/
+
+ENV TORCH_HOME=/app/models
+ENV HF_HOME=/app/models
+ENV HUGGINGFACE_HUB_CACHE=/app/models
+
+USER voxint
+ENV HOME=/app
+
+ENV MEDIA_ROOT=/data/media
+ENV PORT=8024
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/healthz || exit 1
+
+EXPOSE 8024
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

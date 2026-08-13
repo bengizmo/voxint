@@ -1,0 +1,26 @@
+# Pinned stack for the ONNX-only CPU image (Dockerfile.cpu) — no NeMo, no
+# torch. The preprocessing pins MUST stay identical to requirements.txt and to
+# pyproject.toml's `parity` extra: the parity verdict that keeps
+# titanet-large-v1 on the ONNX engine was measured against exactly this
+# chain, so version skew here is embedding-space drift.
+numpy==1.24.3
+
+librosa==0.10.1
+soundfile==0.12.1
+scipy==1.11.4
+numba==0.58.1
+
+# Embedding-space preprocessing (part of the titanet-large-v1 definition)
+pyloudnorm==0.1.0
+noisereduce==2.0.1
+
+# Inference engine — same version the export + parity gate ran against
+# (tests/parity/fixtures/onnx/provenance.json).
+onnxruntime==1.18.1
+
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# librosa 0.10.1 imports pkg_resources, removed in setuptools 81.
+setuptools>=70,<81

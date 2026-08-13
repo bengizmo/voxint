@@ -1,0 +1,53 @@
+# Voxint titanet service — CPU flavor (multi-arch: amd64 + arm64).
+# ONNX Runtime engine ONLY: no NeMo, no torch. Same embedding space id
+# (titanet-large-v1) as the CUDA image — kept on measured equivalence, see the
+# parity verdict in docs/gpu-contracts.md and tests/parity/test_titanet_onnx.py.
+# Contract: docs/gpu-contracts.md (POST /v1/embed, GET /healthz).
+#
+# The ~100 MB .onnx graph is NOT in git. Before building, place the exported
+# artifact at services/titanet/models/titanet-large.onnx — either by running
+# tools/export_titanet_onnx.py inside the pinned CUDA image (maintainer path)
+# or by downloading the checksummed release asset (CI path). The build FAILS
+# unless its sha256 matches TITANET_ONNX_SHA256, which must equal
+# "onnx_sha256" in tests/parity/fixtures/onnx/provenance.json (a contract
+# test pins the two together).
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+# libsndfile1 is load-bearing on arm64: soundfile 0.12.1 ships no aarch64
+# platform wheel, so pip installs the pure wheel that dlopens the system lib.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 libsndfile1 ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
+
+RUN pip3 install --no-cache-dir --upgrade pip wheel
+
+COPY requirements.cpu.txt /tmp/requirements.cpu.txt
+RUN pip3 install --no-cache-dir -r /tmp/requirements.cpu.txt
+
+ARG TITANET_ONNX_SHA256=f397fedc81e77d7f6a42e4d5bc78e2a5f81b9fd663ac82415e423467221545bf
+COPY models/titanet-large.onnx /app/models/titanet-large.onnx
+RUN echo "${TITANET_ONNX_SHA256}  /app/models/titanet-large.onnx" | sha256sum -c - \
+    || { echo "titanet-large.onnx does not match the committed provenance sha256 — \
+re-export with tools/export_titanet_onnx.py or fetch the matching release asset" >&2; exit 1; }
+
+WORKDIR /app
+COPY --chown=voxint:voxint app/ /app/app/
+RUN chown -R voxint:voxint /app
+
+USER voxint
+ENV HOME=/app
+
+ENV EMBED_ENGINE=onnx
+ENV TITANET_ONNX_PATH=/app/models/titanet-large.onnx
+ENV MEDIA_ROOT=/data/media
+ENV PORT=8021
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/healthz || exit 1
+
+EXPOSE 8021
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]
