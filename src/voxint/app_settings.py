@@ -46,7 +46,11 @@ def get_or_create(session: Session) -> AppSettings:
             session.flush()
     except IntegrityError:
         adopted = session.get(AppSettings, SINGLETON_ID)
-        assert adopted is not None  # the winner committed the singleton
+        if adopted is None:
+            # The IntegrityError was not the expected singleton race — re-raise
+            # it rather than returning None (an `assert` here is stripped under
+            # `python -O`, which would violate the `-> AppSettings` contract).
+            raise
         return adopted
     return row
 

@@ -14,11 +14,18 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, inspect, text
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.types import TypeEngine
 
 from voxint.db.models import AppSettings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _pg_type(type_: TypeEngine[object]) -> str:
+    """Render a type as its postgres DDL string so model and reflected agree."""
+    return type_.compile(dialect=postgresql.dialect())
 
 
 @pytest.fixture()
@@ -92,7 +99,19 @@ def test_app_settings_model_matches_migration(engine: Engine) -> None:
     assert set(migrated) == set(model)
     for name, col in model.items():
         assert migrated[name]["nullable"] == col.nullable, f"{name} nullability drift"
+        # Compile both sides through the postgres dialect so a type change
+        # (SMALLINT->INTEGER, TEXT->VARCHAR, dropped timezone, TEXT->TEXT[]) fails
+        # here instead of silently at runtime.
+        assert _pg_type(migrated[name]["type"]) == _pg_type(col.type), (
+            f"{name} type drift: migrated={_pg_type(migrated[name]['type'])} "
+            f"model={_pg_type(col.type)}"
+        )
     check_names = {c["name"] for c in insp.get_check_constraints("app_settings")}
     assert "app_settings_single_row_check" in check_names
+    # The FK must point tutorial_run_id -> pipeline_runs.id AND keep ON DELETE SET
+    # NULL; a bare "some FK targets pipeline_runs" check would miss losing either.
     fks = insp.get_foreign_keys("app_settings")
-    assert any(fk["referred_table"] == "pipeline_runs" for fk in fks)
+    fk = next(f for f in fks if f["constrained_columns"] == ["tutorial_run_id"])
+    assert fk["referred_table"] == "pipeline_runs"
+    assert fk["referred_columns"] == ["id"]
+    assert fk.get("options", {}).get("ondelete") == "SET NULL"
