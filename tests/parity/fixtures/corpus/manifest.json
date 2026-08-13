@@ -1,0 +1,337 @@
+{
+  "embed": {
+    "wav": "embed-corpus.wav",
+    "sha256": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
+    "duration_seconds": 220.242,
+    "utterances": [
+      {
+        "id": "utt_00",
+        "speaker": "SPK_A",
+        "text": "The harbor lights dim after midnight.",
+        "duration_seconds": 2.477,
+        "start_seconds": 0.0,
+        "end_seconds": 2.476875
+      },
+      {
+        "id": "utt_01",
+        "speaker": "SPK_A",
+        "text": "Every autumn the river carries red leaves past the old stone bridge and out toward the bay.",
+        "duration_seconds": 5.828,
+        "start_seconds": 2.976875,
+        "end_seconds": 8.805312
+      },
+      {
+        "id": "utt_02",
+        "speaker": "SPK_A",
+        "text": "Nobody remembered who first planted the orchard, but the trees kept their rows.",
+        "duration_seconds": 5.543,
+        "start_seconds": 9.305312,
+        "end_seconds": 14.847875
+      },
+      {
+        "id": "utt_03",
+        "speaker": "SPK_A",
+        "text": "When the northern wind finally settled, the climbers checked their ropes twice, shouldered their packs, and started the long traverse across the glacier before sunrise could soften the ice beneath them.",
+        "duration_seconds": 12.044,
+        "start_seconds": 15.347875,
+        "end_seconds": 27.391438
+      },
+      {
+        "id": "utt_04",
+        "speaker": "SPK_B",
+        "text": "Fresh bread cools by the window.",
+        "duration_seconds": 2.124,
+        "start_seconds": 27.891437,
+        "end_seconds": 30.015875
+      },
+      {
+        "id": "utt_05",
+        "speaker": "SPK_B",
+        "text": "The observatory dome opened slowly while the astronomer aligned the mirror on the horizon.",
+        "duration_seconds": 4.729,
+        "start_seconds": 30.515875,
+        "end_seconds": 35.2445
+      },
+      {
+        "id": "utt_06",
+        "speaker": "SPK_B",
+        "text": "A single lantern is enough to cross the meadow if you trust the path.",
+        "duration_seconds": 3.783,
+        "start_seconds": 35.7445,
+        "end_seconds": 39.527687
+      },
+      {
+        "id": "utt_07",
+        "speaker": "SPK_B",
+        "text": "The archivist numbered each folder, tied the bundles with cotton string, and carried them down to the basement vault where the temperature never changed and the dust settled in even, patient layers.",
+        "duration_seconds": 11.598,
+        "start_seconds": 40.027687,
+        "end_seconds": 51.625563
+      },
+      {
+        "id": "utt_08",
+        "speaker": "SPK_C",
+        "text": "Rain traced lines down the glass.",
+        "duration_seconds": 2.642,
+        "start_seconds": 52.125563,
+        "end_seconds": 54.76725
+      },
+      {
+        "id": "utt_09",
+        "speaker": "SPK_C",
+        "text": "Two ferries pass each other every morning in the narrow channel south of the lighthouse.",
+        "duration_seconds": 5.162,
+        "start_seconds": 55.26725,
+        "end_seconds": 60.428812
+      },
+      {
+        "id": "utt_10",
+        "speaker": "SPK_C",
+        "text": "The chess club met on Thursdays above the bakery, and the smell of cinnamon always won.",
+        "duration_seconds": 6.044,
+        "start_seconds": 60.928812,
+        "end_seconds": 66.972437
+      },
+      {
+        "id": "utt_11",
+        "speaker": "SPK_C",
+        "text": "After the festival ended, volunteers folded the banners, stacked the chairs in the town hall, swept the square in overlapping circles, and argued cheerfully about where next year's stage should stand.",
+        "duration_seconds": 13.878,
+        "start_seconds": 67.472437,
+        "end_seconds": 81.35
+      },
+      {
+        "id": "utt_12",
+        "speaker": "SPK_D",
+        "text": "The kettle whistled twice, then stopped.",
+        "duration_seconds": 2.988,
+        "start_seconds": 81.85,
+        "end_seconds": 84.83825
+      },
+      {
+        "id": "utt_13",
+        "speaker": "SPK_D",
+        "text": "Maps of the old coastline show a harbor where the parking lot is now.",
+        "duration_seconds": 4.648,
+        "start_seconds": 85.33825,
+        "end_seconds": 89.986312
+      },
+      {
+        "id": "utt_14",
+        "speaker": "SPK_D",
+        "text": "She tuned the violin slowly, listening for the fifth to settle between the strings.",
+        "duration_seconds": 5.122,
+        "start_seconds": 90.486312,
+        "end_seconds": 95.607937
+      },
+      {
+        "id": "utt_15",
+        "speaker": "SPK_D",
+        "text": "The night train slid past the sleeping villages, its windows a ribbon of pale light, and the conductor walked the aisle counting tickets with the ease of a man who had done it ten thousand times.",
+        "duration_seconds": 11.865,
+        "start_seconds": 96.107938,
+        "end_seconds": 107.973063
+      },
+      {
+        "id": "utt_16",
+        "speaker": "SPK_E",
+        "text": "Snow erased the garden by noon.",
+        "duration_seconds": 2.751,
+        "start_seconds": 108.473062,
+        "end_seconds": 111.223812
+      },
+      {
+        "id": "utt_17",
+        "speaker": "SPK_E",
+        "text": "The printing press needed three people: one to feed, one to catch, and one to worry.",
+        "duration_seconds": 6.854,
+        "start_seconds": 111.723812,
+        "end_seconds": 118.57825
+      },
+      {
+        "id": "utt_18",
+        "speaker": "SPK_E",
+        "text": "Low tide uncovered a field of stones arranged in a spiral nobody could date.",
+        "duration_seconds": 5.41,
+        "start_seconds": 119.07825,
+        "end_seconds": 124.487875
+      },
+      {
+        "id": "utt_19",
+        "speaker": "SPK_E",
+        "text": "In the workshop behind the chandlery, coils of rope hung from oak pegs by thickness and lay, and the smell of tar and hemp followed the apprentices home through the winding streets every evening.",
+        "duration_seconds": 14.017,
+        "start_seconds": 124.987875,
+        "end_seconds": 139.00525
+      },
+      {
+        "id": "utt_20",
+        "speaker": "SPK_F",
+        "text": "The elevator hummed one floor too far.",
+        "duration_seconds": 2.356,
+        "start_seconds": 139.50525,
+        "end_seconds": 141.861312
+      },
+      {
+        "id": "utt_21",
+        "speaker": "SPK_F",
+        "text": "Morning fog kept the gliders grounded until the ridge finally showed its edge.",
+        "duration_seconds": 4.435,
+        "start_seconds": 142.361312,
+        "end_seconds": 146.796562
+      },
+      {
+        "id": "utt_22",
+        "speaker": "SPK_F",
+        "text": "He labeled the seed envelopes in pencil because ink fades faster than memory.",
+        "duration_seconds": 4.546,
+        "start_seconds": 147.296562,
+        "end_seconds": 151.842875
+      },
+      {
+        "id": "utt_23",
+        "speaker": "SPK_F",
+        "text": "The orchestra rehearsed the final movement four times, and each time the silence after the last chord lasted a little longer, as if the hall itself were learning where the music ended.",
+        "duration_seconds": 9.94,
+        "start_seconds": 152.342875,
+        "end_seconds": 162.282437
+      }
+    ],
+    "noisy_copies": [
+      {
+        "id": "noisy_0",
+        "source_utterance": "utt_00",
+        "speaker": "SPK_A",
+        "target_snr_db": 3.0,
+        "calibrated_snr_db": 2.99,
+        "start_seconds": 162.782437,
+        "end_seconds": 165.259312
+      },
+      {
+        "id": "noisy_1",
+        "source_utterance": "utt_05",
+        "speaker": "SPK_B",
+        "target_snr_db": 4.0,
+        "calibrated_snr_db": 4.0,
+        "start_seconds": 165.759312,
+        "end_seconds": 170.487937
+      },
+      {
+        "id": "noisy_2",
+        "source_utterance": "utt_10",
+        "speaker": "SPK_C",
+        "target_snr_db": 4.7,
+        "calibrated_snr_db": 4.68,
+        "start_seconds": 170.987937,
+        "end_seconds": 177.031562
+      },
+      {
+        "id": "noisy_3",
+        "source_utterance": "utt_15",
+        "speaker": "SPK_D",
+        "target_snr_db": 5.3,
+        "calibrated_snr_db": 5.28,
+        "start_seconds": 177.531563,
+        "end_seconds": 189.396688
+      },
+      {
+        "id": "noisy_4",
+        "source_utterance": "utt_20",
+        "speaker": "SPK_F",
+        "target_snr_db": 6.0,
+        "calibrated_snr_db": 5.97,
+        "start_seconds": 189.896688,
+        "end_seconds": 192.25275
+      },
+      {
+        "id": "noisy_5",
+        "source_utterance": "utt_01",
+        "speaker": "SPK_A",
+        "target_snr_db": 8.0,
+        "calibrated_snr_db": 8.0,
+        "start_seconds": 192.75275,
+        "end_seconds": 198.581187
+      },
+      {
+        "id": "noisy_6",
+        "source_utterance": "utt_06",
+        "speaker": "SPK_B",
+        "target_snr_db": 12.0,
+        "calibrated_snr_db": 11.98,
+        "start_seconds": 199.081187,
+        "end_seconds": 202.864375
+      },
+      {
+        "id": "noisy_7",
+        "source_utterance": "utt_11",
+        "speaker": "SPK_C",
+        "target_snr_db": 20.0,
+        "calibrated_snr_db": 20.01,
+        "start_seconds": 203.364375,
+        "end_seconds": 217.241938
+      }
+    ]
+  },
+  "transcribe": {
+    "wav": "transcribe-short.wav",
+    "sha256": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f",
+    "duration_seconds": 34.153,
+    "speaker": "SPK_C",
+    "text": "This recording exists to measure transcription parity. The quick grey fox counted thirty two crates of oranges on the harbor scale. Numbers matter here: seventeen, four hundred six, and nineteen fifty two. The committee approved the proposal without amendment, then adjourned for the season. A longer sentence follows, containing a few deliberately unusual words such as gyroscope, marmalade, and periwinkle, spoken at a steady pace to give the decoder an honest chance."
+  },
+  "diarize": {
+    "wav": "diarize-3speaker.wav",
+    "sha256": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795",
+    "duration_seconds": 39.279,
+    "turns": [
+      {
+        "speaker": "SPK_A",
+        "text": "Welcome back everyone, let's review the survey results from last week.",
+        "start_seconds": 0.0,
+        "end_seconds": 4.857312
+      },
+      {
+        "speaker": "SPK_B",
+        "text": "Thanks. The response rate was higher than expected, almost seventy percent.",
+        "start_seconds": 5.207312,
+        "end_seconds": 10.538937
+      },
+      {
+        "speaker": "SPK_C",
+        "text": "That is encouraging. Did the coastal group respond as well as the valley group?",
+        "start_seconds": 10.888938,
+        "end_seconds": 16.342813
+      },
+      {
+        "speaker": "SPK_A",
+        "text": "They did, and their comments were longer on average.",
+        "start_seconds": 16.692812,
+        "end_seconds": 20.1765
+      },
+      {
+        "speaker": "SPK_B",
+        "text": "I can summarize the main themes if that helps the planning discussion.",
+        "start_seconds": 20.5265,
+        "end_seconds": 24.5725
+      },
+      {
+        "speaker": "SPK_C",
+        "text": "Please do, and note anything that contradicts the earlier interviews.",
+        "start_seconds": 24.9225,
+        "end_seconds": 29.858125
+      },
+      {
+        "speaker": "SPK_A",
+        "text": "Agreed. We will hold the open questions for the end of the session.",
+        "start_seconds": 30.208125,
+        "end_seconds": 34.767313
+      },
+      {
+        "speaker": "SPK_B",
+        "text": "Then I will start with the three most common suggestions we received.",
+        "start_seconds": 35.117312,
+        "end_seconds": 38.928937
+      }
+    ]
+  }
+}

@@ -1,0 +1,1075 @@
+{
+  "wav": "embed-corpus.wav",
+  "windows": [
+    {
+      "id": "clean_utt_00",
+      "category": "clean",
+      "start_seconds": 0.0,
+      "end_seconds": 2.476875,
+      "speaker": "SPK_A",
+      "utterance": "utt_00",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "clean_utt_01",
+      "category": "clean",
+      "start_seconds": 2.976875,
+      "end_seconds": 8.805312,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 21.05
+    },
+    {
+      "id": "clean_utt_02",
+      "category": "clean",
+      "start_seconds": 9.305312,
+      "end_seconds": 14.847875,
+      "speaker": "SPK_A",
+      "utterance": "utt_02",
+      "expected_skip_reason": null,
+      "expected_snr_db": 33.92
+    },
+    {
+      "id": "clean_utt_03",
+      "category": "clean",
+      "start_seconds": 15.347875,
+      "end_seconds": 27.391438,
+      "speaker": "SPK_A",
+      "utterance": "utt_03",
+      "expected_skip_reason": null,
+      "expected_snr_db": 24.04
+    },
+    {
+      "id": "clean_utt_04",
+      "category": "clean",
+      "start_seconds": 27.891437,
+      "end_seconds": 30.015875,
+      "speaker": "SPK_B",
+      "utterance": "utt_04",
+      "expected_skip_reason": null,
+      "expected_snr_db": 36.69
+    },
+    {
+      "id": "clean_utt_05",
+      "category": "clean",
+      "start_seconds": 30.515875,
+      "end_seconds": 35.2445,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": null,
+      "expected_snr_db": 14.63
+    },
+    {
+      "id": "clean_utt_06",
+      "category": "clean",
+      "start_seconds": 35.7445,
+      "end_seconds": 39.527687,
+      "speaker": "SPK_B",
+      "utterance": "utt_06",
+      "expected_skip_reason": null,
+      "expected_snr_db": 36.53
+    },
+    {
+      "id": "clean_utt_07",
+      "category": "clean",
+      "start_seconds": 40.027687,
+      "end_seconds": 51.625563,
+      "speaker": "SPK_B",
+      "utterance": "utt_07",
+      "expected_skip_reason": null,
+      "expected_snr_db": 19.33
+    },
+    {
+      "id": "clean_utt_08",
+      "category": "clean",
+      "start_seconds": 52.125563,
+      "end_seconds": 54.76725,
+      "speaker": "SPK_C",
+      "utterance": "utt_08",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "clean_utt_09",
+      "category": "clean",
+      "start_seconds": 55.26725,
+      "end_seconds": 60.428812,
+      "speaker": "SPK_C",
+      "utterance": "utt_09",
+      "expected_skip_reason": null,
+      "expected_snr_db": 28.75
+    },
+    {
+      "id": "clean_utt_10",
+      "category": "clean",
+      "start_seconds": 60.928812,
+      "end_seconds": 66.972437,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "clean_utt_11",
+      "category": "clean",
+      "start_seconds": 67.472437,
+      "end_seconds": 81.35,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 31.53
+    },
+    {
+      "id": "clean_utt_12",
+      "category": "clean",
+      "start_seconds": 81.85,
+      "end_seconds": 84.83825,
+      "speaker": "SPK_D",
+      "utterance": "utt_12",
+      "expected_skip_reason": null,
+      "expected_snr_db": 53.33
+    },
+    {
+      "id": "clean_utt_13",
+      "category": "clean",
+      "start_seconds": 85.33825,
+      "end_seconds": 89.986312,
+      "speaker": "SPK_D",
+      "utterance": "utt_13",
+      "expected_skip_reason": null,
+      "expected_snr_db": 25.51
+    },
+    {
+      "id": "clean_utt_14",
+      "category": "clean",
+      "start_seconds": 90.486312,
+      "end_seconds": 95.607937,
+      "speaker": "SPK_D",
+      "utterance": "utt_14",
+      "expected_skip_reason": null,
+      "expected_snr_db": 33.52
+    },
+    {
+      "id": "clean_utt_15",
+      "category": "clean",
+      "start_seconds": 96.107938,
+      "end_seconds": 107.973063,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 20.93
+    },
+    {
+      "id": "clean_utt_16",
+      "category": "clean",
+      "start_seconds": 108.473062,
+      "end_seconds": 111.223812,
+      "speaker": "SPK_E",
+      "utterance": "utt_16",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "clean_utt_17",
+      "category": "clean",
+      "start_seconds": 111.723812,
+      "end_seconds": 118.57825,
+      "speaker": "SPK_E",
+      "utterance": "utt_17",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "clean_utt_18",
+      "category": "clean",
+      "start_seconds": 119.07825,
+      "end_seconds": 124.487875,
+      "speaker": "SPK_E",
+      "utterance": "utt_18",
+      "expected_skip_reason": null,
+      "expected_snr_db": 30.29
+    },
+    {
+      "id": "clean_utt_19",
+      "category": "clean",
+      "start_seconds": 124.987875,
+      "end_seconds": 139.00525,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 28.24
+    },
+    {
+      "id": "clean_utt_20",
+      "category": "clean",
+      "start_seconds": 139.50525,
+      "end_seconds": 141.861312,
+      "speaker": "SPK_F",
+      "utterance": "utt_20",
+      "expected_skip_reason": null,
+      "expected_snr_db": 41.64
+    },
+    {
+      "id": "clean_utt_21",
+      "category": "clean",
+      "start_seconds": 142.361312,
+      "end_seconds": 146.796562,
+      "speaker": "SPK_F",
+      "utterance": "utt_21",
+      "expected_skip_reason": null,
+      "expected_snr_db": 18.87
+    },
+    {
+      "id": "clean_utt_22",
+      "category": "clean",
+      "start_seconds": 147.296562,
+      "end_seconds": 151.842875,
+      "speaker": "SPK_F",
+      "utterance": "utt_22",
+      "expected_skip_reason": null,
+      "expected_snr_db": 14.2
+    },
+    {
+      "id": "clean_utt_23",
+      "category": "clean",
+      "start_seconds": 152.342875,
+      "end_seconds": 162.282437,
+      "speaker": "SPK_F",
+      "utterance": "utt_23",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.23
+    },
+    {
+      "id": "sub_utt_01_0",
+      "category": "sub_window",
+      "start_seconds": 3.176875,
+      "end_seconds": 4.676875,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 6.4
+    },
+    {
+      "id": "sub_utt_01_1",
+      "category": "sub_window",
+      "start_seconds": 3.476875,
+      "end_seconds": 5.976875,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 11.66
+    },
+    {
+      "id": "sub_utt_01_2",
+      "category": "sub_window",
+      "start_seconds": 5.205312,
+      "end_seconds": 8.405312,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 17.97
+    },
+    {
+      "id": "sub_utt_02_0",
+      "category": "sub_window",
+      "start_seconds": 9.505312,
+      "end_seconds": 11.005312,
+      "speaker": "SPK_A",
+      "utterance": "utt_02",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "sub_utt_02_1",
+      "category": "sub_window",
+      "start_seconds": 9.805312,
+      "end_seconds": 12.305312,
+      "speaker": "SPK_A",
+      "utterance": "utt_02",
+      "expected_skip_reason": null,
+      "expected_snr_db": 26.54
+    },
+    {
+      "id": "sub_utt_02_2",
+      "category": "sub_window",
+      "start_seconds": 11.247875,
+      "end_seconds": 14.447875,
+      "speaker": "SPK_A",
+      "utterance": "utt_02",
+      "expected_skip_reason": null,
+      "expected_snr_db": 22.89
+    },
+    {
+      "id": "sub_utt_03_0",
+      "category": "sub_window",
+      "start_seconds": 15.547875,
+      "end_seconds": 17.047875,
+      "speaker": "SPK_A",
+      "utterance": "utt_03",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.33
+    },
+    {
+      "id": "sub_utt_03_1",
+      "category": "sub_window",
+      "start_seconds": 15.847875,
+      "end_seconds": 18.347875,
+      "speaker": "SPK_A",
+      "utterance": "utt_03",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "sub_utt_03_2",
+      "category": "sub_window",
+      "start_seconds": 23.791438,
+      "end_seconds": 26.991438,
+      "speaker": "SPK_A",
+      "utterance": "utt_03",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.85
+    },
+    {
+      "id": "sub_utt_05_0",
+      "category": "sub_window",
+      "start_seconds": 30.715875,
+      "end_seconds": 32.215875,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": null,
+      "expected_snr_db": 9.4
+    },
+    {
+      "id": "sub_utt_05_1",
+      "category": "sub_window",
+      "start_seconds": 31.015875,
+      "end_seconds": 33.515875,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.44
+    },
+    {
+      "id": "sub_utt_05_2",
+      "category": "sub_window",
+      "start_seconds": 31.6445,
+      "end_seconds": 34.8445,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": null,
+      "expected_snr_db": 11.41
+    },
+    {
+      "id": "sub_utt_07_0",
+      "category": "sub_window",
+      "start_seconds": 40.227687,
+      "end_seconds": 41.727687,
+      "speaker": "SPK_B",
+      "utterance": "utt_07",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.72
+    },
+    {
+      "id": "sub_utt_07_1",
+      "category": "sub_window",
+      "start_seconds": 40.527687,
+      "end_seconds": 43.027687,
+      "speaker": "SPK_B",
+      "utterance": "utt_07",
+      "expected_skip_reason": null,
+      "expected_snr_db": 26.41
+    },
+    {
+      "id": "sub_utt_07_2",
+      "category": "sub_window",
+      "start_seconds": 48.025563,
+      "end_seconds": 51.225563,
+      "speaker": "SPK_B",
+      "utterance": "utt_07",
+      "expected_skip_reason": null,
+      "expected_snr_db": 23.37
+    },
+    {
+      "id": "sub_utt_09_0",
+      "category": "sub_window",
+      "start_seconds": 55.46725,
+      "end_seconds": 56.96725,
+      "speaker": "SPK_C",
+      "utterance": "utt_09",
+      "expected_skip_reason": null,
+      "expected_snr_db": 10.73
+    },
+    {
+      "id": "sub_utt_09_1",
+      "category": "sub_window",
+      "start_seconds": 55.76725,
+      "end_seconds": 58.26725,
+      "speaker": "SPK_C",
+      "utterance": "utt_09",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.81
+    },
+    {
+      "id": "sub_utt_09_2",
+      "category": "sub_window",
+      "start_seconds": 56.828812,
+      "end_seconds": 60.028812,
+      "speaker": "SPK_C",
+      "utterance": "utt_09",
+      "expected_skip_reason": null,
+      "expected_snr_db": 14.26
+    },
+    {
+      "id": "sub_utt_10_0",
+      "category": "sub_window",
+      "start_seconds": 61.128812,
+      "end_seconds": 62.628812,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.36
+    },
+    {
+      "id": "sub_utt_10_1",
+      "category": "sub_window",
+      "start_seconds": 61.428812,
+      "end_seconds": 63.928812,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.49
+    },
+    {
+      "id": "sub_utt_10_2",
+      "category": "sub_window",
+      "start_seconds": 63.372437,
+      "end_seconds": 66.572437,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": null,
+      "expected_snr_db": 18.45
+    },
+    {
+      "id": "sub_utt_11_0",
+      "category": "sub_window",
+      "start_seconds": 67.672437,
+      "end_seconds": 69.172437,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 7.76
+    },
+    {
+      "id": "sub_utt_11_1",
+      "category": "sub_window",
+      "start_seconds": 67.972437,
+      "end_seconds": 70.472437,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 32.01
+    },
+    {
+      "id": "sub_utt_11_2",
+      "category": "sub_window",
+      "start_seconds": 77.75,
+      "end_seconds": 80.95,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.39
+    },
+    {
+      "id": "sub_utt_13_0",
+      "category": "sub_window",
+      "start_seconds": 85.53825,
+      "end_seconds": 87.03825,
+      "speaker": "SPK_D",
+      "utterance": "utt_13",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.26
+    },
+    {
+      "id": "sub_utt_13_1",
+      "category": "sub_window",
+      "start_seconds": 85.83825,
+      "end_seconds": 88.33825,
+      "speaker": "SPK_D",
+      "utterance": "utt_13",
+      "expected_skip_reason": null,
+      "expected_snr_db": 21.0
+    },
+    {
+      "id": "sub_utt_13_2",
+      "category": "sub_window",
+      "start_seconds": 86.386312,
+      "end_seconds": 89.586312,
+      "speaker": "SPK_D",
+      "utterance": "utt_13",
+      "expected_skip_reason": null,
+      "expected_snr_db": 9.05
+    },
+    {
+      "id": "sub_utt_14_0",
+      "category": "sub_window",
+      "start_seconds": 90.686312,
+      "end_seconds": 92.186312,
+      "speaker": "SPK_D",
+      "utterance": "utt_14",
+      "expected_skip_reason": null,
+      "expected_snr_db": 5.34
+    },
+    {
+      "id": "sub_utt_14_1",
+      "category": "sub_window",
+      "start_seconds": 90.986312,
+      "end_seconds": 93.486312,
+      "speaker": "SPK_D",
+      "utterance": "utt_14",
+      "expected_skip_reason": null,
+      "expected_snr_db": 29.38
+    },
+    {
+      "id": "sub_utt_14_2",
+      "category": "sub_window",
+      "start_seconds": 92.007937,
+      "end_seconds": 95.207937,
+      "speaker": "SPK_D",
+      "utterance": "utt_14",
+      "expected_skip_reason": null,
+      "expected_snr_db": 15.57
+    },
+    {
+      "id": "sub_utt_15_0",
+      "category": "sub_window",
+      "start_seconds": 96.307938,
+      "end_seconds": 97.807938,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.32
+    },
+    {
+      "id": "sub_utt_15_1",
+      "category": "sub_window",
+      "start_seconds": 96.607938,
+      "end_seconds": 99.107938,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 24.9
+    },
+    {
+      "id": "sub_utt_15_2",
+      "category": "sub_window",
+      "start_seconds": 104.373063,
+      "end_seconds": 107.573063,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 16.41
+    },
+    {
+      "id": "sub_utt_17_0",
+      "category": "sub_window",
+      "start_seconds": 111.923812,
+      "end_seconds": 113.423812,
+      "speaker": "SPK_E",
+      "utterance": "utt_17",
+      "expected_skip_reason": null,
+      "expected_snr_db": 20.29
+    },
+    {
+      "id": "sub_utt_17_1",
+      "category": "sub_window",
+      "start_seconds": 112.223812,
+      "end_seconds": 114.723812,
+      "speaker": "SPK_E",
+      "utterance": "utt_17",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "sub_utt_17_2",
+      "category": "sub_window",
+      "start_seconds": 114.97825,
+      "end_seconds": 118.17825,
+      "speaker": "SPK_E",
+      "utterance": "utt_17",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "sub_utt_18_0",
+      "category": "sub_window",
+      "start_seconds": 119.27825,
+      "end_seconds": 120.77825,
+      "speaker": "SPK_E",
+      "utterance": "utt_18",
+      "expected_skip_reason": null,
+      "expected_snr_db": 8.85
+    },
+    {
+      "id": "sub_utt_18_1",
+      "category": "sub_window",
+      "start_seconds": 119.57825,
+      "end_seconds": 122.07825,
+      "speaker": "SPK_E",
+      "utterance": "utt_18",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.84
+    },
+    {
+      "id": "sub_utt_18_2",
+      "category": "sub_window",
+      "start_seconds": 120.887875,
+      "end_seconds": 124.087875,
+      "speaker": "SPK_E",
+      "utterance": "utt_18",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.41
+    },
+    {
+      "id": "sub_utt_19_0",
+      "category": "sub_window",
+      "start_seconds": 125.187875,
+      "end_seconds": 126.687875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 20.48
+    },
+    {
+      "id": "sub_utt_19_1",
+      "category": "sub_window",
+      "start_seconds": 125.487875,
+      "end_seconds": 127.987875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "sub_utt_19_2",
+      "category": "sub_window",
+      "start_seconds": 135.40525,
+      "end_seconds": 138.60525,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.94
+    },
+    {
+      "id": "sub_utt_21_0",
+      "category": "sub_window",
+      "start_seconds": 142.561312,
+      "end_seconds": 144.061312,
+      "speaker": "SPK_F",
+      "utterance": "utt_21",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.49
+    },
+    {
+      "id": "sub_utt_21_1",
+      "category": "sub_window",
+      "start_seconds": 142.861312,
+      "end_seconds": 145.361312,
+      "speaker": "SPK_F",
+      "utterance": "utt_21",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.45
+    },
+    {
+      "id": "sub_utt_21_2",
+      "category": "sub_window",
+      "start_seconds": 143.196562,
+      "end_seconds": 146.396562,
+      "speaker": "SPK_F",
+      "utterance": "utt_21",
+      "expected_skip_reason": null,
+      "expected_snr_db": 12.52
+    },
+    {
+      "id": "sub_utt_22_0",
+      "category": "sub_window",
+      "start_seconds": 147.496562,
+      "end_seconds": 148.996562,
+      "speaker": "SPK_F",
+      "utterance": "utt_22",
+      "expected_skip_reason": null,
+      "expected_snr_db": 15.48
+    },
+    {
+      "id": "sub_utt_22_1",
+      "category": "sub_window",
+      "start_seconds": 147.796562,
+      "end_seconds": 150.296562,
+      "speaker": "SPK_F",
+      "utterance": "utt_22",
+      "expected_skip_reason": null,
+      "expected_snr_db": 8.98
+    },
+    {
+      "id": "sub_utt_22_2",
+      "category": "sub_window",
+      "start_seconds": 148.242875,
+      "end_seconds": 151.442875,
+      "speaker": "SPK_F",
+      "utterance": "utt_22",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.15
+    },
+    {
+      "id": "sub_utt_23_0",
+      "category": "sub_window",
+      "start_seconds": 152.542875,
+      "end_seconds": 154.042875,
+      "speaker": "SPK_F",
+      "utterance": "utt_23",
+      "expected_skip_reason": null,
+      "expected_snr_db": 7.06
+    },
+    {
+      "id": "sub_utt_23_1",
+      "category": "sub_window",
+      "start_seconds": 152.842875,
+      "end_seconds": 155.342875,
+      "speaker": "SPK_F",
+      "utterance": "utt_23",
+      "expected_skip_reason": null,
+      "expected_snr_db": 23.02
+    },
+    {
+      "id": "sub_utt_23_2",
+      "category": "sub_window",
+      "start_seconds": 158.682437,
+      "end_seconds": 161.882437,
+      "speaker": "SPK_F",
+      "utterance": "utt_23",
+      "expected_skip_reason": null,
+      "expected_snr_db": 13.75
+    },
+    {
+      "id": "lenb_0.9375",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.925375,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": "too_short",
+      "expected_snr_db": null
+    },
+    {
+      "id": "lenb_0.99",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.977875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": "too_short",
+      "expected_snr_db": null
+    },
+    {
+      "id": "lenb_0.999",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.986875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": "too_short",
+      "expected_snr_db": null
+    },
+    {
+      "id": "lenb_1.0",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.987875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 10.11
+    },
+    {
+      "id": "lenb_1.001",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.988875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 10.1
+    },
+    {
+      "id": "lenb_1.05",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 127.037875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 9.96
+    },
+    {
+      "id": "lenb_1.25",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 127.237875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": null,
+      "expected_snr_db": 9.55
+    },
+    {
+      "id": "lenb_0.5",
+      "category": "length_boundary",
+      "start_seconds": 125.987875,
+      "end_seconds": 126.487875,
+      "speaker": "SPK_E",
+      "utterance": "utt_19",
+      "expected_skip_reason": "too_short",
+      "expected_snr_db": null
+    },
+    {
+      "id": "snrb_noisy_0",
+      "category": "snr_boundary",
+      "start_seconds": 162.782437,
+      "end_seconds": 165.259312,
+      "speaker": "SPK_A",
+      "utterance": "utt_00",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 2.99
+    },
+    {
+      "id": "snrb_noisy_0_sub",
+      "category": "snr_boundary",
+      "start_seconds": 162.932437,
+      "end_seconds": 164.682437,
+      "speaker": "SPK_A",
+      "utterance": "utt_00",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 3.1
+    },
+    {
+      "id": "snrb_noisy_1",
+      "category": "snr_boundary",
+      "start_seconds": 165.759312,
+      "end_seconds": 170.487937,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 4.01
+    },
+    {
+      "id": "snrb_noisy_1_sub",
+      "category": "snr_boundary",
+      "start_seconds": 165.909312,
+      "end_seconds": 167.659312,
+      "speaker": "SPK_B",
+      "utterance": "utt_05",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 3.33
+    },
+    {
+      "id": "snrb_noisy_2",
+      "category": "snr_boundary",
+      "start_seconds": 170.987937,
+      "end_seconds": 177.031562,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 4.69
+    },
+    {
+      "id": "snrb_noisy_2_sub",
+      "category": "snr_boundary",
+      "start_seconds": 171.137937,
+      "end_seconds": 172.887937,
+      "speaker": "SPK_C",
+      "utterance": "utt_10",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 4.7
+    },
+    {
+      "id": "snrb_noisy_3",
+      "category": "snr_boundary",
+      "start_seconds": 177.531563,
+      "end_seconds": 189.396688,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 5.28
+    },
+    {
+      "id": "snrb_noisy_3_sub",
+      "category": "snr_boundary",
+      "start_seconds": 177.681563,
+      "end_seconds": 179.431563,
+      "speaker": "SPK_D",
+      "utterance": "utt_15",
+      "expected_skip_reason": null,
+      "expected_snr_db": 5.2
+    },
+    {
+      "id": "snrb_noisy_4",
+      "category": "snr_boundary",
+      "start_seconds": 189.896688,
+      "end_seconds": 192.25275,
+      "speaker": "SPK_F",
+      "utterance": "utt_20",
+      "expected_skip_reason": null,
+      "expected_snr_db": 5.97
+    },
+    {
+      "id": "snrb_noisy_4_sub",
+      "category": "snr_boundary",
+      "start_seconds": 190.046688,
+      "end_seconds": 191.796688,
+      "speaker": "SPK_F",
+      "utterance": "utt_20",
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 4.89
+    },
+    {
+      "id": "snrb_noisy_5",
+      "category": "snr_boundary",
+      "start_seconds": 192.75275,
+      "end_seconds": 198.581187,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 8.0
+    },
+    {
+      "id": "snrb_noisy_5_sub",
+      "category": "snr_boundary",
+      "start_seconds": 192.90275,
+      "end_seconds": 194.65275,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 6.2
+    },
+    {
+      "id": "snrb_noisy_6",
+      "category": "snr_boundary",
+      "start_seconds": 199.081187,
+      "end_seconds": 202.864375,
+      "speaker": "SPK_B",
+      "utterance": "utt_06",
+      "expected_skip_reason": null,
+      "expected_snr_db": 11.98
+    },
+    {
+      "id": "snrb_noisy_6_sub",
+      "category": "snr_boundary",
+      "start_seconds": 199.231187,
+      "end_seconds": 200.981187,
+      "speaker": "SPK_B",
+      "utterance": "utt_06",
+      "expected_skip_reason": null,
+      "expected_snr_db": 11.17
+    },
+    {
+      "id": "snrb_noisy_7",
+      "category": "snr_boundary",
+      "start_seconds": 203.364375,
+      "end_seconds": 217.241938,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 20.01
+    },
+    {
+      "id": "snrb_noisy_7_sub",
+      "category": "snr_boundary",
+      "start_seconds": 203.514375,
+      "end_seconds": 205.264375,
+      "speaker": "SPK_C",
+      "utterance": "utt_11",
+      "expected_skip_reason": null,
+      "expected_snr_db": 19.9
+    },
+    {
+      "id": "silence_0",
+      "category": "silence",
+      "start_seconds": 217.841938,
+      "end_seconds": 219.141938,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 0.0
+    },
+    {
+      "id": "silence_1",
+      "category": "silence",
+      "start_seconds": 218.141938,
+      "end_seconds": 219.641938,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 0.0
+    },
+    {
+      "id": "gap_straddle_0",
+      "category": "gap_straddle",
+      "start_seconds": 2.496875,
+      "end_seconds": 3.696875,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "gap_straddle_1",
+      "category": "gap_straddle",
+      "start_seconds": 8.825312,
+      "end_seconds": 10.025312,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": null,
+      "expected_snr_db": 40.0
+    },
+    {
+      "id": "past_end_short",
+      "category": "past_end",
+      "start_seconds": 219.841938,
+      "end_seconds": 223.241938,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": "too_short",
+      "expected_snr_db": null
+    },
+    {
+      "id": "past_end_long",
+      "category": "past_end",
+      "start_seconds": 218.241938,
+      "end_seconds": 226.241938,
+      "speaker": null,
+      "utterance": null,
+      "expected_skip_reason": "low_snr",
+      "expected_snr_db": 0.0
+    },
+    {
+      "id": "dup_utt_01",
+      "category": "duplicate",
+      "start_seconds": 2.976875,
+      "end_seconds": 8.805312,
+      "speaker": "SPK_A",
+      "utterance": "utt_01",
+      "expected_skip_reason": null,
+      "expected_snr_db": 21.05
+    },
+    {
+      "id": "dup_utt_09",
+      "category": "duplicate",
+      "start_seconds": 55.26725,
+      "end_seconds": 60.428812,
+      "speaker": "SPK_C",
+      "utterance": "utt_09",
+      "expected_skip_reason": null,
+      "expected_snr_db": 28.75
+    }
+  ]
+}

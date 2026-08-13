@@ -1,0 +1,47 @@
+{
+  "generator": "tools/generate_parity_corpus.py",
+  "espeak_ng_version": "eSpeak NG text-to-speech: 1.50  Data at: /usr/lib/x86_64-linux-gnu/espeak-ng-data",
+  "ffmpeg_version": "ffmpeg version 4.4.2-0ubuntu0.22.04.1+esm12 Copyright (c) 2000-2021 the FFmpeg developers",
+  "noise_seed": 20260813,
+  "sample_rate": 16000,
+  "channels": 1,
+  "encoding": "pcm_s16le",
+  "voices": {
+    "SPK_A": {
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40
+    },
+    "SPK_B": {
+      "voice": "en-us+f4",
+      "speed": 168,
+      "pitch": 62
+    },
+    "SPK_C": {
+      "voice": "en-gb+m6",
+      "speed": 140,
+      "pitch": 28
+    },
+    "SPK_D": {
+      "voice": "en-us+f2",
+      "speed": 155,
+      "pitch": 70
+    },
+    "SPK_E": {
+      "voice": "en-gb+m2",
+      "speed": 132,
+      "pitch": 48
+    },
+    "SPK_F": {
+      "voice": "en-us+f5",
+      "speed": 175,
+      "pitch": 55
+    }
+  },
+  "wav_sha256": {
+    "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
+    "transcribe-short.wav": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f",
+    "diarize-3speaker.wav": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795"
+  },
+  "license": "CC0-1.0"
+}
