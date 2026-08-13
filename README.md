@@ -93,11 +93,17 @@ override the published side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`,
 `API_PORT`). Details and day-2 operations:
 [docs/operations.md](docs/operations.md).
 
-With the stack up, browse runs at `http://127.0.0.1:8080/runs` and adjudicate at
-`/review` (HTTP Basic, the `VOXINT_USER` / `VOXINT_PASSWORD` you set). Feed it work by
-uploading a file, pointing it at a URL (`docker compose exec api voxint fetch <url>`), or
-submitting a local path (`docker compose exec api voxint submit path/to/file.mp3`, relative
-to `MEDIA_ROOT`).
+Open the console at `http://127.0.0.1:8080/` (HTTP Basic, the `VOXINT_USER` /
+`VOXINT_PASSWORD` you set). On a **fresh install** the console holds you at a
+first-run **setup wizard** (`/setup`) — configure media folders, vocabulary, and
+optional LLM enhancement in the browser, then finish into a short guided tutorial
+on a bundled three-speaker sample. Full walkthrough:
+[docs/onboarding.md](docs/onboarding.md).
+
+Once onboarding is complete, browse runs at `/runs` and adjudicate at `/review`.
+Feed it work by uploading a file, pointing it at a URL (`docker compose exec api
+voxint fetch <url>`), or submitting a local path (`docker compose exec api voxint
+submit path/to/file.mp3`, relative to `MEDIA_ROOT`).
 
 To run the GPU model services too (one NVIDIA GPU assumed), first set
 `HF_TOKEN` in `.env` — the pyannote service's diarization weights are

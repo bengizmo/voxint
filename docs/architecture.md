@@ -63,10 +63,11 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0005)
+## Data model (alembic revisions 0001–0006)
 
 | Table | Role |
 |---|---|
+| `app_settings` | single-row instance configuration set by the first-run setup wizard — onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, and guided-tutorial state (revision 0006) |
 | `media_items` | media identity — one row per source file; `source_path` (UNIQUE) — already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs — plus a nullable, non-unique `source_url` for URL provenance (revision 0005) |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |

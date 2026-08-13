@@ -2,6 +2,7 @@
 
 | Doc | Contents |
 |---|---|
+| `onboarding.md` | First-run path: guided installer, setup wizard, and the bundled guided tutorial |
 | `architecture.md` | Pipeline stages, state machine, data model |
 | `gpu-contracts.md` | Versioned HTTP contracts for the ASR / diarizer / embedder services |
 | `gpu-smoke.md` | Build + real-inference smoke procedure for the GPU service images |

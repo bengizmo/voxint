@@ -12,6 +12,11 @@ compose version`; the legacy v1 `docker-compose` binary cannot parse this
 stack, and older v2 plugins lack its optional-`env_file` syntax), and for the
 GPU overlay an NVIDIA GPU with the NVIDIA container toolkit.
 
+For a first run, `./scripts/install.sh` is the recommended path — it renders
+`.env`, generates secrets, resolves port collisions, brings the core stack up, and
+hands off to the in-browser setup wizard (see [onboarding.md](onboarding.md)). The
+manual equivalent:
+
 ```bash
 cp .env.example .env          # set at least VOXINT_PASSWORD
 mkdir -p media                # pre-create the media mount so Docker doesn't create it root-owned
@@ -165,7 +170,10 @@ mismatches across multiple workers.
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your
 `API_PORT` override; basic auth, `VOXINT_USER`/`VOXINT_PASSWORD` — single
-reviewer credential):
+reviewer credential). On a **fresh install** the onboarding gate redirects every
+authenticated page to the first-run setup wizard (`/setup`) until setup is
+finished — so `/review` below becomes reachable only after onboarding completes
+(see [onboarding.md](onboarding.md)):
 
 1. **Queue** (`/review`) — runs that finished matching and await human
    review.
@@ -183,8 +191,9 @@ reviewer credential):
 
 ## HTTP endpoints
 
-Every route but `/healthz` sits behind HTTP Basic; four mutation forms
-(`POST /submit`, `/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim`)
+Every route but `/healthz` sits behind HTTP Basic; the core mutation forms
+(`POST /submit`, `/fetch`, `/runs/{id}/requeue`, `POST /review/{id}/claim`, and
+the wizard/settings forms with their own `CSRF_SETUP` / `CSRF_SETTINGS` tokens)
 additionally require a CSRF token (see above), and the remaining review-workbench
 mutations are gated by their per-run claim token.
 
@@ -204,6 +213,9 @@ mutations are gated by their per-run claim token.
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
 | `GET /review/{run_id}/export.txt` | Speaker-attributed transcript export |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
+| `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
+| `GET /settings` | Post-onboarding settings: re-run the wizard, start/replay/complete the tutorial |
+| `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
 
 ## Backup
 
