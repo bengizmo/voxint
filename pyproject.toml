@@ -48,7 +48,17 @@ dev = [
 # (tests/parity/test_titanet_onnx.py); the NeMo side stays a maintainer-run
 # container gate and is never installed here.
 parity = [
-    "onnxruntime>=1.18",
+    # Exact-pinned to the runtime the -cpu image ships
+    # (services/titanet/requirements.cpu.txt) so the harness measures the
+    # shipped engine, not a lookalike; a contract test binds the two.
+    # KNOWN, ACCEPTED SKEW: numpy/scipy here come from the main resolution
+    # (numpy 2.x) while the image pins numpy 1.24.3 — numpy 1.24 has no
+    # cp312+ wheels, so exact mirroring is impossible in this venv. The
+    # mel-numerics drift across numpy versions is ~1e-7 against a vector
+    # gate floor of 0.9995, and the release smoke closes the gap end-to-end
+    # by checking a shipped-image embedding against the committed CUDA
+    # reference (tools/smoke_cpu_services.py).
+    "onnxruntime==1.28.0",
     # Exact pins mirroring services/titanet/requirements.txt — the in-process
     # ONNX chain must run the same preprocessing stack as the shipped image,
     # or preprocess version skew masquerades as engine drift.

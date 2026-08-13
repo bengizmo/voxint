@@ -35,9 +35,13 @@ native-Metal tiers are tracked separately.
   future Apple host-process path.
 - **Release gates in `release.yml`**: the strict titanet parity harness
   (`VOXINT_PARITY_REQUIRED=1`) runs on amd64 **and** arm64 runners and blocks
-  the multi-arch builds; merged `-cpu` images get a per-arch boot +
-  `/healthz`-identity + short-clip smoke (pyannote's needs an `HF_TOKEN`
-  secret and SKIPs explicitly when absent).
+  the multi-arch builds; the per-arch smoke (`tools/smoke_cpu_services.py`)
+  runs against the **untagged digest images before any tag exists** and
+  requires healthz identity fields, a real corpus transcription, and a
+  titanet embedding within cosine 0.999 of the committed CUDA reference
+  (pyannote's smoke needs an `HF_TOKEN` secret and SKIPs explicitly when
+  absent); tags are only ever attached to smoke-passed digests, and each
+  manifest list is verified to expose exactly amd64+arm64.
 
 ### Changed
 - **The app image (`voxint`) is now multi-arch** (amd64 + arm64).

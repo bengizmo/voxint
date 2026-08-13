@@ -27,8 +27,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Bake the model at build time so the image needs no network at runtime.
-# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md.
-RUN python -c "from faster_whisper import WhisperModel; WhisperModel('large-v2', device='cpu', download_root='/opt/whisper_models')"
+# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md. The HF
+# revision is pinned so the two per-arch native builds (and any rebuild)
+# bake byte-identical weights — an unpinned alias could drift between the
+# amd64 and arm64 legs of one release.
+ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v2', device='cpu', download_root='/opt/whisper_models', revision='${WHISPER_HF_REVISION}')"
 
 FROM python:3.11-slim AS runtime
 

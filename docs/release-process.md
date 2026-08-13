@@ -42,12 +42,19 @@ assets under an existing tag are immutable by policy, never replaced.
   stays a maintainer-run gate: re-run the
   `tools/generate_parity_references.py` flow on an NVIDIA box against the new
   tag before releasing (Gate A, the NVIDIA regression gate).
-- **`smoke-cpu`** — after the manifests merge, each arch boots the `-cpu`
-  images, asserts the `/healthz` identity fields (whisper `device: cpu`,
-  titanet `engine: onnxruntime`), and exercises a short-clip transcribe/embed.
-  pyannote's smoke needs a repo `HF_TOKEN` secret (weights are HF-gated):
-  present → real boot smoke; absent → **explicit SKIP** in the step summary,
-  never a silent pass.
+- **`smoke-cpu`** — runs **before** any tag exists, per arch, against the
+  untagged digest images (`image@sha256:…` is pullable without tags), so a
+  failed smoke leaves nothing public. `tools/smoke_cpu_services.py` asserts
+  the `/healthz` identity fields (whisper `device: cpu`, titanet
+  `engine: onnxruntime`), a real corpus transcription, and a titanet
+  embedding within cosine 0.999 of the **committed CUDA reference** — the
+  ONNX graph provably executes on the shipped numerical stack; a `low_snr`
+  skip response counts as failure, not success. The app image is booted too
+  (`import voxint`). pyannote's smoke needs a repo `HF_TOKEN` secret
+  (weights are HF-gated): present → real 3-speaker diarization; absent →
+  **explicit SKIP** in the step summary, never a silent pass.
+  `merge-multiarch` then tags only smoke-passed digests and verifies each
+  manifest list exposes exactly `linux/amd64` + `linux/arm64`.
 
 ## Cutting a release
 
@@ -63,8 +70,8 @@ assets under an existing tag are immutable by policy, never replaced.
    (push the tag to the private origin too). The tag must point at the release
    commit so images are built from exactly what the compose files pin.
 4. **Watch `release.yml`** (3 CUDA matrix jobs + 2 parity runs + 8 per-arch
-   multi-arch builds + 4 merges + 2 smokes; whisper builds are the slow ones,
-   25–45 min each).
+   multi-arch builds + 2 per-arch smokes + 4 merges — smoke runs BEFORE
+   merge, on digests; whisper builds are the slow ones, 25–45 min each).
    `fail-fast` is off, so one failed matrix entry leaves the others published —
    a failure in `docker/metadata-action` *before* the build step has been
    transient GitHub infrastructure: re-run failed jobs

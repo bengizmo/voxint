@@ -9,19 +9,22 @@
 #   -cpu        = CPU model-service images, multi-arch amd64+arm64
 #   voxint      = api/worker app image, multi-arch amd64+arm64, unsuffixed
 # Multi-arch images are built NATIVELY per arch (ubuntu-24.04-arm, no QEMU —
-# torch-sized builds are impractical under emulation), pushed by digest, then
-# merged into one manifest list per tag (merge-multiarch).
+# torch-sized builds are impractical under emulation) and pushed by digest
+# only. Ordering is deliberate: parity-gate → build → SMOKE (per-arch, against
+# the untagged digests) → merge — release tags never exist for images that
+# have not passed their smoke, so a failed smoke leaves nothing public.
 #
 # Release gates wired here:
 #   parity-gate — the strict titanet ONNX parity harness
 #     (VOXINT_PARITY_REQUIRED=1) on BOTH arches; blocks every multi-arch build.
 #     The NeMo/CUDA side of the parity story stays a maintainer-run container
 #     gate (tools/generate_parity_references.py) — GitHub has no GPU runners.
-#   smoke-cpu — merged -cpu images boot on both arches, /healthz reports the
-#     expected engine/device, and whisper+titanet answer a short-clip request.
-#     pyannote's HF-gated weights need secrets.HF_TOKEN: present → real boot
-#     smoke; absent → explicit SKIP in the step summary, never a false pass
-#     (fork PRs can't see secrets; this workflow is maintainer-triggered).
+#   smoke-cpu — per arch, by digest: healthz identity fields, a real corpus
+#     transcription, and a titanet embedding checked against the committed
+#     CUDA reference vector (tools/smoke_cpu_services.py) — the ONNX graph
+#     provably executes on the shipped numerical stack. pyannote's HF-gated
+#     smoke needs secrets.HF_TOKEN: present → real diarization; absent →
+#     explicit SKIP in the step summary, never a false pass.
 #
 # The ~100 MB titanet .onnx is NOT in git: jobs fetch it from the standing
 # model-asset release (TITANET_ONNX_RELEASE) and verify its sha256 against
@@ -125,7 +128,11 @@ jobs:
         run: uv run pytest tests/parity -q
 
   # Native per-arch builds, pushed by digest only (no tags yet). Tags land in
-  # merge-multiarch as manifest lists spanning both digests.
+  # merge-multiarch after the digest images pass smoke-cpu.
+  # matrix.target.artifact keys the digest artifacts: names must never be a
+  # prefix of a sibling's, or merge-multiarch's download pattern would sweep
+  # up the sibling's digests and corrupt the manifest list (this bit the
+  # first draft: "digests-voxint-*" matched every voxint-*-cpu artifact).
   build-multiarch:
     if: github.server_url == 'https://github.com'
     needs: parity-gate
@@ -137,18 +144,22 @@ jobs:
       matrix:
         target:
           - image: voxint
+            artifact: app
             context: .
             dockerfile: Dockerfile
             suffix: ""
           - image: voxint-whisper
+            artifact: whisper-cpu
             context: services/whisper
             dockerfile: Dockerfile.cpu
             suffix: -cpu
           - image: voxint-pyannote
+            artifact: pyannote-cpu
             context: services/pyannote
             dockerfile: Dockerfile.cpu
             suffix: -cpu
           - image: voxint-titanet
+            artifact: titanet-cpu
             context: services/titanet
             dockerfile: Dockerfile.cpu
             suffix: -cpu
@@ -186,13 +197,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Tag output is unused here (digest-only push); this exists so the
+      # per-arch builds carry the same OCI labels as the CUDA images.
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }}
       - uses: docker/build-push-action@v6
         id: build
         with:
           context: ${{ matrix.target.context }}
           file: ${{ matrix.target.context }}/${{ matrix.target.dockerfile }}
           platforms: ${{ matrix.platform.docker }}
-          # Digest-only push; merge-multiarch attaches the tags.
+          labels: ${{ steps.meta.outputs.labels }}
+          # Digest-only push; merge-multiarch attaches the tags after smoke.
           outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }}
           cache-to: type=gha,scope=${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }},mode=max
@@ -203,14 +221,112 @@ jobs:
           touch "/tmp/digests/${digest#sha256:}"
       - uses: actions/upload-artifact@v4
         with:
-          name: digests-${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }}
+          name: digests-${{ matrix.target.artifact }}-${{ matrix.platform.arch }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
 
-  merge-multiarch:
+  # Boot + real-inference smoke of the UNTAGGED digest images, natively per
+  # arch, BEFORE any tag exists. tools/smoke_cpu_services.py asserts healthz
+  # identity, a real transcription, and a titanet embedding within cosine
+  # 0.999 of the committed CUDA reference — not just liveness.
+  smoke-cpu:
     if: github.server_url == 'https://github.com'
     needs: build-multiarch
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: digests-app-${{ matrix.platform.arch }}
+          path: /tmp/digests/app
+      - uses: actions/download-artifact@v4
+        with:
+          name: digests-whisper-cpu-${{ matrix.platform.arch }}
+          path: /tmp/digests/whisper
+      - uses: actions/download-artifact@v4
+        with:
+          name: digests-pyannote-cpu-${{ matrix.platform.arch }}
+          path: /tmp/digests/pyannote
+      - uses: actions/download-artifact@v4
+        with:
+          name: digests-titanet-cpu-${{ matrix.platform.arch }}
+          path: /tmp/digests/titanet
+      - name: App image boots and imports
+        run: |
+          owner="ghcr.io/${{ github.repository_owner }}"
+          digest=$(ls /tmp/digests/app)
+          docker run --rm "${owner}/voxint@sha256:${digest}" \
+            python -c "import voxint; print('voxint', voxint.__version__)"
+      - name: Boot model services from digests
+        run: |
+          owner="ghcr.io/${{ github.repository_owner }}"
+          media="$PWD/tests/parity/fixtures/corpus"
+          docker run -d --name whisper -p 8022:8022 -v "$media:/data/media:ro" \
+            "${owner}/voxint-whisper@sha256:$(ls /tmp/digests/whisper)"
+          docker run -d --name titanet -p 8021:8021 -v "$media:/data/media:ro" \
+            "${owner}/voxint-titanet@sha256:$(ls /tmp/digests/titanet)"
+          if [ -n "${HF_TOKEN}" ]; then
+            docker run -d --name pyannote -p 8024:8024 -v "$media:/data/media:ro" \
+              -e HF_TOKEN "${owner}/voxint-pyannote@sha256:$(ls /tmp/digests/pyannote)"
+          fi
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - name: Wait for healthz
+        run: |
+          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
+          wait_for() {  # name url max_iterations (5s apart)
+            for i in $(seq 1 "$3"); do
+              curl -sf "$2/healthz" > /dev/null && return 0
+              sleep 5
+            done
+            echo "$1 never became healthy" >&2
+            return 1
+          }
+          wait_for whisper http://localhost:8022 90
+          wait_for titanet http://localhost:8021 60
+          if docker ps --format '{{.Names}}' | grep -q '^pyannote$'; then
+            wait_for pyannote http://localhost:8024 90
+          fi
+      - name: Smoke (real inference vs committed references)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
+          extra=""
+          if [ -n "${HF_TOKEN}" ]; then
+            extra="--pyannote http://localhost:8024"
+          else
+            echo "::warning::pyannote smoke SKIPPED — no HF_TOKEN secret configured (weights are HF-gated)"
+            echo "### pyannote smoke: SKIPPED (no HF_TOKEN secret)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          python3 tools/smoke_cpu_services.py \
+            --fixtures tests/parity/fixtures \
+            --whisper http://localhost:8022 \
+            --titanet http://localhost:8021 \
+            $extra
+
+  # Only smoke-passed digests get tags. Names must match the build-multiarch
+  # artifact keys exactly (see the prefix-collision note there).
+  merge-multiarch:
+    if: github.server_url == 'https://github.com'
+    needs: smoke-cpu
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -219,19 +335,28 @@ jobs:
       matrix:
         target:
           - image: voxint
+            artifact: app
             suffix: ""
           - image: voxint-whisper
+            artifact: whisper-cpu
             suffix: -cpu
           - image: voxint-pyannote
+            artifact: pyannote-cpu
             suffix: -cpu
           - image: voxint-titanet
+            artifact: titanet-cpu
             suffix: -cpu
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: /tmp/digests
-          pattern: digests-${{ matrix.target.image }}${{ matrix.target.suffix }}-*
+          pattern: digests-${{ matrix.target.artifact }}-*
           merge-multiple: true
+      - name: Exactly one digest per arch
+        working-directory: /tmp/digests
+        run: |
+          count=$(ls -1 | wc -l)
+          test "$count" -eq 2 || { echo "expected exactly 2 digests, got $count: $(ls -1)"; exit 1; }
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -253,89 +378,11 @@ jobs:
           docker buildx imagetools create \
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf 'ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }}@sha256:%s ' *)
-      - name: Inspect
+      - name: Verify manifest platforms
         # .tags[0], not outputs.version — version is unsuffixed, and for the
         # -cpu images the unsuffixed tag is the CUDA sibling.
-        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
-
-  # Boot + short-clip smoke of the merged -cpu images, natively on both
-  # arches. Asserts the healthz identity fields the CPU tier promises
-  # (whisper device=cpu; titanet engine=onnxruntime) — not just liveness.
-  smoke-cpu:
-    if: github.server_url == 'https://github.com'
-    needs: merge-multiarch
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-latest, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Resolve release version
-        id: ver
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: Generate short test clip
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
-          mkdir -p "$PWD/smoke-media"
-          # Noise-modulated tone, 5 s, 16 kHz mono — exercises the full request
-          # path; transcript content is irrelevant at smoke level.
-          ffmpeg -loglevel error -f lavfi -i "sine=frequency=220:duration=5" \
-            -f lavfi -i "anoisesrc=colour=pink:duration=5:amplitude=0.05" \
-            -filter_complex amix=inputs=2 -ac 1 -ar 16000 "$PWD/smoke-media/clip.wav"
-      - name: whisper — boot, healthz identity, short-clip transcribe
-        run: |
-          img="ghcr.io/${{ github.repository_owner }}/voxint-whisper:${{ steps.ver.outputs.version }}-cpu"
-          docker run -d --name whisper -p 8022:8022 -v "$PWD/smoke-media:/data/media:ro" "$img"
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:8022/healthz > /tmp/whisper-health.json && break
-            [ "$i" = 60 ] && { docker logs whisper; exit 1; }
-            sleep 5
-          done
-          jq -e '.device == "cpu" and .model_loaded == true' /tmp/whisper-health.json
-          curl -sf -X POST http://localhost:8022/v1/transcribe \
-            -H 'Content-Type: application/json' \
-            -d '{"path": "clip.wav", "language": "en"}' | jq -e 'has("segments")'
-          docker rm -f whisper
-      - name: titanet — boot, healthz identity, short-clip embed
-        run: |
-          img="ghcr.io/${{ github.repository_owner }}/voxint-titanet:${{ steps.ver.outputs.version }}-cpu"
-          docker run -d --name titanet -p 8021:8021 -v "$PWD/smoke-media:/data/media:ro" "$img"
-          for i in $(seq 1 36); do
-            curl -sf http://localhost:8021/healthz > /tmp/titanet-health.json && break
-            [ "$i" = 36 ] && { docker logs titanet; exit 1; }
-            sleep 5
-          done
-          jq -e '.engine == "onnxruntime" and .device == "cpu" and .model_loaded == true' /tmp/titanet-health.json
-          # Shape-level: the window must honor the embedding-xor-skip_reason
-          # invariant; a synthetic clip may legitimately gate on low_snr.
-          curl -sf -X POST http://localhost:8021/v1/embed \
-            -H 'Content-Type: application/json' \
-            -d '{"path": "clip.wav", "windows": [{"start_seconds": 0.0, "end_seconds": 5.0}]}' \
-            | jq -e '.results | length == 1 and ((.[0].embedding != null) != (.[0].skip_reason != null))'
-          docker rm -f titanet
-      - name: pyannote — boot + healthz (needs HF_TOKEN secret)
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: |
-          if [ -z "$HF_TOKEN" ]; then
-            echo "::warning::pyannote smoke SKIPPED — no HF_TOKEN secret configured (weights are HF-gated)"
-            echo "### pyannote smoke: SKIPPED (no HF_TOKEN secret)" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          img="ghcr.io/${{ github.repository_owner }}/voxint-pyannote:${{ steps.ver.outputs.version }}-cpu"
-          docker run -d --name pyannote -p 8024:8024 -e HF_TOKEN "$img"
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:8024/healthz > /tmp/pyannote-health.json && break
-            [ "$i" = 60 ] && { docker logs pyannote; exit 1; }
-            sleep 5
-          done
-          jq -e '.device == "cpu" and .model_loaded == true' /tmp/pyannote-health.json
-          docker rm -f pyannote
+          tag="$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          docker buildx imagetools inspect "$tag"
+          docker buildx imagetools inspect --raw "$tag" \
+            | jq -e '[.manifests[] | select(.platform.os != "unknown") | .platform.os + "/" + .platform.architecture] | sort == ["linux/amd64", "linux/arm64"]'

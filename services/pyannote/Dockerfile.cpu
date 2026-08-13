@@ -34,6 +34,9 @@ RUN pip3 install --no-cache-dir \
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+# Build-time boot canary: if a future requirements resolve drags setuptools
+# past 81 (or anything else breaks pkg_resources), fail HERE, not at startup.
+RUN python3 -c "import pkg_resources"
 
 WORKDIR /app
 # HF weights cache — populated at first startup using the runtime HF_TOKEN.

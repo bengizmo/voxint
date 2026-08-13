@@ -27,6 +27,8 @@ RUN pip3 install --no-cache-dir --upgrade pip wheel
 COPY requirements.cpu.txt /tmp/requirements.cpu.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.cpu.txt
 
+# Overriding this ARG produces a NON-PROVENANCE build (dev-only escape hatch
+# for local re-export experiments); release CI never overrides it.
 ARG TITANET_ONNX_SHA256=f397fedc81e77d7f6a42e4d5bc78e2a5f81b9fd663ac82415e423467221545bf
 COPY models/titanet-large.onnx /app/models/titanet-large.onnx
 RUN echo "${TITANET_ONNX_SHA256}  /app/models/titanet-large.onnx" | sha256sum -c - \

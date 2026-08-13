@@ -173,22 +173,29 @@ class TestL2Normalize:
         assert abs(float(np.linalg.norm(out)) - 1.0) < 1e-6
 
 
+# Both services carry their own copy by design (separate images, no shared
+# package); the contract is the same, so both copies are pinned here.
+@pytest.mark.parametrize("module", [embedding, diarizer], ids=["titanet", "pyannote"])
 class TestResolveDeviceName:
     """Honest /healthz device reporting: rocm must never report as cuda."""
 
-    def test_non_cuda_passthrough_without_torch(self) -> None:
-        assert embedding.resolve_device_name("cpu") == "cpu"
-        assert embedding.resolve_device_name("mps") == "mps"
+    def test_non_cuda_passthrough_without_torch(self, module: object) -> None:
+        assert module.resolve_device_name("cpu") == "cpu"
+        assert module.resolve_device_name("mps") == "mps"
 
-    def test_cuda_stays_cuda_without_hip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cuda_stays_cuda_without_hip(
+        self, module: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         fake_torch = SimpleNamespace(version=SimpleNamespace(hip=None))
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
-        assert embedding.resolve_device_name("cuda") == "cuda"
+        assert module.resolve_device_name("cuda") == "cuda"
 
-    def test_cuda_reports_rocm_when_hip_build(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_cuda_reports_rocm_when_hip_build(
+        self, module: object, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         fake_torch = SimpleNamespace(version=SimpleNamespace(hip="6.2.41133"))
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
-        assert embedding.resolve_device_name("cuda") == "rocm"
+        assert module.resolve_device_name("cuda") == "rocm"
 
 
 class TestDeviceCascade:
@@ -254,6 +261,77 @@ class TestDeviceCascade:
         )
         monkeypatch.setattr(diarizer, "probe_device", lambda name: True)
         assert diarizer.select_device() == "cpu"
+
+
+class _ProbeTensor:
+    """numpy-backed stand-in for torch tensors inside probe_device.
+
+    ``to_behavior`` injects the device-transfer outcome under test: identity
+    (healthy device), corruption (silent-wrong-output backend), or raising
+    (transfer failure).
+    """
+
+    def __init__(self, arr: "np.ndarray", to_behavior: object) -> None:
+        self.arr = arr
+        self._to = to_behavior
+
+    def __matmul__(self, other: "_ProbeTensor") -> "_ProbeTensor":
+        return _ProbeTensor(self.arr @ other.arr, self._to)
+
+    def to(self, device_name: str) -> "_ProbeTensor":
+        return self._to(self)  # type: ignore[operator]
+
+    def cpu(self) -> "_ProbeTensor":
+        return self
+
+
+class TestProbeDevice:
+    """The probe itself (not the cascade): must return False — never raise —
+    for wrong-output, NaN, and crashing backends, and True for a healthy one."""
+
+    @staticmethod
+    def _install_fake_torch(
+        monkeypatch: pytest.MonkeyPatch, to_behavior: object
+    ) -> None:
+        base = np.random.default_rng(0).normal(size=(64, 64))
+
+        def randn(*shape: int, generator: object = None) -> _ProbeTensor:
+            return _ProbeTensor(base.copy(), to_behavior)
+
+        fake = SimpleNamespace(
+            Generator=lambda: SimpleNamespace(manual_seed=lambda seed: None),
+            randn=randn,
+            allclose=lambda a, b, rtol=1e-5, atol=1e-8: bool(
+                np.allclose(a.arr, b.arr, rtol=rtol, atol=atol)
+            ),
+        )
+        monkeypatch.setitem(sys.modules, "torch", fake)
+
+    def test_healthy_device_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._install_fake_torch(monkeypatch, lambda t: t)
+        assert diarizer.probe_device("mps") is True
+
+    def test_silently_wrong_output_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The historical MPS failure mode: no exception, wrong numbers.
+        self._install_fake_torch(
+            monkeypatch, lambda t: _ProbeTensor(t.arr + 1.0, t._to)
+        )
+        assert diarizer.probe_device("mps") is False
+
+    def test_nan_output_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._install_fake_torch(
+            monkeypatch, lambda t: _ProbeTensor(t.arr * float("nan"), t._to)
+        )
+        assert diarizer.probe_device("mps") is False
+
+    def test_transfer_crash_returns_false_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def boom(t: _ProbeTensor) -> _ProbeTensor:
+            raise RuntimeError("device out of memory")
+
+        self._install_fake_torch(monkeypatch, boom)
+        assert diarizer.probe_device("cuda") is False
 
 
 class TestEngineFactory:
@@ -405,15 +483,70 @@ class TestCpuImageProvenance:
                     "pyloudnorm", "noisereduce"):
             assert cpu[pkg] == cuda[pkg], f"{pkg}: cpu {cpu[pkg]} != cuda {cuda[pkg]}"
 
-    def test_cpu_onnxruntime_matches_export_provenance(self) -> None:
-        import json
+    def test_cpu_onnxruntime_matches_parity_harness(self) -> None:
+        # The binding invariant is image == HARNESS (what the parity verdict
+        # actually measured), pinned in three places: the image requirements,
+        # the pyproject parity extra, and the uv.lock resolution. NOT the
+        # export-time ORT in provenance.json — that records graph fidelity
+        # at export and may lag the runtime.
+        import re
 
         from tests.contracts.conftest import REPO_ROOT
 
-        provenance = json.loads(
-            (
-                REPO_ROOT / "tests" / "parity" / "fixtures" / "onnx" / "provenance.json"
-            ).read_text()
-        )
         reqs = (REPO_ROOT / "services" / "titanet" / "requirements.cpu.txt").read_text()
-        assert f"onnxruntime=={provenance['onnxruntime_version']}" in reqs
+        image_match = re.search(r"^onnxruntime==([0-9.]+)$", reqs, re.MULTILINE)
+        assert image_match is not None, "requirements.cpu.txt lost its onnxruntime pin"
+        image_pin = image_match.group(1)
+
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+        assert f'"onnxruntime=={image_pin}"' in pyproject, (
+            f"pyproject parity extra does not pin onnxruntime=={image_pin}"
+        )
+
+        lock = (REPO_ROOT / "uv.lock").read_text()
+        lock_match = re.search(
+            r'name = "onnxruntime"\nversion = "([0-9.]+)"', lock
+        )
+        assert lock_match is not None and lock_match.group(1) == image_pin, (
+            f"uv.lock resolves onnxruntime {lock_match and lock_match.group(1)}, "
+            f"image pins {image_pin}"
+        )
+
+    def test_compose_default_pins_identical(self) -> None:
+        # release-process.md step 1 requires an ATOMIC pin bump across all
+        # compose files; this makes it machine-checked. A partial bump ships
+        # a mixed-version stack — e.g. an app that predates COMPUTE_TIER and
+        # silently ignores it.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        pins: dict[str, set[str]] = {}
+        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml"):
+            found = set(
+                re.findall(r"VOXINT_IMAGE_TAG:-([0-9][0-9.]*)", (REPO_ROOT / name).read_text())
+            )
+            assert len(found) == 1, f"{name} has inconsistent internal pins: {found}"
+            pins[name] = found
+        assert len(set().union(*pins.values())) == 1, f"compose pin skew: {pins}"
+
+    def test_torch_pins_match_across_flavors(self) -> None:
+        # A one-sided torch bump silently changes cross-flavor numerics; the
+        # CUDA and CPU images must agree on the base torch version per
+        # service (local build tags like +cu118 stripped).
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        def torch_base(path: str) -> str:
+            text = (REPO_ROOT / path).read_text()
+            match = re.search(r"torch==([0-9.]+)", text)
+            assert match is not None, f"{path} has no torch pin"
+            return match.group(1)
+
+        assert torch_base("services/whisper/Dockerfile") == torch_base(
+            "services/whisper/Dockerfile.cpu"
+        )
+        assert torch_base("services/pyannote/Dockerfile") == torch_base(
+            "services/pyannote/Dockerfile.cpu"
+        )

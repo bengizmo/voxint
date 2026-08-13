@@ -14,9 +14,12 @@ numba==0.58.1
 pyloudnorm==0.1.0
 noisereduce==2.0.1
 
-# Inference engine — same version the export + parity gate ran against
-# (tests/parity/fixtures/onnx/provenance.json).
-onnxruntime==1.18.1
+# Inference engine — MUST match the version the parity harness actually
+# measured (pyproject's parity extra / uv.lock), which is what keeps the
+# titanet-large-v1 verdict binding for this image; a contract test pins the
+# three together. provenance.json's onnxruntime_version records the
+# EXPORT-time ORT (graph fidelity), which may lag this runtime pin.
+onnxruntime==1.28.0
 
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
