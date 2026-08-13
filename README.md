@@ -58,6 +58,25 @@ version` — the legacy v1 `docker-compose` binary cannot parse this stack).
 
 ```bash
 git clone https://github.com/bengizmo/voxint.git && cd voxint
+```
+
+**Guided install (recommended for a first run):**
+
+```bash
+./scripts/install.sh
+```
+
+It asks only for an admin password and a media folder, generates everything
+else (including a random `CSRF_SECRET`), pulls the pinned release images, starts
+the stack, waits for the API to report healthy, and prints the console URL. It
+is safe to re-run — an existing `.env` is kept unless you ask to regenerate it
+(which backs the old one up first). This brings up the **core control plane**
+(console, review UI, durable pipeline state) — enough to open the console and
+adjudicate; audio processing additionally needs the GPU model services (below).
+
+**Or configure by hand:**
+
+```bash
 cp .env.example .env          # then edit at least VOXINT_PASSWORD
 mkdir -p media                # media mount; pre-create so it isn't root-owned
 docker compose pull           # prebuilt release images from GHCR

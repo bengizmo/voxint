@@ -3,7 +3,19 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes between minors).
 
-## [0.2.0] — 2026-08-12
+## [Unreleased]
+
+### Added
+- **Guided installer** (`scripts/install.sh`): one command that takes a fresh
+  clone to a running core stack for non-technical users. Prompts only for an
+  admin password and a media folder; auto-generates `CSRF_SECRET`, detects
+  host-port collisions and offers a free alternate, and renders `.env` from
+  `.env.example` (never overwriting an existing one without a timestamped
+  backup). Preflights Docker + the Compose plugin (≥ 2.24), pulls the pinned
+  images, starts the stack, and polls the API container's healthcheck — then
+  prints the console URL and states plainly that the core stack is the control
+  plane only (audio processing needs the GPU overlay). Bash 3.2+, macOS/Linux,
+  no runtime dependency beyond Docker. (#2)
 
 Browser operability and URL ingestion.
 
