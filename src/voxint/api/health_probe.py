@@ -69,38 +69,41 @@ def probe_services(
 
 
 def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
+    def outcome(*, up: bool, detail: str, latency_ms: float | None) -> ServiceHealth:
+        return ServiceHealth(name=name, url=base_url, up=up, detail=detail, latency_ms=latency_ms)
+
     url = f"{base_url.rstrip('/')}/healthz"
     start = time.monotonic()
     try:
         response = client.get(url)
     except httpx.TimeoutException:
         # No completed round-trip → no latency to report.
-        return ServiceHealth(name, base_url, up=False, detail="timeout", latency_ms=None)
+        return outcome(up=False, detail="timeout", latency_ms=None)
+    except httpx.InvalidURL:
+        # A malformed configured URL is a config error, not a transport failure —
+        # and InvalidURL is NOT an httpx.HTTPError, so it must be caught explicitly
+        # to keep this probe's "never raises into the request" contract.
+        return outcome(up=False, detail="invalid url", latency_ms=None)
     except httpx.HTTPError:
-        return ServiceHealth(
-            name, base_url, up=False, detail="unreachable", latency_ms=None
-        )
+        return outcome(up=False, detail="unreachable", latency_ms=None)
     latency_ms = (time.monotonic() - start) * 1000.0
     if response.status_code == 503:
         # Reachable, but the model is not loaded (the contract's degraded state) —
         # distinct from an unreachable service so the wizard can say so.
-        return ServiceHealth(
-            name, base_url, up=False, detail="degraded (model not loaded)", latency_ms=latency_ms
-        )
+        return outcome(up=False, detail="degraded (model not loaded)", latency_ms=latency_ms)
     if not response.is_success:
-        return ServiceHealth(
-            name, base_url, up=False, detail=f"HTTP {response.status_code}", latency_ms=latency_ms
-        )
+        return outcome(up=False, detail=f"HTTP {response.status_code}", latency_ms=latency_ms)
     try:
         body = response.json()
     except ValueError:
-        return ServiceHealth(
-            name, base_url, up=False, detail="invalid response", latency_ms=latency_ms
-        )
-    # A 2xx is already "reachable + ready" per the readiness contract; still honor
-    # an explicit model_loaded=False as not-ready rather than trusting the status.
-    if isinstance(body, dict) and body.get("model_loaded") is False:
-        return ServiceHealth(
-            name, base_url, up=False, detail="model not loaded", latency_ms=latency_ms
-        )
-    return ServiceHealth(name, base_url, up=True, detail="ready", latency_ms=latency_ms)
+        return outcome(up=False, detail="invalid response", latency_ms=latency_ms)
+    # Enforce the documented readiness shape (docs/gpu-contracts.md) rather than
+    # trusting any 2xx — some other server answering 200 on that port must not read
+    # as "ready". Additive fields are tolerated: only these two keys are inspected.
+    if not isinstance(body, dict):
+        return outcome(up=False, detail="invalid response", latency_ms=latency_ms)
+    if body.get("model_loaded") is False:
+        return outcome(up=False, detail="model not loaded", latency_ms=latency_ms)
+    if body.get("status") == "ok" and body.get("model_loaded") is True:
+        return outcome(up=True, detail="ready", latency_ms=latency_ms)
+    return outcome(up=False, detail="not ready", latency_ms=latency_ms)

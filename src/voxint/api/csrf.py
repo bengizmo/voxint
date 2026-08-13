@@ -8,8 +8,8 @@ so CSRF is a real (if low-severity, on single-operator localhost) vector.
 
 A token is ``nonce.HMAC_SHA256(secret, "action.nonce")``: unforgeable without the
 app's ``csrf_secret``, and **bound to a specific action** so a token minted for
-one form cannot be replayed against another route (a cheap, useful property — the
-three mutation routes each mint and verify under their own action string). The
+one form cannot be replayed against another route (a cheap, useful property — each
+mutation route mints and verifies under its own action string). The
 attacker cannot read a same-origin rendered token, so they cannot supply a valid
 one; a missing/malformed/mis-signed token is refused *before* any DB write.
 

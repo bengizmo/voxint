@@ -8,6 +8,7 @@ and the own-client create/close branch, and asserts a probe never raises.
 import socket
 
 import httpx
+import pytest
 
 from voxint.api.health_probe import ServiceHealth, probe_services
 from voxint.config import Settings
@@ -191,3 +192,73 @@ def test_creates_and_closes_own_client_when_none_given() -> None:
     assert len(results) == 3
     assert all(r.up is False for r in results)
     assert all(r.detail == "unreachable" for r in results)
+
+
+def test_malformed_url_is_reported_not_raised() -> None:
+    # A bad configured URL raises httpx.InvalidURL, which is NOT an httpx.HTTPError;
+    # the probe must catch it so "never raises" holds. URL parsing fails before any
+    # network, so this is deterministic without a server.
+    bad = "http://localhost:not-a-port"
+    settings = Settings(
+        voxint_user="u",
+        voxint_password="p",
+        asr_url=bad,
+        diarizer_url=bad,
+        embedder_url=bad,
+    )
+    results = probe_services(settings)
+    assert len(results) == 3
+    for r in results:
+        assert r.up is False
+        assert r.detail == "invalid url"
+        assert r.latency_ms is None
+
+
+def test_2xx_without_ready_shape_is_not_ready() -> None:
+    # A 200 that lacks status="ok" + model_loaded=true is not "ready" — a foreign
+    # server answering 200 on the port must not read as available.
+    client = _client(
+        {
+            _ASR_PORT: httpx.Response(200, json={"status": "starting"}),
+            _DIARIZER_PORT: _healthy("p"),
+            _EMBEDDER_PORT: _healthy("t"),
+        }
+    )
+    asr = _by_name(probe_services(_settings(), client=client))["transcription"]
+    assert asr.up is False
+    assert asr.detail == "not ready"
+
+
+def test_2xx_non_object_body_is_invalid() -> None:
+    client = _client(
+        {
+            _ASR_PORT: httpx.Response(200, json=["ok"]),
+            _DIARIZER_PORT: _healthy("p"),
+            _EMBEDDER_PORT: _healthy("t"),
+        }
+    )
+    asr = _by_name(probe_services(_settings(), client=client))["transcription"]
+    assert asr.up is False
+    assert asr.detail == "invalid response"
+
+
+def test_own_client_closed_even_on_unexpected_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The client=None path must close its own client even if probing raises an
+    # unexpected (non-httpx) error — the finally block owns the close, and the bug
+    # is not masked (it still propagates).
+    closed = {"n": 0}
+
+    class _SpyClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def get(self, _url: str) -> httpx.Response:
+            raise RuntimeError("boom")
+
+        def close(self) -> None:
+            closed["n"] += 1
+
+    monkeypatch.setattr("voxint.api.health_probe.httpx.Client", _SpyClient)
+    with pytest.raises(RuntimeError):
+        probe_services(_settings())
+    assert closed["n"] == 1
