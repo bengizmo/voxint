@@ -44,6 +44,21 @@ dev = [
     "types-pyyaml",
     "scipy-stubs",
 ]
+# In-process ONNX-engine deps for the titanet parity harness
+# (tests/parity/test_titanet_onnx.py); the NeMo side stays a maintainer-run
+# container gate and is never installed here.
+parity = [
+    "onnxruntime>=1.18",
+    # Exact pins mirroring services/titanet/requirements.txt — the in-process
+    # ONNX chain must run the same preprocessing stack as the shipped image,
+    # or preprocess version skew masquerades as engine drift.
+    "librosa==0.10.1",
+    "soundfile==0.12.1",
+    "noisereduce==2.0.1",
+    "pyloudnorm==0.1.0",
+    # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
+    "setuptools>=70,<81",
+]
 
 [project.scripts]
 voxint = "voxint.cli:main"

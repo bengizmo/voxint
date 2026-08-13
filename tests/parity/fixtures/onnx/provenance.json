@@ -1,0 +1,47 @@
+{
+  "model_name": "nvidia/speakerverification_en_titanet_large",
+  "exported": "2026-08-13",
+  "nemo_version": "1.22.0",
+  "torch_version": "2.1.0+cu118",
+  "onnx_version": "1.16.2",
+  "onnxruntime_version": "1.18.1",
+  "python_version": "3.10.12",
+  "export_device": "cuda",
+  "opset_import": {
+    "ai.onnx": 16
+  },
+  "graph_inputs": [
+    "audio_signal",
+    "length"
+  ],
+  "graph_outputs": [
+    "logits",
+    "embs"
+  ],
+  "nemo_checkpoint_file": "speakerverification_en_titanet_large.nemo",
+  "nemo_checkpoint_sha256": "e838520693f269e7984f55bc8eb3c2d60ccf246bf4b896d4be9bcabe3e4b0fe3",
+  "onnx_sha256": "f397fedc81e77d7f6a42e4d5bc78e2a5f81b9fd663ac82415e423467221545bf",
+  "onnx_size_bytes": 101405175,
+  "onnx_committed": false,
+  "onnx_regeneration": "run this script inside the pinned titanet image (see module docstring)",
+  "license": "NVIDIA titanet_large is published under CC-BY-4.0 (NGC / Hugging Face model card). Redistribution with attribution is permitted; the .onnx is nevertheless kept out of git for repo-size reasons and regenerated (or fetched as a checksummed release asset).",
+  "export_sanity_cosine": 0.999999463558197,
+  "export_sanity_note": "same checkpoint-preprocessor mel features through in-process NeMo forward vs onnxruntime CPU EP; graph fidelity only, not the parity gate",
+  "dither_semantics": {
+    "filterbank_forward_dither_lines": [
+      "# dither (only in training mode for eval determinism)",
+      "if self.training and self.dither > 0:",
+      "x += self.dither * torch.randn_like(x)",
+      "if self.training and self.nb_augmentation_prob > 0.0:"
+    ],
+    "dither_applied_only_in_training": true
+  },
+  "tts_submodules_stubbed_for_export": true,
+  "mel_frontend_in_graph": false,
+  "sherpa_onnx_crosscheck": {
+    "artifact": "github.com/k2-fsa/sherpa-onnx releases speaker-recongition-models/nemo_en_titanet_large.onnx",
+    "method": "identical app/mel.py features (3 s seeded noise) through both graphs, CPU EP",
+    "embs_cosine": 0.99999994,
+    "note": "cross-check only, not source of truth"
+  }
+}

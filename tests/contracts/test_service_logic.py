@@ -192,3 +192,69 @@ class TestResolveDeviceName:
         fake_torch = SimpleNamespace(version=SimpleNamespace(hip="6.2.41133"))
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
         assert embedding.resolve_device_name("cuda") == "rocm"
+
+
+class TestEngineFactory:
+    """EMBED_ENGINE selects the engine and fails fast on unknown values."""
+
+    def test_unknown_engine_fails_fast(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("EMBED_ENGINE", "tensorrt")
+        with pytest.raises(ValueError, match="tensorrt"):
+            embedding.create_embedder()
+
+    def test_default_is_nemo(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.contracts.conftest import service_package
+
+        monkeypatch.delenv("EMBED_ENGINE", raising=False)
+        with service_package("titanet"):
+            embedder = embedding.create_embedder()
+        assert embedder.engine == "nemo"
+        assert embedder.runtime == "torch"
+
+    def test_onnx_engine_selected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tests.contracts.conftest import service_package
+
+        monkeypatch.setenv("EMBED_ENGINE", "onnx")
+        with service_package("titanet"):
+            embedder = embedding.create_embedder()
+        assert embedder.engine == "onnxruntime"
+        assert embedder.runtime == "onnxruntime"
+
+
+class TestMelConstantsPinnedToCheckpoint:
+    """app/mel.py constants must match the checkpoint's dumped preprocessor
+    config (tests/parity/fixtures/onnx/preprocessor-config.json) — the mel
+    front-end is part of the titanet-large-v1 space definition."""
+
+    def test_constants_match_dumped_config(self) -> None:
+        import json
+        from pathlib import Path
+
+        mel = load_service_module("titanet", "mel")
+        cfg_path = (
+            Path(__file__).resolve().parents[1]
+            / "parity"
+            / "fixtures"
+            / "onnx"
+            / "preprocessor-config.json"
+        )
+        cfg = json.loads(cfg_path.read_text())
+        assert cfg["sample_rate"] == mel.SAMPLE_RATE
+        assert int(cfg["window_size"] * cfg["sample_rate"]) == mel.WIN_LENGTH
+        assert int(cfg["window_stride"] * cfg["sample_rate"]) == mel.HOP_LENGTH
+        assert cfg["n_fft"] == mel.N_FFT
+        assert cfg["features"] == mel.N_MELS
+        assert cfg["window"] == "hann"
+        assert cfg["normalize"] == "per_feature"
+        assert cfg["frame_splicing"] == 1  # mel.py implements splicing == 1 only
+
+    def test_frame_count_formula(self) -> None:
+        mel = load_service_module("titanet", "mel")
+        # floor(L / hop) + 1; output is exactly the valid frames — NEVER padded
+        # to NeMo's pad_to (the exported graph has no conv masking, so padding
+        # leaks into convolutions; measured 0.988 vs 0.999999 cosine on 1 s).
+        audio = np.zeros(16000, dtype=np.float32)
+        out = mel.mel_spectrogram(audio)
+        valid = mel.num_valid_frames(16000)
+        assert valid == 101
+        assert out.shape == (mel.N_MELS, valid)
