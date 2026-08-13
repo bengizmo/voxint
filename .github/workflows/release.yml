@@ -3,13 +3,42 @@
 # elsewhere, so if the Forgejo instance happens to parse .github/workflows it
 # stays a no-op there (Forgejo has no GHCR credentials and never needs them).
 # Auth is the workflow-scoped GITHUB_TOKEN (packages: write); no extra secrets.
+#
+# Flavor matrix (docs/gpu-contracts.md + the non-NVIDIA plan):
+#   unsuffixed  = CUDA model-service images, amd64 (publish-images, unchanged)
+#   -cpu        = CPU model-service images, multi-arch amd64+arm64
+#   voxint      = api/worker app image, multi-arch amd64+arm64, unsuffixed
+# Multi-arch images are built NATIVELY per arch (ubuntu-24.04-arm, no QEMU —
+# torch-sized builds are impractical under emulation), pushed by digest, then
+# merged into one manifest list per tag (merge-multiarch).
+#
+# Release gates wired here:
+#   parity-gate — the strict titanet ONNX parity harness
+#     (VOXINT_PARITY_REQUIRED=1) on BOTH arches; blocks every multi-arch build.
+#     The NeMo/CUDA side of the parity story stays a maintainer-run container
+#     gate (tools/generate_parity_references.py) — GitHub has no GPU runners.
+#   smoke-cpu — merged -cpu images boot on both arches, /healthz reports the
+#     expected engine/device, and whisper+titanet answer a short-clip request.
+#     pyannote's HF-gated weights need secrets.HF_TOKEN: present → real boot
+#     smoke; absent → explicit SKIP in the step summary, never a false pass
+#     (fork PRs can't see secrets; this workflow is maintainer-triggered).
+#
+# The ~100 MB titanet .onnx is NOT in git: jobs fetch it from the standing
+# model-asset release (TITANET_ONNX_RELEASE) and verify its sha256 against
+# tests/parity/fixtures/onnx/provenance.json before use. A re-export bumps
+# the asset release AND provenance together.
 name: release
 
 on:
   push:
     tags: ["v*"]
 
+env:
+  TITANET_ONNX_RELEASE: titanet-onnx-v1
+
 jobs:
+  # CUDA images — byte-identical build steps to previous releases; amd64-only.
+  # (The voxint app image moved to the multi-arch pipeline below.)
   publish-images:
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
@@ -22,8 +51,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: voxint            # api + worker share this image
-            context: .
           - image: voxint-whisper
             context: services/whisper
           - image: voxint-pyannote
@@ -59,3 +86,256 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,scope=${{ matrix.image }},mode=max
+
+  # Strict titanet ONNX parity on both arches. Blocks every multi-arch build:
+  # shipping a -cpu titanet whose engine drifted from the CUDA embedding space
+  # is the one unrecoverable failure mode (silent space drift).
+  parity-gate:
+    if: github.server_url == 'https://github.com'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install (dev + parity extras)
+        run: uv sync --frozen --extra dev --extra parity
+      - name: Fetch the exported graph (model-asset release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p services/titanet/models
+          gh release download "$TITANET_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern titanet-large.onnx \
+            --output services/titanet/models/titanet-large.onnx
+      - name: Verify artifact against committed provenance
+        run: |
+          expected=$(python3 -c "import json; print(json.load(open('tests/parity/fixtures/onnx/provenance.json'))['onnx_sha256'])")
+          echo "${expected}  services/titanet/models/titanet-large.onnx" | sha256sum -c -
+      - name: Parity harness (strict — missing prerequisites hard-fail)
+        env:
+          VOXINT_PARITY_REQUIRED: "1"
+        run: uv run pytest tests/parity -q
+
+  # Native per-arch builds, pushed by digest only (no tags yet). Tags land in
+  # merge-multiarch as manifest lists spanning both digests.
+  build-multiarch:
+    if: github.server_url == 'https://github.com'
+    needs: parity-gate
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - image: voxint
+            context: .
+            dockerfile: Dockerfile
+            suffix: ""
+          - image: voxint-whisper
+            context: services/whisper
+            dockerfile: Dockerfile.cpu
+            suffix: -cpu
+          - image: voxint-pyannote
+            context: services/pyannote
+            dockerfile: Dockerfile.cpu
+            suffix: -cpu
+          - image: voxint-titanet
+            context: services/titanet
+            dockerfile: Dockerfile.cpu
+            suffix: -cpu
+        platform:
+          - runner: ubuntu-latest
+            arch: amd64
+            docker: linux/amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            docker: linux/arm64
+    runs-on: ${{ matrix.platform.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Fetch the exported graph (titanet only)
+        if: matrix.target.image == 'voxint-titanet'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p services/titanet/models
+          gh release download "$TITANET_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern titanet-large.onnx \
+            --output services/titanet/models/titanet-large.onnx
+          # The Dockerfile re-verifies against its baked provenance sha; this
+          # early check just fails faster with a clearer message.
+          expected=$(python3 -c "import json; print(json.load(open('tests/parity/fixtures/onnx/provenance.json'))['onnx_sha256'])")
+          echo "${expected}  services/titanet/models/titanet-large.onnx" | sha256sum -c -
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: ${{ matrix.target.context }}
+          file: ${{ matrix.target.context }}/${{ matrix.target.dockerfile }}
+          platforms: ${{ matrix.platform.docker }}
+          # Digest-only push; merge-multiarch attaches the tags.
+          outputs: type=image,name=ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }}
+          cache-to: type=gha,scope=${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }},mode=max
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.target.image }}${{ matrix.target.suffix }}-${{ matrix.platform.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge-multiarch:
+    if: github.server_url == 'https://github.com'
+    needs: build-multiarch
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - image: voxint
+            suffix: ""
+          - image: voxint-whisper
+            suffix: -cpu
+          - image: voxint-pyannote
+            suffix: -cpu
+          - image: voxint-titanet
+            suffix: -cpu
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-${{ matrix.target.image }}${{ matrix.target.suffix }}-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }}
+          flavor: |
+            suffix=${{ matrix.target.suffix }},onlatest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf 'ghcr.io/${{ github.repository_owner }}/${{ matrix.target.image }}@sha256:%s ' *)
+      - name: Inspect
+        # .tags[0], not outputs.version — version is unsuffixed, and for the
+        # -cpu images the unsuffixed tag is the CUDA sibling.
+        run: docker buildx imagetools inspect "$(jq -r '.tags[0]' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+
+  # Boot + short-clip smoke of the merged -cpu images, natively on both
+  # arches. Asserts the healthz identity fields the CPU tier promises
+  # (whisper device=cpu; titanet engine=onnxruntime) — not just liveness.
+  smoke-cpu:
+    if: github.server_url == 'https://github.com'
+    needs: merge-multiarch
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve release version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Generate short test clip
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+          mkdir -p "$PWD/smoke-media"
+          # Noise-modulated tone, 5 s, 16 kHz mono — exercises the full request
+          # path; transcript content is irrelevant at smoke level.
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=220:duration=5" \
+            -f lavfi -i "anoisesrc=colour=pink:duration=5:amplitude=0.05" \
+            -filter_complex amix=inputs=2 -ac 1 -ar 16000 "$PWD/smoke-media/clip.wav"
+      - name: whisper — boot, healthz identity, short-clip transcribe
+        run: |
+          img="ghcr.io/${{ github.repository_owner }}/voxint-whisper:${{ steps.ver.outputs.version }}-cpu"
+          docker run -d --name whisper -p 8022:8022 -v "$PWD/smoke-media:/data/media:ro" "$img"
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8022/healthz > /tmp/whisper-health.json && break
+            [ "$i" = 60 ] && { docker logs whisper; exit 1; }
+            sleep 5
+          done
+          jq -e '.device == "cpu" and .model_loaded == true' /tmp/whisper-health.json
+          curl -sf -X POST http://localhost:8022/v1/transcribe \
+            -H 'Content-Type: application/json' \
+            -d '{"path": "clip.wav", "language": "en"}' | jq -e 'has("segments")'
+          docker rm -f whisper
+      - name: titanet — boot, healthz identity, short-clip embed
+        run: |
+          img="ghcr.io/${{ github.repository_owner }}/voxint-titanet:${{ steps.ver.outputs.version }}-cpu"
+          docker run -d --name titanet -p 8021:8021 -v "$PWD/smoke-media:/data/media:ro" "$img"
+          for i in $(seq 1 36); do
+            curl -sf http://localhost:8021/healthz > /tmp/titanet-health.json && break
+            [ "$i" = 36 ] && { docker logs titanet; exit 1; }
+            sleep 5
+          done
+          jq -e '.engine == "onnxruntime" and .device == "cpu" and .model_loaded == true' /tmp/titanet-health.json
+          # Shape-level: the window must honor the embedding-xor-skip_reason
+          # invariant; a synthetic clip may legitimately gate on low_snr.
+          curl -sf -X POST http://localhost:8021/v1/embed \
+            -H 'Content-Type: application/json' \
+            -d '{"path": "clip.wav", "windows": [{"start_seconds": 0.0, "end_seconds": 5.0}]}' \
+            | jq -e '.results | length == 1 and ((.[0].embedding != null) != (.[0].skip_reason != null))'
+          docker rm -f titanet
+      - name: pyannote — boot + healthz (needs HF_TOKEN secret)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::warning::pyannote smoke SKIPPED — no HF_TOKEN secret configured (weights are HF-gated)"
+            echo "### pyannote smoke: SKIPPED (no HF_TOKEN secret)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          img="ghcr.io/${{ github.repository_owner }}/voxint-pyannote:${{ steps.ver.outputs.version }}-cpu"
+          docker run -d --name pyannote -p 8024:8024 -e HF_TOKEN "$img"
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8024/healthz > /tmp/pyannote-health.json && break
+            [ "$i" = 60 ] && { docker logs pyannote; exit 1; }
+            sleep 5
+          done
+          jq -e '.device == "cpu" and .model_loaded == true' /tmp/pyannote-health.json
+          docker rm -f pyannote
