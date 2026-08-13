@@ -55,10 +55,12 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
+    CSRF_SETUP,
     CSRF_SUBMIT,
     mint_csrf_token,
     verify_csrf_token,
 )
+from voxint.api.health_probe import probe_services
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
@@ -68,8 +70,27 @@ from voxint.api.runs_query import (
     parse_status_filter,
     runs_url,
 )
-from voxint.app_settings import is_onboarded
-from voxint.config import Settings, get_settings
+from voxint.api.setup_wizard import (
+    STEP_ORDER,
+    ScanResult,
+    SetupValidationError,
+    WizardStep,
+    next_step,
+    normalize_llm_base_url,
+    normalize_llm_model,
+    normalize_media_folders,
+    normalize_vocabulary,
+    parse_step,
+    scan_media_folders,
+    validate_llm_enable,
+)
+from voxint.app_settings import (
+    complete_onboarding,
+    get_app_settings,
+    get_or_create,
+    is_onboarded,
+)
+from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
     Decision,
     PipelineRun,
@@ -88,6 +109,7 @@ from voxint.ingest import (
     UploadValidationError,
     UrlValidationError,
     requeue_failed_run,
+    submit_media_item_if_new,
     submit_upload,
     submit_url,
 )
@@ -395,6 +417,51 @@ def _workbench_context(
     }
 
 
+def _setup_context(
+    request: Request,
+    session: Session,
+    step: WizardStep,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Template context for a setup-wizard step.
+
+    Read-only: it uses ``get_app_settings`` (never ``get_or_create``) so rendering a
+    GET can't create the app_settings row. Fields prefill from the saved row layered
+    over env defaults, matching how a run would resolve them; a POST that fails
+    validation passes ``error=`` plus the raw submitted text via ``overrides`` so the
+    operator's in-progress input survives the re-render.
+    """
+    settings: Settings = request.app.state.settings
+    row = get_app_settings(session)
+    media_folders = list(row.media_folders) if row and row.media_folders else []
+    vocabulary = list(row.vocabulary) if row and row.vocabulary else []
+    context: dict[str, Any] = {
+        "request": request,
+        "step": step,
+        "steps": STEP_ORDER,
+        "step_index": STEP_ORDER.index(step),
+        "next_step": next_step(step),
+        "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
+        "media_root": str(settings.media_root),
+        "media_folders": media_folders,
+        # Newline-joined text prefills the folder/vocab textareas on a plain GET.
+        "media_folders_text": "\n".join(media_folders),
+        "vocabulary": vocabulary,
+        "vocabulary_text": "\n".join(vocabulary),
+        # LLM step: the row's enablement over env, its (non-secret) overrides, and
+        # whether the env carries a key / a lease-fitting budget — never the key.
+        "llm_enabled": bool(row.llm_enabled) if row is not None else settings.llm_enabled,
+        "llm_base_url": (row.llm_base_url if row and row.llm_base_url else settings.llm_base_url),
+        "llm_model": (row.llm_model if row and row.llm_model else settings.llm_model),
+        "llm_key_present": bool(settings.llm_api_key.strip()),
+        "llm_budget_ok": llm_budget_fits_stage_lease(settings),
+        "active_nav": "setup",
+        "error": None,
+    }
+    context.update(overrides)
+    return context
+
+
 def _labels_response(
     request: Request,
     session: Session,
@@ -425,16 +492,245 @@ def _register_routes(app: FastAPI) -> None:
     def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
+    # ---- First-run setup wizard (issue #3) -------------------------------------
+    # Every wizard route is registered on `app`, NOT `protected`, so the onboarding
+    # gate exempts it: an un-onboarded operator must be able to reach the page the
+    # gate redirects them to. Auth still applies (OperatorDep) — only /healthz is
+    # unauthenticated. Each POST verifies CSRF_SETUP before any write. The exact
+    # paths below are enumerated in the route-inventory test's exempt allowlist
+    # (deliberately NOT a blanket /setup prefix, so an accidental ungated route
+    # still fails that guard).
+
     @app.get("/setup", include_in_schema=False)
-    def setup(operator: OperatorDep) -> Response:
-        # First-run wizard placeholder — the real steps 1-6 land in slice 4. It
-        # is deliberately OFF the protected router (registered on `app`, not
-        # `protected`) so the onboarding gate exempts it: an un-onboarded operator
-        # must be able to reach the page the gate redirects them to. Auth still
-        # applies (OperatorDep); credential setup stays the installer's job.
-        return PlainTextResponse(
-            "Voxint setup — the first-run configuration wizard lands here."
+    def setup(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
+        step = parse_step(request.query_params.get("step"))
+        context = _setup_context(request, session, step)
+        if step is WizardStep.SERVICES:
+            # Probe only on the services step — a few-second network op we don't want
+            # to pay on every wizard GET. Best-effort; probe_services never raises.
+            settings: Settings = request.app.state.settings
+            context["services"] = probe_services(settings)
+        return templates.TemplateResponse(request, "setup.html", context)
+
+    def _setup_redirect(step: WizardStep) -> RedirectResponse:
+        return RedirectResponse(f"/setup?step={step.value}", status_code=303)
+
+    @app.post("/setup/media", include_in_schema=False)
+    def setup_media(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        media_folders: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        try:
+            folders = normalize_media_folders(
+                media_folders.splitlines(), settings.media_root
+            )
+        except SetupValidationError as exc:
+            # Validation runs BEFORE any get_or_create, so a rejected save writes
+            # nothing; re-render the step with the message and the raw input intact.
+            return templates.TemplateResponse(
+                request,
+                "setup.html",
+                _setup_context(
+                    request,
+                    session,
+                    WizardStep.MEDIA,
+                    error=str(exc),
+                    media_folders_text=media_folders,
+                ),
+            )
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.media_folders = folders
+        # Back to the media step (not the next one) so the optional "scan for
+        # existing media" stays discoverable; the template offers a Continue link.
+        return _setup_redirect(WizardStep.MEDIA)
+
+    def _scan_response(
+        request: Request, session: Session, result: ScanResult
+    ) -> Response:
+        """htmx → the scan preview/result fragment; a plain POST → back to the step.
+
+        The scan feature is htmx-driven (a fragment swapped into the media step);
+        without htmx it degrades to a redirect and the operator submits media
+        individually — the scan is an optional convenience, never the only path.
+        """
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request,
+                "fragments/setup_scan.html",
+                {
+                    "request": request,
+                    "result": result,
+                    "csrf_setup": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_SETUP
+                    ),
+                },
+            )
+        return _setup_redirect(WizardStep.MEDIA)
+
+    @app.post("/setup/scan", include_in_schema=False)
+    def setup_scan(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        row = get_app_settings(session)  # read-only: previewing never creates the row
+        folders = list(row.media_folders) if row and row.media_folders else []
+        result = scan_media_folders(session, settings.media_root, folders, settings)
+        return _scan_response(request, session, result)
+
+    @app.post("/setup/scan/confirm", include_in_schema=False)
+    def setup_scan_confirm(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        row = get_app_settings(session)
+        folders = list(row.media_folders) if row and row.media_folders else []
+        # Re-scan fresh rather than trusting any client-supplied path list: the
+        # preview is advisory and the filesystem may have changed since it rendered.
+        result = scan_media_folders(session, settings.media_root, folders, settings)
+        # submit_media_item_if_new is race-safe and returns None for an already-known
+        # path, so a double-clicked confirm or a concurrent one cannot duplicate runs.
+        run_ids = [
+            run.id
+            for path in result.candidates
+            if (run := submit_media_item_if_new(session, path)) is not None
+        ]
+        # Commit the whole batch ONCE (commit-before-publish); if the commit fails,
+        # nothing is published and no partial state escapes.
+        session.commit()
+        # After the durable QUEUED rows exist, publish each. A broker outage leaves
+        # them QUEUED for the recovery sweep — never roll back a published batch.
+        published = sum(_publish_or_defer(run_id) for run_id in run_ids)
+        confirmed = ScanResult(
+            candidates=[],
+            inspected=result.inspected,
+            hit_entry_cap=result.hit_entry_cap,
+            hit_file_cap=result.hit_file_cap,
+            root_missing=result.root_missing,
         )
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request,
+                "fragments/setup_scan.html",
+                {
+                    "request": request,
+                    "result": confirmed,
+                    "queued": len(run_ids),
+                    "published": published,
+                    "csrf_setup": mint_csrf_token(
+                        request.app.state.csrf_secret, CSRF_SETUP
+                    ),
+                },
+            )
+        return _setup_redirect(WizardStep.MEDIA)
+
+    @app.post("/setup/vocabulary", include_in_schema=False)
+    def setup_vocabulary(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        vocabulary: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        try:
+            terms = normalize_vocabulary(vocabulary)
+        except SetupValidationError as exc:
+            return templates.TemplateResponse(
+                request,
+                "setup.html",
+                _setup_context(
+                    request,
+                    session,
+                    WizardStep.VOCABULARY,
+                    error=str(exc),
+                    vocabulary_text=vocabulary,
+                ),
+            )
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.vocabulary = terms
+        return _setup_redirect(WizardStep.LLM)
+
+    @app.post("/setup/llm", include_in_schema=False)
+    def setup_llm(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        enabled: Annotated[bool, Form()] = False,
+        llm_base_url: Annotated[str, Form()] = "",
+        llm_model: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+
+        def _rerender(error: str) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "setup.html",
+                _setup_context(
+                    request,
+                    session,
+                    WizardStep.LLM,
+                    error=error,
+                    llm_enabled=enabled,
+                    llm_base_url=llm_base_url or settings.llm_base_url,
+                    llm_model=llm_model or settings.llm_model,
+                ),
+            )
+
+        # Format-validate the (optional) overrides first; a malformed value is a
+        # form error that changes nothing (a prior valid config stays intact).
+        try:
+            base_url = normalize_llm_base_url(llm_base_url)
+            model = normalize_llm_model(llm_model)
+        except SetupValidationError as exc:
+            return _rerender(str(exc))
+        # Enabling has two hard guards (env key present + budget fits the lease). On
+        # failure we FAIL CLOSED: persist llm_enabled=False (plus the parsed
+        # overrides) and show why, so an un-enablable LLM can never be left on.
+        if enabled:
+            try:
+                validate_llm_enable(settings)
+            except SetupValidationError as exc:
+                row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+                row.llm_enabled = False
+                row.llm_base_url = base_url
+                row.llm_model = model
+                return _rerender(str(exc))
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.llm_enabled = enabled
+        row.llm_base_url = base_url
+        row.llm_model = model
+        return _setup_redirect(WizardStep.SERVICES)
+
+    @app.post("/setup/finish", include_in_schema=False)
+    def setup_finish(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        complete_onboarding(session, llm_enabled_default=settings.llm_enabled)
+        # Commit explicitly before the redirect so the /review request that follows
+        # cannot observe stale onboarding state (the gate re-reads per request).
+        session.commit()
+        return RedirectResponse("/review", status_code=303)
 
     @protected.get("/", include_in_schema=False)
     def index(operator: OperatorDep) -> RedirectResponse:

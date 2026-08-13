@@ -1,0 +1,35 @@
+{# Scan preview / confirm result, swapped into #setup-scan on the media step. #}
+{% if queued is defined %}
+  {# Confirm result. #}
+  <div class="notice" role="status">
+    Queued {{ queued }} run{{ "" if queued == 1 else "s" }} for transcription.
+    {% if queued and published < queued %}
+      <span class="muted">({{ published }} enqueued now; the rest are saved and will
+      start automatically once the task broker is reachable.)</span>
+    {% endif %}
+  </div>
+{% elif result.root_missing %}
+  <p class="notice">The media root doesn't exist yet — create it (and add some media)
+     before scanning.</p>
+{% elif not result.candidates %}
+  <p class="muted">No new media found in your registered folders.</p>
+  {% if result.inspected == 0 %}
+  <p class="muted">Register a folder above first, then scan.</p>
+  {% endif %}
+{% else %}
+  <p><strong>{{ result.candidates|length }}</strong> new file{{ "" if result.candidates|length == 1 else "s" }}
+     found{% if result.hit_file_cap or result.hit_entry_cap %} (showing the first batch — more may exist){% endif %}:</p>
+  <ul class="muted">
+    {% for path in result.candidates[:50] %}
+    <li><code>{{ path }}</code></li>
+    {% endfor %}
+    {% if result.candidates|length > 50 %}
+    <li>…and {{ result.candidates|length - 50 }} more</li>
+    {% endif %}
+  </ul>
+  <form hx-post="/setup/scan/confirm" hx-target="#setup-scan" hx-swap="innerHTML"
+        method="post" action="/setup/scan/confirm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <button type="submit">Queue these {{ result.candidates|length }} for transcription</button>
+  </form>
+{% endif %}

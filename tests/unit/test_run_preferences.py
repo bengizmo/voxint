@@ -154,6 +154,29 @@ def test_apply_no_row_enabled_without_key_disables_llm() -> None:
     assert ctx.llm is None
 
 
+def test_apply_disables_llm_when_budget_exceeds_lease(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Deferred finding 2, runtime fail-closed guard: even with an enabled row and a
+    # key present, a run budget that no longer fits the enhance_match lease must NOT
+    # build a client — otherwise the recovery sweep could reclaim the stage
+    # mid-flight. The env-time validator can't catch this because the wizard enables
+    # the LLM with the env flag off, so this per-run check is the backstop.
+    base = make_base_ctx()
+    settings = Settings(
+        _env_file=None,
+        llm_api_key="sk-test",
+        llm_enabled=False,  # keep the env-time validator quiet at construction
+        llm_run_budget_seconds=999999.0,
+        stage_lease_seconds=21600,
+    )
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
+    with caplog.at_level(logging.WARNING):
+        ctx = apply_run_preferences(base, settings, prefs)
+    assert ctx.llm is None
+    assert any("lease" in r.message for r in caplog.records)
+
+
 def test_apply_disables_llm_when_prefs_disabled() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=False), make_settings())

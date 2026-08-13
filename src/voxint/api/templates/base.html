@@ -43,13 +43,29 @@
     .pill.failed { background: #c332; border-color: #c33; }
     .pill.queued, .pill.awaiting_adjudication { background: #8882; }
     .pill.cancelled { background: #8881; opacity: .7; }
+    ol.wizard-steps { display: flex; flex-wrap: wrap; gap: .4rem 1rem; list-style: none;
+                      padding: 0; margin: 0 0 1.5rem; border-bottom: 1px solid #8884;
+                      padding-bottom: .6rem; font-size: .9rem; }
+    ol.wizard-steps li { opacity: .5; }
+    ol.wizard-steps li.done { opacity: .8; }
+    ol.wizard-steps li.current { opacity: 1; font-weight: 600; }
+    ol.wizard-steps li .n { display: inline-block; min-width: 1.4rem; text-align: center;
+                            border: 1px solid #8886; border-radius: 1rem; margin-right: .3rem; }
+    .setup textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: .95rem; }
+    .setup .field { margin: 1rem 0; }
+    .setup .actions { display: flex; gap: 1rem; align-items: center; margin: 1.5rem 0 0; }
+    .svc { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; }
+    .svc .dot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; }
+    .svc .dot.up { background: #2a2; } .svc .dot.down { background: #c33; }
   </style>
 </head>
 <body>
+  {% block nav %}
   <nav class="top">
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
     <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
   </nav>
+  {% endblock %}
   {% block body %}{% endblock %}
 </body>
 </html>

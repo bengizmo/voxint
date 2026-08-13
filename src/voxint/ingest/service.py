@@ -142,6 +142,35 @@ def submit_media_item(session: Session, source_path: str) -> PipelineRun:
     return submit(session, media.id)
 
 
+def submit_media_item_if_new(session: Session, source_path: str) -> PipelineRun | None:
+    """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
+
+    Unlike :func:`submit_media_item` — which reuses an existing MediaItem and always
+    mints a *fresh* run — this inserts the MediaItem and mints its run atomically,
+    and returns ``None`` when ``source_path`` already exists. That makes it the safe
+    primitive for the first-run wizard's "scan for existing media" confirm step: a
+    double-clicked confirm, a re-scan, or two concurrent confirms cannot each queue
+    another run for a file already ingested. The INSERT is contained in a SAVEPOINT
+    so the losing racer's UNIQUE(source_path) conflict rolls back only that insert —
+    not the caller's batch transaction — and is reported as ``None`` (skip), never an
+    error (mirrors :func:`_get_or_create_media`).
+
+    DB-only, like the rest of this module: the caller commits the whole batch once,
+    then lazily publishes ``voxint.run_pipeline`` for each returned run
+    (commit-before-publish).
+    """
+    media = MediaItem(source_path=source_path)
+    try:
+        with session.begin_nested():
+            session.add(media)
+            session.flush()
+    except IntegrityError:
+        # Already ingested (a prior submission, an earlier scan, or a concurrent
+        # confirm won the race) — skip rather than mint a duplicate run.
+        return None
+    return submit(session, media.id)
+
+
 def _get_or_create_media(session: Session, source_path: str) -> MediaItem:
     """Return the MediaItem for ``source_path``, inserting it if absent.
 

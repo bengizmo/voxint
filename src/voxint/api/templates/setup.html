@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% set labels = {
+  "welcome": "Welcome",
+  "media": "Media folders",
+  "vocabulary": "Vocabulary",
+  "llm": "LLM enhancement",
+  "services": "Model services",
+  "finish": "Finish",
+} %}
+{% block title %}Voxint setup — {{ labels[step.value] }}{% endblock %}
+{# The wizard runs before onboarding, so the protected top nav (Runs / Review)
+   would only bounce the operator back here. Replace it with a step indicator. #}
+{% block nav %}
+<ol class="wizard-steps" aria-label="Setup steps">
+  {% for s in steps %}
+  <li class="{% if s == step %}current{% elif loop.index0 < step_index %}done{% endif %}">
+    <a href="/setup?step={{ s.value }}"><span class="n">{{ loop.index }}</span>{{ labels[s.value] }}</a>
+  </li>
+  {% endfor %}
+</ol>
+{% endblock %}
+{% block body %}
+<div class="setup">
+{% if error %}<div class="notice error" role="alert">{{ error }}</div>{% endif %}
+
+{% if step.value == "welcome" %}
+  <h1>Welcome to Voxint</h1>
+  <p>Voxint transcribes your audio and video, separates who spoke when, and lets you
+     attribute each voice to a real person — so you get a searchable, speaker-labelled
+     transcript you can trust.</p>
+  <p class="muted">This quick setup takes about two minutes. Every step is optional and
+     you can revisit it later.</p>
+  <div class="actions">
+    <a href="/setup?step=media">Get started →</a>
+  </div>
+
+{% elif step.value == "media" %}
+  <h1>Media folders</h1>
+  <p>Voxint reads media from under <code>{{ media_root }}</code>. Register one folder per
+     line (paths relative to that root); leave blank to skip.</p>
+  <form method="post" action="/setup/media">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <div class="field">
+      <label for="media_folders">Folders (one per line)</label>
+      <textarea id="media_folders" name="media_folders"
+                placeholder="podcasts&#10;interviews/2026">{{ media_folders_text }}</textarea>
+    </div>
+    <button type="submit">Save folders</button>
+  </form>
+
+  {% if media_folders %}
+  <p class="muted">Registered: {% for f in media_folders %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
+  {% endif %}
+
+  <h2>Scan for existing media</h2>
+  <p class="muted">Optionally look through your registered folders for audio/video that
+     isn't in Voxint yet, and queue it for transcription.</p>
+  <form hx-post="/setup/scan" hx-target="#setup-scan" hx-swap="innerHTML" method="post" action="/setup/scan">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <button type="submit">Scan now</button>
+  </form>
+  <div id="setup-scan"></div>
+
+  <div class="actions">
+    <a href="/setup?step=vocabulary">Continue →</a>
+  </div>
+
+{% elif step.value == "vocabulary" %}
+  <h1>Custom vocabulary</h1>
+  <p>Add names, jargon, acronyms, and preferred spellings — one per line. Voxint feeds
+     these to transcription and to name attribution, so unusual terms come out right.
+     They apply to your next run with no restart needed.</p>
+  <form method="post" action="/setup/vocabulary">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <div class="field">
+      <label for="vocabulary">Vocabulary (one term per line)</label>
+      <textarea id="vocabulary" name="vocabulary"
+                placeholder="Ductless mini-split&#10;NUCA&#10;Dr. Ilana Rosen">{{ vocabulary_text }}</textarea>
+    </div>
+    <button type="submit">Save vocabulary</button>
+  </form>
+  <div class="actions">
+    <a href="/setup?step=llm">Continue →</a>
+  </div>
+
+{% elif step.value == "llm" %}
+  <h1>LLM transcript enhancement <span class="muted">(optional)</span></h1>
+  <p>When enabled, Voxint sends transcript segments to an OpenAI-compatible model to
+     clean them up and surface likely speaker names. It's best-effort — a slow or failing
+     model never blocks a run; enhancement is simply skipped.</p>
+  {% if llm_key_present %}
+    <p class="muted">An <code>LLM_API_KEY</code> is set in the environment. ✓</p>
+  {% else %}
+    <p class="notice">No <code>LLM_API_KEY</code> is set. The key is configured in the
+       environment (never stored here); set it and restart the worker before enabling.</p>
+  {% endif %}
+  {% if not llm_budget_ok %}
+    <p class="notice">The configured LLM run budget doesn't fit the transcription stage
+       lease, so enhancement can't be enabled until that's adjusted.</p>
+  {% endif %}
+  <form method="post" action="/setup/llm">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <div class="field">
+      <label><input type="checkbox" name="enabled" value="true"{% if llm_enabled %} checked{% endif %}>
+        Enable LLM enhancement</label>
+    </div>
+    <div class="field">
+      <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = default)</span></label>
+      <input type="url" id="llm_base_url" name="llm_base_url" value="{{ llm_base_url }}"
+             placeholder="https://api.openai.com/v1">
+    </div>
+    <div class="field">
+      <label for="llm_model">Model <span class="muted">(blank = default)</span></label>
+      <input type="text" id="llm_model" name="llm_model" value="{{ llm_model }}"
+             placeholder="gpt-4o-mini">
+    </div>
+    <button type="submit">Save LLM settings</button>
+  </form>
+  <div class="actions">
+    <a href="/setup?step=services">Continue →</a>
+  </div>
+
+{% elif step.value == "services" %}
+  <h1>Model services</h1>
+  <p>Voxint's transcription, diarization, and speaker-embedding run as separate GPU
+     services. Here's whether each is reachable right now:</p>
+  {% for svc in services %}
+  <div class="svc">
+    <span class="dot {{ 'up' if svc.up else 'down' }}"></span>
+    <strong>{{ svc.name }}</strong>
+    <span class="muted">{{ svc.detail }}{% if svc.latency_ms is not none %} · {{ "%.0f"|format(svc.latency_ms) }} ms{% endif %}</span>
+  </div>
+  {% endfor %}
+  <p class="muted">If a service is down, start the GPU overlay (see the README's GPU
+     services section). This check is advisory — you can finish setup regardless, and a
+     run simply waits on any service it needs.</p>
+  <div class="actions">
+    <a href="/setup?step=services">Re-check</a>
+    <a href="/setup?step=finish">Continue →</a>
+  </div>
+
+{% elif step.value == "finish" %}
+  <h1>You're all set</h1>
+  <ul>
+    <li>{{ media_folders|length }} media folder{{ "" if media_folders|length == 1 else "s" }} registered</li>
+    <li>{{ vocabulary|length }} vocabulary term{{ "" if vocabulary|length == 1 else "s" }}</li>
+    <li>LLM enhancement {{ "enabled" if llm_enabled else "off" }}</li>
+  </ul>
+  <p class="muted">Finishing opens the review console. You can re-run this setup any time.</p>
+  <form method="post" action="/setup/finish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <button type="submit">Finish setup →</button>
+  </form>
+{% endif %}
+</div>
+{% endblock %}

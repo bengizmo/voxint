@@ -30,7 +30,7 @@ def seed_onboarded(session_factory: sessionmaker[Session]) -> None:
     repository and migration tests assert on the absent-row ("not onboarded") state.
     """
     with session_factory() as session:
-        complete_onboarding(session)
+        complete_onboarding(session, llm_enabled_default=False)
         session.commit()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

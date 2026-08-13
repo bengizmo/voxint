@@ -24,7 +24,7 @@ from voxint.clients.base import ASRClient, DiarizerClient, EmbedderClient, LLMCl
 from voxint.clients.diarize import HttpDiarizerClient
 from voxint.clients.embed import HttpEmbedderClient
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import Settings
+from voxint.config import Settings, llm_budget_fits_stage_lease
 from voxint.db.models import AppSettings, ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
 from voxint.media.netcheck import Resolver
@@ -208,7 +208,17 @@ def apply_run_preferences(
     vocabulary = _dedup_order_preserving((*base.vocabulary, *prefs.vocabulary))
     enhancement_context = _augment_enhancement_context(base.enhancement_context, vocabulary)
     llm: LLMClient | None
-    if prefs.llm_enabled and settings.llm_api_key:
+    # Fail closed on two independent preconditions before building the client:
+    #  - the API key must be present (it is env-only, never stored on the row); and
+    #  - the run budget must still fit the enhance_match lease. The wizard already
+    #    refuses to persist llm_enabled=True when the budget doesn't fit, but the
+    #    env budget can change AFTER a True row is written while the env llm_enabled
+    #    flag is off (so the startup validator never re-checked it) — this per-run
+    #    guard closes that window so enhancement can never run into a lease the
+    #    recovery sweep could reclaim mid-flight. Both are honest no-ops (enhancement
+    #    is best-effort): warn and proceed with llm=None rather than failing the run.
+    budget_ok = llm_budget_fits_stage_lease(settings)
+    if prefs.llm_enabled and settings.llm_api_key and budget_ok:
         llm = HttpLLMClient(
             prefs.llm_base_url,
             prefs.llm_model,
@@ -220,6 +230,14 @@ def apply_run_preferences(
             logger.warning(
                 "LLM enhancement is enabled but LLM_API_KEY is unset; "
                 "proceeding with enhancement disabled for this run."
+            )
+        elif prefs.llm_enabled and not budget_ok:
+            logger.warning(
+                "LLM enhancement is enabled but the run budget plus worst-case "
+                "overrun no longer fits the enhance_match stage lease; proceeding "
+                "with enhancement disabled for this run to avoid a mid-flight "
+                "lease reclaim. Lower llm_run_budget_seconds or raise "
+                "stage_lease_seconds."
             )
         llm = None
     return dataclasses.replace(

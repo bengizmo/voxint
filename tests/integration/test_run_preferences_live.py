@@ -71,7 +71,7 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
 
     # --- config A: user vocab "Foobar", LLM enabled ---
     with session_factory() as session:
-        row = store.get_or_create(session)
+        row = store.get_or_create(session, llm_enabled_default=False)
         row.vocabulary = ["Foobar"]
         row.llm_enabled = True
         row.llm_model = "model-a"
@@ -91,7 +91,7 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
 
     # --- config B: user vocab "Bazqux", LLM disabled — same base_ctx, no rebuild ---
     with session_factory() as session:
-        row = store.get_or_create(session)
+        row = store.get_or_create(session, llm_enabled_default=False)
         row.vocabulary = ["Bazqux"]
         row.llm_enabled = False
         row.llm_model = None
@@ -145,12 +145,12 @@ def test_run_pipeline_reapplies_settings_each_invocation(
     run_id = uuid.uuid4()  # execute_run is stubbed, so the run need not exist
 
     with session_factory() as session:
-        store.get_or_create(session).vocabulary = ["Foobar"]
+        store.get_or_create(session, llm_enabled_default=False).vocabulary = ["Foobar"]
         session.commit()
     worker_tasks.run_pipeline.apply(args=[str(run_id)]).get()
 
     with session_factory() as session:
-        store.get_or_create(session).vocabulary = ["Bazqux"]
+        store.get_or_create(session, llm_enabled_default=False).vocabulary = ["Bazqux"]
         session.commit()
     worker_tasks.run_pipeline.apply(args=[str(run_id)]).get()
 
@@ -190,7 +190,7 @@ def test_run_pipeline_closes_per_run_llm_client(
     )
 
     with session_factory() as session:
-        row = store.get_or_create(session)
+        row = store.get_or_create(session, llm_enabled_default=False)
         row.llm_enabled = True
         row.llm_model = "m"
         session.commit()

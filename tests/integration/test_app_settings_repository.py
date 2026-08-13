@@ -18,7 +18,7 @@ def test_get_or_create_defaults_and_is_idempotent(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        first = store.get_or_create(session)
+        first = store.get_or_create(session, llm_enabled_default=False)
         assert first.id == store.SINGLETON_ID
         assert first.onboarding_complete is False
         assert first.media_folders == []
@@ -26,14 +26,33 @@ def test_get_or_create_defaults_and_is_idempotent(
         assert first.llm_enabled is False
         assert first.llm_base_url is None
         # a second call in the same session returns the same row, not a new one
-        assert store.get_or_create(session) is first
+        assert store.get_or_create(session, llm_enabled_default=False) is first
         session.commit()
 
     # persisted, and still exactly one row across a fresh session
     with session_factory() as session:
-        again = store.get_or_create(session)
+        again = store.get_or_create(session, llm_enabled_default=False)
         assert again.id == store.SINGLETON_ID
         assert again.onboarding_complete is False
+
+
+def test_get_or_create_seeds_llm_enabled_from_default(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A newly-created row takes ``llm_enabled`` from ``llm_enabled_default``.
+
+    This is the deferred-finding-1 fix: ``resolve_run_preferences`` reads
+    ``llm_enabled`` HARD from the row once one exists, so the first write (whatever
+    its reason) must carry the env's enablement, not the model default False.
+    """
+    with session_factory() as session:
+        row = store.get_or_create(session, llm_enabled_default=True)
+        assert row.llm_enabled is True
+        session.commit()
+    # An existing row is returned unchanged — the default only applies at insert.
+    with session_factory() as session:
+        again = store.get_or_create(session, llm_enabled_default=False)
+        assert again.llm_enabled is True
 
 
 def test_complete_onboarding_flips_the_flag(
@@ -41,13 +60,13 @@ def test_complete_onboarding_flips_the_flag(
 ) -> None:
     with session_factory() as session:
         assert store.is_onboarded(session) is False
-        store.complete_onboarding(session)
+        store.complete_onboarding(session, llm_enabled_default=False)
         session.commit()
 
     with session_factory() as session:
         assert store.is_onboarded(session) is True
         # idempotent: completing again keeps a single onboarded row
-        store.complete_onboarding(session)
+        store.complete_onboarding(session, llm_enabled_default=False)
         session.commit()
         assert store.is_onboarded(session) is True
 
@@ -68,7 +87,7 @@ def test_deleting_tutorial_run_sets_fk_null(
         session.add(run)
         session.flush()
         run_id = run.id
-        settings = store.get_or_create(session)
+        settings = store.get_or_create(session, llm_enabled_default=False)
         settings.tutorial_run_id = run_id
         session.commit()
         assert settings.tutorial_run_id == run_id
@@ -103,7 +122,7 @@ def test_get_or_create_is_race_safe(
                 # observe the empty table, then release both threads together
                 assert store.get_app_settings(session) is None
                 barrier.wait(timeout=10)
-                row = store.get_or_create(session)
+                row = store.get_or_create(session, llm_enabled_default=False)
                 session.commit()
                 with lock:
                     results.append(row.id)

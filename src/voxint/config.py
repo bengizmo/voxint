@@ -127,6 +127,15 @@ class Settings(BaseSettings):
     # a run.
     health_probe_timeout_seconds: PositiveSeconds = 3.0
 
+    # First-run wizard "scan for existing media" (step 2). Bounds the optional
+    # walk over the registered media folders: at most setup_scan_max_files net-new
+    # candidates are surfaced, and the walk stops after inspecting
+    # setup_scan_max_entries directory entries so a deep/wide tree can never make
+    # the step hang or auto-queue an unbounded number of runs. Advisory
+    # convenience — the operator can always submit media individually.
+    setup_scan_max_files: int = Field(default=500, ge=1)
+    setup_scan_max_entries: int = Field(default=20000, ge=1)
+
     # Media normalization (prepare stage)
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
@@ -204,19 +213,20 @@ class Settings(BaseSettings):
         # overrun by up to attempts x timeout. Budget plus that worst case must
         # stay below the lease or recovery could reclaim enhance_match
         # mid-flight — catch the misconfiguration at startup, not in production.
-        # NOTE: the first-run wizard can enable the LLM at runtime (app_settings)
-        # independent of this env flag, so this env-time check does not cover that
-        # path — the wizard's enable step validates budget-vs-lease itself before
-        # persisting llm_enabled=True (see the onboarding wizard, issue #3).
-        if self.llm_enabled:
+        # The comparison itself lives in the module-level
+        # ``llm_budget_fits_stage_lease`` so the first-run wizard's runtime enable
+        # step (and the worker's fail-closed guard) share ONE invariant with this
+        # env-time check and can never drift. This validator is still gated on
+        # ``llm_enabled`` because the wizard can enable the LLM at runtime with the
+        # env flag off — that path is covered by the wizard/worker guards, not here.
+        if self.llm_enabled and not llm_budget_fits_stage_lease(self):
             worst_case = self.llm_run_budget_seconds + (
                 self.llm_attempts_per_batch * self.llm_timeout_seconds
             )
-            if worst_case >= self.stage_lease_seconds:
-                raise ValueError(
-                    f"llm_run_budget_seconds + attempts x timeout ({worst_case})"
-                    f" must be below stage_lease_seconds ({self.stage_lease_seconds})"
-                )
+            raise ValueError(
+                f"llm_run_budget_seconds + attempts x timeout ({worst_case})"
+                f" must be below stage_lease_seconds ({self.stage_lease_seconds})"
+            )
         return self
 
     @model_validator(mode="after")
@@ -320,6 +330,25 @@ class Settings(BaseSettings):
                 f" of all six stage leases ({all_stage_leases})"
             )
         return self
+
+
+def llm_budget_fits_stage_lease(settings: Settings) -> bool:
+    """True iff the LLM run budget plus one worst-case in-flight overrun stays
+    below the enhance_match stage lease.
+
+    The budget is checked before each batch, so one in-flight attempt can overrun
+    by up to ``attempts_per_batch x timeout``; that worst case plus the budget must
+    stay strictly below ``stage_lease_seconds`` or the recovery sweep could reclaim
+    enhance_match mid-flight. This is the SINGLE source of that comparison, shared
+    by the env-time ``Settings`` validator, the first-run wizard's LLM-enable step
+    (which refuses to persist ``llm_enabled=True`` when it returns False), and the
+    worker's per-run fail-closed guard (``apply_run_preferences``) — so a runtime
+    enable can never bypass an invariant the env path enforces.
+    """
+    worst_case = settings.llm_run_budget_seconds + (
+        settings.llm_attempts_per_batch * settings.llm_timeout_seconds
+    )
+    return worst_case < settings.stage_lease_seconds
 
 
 class SettingsError(Exception):

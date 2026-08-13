@@ -22,6 +22,7 @@ from voxint.ingest import (
     UrlValidationError,
     requeue_failed_run,
     submit_media_item,
+    submit_media_item_if_new,
     submit_url,
 )
 from voxint.pipeline.transitions import (
@@ -99,6 +100,63 @@ def test_submit_media_item_reuses_media_but_mints_new_run(
     with session_factory() as session:
         assert len(session.execute(select(MediaItem)).scalars().all()) == 1
         assert len(session.execute(select(PipelineRun)).scalars().all()) == 2
+
+
+def test_submit_media_item_if_new_creates_once_then_skips(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The scan-confirm primitive: a fresh path queues one run; an existing path
+    returns None (no duplicate run), unlike submit_media_item which always mints one."""
+    with session_factory() as session:
+        run = submit_media_item_if_new(session, "scan/a.wav")
+        assert run is not None
+        session.commit()
+        run_id = run.id
+
+    with session_factory() as session:
+        # Same path again → skip, so a double-clicked/re-scanned confirm can't spam runs.
+        assert submit_media_item_if_new(session, "scan/a.wav") is None
+        session.commit()
+
+    with session_factory() as session:
+        assert len(session.execute(select(MediaItem)).scalars().all()) == 1
+        runs = session.execute(select(PipelineRun)).scalars().all()
+        assert len(runs) == 1 and runs[0].id == run_id
+
+
+def test_submit_media_item_if_new_recovers_from_concurrent_insert(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Two racers on the same brand-new path: the loser's SAVEPOINT conflict is
+    reported as None (skip), never an error, and only one run is created."""
+    path = f"scan/{uuid.uuid4()}.wav"
+    barrier = threading.Barrier(2)
+    outcomes: dict[str, bool] = {}
+    errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def racer(key: str) -> None:
+        try:
+            with session_factory() as session:
+                barrier.wait(timeout=10)
+                run = submit_media_item_if_new(session, path)
+                session.commit()
+                with lock:
+                    outcomes[key] = run is not None
+        except BaseException as exc:  # surfaced to the test body
+            with lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=racer, args=(k,)) for k in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
+
+    assert not errors, errors
+    assert sorted(outcomes.values()) == [False, True]  # exactly one created a run
+    with session_factory() as session:
+        assert len(session.execute(select(PipelineRun)).scalars().all()) == 1
 
 
 def test_submit_media_item_recovers_from_concurrent_insert(

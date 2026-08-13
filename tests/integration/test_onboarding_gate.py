@@ -26,8 +26,20 @@ _HTMX = {"HX-Request": "true"}
 _ZERO = uuid.UUID(int=0)
 
 # Routes deliberately reachable before onboarding: liveness, the htmx runtime the
-# setup page itself needs, and the wizard destination the gate redirects TO.
-EXEMPT_PATHS = {"/healthz", "/setup", "/static/htmx.min.js"}
+# setup page itself needs, and the setup wizard the gate redirects TO. The wizard
+# family is enumerated EXACTLY (not a blanket "/setup" prefix) so an accidentally
+# ungated route under /setup would still fail this guard.
+EXEMPT_PATHS = {
+    "/healthz",
+    "/static/htmx.min.js",
+    "/setup",
+    "/setup/media",
+    "/setup/scan",
+    "/setup/scan/confirm",
+    "/setup/vocabulary",
+    "/setup/llm",
+    "/setup/finish",
+}
 
 
 @pytest.fixture()
