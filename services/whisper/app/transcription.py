@@ -29,6 +29,20 @@ class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
 
 
+def resolve_device_name(device_type: str) -> str:
+    """Honest /healthz device reporting: torch built for ROCm masquerades as
+    CUDA (``torch.cuda.is_available()`` is true, device type is ``cuda``), so
+    report ``rocm`` whenever ``torch.version.hip`` is set. CT2 itself has no
+    HIP backend today, but the health label must not lie if it ever does (the
+    bundled torch is the runtime the VAD path actually uses)."""
+    if device_type == "cuda":
+        import torch
+
+        if getattr(torch.version, "hip", None):
+            return "rocm"
+    return device_type
+
+
 # Read once at import — the container env is stable, no hot reload.
 # Toggle via WHISPER_REPETITION_TAG=off and restart to disable.
 _REPETITION_TAG_ENABLED = os.getenv("WHISPER_REPETITION_TAG", "on").strip().lower() in {
@@ -244,6 +258,9 @@ class WhisperTranscriber:
                 download_root=download_root,
             )
             self.pipeline = BatchedInferencePipeline(model=self.model)
+            # CT2 got the raw device string above; only the reported name is
+            # rewritten to the honest label.
+            self.device = resolve_device_name(self.device)
             self.is_initialized = True
             logger.info("Model loaded in %.2fs", time.time() - start)
 
@@ -370,8 +387,12 @@ class WhisperTranscriber:
         )
 
     def cleanup_memory(self) -> None:
-        if self.device == "cuda":
-            import torch
+        # Keyed on runtime capability, not the reported device label (which
+        # honestly says "rocm" on torch-HIP while the allocator API is still
+        # torch.cuda).
+        if not self.is_initialized:
+            return
+        import torch
 
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()

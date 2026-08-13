@@ -159,7 +159,12 @@ class TitanetEmbedder:
         return outcomes
 
     def cleanup_memory(self) -> None:
-        if self.device_name == "cuda":
-            import torch
+        # Keyed on runtime capability, not the reported device label:
+        # torch-HIP exposes the same torch.cuda allocator API while healthz
+        # honestly reports "rocm", so a label check would skip cleanup on AMD.
+        if not self.model_loaded:
+            return
+        import torch
 
+        if torch.cuda.is_available():
             torch.cuda.empty_cache()

@@ -235,12 +235,14 @@ measured-equivalence gate to serve under this space id.
 
 Per-window processing chain, in order:
 
-1. **Slice**: `[start_seconds, end_seconds)` at sample precision —
-   `start = int(start_seconds × sr)`, `end = min(int(end_seconds × sr), len)`
-   (truncating int conversion, not rounding).
-2. **Resample / downmix**: whole-file resample to 16 kHz (torchaudio-equivalent
-   sinc interpolation) before slicing if the source is not 16 kHz; channel
-   mean-downmix to mono.
+1. **Resample / downmix (whole file)**: if the source is not 16 kHz, the whole
+   file is resampled to 16 kHz (torchaudio-equivalent sinc interpolation)
+   *before any slicing*; multi-channel audio is mean-downmixed to mono. All
+   subsequent sample arithmetic is at 16 kHz.
+2. **Slice**: `[start_seconds, end_seconds)` at sample precision in the 16 kHz
+   timeline — `start = int(start_seconds × 16000)`,
+   `end = min(int(end_seconds × 16000), len)` (truncating int conversion, not
+   rounding).
 3. **Skip gates** (checked in this order, before any normalization):
    `too_short` for slices `< 1.0 s` (SNR not measured); `low_snr` for
    estimated SNR below the threshold (default 5 dB, `TITANET_SNR_THRESHOLD_DB`).
@@ -268,8 +270,10 @@ reference is the pinned NeMo checkpoint.
 
 Bit-identity is not the bar — it is already false across CUDA hardware
 generations. An alternative implementation may keep `titanet-large-v1` **iff**
-it passes the 3-level parity gate in `tests/parity/test_titanet_onnx.py`
-against reference outputs produced by the NeMo/CUDA implementation
+it passes the 3-level parity gate (`tests/parity/test_titanet_onnx.py`; the
+harness lands together with the first alternative implementation — until then
+this section is the binding policy it must implement) against reference
+outputs produced by the NeMo/CUDA implementation
 (fixtures: `tests/parity/fixtures/`):
 
 - **mel level** — the reimplemented front-end matches the NeMo-internal
@@ -330,7 +334,7 @@ callers index results by window position):
   measured); windows with SNR below the threshold (default 5 dB) skip as
   `low_snr` with the measured `snr_db`.
 - Per-window processing follows the normative `titanet-large-v1` space
-  definition above (slice → resample 16 kHz mono → noise reduction → LUFS −16
+  definition above (resample 16 kHz mono → slice → noise reduction → LUFS −16
   → peak 0.95 → TitaNet → L2); reference code in
   `services/titanet/app/preprocess.py`.
 

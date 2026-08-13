@@ -209,18 +209,30 @@ def _mix_to_target_snr(
     textbook SNR formula) makes the gate expectations exact by construction.
     """
     lo, hi = 1e-6, 4.0
-    best_audio, best_snr = speech, preprocess.calculate_snr_db(_quantize(speech))
+    best_audio: np.ndarray | None = None
+    best_snr, best_err = 0.0, float("inf")
     for _ in range(60):
         gain = (lo + hi) / 2.0
         mixed = _quantize(0.85 * speech + gain * noise)
         snr = preprocess.calculate_snr_db(mixed)
-        best_audio, best_snr = mixed, snr
-        if abs(snr - target_db) <= SNR_TOLERANCE_DB:
+        err = abs(snr - target_db)
+        # Keep best-by-error, not last-evaluated: the estimator is not
+        # globally monotonic in gain (silence/digital-floor special cases,
+        # [0, 60] clamp), so a late midpoint can be worse than an earlier one.
+        if err < best_err:
+            best_audio, best_snr, best_err = mixed, snr, err
+        if err <= SNR_TOLERANCE_DB:
             break
         if snr > target_db:
             lo = gain  # more noise -> lower measured SNR
         else:
             hi = gain
+    if best_audio is None or best_err > SNR_TOLERANCE_DB:
+        # Fail closed: a straddle window on the wrong side of the 5 dB gate
+        # would silently hollow out the snr_boundary category.
+        raise RuntimeError(
+            f"SNR calibration missed target {target_db} dB (best {best_snr} dB)"
+        )
     return best_audio, best_snr
 
 

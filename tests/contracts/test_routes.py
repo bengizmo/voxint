@@ -62,9 +62,9 @@ class TestWhisperRoutes:
                 model_name="large-v2",
                 device="cpu",
                 engine="faster-whisper",
-                engine_version="1.2.1",
+                engine_version="test-engine-ver",
                 runtime="ctranslate2",
-                runtime_version="4.4.0",
+                runtime_version="test-runtime-ver",
                 transcribe=lambda *a, **k: fake_output,
                 cleanup_memory=lambda: None,
             ),
@@ -86,9 +86,9 @@ class TestWhisperRoutes:
         assert body["model"] == "large-v2"
         assert body["contract_version"] == "v1"
         assert body["engine"] == "faster-whisper"
-        assert body["engine_version"] == "1.2.1"
+        assert body["engine_version"] == "test-engine-ver"
         assert body["runtime"] == "ctranslate2"
-        assert body["runtime_version"] == "4.4.0"
+        assert body["runtime_version"] == "test-runtime-ver"
 
     def test_healthz_degraded_503_null_model(
         self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch
@@ -199,9 +199,9 @@ class TestPyannoteRoutes:
                 model_name="pyannote/speaker-diarization-3.1",
                 device_name="cpu",
                 engine="pyannote.audio",
-                engine_version="3.1.1",
+                engine_version="test-engine-ver",
                 runtime="torch",
-                runtime_version="2.5.0",
+                runtime_version="test-runtime-ver",
                 diarize=lambda *a, **k: result,
             ),
         )
@@ -267,9 +267,9 @@ class TestTitanetRoutes:
                 model_name="nvidia/speakerverification_en_titanet_large",
                 device_name="cpu",
                 engine="nemo",
-                engine_version="1.22.0",
+                engine_version="test-engine-ver",
                 runtime="torch",
-                runtime_version="2.1.0",
+                runtime_version="test-runtime-ver",
                 embed_windows=fake_embed,
                 cleanup_memory=lambda: None,
             ),

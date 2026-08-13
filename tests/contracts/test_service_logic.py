@@ -130,11 +130,11 @@ class TestTurnPostprocess:
 
 class TestSnrGate:
     def test_pure_silence_scores_zero(self) -> None:
-        assert embedding.calculate_snr_db(np.zeros(32000, dtype=np.float32)) == 0.0
+        assert preprocess.calculate_snr_db(np.zeros(32000, dtype=np.float32)) == 0.0
 
     def test_near_silence_scores_zero(self) -> None:
         audio = np.full(32000, 1e-8, dtype=np.float32)
-        assert embedding.calculate_snr_db(audio) == 0.0
+        assert preprocess.calculate_snr_db(audio) == 0.0
 
     def test_speechlike_audio_beats_the_gate(self) -> None:
         rng = np.random.default_rng(seed=7)
@@ -142,7 +142,7 @@ class TestSnrGate:
         floor = rng.normal(0.0, 0.001, 64000).astype(np.float32)
         bursts = np.zeros(64000, dtype=np.float32)
         bursts[8000:24000] = rng.normal(0.0, 0.5, 16000).astype(np.float32)
-        snr = embedding.calculate_snr_db(floor + bursts)
+        snr = preprocess.calculate_snr_db(floor + bursts)
         assert snr > 5.0
 
 

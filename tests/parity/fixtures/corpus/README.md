@@ -1,12 +1,18 @@
 # Parity golden corpus
 
-Deterministic, redistributable audio inputs for the backend-parity gates
+Redistributable audio inputs for the backend-parity gates
 (docs/gpu-contracts.md, "Equivalence policy") and the standing NVIDIA
-regression gate. Regenerated only by a human running, from the repo root:
+regression gate. **The committed artifacts are the source of truth** —
+immutable, SHA-256-bound (`provenance.json`), and paired with the reference
+outputs under `../references/` via those checksums.
 
-```
-python tools/generate_parity_corpus.py
-```
+Regeneration (`python tools/generate_parity_corpus.py`, run by a human from
+the repo root) is deterministic only per espeak-ng/ffmpeg installation: a
+different espeak voice-data or ffmpeg version produces different audio, the
+checksums change, and every committed reference is invalidated. Never
+hand-edit any corpus file, and never regenerate the corpus without
+immediately re-running `tools/generate_parity_references.py` on CUDA hardware
+and committing corpus + references together.
 
 | File | Role |
 |------|------|

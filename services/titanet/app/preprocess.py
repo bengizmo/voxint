@@ -1,10 +1,10 @@
 """Reference implementation of ``titanet-large-v1`` window preprocessing.
 
 This module is the code half of the space definition in
-``docs/gpu-contracts.md`` (steps 1-6 plus the final L2 normalization): slice →
-resample 16 kHz mono → skip gates (too_short / low_snr) → stationary
-spectral-gating noise reduction → LUFS normalization to -16 LUFS → peak
-normalization to 0.95 → model → L2 normalization. Every engine (NeMo/CUDA,
+``docs/gpu-contracts.md`` (steps 1-6 plus the final L2 normalization):
+whole-file resample to 16 kHz mono → slice → skip gates (too_short / low_snr)
+→ stationary spectral-gating noise reduction → LUFS normalization to -16 LUFS
+→ peak normalization to 0.95 → model → L2 normalization. Every engine (NeMo/CUDA,
 ONNX Runtime, future backends) must consume THIS module — a parallel
 implementation of any step is a new embedding space, never a silent swap.
 

@@ -2,11 +2,21 @@
   "meta": {
     "generated_on": "2026-08-13",
     "image_tag": "0.3.0",
+    "image_digest": null,
     "hardware": "maintainer NVIDIA hardware",
     "corpus_sha256": {
       "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
       "transcribe-short.wav": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f",
       "diarize-3speaker.wav": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795"
+    },
+    "corpus_files_sha256": {
+      "diarize-3speaker.wav": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795",
+      "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
+      "embed-pairs.json": "7c0b9198c0f2a508b00ad8bcb049b4463cae7677d4b4ca4784fdcf154a1b6ea4",
+      "embed-windows.json": "348bad9b063649550325ec7f1c8fb0cbefeb163431dfea39dd2fac8d74d93568",
+      "manifest.json": "404f31e44c2f04f982b2436c67ede47de86fec102b7608d4a11cfcca785aa1dc",
+      "provenance.json": "6e0803d1f3d8172f262b49f319573fa25ec9322785c7ac96d5a215e92a33d685",
+      "transcribe-short.wav": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f"
     },
     "service_healthz": {
       "status": "ok",
