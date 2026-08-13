@@ -28,3 +28,4 @@ htmlcov/
 *.m4a
 # Except the bundled guided-tutorial sample (package data, must ship in the wheel).
 !src/voxint/tutorial/assets/*.wav
+!tests/parity/fixtures/corpus/*.wav
