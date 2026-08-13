@@ -9,6 +9,8 @@ torch/GPU deps — that's the services' side of the contract-test bargain.
 import importlib
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -31,11 +33,7 @@ def load_service_main(service: str) -> ModuleType:
     if unique in sys.modules:
         return sys.modules[unique]
 
-    saved = {
-        k: sys.modules.pop(k)
-        for k in list(sys.modules)
-        if k == "app" or k.startswith("app.")
-    }
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "app" or k.startswith("app.")}
     sys.path.insert(0, str(SERVICES_DIR / service))
     try:
         mod = importlib.import_module("app.main")
@@ -60,11 +58,7 @@ def load_service_module(service: str, module: str) -> ModuleType:
     if name in sys.modules:
         return sys.modules[name]
 
-    saved = {
-        k: sys.modules.pop(k)
-        for k in list(sys.modules)
-        if k == "app" or k.startswith("app.")
-    }
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "app" or k.startswith("app.")}
     sys.path.insert(0, str(SERVICES_DIR / service))
     try:
         mod = importlib.import_module(f"app.{module}")
@@ -76,6 +70,27 @@ def load_service_module(service: str, module: str) -> ModuleType:
         sys.modules.update(saved)
     sys.modules[name] = mod
     return mod
+
+
+@contextmanager
+def service_package(service: str) -> Iterator[None]:
+    """Temporarily make one service's ``app`` package importable.
+
+    For calling service functions that lazily ``import app.<something>`` at
+    call time (e.g. the titanet engine factory) — the load_service_* helpers
+    tear the package down after import, so those lazy imports need the
+    package context restored around the call.
+    """
+    saved = {k: sys.modules.pop(k) for k in list(sys.modules) if k == "app" or k.startswith("app.")}
+    sys.path.insert(0, str(SERVICES_DIR / service))
+    try:
+        yield
+    finally:
+        sys.path.remove(str(SERVICES_DIR / service))
+        for k in list(sys.modules):
+            if k == "app" or k.startswith("app."):
+                del sys.modules[k]
+        sys.modules.update(saved)
 
 
 def load_fixture(name: str) -> Any:

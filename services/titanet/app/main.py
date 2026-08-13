@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
-from app.embedding import DecodeError, TitanetEmbedder
+from app.embedding import DecodeError, create_embedder
 from app.errors import (
     file_not_found,
     inference_failed,
@@ -42,7 +42,7 @@ SERVICE_VERSION = "1.0.0"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "/data/media"))
 MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
 
-embedder = TitanetEmbedder()
+embedder = create_embedder()
 
 _pending = 0
 _pending_lock = threading.Lock()
@@ -139,9 +139,7 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
     return EmbedResponse(
         embedding_space=EMBEDDING_SPACE,
         results=[
-            WindowResult(
-                embedding=o.embedding, snr_db=o.snr_db, skip_reason=o.skip_reason
-            )
+            WindowResult(embedding=o.embedding, snr_db=o.snr_db, skip_reason=o.skip_reason)
             for o in outcomes
         ],
     )
