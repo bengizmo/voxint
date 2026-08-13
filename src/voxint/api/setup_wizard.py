@@ -116,6 +116,7 @@ def normalize_media_folders(raw_folders: Iterable[str], media_root: Path) -> lis
     path, an escape, a non-directory, or more than :data:`MAX_MEDIA_FOLDERS`.
     """
     root = media_root.resolve()
+    reserved = {(root / name).resolve() for name in _RESERVED_TREES}
     out: list[str] = []
     seen: set[str] = set()
     for raw in raw_folders:
@@ -129,6 +130,12 @@ def normalize_media_folders(raw_folders: Iterable[str], media_root: Path) -> lis
         resolved = (root / folder).resolve()
         if not resolved.is_relative_to(root):
             raise SetupValidationError(f"media folder is outside the media root: {folder!r}")
+        if _under_reserved(resolved, reserved):
+            # incoming/ and artifacts/ are Voxint-owned (uploads and normalized
+            # audio); registering them would re-ingest the pipeline's own outputs.
+            raise SetupValidationError(
+                f"media folder is a reserved Voxint directory: {folder!r}"
+            )
         if not resolved.is_dir():
             raise SetupValidationError(
                 f"media folder is not an existing directory: {folder!r}"
@@ -184,6 +191,11 @@ def normalize_llm_base_url(raw: str) -> str | None:
         raise SetupValidationError("LLM base URL must not contain whitespace")
     try:
         parts = urlsplit(value)
+        # .port is lazily parsed; touch it so a bad ":port" (":abc", out-of-range)
+        # fails HERE rather than crashing httpx.Client construction in the worker —
+        # which runs before run_pipeline's failure handling and would strand the run
+        # QUEUED for the recovery sweep to re-publish forever.
+        _ = parts.port
     except ValueError as exc:
         raise SetupValidationError("LLM base URL is malformed") from exc
     if parts.scheme not in ("http", "https"):
@@ -239,18 +251,29 @@ class ScanResult:
     root_missing: bool  # MEDIA_ROOT is absent / not a directory
 
 
+def _under_reserved(path: Path, reserved: set[Path]) -> bool:
+    """True if ``path`` is (or is nested under) a reserved tree Voxint owns."""
+    return any(path.is_relative_to(r) for r in reserved)
+
+
 def scan_media_folders(
     session: Session, media_root: Path, folders: Iterable[str], settings: Settings
 ) -> ScanResult:
     """Walk the registered ``folders`` for net-new media, bounded and containment-safe.
 
     Only the given folders are walked (each re-validated to still be a directory
-    under ``media_root`` — a stored folder may have been removed since it was saved).
-    The reserved trees Voxint owns and every symlink are pruned. Files are filtered
-    by :data:`_MEDIA_SUFFIXES` (case-insensitive), de-duplicated, and checked against
-    existing ``MediaItem.source_path`` in one query so only genuinely new paths are
-    returned. Both caps are honoured; a missing media root yields an empty result
-    with ``root_missing=True`` rather than raising.
+    under ``media_root`` — a stored folder may have been removed since it was saved,
+    and a folder that IS or sits under a reserved tree is skipped entirely, not just
+    pruned as a child). The traversal is an explicit ``os.scandir`` stack rather than
+    ``os.walk``: ``os.walk`` materializes a whole directory's entries before yielding,
+    so a single directory with millions of children could blow ``setup_scan_max_entries``
+    before the cap is checked; ``os.scandir`` is lazy, so counting each entry as it is
+    consumed makes the cap a true bound on work. Symlinks (files and dirs) are never
+    followed. Files are filtered by :data:`_MEDIA_SUFFIXES` (case-insensitive) and
+    de-duplicated; the collected candidates are checked against existing
+    ``MediaItem.source_path`` in one query and the ``setup_scan_max_files`` cap is
+    applied to the *net-new* result (so an already-ingested first batch can't mask
+    genuinely new media). A missing media root yields ``root_missing=True``, not a raise.
     """
     root = media_root.resolve()
     if not root.is_dir():
@@ -260,49 +283,52 @@ def scan_media_folders(
     max_entries = settings.setup_scan_max_entries
     max_files = settings.setup_scan_max_files
 
-    found: dict[str, None] = {}  # ordered set of relative POSIX candidate paths
-    inspected = 0
-    hit_entry_cap = False
-    hit_file_cap = False
-
+    stack: list[Path] = []
+    seen_dirs: set[Path] = set()
     for folder in folders:
         base = (root / folder).resolve()
         if not (base.is_relative_to(root) and base.is_dir()):
             continue  # revalidate: a stored folder can vanish between save and scan
-        for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
-            here = Path(dirpath)
-            # Prune reserved trees and symlinked subdirs in place so os.walk never
-            # descends into them.
-            dirnames[:] = [
-                d
-                for d in dirnames
-                if (here / d).resolve() not in reserved and not (here / d).is_symlink()
-            ]
-            for name in filenames:
+        if _under_reserved(base, reserved):
+            continue  # a folder registered AS incoming/artifacts is never scanned
+        if base not in seen_dirs:
+            seen_dirs.add(base)
+            stack.append(base)
+
+    found: dict[str, None] = {}  # ordered set of relative POSIX candidate paths
+    inspected = 0
+    hit_entry_cap = False
+
+    while stack and not hit_entry_cap:
+        current = stack.pop()
+        try:
+            scanner = os.scandir(current)
+        except OSError:
+            continue  # a directory that vanished or is unreadable — skip, don't fail
+        with scanner:
+            for entry in scanner:
                 inspected += 1
                 if inspected > max_entries:
                     hit_entry_cap = True
                     break
-                path = here / name
-                if path.is_symlink():
-                    continue
-                if path.suffix.lower() not in _MEDIA_SUFFIXES:
-                    continue
-                resolved = path.resolve()
-                if not resolved.is_relative_to(root):
-                    continue  # a symlinked file slipped through — containment wins
-                rel = resolved.relative_to(root).as_posix()
-                if rel not in found:
-                    found[rel] = None
-                    if len(found) >= max_files:
-                        hit_file_cap = True
-                        break
-            if hit_entry_cap or hit_file_cap:
-                break
-        if hit_entry_cap or hit_file_cap:
-            break
+                if entry.is_symlink():
+                    continue  # never follow a symlink (avoids escapes and cycles)
+                if entry.is_dir(follow_symlinks=False):
+                    child = Path(entry.path).resolve()
+                    if child in reserved or child in seen_dirs:
+                        continue
+                    seen_dirs.add(child)
+                    stack.append(child)
+                elif entry.is_file(follow_symlinks=False):
+                    if Path(entry.name).suffix.lower() not in _MEDIA_SUFFIXES:
+                        continue
+                    resolved = Path(entry.path).resolve()
+                    if not resolved.is_relative_to(root):
+                        continue  # defence-in-depth containment (symlink-free here)
+                    found[resolved.relative_to(root).as_posix()] = None
 
     candidates = list(found)
+    hit_file_cap = False
     if candidates:
         existing = set(
             session.execute(
@@ -311,7 +337,13 @@ def scan_media_folders(
                 )
             ).scalars()
         )
-        candidates = [c for c in candidates if c not in existing]
+        net_new = [c for c in candidates if c not in existing]
+        # Apply the file cap to NET-NEW results (after the existence filter), so an
+        # already-ingested first batch never fills the cap and hides new media.
+        if len(net_new) > max_files:
+            hit_file_cap = True
+            net_new = net_new[:max_files]
+        candidates = net_new
     return ScanResult(
         candidates=candidates,
         inspected=inspected,

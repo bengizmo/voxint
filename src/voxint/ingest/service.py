@@ -165,8 +165,16 @@ def submit_media_item_if_new(session: Session, source_path: str) -> PipelineRun 
             session.add(media)
             session.flush()
     except IntegrityError:
-        # Already ingested (a prior submission, an earlier scan, or a concurrent
-        # confirm won the race) — skip rather than mint a duplicate run.
+        # Only a UNIQUE(source_path) conflict is the expected "already ingested"
+        # skip (a prior submission, an earlier scan, or a concurrent confirm won the
+        # race). Re-read to confirm the row now exists; re-raise anything else rather
+        # than masking an unrelated integrity failure as a silent skip (mirrors
+        # _get_or_create_media).
+        existing = session.execute(
+            select(MediaItem).where(MediaItem.source_path == source_path)
+        ).scalar_one_or_none()
+        if existing is None:
+            raise
         return None
     return submit(session, media.id)
 

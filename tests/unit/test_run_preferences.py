@@ -10,6 +10,7 @@ covered end to end in tests/integration/test_run_preferences_live.py.
 import logging
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
@@ -175,6 +176,39 @@ def test_apply_disables_llm_when_budget_exceeds_lease(
         ctx = apply_run_preferences(base, settings, prefs)
     assert ctx.llm is None
     assert any("lease" in r.message for r in caplog.records)
+
+
+def test_apply_disables_llm_when_key_is_whitespace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A whitespace-only key must read as absent (matching the wizard's stripped
+    # check), so enhancement degrades to llm=None rather than building a client with
+    # an unusable key.
+    base = make_base_ctx()
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
+    with caplog.at_level(logging.WARNING):
+        ctx = apply_run_preferences(base, make_settings(llm_api_key="   "), prefs)
+    assert ctx.llm is None
+    assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
+
+
+def test_apply_disables_llm_when_client_construction_raises(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A malformed base_url raises while httpx builds the client. Since
+    # apply_run_preferences runs before execute_run's failure handling in
+    # run_pipeline, propagating would strand the run QUEUED for the recovery sweep to
+    # re-publish forever (poison loop). The guard must swallow it → llm=None.
+    def _boom(*_args: object, **_kwargs: object) -> object:
+        raise httpx.InvalidURL("bad base url")
+
+    monkeypatch.setattr("voxint.pipeline.stages.context.HttpLLMClient", _boom)
+    base = make_base_ctx()
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
+    with caplog.at_level(logging.WARNING):
+        ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+    assert ctx.llm is None
+    assert any("could not be built" in r.message for r in caplog.records)
 
 
 def test_apply_disables_llm_when_prefs_disabled() -> None:

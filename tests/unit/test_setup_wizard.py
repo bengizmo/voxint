@@ -83,6 +83,17 @@ def test_normalize_media_folders_rejects_missing_dir(tmp_path: Path) -> None:
         normalize_media_folders(["nope"], tmp_path)
 
 
+@pytest.mark.parametrize("reserved", ["incoming", "artifacts", "incoming/sub"])
+def test_normalize_media_folders_rejects_reserved_tree(
+    tmp_path: Path, reserved: str
+) -> None:
+    # incoming/ and artifacts/ are Voxint-owned; registering them (or a subfolder)
+    # would re-ingest the pipeline's own uploads/outputs.
+    (tmp_path / reserved).mkdir(parents=True)
+    with pytest.raises(SetupValidationError, match="reserved"):
+        normalize_media_folders([reserved], tmp_path)
+
+
 def test_normalize_media_folders_rejects_file(tmp_path: Path) -> None:
     (tmp_path / "a.wav").write_bytes(b"x")
     with pytest.raises(SetupValidationError):
@@ -142,6 +153,8 @@ def test_normalize_llm_base_url_accepts_localhost() -> None:
         "http:// space /v1",  # whitespace
         "http:///v1",  # scheme but no host
         "http://[::1/v1",  # unclosed IPv6 bracket → urlsplit ValueError
+        "http://host:notaport/v1",  # bad :port — must fail here, not in httpx later
+        "http://host:99999999/v1",  # out-of-range port
         "https://host/" + "a" * 3000,  # over the length ceiling
     ],
 )

@@ -406,6 +406,35 @@ def test_scan_skips_symlinked_files(
     assert result.candidates == ["real/a.wav"]  # the symlinked file is skipped
 
 
+def test_scan_skips_a_reserved_base(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Defence-in-depth: even if a reserved tree ends up registered as a folder, the
+    # scan base itself (not just its children) is excluded, so pipeline uploads are
+    # never re-ingested.
+    _write_media(media_root, "incoming/u.wav")
+    settings = Settings(_env_file=None, media_root=media_root)  # type: ignore[call-arg]
+    with session_factory() as session:
+        result = scan_media_folders(session, media_root, ["incoming"], settings)
+    assert result.candidates == []
+
+
+def test_scan_file_cap_applies_to_net_new_not_known(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Regression: the file cap must apply AFTER the existence filter, so an
+    # already-ingested file can't fill the cap and hide genuinely new media.
+    _write_media(media_root, "m/known.wav")
+    _write_media(media_root, "m/fresh.wav")
+    settings = Settings(_env_file=None, media_root=media_root, setup_scan_max_files=1)  # type: ignore[call-arg]
+    with session_factory() as session:
+        session.add(MediaItem(source_path="m/known.wav"))
+        session.commit()
+        result = scan_media_folders(session, media_root, ["m"], settings)
+    assert result.candidates == ["m/fresh.wav"]  # net-new surfaces regardless of order
+    assert result.hit_file_cap is False  # one net-new, under the cap
+
+
 # --------------------------------------------------------- scan (route + confirm)
 
 
