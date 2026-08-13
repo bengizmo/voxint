@@ -3,11 +3,11 @@
 Server-rendered ``?tutorial=<step>`` banners are injected into the EXISTING
 run/review/workbench pages ONLY for the real seeded tutorial run and only on the
 step's bound page; a spoofed param, the wrong page, or a non-tutorial run shows
-nothing. The claim POST carries the walkthrough forward (``continue_tutorial``),
-the adjudicate→export link preserves the claim token, htmx label swaps never
-clobber the banner, completion is an explicit idempotent CSRF-guarded POST, and
-replay clears completion without touching prior rulings. The setup finish launches
-the tutorial only after onboarding commits.
+nothing. Claiming the tutorial run continues the walkthrough on RUN IDENTITY (any
+claim control, not a hidden form field), the adjudicate→export link preserves the
+claim token, htmx label swaps never clobber the banner, completion is an explicit
+idempotent CSRF-guarded POST, and replay clears completion without touching prior
+rulings. The setup finish launches the tutorial only after onboarding commits.
 """
 
 import uuid
@@ -91,13 +91,18 @@ def _plain_completed_run(session_factory: sessionmaker[Session]) -> uuid.UUID:
         return run.id
 
 
-def _claim(
-    client: TestClient, run_id: uuid.UUID, *, continue_tutorial: bool = False
-) -> str:
-    data = {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)}
-    if continue_tutorial:
-        data["continue_tutorial"] = "true"
-    resp = client.post(f"/review/{run_id}/claim", data=data, follow_redirects=False)
+def _claim(client: TestClient, run_id: uuid.UUID) -> str:
+    """Claim a run the ordinary way (no tutorial-specific form field).
+
+    Tutorial continuation is keyed on run identity in the claim route, so an
+    ordinary claim of the tutorial run continues the walkthrough — that IS the
+    behaviour under test, not a special form field.
+    """
+    resp = client.post(
+        f"/review/{run_id}/claim",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_CLAIM)},
+        follow_redirects=False,
+    )
     assert resp.status_code == 303, resp.text
     return resp.headers["location"]
 
@@ -166,6 +171,16 @@ def test_unknown_param_is_ignored_not_422(
     assert BANNER not in resp.text
 
 
+def test_done_step_on_run_page_renders_no_banner(
+    client: TestClient, tutorial_run_id: uuid.UUID
+) -> None:
+    # DONE binds to the Settings page; on a run page it is a clean page-mismatch
+    # (no banner), never a KeyError on the step→page map.
+    resp = client.get(f"/runs/{tutorial_run_id}?tutorial=done")
+    assert resp.status_code == 200
+    assert BANNER not in resp.text
+
+
 def test_review_step_banner_offers_tutorial_claim(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
@@ -173,9 +188,10 @@ def test_review_step_banner_offers_tutorial_claim(
     assert resp.status_code == 200
     assert BANNER in resp.text
     assert "Claim the tutorial run" in resp.text
-    # The banner's own claim form targets the exact tutorial run and continues.
+    # The banner's own claim form targets the exact tutorial run; continuation into
+    # adjudicate mode is decided by the claim route on run identity (asserted in
+    # test_claim_of_tutorial_run_lands_on_adjudicate), not a hidden form field.
     assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
-    assert 'name="continue_tutorial"' in resp.text
 
 
 def test_review_banner_present_even_when_run_resolved(
@@ -185,7 +201,7 @@ def test_review_banner_present_even_when_run_resolved(
 ) -> None:
     # Resolve every label, so the run leaves the queue; the review-step banner must
     # still offer to claim it (it does not depend on a queue row existing).
-    location = _claim(client, tutorial_run_id, continue_tutorial=True)
+    location = _claim(client, tutorial_run_id)
     token = _token(location)
     _decide(client, tutorial_run_id, HEARD_LABEL, token, "exclude")
     _decide(client, tutorial_run_id, UNRESOLVED_LABEL, token, "exclude")
@@ -199,29 +215,39 @@ def test_review_banner_present_even_when_run_resolved(
 # ------------------------------------------------------ claim continuity + token
 
 
-def test_claim_with_continue_tutorial_lands_on_adjudicate(
+def test_claim_of_tutorial_run_lands_on_adjudicate(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
-    location = _claim(client, tutorial_run_id, continue_tutorial=True)
+    # ANY ordinary claim of the (active) tutorial run continues the walkthrough —
+    # no special form field — so a user can't fall out by using the queue's own
+    # Review button instead of the banner's button.
+    location = _claim(client, tutorial_run_id)
     assert "token=" in location
     assert "tutorial=adjudicate" in location
 
 
-def test_claim_without_continue_tutorial_has_no_suffix(
+def test_claim_of_completed_tutorial_has_no_suffix(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
-    location = _claim(client, tutorial_run_id, continue_tutorial=False)
+    # Once the tutorial is completed, the run claims normally (no banner) — the
+    # continuation is gated on the walkthrough still being active.
+    client.post(
+        "/settings/tutorial/complete",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS)},
+        follow_redirects=False,
+    )
+    location = _claim(client, tutorial_run_id)
     assert "token=" in location
     assert "tutorial=" not in location
 
 
-def test_continue_tutorial_ignored_for_non_tutorial_run(
+def test_claim_of_non_tutorial_run_has_no_suffix(
     client: TestClient,
     tutorial_run_id: uuid.UUID,
     session_factory: sessionmaker[Session],
 ) -> None:
     other = _plain_completed_run(session_factory)
-    location = _claim(client, other, continue_tutorial=True)
+    location = _claim(client, other)
     # The marker is only appended for the REAL tutorial run — never an arbitrary one.
     assert "tutorial=" not in location
 
@@ -229,7 +255,7 @@ def test_continue_tutorial_ignored_for_non_tutorial_run(
 def test_adjudicate_banner_next_link_carries_token(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
-    token = _token(_claim(client, tutorial_run_id, continue_tutorial=True))
+    token = _token(_claim(client, tutorial_run_id))
     resp = client.get(f"/review/{tutorial_run_id}?token={token}&tutorial=adjudicate")
     assert resp.status_code == 200
     assert BANNER in resp.text
@@ -245,14 +271,15 @@ def test_adjudicate_banner_without_token_offers_claim(
     resp = client.get(f"/review/{tutorial_run_id}?tutorial=adjudicate")
     assert resp.status_code == 200
     assert BANNER in resp.text
-    # No live claim → degrade to a claim-and-continue form, not a dead next-link.
-    assert 'name="continue_tutorial"' in resp.text
+    # No live claim → degrade to a claim form (which the route continues on run
+    # identity), not a dead next-link that would land on a read-only workbench.
+    assert f'action="/review/{tutorial_run_id}/claim"' in resp.text
 
 
 def test_export_banner_has_export_link_and_finish(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
-    token = _token(_claim(client, tutorial_run_id, continue_tutorial=True))
+    token = _token(_claim(client, tutorial_run_id))
     resp = client.get(f"/review/{tutorial_run_id}?token={token}&tutorial=export")
     assert resp.status_code == 200
     assert BANNER in resp.text
@@ -268,7 +295,7 @@ def test_export_banner_has_export_link_and_finish(
 def test_htmx_decision_fragment_excludes_banner(
     client: TestClient, tutorial_run_id: uuid.UUID
 ) -> None:
-    token = _token(_claim(client, tutorial_run_id, continue_tutorial=True))
+    token = _token(_claim(client, tutorial_run_id))
     resp = client.post(
         f"/review/{tutorial_run_id}/labels/{UNRESOLVED_LABEL}/decision",
         data={"token": token, "nonce": uuid.uuid4().hex, "action": "exclude"},
@@ -311,6 +338,25 @@ def test_settings_completed_offers_replay(
     assert resp.status_code == 303
     page = client.get("/settings")
     assert "Replay tutorial" in page.text
+
+
+def test_settings_done_spoof_hidden_when_incomplete(
+    client: TestClient, tutorial_run_id: uuid.UUID
+) -> None:
+    # A bookmarked/spoofed ?tutorial=done must NOT show the completion celebration
+    # while the tutorial is seeded-but-incomplete — otherwise the page would
+    # simultaneously claim completion and offer "Start the guided tutorial".
+    resp = client.get("/settings?tutorial=done")
+    assert resp.status_code == 200
+    assert "You finished the tutorial" not in resp.text
+    assert "Start the guided tutorial" in resp.text
+
+
+def test_settings_done_spoof_hidden_when_unseeded(client: TestClient) -> None:
+    resp = client.get("/settings?tutorial=done")
+    assert resp.status_code == 200
+    assert "You finished the tutorial" not in resp.text
+    assert "voxint tutorial seed" in resp.text
 
 
 # --------------------------------------------------------- completion + replay
@@ -376,7 +422,7 @@ def test_replay_clears_completion_preserves_rulings(
     session_factory: sessionmaker[Session],
 ) -> None:
     # Make a ruling, complete, then replay: completion clears, the ruling remains.
-    token = _token(_claim(client, tutorial_run_id, continue_tutorial=True))
+    token = _token(_claim(client, tutorial_run_id))
     _decide(client, tutorial_run_id, HEARD_LABEL, token, "exclude")
     client.post(
         "/settings/tutorial/complete",
@@ -458,7 +504,7 @@ def test_full_walkthrough_resolves_and_leaves_queue(
 ) -> None:
     # run → review (claim, continue) → adjudicate the two unresolved voices → the
     # run is fully resolved and drops out of the adjudication queue → finish.
-    location = _claim(client, tutorial_run_id, continue_tutorial=True)
+    location = _claim(client, tutorial_run_id)
     assert "tutorial=adjudicate" in location
     token = _token(location)
     _decide(client, tutorial_run_id, HEARD_LABEL, token, "exclude")

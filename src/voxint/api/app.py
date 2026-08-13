@@ -1129,7 +1129,6 @@ def _register_routes(app: FastAPI) -> None:
         operator: OperatorDep,
         session: SessionDep,
         csrf_token: Annotated[str | None, Form()] = None,
-        continue_tutorial: Annotated[bool, Form()] = False,
     ) -> RedirectResponse:
         # Claim mints the run's claim token, so — unlike the other workbench
         # mutations — it has no unguessable token of its own to gate a forged POST.
@@ -1147,14 +1146,20 @@ def _register_routes(app: FastAPI) -> None:
             )
         except ClaimUnavailableError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        # Guided-tutorial continuity: the tutorial's own claim form sets
-        # continue_tutorial, so a claim of the seeded run lands on the workbench in
-        # `adjudicate` mode. Bounded to a fixed marker (never an attacker-supplied
-        # return URL), and only for the real tutorial run, so it cannot redirect
-        # elsewhere or paint a banner onto an unrelated run.
+        # Guided-tutorial continuity: claiming the tutorial run — while the
+        # walkthrough is still active (not yet completed) — lands on the workbench
+        # in `adjudicate` mode. Keyed on RUN IDENTITY, not a hidden form field, so
+        # EVERY claim control continues the tutorial identically: the banner's own
+        # button, the queue row's ordinary "Review" button, and the workbench claim
+        # button. A first-time user therefore cannot silently fall out of the
+        # walkthrough by clicking the "wrong" (but identical-looking) button. A
+        # non-tutorial run is never rewritten, and once completed the tutorial run
+        # claims normally (no banner) — replay clears completion and re-activates it.
         suffix = ""
-        if continue_tutorial and ready_tutorial_run_id(session) == run_id:
-            suffix = "&tutorial=adjudicate"
+        if ready_tutorial_run_id(session) == run_id:
+            row = get_app_settings(session)
+            if row is not None and row.tutorial_completed_at is None:
+                suffix = "&tutorial=adjudicate"
         return RedirectResponse(
             f"/review/{run_id}?token={token}{suffix}", status_code=303
         )
@@ -1303,8 +1308,15 @@ def _register_routes(app: FastAPI) -> None:
                 "tutorial_available": tutorial_run is not None,
                 "tutorial_run_id": tutorial_run,
                 "tutorial_completed_at": row.tutorial_completed_at if row else None,
-                # Completion celebration after POST /settings/tutorial/complete.
-                "tutorial_done": request.query_params.get("tutorial") == "done",
+                # Completion celebration after POST /settings/tutorial/complete —
+                # shown ONLY when the tutorial is genuinely completed, so a spoofed
+                # or bookmarked ?tutorial=done on an unseeded/incomplete tutorial
+                # does not falsely claim completion.
+                "tutorial_done": (
+                    request.query_params.get("tutorial") == "done"
+                    and row is not None
+                    and row.tutorial_completed_at is not None
+                ),
                 "csrf_settings": mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_SETTINGS
                 ),

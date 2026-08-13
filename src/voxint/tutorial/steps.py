@@ -62,6 +62,12 @@ class TutorialPage(StrEnum):
 # Which page each step is allowed to render on. ADJUDICATE and EXPORT both bind to
 # the workbench (the same ``/review/{id}`` page, two banners); the API layer keys
 # the run identity check off ``tutorial_run_id`` so neither renders on another run.
+#
+# DONE binds to SETTINGS, but the Settings page renders its terminal completion
+# celebration INLINE (it needs a "submit your own media" link the walkthrough
+# banner has no place for), NOT through ``_tutorial_banner``. DONE's entry here is
+# still load-bearing: it makes ``?tutorial=done`` on a run/review/workbench page a
+# clean page-mismatch (no banner) instead of a ``KeyError`` on this dict.
 STEP_PAGE: dict[TutorialStep, TutorialPage] = {
     TutorialStep.RUN: TutorialPage.RUN_DETAIL,
     TutorialStep.REVIEW: TutorialPage.REVIEW_QUEUE,

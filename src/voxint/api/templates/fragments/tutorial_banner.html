@@ -17,10 +17,11 @@
     {% if tutorial.claim_run_id %}
     {# REVIEW step (and ADJUDICATE with no live claim): claim THIS exact run and
        continue into the workbench — works whether or not the run is still in the
-       queue, so a replayed (already-resolved) run is still reachable. #}
+       queue, so a replayed (already-resolved) run is still reachable. Continuation
+       into `adjudicate` mode is keyed on run identity in the claim route, so this
+       button and the ordinary queue/workbench claim buttons behave identically. #}
     <form method="post" action="/review/{{ tutorial.claim_run_id }}/claim" class="inline">
       <input type="hidden" name="csrf_token" value="{{ tutorial.csrf_claim }}">
-      <input type="hidden" name="continue_tutorial" value="true">
       <button type="submit">{{ tutorial.claim_label }}</button>
     </form>
     {% endif %}
