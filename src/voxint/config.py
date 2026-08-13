@@ -6,7 +6,7 @@ hardcoded elsewhere. Values come from the environment (or an ``.env`` file in de
 
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,6 +25,30 @@ Cosine = Annotated[float, Field(ge=-1, le=1, allow_inf_nan=False)]
 # reclaim ACQUIRE mid-publish. 300 s comfortably covers hashing a multi-GiB
 # file plus the kill grace and the commit.
 ACQUIRE_CLEANUP_MARGIN_SECONDS = 300.0
+
+# Headroom every stage lease must keep over the GPU-call timeout it covers:
+# after an inference call returns (or times out), the stage still persists its
+# results and commits before the lease may expire, or recovery reclaims the
+# stage mid-persist and a second worker re-executes it (docs/timeouts-and-leases.md).
+GPU_CALL_PERSISTENCE_MARGIN_SECONDS = 600.0
+
+# The CPU tier's scaling factor over the GPU-tier timing defaults. CPU
+# inference for these models is roughly 5-20x slower than GPU depending on
+# stage and cores; 4x on top of the already-generous GPU defaults (which carry
+# their own multi-hour slack) keeps a healthy slow run distinguishable from a
+# hung one without waiting a week to reclaim a genuinely dead lease. Explicit
+# env values always win over the scaled defaults.
+CPU_TIER_TIMEOUT_FACTOR = 4.0
+
+# Timing fields the compute-tier profile scales when they are left at their
+# defaults. acquire_* are download-bound, not inference-bound, so the tier
+# never touches them. celery_visibility scales with the leases it must cover.
+TIER_SCALED_TIMING_FIELDS = (
+    "gpu_http_timeout_seconds",
+    "stage_lease_seconds",
+    "diarize_embed_lease_seconds",
+    "celery_visibility_timeout_seconds",
+)
 
 
 class Settings(BaseSettings):
@@ -113,6 +137,13 @@ class Settings(BaseSettings):
     ytdlp_cookies_file: Path | None = None
 
     # GPU model services
+    # Which compute tier the model services run on. A named timing PROFILE,
+    # not a hardware switch: "cpu" multiplies the default inference timeouts /
+    # stage leases / visibility horizon by CPU_TIER_TIMEOUT_FACTOR so a
+    # healthy-but-slow CPU run is never reclaimed as hung mid-stage
+    # (docs/timeouts-and-leases.md). Explicitly-set values are never scaled.
+    # "rocm" and future accelerated tiers keep GPU-class timing.
+    compute_tier: Literal["gpu", "cpu", "rocm"] = "gpu"
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
     embedder_url: str = "http://localhost:8021"
@@ -206,6 +237,42 @@ class Settings(BaseSettings):
 
     # Domain pack (defaults to the bundled generic pack when unset)
     domain_pack_path: Path | None = None
+
+    @model_validator(mode="after")
+    def _apply_compute_tier_profile(self) -> "Settings":
+        # Defined FIRST so the scaled values are what every later invariant
+        # validator (LLM budget, visibility floor, GPU-timeout margin) checks.
+        # Only fields still at their class default are scaled — an explicit env
+        # value is an operator decision the profile must not override
+        # (model_fields_set tracks exactly which fields were provided).
+        if self.compute_tier == "cpu":
+            for name in TIER_SCALED_TIMING_FIELDS:
+                if name not in self.model_fields_set:
+                    scaled = type(getattr(self, name))(
+                        getattr(self, name) * CPU_TIER_TIMEOUT_FACTOR
+                    )
+                    object.__setattr__(self, name, scaled)
+        return self
+
+    @model_validator(mode="after")
+    def _gpu_timeout_fits_stage_leases(self) -> "Settings":
+        # Every stage lease must outlast the longest single inference call it
+        # covers PLUS the persistence tail, or recovery reclaims a healthy
+        # stage mid-persist and a second worker re-executes it (duplicate
+        # execution). transcribe/prepare-class stages sit under
+        # stage_lease_seconds; diarize_embed makes one diarization call plus N
+        # embedding batches, so its (dedicated, larger) lease gets the same
+        # floor against a single call — the batch-sum sizing is operational
+        # guidance in docs/timeouts-and-leases.md, not statically checkable.
+        floor = self.gpu_http_timeout_seconds + GPU_CALL_PERSISTENCE_MARGIN_SECONDS
+        for lease_name in ("stage_lease_seconds", "diarize_embed_lease_seconds"):
+            lease = getattr(self, lease_name)
+            if lease <= floor:
+                raise ValueError(
+                    f"{lease_name} ({lease}) must exceed gpu_http_timeout_seconds"
+                    f" plus the persistence margin ({floor})"
+                )
+        return self
 
     @model_validator(mode="after")
     def _llm_budget_fits_stage_lease(self) -> "Settings":

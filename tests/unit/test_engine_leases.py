@@ -15,6 +15,7 @@ def test_default_stage_leases_gives_acquire_and_diarize_dedicated_budgets(
         diarize_embed_lease_seconds=2000,
         acquire_lease_seconds=400,
         acquire_timeout_seconds=50.0,  # + 300 margin stays below the 400 lease
+        gpu_http_timeout_seconds=100.0,  # + 600 margin stays below both leases
     )
     monkeypatch.setattr(engine, "get_settings", lambda: settings)
 
@@ -44,6 +45,7 @@ def test_visibility_floor_matches_engine_lease_topology(
         diarize_embed_lease_seconds=2000,
         acquire_lease_seconds=500,
         acquire_timeout_seconds=100.0,  # + 300 margin < 500 lease
+        gpu_http_timeout_seconds=100.0,  # + 600 margin < both stage leases
     )
     base = Settings(_env_file=None, celery_visibility_timeout_seconds=10_000, **leases)
     monkeypatch.setattr(engine, "get_settings", lambda: base)

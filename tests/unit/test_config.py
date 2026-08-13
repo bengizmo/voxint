@@ -165,3 +165,58 @@ def test_celery_visibility_must_cover_all_leases() -> None:
         Settings(_env_file=None, diarize_embed_lease_seconds=200000)
     # Default settings clear the floor.
     Settings(_env_file=None)
+
+
+def test_compute_tier_defaults_to_gpu_baseline() -> None:
+    s = Settings(_env_file=None)
+    assert s.compute_tier == "gpu"
+    assert s.gpu_http_timeout_seconds == 14400.0
+    assert s.stage_lease_seconds == 21600
+    assert s.diarize_embed_lease_seconds == 43200
+    assert s.celery_visibility_timeout_seconds == 172800
+
+
+def test_cpu_tier_scales_default_timing_chain() -> None:
+    s = Settings(_env_file=None, compute_tier="cpu")
+    assert s.gpu_http_timeout_seconds == 14400.0 * 4
+    assert s.stage_lease_seconds == 21600 * 4
+    assert s.diarize_embed_lease_seconds == 43200 * 4
+    assert s.celery_visibility_timeout_seconds == 172800 * 4
+    # Scaled ints stay ints (Celery/engine consume these as ints).
+    assert isinstance(s.stage_lease_seconds, int)
+    # Download-bound budgets are tier-independent.
+    assert s.acquire_timeout_seconds == 7200.0
+    assert s.acquire_lease_seconds == 10800
+
+
+def test_rocm_tier_keeps_gpu_timing() -> None:
+    s = Settings(_env_file=None, compute_tier="rocm")
+    assert s.gpu_http_timeout_seconds == 14400.0
+    assert s.stage_lease_seconds == 21600
+
+
+def test_cpu_tier_never_overrides_explicit_values(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # Explicit env values win over the profile — and if the explicit value
+    # breaks the chain against the other (scaled) values, startup must fail
+    # loudly instead of silently un-scaling anything.
+    monkeypatch.setenv("COMPUTE_TIER", "cpu")
+    monkeypatch.setenv("STAGE_LEASE_SECONDS", "30000")
+    with pytest.raises(SettingsError, match="stage_lease_seconds"):
+        get_settings()
+    # A consistent explicit set is accepted unscaled.
+    monkeypatch.setenv("GPU_HTTP_TIMEOUT_SECONDS", "14400")
+    s = get_settings()
+    assert s.stage_lease_seconds == 30000
+    assert s.gpu_http_timeout_seconds == 14400.0
+    # Untouched fields still get the profile.
+    assert s.diarize_embed_lease_seconds == 43200 * 4
+
+
+def test_gpu_timeout_must_fit_stage_leases() -> None:
+    # Timeout reaching the lease minus margin opens a duplicate-execution
+    # window (recovery reclaims a stage still persisting a slow call).
+    with pytest.raises(ValidationError, match="persistence margin"):
+        Settings(_env_file=None, gpu_http_timeout_seconds=21600.0)
+    with pytest.raises(ValidationError, match="diarize_embed_lease_seconds"):
+        Settings(_env_file=None, diarize_embed_lease_seconds=14500)
+    Settings(_env_file=None)
