@@ -107,6 +107,8 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
+      - name: Install libsndfile (soundfile 0.12.1 ships no aarch64 wheel lib)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends libsndfile1
       - name: Install (dev + parity extras)
         run: uv sync --frozen --extra dev --extra parity
       - name: Fetch the exported graph (model-asset release)
