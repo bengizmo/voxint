@@ -33,3 +33,10 @@ paths = [
     '''^\.gitleaks\.toml$''',
     '''(^|/)uv\.lock$''',
 ]
+# 29ce5b5a: parity doc/test comments named the measurement host (a bare machine
+# nickname — no address or credential). Scrubbed from the worktree in the v0.4.0
+# release commit; the historical commit is allowlisted because published history
+# is never rewritten.
+commits = [
+    "29ce5b5a3c0b2a65c5442c467ca5b8c1b177bcfc",
+]

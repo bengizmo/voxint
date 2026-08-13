@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: uv sync --frozen --extra dev
+        run: uv sync --frozen --extra dev --extra parity
       - name: Install ffmpeg (normalize-stage tests)
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Ruff
