@@ -1,0 +1,930 @@
+{
+  "meta": {
+    "generated_on": "2026-08-13",
+    "image_tag": "0.3.0",
+    "hardware": "maintainer NVIDIA hardware",
+    "corpus_sha256": {
+      "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
+      "transcribe-short.wav": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f",
+      "diarize-3speaker.wav": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795"
+    },
+    "service_healthz": {
+      "status": "ok",
+      "service": "whisper",
+      "version": "1.0.0",
+      "contract_version": "v1",
+      "model": "large-v2",
+      "device": "cuda",
+      "model_loaded": true
+    }
+  },
+  "variants": {
+    "vad_true": {
+      "language": "en",
+      "duration_seconds": 34.15325,
+      "transcript": "This recording exists to measure transcription parity. The quick grey fox counted 32 crates of oranges on the harbour scale. Numbers matter here. 17, 406, and 1952. The committee approved the proposal without amendment, then adjourned for the season. A longer sentence follows, containing a few deliberately unusual words, such as gyroscope, marmalade, and periwinkle.  spoken at a steady pace to give the decoder an honest chance.",
+      "confidence": 0.8456702305632102,
+      "segments": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 29.6,
+          "text": " This recording exists to measure transcription parity. The quick grey fox counted 32 crates of oranges on the harbour scale. Numbers matter here. 17, 406, and 1952. The committee approved the proposal without amendment, then adjourned for the season. A longer sentence follows, containing a few deliberately unusual words, such as gyroscope, marmalade, and periwinkle.",
+          "confidence": 0.8368856529438424,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 29.93,
+          "end_seconds": 33.57,
+          "text": " spoken at a steady pace to give the decoder an honest chance.",
+          "confidence": 0.8544548081825779,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        }
+      ],
+      "words": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 0.22,
+          "word": " This",
+          "confidence": 0.60546875
+        },
+        {
+          "start_seconds": 0.22,
+          "end_seconds": 0.74,
+          "word": " recording",
+          "confidence": 0.853515625
+        },
+        {
+          "start_seconds": 0.74,
+          "end_seconds": 1.3,
+          "word": " exists",
+          "confidence": 0.74609375
+        },
+        {
+          "start_seconds": 1.3,
+          "end_seconds": 1.68,
+          "word": " to",
+          "confidence": 0.9033203125
+        },
+        {
+          "start_seconds": 1.68,
+          "end_seconds": 1.92,
+          "word": " measure",
+          "confidence": 0.8095703125
+        },
+        {
+          "start_seconds": 1.92,
+          "end_seconds": 2.68,
+          "word": " transcription",
+          "confidence": 0.806640625
+        },
+        {
+          "start_seconds": 2.68,
+          "end_seconds": 3.42,
+          "word": " parity.",
+          "confidence": 0.90185546875
+        },
+        {
+          "start_seconds": 4.02,
+          "end_seconds": 4.16,
+          "word": " The",
+          "confidence": 0.80908203125
+        },
+        {
+          "start_seconds": 4.16,
+          "end_seconds": 4.48,
+          "word": " quick",
+          "confidence": 0.5986328125
+        },
+        {
+          "start_seconds": 4.48,
+          "end_seconds": 4.78,
+          "word": " grey",
+          "confidence": 0.495849609375
+        },
+        {
+          "start_seconds": 4.78,
+          "end_seconds": 5.16,
+          "word": " fox",
+          "confidence": 0.78955078125
+        },
+        {
+          "start_seconds": 5.16,
+          "end_seconds": 5.66,
+          "word": " counted",
+          "confidence": 0.771484375
+        },
+        {
+          "start_seconds": 5.66,
+          "end_seconds": 6.4,
+          "word": " 32",
+          "confidence": 0.666015625
+        },
+        {
+          "start_seconds": 6.4,
+          "end_seconds": 6.94,
+          "word": " crates",
+          "confidence": 0.93505859375
+        },
+        {
+          "start_seconds": 6.94,
+          "end_seconds": 7.18,
+          "word": " of",
+          "confidence": 0.89892578125
+        },
+        {
+          "start_seconds": 7.18,
+          "end_seconds": 7.54,
+          "word": " oranges",
+          "confidence": 0.845703125
+        },
+        {
+          "start_seconds": 7.54,
+          "end_seconds": 7.8,
+          "word": " on",
+          "confidence": 0.8974609375
+        },
+        {
+          "start_seconds": 7.8,
+          "end_seconds": 7.98,
+          "word": " the",
+          "confidence": 0.8193359375
+        },
+        {
+          "start_seconds": 7.98,
+          "end_seconds": 8.34,
+          "word": " harbour",
+          "confidence": 0.59063720703125
+        },
+        {
+          "start_seconds": 8.34,
+          "end_seconds": 8.86,
+          "word": " scale.",
+          "confidence": 0.7939453125
+        },
+        {
+          "start_seconds": 9.34,
+          "end_seconds": 9.8,
+          "word": " Numbers",
+          "confidence": 0.85400390625
+        },
+        {
+          "start_seconds": 9.8,
+          "end_seconds": 10.12,
+          "word": " matter",
+          "confidence": 0.84423828125
+        },
+        {
+          "start_seconds": 10.12,
+          "end_seconds": 10.56,
+          "word": " here.",
+          "confidence": 0.8076171875
+        },
+        {
+          "start_seconds": 11.02,
+          "end_seconds": 11.54,
+          "word": " 17,",
+          "confidence": 0.705078125
+        },
+        {
+          "start_seconds": 12.06,
+          "end_seconds": 13.22,
+          "word": " 406,",
+          "confidence": 0.89892578125
+        },
+        {
+          "start_seconds": 13.58,
+          "end_seconds": 13.8,
+          "word": " and",
+          "confidence": 0.85107421875
+        },
+        {
+          "start_seconds": 13.8,
+          "end_seconds": 15.14,
+          "word": " 1952.",
+          "confidence": 0.915283203125
+        },
+        {
+          "start_seconds": 15.7,
+          "end_seconds": 15.88,
+          "word": " The",
+          "confidence": 0.81982421875
+        },
+        {
+          "start_seconds": 15.88,
+          "end_seconds": 16.24,
+          "word": " committee",
+          "confidence": 0.650390625
+        },
+        {
+          "start_seconds": 16.24,
+          "end_seconds": 16.84,
+          "word": " approved",
+          "confidence": 0.82958984375
+        },
+        {
+          "start_seconds": 16.84,
+          "end_seconds": 17.12,
+          "word": " the",
+          "confidence": 0.791015625
+        },
+        {
+          "start_seconds": 17.12,
+          "end_seconds": 17.62,
+          "word": " proposal",
+          "confidence": 0.7158203125
+        },
+        {
+          "start_seconds": 17.62,
+          "end_seconds": 18.1,
+          "word": " without",
+          "confidence": 0.794921875
+        },
+        {
+          "start_seconds": 18.1,
+          "end_seconds": 18.68,
+          "word": " amendment,",
+          "confidence": 0.80859375
+        },
+        {
+          "start_seconds": 19.16,
+          "end_seconds": 19.38,
+          "word": " then",
+          "confidence": 0.7060546875
+        },
+        {
+          "start_seconds": 19.38,
+          "end_seconds": 19.82,
+          "word": " adjourned",
+          "confidence": 0.974609375
+        },
+        {
+          "start_seconds": 19.82,
+          "end_seconds": 20.04,
+          "word": " for",
+          "confidence": 0.892578125
+        },
+        {
+          "start_seconds": 20.04,
+          "end_seconds": 20.24,
+          "word": " the",
+          "confidence": 0.80078125
+        },
+        {
+          "start_seconds": 20.24,
+          "end_seconds": 20.6,
+          "word": " season.",
+          "confidence": 0.88037109375
+        },
+        {
+          "start_seconds": 21.22,
+          "end_seconds": 21.38,
+          "word": " A",
+          "confidence": 0.99560546875
+        },
+        {
+          "start_seconds": 21.38,
+          "end_seconds": 21.68,
+          "word": " longer",
+          "confidence": 0.80859375
+        },
+        {
+          "start_seconds": 21.68,
+          "end_seconds": 22.24,
+          "word": " sentence",
+          "confidence": 0.84033203125
+        },
+        {
+          "start_seconds": 22.24,
+          "end_seconds": 22.78,
+          "word": " follows,",
+          "confidence": 0.82763671875
+        },
+        {
+          "start_seconds": 23.22,
+          "end_seconds": 23.64,
+          "word": " containing",
+          "confidence": 0.8115234375
+        },
+        {
+          "start_seconds": 23.64,
+          "end_seconds": 23.94,
+          "word": " a",
+          "confidence": 0.99951171875
+        },
+        {
+          "start_seconds": 23.94,
+          "end_seconds": 24.14,
+          "word": " few",
+          "confidence": 0.81640625
+        },
+        {
+          "start_seconds": 24.14,
+          "end_seconds": 24.66,
+          "word": " deliberately",
+          "confidence": 0.84375
+        },
+        {
+          "start_seconds": 24.66,
+          "end_seconds": 25.26,
+          "word": " unusual",
+          "confidence": 0.78857421875
+        },
+        {
+          "start_seconds": 25.26,
+          "end_seconds": 25.88,
+          "word": " words,",
+          "confidence": 0.7431640625
+        },
+        {
+          "start_seconds": 26.22,
+          "end_seconds": 26.5,
+          "word": " such",
+          "confidence": 0.8837890625
+        },
+        {
+          "start_seconds": 26.5,
+          "end_seconds": 26.76,
+          "word": " as",
+          "confidence": 0.9033203125
+        },
+        {
+          "start_seconds": 26.76,
+          "end_seconds": 27.52,
+          "word": " gyroscope,",
+          "confidence": 0.7493489583333334
+        },
+        {
+          "start_seconds": 27.88,
+          "end_seconds": 28.5,
+          "word": " marmalade,",
+          "confidence": 0.9283854166666666
+        },
+        {
+          "start_seconds": 28.74,
+          "end_seconds": 29.0,
+          "word": " and",
+          "confidence": 0.89013671875
+        },
+        {
+          "start_seconds": 29.0,
+          "end_seconds": 29.6,
+          "word": " periwinkle.",
+          "confidence": 0.968994140625
+        },
+        {
+          "start_seconds": 29.93,
+          "end_seconds": 30.39,
+          "word": " spoken",
+          "confidence": 0.5380859375
+        },
+        {
+          "start_seconds": 30.39,
+          "end_seconds": 30.65,
+          "word": " at",
+          "confidence": 0.8896484375
+        },
+        {
+          "start_seconds": 30.65,
+          "end_seconds": 30.79,
+          "word": " a",
+          "confidence": 0.9951171875
+        },
+        {
+          "start_seconds": 30.79,
+          "end_seconds": 31.07,
+          "word": " steady",
+          "confidence": 0.78466796875
+        },
+        {
+          "start_seconds": 31.07,
+          "end_seconds": 31.45,
+          "word": " pace",
+          "confidence": 0.85791015625
+        },
+        {
+          "start_seconds": 31.45,
+          "end_seconds": 31.67,
+          "word": " to",
+          "confidence": 0.900390625
+        },
+        {
+          "start_seconds": 31.67,
+          "end_seconds": 31.93,
+          "word": " give",
+          "confidence": 0.8408203125
+        },
+        {
+          "start_seconds": 31.93,
+          "end_seconds": 32.11,
+          "word": " the",
+          "confidence": 0.81201171875
+        },
+        {
+          "start_seconds": 32.11,
+          "end_seconds": 32.59,
+          "word": " decoder",
+          "confidence": 0.936767578125
+        },
+        {
+          "start_seconds": 32.59,
+          "end_seconds": 32.75,
+          "word": " an",
+          "confidence": 0.90771484375
+        },
+        {
+          "start_seconds": 32.75,
+          "end_seconds": 33.09,
+          "word": " honest",
+          "confidence": 0.84716796875
+        },
+        {
+          "start_seconds": 33.09,
+          "end_seconds": 33.57,
+          "word": " chance.",
+          "confidence": 0.93896484375
+        }
+      ],
+      "suspect_segment_count": 0
+    },
+    "vad_false": {
+      "language": "en",
+      "duration_seconds": 34.15325,
+      "transcript": "This recording exists to measure transcription parity.  The quick grey fox counted 32 crates of oranges on the Haber scale.  Numbers matter here.  17, 406, and 1952.  The committee approved the proposal without amendment, then adjourned for the season.  A longer sentence follows, containing a few deliberately unusual words, such as gyroscope,  Marmalade, and Periwinkle, spoken at a steady pace to give the decoder an honest chance.",
+      "confidence": 0.7177370215297986,
+      "segments": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 3.42,
+          "text": " This recording exists to measure transcription parity.",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 4.04,
+          "end_seconds": 8.84,
+          "text": " The quick grey fox counted 32 crates of oranges on the Haber scale.",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 9.36,
+          "end_seconds": 10.58,
+          "text": " Numbers matter here.",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 11.04,
+          "end_seconds": 15.14,
+          "text": " 17, 406, and 1952.",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 15.7,
+          "end_seconds": 20.64,
+          "text": " The committee approved the proposal without amendment, then adjourned for the season.",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 21.2,
+          "end_seconds": 27.52,
+          "text": " A longer sentence follows, containing a few deliberately unusual words, such as gyroscope,",
+          "confidence": 0.7165752099889755,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        },
+        {
+          "start_seconds": 27.52,
+          "end_seconds": 33.58,
+          "text": " Marmalade, and Periwinkle, spoken at a steady pace to give the decoder an honest chance.",
+          "confidence": 0.7247078907747374,
+          "suspect": false,
+          "suspect_score": null,
+          "suspect_span": null
+        }
+      ],
+      "words": [
+        {
+          "start_seconds": 0.0,
+          "end_seconds": 0.22,
+          "word": " This",
+          "confidence": 0.55224609375
+        },
+        {
+          "start_seconds": 0.22,
+          "end_seconds": 0.74,
+          "word": " recording",
+          "confidence": 0.8603515625
+        },
+        {
+          "start_seconds": 0.74,
+          "end_seconds": 1.3,
+          "word": " exists",
+          "confidence": 0.75732421875
+        },
+        {
+          "start_seconds": 1.3,
+          "end_seconds": 1.68,
+          "word": " to",
+          "confidence": 0.90576171875
+        },
+        {
+          "start_seconds": 1.68,
+          "end_seconds": 1.92,
+          "word": " measure",
+          "confidence": 0.80224609375
+        },
+        {
+          "start_seconds": 1.92,
+          "end_seconds": 2.68,
+          "word": " transcription",
+          "confidence": 0.79931640625
+        },
+        {
+          "start_seconds": 2.68,
+          "end_seconds": 3.42,
+          "word": " parity.",
+          "confidence": 0.8974609375
+        },
+        {
+          "start_seconds": 4.04,
+          "end_seconds": 4.16,
+          "word": " The",
+          "confidence": 0.8154296875
+        },
+        {
+          "start_seconds": 4.16,
+          "end_seconds": 4.48,
+          "word": " quick",
+          "confidence": 0.471923828125
+        },
+        {
+          "start_seconds": 4.48,
+          "end_seconds": 4.78,
+          "word": " grey",
+          "confidence": 0.47509765625
+        },
+        {
+          "start_seconds": 4.78,
+          "end_seconds": 5.16,
+          "word": " fox",
+          "confidence": 0.7900390625
+        },
+        {
+          "start_seconds": 5.16,
+          "end_seconds": 5.66,
+          "word": " counted",
+          "confidence": 0.767578125
+        },
+        {
+          "start_seconds": 5.66,
+          "end_seconds": 6.4,
+          "word": " 32",
+          "confidence": 0.68017578125
+        },
+        {
+          "start_seconds": 6.4,
+          "end_seconds": 6.94,
+          "word": " crates",
+          "confidence": 0.930908203125
+        },
+        {
+          "start_seconds": 6.94,
+          "end_seconds": 7.18,
+          "word": " of",
+          "confidence": 0.916015625
+        },
+        {
+          "start_seconds": 7.18,
+          "end_seconds": 7.54,
+          "word": " oranges",
+          "confidence": 0.84130859375
+        },
+        {
+          "start_seconds": 7.54,
+          "end_seconds": 7.8,
+          "word": " on",
+          "confidence": 0.8896484375
+        },
+        {
+          "start_seconds": 7.8,
+          "end_seconds": 7.98,
+          "word": " the",
+          "confidence": 0.8154296875
+        },
+        {
+          "start_seconds": 7.98,
+          "end_seconds": 8.36,
+          "word": " Haber",
+          "confidence": 0.579833984375
+        },
+        {
+          "start_seconds": 8.36,
+          "end_seconds": 8.84,
+          "word": " scale.",
+          "confidence": 0.76611328125
+        },
+        {
+          "start_seconds": 9.36,
+          "end_seconds": 9.8,
+          "word": " Numbers",
+          "confidence": 0.836181640625
+        },
+        {
+          "start_seconds": 9.8,
+          "end_seconds": 10.12,
+          "word": " matter",
+          "confidence": 0.8466796875
+        },
+        {
+          "start_seconds": 10.12,
+          "end_seconds": 10.58,
+          "word": " here.",
+          "confidence": 0.80224609375
+        },
+        {
+          "start_seconds": 11.04,
+          "end_seconds": 11.5,
+          "word": " 17,",
+          "confidence": 0.68408203125
+        },
+        {
+          "start_seconds": 12.06,
+          "end_seconds": 13.22,
+          "word": " 406,",
+          "confidence": 0.901611328125
+        },
+        {
+          "start_seconds": 13.58,
+          "end_seconds": 13.8,
+          "word": " and",
+          "confidence": 0.841796875
+        },
+        {
+          "start_seconds": 13.8,
+          "end_seconds": 15.14,
+          "word": " 1952.",
+          "confidence": 0.920166015625
+        },
+        {
+          "start_seconds": 15.7,
+          "end_seconds": 15.86,
+          "word": " The",
+          "confidence": 0.8203125
+        },
+        {
+          "start_seconds": 15.86,
+          "end_seconds": 16.24,
+          "word": " committee",
+          "confidence": 0.642578125
+        },
+        {
+          "start_seconds": 16.24,
+          "end_seconds": 16.84,
+          "word": " approved",
+          "confidence": 0.82275390625
+        },
+        {
+          "start_seconds": 16.84,
+          "end_seconds": 17.12,
+          "word": " the",
+          "confidence": 0.80078125
+        },
+        {
+          "start_seconds": 17.12,
+          "end_seconds": 17.62,
+          "word": " proposal",
+          "confidence": 0.7119140625
+        },
+        {
+          "start_seconds": 17.62,
+          "end_seconds": 18.1,
+          "word": " without",
+          "confidence": 0.8115234375
+        },
+        {
+          "start_seconds": 18.1,
+          "end_seconds": 18.68,
+          "word": " amendment,",
+          "confidence": 0.8046875
+        },
+        {
+          "start_seconds": 19.16,
+          "end_seconds": 19.38,
+          "word": " then",
+          "confidence": 0.73486328125
+        },
+        {
+          "start_seconds": 19.38,
+          "end_seconds": 19.82,
+          "word": " adjourned",
+          "confidence": 0.974609375
+        },
+        {
+          "start_seconds": 19.82,
+          "end_seconds": 20.04,
+          "word": " for",
+          "confidence": 0.89453125
+        },
+        {
+          "start_seconds": 20.04,
+          "end_seconds": 20.24,
+          "word": " the",
+          "confidence": 0.8076171875
+        },
+        {
+          "start_seconds": 20.24,
+          "end_seconds": 20.64,
+          "word": " season.",
+          "confidence": 0.88232421875
+        },
+        {
+          "start_seconds": 21.2,
+          "end_seconds": 21.38,
+          "word": " A",
+          "confidence": 0.99072265625
+        },
+        {
+          "start_seconds": 21.38,
+          "end_seconds": 21.68,
+          "word": " longer",
+          "confidence": 0.82080078125
+        },
+        {
+          "start_seconds": 21.68,
+          "end_seconds": 22.24,
+          "word": " sentence",
+          "confidence": 0.841796875
+        },
+        {
+          "start_seconds": 22.24,
+          "end_seconds": 22.78,
+          "word": " follows,",
+          "confidence": 0.8291015625
+        },
+        {
+          "start_seconds": 23.22,
+          "end_seconds": 23.64,
+          "word": " containing",
+          "confidence": 0.8310546875
+        },
+        {
+          "start_seconds": 23.64,
+          "end_seconds": 23.94,
+          "word": " a",
+          "confidence": 0.9990234375
+        },
+        {
+          "start_seconds": 23.94,
+          "end_seconds": 24.14,
+          "word": " few",
+          "confidence": 0.79541015625
+        },
+        {
+          "start_seconds": 24.14,
+          "end_seconds": 24.66,
+          "word": " deliberately",
+          "confidence": 0.84033203125
+        },
+        {
+          "start_seconds": 24.66,
+          "end_seconds": 25.26,
+          "word": " unusual",
+          "confidence": 0.8212890625
+        },
+        {
+          "start_seconds": 25.26,
+          "end_seconds": 25.88,
+          "word": " words,",
+          "confidence": 0.73779296875
+        },
+        {
+          "start_seconds": 26.22,
+          "end_seconds": 26.5,
+          "word": " such",
+          "confidence": 0.8740234375
+        },
+        {
+          "start_seconds": 26.5,
+          "end_seconds": 26.76,
+          "word": " as",
+          "confidence": 0.89990234375
+        },
+        {
+          "start_seconds": 26.76,
+          "end_seconds": 27.52,
+          "word": " gyroscope,",
+          "confidence": 0.7552083333333334
+        },
+        {
+          "start_seconds": 27.52,
+          "end_seconds": 28.5,
+          "word": " Marmalade,",
+          "confidence": 0.7938639322916666
+        },
+        {
+          "start_seconds": 28.76,
+          "end_seconds": 28.98,
+          "word": " and",
+          "confidence": 0.8486328125
+        },
+        {
+          "start_seconds": 28.98,
+          "end_seconds": 29.68,
+          "word": " Periwinkle,",
+          "confidence": 0.94287109375
+        },
+        {
+          "start_seconds": 30.02,
+          "end_seconds": 30.52,
+          "word": " spoken",
+          "confidence": 0.460205078125
+        },
+        {
+          "start_seconds": 30.52,
+          "end_seconds": 30.66,
+          "word": " at",
+          "confidence": 0.90966796875
+        },
+        {
+          "start_seconds": 30.66,
+          "end_seconds": 30.82,
+          "word": " a",
+          "confidence": 0.99609375
+        },
+        {
+          "start_seconds": 30.82,
+          "end_seconds": 31.08,
+          "word": " steady",
+          "confidence": 0.77685546875
+        },
+        {
+          "start_seconds": 31.08,
+          "end_seconds": 31.46,
+          "word": " pace",
+          "confidence": 0.857421875
+        },
+        {
+          "start_seconds": 31.46,
+          "end_seconds": 31.68,
+          "word": " to",
+          "confidence": 0.8740234375
+        },
+        {
+          "start_seconds": 31.68,
+          "end_seconds": 31.92,
+          "word": " give",
+          "confidence": 0.83642578125
+        },
+        {
+          "start_seconds": 31.92,
+          "end_seconds": 32.1,
+          "word": " the",
+          "confidence": 0.7958984375
+        },
+        {
+          "start_seconds": 32.1,
+          "end_seconds": 32.58,
+          "word": " decoder",
+          "confidence": 0.83984375
+        },
+        {
+          "start_seconds": 32.58,
+          "end_seconds": 32.76,
+          "word": " an",
+          "confidence": 0.89892578125
+        },
+        {
+          "start_seconds": 32.76,
+          "end_seconds": 33.08,
+          "word": " honest",
+          "confidence": 0.84619140625
+        },
+        {
+          "start_seconds": 33.08,
+          "end_seconds": 33.58,
+          "word": " chance.",
+          "confidence": 0.92626953125
+        }
+      ],
+      "suspect_segment_count": 0
+    }
+  }
+}

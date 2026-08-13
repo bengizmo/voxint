@@ -1,0 +1,93 @@
+{
+  "meta": {
+    "generated_on": "2026-08-13",
+    "image_tag": "0.3.0",
+    "hardware": "maintainer NVIDIA hardware",
+    "corpus_sha256": {
+      "embed-corpus.wav": "4cd3dd6d8f074c43902ae5a395dd3f9d839a630424ed28a6d1d26d06d969a080",
+      "transcribe-short.wav": "55001f48bd6965d7bad634384aaf9e833d93696d6cc6139b2d842238e182429f",
+      "diarize-3speaker.wav": "70d34c80ffabfe393dc3e1e1bc92e8cf4b1d6c26fb21e08b7df894f3f4fe1795"
+    },
+    "service_healthz": {
+      "status": "ok",
+      "service": "pyannote",
+      "version": "1.0.0",
+      "contract_version": "v1",
+      "model": "pyannote/speaker-diarization-3.1",
+      "device": "cuda",
+      "model_loaded": true
+    }
+  },
+  "response": {
+    "duration_seconds": 39.2789375,
+    "num_speakers": 3,
+    "turns": [
+      {
+        "start_seconds": 0.008488964346349746,
+        "end_seconds": 4.439728353140916,
+        "label": "SPEAKER_00",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 5.2207130730050935,
+        "end_seconds": 10.297113752122241,
+        "label": "SPEAKER_01",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 10.891341256366724,
+        "end_seconds": 15.950764006791173,
+        "label": "SPEAKER_00",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 16.64685908319185,
+        "end_seconds": 19.855687606112056,
+        "label": "SPEAKER_00",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 20.46689303904924,
+        "end_seconds": 24.354838709677423,
+        "label": "SPEAKER_02",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 24.9660441426146,
+        "end_seconds": 34.42275042444822,
+        "label": "SPEAKER_00",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      },
+      {
+        "start_seconds": 35.0848896434635,
+        "end_seconds": 38.59932088285229,
+        "label": "SPEAKER_02",
+        "overlap": false,
+        "overlap_seconds": 0.0
+      }
+    ],
+    "speakers": [
+      {
+        "label": "SPEAKER_00",
+        "total_seconds": 22.15619694397284,
+        "num_turns": 4
+      },
+      {
+        "label": "SPEAKER_02",
+        "total_seconds": 7.402376910016976,
+        "num_turns": 2
+      },
+      {
+        "label": "SPEAKER_01",
+        "total_seconds": 5.076400679117148,
+        "num_turns": 1
+      }
+    ]
+  }
+}
