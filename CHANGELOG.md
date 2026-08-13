@@ -5,6 +5,46 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+CPU tier: run Voxint's full pipeline with **no NVIDIA GPU** — on plain
+servers, AMD boxes, and Apple Silicon (Docker Desktop). Closes the
+container-path ask of #1 (Apple Silicon) and #4 (AMD); accelerated ROCm and
+native-Metal tiers are tracked separately.
+
+### Added
+- **Multi-arch (amd64 + arm64) `-cpu` image flavor** for all three model
+  services (`voxint-{whisper,pyannote,titanet}:X.Y.Z-cpu`), built natively
+  per arch (no QEMU) and merged into one manifest list. Unsuffixed
+  model-service tags remain CUDA, unchanged.
+- **`compose.cpu.yaml`** overlay: the whole stack on CPU with
+  `docker compose -f compose.yaml -f compose.cpu.yaml up -d`. Sets
+  `COMPUTE_TIER=cpu`, which scales default inference timeouts, stage leases,
+  and the Celery visibility horizon so slow-but-healthy CPU runs are never
+  reclaimed as hung. Honest expectation: long recordings take **hours** on
+  CPU.
+- **titanet ONNX Runtime engine in the shipped `-cpu` image**
+  (`EMBED_ENGINE=onnx`, torch- and NeMo-free): same embedding space id
+  (`titanet-large-v1`), kept on the measured three-level parity gate
+  (mel / vector / decision) against the CUDA engine — verdict recorded in
+  `docs/gpu-contracts.md`. The build verifies the model artifact's sha256
+  against the committed export provenance; the ~100 MB `.onnx` ships via the
+  standing `titanet-onnx-v1` model-asset release, never git.
+- **pyannote device cascade** (`cuda → mps → cpu`) with a real-tensor-op
+  startup probe that checks device output against a CPU reference — a backend
+  that computes silently-wrong results (the historical MPS failure mode) is
+  rejected, not trusted. MPS is inert in containers; the branch serves the
+  future Apple host-process path.
+- **Release gates in `release.yml`**: the strict titanet parity harness
+  (`VOXINT_PARITY_REQUIRED=1`) runs on amd64 **and** arm64 runners and blocks
+  the multi-arch builds; merged `-cpu` images get a per-arch boot +
+  `/healthz`-identity + short-clip smoke (pyannote's needs an `HF_TOKEN`
+  secret and SKIPs explicitly when absent).
+
+### Changed
+- **The app image (`voxint`) is now multi-arch** (amd64 + arm64).
+- The whisper CUDA image's engine, pins, and behavior are untouched; the
+  `-cpu` flavor runs the same faster-whisper/CTranslate2 int8 engine with
+  CPU-appropriate defaults (`BATCH_SIZE=4`).
+
 ## [0.3.0] — 2026-08-13
 
 Non-technical onboarding: get from a fresh clone to a first successful,

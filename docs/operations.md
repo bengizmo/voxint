@@ -12,7 +12,9 @@ compose version`; the legacy v1 `docker-compose` binary cannot parse this
 stack, and older v2 plugins lack its optional-`env_file` syntax), and for the
 GPU overlay an NVIDIA GPU with the NVIDIA container toolkit. The three model
 services share one GPU and total ~3.5–4.5 GB of loaded VRAM; budget ~6–8 GB for
-Whisper batch headroom (per-service figures in `services/*/README.md`).
+Whisper batch headroom (per-service figures in `services/*/README.md`). No
+NVIDIA GPU? See [the CPU tier](#running-without-an-nvidia-gpu-cpu-tier) below —
+slower, but runs anywhere, including arm64/Apple Silicon.
 
 For a first run, `./scripts/install.sh` is the recommended path — it renders
 `.env`, generates secrets, resolves port collisions, brings the core stack up, and
@@ -53,6 +55,42 @@ docker compose -f compose.yaml -f compose.gpu.yaml \
 Exactly one service (`api`) declares the app `build:`; migrate/worker/beat
 consume the tag it produces. Do not give several `build:` services a shared
 `image:` tag — concurrent BuildKit writers race on it ("already exists").
+
+### Running without an NVIDIA GPU (CPU tier)
+
+Every model service also ships a **`-cpu` image flavor** — multi-arch
+(amd64 + arm64), no GPU, no NVIDIA container toolkit. This is the supported
+path for Apple Silicon (via Docker Desktop), AMD-GPU boxes (until the ROCm
+tier lands), and plain CPU servers:
+
+```bash
+docker compose -f compose.yaml -f compose.cpu.yaml up -d
+```
+
+What changes relative to the GPU overlay — and what doesn't:
+
+- **Speed — set expectations honestly.** CPU inference is orders of magnitude
+  slower than GPU: transcribing a multi-hour recording takes **hours**, not
+  minutes. This is fine for overnight/batch use and correctness-identical; it
+  is not an interactive experience.
+- **`COMPUTE_TIER=cpu` is load-bearing.** The overlay sets it on the api and
+  worker: it multiplies the default inference timeouts, stage leases, and the
+  Celery visibility horizon so a healthy 4-hour CPU transcription is never
+  reclaimed as a hung task mid-stage (the reclaim would duplicate work). See
+  [timeouts-and-leases.md](timeouts-and-leases.md). Timeout env vars you set
+  explicitly are never scaled.
+- **Same contracts, same quality.** `/v1/*` request/response schemas and the
+  quality gates are identical. whisper runs the same faster-whisper/CTranslate2
+  engine (int8) on CPU; pyannote runs the same pipeline on torch-CPU; titanet
+  runs on **ONNX Runtime** (`/healthz` reports `engine: onnxruntime`) under the
+  **same embedding space id** (`titanet-large-v1`) — kept on a measured
+  three-level parity gate against the CUDA engine, not on faith
+  (see [gpu-contracts.md](gpu-contracts.md)).
+- **pyannote still needs `HF_TOKEN`** in `.env` — the diarization weights are
+  HF-gated regardless of compute tier.
+- **Mixing tiers is fine.** The overlays are per-service compositions; a later
+  accelerated tier (e.g. ROCm pyannote) swaps individual services without
+  touching the others.
 
 ### Schema migrations
 

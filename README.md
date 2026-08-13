@@ -128,6 +128,22 @@ Per-service details, env tunables, and image matrices:
 `services/*/README.md`; wire contracts:
 [docs/gpu-contracts.md](docs/gpu-contracts.md).
 
+**No NVIDIA GPU?** The same three model services ship as multi-arch
+(amd64 + arm64) `-cpu` images — no GPU, no NVIDIA toolkit, runs on plain
+servers, AMD boxes, and Apple Silicon via Docker Desktop:
+
+```bash
+docker compose -f compose.yaml -f compose.cpu.yaml up -d
+```
+
+Be honest with your expectations: CPU inference is **orders of magnitude
+slower** — a long recording that takes minutes on a GPU takes **hours** on
+CPU. The overlay sets `COMPUTE_TIER=cpu`, which scales the pipeline's
+timeouts and stage leases so slow-but-healthy runs aren't reclaimed as hung.
+Same contracts, same embedding space (TitaNet runs on ONNX Runtime under a
+measured-equivalence parity gate). Details:
+[docs/operations.md](docs/operations.md#running-without-an-nvidia-gpu-cpu-tier).
+
 To run the source you checked out instead of the release images, layer the
 build overlays (exactly one service owns each build — see
 [docs/operations.md](docs/operations.md)):
