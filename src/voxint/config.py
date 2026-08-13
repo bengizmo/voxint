@@ -198,6 +198,10 @@ class Settings(BaseSettings):
         # overrun by up to attempts x timeout. Budget plus that worst case must
         # stay below the lease or recovery could reclaim enhance_match
         # mid-flight — catch the misconfiguration at startup, not in production.
+        # NOTE: the first-run wizard can enable the LLM at runtime (app_settings)
+        # independent of this env flag, so this env-time check does not cover that
+        # path — the wizard's enable step validates budget-vs-lease itself before
+        # persisting llm_enabled=True (see the onboarding wizard, issue #3).
         if self.llm_enabled:
             worst_case = self.llm_run_budget_seconds + (
                 self.llm_attempts_per_batch * self.llm_timeout_seconds

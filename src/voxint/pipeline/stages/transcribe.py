@@ -9,7 +9,7 @@ from voxint.db.models import TranscriptSegment
 from voxint.pipeline.stages.context import StageContext, normalized_audio_path
 
 # Whisper biases toward — and can hallucinate from — an over-long initial_prompt,
-# so bound it. Terms are dropped whole at the boundary rather than mid-word.
+# so bound it. Terms are dropped whole (never mid-word).
 INITIAL_PROMPT_MAX_CHARS = 2000
 
 
@@ -17,14 +17,16 @@ def _initial_prompt(vocabulary: tuple[str, ...]) -> str | None:
     """Render the run's vocabulary as a bounded whisper ``initial_prompt``.
 
     ``vocabulary`` is already deduped/ordered upstream; this joins terms with
-    ", " up to the char cap (whole terms only) and returns None when empty.
+    ", " up to the char cap (whole terms only) and returns None when empty. A
+    single over-cap term is skipped rather than aborting the rest, so one
+    pathological entry can't starve every later term.
     """
     parts: list[str] = []
     length = 0
     for term in vocabulary:
         addition = len(term) + (2 if parts else 0)  # ", " separator between terms
         if length + addition > INITIAL_PROMPT_MAX_CHARS:
-            break
+            continue  # this term doesn't fit; a shorter later term still might
         parts.append(term)
         length += addition
     return ", ".join(parts) if parts else None

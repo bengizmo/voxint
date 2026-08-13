@@ -84,7 +84,15 @@ class StageContext:
 
 
 def build_stage_context(settings: Settings) -> StageContext:
-    """Production wiring: long-lived HTTP clients sized for media-length calls."""
+    """Production wiring: long-lived HTTP clients sized for media-length calls.
+
+    This is the process-cached BASE context. The LLM client is deliberately left
+    ``None`` here and wired per-run by :func:`apply_run_preferences`, which owns
+    (and closes) it — the run's effective base_url/model/enabled come from the
+    app_settings row, and a per-run owned ``httpx.Client`` must not outlive the run.
+    The transport clients (asr/diarizer/embedder/downloader) ARE long-lived and are
+    preserved across runs.
+    """
     timeout = settings.gpu_http_timeout_seconds
     pack = (
         DomainPack.load(settings.domain_pack_path)
@@ -95,16 +103,7 @@ def build_stage_context(settings: Settings) -> StageContext:
         asr=HttpASRClient(settings.asr_url, settings.media_root, timeout),
         diarizer=HttpDiarizerClient(settings.diarizer_url, settings.media_root, timeout),
         embedder=HttpEmbedderClient(settings.embedder_url, settings.media_root, timeout),
-        llm=(
-            HttpLLMClient(
-                settings.llm_base_url,
-                settings.llm_model,
-                settings.llm_api_key,
-                settings.llm_timeout_seconds,
-            )
-            if settings.llm_enabled
-            else None
-        ),
+        llm=None,  # wired per-run by apply_run_preferences (which closes it)
         media_root=settings.media_root,
         downloader=build_ytdlp_downloader(
             timeout_seconds=settings.acquire_timeout_seconds,
@@ -201,6 +200,10 @@ def apply_run_preferences(
     client. Enabling the LLM without an env key is an honest no-op: the run logs a
     warning and proceeds with ``llm=None`` (enhancement is best-effort, never a
     blocker), rather than failing.
+
+    When enabled, the returned ``llm`` is a freshly built ``HttpLLMClient`` that
+    OWNS its ``httpx.Client``; the caller (``run_pipeline``) must ``close()`` it
+    after the run so a long-lived worker does not leak a connection pool per run.
     """
     vocabulary = _dedup_order_preserving((*base.vocabulary, *prefs.vocabulary))
     enhancement_context = _augment_enhancement_context(base.enhancement_context, vocabulary)

@@ -10,13 +10,15 @@ reached ASR changed — without ever rebuilding the base context.
 
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint import app_settings as store
 from voxint.config import Settings
-from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun
+from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun, RunStatus, Stage
 from voxint.pipeline.stages import transcribe
 from voxint.pipeline.stages.context import (
     StageContext,
@@ -106,3 +108,92 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
     assert "Foobar" not in asr.last_initial_prompt  # ...with no _runtime rebuild
     assert "Packword" in asr.last_initial_prompt  # pack vocab persists
     assert ctx_b.llm is None  # disabled by the edit
+
+
+def test_run_pipeline_reapplies_settings_each_invocation(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The run_pipeline glue (not just the resolve/apply seam) re-reads the row
+    every invocation while reusing ONE cached base context — the real no-restart
+    path. _runtime() is stubbed to a fixed base; execute_run captures the applied
+    StageContext so we can assert its vocabulary tracks the DB edit.
+    """
+    from voxint.worker import tasks as worker_tasks
+
+    base_ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=("Packword",),
+    )
+    # Stand in for the process-cached _runtime() singleton — built ONCE, reused.
+    monkeypatch.setattr(worker_tasks, "_runtime", lambda: (session_factory, base_ctx))
+
+    captured: list[StageContext] = []
+
+    def fake_execute_run(
+        factory: object, run_id: uuid.UUID, stage_fns: dict[Stage, object]
+    ) -> object:
+        # partial(transcribe.run, ctx) — arg 0 is the applied StageContext.
+        captured.append(stage_fns[Stage.TRANSCRIBE].args[0])  # type: ignore[attr-defined]
+        return SimpleNamespace(status=RunStatus.COMPLETED)
+
+    monkeypatch.setattr(worker_tasks, "execute_run", fake_execute_run)
+
+    run_id = uuid.uuid4()  # execute_run is stubbed, so the run need not exist
+
+    with session_factory() as session:
+        store.get_or_create(session).vocabulary = ["Foobar"]
+        session.commit()
+    worker_tasks.run_pipeline.apply(args=[str(run_id)]).get()
+
+    with session_factory() as session:
+        store.get_or_create(session).vocabulary = ["Bazqux"]
+        session.commit()
+    worker_tasks.run_pipeline.apply(args=[str(run_id)]).get()
+
+    assert captured[0].vocabulary == ("Packword", "Foobar")
+    assert captured[1].vocabulary == ("Packword", "Bazqux")  # re-read, no rebuild
+
+
+def test_run_pipeline_closes_per_run_llm_client(
+    session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The per-run HttpLLMClient (built when the row enables LLM and a key is set)
+    is closed after the run, so a long-lived worker doesn't leak a pool per run."""
+    from voxint.clients.llm import HttpLLMClient
+    from voxint.worker import tasks as worker_tasks
+
+    base_ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+    )
+    monkeypatch.setattr(worker_tasks, "_runtime", lambda: (session_factory, base_ctx))
+    monkeypatch.setattr(
+        worker_tasks,
+        "execute_run",
+        lambda factory, run_id, stage_fns: SimpleNamespace(status=RunStatus.COMPLETED),
+    )
+    # Env supplies the (never-stored) API key so the enabled row actually builds a client.
+    monkeypatch.setattr(
+        worker_tasks, "get_settings", lambda: Settings(_env_file=None, llm_api_key="sk-test")
+    )
+    closes: list[int] = []
+    real_close = HttpLLMClient.close
+    monkeypatch.setattr(
+        HttpLLMClient, "close", lambda self: (closes.append(1), real_close(self))[1]
+    )
+
+    with session_factory() as session:
+        row = store.get_or_create(session)
+        row.llm_enabled = True
+        row.llm_model = "m"
+        session.commit()
+
+    worker_tasks.run_pipeline.apply(args=[str(uuid.uuid4())]).get()
+    assert closes == [1]  # exactly one per-run client, closed exactly once

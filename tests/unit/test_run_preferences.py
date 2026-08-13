@@ -143,6 +143,17 @@ def test_apply_disables_llm_without_key_and_warns(caplog: pytest.LogCaptureFixtu
     assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
 
 
+def test_apply_no_row_enabled_without_key_disables_llm() -> None:
+    # No app_settings row + env LLM enabled but no key → honest no-op (llm=None),
+    # not an unusable client. (The one intentional refinement over the pre-wizard
+    # path, which used to construct an enabled-but-keyless client.)
+    base = make_base_ctx()
+    settings = make_settings(llm_enabled=True, llm_api_key="")
+    prefs = resolve_run_preferences(None, settings)
+    ctx = apply_run_preferences(base, settings, prefs)
+    assert ctx.llm is None
+
+
 def test_apply_disables_llm_when_prefs_disabled() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=False), make_settings())
@@ -168,6 +179,12 @@ def test_initial_prompt_empty_is_none() -> None:
 
 def test_initial_prompt_joins_terms() -> None:
     assert _initial_prompt(("Foo", "Bar")) == "Foo, Bar"
+
+
+def test_initial_prompt_skips_oversized_term_keeps_others() -> None:
+    huge = "x" * (INITIAL_PROMPT_MAX_CHARS + 10)
+    # The oversized first term is skipped, not fatal — later terms still make it in.
+    assert _initial_prompt((huge, "Foo", "Bar")) == "Foo, Bar"
 
 
 def test_initial_prompt_truncates_whole_terms_within_cap() -> None:

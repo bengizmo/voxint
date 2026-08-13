@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint import app_settings
 from voxint.clients.errors import ServiceError
+from voxint.clients.llm import HttpLLMClient
 from voxint.config import get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.db.session import build_engine, build_session_factory
@@ -135,7 +136,8 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     # the next run_pipeline invocation re-reads the row.
     with factory() as session:
         prefs = resolve_run_preferences(app_settings.get_app_settings(session), settings)
-    stage_fns = build_stage_fns(apply_run_preferences(base_ctx, settings, prefs))
+    ctx = apply_run_preferences(base_ctx, settings, prefs)
+    stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns)
     except StageFailedError as exc:
@@ -155,7 +157,15 @@ def run_pipeline(self: object, run_id_str: str) -> str:
         raise self.retry(  # type: ignore[attr-defined]  # noqa: B904 — celery Retry carries exc=
             exc=exc, countdown=delay + random.uniform(0, delay * 0.1)
         )
-    return final.status.value
+    else:
+        return final.status.value
+    finally:
+        # apply_run_preferences may build a per-run HttpLLMClient that owns its
+        # httpx.Client; close it on every exit path (success, retry, hard fail) so
+        # a long-lived worker doesn't leak a connection pool per run. A stage retry
+        # re-enters run_pipeline and builds a fresh one.
+        if isinstance(ctx.llm, HttpLLMClient):
+            ctx.llm.close()
 
 
 @app.task(name="voxint.recovery_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
