@@ -28,11 +28,12 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    SmallInteger,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 EMBEDDING_DIM = 192
@@ -449,4 +450,46 @@ class AdjudicationDecision(Base):
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AppSettings(Base):
+    """Singleton (``id = 1``) store for the preferences the first-run wizard writes.
+
+    Deliberately split from ``config.Settings`` (env-only, frozen on ``app.state``
+    at process start): infra config and secrets — ``DATABASE_URL``, ``REDIS_URL``,
+    ports, ``LLM_API_KEY`` — stay in the environment and the wizard never rewrites
+    ``.env``. Only non-secret, user-facing preferences live here. Exactly one row
+    exists, pinned by the ``id = 1`` CHECK; the API reads it per request and the
+    worker snapshots it per run (see ``pipeline.stages.context``). ``llm_base_url``
+    / ``llm_model`` are nullable — NULL means "fall back to the env default"; the
+    LLM API key is never stored here.
+    """
+
+    __tablename__ = "app_settings"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="app_settings_single_row_check"),
+    )
+
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
+    onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Folders the wizard registered under MEDIA_ROOT (paths relative to it).
+    media_folders: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # User vocabulary (names/jargon/acronyms): augments the selected domain pack,
+    # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
+    vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    llm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # NULL -> use the env default (config.Settings); the API key stays env-only.
+    llm_base_url: Mapped[str | None] = mapped_column(Text)
+    llm_model: Mapped[str | None] = mapped_column(Text)
+    # The bundled guided-tutorial run, seeded idempotently by `voxint tutorial seed`.
+    tutorial_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="SET NULL")
+    )
+    tutorial_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
