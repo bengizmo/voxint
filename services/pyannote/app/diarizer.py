@@ -35,6 +35,59 @@ def resolve_device_name(device_type: str) -> str:
     return device_type
 
 
+def probe_device(device_name: str) -> bool:
+    """Run a real tensor op on the device and compare against a CPU reference.
+
+    Availability flags are not enough: the historical MPS failure mode is
+    *silent wrong output*, not an exception — a backend that computes garbage
+    still reports ``is_available() == True``. A fixed-seed matmul checked
+    against the CPU result catches both crash-y and silently-wrong backends
+    before the pipeline is moved onto one.
+    """
+    import torch
+
+    try:
+        gen = torch.Generator().manual_seed(0)
+        x = torch.randn(64, 64, generator=gen)
+        reference = x @ x
+        result = (x.to(device_name) @ x.to(device_name)).cpu()
+        # Loose on purpose: TF32-style reduced-precision matmul on a healthy
+        # accelerator drifts ~1e-3 relative, while the failure mode being
+        # screened for (garbage/NaN/zero output) is off by orders of
+        # magnitude. A too-tight tolerance would silently demote a healthy
+        # GPU to CPU.
+        ok = bool(torch.allclose(result, reference, rtol=1e-2, atol=1e-2))
+        if not ok:
+            logger.warning(
+                "Device %s FAILED the tensor-op sanity probe (wrong output)", device_name
+            )
+        return ok
+    except Exception as exc:
+        logger.warning("Device %s failed the tensor-op probe: %s", device_name, exc)
+        return False
+
+
+def select_device() -> str:
+    """``cuda → mps → cpu`` cascade, each candidate gated by ``probe_device``.
+
+    MPS is inert inside Linux containers (never available) — the branch exists
+    for the Apple host-process path, where the same app code runs in a native
+    venv. CPU is the unconditional floor and is not probed.
+    """
+    import torch
+
+    candidates = []
+    if torch.cuda.is_available():
+        candidates.append("cuda")
+    mps_backend = getattr(torch.backends, "mps", None)
+    if mps_backend is not None and mps_backend.is_available():
+        candidates.append("mps")
+    for name in candidates:
+        if probe_device(name):
+            return name
+    return "cpu"
+
+
 class Diarizer:
     """Pipeline load + single-flight inference + post-processing."""
 
@@ -104,12 +157,14 @@ class Diarizer:
                 "usually an unaccepted HF gate or invalid HF_TOKEN"
             )
 
-        if torch.cuda.is_available():
-            self.model.to(torch.device("cuda"))
-            self.device_name = resolve_device_name("cuda")
+        device = select_device()
+        if device != "cpu":
+            self.model.to(torch.device(device))
+        self.device_name = resolve_device_name(device)
+        if device == "cuda":
             logger.info("Pipeline on GPU: %s", torch.cuda.get_device_name(0))
         else:
-            logger.info("Pipeline on CPU")
+            logger.info("Pipeline on %s", self.device_name)
 
         # Batch sizes/step are pipeline properties with setters.
         self.model.segmentation_batch_size = self.segmentation_batch_size
