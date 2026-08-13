@@ -55,6 +55,7 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
+    CSRF_SETTINGS,
     CSRF_SETUP,
     CSRF_SUBMIT,
     mint_csrf_token,
@@ -85,10 +86,13 @@ from voxint.api.setup_wizard import (
     validate_llm_enable,
 )
 from voxint.app_settings import (
+    clear_tutorial_completion,
     complete_onboarding,
     get_app_settings,
     get_or_create,
     is_onboarded,
+    mark_tutorial_complete,
+    ready_tutorial_run_id,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -123,6 +127,15 @@ from voxint.media.serving import (
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 from voxint.speakers.matching import gates_from_settings
+from voxint.tutorial.steps import (
+    STEP_COPY,
+    STEP_PAGE,
+    WALKTHROUGH_TOTAL,
+    TutorialPage,
+    TutorialStep,
+    parse_tutorial_step,
+    walkthrough_number,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -455,11 +468,87 @@ def _setup_context(
         "llm_model": (row.llm_model if row and row.llm_model else settings.llm_model),
         "llm_key_present": bool(settings.llm_api_key.strip()),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
+        # The finish step launches the tutorial iff it has been seeded; otherwise
+        # it prints the `voxint tutorial seed` note and does a plain /review finish.
+        "tutorial_available": ready_tutorial_run_id(session) is not None,
         "active_nav": "setup",
         "error": None,
     }
     context.update(overrides)
     return context
+
+
+def _tutorial_banner(
+    request: Request,
+    session: Session,
+    *,
+    page: TutorialPage,
+    run_id: uuid.UUID | None = None,
+    token: uuid.UUID | None = None,
+) -> dict[str, Any] | None:
+    """Resolve the guided-tutorial banner context for a page, or ``None``.
+
+    Renders nothing unless ALL hold: the ``?tutorial=`` value parses to a step
+    (an absent/unknown value is a quiet no-banner, never a 422); that step's bound
+    page (:data:`STEP_PAGE`) is THIS page; a tutorial run is configured AND still
+    present (``ready_tutorial_run_id``); and — for the run-scoped pages — the
+    route's ``run_id`` is exactly that tutorial run. So a ``?tutorial=`` spoofed
+    onto any other run, or onto the wrong page, shows nothing. Read-only: it never
+    creates the ``app_settings`` row and never mutates.
+
+    The returned dict is a flat bag the banner partial reads; each step populates
+    only the action fields it needs (a next-link, a claim form, or the export +
+    finish controls). The adjudicate→export next-link carries the verified claim
+    ``token`` so the workbench stays writable; the export link never does.
+    """
+    step = parse_tutorial_step(request.query_params.get("tutorial"))
+    if step is None or STEP_PAGE[step] is not page:
+        return None
+    tutorial_run_id = ready_tutorial_run_id(session)
+    if tutorial_run_id is None:
+        return None
+    # Run-scoped pages must be showing THE tutorial run; the queue page carries no
+    # run_id and only needs the tutorial run to exist (checked above).
+    if page in (TutorialPage.RUN_DETAIL, TutorialPage.WORKBENCH) and run_id != tutorial_run_id:
+        return None
+
+    copy = STEP_COPY[step]
+    secret = request.app.state.csrf_secret
+    banner: dict[str, Any] = {
+        "step": step.value,
+        "n": walkthrough_number(step),
+        "total": WALKTHROUGH_TOTAL,
+        "title": copy.title,
+        "body": copy.body,
+        "next_href": None,
+        "next_label": None,
+        "claim_run_id": None,
+        "claim_label": "Claim the tutorial run →",
+        "csrf_claim": None,
+        "export_href": None,
+        "csrf_settings": None,
+    }
+    if step is TutorialStep.RUN:
+        banner["next_href"] = "/review?tutorial=review"
+        banner["next_label"] = "Open the review console →"
+    elif step is TutorialStep.REVIEW:
+        banner["claim_run_id"] = tutorial_run_id
+        banner["csrf_claim"] = mint_csrf_token(secret, CSRF_CLAIM)
+    elif step is TutorialStep.ADJUDICATE:
+        if token is not None:
+            banner["next_href"] = f"/review/{tutorial_run_id}?token={token}&tutorial=export"
+            banner["next_label"] = "I've attributed the voices →"
+        else:
+            # No live claim on this tab — offer to (re)claim and continue rather
+            # than a dead next-link that would land on a read-only workbench.
+            banner["claim_run_id"] = tutorial_run_id
+            banner["csrf_claim"] = mint_csrf_token(secret, CSRF_CLAIM)
+    elif step is TutorialStep.EXPORT:
+        # Plaintext export opens in a new tab; the claim token is deliberately NOT
+        # placed in its URL. Finishing is an explicit CSRF-guarded POST.
+        banner["export_href"] = f"/review/{tutorial_run_id}/export.txt"
+        banner["csrf_settings"] = mint_csrf_token(secret, CSRF_SETTINGS)
+    return banner
 
 
 def _labels_response(
@@ -727,9 +816,15 @@ def _register_routes(app: FastAPI) -> None:
         _require_csrf(request, CSRF_SETUP, csrf_token)
         settings: Settings = request.app.state.settings
         complete_onboarding(session, llm_enabled_default=settings.llm_enabled)
-        # Commit explicitly before the redirect so the /review request that follows
-        # cannot observe stale onboarding state (the gate re-reads per request).
+        # Commit explicitly before the redirect so the request that follows cannot
+        # observe stale onboarding state (the gate re-reads per request).
         session.commit()
+        # Launch the guided tutorial only AFTER onboarding commits: a pre-onboarding
+        # link to /runs/{id}?tutorial=run would hit the protected gate and bounce
+        # back to /setup. Fall back to the queue when the tutorial is unseeded.
+        tutorial_run = ready_tutorial_run_id(session)
+        if tutorial_run is not None:
+            return RedirectResponse(f"/runs/{tutorial_run}?tutorial=run", status_code=303)
         return RedirectResponse("/review", status_code=303)
 
     @protected.get("/", include_in_schema=False)
@@ -944,6 +1039,9 @@ def _register_routes(app: FastAPI) -> None:
                 "csrf_requeue": mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_REQUEUE
                 ),
+                "tutorial": _tutorial_banner(
+                    request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
+                ),
                 "active_nav": "runs",
             },
         )
@@ -1017,6 +1115,9 @@ def _register_routes(app: FastAPI) -> None:
                 "operator": operator,
                 # CSRF token for the per-row claim forms.
                 "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
+                "tutorial": _tutorial_banner(
+                    request, session, page=TutorialPage.REVIEW_QUEUE
+                ),
                 "active_nav": "review",
             },
         )
@@ -1028,6 +1129,7 @@ def _register_routes(app: FastAPI) -> None:
         operator: OperatorDep,
         session: SessionDep,
         csrf_token: Annotated[str | None, Form()] = None,
+        continue_tutorial: Annotated[bool, Form()] = False,
     ) -> RedirectResponse:
         # Claim mints the run's claim token, so — unlike the other workbench
         # mutations — it has no unguessable token of its own to gate a forged POST.
@@ -1045,7 +1147,17 @@ def _register_routes(app: FastAPI) -> None:
             )
         except ClaimUnavailableError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return RedirectResponse(f"/review/{run_id}?token={token}", status_code=303)
+        # Guided-tutorial continuity: the tutorial's own claim form sets
+        # continue_tutorial, so a claim of the seeded run lands on the workbench in
+        # `adjudicate` mode. Bounded to a fixed marker (never an attacker-supplied
+        # return URL), and only for the real tutorial run, so it cannot redirect
+        # elsewhere or paint a banner onto an unrelated run.
+        suffix = ""
+        if continue_tutorial and ready_tutorial_run_id(session) == run_id:
+            suffix = "&tutorial=adjudicate"
+        return RedirectResponse(
+            f"/review/{run_id}?token={token}{suffix}", status_code=303
+        )
 
     @protected.get("/review/{run_id}")
     def workbench(
@@ -1061,9 +1173,14 @@ def _register_routes(app: FastAPI) -> None:
                 verify_claim(session, run_id, token)
             except ClaimMismatchError:
                 token = None  # stale tab: render read-only with a claim button
-        return templates.TemplateResponse(
-            request, "run.html", _workbench_context(request, session, run, token)
+        context = _workbench_context(request, session, run, token)
+        # Full-page render only: the banner lives above the body (base.html),
+        # outside the #labels htmx target, so decision/enroll fragment swaps — which
+        # go through _labels_response and never carry `tutorial` — leave it in place.
+        context["tutorial"] = _tutorial_banner(
+            request, session, page=TutorialPage.WORKBENCH, run_id=run_id, token=token
         )
+        return templates.TemplateResponse(request, "run.html", context)
 
     @protected.post("/review/{run_id}/release")
     def release(
@@ -1164,6 +1281,70 @@ def _register_routes(app: FastAPI) -> None:
             for line in lines
         )
         return PlainTextResponse(body + ("\n" if lines else ""))
+
+    # ---- Settings + guided-tutorial lifecycle (issue #3, slice 6) --------------
+    # The persistent, re-runnable entry point: re-open the setup wizard, and
+    # start / replay / complete the guided tutorial. All @protected (an
+    # un-onboarded operator is bounced to /setup by the gate). The two POSTs verify
+    # CSRF_SETTINGS and 409 when no tutorial run is available, so a stray token can
+    # never "complete" or "replay" an unseeded tutorial.
+
+    @protected.get("/settings")
+    def settings_page(
+        request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        tutorial_run = ready_tutorial_run_id(session)
+        row = get_app_settings(session)
+        return templates.TemplateResponse(
+            request,
+            "settings.html",
+            {
+                "request": request,
+                "tutorial_available": tutorial_run is not None,
+                "tutorial_run_id": tutorial_run,
+                "tutorial_completed_at": row.tutorial_completed_at if row else None,
+                # Completion celebration after POST /settings/tutorial/complete.
+                "tutorial_done": request.query_params.get("tutorial") == "done",
+                "csrf_settings": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_SETTINGS
+                ),
+                "active_nav": "settings",
+            },
+        )
+
+    @protected.post("/settings/tutorial/complete")
+    def tutorial_complete(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        # Explicit, idempotent completion (mark_tutorial_complete stamps only when
+        # currently NULL, so a refresh/repost preserves the original time); 409 when
+        # there is no available tutorial run to complete.
+        if not mark_tutorial_complete(session):
+            raise HTTPException(status_code=409, detail="no tutorial run to complete")
+        session.commit()
+        return RedirectResponse("/settings?tutorial=done", status_code=303)
+
+    @protected.post("/settings/tutorial/replay")
+    def tutorial_replay(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        run_id = ready_tutorial_run_id(session)
+        if run_id is None:
+            raise HTTPException(status_code=409, detail="no tutorial run to replay")
+        # Non-destructive replay: clear the completion stamp and re-enter the
+        # walkthrough. Prior speaker rulings on the run are intentionally preserved
+        # (see clear_tutorial_completion / settings.html copy).
+        clear_tutorial_completion(session)
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
 
     @protected.get("/media/{run_id}")
     @protected.head("/media/{run_id}")

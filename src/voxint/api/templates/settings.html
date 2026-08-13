@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Voxint — settings{% endblock %}
+{% block body %}
+<div class="settings">
+<h1>Settings</h1>
+
+{% if tutorial_done %}
+{# Completion celebration after POST /settings/tutorial/complete (?tutorial=done).
+   Terminal — no "next step" — so it is rendered here rather than through the
+   walkthrough banner partial, and it offers the plain "submit your own media"
+   link the plan calls for in place of a live "try it" step. #}
+<section class="tutorial-banner" role="note" aria-label="Tutorial complete">
+  <h2>You finished the tutorial 🎉</h2>
+  <p>You have completed one full run end to end — submit, review, attribute, export.
+     When you are ready, submit your own audio or video and do the same with real
+     speakers.</p>
+  <div class="tutorial-actions">
+    <a href="/runs">Submit your own media →</a>
+  </div>
+</section>
+{% endif %}
+
+<h2>First-run setup</h2>
+<p class="muted">Onboarding is complete. You can walk through the setup wizard again
+   at any time — it never resets your existing preferences unless you change them.</p>
+<p><a href="/setup">Re-run the setup wizard →</a></p>
+
+<h2>Guided tutorial</h2>
+{% if not tutorial_available %}
+  <p class="muted">The guided tutorial isn't set up yet. Run
+     <code>voxint tutorial seed</code> to create the bundled three-speaker sample,
+     then reload this page.</p>
+{% elif tutorial_completed_at %}
+  <p>Completed <strong>{{ tutorial_completed_at.strftime("%Y-%m-%d %H:%M") }}</strong>.</p>
+  <p class="muted">Replaying walks you through the sample again. Your previous speaker
+     rulings on the tutorial run are preserved — replay doesn't reset them.</p>
+  <form method="post" action="/settings/tutorial/replay" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+    <button type="submit">Replay tutorial →</button>
+  </form>
+{% else %}
+  <p class="muted">A short, hands-on walkthrough of one full run on a bundled
+     three-speaker sample.</p>
+  <p><a href="/runs/{{ tutorial_run_id }}?tutorial=run">Start the guided tutorial →</a></p>
+{% endif %}
+</div>
+{% endblock %}

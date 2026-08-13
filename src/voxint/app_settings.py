@@ -6,10 +6,13 @@ live here in the DB. Exactly one row (``id = 1``) ever exists. Callers own the
 transaction — every function takes a live ``Session`` and never commits.
 """
 
+import uuid
+from datetime import UTC, datetime
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from voxint.db.models import AppSettings
+from voxint.db.models import AppSettings, PipelineRun
 
 SINGLETON_ID = 1
 
@@ -63,6 +66,63 @@ def get_or_create(session: Session, *, llm_enabled_default: bool) -> AppSettings
             raise
         return adopted
     return row
+
+
+def ready_tutorial_run_id(session: Session) -> uuid.UUID | None:
+    """The configured tutorial run id, but only if its run still exists.
+
+    ``app_settings.tutorial_run_id`` is a FK with ``ON DELETE SET NULL``, so a
+    dangling reference is impossible — but the row may simply never have been
+    seeded (``NULL``) when ``voxint tutorial seed`` has not run. Returns the id iff
+    a tutorial run is configured AND present, so callers (the launch redirect, the
+    Settings page, the banner resolver, the complete/replay routes) share ONE
+    "is the tutorial actually available?" answer instead of each re-deriving it.
+    """
+    row = session.get(AppSettings, SINGLETON_ID)
+    if row is None or row.tutorial_run_id is None:
+        return None
+    if session.get(PipelineRun, row.tutorial_run_id) is None:
+        return None
+    return row.tutorial_run_id
+
+
+def mark_tutorial_complete(session: Session) -> bool:
+    """Stamp ``tutorial_completed_at`` (idempotent). Caller commits.
+
+    Returns ``False`` when there is no available tutorial run to complete (the
+    route maps that to a 409 — a stray Settings token must not "complete" an
+    unseeded tutorial). The stamp is written only when currently ``NULL`` so a
+    refresh or double-submit preserves the original completion time rather than
+    rewriting it to "now" on every repost.
+    """
+    if ready_tutorial_run_id(session) is None:
+        return False
+    row = session.get(AppSettings, SINGLETON_ID)
+    assert row is not None  # ready_tutorial_run_id returned non-None ⇒ row exists
+    if row.tutorial_completed_at is None:
+        row.tutorial_completed_at = datetime.now(tz=UTC)
+        session.flush()
+    return True
+
+
+def clear_tutorial_completion(session: Session) -> bool:
+    """Clear ``tutorial_completed_at`` so the walkthrough can be replayed. Caller
+    commits.
+
+    Returns ``False`` when no tutorial run is available (→ 409). Replay is
+    deliberately NON-destructive: it only clears the completion stamp and lets the
+    operator walk the banners again. It does NOT reset the run's prior speaker
+    rulings — the seeded run's children have no ``ON DELETE CASCADE`` and its
+    decisions are append-only, so a true reset would be disproportionate surgery
+    for a local teaching tool. The Settings copy states that prior rulings remain.
+    """
+    if ready_tutorial_run_id(session) is None:
+        return False
+    row = session.get(AppSettings, SINGLETON_ID)
+    assert row is not None  # ready_tutorial_run_id returned non-None ⇒ row exists
+    row.tutorial_completed_at = None
+    session.flush()
+    return True
 
 
 def complete_onboarding(session: Session, *, llm_enabled_default: bool) -> AppSettings:

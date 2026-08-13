@@ -146,11 +146,24 @@
     <li>{{ vocabulary|length }} vocabulary term{{ "" if vocabulary|length == 1 else "s" }}</li>
     <li>LLM enhancement {{ "enabled" if llm_enabled else "off" }}</li>
   </ul>
-  <p class="muted">Finishing opens the review console. You can re-run this setup any time.</p>
+  {% if tutorial_available %}
+  <p class="muted">Finishing starts a short guided tutorial on a bundled
+     three-speaker sample. You can re-run this setup — or the tutorial — any time
+     from Settings.</p>
+  <form method="post" action="/setup/finish">
+    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
+    <button type="submit">Finish setup &amp; start tutorial →</button>
+  </form>
+  {% else %}
+  <p class="muted">Finishing opens the review console. You can re-run this setup any
+     time from Settings.</p>
+  <p class="muted">Tip: run <code>voxint tutorial seed</code> to enable the guided
+     tutorial on a bundled three-speaker sample.</p>
   <form method="post" action="/setup/finish">
     <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
     <button type="submit">Finish setup →</button>
   </form>
+  {% endif %}
 {% endif %}
 </div>
 {% endblock %}

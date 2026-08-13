@@ -57,6 +57,17 @@
     .svc { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; }
     .svc .dot { width: .7rem; height: .7rem; border-radius: 50%; display: inline-block; }
     .svc .dot.up { background: #2a2; } .svc .dot.down { background: #c33; }
+    .tutorial-banner { border: 1px solid #26a; border-left: .3rem solid #26a;
+                       background: #26a2; border-radius: .5rem; padding: .8rem 1rem;
+                       margin: 0 0 1.5rem; }
+    .tutorial-banner h2 { margin: .2rem 0 .4rem; }
+    .tutorial-banner p { margin: .3rem 0; }
+    .tutorial-step { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em;
+                     opacity: .75; margin: 0; }
+    .tutorial-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
+                        margin-top: .8rem; }
+    .settings dl { margin: 1rem 0; }
+    .settings dt { font-weight: 600; margin-top: .8rem; }
   </style>
 </head>
 <body>
@@ -64,8 +75,14 @@
   <nav class="top">
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
     <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
+    <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>
   {% endblock %}
+  {# Guided-tutorial banner: present only when the API layer resolved a real
+     tutorial-run/step for this page. Injected here (outside every page's body
+     block, and outside the workbench htmx swap target) so fragment swaps never
+     remove it. #}
+  {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
   {% block body %}{% endblock %}
 </body>
 </html>

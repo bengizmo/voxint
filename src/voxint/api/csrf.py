@@ -46,6 +46,11 @@ CSRF_CLAIM = "claim"
 # flow, not independent mutation surfaces). Split per-step only if a step ever
 # needs to reject another step's token.
 CSRF_SETUP = "setup"
+# The Settings page's tutorial actions (issue #3, slice 6): mark-complete and
+# replay. One action for both — they are same-operator, same-surface mutations on
+# a single row, so a token minted for one being valid on the other is a harmless
+# replay (mirrors CSRF_SETUP's single-flow rationale).
+CSRF_SETTINGS = "settings"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:
