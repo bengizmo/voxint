@@ -10,7 +10,9 @@ model: [architecture.md](architecture.md); gate semantics:
 Prerequisites: Docker Engine with the **Compose plugin ≥ 2.24** (`docker
 compose version`; the legacy v1 `docker-compose` binary cannot parse this
 stack, and older v2 plugins lack its optional-`env_file` syntax), and for the
-GPU overlay an NVIDIA GPU with the NVIDIA container toolkit.
+GPU overlay an NVIDIA GPU with the NVIDIA container toolkit. The three model
+services share one GPU and total ~3.5–4.5 GB of loaded VRAM; budget ~6–8 GB for
+Whisper batch headroom (per-service figures in `services/*/README.md`).
 
 For a first run, `./scripts/install.sh` is the recommended path — it renders
 `.env`, generates secrets, resolves port collisions, brings the core stack up, and

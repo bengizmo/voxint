@@ -109,7 +109,15 @@ To run the GPU model services too (one NVIDIA GPU assumed), first set
 `HF_TOKEN` in `.env` — the pyannote service's diarization weights are
 HF-gated, so you need a Hugging Face token with access to the pyannote
 models accepted (see `services/pyannote/README.md`); compose refuses the GPU
-overlay without it. Then:
+overlay without it.
+
+All three services share the one GPU. Their loaded weights total roughly
+**3.5–4.5 GB** of VRAM (whisper large-v2 int8 ~1.5 GB, pyannote ~1–2 GB,
+TitaNet ~1 GB); budget **~6–8 GB in practice** for Whisper's batch/decode
+headroom and three separate CUDA contexts. An 8 GB card is comfortable.
+(Per-service figures live in each `services/*/README.md`.)
+
+Then:
 
 ```bash
 docker compose -f compose.yaml -f compose.gpu.yaml pull
