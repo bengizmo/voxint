@@ -8,7 +8,7 @@ image, provenance in ``tests/parity/fixtures/onnx/``) into NumPy:
 
     pad-reflect(n_fft/2) → preemphasis 0.97 → STFT (hann sym 400, hop 160,
     n_fft 512) → |X|² → slaney mel (80 bins, 0 to 8 kHz) → log(x + 2⁻²⁴) →
-    per-feature mean/std normalize over valid frames → mask + pad-to-16
+    per-feature mean/std normalize over valid frames → EXACTLY valid frames out
 
 Behavioral notes, all verified against the installed 1.22.0 source:
 
@@ -18,9 +18,13 @@ Behavioral notes, all verified against the installed 1.22.0 source:
 * ``get_seq_len`` uses the center-padded formula ``floor(L / hop) + 1``.
 * Per-feature normalization uses the *unbiased* std over the valid frames
   plus CONSTANT=1e-5, matching ``normalize_batch``.
-* Frames past ``seq_len`` are zeroed and the frame axis is padded to a
-  multiple of 16 with 0 (``pad_to: 16``) — the exported graph masks on the
-  ``length`` input, but padding identically removes any doubt.
+* **Output is NEVER padded to NeMo's ``pad_to: 16``.** NeMo pads for GPU
+  efficiency and masks convolution activations past ``length`` — but the
+  exported graph LOST those masked convolutions (``model.export()`` replaces
+  them with regular convs), so padded frames would leak into conv receptive
+  fields. Measured: 0.988 cosine on a 1 s window with padding vs ≥ 0.999999
+  without. See ``mel_spectrogram``'s docstring and the normative finding in
+  ``docs/gpu-contracts.md``.
 
 The measured-equivalence gate for this module is the mel level of
 ``tests/parity/test_titanet_onnx.py`` (vs ``references/mel/``). Numerics run
@@ -108,6 +112,12 @@ def mel_spectrogram(audio: np.ndarray) -> np.ndarray:
     """
     if audio.ndim != 1:
         raise ValueError(f"expected mono audio, got shape {audio.shape}")
+    if len(audio) < N_FFT:
+        # Guards reflect-padding and the unbiased per-feature std (seq_len==1
+        # would yield NaN). Unreachable through the service path — the
+        # too_short gate rejects windows < 1 s (16000 samples) — but this
+        # module must fail loud, not emit NaN vectors, if reused elsewhere.
+        raise ValueError(f"mel front-end requires >= {N_FFT} samples, got {len(audio)}")
     x = audio.astype(np.float64)
     seq_len = num_valid_frames(len(x))
 

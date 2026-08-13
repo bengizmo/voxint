@@ -21,10 +21,12 @@ Tolerances were MEASURED first (2026-08-13, thinktank, onnxruntime CPU EP on
 amd64) and then ratcheted with margin — see docs/gpu-contracts.md for the
 recorded numbers. Loosening any of them is a space-id decision, not a test fix.
 
-Prerequisites (each missing one is an explicit SKIP, never a false pass):
+Prerequisites (each missing one is an explicit SKIP in dev runs):
 ``uv sync --extra parity``; the exported graph at
 ``services/titanet/models/titanet-large.onnx`` (tools/export_titanet_onnx.py);
-the committed mel/CUDA references.
+the committed mel/CUDA references. Release/CI runs set
+``VOXINT_PARITY_REQUIRED=1``, which turns any missing prerequisite into a
+hard failure so a fully-skipped suite can never green-board a release.
 """
 
 from __future__ import annotations
@@ -60,20 +62,32 @@ PAIR_COSINE_MAX_DRIFT = 2e-3  # per labeled pair (measured max 4.6e-4)
 TOP1_MARGIN_MAX_DRIFT = 2e-3  # (measured max 3.5e-4)
 MATCHING_GATES = (0.60, 0.70)  # match_min_cosine / grounded_min_cosine
 
-onnxruntime = pytest.importorskip("onnxruntime", reason="parity extra not installed")
-pytest.importorskip("noisereduce", reason="parity extra not installed")
+# Release/CI gate mode: with VOXINT_PARITY_REQUIRED=1 every missing
+# prerequisite is a hard FAILURE, never a skip — a green board must mean the
+# gate actually ran (a fully-skipped parity suite still exits 0 otherwise).
+_REQUIRED = os.getenv("VOXINT_PARITY_REQUIRED") == "1"
 
-pytestmark = [
-    pytest.mark.skipif(
-        not ONNX_PATH.exists(),
-        reason=f"{ONNX_PATH} missing — run tools/export_titanet_onnx.py",
+_PREREQS = [
+    (ONNX_PATH.exists(), f"{ONNX_PATH} missing — run tools/export_titanet_onnx.py"),
+    (
+        (MEL_DIR / "mel-references.npz").exists(),
+        "mel references missing — run tools/generate_mel_references.py",
     ),
-    pytest.mark.skipif(
-        not (MEL_DIR / "mel-references.npz").exists(),
-        reason="mel references missing — run tools/generate_mel_references.py",
-    ),
-    pytest.mark.skipif(not CUDA_EMBED_JSON.exists(), reason="CUDA embed references missing"),
+    (CUDA_EMBED_JSON.exists(), "CUDA embed references missing"),
+    (ONNX_PROVENANCE.exists(), "ONNX export provenance missing"),
 ]
+if _REQUIRED:
+    _missing = [reason for ok, reason in _PREREQS if not ok]
+    if _missing:
+        pytest.fail(f"VOXINT_PARITY_REQUIRED=1 but prerequisites missing: {_missing}")
+    import noisereduce  # noqa: F401
+    import onnxruntime
+
+    pytestmark: list[pytest.MarkDecorator] = []
+else:
+    onnxruntime = pytest.importorskip("onnxruntime", reason="parity extra not installed")
+    pytest.importorskip("noisereduce", reason="parity extra not installed")
+    pytestmark = [pytest.mark.skipif(not ok, reason=reason) for ok, reason in _PREREQS]
 
 
 def _sha256(path: Path) -> str:
@@ -96,30 +110,54 @@ def corpus_windows() -> list[dict[str, Any]]:
 @pytest.fixture(scope="session")
 def cuda_reference() -> dict[str, Any]:
     ref = json.loads(CUDA_EMBED_JSON.read_text())
-    # The reference must describe the corpus we are about to embed.
-    actual = _sha256(CORPUS_DIR / "embed-corpus.wav")
-    bound = ref["meta"]["corpus_files_sha256"]["embed-corpus.wav"]
-    assert actual == bound, "corpus wav does not match the committed CUDA reference"
+    # The reference must describe the exact corpus we are about to embed —
+    # audio AND the window/pair definitions (editing embed-pairs.json could
+    # otherwise silently weaken the decision-level gate).
+    for name in ("embed-corpus.wav", "embed-windows.json", "embed-pairs.json"):
+        actual = _sha256(CORPUS_DIR / name)
+        bound = ref["meta"]["corpus_files_sha256"][name]
+        assert actual == bound, f"{name} does not match the committed CUDA reference"
     assert ref["embedding_space"] == "titanet-large-v1"
     return ref
+
+
+def test_onnx_artifact_matches_committed_provenance() -> None:
+    """The graph under test must be the exact artifact the recorded PASS
+    verdict certifies — a stale/corrupt/re-exported .onnx must fail loudly,
+    not ride a green gate."""
+    prov = json.loads(ONNX_PROVENANCE.read_text())
+    actual = _sha256(ONNX_PATH)
+    assert actual == prov["onnx_sha256"], (
+        f"local .onnx sha256 {actual} differs from committed provenance "
+        f"{prov['onnx_sha256']} — re-export with tools/export_titanet_onnx.py "
+        "and commit the updated provenance.json alongside a fresh gate run"
+    )
+    assert prov["graph_inputs"] == ["audio_signal", "length"]
+    assert "embs" in prov["graph_outputs"]
+    assert prov["mel_frontend_in_graph"] is False
 
 
 @pytest.fixture(scope="session")
 def onnx_outcomes(corpus_windows: list[dict[str, Any]]) -> dict[str, Any]:
     """Run the real ONNX engine (same code path as the service) on the full
     corpus once; every vector/decision test reads from this."""
+    saved_env = {k: os.environ.get(k) for k in ("TITANET_ONNX_PATH", "EMBED_ENGINE")}
     os.environ["TITANET_ONNX_PATH"] = str(ONNX_PATH)
-    with service_package("titanet"):
-        from app.embedding import create_embedder
+    os.environ["EMBED_ENGINE"] = "onnx"
+    try:
+        with service_package("titanet"):
+            from app.embedding import create_embedder
 
-        os.environ["EMBED_ENGINE"] = "onnx"
-        try:
             embedder = create_embedder()
-        finally:
-            del os.environ["EMBED_ENGINE"]
-        embedder.load_model()
-        windows = [(w["start_seconds"], w["end_seconds"]) for w in corpus_windows]
-        outcomes = embedder.embed_windows(str(CORPUS_DIR / "embed-corpus.wav"), windows)
+            embedder.load_model()
+            windows = [(w["start_seconds"], w["end_seconds"]) for w in corpus_windows]
+            outcomes = embedder.embed_windows(str(CORPUS_DIR / "embed-corpus.wav"), windows)
+    finally:
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
     assert embedder.engine == "onnxruntime"
     return {
         "engine": embedder.engine,
@@ -132,6 +170,11 @@ class TestMelLevel:
     def test_mel_frontend_matches_nemo_preprocessor(self) -> None:
         refs = np.load(MEL_DIR / "mel-references.npz")
         meta = json.loads((MEL_DIR / "mel-references.json").read_text())
+        # The mel references must have been generated from this exact corpus.
+        for name, bound in meta["corpus_files_sha256"].items():
+            assert _sha256(CORPUS_DIR / name) == bound, (
+                f"mel references were generated from a different {name}"
+            )
         with service_package("titanet"):
             from app.mel import mel_spectrogram
 
@@ -265,7 +308,8 @@ class TestDecisionLevel:
             cuda_order = np.argsort(cuda_sims[row])[::-1]
             onnx_order = np.argsort(onnx_sims[row])[::-1]
             if cuda_order[0] != onnx_order[0]:
-                # Only a real rank flip if the CUDA top-2 were separable at all.
+                # Every flip is recorded and gated (strictly, even degenerate
+                # near-ties); the CUDA margin is captured for failure analysis.
                 cuda_margin = cuda_sims[row][cuda_order[0]] - cuda_sims[row][cuda_order[1]]
                 top1_changes.append((wid, ids[cuda_order[0]], ids[onnx_order[0]], cuda_margin))
             cuda_margin = cuda_sims[row][cuda_order[0]] - cuda_sims[row][cuda_order[1]]

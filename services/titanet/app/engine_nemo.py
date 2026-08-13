@@ -57,6 +57,12 @@ class NemoEmbedder(TitanetEmbedderBase):
             waveform, sample_rate = torchaudio.load(audio_path)
         except Exception as exc:
             raise DecodeError(f"Could not decode audio: {exc}") from exc
+        if sample_rate != SAMPLE_RATE or waveform.shape[0] > 1:
+            logger.warning(
+                "non-conforming input (%d Hz, %d ch) — resampling/downmixing in-service",
+                sample_rate,
+                waveform.shape[0],
+            )
         if sample_rate != SAMPLE_RATE:
             waveform = torchaudio.transforms.Resample(sample_rate, SAMPLE_RATE)(waveform)
         if waveform.shape[0] > 1:

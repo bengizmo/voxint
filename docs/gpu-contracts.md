@@ -236,9 +236,18 @@ measured-equivalence gate to serve under this space id.
 Per-window processing chain, in order:
 
 1. **Resample / downmix (whole file)**: if the source is not 16 kHz, the whole
-   file is resampled to 16 kHz (torchaudio-equivalent sinc interpolation)
-   *before any slicing*; multi-channel audio is mean-downmixed to mono. All
-   subsequent sample arithmetic is at 16 kHz.
+   file is resampled to 16 kHz *before any slicing*; multi-channel audio is
+   mean-downmixed to mono (resample first, then downmix — consistent across
+   engines). All subsequent sample arithmetic is at 16 kHz. Both engines log a
+   warning when this fallback fires. **Documented deviation:** the resample
+   kernel is per-engine (NeMo engine: torchaudio sinc; ONNX engine:
+   librosa/soxr) and is NOT covered by the parity gate — the golden corpus is
+   16 kHz mono by construction, and conforming voxint deployments normalize
+   all media to 16 kHz mono in the prepare stage before the services ever see
+   it. Cross-engine equivalence on non-16 kHz input is unmeasured; if a
+   deployment feeds non-conforming media directly, embeddings from different
+   engines may diverge beyond the gate's bounds. (Follow-up: add multi-rate /
+   stereo fixtures to the vector gate if this path ever becomes load-bearing.)
 2. **Slice**: `[start_seconds, end_seconds)` at sample precision in the 16 kHz
    timeline — `start = int(start_seconds × 16000)`,
    `end = min(int(end_seconds × 16000), len)` (truncating int conversion, not
@@ -249,7 +258,12 @@ Per-window processing chain, in order:
    SNR estimator: full-window RMS over the noise floor = mean of the quietest
    10% of 2048-sample frame RMS energies, clamped to [0, 60] dB, with the
    documented silence (RMS < 1e-6 → 0 dB) and digital-silence-floor
-   (< 1e-10 → 40 dB) special cases.
+   (< 1e-10 → 40 dB) special cases. Frame tiling is normative as implemented:
+   non-overlapping 2048-sample frames starting at 0, iterated while
+   `start < len(window) - 2048` — the tail partial frame (and a final frame
+   that would fit exactly) is excluded. The CUDA references were generated
+   with this exact tiling; changing it changes `snr_db` values and gate
+   outcomes.
 4. **Noise reduction**: stationary spectral gating (`noisereduce`,
    `prop_decrease=0.75`).
 5. **Loudness**: integrated-loudness normalization to −16 LUFS (BS.1770;
@@ -307,7 +321,12 @@ corpus (92 embedded / 107 windows, 465 labeled pairs):
 | top-1 flips / margin drift (max) | 0 / 3.5e-4 | 0 / ≤ 2e-3 |
 
 arm64 is not yet measured — the same harness must pass there before any
-arm64 image ships (Phase 2 release gate).
+arm64 image ships (Phase 2 release gate). Release/CI invocations must set
+`VOXINT_PARITY_REQUIRED=1`, which turns every missing prerequisite (graph,
+references, deps) into a hard failure — a fully-skipped parity suite exits
+green otherwise. The harness also binds the graph under test to the
+committed export provenance by sha256, and the window/pair definitions to
+the CUDA reference's recorded corpus hashes.
 
 Two normative findings from the spike, binding on every non-NeMo runtime:
 

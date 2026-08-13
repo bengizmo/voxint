@@ -53,13 +53,18 @@ class OnnxEmbedder(TitanetEmbedderBase):
         start = time.time()
         self.session = ort.InferenceSession(self.onnx_path, providers=["CPUExecutionProvider"])
         self.device_name = "cpu"
-        inputs = [i.name for i in self.session.get_inputs()]
+        inputs = {i.name for i in self.session.get_inputs()}
         outputs = [o.name for o in self.session.get_outputs()]
+        # Bind graph I/O by name, never by declaration order — a re-export
+        # with reordered inputs must fail at load, not at first inference.
+        if not {"audio_signal", "length"} <= inputs:
+            raise RuntimeError(
+                f"exported graph inputs {sorted(inputs)} missing audio_signal/length"
+            )
         if "embs" not in outputs:
             raise RuntimeError(f"exported graph has no 'embs' output (outputs: {outputs})")
-        self._input_names = inputs
         self.model_loaded = True
-        logger.info("TitaNet ONNX loaded in %.2fs (inputs=%s)", time.time() - start, inputs)
+        logger.info("TitaNet ONNX loaded in %.2fs (inputs=%s)", time.time() - start, sorted(inputs))
 
     def _decode(self, audio_path: str) -> np.ndarray:
         import soundfile as sf
@@ -70,6 +75,17 @@ class OnnxEmbedder(TitanetEmbedderBase):
             raise DecodeError(f"Could not decode audio: {exc}") from exc
         audio = audio.T  # [channels, samples]
         # Same order as the NeMo engine: resample first, then downmix to mono.
+        # NOTE (documented deviation, docs/gpu-contracts.md): this fallback
+        # resampler (librosa/soxr) is a different kernel than the NeMo
+        # engine's torchaudio sinc resampler and is unmeasured by the parity
+        # gate — voxint's prepare stage normalizes all media to 16 kHz mono
+        # before the services, so conforming deployments never hit it.
+        if sample_rate != SAMPLE_RATE or audio.shape[0] > 1:
+            logger.warning(
+                "non-conforming input (%d Hz, %d ch) — resampling/downmixing in-service",
+                sample_rate,
+                audio.shape[0],
+            )
         if sample_rate != SAMPLE_RATE:
             import librosa
 
@@ -80,7 +96,5 @@ class OnnxEmbedder(TitanetEmbedderBase):
         mel = mel_spectrogram(audio_np)
         feats = mel[np.newaxis, :, :].astype(np.float32)
         length = np.array([num_valid_frames(len(audio_np))], dtype=np.int64)
-        outputs = self.session.run(
-            ["embs"], {self._input_names[0]: feats, self._input_names[1]: length}
-        )
+        outputs = self.session.run(["embs"], {"audio_signal": feats, "length": length})
         return np.asarray(outputs[0]).squeeze()

@@ -126,7 +126,12 @@ async def embed(request: EmbedRequest) -> EmbedResponse:
         raise inference_failed(f"Embedding extraction failed: {exc}") from exc
     finally:
         _release()
-        embedder.cleanup_memory()
+        try:
+            embedder.cleanup_memory()
+        except Exception:
+            # Cleanup is best-effort: a failure here must never replace the
+            # response (or the intended structured error) with a 500.
+            logger.exception("cleanup_memory failed (ignored)")
 
     embedded = sum(1 for o in outcomes if o.embedding is not None)
     logger.info(

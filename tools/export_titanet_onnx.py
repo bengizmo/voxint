@@ -102,7 +102,7 @@ def _stub_tts_submodules() -> bool:
         from nemo.collections.tts.modules.submodules import MaskedInstanceNorm1d  # noqa: F401
 
         return False
-    except Exception:
+    except ImportError:
         import sys
         import types
 
@@ -131,9 +131,10 @@ def main() -> None:
     print(f"checkpoint: {ckpt}")
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
-        model_name=MODEL_NAME, map_location=device
-    )
+    # restore_from(ckpt) rather than from_pretrained(name): the provenance
+    # hashes ckpt, so the export must provably load THAT file, not whatever
+    # the resolver happens to pick.
+    model = nemo_asr.models.EncDecSpeakerLabelModel.restore_from(str(ckpt), map_location=device)
     model.eval()
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -181,9 +182,31 @@ def main() -> None:
     a = emb_ref.cpu().numpy().ravel()
     b = np.asarray(emb_onnx).ravel()
     cosine = float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
-    print(f"export sanity cosine (NeMo vs ORT embs): {cosine:.8f}")
+    print(f"export sanity cosine (NeMo vs ORT embs, padded feats): {cosine:.8f}")
     if cosine < SANITY_MIN_COSINE:
         raise SystemExit(f"export sanity FAILED: cosine {cosine} < {SANITY_MIN_COSINE}")
+
+    # Second sanity leg in the SERVING shape: exact-length features, no
+    # pad_to-16 — the configuration engine_onnx actually feeds (the exported
+    # graph has no conv masking, so the padded leg alone can hide tail leaks).
+    valid = int(feat_len.item())
+    ort_outs_exact = sess.run(
+        None,
+        {
+            sess.get_inputs()[0].name: feats.cpu().numpy()[:, :, :valid],
+            sess.get_inputs()[1].name: feat_len.cpu().numpy(),
+        },
+    )
+    emb_exact = (
+        ort_outs_exact[out_names.index("embs")] if "embs" in out_names else ort_outs_exact[-1]
+    )
+    b2 = np.asarray(emb_exact).ravel()
+    cosine_exact = float(np.dot(a, b2) / (np.linalg.norm(a) * np.linalg.norm(b2)))
+    print(f"export sanity cosine (NeMo vs ORT embs, exact-length feats): {cosine_exact:.8f}")
+    if cosine_exact < SANITY_MIN_COSINE:
+        raise SystemExit(
+            f"export sanity (exact-length) FAILED: cosine {cosine_exact} < {SANITY_MIN_COSINE}"
+        )
 
     provenance = {
         "model_name": MODEL_NAME,
@@ -192,6 +215,8 @@ def main() -> None:
         "torch_version": torch.__version__,
         "onnx_version": onnx.__version__,
         "onnxruntime_version": ort.__version__,
+        "numpy_version": __import__("numpy").__version__,
+        "librosa_version": __import__("librosa").__version__,
         "python_version": sys.version.split()[0],
         "export_device": device,
         "opset_import": opsets,

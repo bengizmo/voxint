@@ -82,15 +82,11 @@ class TestTurnPostprocess:
             # gap 4.0 → 4.5 is 0.5 ≤ min_duration_off 0.6 → merges.
             {"start_seconds": 4.5, "end_seconds": 8.0, "label": "SPEAKER_00"},
         ]
-        turns, speakers = postprocess.process_turns(
-            raw, min_turn_seconds=0.5, min_duration_off=0.6
-        )
+        turns, speakers = postprocess.process_turns(raw, min_turn_seconds=0.5, min_duration_off=0.6)
         assert len(turns) == 1
         assert turns[0]["start_seconds"] == 0.0
         assert turns[0]["end_seconds"] == 8.0
-        assert speakers == [
-            {"label": "SPEAKER_00", "total_seconds": 8.0, "num_turns": 1}
-        ]
+        assert speakers == [{"label": "SPEAKER_00", "total_seconds": 8.0, "num_turns": 1}]
 
     def test_gap_wider_than_min_duration_off_not_merged(self) -> None:
         raw = [
@@ -258,3 +254,47 @@ class TestMelConstantsPinnedToCheckpoint:
         valid = mel.num_valid_frames(16000)
         assert valid == 101
         assert out.shape == (mel.N_MELS, valid)
+
+
+class TestMelEdgeCases:
+    """Fail-loud preconditions for the mel front-end (part of the space
+    definition's non-NeMo runtime requirements)."""
+
+    def test_non_mono_rejected(self) -> None:
+        mel = load_service_module("titanet", "mel")
+        with pytest.raises(ValueError, match="mono"):
+            mel.mel_spectrogram(np.zeros((2, 16000), dtype=np.float32))
+
+    def test_short_input_rejected_not_nan(self) -> None:
+        # < N_FFT samples would NaN the unbiased per-feature std (seq_len==1)
+        # or break reflect padding; the module must raise, never emit NaN.
+        mel = load_service_module("titanet", "mel")
+        with pytest.raises(ValueError, match="samples"):
+            mel.mel_spectrogram(np.zeros(511, dtype=np.float32))
+
+    def test_frame_count_table(self) -> None:
+        mel = load_service_module("titanet", "mel")
+        # floor(L / hop) + 1 across the range the service can produce.
+        for samples, frames in [(512, 4), (16000, 101), (16001, 101), (16160, 102), (64000, 401)]:
+            assert mel.num_valid_frames(samples) == frames, samples
+            out = mel.mel_spectrogram(np.zeros(samples, dtype=np.float32))
+            assert out.shape == (mel.N_MELS, frames), samples
+
+    def test_dither_pinned_but_not_applied(self) -> None:
+        # The checkpoint config carries dither=1e-5; NeMo applies it only in
+        # training mode, so eval-mode extraction omits it (provenance records
+        # the verified source lines). Pin the config value so a checkpoint
+        # swap can't silently change what "omitted" means.
+        import json
+        from pathlib import Path
+
+        cfg = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "parity"
+                / "fixtures"
+                / "onnx"
+                / "preprocessor-config.json"
+            ).read_text()
+        )
+        assert cfg["dither"] == pytest.approx(1e-5)
