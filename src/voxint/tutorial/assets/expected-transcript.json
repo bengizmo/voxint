@@ -1,0 +1,84 @@
+{
+  "segments": [
+    {
+      "segment_index": 0,
+      "diarization_label": "SPEAKER_00",
+      "start_seconds": 0.0,
+      "end_seconds": 8.639,
+      "text": "Welcome to the walkthrough. I'll be your first speaker for this short demo, and I'll speak a few times so the tool has plenty to work with.",
+      "speaker": "Jordan Rivera"
+    },
+    {
+      "segment_index": 1,
+      "diarization_label": "SPEAKER_01",
+      "start_seconds": 8.989,
+      "end_seconds": 14.219,
+      "text": "Hi everyone, I'm Priya, and I'll be the second voice joining the conversation today.",
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "segment_index": 2,
+      "diarization_label": "SPEAKER_02",
+      "start_seconds": 14.569,
+      "end_seconds": 20.827,
+      "text": "And I'm just here as a third speaker, no name needed, adding a little variety to the mix.",
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "segment_index": 3,
+      "diarization_label": "SPEAKER_00",
+      "start_seconds": 21.177,
+      "end_seconds": 28.271,
+      "text": "Notice how each of us keeps a steady and distinct tone, which is exactly what the system listens for.",
+      "speaker": "Jordan Rivera"
+    },
+    {
+      "segment_index": 4,
+      "diarization_label": "SPEAKER_01",
+      "start_seconds": 28.621,
+      "end_seconds": 34.745,
+      "text": "The pipeline groups every speaker's turns, then asks a person to confirm who each voice really is.",
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "segment_index": 5,
+      "diarization_label": "SPEAKER_02",
+      "start_seconds": 35.095,
+      "end_seconds": 41.816,
+      "text": "Some voices it recognizes on its own, and the rest it leaves for you to decide with confidence.",
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "segment_index": 6,
+      "diarization_label": "SPEAKER_00",
+      "start_seconds": 42.166,
+      "end_seconds": 48.274,
+      "text": "That is the whole idea here. You always stay in control of the final label for every speaker.",
+      "speaker": "Jordan Rivera"
+    },
+    {
+      "segment_index": 7,
+      "diarization_label": "SPEAKER_01",
+      "start_seconds": 48.624,
+      "end_seconds": 54.301,
+      "text": "Once the run finishes, you review the evidence and either accept a match or assign a new name.",
+      "speaker": "SPEAKER_01"
+    },
+    {
+      "segment_index": 8,
+      "diarization_label": "SPEAKER_02",
+      "start_seconds": 54.651,
+      "end_seconds": 61.096,
+      "text": "It only takes a moment, and then your transcript reads with the right speaker on every line.",
+      "speaker": "SPEAKER_02"
+    },
+    {
+      "segment_index": 9,
+      "diarization_label": "SPEAKER_00",
+      "start_seconds": 61.447,
+      "end_seconds": 68.367,
+      "text": "Thanks for following along. When you're ready, submit your own audio and try the full flow yourself.",
+      "speaker": "Jordan Rivera"
+    }
+  ]
+}

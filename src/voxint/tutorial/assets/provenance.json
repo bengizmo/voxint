@@ -1,0 +1,29 @@
+{
+  "generator": "tools/generate_tutorial_audio.py",
+  "espeak_ng_version": "eSpeak NG text-to-speech: 1.50  Data at: /usr/lib/x86_64-linux-gnu/espeak-ng-data",
+  "ffmpeg_version": "ffmpeg version 4.4.2-0ubuntu0.22.04.1+esm12 Copyright (c) 2000-2021 the FFmpeg developers",
+  "sample_rate": 16000,
+  "channels": 1,
+  "encoding": "pcm_s16le",
+  "duration_seconds": 68.367,
+  "gap_seconds": 0.35,
+  "voices": {
+    "SPEAKER_00": {
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40
+    },
+    "SPEAKER_01": {
+      "voice": "en-us+f4",
+      "speed": 168,
+      "pitch": 62
+    },
+    "SPEAKER_02": {
+      "voice": "en-gb+m6",
+      "speed": 140,
+      "pitch": 28
+    }
+  },
+  "wav_sha256": "c8552354a16fb7fbccc2e1795b983a44bdbc6302562644313e087efd9d28541b",
+  "license": "CC0-1.0"
+}

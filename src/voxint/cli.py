@@ -159,6 +159,27 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tutorial_seed(args: argparse.Namespace) -> int:
+    """Idempotently seed the bundled guided-tutorial run and print its id.
+
+    Safe to run repeatedly: an existing tutorial run is returned untouched (its
+    WAV repaired if media_root was wiped), a deleted one is rebuilt.
+    """
+    del args
+    from voxint.config import get_settings
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.tutorial.seed import seed_tutorial_run
+
+    settings = get_settings()
+    factory = build_session_factory(build_engine())
+    with session_scope(factory) as session:
+        run_id = seed_tutorial_run(
+            session, media_root=settings.media_root, settings=settings
+        )
+    print(run_id)
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -201,6 +222,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)
+
+    tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
+    tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
+    seed_p = tutorial_sub.add_parser(
+        "seed", help="idempotently seed the bundled 3-speaker tutorial run"
+    )
+    seed_p.set_defaults(fn=_tutorial_seed)
 
     # File-based scoring harness: no settings, no DB, no worker (docs/harness.md).
     from voxint.harness import score_cli

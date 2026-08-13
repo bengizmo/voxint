@@ -1,0 +1,117 @@
+{
+  "description": "Authored speaker layout for the bundled guided-tutorial sample. Voices/text are hand-written (clean-room, CC0); per-utterance start/end are filled in by tools/generate_tutorial_audio.py from the actual synthesized timeline and MUST NOT be edited by hand.",
+  "embedding_space": "voxint-tutorial-v1",
+  "gap_seconds": 0.35,
+  "sample_rate": 16000,
+  "roster_speaker": {
+    "label": "SPEAKER_00",
+    "display_name": "Jordan Rivera"
+  },
+  "heard_name": {
+    "label": "SPEAKER_01",
+    "name": "Priya"
+  },
+  "unresolved_label": "SPEAKER_02",
+  "utterances": [
+    {
+      "index": 0,
+      "label": "SPEAKER_00",
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40,
+      "text": "Welcome to the walkthrough. I'll be your first speaker for this short demo, and I'll speak a few times so the tool has plenty to work with.",
+      "start": 0.0,
+      "end": 8.639
+    },
+    {
+      "index": 1,
+      "label": "SPEAKER_01",
+      "voice": "en-us+f4",
+      "speed": 168,
+      "pitch": 62,
+      "text": "Hi everyone, I'm Priya, and I'll be the second voice joining the conversation today.",
+      "start": 8.989,
+      "end": 14.219
+    },
+    {
+      "index": 2,
+      "label": "SPEAKER_02",
+      "voice": "en-gb+m6",
+      "speed": 140,
+      "pitch": 28,
+      "text": "And I'm just here as a third speaker, no name needed, adding a little variety to the mix.",
+      "start": 14.569,
+      "end": 20.827
+    },
+    {
+      "index": 3,
+      "label": "SPEAKER_00",
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40,
+      "text": "Notice how each of us keeps a steady and distinct tone, which is exactly what the system listens for.",
+      "start": 21.177,
+      "end": 28.271
+    },
+    {
+      "index": 4,
+      "label": "SPEAKER_01",
+      "voice": "en-us+f4",
+      "speed": 168,
+      "pitch": 62,
+      "text": "The pipeline groups every speaker's turns, then asks a person to confirm who each voice really is.",
+      "start": 28.621,
+      "end": 34.745
+    },
+    {
+      "index": 5,
+      "label": "SPEAKER_02",
+      "voice": "en-gb+m6",
+      "speed": 140,
+      "pitch": 28,
+      "text": "Some voices it recognizes on its own, and the rest it leaves for you to decide with confidence.",
+      "start": 35.095,
+      "end": 41.816
+    },
+    {
+      "index": 6,
+      "label": "SPEAKER_00",
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40,
+      "text": "That is the whole idea here. You always stay in control of the final label for every speaker.",
+      "start": 42.166,
+      "end": 48.274
+    },
+    {
+      "index": 7,
+      "label": "SPEAKER_01",
+      "voice": "en-us+f4",
+      "speed": 168,
+      "pitch": 62,
+      "text": "Once the run finishes, you review the evidence and either accept a match or assign a new name.",
+      "start": 48.624,
+      "end": 54.301
+    },
+    {
+      "index": 8,
+      "label": "SPEAKER_02",
+      "voice": "en-gb+m6",
+      "speed": 140,
+      "pitch": 28,
+      "text": "It only takes a moment, and then your transcript reads with the right speaker on every line.",
+      "start": 54.651,
+      "end": 61.096
+    },
+    {
+      "index": 9,
+      "label": "SPEAKER_00",
+      "voice": "en-us+m3",
+      "speed": 150,
+      "pitch": 40,
+      "text": "Thanks for following along. When you're ready, submit your own audio and try the full flow yourself.",
+      "start": 61.447,
+      "end": 68.367
+    }
+  ]
+}
