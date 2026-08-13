@@ -24,6 +24,7 @@ from functools import lru_cache
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint import app_settings
 from voxint.clients.errors import ServiceError
 from voxint.config import get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
@@ -31,11 +32,16 @@ from voxint.db.session import build_engine, build_session_factory
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
-    StageFn,
     execute_run,
     recover_interrupted_runs,
 )
-from voxint.pipeline.stages.context import build_stage_context, build_stage_fns
+from voxint.pipeline.stages.context import (
+    StageContext,
+    apply_run_preferences,
+    build_stage_context,
+    build_stage_fns,
+    resolve_run_preferences,
+)
 from voxint.pipeline.transitions import (
     InvalidTransitionError,
     RunSnapshot,
@@ -46,11 +52,13 @@ from voxint.worker.app import app
 
 
 @lru_cache(maxsize=1)
-def _runtime() -> tuple[sessionmaker[Session], dict[Stage, StageFn]]:
-    """Per-process singletons: engine pool, HTTP clients, stage map."""
+def _runtime() -> tuple[sessionmaker[Session], StageContext]:
+    """Per-process singletons: engine pool + the base StageContext (transport
+    clients + domain pack). ``run_pipeline`` layers each run's app_settings
+    preferences onto this base, so wizard edits take effect with no restart."""
     settings = get_settings()
     factory = build_session_factory(build_engine(settings.database_url))
-    return factory, build_stage_fns(build_stage_context(settings))
+    return factory, build_stage_context(settings)
 
 
 def retryable_cause(exc: StageFailedError) -> bool:
@@ -118,12 +126,19 @@ def requeue_failed_stage(factory: sessionmaker[Session], failed: RunSnapshot) ->
 @app.task(bind=True, name="voxint.run_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def run_pipeline(self: object, run_id_str: str) -> str:
     """Advance one run to COMPLETED (or park it FAILED / adjudication-paused)."""
-    factory, stage_fns = _runtime()
+    factory, base_ctx = _runtime()
+    settings = get_settings()
     run_id = uuid.UUID(run_id_str)
+    # Snapshot the wizard's preferences once per invocation and layer them onto the
+    # process-cached base context, so a settings edit lands on the next run with no
+    # worker restart. A stage retry inside this execute_run reuses this snapshot;
+    # the next run_pipeline invocation re-reads the row.
+    with factory() as session:
+        prefs = resolve_run_preferences(app_settings.get_app_settings(session), settings)
+    stage_fns = build_stage_fns(apply_run_preferences(base_ctx, settings, prefs))
     try:
         final = execute_run(factory, run_id, stage_fns)
     except StageFailedError as exc:
-        settings = get_settings()
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
         with factory() as session:

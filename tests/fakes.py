@@ -19,7 +19,15 @@ FAKE_EMBEDDING_SPACE = "fake-192-v1"
 
 
 class FakeASR:
-    def transcribe(self, audio_path: Path) -> TranscriptionResult:
+    def __init__(self) -> None:
+        # Records the initial_prompt of the most recent transcribe call so tests
+        # can assert which vocabulary actually reached ASR.
+        self.last_initial_prompt: str | None = None
+
+    def transcribe(
+        self, audio_path: Path, initial_prompt: str | None = None
+    ) -> TranscriptionResult:
+        self.last_initial_prompt = initial_prompt
         return TranscriptionResult(
             segments=(
                 TranscriptionSegment(0.0, 4.0, "hello and welcome to the show"),

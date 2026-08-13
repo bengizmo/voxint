@@ -7,8 +7,11 @@ at-least-once (engine contract), so every one is idempotent: it deletes or
 resets exactly the rows it owns for the run before writing them again.
 """
 
+import dataclasses
+import logging
 import socket
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -22,12 +25,14 @@ from voxint.clients.diarize import HttpDiarizerClient
 from voxint.clients.embed import HttpEmbedderClient
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
-from voxint.db.models import ArtifactKind, AudioArtifact, Stage
+from voxint.db.models import AppSettings, ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
 from voxint.media.netcheck import Resolver
 from voxint.media.ytdlp import Downloader, build_ytdlp_downloader
 from voxint.pipeline.engine import StageFn
 from voxint.speakers.matching import MatchingGates, gates_from_settings
+
+logger = logging.getLogger(__name__)
 
 
 class StageDataError(Exception):
@@ -72,6 +77,9 @@ class StageContext:
     llm_policy: LLMPolicy = LLMPolicy()
     # Domain-pack prompt fragment appended to the enhancement system prompt.
     enhancement_context: str = ""
+    # Effective ASR/enhancement vocabulary for the run (domain pack + user words).
+    # Surfaced to the whisper initial_prompt and rendered into enhancement_context.
+    vocabulary: tuple[str, ...] = ()
     matching_gates: MatchingGates = field(default_factory=MatchingGates)
 
 
@@ -115,7 +123,104 @@ def build_stage_context(settings: Settings) -> StageContext:
             consecutive_failure_limit=settings.llm_consecutive_failure_limit,
         ),
         enhancement_context=pack.prompt_fragments.get("enhancement_context", ""),
+        vocabulary=pack.vocabulary,
         matching_gates=gates_from_settings(settings),
+    )
+
+
+@dataclass(frozen=True)
+class RunPreferences:
+    """Effective, non-secret pipeline preferences for a single run.
+
+    Snapshotted once at ``run_pipeline`` start from the ``app_settings`` singleton
+    layered over env (:class:`Settings`), then applied to the process-cached base
+    context — so a wizard edit takes effect on the next run with no worker restart.
+    ``vocabulary`` here is the *user* word list only; the domain pack's words are
+    unioned in :func:`apply_run_preferences`, which holds the base context.
+    """
+
+    vocabulary: tuple[str, ...]
+    llm_enabled: bool
+    llm_base_url: str
+    llm_model: str
+
+
+def _dedup_order_preserving(items: Iterable[str]) -> tuple[str, ...]:
+    """First occurrence wins; blank/whitespace-only entries dropped."""
+    seen: dict[str, None] = {}
+    for item in items:
+        stripped = item.strip()
+        if stripped and stripped not in seen:
+            seen[stripped] = None
+    return tuple(seen)
+
+
+def resolve_run_preferences(
+    row: AppSettings | None, settings: Settings
+) -> RunPreferences:
+    """Layer the ``app_settings`` row over env defaults (pure — no I/O, no pack).
+
+    A NULL/absent row field falls back to the env default, so with no row at all
+    this reproduces today's env-only behavior exactly. The LLM API key is never
+    stored in the row; it stays env-only (see :func:`apply_run_preferences`).
+    """
+    llm_enabled = row.llm_enabled if row is not None else settings.llm_enabled
+    llm_base_url = (
+        row.llm_base_url if row is not None and row.llm_base_url else settings.llm_base_url
+    )
+    llm_model = row.llm_model if row is not None and row.llm_model else settings.llm_model
+    # row.vocabulary is NOT NULL in the DB (server default []), but an in-memory
+    # row may leave it None — guard so a bare row can't crash a pure resolve.
+    vocabulary = _dedup_order_preserving(
+        row.vocabulary if row is not None and row.vocabulary else ()
+    )
+    return RunPreferences(
+        vocabulary=vocabulary,
+        llm_enabled=llm_enabled,
+        llm_base_url=llm_base_url,
+        llm_model=llm_model,
+    )
+
+
+def _augment_enhancement_context(pack_fragment: str, vocabulary: tuple[str, ...]) -> str:
+    """Append a rendered vocabulary line to the domain pack's prompt fragment."""
+    if not vocabulary:
+        return pack_fragment
+    vocab_line = "Domain vocabulary (names, jargon, acronyms): " + ", ".join(vocabulary)
+    return f"{pack_fragment}\n{vocab_line}" if pack_fragment else vocab_line
+
+
+def apply_run_preferences(
+    base: StageContext, settings: Settings, prefs: RunPreferences
+) -> StageContext:
+    """Layer ``prefs`` onto the process-cached ``base`` context for one run.
+
+    Transport clients (asr/diarizer/embedder/downloader) are kept as-is — only the
+    per-run, preference-derived fields are swapped via ``dataclasses.replace``:
+    the pack+user vocabulary, the enhancement context that renders it, and the LLM
+    client. Enabling the LLM without an env key is an honest no-op: the run logs a
+    warning and proceeds with ``llm=None`` (enhancement is best-effort, never a
+    blocker), rather than failing.
+    """
+    vocabulary = _dedup_order_preserving((*base.vocabulary, *prefs.vocabulary))
+    enhancement_context = _augment_enhancement_context(base.enhancement_context, vocabulary)
+    llm: LLMClient | None
+    if prefs.llm_enabled and settings.llm_api_key:
+        llm = HttpLLMClient(
+            prefs.llm_base_url,
+            prefs.llm_model,
+            settings.llm_api_key,
+            settings.llm_timeout_seconds,
+        )
+    else:
+        if prefs.llm_enabled and not settings.llm_api_key:
+            logger.warning(
+                "LLM enhancement is enabled but LLM_API_KEY is unset; "
+                "proceeding with enhancement disabled for this run."
+            )
+        llm = None
+    return dataclasses.replace(
+        base, llm=llm, enhancement_context=enhancement_context, vocabulary=vocabulary
     )
 
 

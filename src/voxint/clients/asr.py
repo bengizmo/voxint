@@ -1,6 +1,7 @@
 """HTTP client for the whisper service's v1 transcription contract."""
 
 from pathlib import Path
+from typing import Any
 
 from voxint.clients._http import ServiceHttpClient, finite_interval
 from voxint.clients.base import TranscriptionResult, TranscriptionSegment
@@ -8,8 +9,15 @@ from voxint.clients.errors import ProtocolError
 
 
 class HttpASRClient(ServiceHttpClient):
-    def transcribe(self, audio_path: Path) -> TranscriptionResult:
-        body = self.post_json("/v1/transcribe", {"path": self.relative_path(audio_path)})
+    def transcribe(
+        self, audio_path: Path, initial_prompt: str | None = None
+    ) -> TranscriptionResult:
+        payload: dict[str, Any] = {"path": self.relative_path(audio_path)}
+        # Only send initial_prompt when non-empty: the whisper contract treats a
+        # missing key as "no bias", and an empty string would be a wasted field.
+        if initial_prompt:
+            payload["initial_prompt"] = initial_prompt
+        body = self.post_json("/v1/transcribe", payload)
         try:
             segments = []
             for seg in body["segments"]:

@@ -60,7 +60,9 @@ class EmbeddingResult:
 
 
 class ASRClient(Protocol):
-    def transcribe(self, audio_path: Path) -> TranscriptionResult: ...
+    def transcribe(
+        self, audio_path: Path, initial_prompt: str | None = None
+    ) -> TranscriptionResult: ...
 
 
 class DiarizerClient(Protocol):

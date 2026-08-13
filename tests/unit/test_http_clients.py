@@ -46,6 +46,33 @@ def test_relative_path_sent_posix() -> None:
     assert seen["path"] == "runs/abc/normalized.wav"
 
 
+def test_initial_prompt_sent_when_present() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"language": "en", "segments": []})
+
+    client = make_client(HttpASRClient, handler)
+    client.transcribe(AUDIO, initial_prompt="Foo, Bar")
+    assert seen["initial_prompt"] == "Foo, Bar"
+
+
+def test_initial_prompt_omitted_when_empty() -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"language": "en", "segments": []})
+
+    client = make_client(HttpASRClient, handler)
+    client.transcribe(AUDIO, initial_prompt=None)
+    assert "initial_prompt" not in seen
+    # an empty string is treated the same as absent — no wasted field
+    client.transcribe(AUDIO, initial_prompt="")
+    assert "initial_prompt" not in seen
+
+
 def test_path_outside_media_root_is_non_retryable() -> None:
     client = make_client(HttpASRClient, lambda r: httpx.Response(500))
     with pytest.raises(ServiceError) as exc_info:
