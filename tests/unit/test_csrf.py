@@ -1,8 +1,10 @@
 """Stateless, action-bound CSRF token mint/verify (pure functions)."""
 
 from voxint.api.csrf import (
+    CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
+    CSRF_SETUP,
     CSRF_SUBMIT,
     mint_csrf_token,
     verify_csrf_token,
@@ -12,7 +14,7 @@ _CSRF_KEY = "csrf-signing-key-for-tests"  # low-entropy, not a real secret
 
 
 def test_minted_token_verifies_for_its_action() -> None:
-    for action in (CSRF_SUBMIT, CSRF_FETCH, CSRF_REQUEUE):
+    for action in (CSRF_SUBMIT, CSRF_FETCH, CSRF_REQUEUE, CSRF_CLAIM, CSRF_SETUP):
         token = mint_csrf_token(_CSRF_KEY, action)
         assert verify_csrf_token(_CSRF_KEY, action, token) is True
 
@@ -22,6 +24,16 @@ def test_token_is_bound_to_its_action() -> None:
     token = mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT)
     assert verify_csrf_token(_CSRF_KEY, CSRF_FETCH, token) is False
     assert verify_csrf_token(_CSRF_KEY, CSRF_REQUEUE, token) is False
+
+
+def test_setup_token_is_bound_to_its_action() -> None:
+    # The wizard's token is not interchangeable with the other mutation forms
+    # (and theirs are not valid on the wizard's POSTs).
+    setup_token = mint_csrf_token(_CSRF_KEY, CSRF_SETUP)
+    assert verify_csrf_token(_CSRF_KEY, CSRF_SETUP, setup_token) is True
+    assert verify_csrf_token(_CSRF_KEY, CSRF_SUBMIT, setup_token) is False
+    submit_token = mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT)
+    assert verify_csrf_token(_CSRF_KEY, CSRF_SETUP, submit_token) is False
 
 
 def test_wrong_secret_fails() -> None:

@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.integration.conftest import seed_onboarded
 from voxint.adjudication.resolver import (
     Resolution,
     label_count,
@@ -64,6 +65,7 @@ def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient
     )
     test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
     test_client.auth = CREDS
+    seed_onboarded(session_factory)
     return test_client
 
 

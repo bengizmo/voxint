@@ -120,6 +120,12 @@ class Settings(BaseSettings):
     # long. Must stay comfortably BELOW stage_lease_seconds: the lease covers a
     # whole stage (possibly several sequential calls) plus persistence margin.
     gpu_http_timeout_seconds: float = 14400.0  # 4 h
+    # The first-run wizard's readiness probe of the three services' /healthz
+    # (voxint.api.health_probe). Deliberately short and separate from the
+    # inference timeout above: reusing the 4-hour budget would make the wizard's
+    # "check services" step appear to hang. Advisory only — a probe never blocks
+    # a run.
+    health_probe_timeout_seconds: PositiveSeconds = 3.0
 
     # Media normalization (prepare stage)
     ffmpeg_bin: str = "ffmpeg"

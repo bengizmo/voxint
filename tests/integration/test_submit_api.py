@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.integration.conftest import seed_onboarded
 from voxint.api.app import _UPLOAD_ENVELOPE_ALLOWANCE, create_app
 from voxint.api.csrf import CSRF_FETCH, CSRF_SUBMIT, mint_csrf_token
 from voxint.config import Settings
@@ -66,6 +67,7 @@ def make_client(
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
+    seed_onboarded(session_factory)
     return client
 
 

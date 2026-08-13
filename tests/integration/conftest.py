@@ -14,9 +14,24 @@ from alembic.config import Config
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.app_settings import complete_onboarding
 from voxint.db.models import Base
 
 TEST_DB_URL = os.environ.get("VOXINT_TEST_DATABASE_URL")
+
+
+def seed_onboarded(session_factory: sessionmaker[Session]) -> None:
+    """Mark the app onboarded so the first-run gate lets protected routes through.
+
+    The onboarding gate (issue #3) 303s every non-exempt route to ``/setup`` until
+    ``onboarding_complete`` is set, so an API test that means to exercise a handler
+    must start onboarded. Called explicitly by the API client fixtures/builders —
+    deliberately NOT a global autouse fixture, because the ``app_settings``
+    repository and migration tests assert on the absent-row ("not onboarded") state.
+    """
+    with session_factory() as session:
+        complete_onboarding(session)
+        session.commit()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 

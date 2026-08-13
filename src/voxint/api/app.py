@@ -16,7 +16,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     PlainTextResponse,
@@ -68,6 +68,7 @@ from voxint.api.runs_query import (
     parse_status_filter,
     runs_url,
 )
+from voxint.app_settings import is_onboarded
 from voxint.config import Settings, get_settings
 from voxint.db.models import (
     Decision,
@@ -293,6 +294,42 @@ def _get_media_gate(request: Request) -> MediaGate:
 SessionDep = Annotated[Session, Depends(_get_session)]
 OperatorDep = Annotated[str, Depends(require_operator)]
 
+
+def require_onboarded(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> None:
+    """First-run gate: redirect an un-onboarded operator to the setup wizard.
+
+    Wired as a single router-level dependency on the *protected* router that
+    carries every non-exempt route (``/healthz``, the htmx asset, and ``/setup``
+    stay on ``app`` and so are structurally exempt — no path matching to keep in
+    sync). It depends on ``OperatorDep`` so authentication runs first: an
+    unauthenticated request gets a 401 challenge, never a redirect that would leak
+    onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
+    dependency cache hands the gate the same ``Session`` the route handler uses —
+    one connection, not two.
+
+    The onboarding read is cached on ``request.state`` for the life of the request
+    only. It is deliberately NOT cached on ``app.state``: the Celery worker can
+    flip ``onboarding_complete`` in its own process, so a cross-request cache would
+    serve a stale answer. Not onboarded ⇒ ``303`` to ``/setup`` for an ordinary
+    navigation, or a ``204`` carrying ``HX-Redirect`` for an htmx request (htmx
+    performs the client-side redirect; a 303's body would be swapped into the page
+    instead of navigating).
+    """
+    onboarded = getattr(request.state, "onboarded", None)
+    if onboarded is None:
+        onboarded = is_onboarded(session)
+        request.state.onboarded = onboarded
+    if onboarded:
+        return
+    if request.headers.get("HX-Request"):
+        raise HTTPException(status_code=204, headers={"HX-Redirect": "/setup"})
+    raise HTTPException(status_code=303, headers={"Location": "/setup"})
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 
@@ -376,12 +413,34 @@ def _labels_response(
 
 
 def _register_routes(app: FastAPI) -> None:
+    # Two registrars: `app` carries the onboarding-gate-EXEMPT routes (liveness,
+    # the htmx asset, and the setup wizard); `protected` carries everything else
+    # behind one router-level gate (require_onboarded). Exemption is structural —
+    # a route is exempt iff it is registered on `app` rather than `protected`, so
+    # there is no path allow-list to keep in sync. New console routes should
+    # default to `protected` (the route-inventory test guards against a slip).
+    protected = APIRouter(dependencies=[Depends(require_onboarded)])
+
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
 
-    @app.get("/", include_in_schema=False)
+    @app.get("/setup", include_in_schema=False)
+    def setup(operator: OperatorDep) -> Response:
+        # First-run wizard placeholder — the real steps 1-6 land in slice 4. It
+        # is deliberately OFF the protected router (registered on `app`, not
+        # `protected`) so the onboarding gate exempts it: an un-onboarded operator
+        # must be able to reach the page the gate redirects them to. Auth still
+        # applies (OperatorDep); credential setup stays the installer's job.
+        return PlainTextResponse(
+            "Voxint setup — the first-run configuration wizard lands here."
+        )
+
+    @protected.get("/", include_in_schema=False)
     def index(operator: OperatorDep) -> RedirectResponse:
+        # On the protected router: when onboarded the gate passes and we land on
+        # the review queue; when not, the gate has already redirected to /setup,
+        # so this stays an unconditional redirect (no second onboarding read).
         return RedirectResponse("/review", status_code=303)
 
     @app.get("/static/htmx.min.js")
@@ -394,7 +453,7 @@ def _register_routes(app: FastAPI) -> None:
             media_type="text/javascript",
         )
 
-    @app.get("/runs")
+    @protected.get("/runs")
     def runs(
         request: Request,
         operator: OperatorDep,
@@ -459,7 +518,7 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.post("/submit")
+    @protected.post("/submit")
     def submit_media_upload(
         request: Request,
         operator: OperatorDep,
@@ -501,7 +560,7 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
-    @app.post("/fetch")
+    @protected.post("/fetch")
     def fetch_media_url(
         request: Request,
         operator: OperatorDep,
@@ -539,7 +598,7 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
-    @app.get("/runs/{run_id}")
+    @protected.get("/runs/{run_id}")
     def run_detail(
         run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
     ) -> Response:
@@ -593,7 +652,7 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.get("/runs/{run_id}/transcript")
+    @protected.get("/runs/{run_id}/transcript")
     def run_transcript(
         run_id: uuid.UUID,
         request: Request,
@@ -619,7 +678,7 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.post("/runs/{run_id}/requeue")
+    @protected.post("/runs/{run_id}/requeue")
     def requeue_run(
         run_id: uuid.UUID,
         request: Request,
@@ -649,7 +708,7 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
 
-    @app.get("/review")
+    @protected.get("/review")
     def review_queue(
         request: Request, operator: OperatorDep, session: SessionDep
     ) -> Response:
@@ -666,7 +725,7 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
 
-    @app.post("/review/{run_id}/claim")
+    @protected.post("/review/{run_id}/claim")
     def claim(
         run_id: uuid.UUID,
         request: Request,
@@ -692,7 +751,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return RedirectResponse(f"/review/{run_id}?token={token}", status_code=303)
 
-    @app.get("/review/{run_id}")
+    @protected.get("/review/{run_id}")
     def workbench(
         run_id: uuid.UUID,
         request: Request,
@@ -710,7 +769,7 @@ def _register_routes(app: FastAPI) -> None:
             request, "run.html", _workbench_context(request, session, run, token)
         )
 
-    @app.post("/review/{run_id}/release")
+    @protected.post("/review/{run_id}/release")
     def release(
         run_id: uuid.UUID,
         operator: OperatorDep,
@@ -723,7 +782,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return RedirectResponse("/review", status_code=303)
 
-    @app.post("/review/{run_id}/labels/{label}/decision")
+    @protected.post("/review/{run_id}/labels/{label}/decision")
     def decide(
         run_id: uuid.UUID,
         label: str,
@@ -765,7 +824,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
-    @app.post("/review/{run_id}/labels/{label}/enroll")
+    @protected.post("/review/{run_id}/labels/{label}/enroll")
     def enroll(
         run_id: uuid.UUID,
         label: str,
@@ -797,7 +856,7 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
-    @app.get("/review/{run_id}/export.txt")
+    @protected.get("/review/{run_id}/export.txt")
     def export_transcript(
         run_id: uuid.UUID, operator: OperatorDep, session: SessionDep
     ) -> PlainTextResponse:
@@ -810,8 +869,8 @@ def _register_routes(app: FastAPI) -> None:
         )
         return PlainTextResponse(body + ("\n" if lines else ""))
 
-    @app.get("/media/{run_id}")
-    @app.head("/media/{run_id}")
+    @protected.get("/media/{run_id}")
+    @protected.head("/media/{run_id}")
     def media(
         run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
     ) -> Response:
@@ -848,6 +907,10 @@ def _register_routes(app: FastAPI) -> None:
         return StreamingResponse(
             _stream_file(fh, start, length), status_code=status, headers=headers
         )
+
+    # Mount the gated routes last: every @protected route above is now attached to
+    # `app` behind require_onboarded, while the @app routes stay exempt.
+    app.include_router(protected)
 
 
 def _stream_file(fh: BinaryIO, start: int, length: int) -> Iterator[bytes]:

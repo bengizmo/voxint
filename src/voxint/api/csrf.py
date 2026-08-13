@@ -40,6 +40,12 @@ CSRF_SUBMIT = "submit"
 CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
 CSRF_CLAIM = "claim"
+# The first-run setup wizard (issue #3). One action for the whole flow: its
+# POST steps land in slice 4, and a token minted on one wizard step being valid
+# on another is a harmless same-operator replay (the wizard is a single guided
+# flow, not independent mutation surfaces). Split per-step only if a step ever
+# needs to reject another step's token.
+CSRF_SETUP = "setup"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:
