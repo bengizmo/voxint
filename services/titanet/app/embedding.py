@@ -1,15 +1,10 @@
-"""TitaNet embedding core.
+"""TitaNet embedding core (NeMo engine).
 
-Model: NVIDIA NeMo TitaNet-Large, 192-dim speaker embeddings. The full
-preprocessing chain below is part of the ``titanet-large-v1`` embedding-space
-definition — changing any step means a new space id, never a silent swap.
-
-Per-window chain: slice → resample 16 kHz mono → stationary spectral-gating
-noise reduction → LUFS normalization to -16 LUFS → peak normalization to 0.95
-→ TitaNet → L2 normalization. LUFS + noise reduction exist because raw
-loudness/noise variance fragments a single speaker's embeddings into multiple
-clusters (measured on poor audio: mean cosine similarity 0.30 unnormalized vs
-0.64 on clean audio).
+Model: NVIDIA NeMo TitaNet-Large, 192-dim speaker embeddings. The per-window
+preprocessing chain is part of the ``titanet-large-v1`` embedding-space
+definition and lives in ``app.preprocess`` (the normative definition is in
+``docs/gpu-contracts.md``) — every engine consumes that module; changing any
+step means a new space id, never a silent swap.
 """
 
 import logging
@@ -22,6 +17,14 @@ from typing import Any
 
 import numpy as np
 
+from app.preprocess import (
+    MIN_WINDOW_SECONDS,
+    calculate_snr_db,
+    l2_normalize,
+    normalize_audio_for_embedding,
+    window_sample_bounds,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,8 +32,19 @@ class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
 
 
-MIN_WINDOW_SECONDS = 1.0
 MODEL_NAME = "nvidia/speakerverification_en_titanet_large"
+
+
+def resolve_device_name(device_type: str) -> str:
+    """Honest /healthz device reporting: torch built for ROCm masquerades as
+    CUDA (``torch.cuda.is_available()`` is true, device type is ``cuda``), so
+    report ``rocm`` whenever ``torch.version.hip`` is set."""
+    if device_type == "cuda":
+        import torch
+
+        if getattr(torch.version, "hip", None):
+            return "rocm"
+    return device_type
 
 
 @dataclass(frozen=True)
@@ -38,55 +52,6 @@ class WindowOutcome:
     embedding: list[float] | None
     snr_db: float | None
     skip_reason: str | None
-
-
-def calculate_snr_db(audio: np.ndarray, frame_length: int = 2048) -> float:
-    """Estimate SNR: RMS energy over the noise floor (quietest 10% of frames)."""
-    rms = float(np.sqrt(np.mean(audio**2)))
-    # Silence (or near-silence) has no signal: report 0 dB so the low_snr gate
-    # skips it. Without this check a ~zero noise floor made pure silence score
-    # as pristine 40 dB audio.
-    if rms < 1e-6:
-        return 0.0
-    frame_energies = [
-        float(np.sqrt(np.mean(audio[i : i + frame_length] ** 2)))
-        for i in range(0, len(audio) - frame_length, frame_length)
-    ]
-    if not frame_energies:
-        return 20.0
-    frame_energies.sort()
-    noise_floor = float(np.mean(frame_energies[: max(1, len(frame_energies) // 10)]))
-    if noise_floor < 1e-10:
-        # Real signal over a digitally-silent floor (e.g. gated/denoised input).
-        return 40.0
-    snr_db = 20.0 * float(np.log10(rms / noise_floor))
-    return max(0.0, min(60.0, snr_db))
-
-
-def normalize_audio_for_embedding(audio_np: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
-    """Noise-reduce + loudness-normalize a window before embedding.
-
-    This chain is part of the titanet-large-v1 space definition, so failures
-    are request-fatal: silently skipping a stage would emit vectors with
-    different preprocessing semantics under the same space id. (The one
-    tolerated no-op: pyloudnorm returning -inf loudness for content it cannot
-    meter — the LUFS *target* simply cannot apply to such audio, and that is
-    deterministic per input, not a degradation.)
-    """
-    import noisereduce as nr
-    import pyloudnorm as pyln
-
-    audio_np = nr.reduce_noise(y=audio_np, sr=sample_rate, stationary=True, prop_decrease=0.75)
-
-    meter = pyln.Meter(sample_rate)
-    loudness = meter.integrated_loudness(audio_np)
-    if np.isfinite(loudness):
-        audio_np = pyln.normalize.loudness(audio_np, loudness, -16.0)
-
-    peak = float(np.max(np.abs(audio_np)))
-    if peak > 0:
-        audio_np = audio_np / peak * 0.95
-    return audio_np
 
 
 class TitanetEmbedder:
@@ -101,12 +66,22 @@ class TitanetEmbedder:
         # NeMo model inference is not concurrency-safe; single-flight.
         self._lock = threading.Lock()
 
+        # /healthz identity fields (see docs/gpu-contracts.md); versions
+        # resolved at load time so healthz never imports engine packages.
+        self.engine = "nemo"
+        self.engine_version: str | None = None
+        self.runtime: str | None = "torch"
+        self.runtime_version: str | None = None
+
     def load_model(self) -> None:
+        import nemo
         import nemo.collections.asr as nemo_asr
         import torch
 
+        self.engine_version = nemo.__version__
+        self.runtime_version = torch.__version__
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        self.device_name = device.type
+        self.device_name = resolve_device_name(device.type)
         logger.info("Loading %s on %s", self.model_name, self.device_name)
         start = time.time()
         self.model = nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(
@@ -137,8 +112,9 @@ class TitanetEmbedder:
         with self._lock:
             for start_s, end_s in windows:
                 # Skip precedence (contract): too_short (no SNR measured) → low_snr.
-                start_sample = int(start_s * sample_rate)
-                end_sample = min(int(end_s * sample_rate), waveform.shape[1])
+                start_sample, end_sample = window_sample_bounds(
+                    start_s, end_s, sample_rate, waveform.shape[1]
+                )
                 segment = waveform[:, start_sample:end_sample]
                 if segment.shape[1] < int(MIN_WINDOW_SECONDS * sample_rate):
                     outcomes.append(
@@ -171,7 +147,7 @@ class TitanetEmbedder:
                     embedding_np = np.array(embedding).squeeze()
                 if embedding_np.ndim > 1:
                     embedding_np = embedding_np.mean(axis=0)
-                embedding_np = embedding_np / (np.linalg.norm(embedding_np) + 1e-8)
+                embedding_np = l2_normalize(embedding_np)
 
                 outcomes.append(
                     WindowOutcome(

@@ -86,6 +86,10 @@ async def healthz() -> HealthResponse | JSONResponse:
         contract_version=CONTRACT_VERSION,
         model=diarizer.model_name if loaded else None,
         device=diarizer.device_name,
+        engine=diarizer.engine,
+        engine_version=diarizer.engine_version,
+        runtime=diarizer.runtime,
+        runtime_version=diarizer.runtime_version,
         model_loaded=loaded,
     )
     if not loaded:

@@ -4,6 +4,9 @@ Not wire-schema tests, but they pin the behaviors the contract documents
 (suspect tagging semantics, post-processing operation order, overlap_seconds).
 """
 
+import sys
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -12,6 +15,7 @@ from tests.contracts.conftest import load_service_module
 detector = load_service_module("whisper", "transcription")
 postprocess = load_service_module("pyannote", "postprocess")
 embedding = load_service_module("titanet", "embedding")
+preprocess = load_service_module("titanet", "preprocess")
 
 
 class TestRepetitionDetector:
@@ -140,3 +144,51 @@ class TestSnrGate:
         bursts[8000:24000] = rng.normal(0.0, 0.5, 16000).astype(np.float32)
         snr = embedding.calculate_snr_db(floor + bursts)
         assert snr > 5.0
+
+
+class TestWindowSampleBounds:
+    """Space-definition step 1: truncating slice math, end clamped to media."""
+
+    def test_truncating_not_rounding(self) -> None:
+        # 0.9999s x 16000 = 15998.4 → truncates to 15998, never rounds up.
+        assert preprocess.window_sample_bounds(0.9999, 2.0, 16000, 100000) == (15998, 32000)
+
+    def test_end_clamped_to_media_length(self) -> None:
+        assert preprocess.window_sample_bounds(0.0, 10.0, 16000, 48000) == (0, 48000)
+
+    def test_matches_previous_inline_math(self) -> None:
+        # Refactor gate: identical to the pre-extraction inline expressions.
+        for start_s, end_s, sr, total in [
+            (12.1, 18.9, 16000, 10**7),
+            (0.0, 0.5, 16000, 8000),
+            (3.333, 4.444, 16000, 70000),
+        ]:
+            expected = (int(start_s * sr), min(int(end_s * sr), total))
+            assert preprocess.window_sample_bounds(start_s, end_s, sr, total) == expected
+
+
+class TestL2Normalize:
+    def test_unit_norm_and_previous_inline_math(self) -> None:
+        rng = np.random.default_rng(seed=3)
+        vec = rng.normal(0.0, 1.0, 192)
+        out = preprocess.l2_normalize(vec)
+        assert np.allclose(out, vec / (np.linalg.norm(vec) + 1e-8))
+        assert abs(float(np.linalg.norm(out)) - 1.0) < 1e-6
+
+
+class TestResolveDeviceName:
+    """Honest /healthz device reporting: rocm must never report as cuda."""
+
+    def test_non_cuda_passthrough_without_torch(self) -> None:
+        assert embedding.resolve_device_name("cpu") == "cpu"
+        assert embedding.resolve_device_name("mps") == "mps"
+
+    def test_cuda_stays_cuda_without_hip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_torch = SimpleNamespace(version=SimpleNamespace(hip=None))
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        assert embedding.resolve_device_name("cuda") == "cuda"
+
+    def test_cuda_reports_rocm_when_hip_build(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        fake_torch = SimpleNamespace(version=SimpleNamespace(hip="6.2.41133"))
+        monkeypatch.setitem(sys.modules, "torch", fake_torch)
+        assert embedding.resolve_device_name("cuda") == "rocm"

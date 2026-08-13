@@ -88,6 +88,10 @@ async def healthz() -> HealthResponse | JSONResponse:
         contract_version=CONTRACT_VERSION,
         model=embedder.model_name if loaded else None,
         device=embedder.device_name,
+        engine=embedder.engine,
+        engine_version=embedder.engine_version,
+        runtime=embedder.runtime,
+        runtime_version=embedder.runtime_version,
         model_loaded=loaded,
     )
     if not loaded:

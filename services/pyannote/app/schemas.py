@@ -57,4 +57,10 @@ class HealthResponse(BaseModel):
     contract_version: str = CONTRACT_VERSION
     model: str | None
     device: str
+    # Additive v1 fields: inference engine vs the compute runtime it runs on
+    # (docs/gpu-contracts.md "Health"). Versions are null until model load.
+    engine: str
+    engine_version: str | None = None
+    runtime: str | None = None
+    runtime_version: str | None = None
     model_loaded: bool

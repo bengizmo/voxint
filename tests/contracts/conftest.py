@@ -6,7 +6,7 @@ under unique module names. Anything loaded here must stay importable without
 torch/GPU deps — that's the services' side of the contract-test bargain.
 """
 
-import importlib.util
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -50,15 +50,31 @@ def load_service_main(service: str) -> ModuleType:
 
 
 def load_service_module(service: str, module: str) -> ModuleType:
-    path = SERVICES_DIR / service / "app" / f"{module}.py"
+    """Import one torch-free module from a service's ``app`` package.
+
+    Same package-swap dance as ``load_service_main`` (rather than a bare
+    file-path load) so intra-package imports like
+    ``from app.preprocess import ...`` resolve.
+    """
     name = f"voxint_contract_{service}_{module}"
     if name in sys.modules:
         return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
+
+    saved = {
+        k: sys.modules.pop(k)
+        for k in list(sys.modules)
+        if k == "app" or k.startswith("app.")
+    }
+    sys.path.insert(0, str(SERVICES_DIR / service))
+    try:
+        mod = importlib.import_module(f"app.{module}")
+    finally:
+        sys.path.remove(str(SERVICES_DIR / service))
+        for k in list(sys.modules):
+            if k == "app" or k.startswith("app."):
+                del sys.modules[k]
+        sys.modules.update(saved)
     sys.modules[name] = mod
-    spec.loader.exec_module(mod)
     return mod
 
 

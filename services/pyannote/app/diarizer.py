@@ -23,6 +23,18 @@ class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
 
 
+def resolve_device_name(device_type: str) -> str:
+    """Honest /healthz device reporting: torch built for ROCm masquerades as
+    CUDA (``torch.cuda.is_available()`` is true, device type is ``cuda``), so
+    report ``rocm`` whenever ``torch.version.hip`` is set."""
+    if device_type == "cuda":
+        import torch
+
+        if getattr(torch.version, "hip", None):
+            return "rocm"
+    return device_type
+
+
 class Diarizer:
     """Pipeline load + single-flight inference + post-processing."""
 
@@ -32,6 +44,13 @@ class Diarizer:
         self.model_name = os.getenv("DIARIZER_MODEL_NAME", "pyannote/speaker-diarization-3.1")
         self.hf_token = os.getenv("HF_TOKEN") or None
         self.device_name = "cpu"
+
+        # /healthz identity fields (see docs/gpu-contracts.md); versions
+        # resolved at load time so healthz never imports engine packages.
+        self.engine = "pyannote.audio"
+        self.engine_version: str | None = None
+        self.runtime: str | None = "torch"
+        self.runtime_version: str | None = None
 
         # Env-tunable hyperparameters. Threshold below the pyannote default
         # (~0.70) is deliberate: the default under-clusters quiet recordings
@@ -65,6 +84,10 @@ class Diarizer:
 
         logger.info("Loading diarization pipeline: %s", self.model_name)
         start = time.time()
+        import pyannote.audio
+
+        self.engine_version = pyannote.audio.__version__
+        self.runtime_version = torch.__version__
         # The auth kwarg name differs between pyannote releases:
         # 3.1.x wants use_auth_token=, 4.x wants token=. Try 4.x first.
         try:
@@ -83,7 +106,7 @@ class Diarizer:
 
         if torch.cuda.is_available():
             self.model.to(torch.device("cuda"))
-            self.device_name = "cuda"
+            self.device_name = resolve_device_name("cuda")
             logger.info("Pipeline on GPU: %s", torch.cuda.get_device_name(0))
         else:
             logger.info("Pipeline on CPU")

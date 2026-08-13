@@ -55,7 +55,11 @@ same contract.
     "version": "<service semver>",
     "contract_version": "v1",
     "model": "<model identifier actually loaded>",
-    "device": "cuda" | "cpu",
+    "device": "cuda" | "cpu" | "mps" | "rocm" | "metal",
+    "engine": "<inference engine>",
+    "engine_version": "<engine version>",
+    "runtime": "<compute runtime>" | null,
+    "runtime_version": "<runtime version>" | null,
     "model_loaded": true
   }
   ```
@@ -64,6 +68,24 @@ same contract.
   with the same shape, `status: "degraded"`, and `model: null`. `/healthz`
   never triggers model loading and never touches the GPU beyond a cheap
   availability check.
+
+  - `device` is the compute device actually used for inference. **Honest
+    reporting is required**: torch built for ROCm masquerades as CUDA
+    (`torch.cuda.is_available()` is true and the device type is `"cuda"`), so
+    services must report `"rocm"` whenever `torch.version.hip` is set. `"mps"`
+    is torch Metal Performance Shaders (host adapters); `"metal"` is
+    non-torch Metal backends (e.g. whisper.cpp/ggml).
+  - `engine` / `engine_version` identify the **inference engine only** — e.g.
+    `faster-whisper`, `pyannote.audio`, `nemo`, `onnxruntime`, `whisper.cpp` —
+    never the driver or userspace stack. `model` stays the weights identity:
+    large-v2 is large-v2 regardless of engine.
+  - `runtime` / `runtime_version` identify the compute userspace the engine
+    runs on (e.g. `torch` / `2.5.0+cu118`, `torch` / `2.8.0+rocm7.2`,
+    `ctranslate2` / `4.4.0`, `onnxruntime` / `1.20.1`), `null` when the
+    engine has no separable runtime. Best-effort diagnostics — host-driver
+    provenance is **not** readiness truth and is never required for `"ok"`.
+  - The four fields are additive within `v1`; consumers must tolerate their
+    absence (older services) and any future additive values.
 
 ## whisper — `POST /v1/transcribe` (port 8022)
 
@@ -121,6 +143,13 @@ Response:
 - `confidence` values are `exp(avg_logprob)` clamped to [0, 1]; segment
   `confidence` is `null` when the model provides no logprob; the top-level
   `confidence` is the mean over segments that have one (0.8 if none do).
+  Confidence is **engine-calibrated**: values are comparable across requests
+  served by the same engine (`engine` in `/healthz`), not across engines —
+  the reference calibration (and the suspect detector's tuning) is
+  faster-whisper/CTranslate2 output. An alternative engine must reproduce the
+  same `exp(avg_logprob)` algorithm and pass a measured conformance gate
+  before shipping; a deviation is a documented contract amendment, never a
+  silent recalibration.
 - `suspect` — hallucination soft-tag from the repetition detector (run-length +
   n-gram-density rules). Text is preserved verbatim; downstream gates decide
   how to weight flagged spans. `suspect_score` ∈ [0, 1] is a severity hint
@@ -192,10 +221,70 @@ Response:
 
 ## titanet — `POST /v1/embed` (port 8021)
 
-Model: NVIDIA NeMo **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`),
-192-dim. Embedding space id: **`titanet-large-v1`** — persisted with every
-vector; changing the model *or the preprocessing chain below* means a new
-space id, never a silent swap.
+Model: **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`
+weights), 192-dim. Embedding space id: **`titanet-large-v1`** — persisted with
+every vector; changing the model weights *or any parameter of the space
+definition below* means a new space id, never a silent swap.
+
+### The `titanet-large-v1` space definition (normative)
+
+The space is defined **parametrically** — by the written parameters below, not
+by any single engine or hardware. Every implementation (NeMo/CUDA, ONNX
+Runtime, or future backends) must realize these parameters and pass the
+measured-equivalence gate to serve under this space id.
+
+Per-window processing chain, in order:
+
+1. **Slice**: `[start_seconds, end_seconds)` at sample precision —
+   `start = int(start_seconds × sr)`, `end = min(int(end_seconds × sr), len)`
+   (truncating int conversion, not rounding).
+2. **Resample / downmix**: whole-file resample to 16 kHz (torchaudio-equivalent
+   sinc interpolation) before slicing if the source is not 16 kHz; channel
+   mean-downmix to mono.
+3. **Skip gates** (checked in this order, before any normalization):
+   `too_short` for slices `< 1.0 s` (SNR not measured); `low_snr` for
+   estimated SNR below the threshold (default 5 dB, `TITANET_SNR_THRESHOLD_DB`).
+   SNR estimator: full-window RMS over the noise floor = mean of the quietest
+   10% of 2048-sample frame RMS energies, clamped to [0, 60] dB, with the
+   documented silence (RMS < 1e-6 → 0 dB) and digital-silence-floor
+   (< 1e-10 → 40 dB) special cases.
+4. **Noise reduction**: stationary spectral gating (`noisereduce`,
+   `prop_decrease=0.75`).
+5. **Loudness**: integrated-loudness normalization to −16 LUFS (BS.1770;
+   skipped only when the meter returns non-finite loudness).
+6. **Peak**: peak normalization to 0.95.
+7. **Model**: TitaNet-Large forward pass on the processed 16 kHz mono window;
+   mel-spectrogram front-end per the pinned NeMo 1.22 preprocessor config
+   (dither 1e-5, per-feature normalization, log with zero-guard,
+   n_fft/hop/window per the checkpoint's config) — implementations that do
+   not embed NeMo must reproduce this front-end and prove it at the mel level.
+8. **Output**: L2 normalization of the 192-dim vector.
+
+The reference implementation of steps 1–6 is
+`services/titanet/app/preprocess.py` (shared by every engine); step 7's
+reference is the pinned NeMo checkpoint.
+
+### Equivalence policy (measured, not bit-identical)
+
+Bit-identity is not the bar — it is already false across CUDA hardware
+generations. An alternative implementation may keep `titanet-large-v1` **iff**
+it passes the 3-level parity gate in `tests/parity/test_titanet_onnx.py`
+against reference outputs produced by the NeMo/CUDA implementation
+(fixtures: `tests/parity/fixtures/`):
+
+- **mel level** — the reimplemented front-end matches the NeMo-internal
+  mel features within tolerance on the golden corpus;
+- **vector level** — per-window cosine similarity above the ratcheted
+  threshold (≥ 0.999 baseline), identical `skip_reason` per window, `snr_db`
+  within ±0.5 dB, on amd64 and arm64;
+- **decision level** — replaying voxint's matching gates (0.60/0.70
+  thresholds) on labeled same/different-speaker pairs produces no
+  merge/split changes, no threshold crossings, and stable top-1/top-2
+  margins, within percentile and worst-case tolerances recorded in the
+  harness.
+
+A failed gate means a new space id (`titanet-large-v2`) plus a re-embed
+migration — never shipping a drifted implementation under the old id.
 
 Request (unknown fields rejected):
 
@@ -240,10 +329,10 @@ callers index results by window position):
   windows under 1.0 s skip as `too_short` (with `snr_db: null` — SNR is not
   measured); windows with SNR below the threshold (default 5 dB) skip as
   `low_snr` with the measured `snr_db`.
-- Preprocessing per window (part of the space definition): slice → resample to
-  16 kHz mono → stationary spectral-gating noise reduction → LUFS
-  normalization to −16 LUFS → peak normalization to 0.95 → TitaNet →
-  L2 normalization.
+- Per-window processing follows the normative `titanet-large-v1` space
+  definition above (slice → resample 16 kHz mono → noise reduction → LUFS −16
+  → peak 0.95 → TitaNet → L2); reference code in
+  `services/titanet/app/preprocess.py`.
 
 ## Contract tests
 

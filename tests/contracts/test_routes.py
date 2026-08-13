@@ -61,6 +61,10 @@ class TestWhisperRoutes:
                 is_initialized=True,
                 model_name="large-v2",
                 device="cpu",
+                engine="faster-whisper",
+                engine_version="1.2.1",
+                runtime="ctranslate2",
+                runtime_version="4.4.0",
                 transcribe=lambda *a, **k: fake_output,
                 cleanup_memory=lambda: None,
             ),
@@ -81,6 +85,10 @@ class TestWhisperRoutes:
         assert body["status"] == "ok"
         assert body["model"] == "large-v2"
         assert body["contract_version"] == "v1"
+        assert body["engine"] == "faster-whisper"
+        assert body["engine_version"] == "1.2.1"
+        assert body["runtime"] == "ctranslate2"
+        assert body["runtime_version"] == "4.4.0"
 
     def test_healthz_degraded_503_null_model(
         self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch
@@ -190,6 +198,10 @@ class TestPyannoteRoutes:
                 model_loaded=True,
                 model_name="pyannote/speaker-diarization-3.1",
                 device_name="cpu",
+                engine="pyannote.audio",
+                engine_version="3.1.1",
+                runtime="torch",
+                runtime_version="2.5.0",
                 diarize=lambda *a, **k: result,
             ),
         )
@@ -254,6 +266,10 @@ class TestTitanetRoutes:
                 model_loaded=True,
                 model_name="nvidia/speakerverification_en_titanet_large",
                 device_name="cpu",
+                engine="nemo",
+                engine_version="1.22.0",
+                runtime="torch",
+                runtime_version="2.1.0",
                 embed_windows=fake_embed,
                 cleanup_memory=lambda: None,
             ),

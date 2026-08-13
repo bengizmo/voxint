@@ -95,6 +95,10 @@ async def healthz() -> HealthResponse | JSONResponse:
         contract_version=CONTRACT_VERSION,
         model=transcriber.model_name if loaded else None,
         device=transcriber.device,
+        engine=transcriber.engine,
+        engine_version=transcriber.engine_version,
+        runtime=transcriber.runtime,
+        runtime_version=transcriber.runtime_version,
         model_loaded=loaded,
     )
     if not loaded:

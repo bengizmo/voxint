@@ -209,9 +209,22 @@ class WhisperTranscriber:
         self.model_lock = threading.Lock()
         self.is_initialized = False
 
+        # /healthz identity fields (see docs/gpu-contracts.md): the inference
+        # engine and the compute runtime it runs on. Versions are resolved at
+        # load time so healthz never imports engine packages itself.
+        self.engine = "faster-whisper"
+        self.engine_version: str | None = None
+        self.runtime: str | None = "ctranslate2"
+        self.runtime_version: str | None = None
+
     def load_model(self) -> None:
         """Load the Whisper model and wrap it in BatchedInferencePipeline."""
+        import ctranslate2
+        import faster_whisper
         from faster_whisper import BatchedInferencePipeline, WhisperModel
+
+        self.engine_version = faster_whisper.__version__
+        self.runtime_version = ctranslate2.__version__
 
         with self.model_lock:
             if self.model is not None:
