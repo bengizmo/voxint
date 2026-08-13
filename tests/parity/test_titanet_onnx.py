@@ -17,7 +17,7 @@ onto non-NVIDIA backends (plan decision #3; policy in docs/gpu-contracts.md):
   cross either gate differently than the CUDA embeddings; pair-cosine drift
   and top-1/top-2 structure must stay inside the ratcheted bounds.
 
-Tolerances were MEASURED first (2026-08-13, thinktank, onnxruntime CPU EP on
+Tolerances were MEASURED first (2026-08-13, maintainer amd64 workstation, onnxruntime CPU EP on
 amd64) and then ratcheted with margin — see docs/gpu-contracts.md for the
 recorded numbers. Loosening any of them is a space-id decision, not a test fix.
 
@@ -49,7 +49,7 @@ CUDA_EMBED_JSON = REPO / "tests" / "parity" / "fixtures" / "references" / "cuda"
 ONNX_PATH = REPO / "services" / "titanet" / "models" / "titanet-large.onnx"
 ONNX_PROVENANCE = REPO / "tests" / "parity" / "fixtures" / "onnx" / "provenance.json"
 
-# --- Ratcheted tolerances. Measured 2026-08-13 (thinktank, amd64, ORT CPU EP,
+# --- Ratcheted tolerances. Measured 2026-08-13 (maintainer amd64 workstation, ORT CPU EP,
 # --- vs the 0.3.0 CUDA references; recorded in docs/gpu-contracts.md):
 # --- mel worst 2.2e-4 · vector cosine min 0.9999966 / p50 0.9999993 ·
 # --- snr diff 0.0 · pair drift max 4.6e-4 · gate crossings 0 · top1 flips 0 ·

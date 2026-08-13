@@ -34,7 +34,7 @@ CTranslate2) · torch/torchaudio 2.1.1+cu121 · faster-whisper 1.2.1 ·
 numpy 1.24.3. VRAM: ~1.5 GB (large-v2 int8) + batch overhead.
 
 ```bash
-docker pull ghcr.io/bengizmo/voxint-whisper:0.3.0   # prebuilt release image
+docker pull ghcr.io/bengizmo/voxint-whisper:0.4.0   # prebuilt release image
 docker build -t voxint-whisper services/whisper     # …or build from source
 docker run --rm --gpus all -p 127.0.0.1:8022:8022 \
   -v /path/to/media:/data/media:ro voxint-whisper

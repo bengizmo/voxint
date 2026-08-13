@@ -32,7 +32,7 @@ torch/torchaudio 2.1.0+cu118 · nemo_toolkit[asr] 1.22.0 · huggingface-hub
 VRAM: ~1 GB loaded.
 
 ```bash
-docker pull ghcr.io/bengizmo/voxint-titanet:0.3.0   # prebuilt release image
+docker pull ghcr.io/bengizmo/voxint-titanet:0.4.0   # prebuilt release image
 docker build -t voxint-titanet services/titanet     # …or build from source
 docker run --rm --gpus all -p 127.0.0.1:8021:8021 \
   -v /path/to/media:/data/media:ro voxint-titanet

@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-13
+
 CPU tier: run Voxint's full pipeline with **no NVIDIA GPU** — on plain
 servers, AMD boxes, and Apple Silicon (Docker Desktop). Closes the
 container-path ask of #1 (Apple Silicon) and #4 (AMD); accelerated ROCm and
@@ -142,7 +144,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/bengizmo/voxint/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bengizmo/voxint/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bengizmo/voxint/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bengizmo/voxint/releases/tag/v0.1.0

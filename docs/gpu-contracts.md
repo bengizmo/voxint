@@ -306,7 +306,7 @@ migration — never shipping a drifted implementation under the old id.
 
 The ONNX engine (`app/engine_onnx.py`: self-exported opset-16 graph, see
 `tests/parity/fixtures/onnx/provenance.json`, + the reimplemented mel
-front-end `app/mel.py`) **keeps `titanet-large-v1`**. Measured on thinktank
+front-end `app/mel.py`) **keeps `titanet-large-v1`**. Measured on a maintainer workstation
 (amd64, onnxruntime CPU EP) against the 0.3.0 CUDA references, full golden
 corpus (92 embedded / 107 windows, 465 labeled pairs):
 
