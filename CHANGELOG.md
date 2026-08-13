@@ -5,6 +5,11 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-08-13
+
+Non-technical onboarding: get from a fresh clone to a first successful,
+adjudicated run without editing config by hand.
+
 ### Added
 - **Guided installer** (`scripts/install.sh`): one command that takes a fresh
   clone to a running core stack for non-technical users. Prompts only for an
@@ -16,8 +21,24 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   prints the console URL and states plainly that the core stack is the control
   plane only (audio processing needs the GPU overlay). Bash 3.2+, macOS/Linux,
   no runtime dependency beyond Docker. (#2)
+- **First-run setup wizard** (`/setup`): a guided, operator-authenticated flow
+  that takes a fresh install to a configured state. Choose media folders (with
+  an optional bounded scan that previews and batch-registers existing media),
+  define a domain vocabulary that feeds both the Whisper `initial_prompt` and
+  the LLM enhancement context, toggle optional LLM transcript enhancement, and
+  check GPU service health honestly — core-only when the GPU overlay is absent,
+  with no silent fallback. Preferences apply per run with no worker restart. An
+  onboarding gate holds the console at the wizard until setup is finished, then
+  releases the full app. Backed by an `app_settings` singleton (alembic
+  revision 0006). (#3)
+- **Guided 3-speaker tutorial**: a bundled synthetic 3-speaker sample and an
+  idempotent `voxint tutorial seed` command that stages a ready-to-adjudicate
+  run. Server-rendered `?tutorial=<step>` banners walk through the
+  run → review → transcript flow on the real console pages, and a new
+  **Settings** page re-runs the wizard and starts, replays (non-destructively),
+  or completes the tutorial. (#3)
 
-Browser operability and URL ingestion.
+## [0.2.0] — 2026-08-12
 
 ### Added
 - **Browser console** served from the same FastAPI app: a keyset-paged `/runs`
@@ -77,5 +98,7 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/bengizmo/voxint/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bengizmo/voxint/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/bengizmo/voxint/releases/tag/v0.1.0
