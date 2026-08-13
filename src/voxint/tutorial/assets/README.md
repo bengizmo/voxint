@@ -28,7 +28,9 @@ arguments, and the current `wav_sha256` are recorded in `provenance.json`.
 
 Three speakers, chosen to teach the three adjudication states:
 
-- `SPEAKER_00` → a **grounded cosine** match to a roster speaker (`Jordan Rivera`).
+- `SPEAKER_00` → a **grounded cosine** match to a roster speaker
+  (`Jordan Rivera (Tutorial)` — a reserved name, so seeding never adopts a real
+  user's same-named roster identity).
 - `SPEAKER_01` → a **heard name** (`Priya`, self-introduced) that is *unverified* —
   a suggestion, never an attribution.
 - `SPEAKER_02` → **unresolved**, no name and no acoustic match.

@@ -201,6 +201,46 @@ def test_reseed_repairs_missing_wav(
         assert _count(session, PipelineRun) == 1
 
 
+def test_seed_does_not_disturb_existing_roster(
+    session_factory: sessionmaker[Session], settings: Settings
+) -> None:
+    # A real user's roster identity (different name, real embedding space) must be
+    # left untouched: the reserved tutorial name never adopts someone else's row,
+    # and no synthetic embedding is grafted onto it.
+    with session_scope(session_factory) as session:
+        real = Speaker(display_name="Dana Real")
+        session.add(real)
+        session.flush()
+        session.add(
+            SpeakerEmbedding(
+                speaker_id=real.id,
+                embedding_space="titanet-large-v1",
+                embedding=[1.0] + [0.0] * 191,
+            )
+        )
+
+    _seed(session_factory, settings)
+    tutorial_name = resources.load_layout()["roster_speaker"]["display_name"]
+    assert tutorial_name != "Dana Real"
+    with session_factory() as session:
+        names = {s.display_name for s in session.execute(select(Speaker)).scalars()}
+        assert {"Dana Real", tutorial_name} <= names
+        real_row = session.execute(
+            select(Speaker).where(Speaker.display_name == "Dana Real")
+        ).scalar_one()
+        real_embs = (
+            session.execute(
+                select(SpeakerEmbedding).where(
+                    SpeakerEmbedding.speaker_id == real_row.id
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(real_embs) == 1  # untouched
+        assert real_embs[0].embedding_space == "titanet-large-v1"
+
+
 # --- media-serve + export through the real API --------------------------------
 
 

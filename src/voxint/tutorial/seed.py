@@ -28,6 +28,12 @@ Design notes:
 * The caller owns the transaction — this module flushes, never commits. The WAV is
   copied to media_root before any DB write and cannot be rolled back with the
   transaction; a rolled-back seed leaves a harmless orphan artifact directory.
+* The seeded run is a normal ``COMPLETED`` run with two unresolved labels, so it
+  intentionally appears in ``resolver.adjudication_queue`` — that IS the tutorial:
+  the user practices claiming and adjudicating it. There is no ``is_tutorial`` flag
+  on ``PipelineRun``; the tutorial UX (a later slice) keys off
+  ``app_settings.tutorial_run_id`` to frame it, and completing the walkthrough
+  resolves the labels so it leaves the queue.
 """
 
 from __future__ import annotations
@@ -40,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import Resolution, label_states
@@ -68,8 +75,12 @@ from voxint.speakers.matching import (
 )
 from voxint.tutorial import resources
 
-# Stable identity of the bundled sample under MEDIA_ROOT — a sentinel, reused
-# across rebuilds so its UNIQUE source_path never collides after a run deletion.
+# Stable identity of the bundled sample under MEDIA_ROOT — a reserved sentinel,
+# reused across rebuilds so its UNIQUE source_path never collides after a run
+# deletion. No physical file is ever written here: the seeded run is already
+# COMPLETED, so ACQUIRE/PREPARE never run and never read source_path; only the
+# normalized artifact (copied below) is served. A future "reprocess from source"
+# on a completed run would be the only thing to change that.
 TUTORIAL_SOURCE_PATH = "tutorial/sample-3speaker.wav"
 # Mirrors pipeline.stages.prepare._ARTIFACT_TEMPLATE so the tutorial run's artifact
 # looks identical to a real prepared run; only this row and the physical copy must
@@ -131,6 +142,13 @@ def _atomic_copy(wav_bytes: bytes, dest: Path) -> None:
 def _get_or_create_media(
     session: Session, provenance: dict[str, Any], size_bytes: int
 ) -> MediaItem:
+    """The reserved tutorial MediaItem (UNIQUE source_path), race-safe on insert.
+
+    Mirrors ``ingest.service._get_or_create_media`` / ``app_settings.get_or_create``:
+    two concurrent seeds can both observe no row and both insert; the SAVEPOINT
+    rolls back only the loser's insert — not the caller's transaction — so we
+    re-read and adopt the winner's row instead of crashing on UNIQUE.
+    """
     media = session.execute(
         select(MediaItem).where(MediaItem.source_path == TUTORIAL_SOURCE_PATH)
     ).scalar_one_or_none()
@@ -143,22 +161,46 @@ def _get_or_create_media(
         size_bytes=size_bytes,
         sha256=str(provenance["wav_sha256"]),
     )
-    session.add(media)
-    session.flush()
+    try:
+        with session.begin_nested():
+            session.add(media)
+            session.flush()
+    except IntegrityError:
+        adopted = session.execute(
+            select(MediaItem).where(MediaItem.source_path == TUTORIAL_SOURCE_PATH)
+        ).scalar_one_or_none()
+        if adopted is None:
+            raise  # not the expected UNIQUE(source_path) race — surface it
+        return adopted
     return media
 
 
 def _get_or_create_roster_speaker(
     session: Session, name: str, space: str, embedding: list[float]
 ) -> Speaker:
-    """The grounded roster identity + its enrollment centroid (created once)."""
+    """The grounded roster identity + its enrollment centroid (created once).
+
+    ``name`` is a reserved tutorial display name (see ``utterance.json``), scoped
+    like the other tutorial anchors (``tutorial/…`` source_path, ``voxint-tutorial``
+    embedding space) so adopting a same-named row only ever re-adopts the tutorial's
+    own speaker — never a real user's roster identity. The insert is SAVEPOINT-
+    guarded for the same concurrent-seed race (``display_name`` is UNIQUE).
+    """
     speaker = session.execute(
         select(Speaker).where(Speaker.display_name == name)
     ).scalar_one_or_none()
     if speaker is None:
         speaker = Speaker(display_name=name)
-        session.add(speaker)
-        session.flush()
+        try:
+            with session.begin_nested():
+                session.add(speaker)
+                session.flush()
+        except IntegrityError:
+            speaker = session.execute(
+                select(Speaker).where(Speaker.display_name == name)
+            ).scalar_one_or_none()
+            if speaker is None:
+                raise  # not the expected UNIQUE(display_name) race — surface it
     has_embedding = session.execute(
         select(SpeakerEmbedding.id).where(
             SpeakerEmbedding.speaker_id == speaker.id,

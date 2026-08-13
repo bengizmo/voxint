@@ -6,7 +6,7 @@
       "start_seconds": 0.0,
       "end_seconds": 8.639,
       "text": "Welcome to the walkthrough. I'll be your first speaker for this short demo, and I'll speak a few times so the tool has plenty to work with.",
-      "speaker": "Jordan Rivera"
+      "speaker": "Jordan Rivera (Tutorial)"
     },
     {
       "segment_index": 1,
@@ -30,7 +30,7 @@
       "start_seconds": 21.177,
       "end_seconds": 28.271,
       "text": "Notice how each of us keeps a steady and distinct tone, which is exactly what the system listens for.",
-      "speaker": "Jordan Rivera"
+      "speaker": "Jordan Rivera (Tutorial)"
     },
     {
       "segment_index": 4,
@@ -54,7 +54,7 @@
       "start_seconds": 42.166,
       "end_seconds": 48.274,
       "text": "That is the whole idea here. You always stay in control of the final label for every speaker.",
-      "speaker": "Jordan Rivera"
+      "speaker": "Jordan Rivera (Tutorial)"
     },
     {
       "segment_index": 7,
@@ -78,7 +78,7 @@
       "start_seconds": 61.447,
       "end_seconds": 68.367,
       "text": "Thanks for following along. When you're ready, submit your own audio and try the full flow yourself.",
-      "speaker": "Jordan Rivera"
+      "speaker": "Jordan Rivera (Tutorial)"
     }
   ]
 }
