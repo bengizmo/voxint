@@ -5,6 +5,14 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-14
+
+The Apple Silicon "metal" compute tier (#1): native macOS model services
+under launchd with diarization on the Apple GPU via torch-MPS, measured
+against the committed CUDA references (maintainer Gate M PASS on an M1 Pro),
+plus the tier-independent device-control contracts (`DIARIZER_DEVICE`,
+`TITANET_ORT_PROVIDERS`) and multi-model review hardening of the launcher.
+
 ### Added
 - **Apple Silicon "metal" compute tier**: the core stack stays in Docker
   (`compose.metal.yaml` rewires api/worker to `host.docker.internal`) while
@@ -452,7 +460,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/bengizmo/voxint/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/bengizmo/voxint/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/bengizmo/voxint/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/bengizmo/voxint/compare/v0.5.1...v0.6.0
