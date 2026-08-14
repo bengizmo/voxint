@@ -1,0 +1,26 @@
+# Pins for the native macOS arm64 ("metal" tier) venv — Python 3.11, matching
+# the CUDA/CPU images. Installed by scripts/metal/voxint-metal.sh into the
+# metal home's whisper venv via uv.
+#
+# Torch-free like the rocm flavor (which proves torch is optional here):
+# faster-whisper 1.2.x runs its Silero VAD on onnxruntime, and the app's torch
+# usage sits behind guarded imports (app/transcription.py). v1 metal runs
+# CTranslate2 on CPU — a Metal-accelerated ASR engine is a tracked follow-up
+# with its own pre-registered gate, not this file.
+#
+# ctranslate2 IS pinned here (unlike the rocm flavor, which installs a
+# sha256-pinned GitHub release wheel before resolving): the macOS arm64 wheel
+# comes from PyPI and would otherwise float inside faster-whisper's
+# >=4.0,<5 range. 4.8.1 is what the Phase 0 spike verified resolving as a
+# native arm64 macOS wheel under uv.
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
+faster-whisper==1.2.1
+ctranslate2==4.8.1
+# Same numpy as the CUDA/CPU images — the rocm flavor's 1.26.4 exemption is
+# py3.12-only and does not apply to this py3.11 venv.
+numpy==1.24.3
+soundfile==0.12.1

@@ -283,6 +283,40 @@ class TestWhisperFlavorPinParity:
             )
         assert "torch" not in rocm, "the rocm image is torch-free by design"
 
+    def test_metal_requirements_mirror_shared_pins(self) -> None:
+        # The metal venv is py3.11 like the CUDA/CPU images, so unlike rocm
+        # it gets NO numpy exemption — the whole preprocessing substrate must
+        # match. Torch-free like rocm; ctranslate2 must be exact-pinned (the
+        # macOS arm64 wheel comes from PyPI and would otherwise float inside
+        # faster-whisper's >=4.0,<5 range with nothing else pinning it).
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        def pins(name: str) -> dict[str, str]:
+            text = (REPO_ROOT / "services" / "whisper" / name).read_text()
+            return dict(re.findall(r"^([A-Za-z0-9_\[\]-]+)==([0-9.]+)$", text, re.MULTILINE))
+
+        base = pins("requirements.txt")
+        metal = pins("requirements.metal.txt")
+        for pkg in (
+            "fastapi",
+            "uvicorn[standard]",
+            "pydantic",
+            "faster-whisper",
+            "soundfile",
+            "numpy",
+        ):
+            assert pkg in base and pkg in metal, f"{pkg} pin missing from a flavor file"
+            assert base[pkg] == metal[pkg], (
+                f"{pkg}: base {base[pkg]} != metal {metal[pkg]} — bump both or neither"
+            )
+        assert "torch" not in metal, "the metal whisper venv is torch-free by design"
+        assert "ctranslate2" in metal, (
+            "requirements.metal.txt lost its exact ctranslate2 pin — the macOS "
+            "wheel would float inside faster-whisper's range"
+        )
+
 
 class TestDiarizerModelResolution:
     """The offline-by-default model resolution that closes issue #24: explicit
@@ -1104,3 +1138,54 @@ class TestCpuImageProvenance:
         assert torch_base("services/pyannote/Dockerfile") == torch_base(
             "services/pyannote/Dockerfile.cpu"
         )
+        # The metal venv joins the same parity set: its torch/torchaudio must
+        # track Dockerfile.cpu exactly (the MPS spike measured 2.5.0; a
+        # one-sided bump would fork numerics between the container and native
+        # deployments of the same service).
+        assert torch_base("services/pyannote/requirements.metal.txt") == torch_base(
+            "services/pyannote/Dockerfile.cpu"
+        )
+
+        def torchaudio_base(path: str) -> str:
+            text = (REPO_ROOT / path).read_text()
+            match = re.search(r"torchaudio==([0-9.]+)", text)
+            assert match is not None, f"{path} has no torchaudio pin"
+            return match.group(1)
+
+        assert torchaudio_base("services/pyannote/requirements.metal.txt") == torchaudio_base(
+            "services/pyannote/Dockerfile.cpu"
+        )
+
+    def test_pyannote_metal_requirements_include_shared_stack(self) -> None:
+        # The metal flavor must stay a THIN additive layer: the shared stack
+        # comes from `-r requirements.txt` (single source, drift impossible),
+        # and setuptools must stay inside the images' >=70,<81 window —
+        # pyannote.database imports pkg_resources, removed in setuptools 81
+        # (uv venvs ship no setuptools, so losing the pin breaks startup).
+        from tests.contracts.conftest import REPO_ROOT
+
+        text = (
+            REPO_ROOT / "services" / "pyannote" / "requirements.metal.txt"
+        ).read_text()
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert "-r requirements.txt" in lines, (
+            "requirements.metal.txt must include the shared stack via "
+            "-r requirements.txt, not fork a copy of it"
+        )
+        assert "setuptools>=70,<81" in lines, (
+            "requirements.metal.txt lost the setuptools<81 window that keeps "
+            "pkg_resources importable for pyannote.database"
+        )
+        # Additive-only: nothing beyond the include, the torch pair, and
+        # setuptools — anything else belongs in requirements.txt.
+        extras = set(lines) - {
+            "-r requirements.txt",
+            "setuptools>=70,<81",
+        }
+        assert all(
+            line.startswith(("torch==", "torchaudio==")) for line in extras
+        ), f"unexpected additions in requirements.metal.txt: {sorted(extras)}"
