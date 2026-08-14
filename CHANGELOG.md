@@ -5,6 +5,23 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-08-14
+
+Robustness patch for burst-load resilience (#23). No inference or contract
+changes.
+
+### Fixed
+- **All long-running services now carry `restart: unless-stopped`** (core
+  stack + every model-service overlay; `migrate` keeps its deliberate
+  `"no"`): a transient model-service crash self-heals instead of staying
+  down until a human runs `up -d` (#23).
+- **Connection failures to a model service now say what they mean**: when
+  the service DNS name stops resolving or the connection is refused —
+  inside the compose network this almost always means the container is
+  down — the worker's ledger error names the service host and says the
+  container is likely down or restarting, instead of surfacing a raw
+  resolver error that reads as a network problem (#23).
+
 ## [0.5.0] — 2026-08-14
 
 AMD-GPU acceleration for ASR (#4). The ROCm tier is a hybrid: whisper runs on

@@ -10,12 +10,13 @@ name: voxint
 # One shared image for migrate/api/worker/beat; VOXINT_IMAGE_TAG in .env
 # overrides the pin (e.g. to run a newer release without editing this file).
 x-voxint-app: &voxint-app
-  image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.5.0}
+  image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.5.1}
   pull_policy: missing
 
 services:
   postgres:
     image: pgvector/pgvector:pg17
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-voxint}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-voxint}
@@ -33,6 +34,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     healthcheck:
@@ -60,6 +62,7 @@ services:
   api:
     <<: *voxint-app
     command: voxint serve
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
@@ -93,6 +96,7 @@ services:
   worker:
     <<: *voxint-app
     command: celery -A voxint.worker.app worker --loglevel=INFO
+    restart: unless-stopped
     env_file:
       - path: .env
         required: false
@@ -117,6 +121,7 @@ services:
   beat:
     <<: *voxint-app
     command: celery -A voxint.worker.app beat --loglevel=INFO -s /tmp/celerybeat-schedule
+    restart: unless-stopped
     environment:
       REDIS_URL: redis://redis:6379/0
     depends_on:
