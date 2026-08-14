@@ -138,6 +138,15 @@ jobs:
         run: |
           "$HOME/.voxint-metal/venvs/pyannote/bin/python" -m pytest \
             tests/parity/test_pyannote_metal.py -q -rs --junitxml=junit-pyannote.xml
+      - name: Link the ONNX graph where the titanet harness expects it
+        # test_titanet_onnx.py looks in services/titanet/models/ (the
+        # release-workflow layout); the launcher's setup keeps its
+        # sha-verified copy under the metal home. Symlink, don't copy — the
+        # graph is ~100 MB and setup already provenance-verified it.
+        run: |
+          mkdir -p services/titanet/models
+          ln -sf "$HOME/.voxint-metal/models/titanet/titanet-large.onnx" \
+            services/titanet/models/titanet-large.onnx
       - name: Titanet ONNX parity (strict, exact metal-tier wheel build)
         # VOXINT_PARITY_REQUIRED applies here (unlike the metal modules):
         # this harness has strict-mode support, and the release workflow
