@@ -32,7 +32,13 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "scripts").mkdir()
     shutil.copy(REAL_REPO / "scripts" / "install.sh", tmp_path / "scripts" / "install.sh")
     shutil.copy(REAL_REPO / ".env.example", tmp_path / ".env.example")
-    for name in ("compose.yaml", "compose.cpu.yaml", "compose.gpu.yaml", "compose.rocm.yaml"):
+    for name in (
+        "compose.yaml",
+        "compose.cpu.yaml",
+        "compose.gpu.yaml",
+        "compose.rocm.yaml",
+        "compose.metal.yaml",
+    ):
         shutil.copy(REAL_REPO / name, tmp_path / name)
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
@@ -75,6 +81,7 @@ def run_lib(
         ("cpu", "-f compose.yaml -f compose.cpu.yaml"),
         ("gpu", "-f compose.yaml -f compose.gpu.yaml"),
         ("rocm", "-f compose.yaml -f compose.rocm.yaml"),
+        ("metal", "-f compose.yaml -f compose.metal.yaml"),
         ("none", "-f compose.yaml"),
         ("junk", "-f compose.yaml"),
         ("", "-f compose.yaml"),
@@ -92,9 +99,11 @@ def test_compose_file_args_for_tier(repo: Path, tier: str, expected: str) -> Non
         ("cpu", "cpu"),
         ("gpu", "gpu"),
         ("rocm", "rocm"),
+        ("metal", "metal"),
         ("none", "none"),
         ("CPU", ""),
         ("ROCM", ""),
+        ("METAL", ""),
         ("banana", ""),
         ("", ""),
     ],
@@ -103,6 +112,33 @@ def test_normalize_tier(repo: Path, value: str, expected: str) -> None:
     proc = run_lib(repo, f'normalize_tier "{value}"')
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout == expected
+
+
+def test_prompt_compute_tier_accepts_metal(repo: Path) -> None:
+    proc = run_lib(
+        repo, 'prompt_compute_tier\nprintf %s "$COMPUTE_TIER_VALUE"', stdin="m\n"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "metal"
+    assert "[M] Apple tier" in proc.stderr
+
+
+def test_prompt_compute_tier_defaults_to_metal_on_apple_silicon(repo: Path) -> None:
+    # A fake uname on the fixture PATH models an Apple Silicon host, so this
+    # runs (and stays meaningful) on Linux CI too. Bare Enter must take the
+    # suggested default.
+    fake_uname = repo / "fakebin" / "uname"
+    fake_uname.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in -s) echo Darwin ;; -m) echo arm64 ;; *) echo Darwin ;; esac\n'
+    )
+    fake_uname.chmod(0o755)
+    proc = run_lib(
+        repo, 'prompt_compute_tier\nprintf %s "$COMPUTE_TIER_VALUE"', stdin="\n"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "metal"
+    assert "[M/g/a/c/n]" in proc.stderr
 
 
 def test_dc_routes_overlay_args_to_docker(repo: Path) -> None:

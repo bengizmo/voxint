@@ -11,10 +11,13 @@
 # What this installs: the CORE control plane (Postgres, Redis, the API + review
 # console, the Celery worker and beat) plus, if you choose one, a compute tier
 # for the model services -- GPU (compose.gpu.yaml, NVIDIA), ROCm
-# (compose.rocm.yaml, AMD GPU for ASR) or CPU (compose.cpu.yaml, runs
-# anywhere). Transcription, diarization, and speaker embedding need a tier;
-# all model weights (diarization included) are vendored into the images, so
-# no Hugging Face account or token is involved.
+# (compose.rocm.yaml, AMD GPU for ASR), CPU (compose.cpu.yaml, runs
+# anywhere), or Metal (compose.metal.yaml, Apple Silicon: core in Docker,
+# model services native via scripts/metal/voxint-metal.sh so diarization can
+# use the Apple GPU). Transcription, diarization, and speaker embedding need
+# a tier; all model weights (diarization included) are vendored into the
+# images -- and sha-verified downloads for the native metal services -- so no
+# Hugging Face account or token is involved.
 #
 # Requirements: Docker Engine with the Compose plugin >= 2.24. No other runtime
 # dependency. Tested on Linux and macOS; Bash 3.2 compatible.
@@ -67,9 +70,12 @@ unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT H
 
 # ---------------------------------------------------------------------------
 # Compute-tier state. COMPUTE_TIER_VALUE is what the user chose
-# (cpu|gpu|rocm|none, persisted in .env as VOXINT_COMPOSE_TIER).
+# (cpu|gpu|rocm|metal|none, persisted in .env as VOXINT_COMPOSE_TIER).
 # EFFECTIVE_TIER is what this run actually starts (same as the choice — the
-# model weights are vendored into the images, nothing to defer on).
+# model weights are vendored into the images, nothing to defer on). The
+# metal tier starts core-only in Docker: its model services run natively,
+# set up AFTER this installer by scripts/metal/voxint-metal.sh (the handoff
+# says so explicitly).
 # ---------------------------------------------------------------------------
 COMPUTE_TIER_VALUE=""
 EFFECTIVE_TIER="none"
@@ -99,7 +105,7 @@ detect_render_gid() {
 }
 
 normalize_tier() {
-  case ${1:-} in cpu|gpu|rocm|none) printf '%s' "$1" ;; *) printf '%s' "" ;; esac
+  case ${1:-} in cpu|gpu|rocm|metal|none) printf '%s' "$1" ;; *) printf '%s' "" ;; esac
 }
 
 # One helper owns the tier -> Compose-file mapping, and EVERY Compose
@@ -110,6 +116,7 @@ compose_file_args_for_tier() {
     cpu)  printf '%s' '-f compose.yaml -f compose.cpu.yaml' ;;
     gpu)  printf '%s' '-f compose.yaml -f compose.gpu.yaml' ;;
     rocm) printf '%s' '-f compose.yaml -f compose.rocm.yaml' ;;
+    metal) printf '%s' '-f compose.yaml -f compose.metal.yaml' ;;
     *)   printf '%s' '-f compose.yaml' ;;
   esac
 }
@@ -308,6 +315,10 @@ prompt_compute_tier() {
   local def=c label ans
   if [ -e /dev/kfd ]; then def=a; fi
   if command -v nvidia-smi >/dev/null 2>&1; then def=g; fi
+  # Checked LAST so it wins on a Mac even if a stray nvidia-smi is on PATH:
+  # Apple Silicon cannot run the CUDA containers, and the metal tier is what
+  # actually uses the Apple GPU.
+  if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then def=m; fi
   step "Choosing a compute tier for the model services"
   say "  Transcription, diarization, and speaker embedding run as model services."
   say "  Pick how they should run:"
@@ -316,11 +327,15 @@ prompt_compute_tier() {
   say "                     runs on the GPU, diarization/embedding on CPU)"
   say "    [C] CPU tier  -- no GPU needed; works on any amd64/arm64 host"
   say "                     (much slower: long recordings take hours, not minutes)"
+  say "    [M] Apple tier -- native model services on this Mac (Apple Silicon):"
+  say "                     diarization uses the Apple GPU; needs a separate"
+  say "                     native setup step AFTER this installer (uv, ~3.2 GB)"
   say "    [N] None for now -- core console only; audio processing disabled"
   case $def in
-    g) label='[G/a/c/n]' ;;
-    a) label='[A/g/c/n]' ;;
-    *) label='[C/g/a/n]' ;;
+    g) label='[G/a/c/m/n]' ;;
+    a) label='[A/g/c/m/n]' ;;
+    m) label='[M/g/a/c/n]' ;;
+    *) label='[C/g/a/m/n]' ;;
   esac
   while :; do
     printf 'Compute tier %s: ' "$label" >&2
@@ -330,9 +345,10 @@ prompt_compute_tier() {
       g|G|gpu|GPU)          COMPUTE_TIER_VALUE=gpu;  return 0 ;;
       a|A|amd|AMD|rocm|ROCm|ROCM) COMPUTE_TIER_VALUE=rocm; detect_render_gid; return 0 ;;
       c|C|cpu|CPU)          COMPUTE_TIER_VALUE=cpu;  return 0 ;;
+      m|M|metal|Metal|METAL) COMPUTE_TIER_VALUE=metal; return 0 ;;
       n|N|none|None|NONE)   COMPUTE_TIER_VALUE=none; return 0 ;;
     esac
-    say "  Please answer g, a, c, or n."
+    say "  Please answer g, a, c, m, or n."
   done
 }
 
@@ -647,6 +663,10 @@ pull_and_start() {
 
   if [ "$EFFECTIVE_TIER" = "none" ]; then
     step "Starting the stack (core services)"
+  elif [ "$EFFECTIVE_TIER" = "metal" ]; then
+    # The metal overlay only rewires api/worker -- the model services run
+    # natively and are NOT started by Compose (see the handoff below).
+    step "Starting the stack (core services, wired for native metal model services)"
   else
     step "Starting the stack (core + $EFFECTIVE_TIER model services)"
   fi
@@ -798,6 +818,24 @@ print_handoff() {
       say ""
       say " Stop the stack with:"
       say "   docker compose -f compose.yaml -f compose.gpu.yaml down"
+      ;;
+    metal)
+      say " IMPORTANT -- the core stack is wired for the metal tier, but the"
+      say " native model services are NOT running yet: Docker only runs the"
+      say " core here. Submitting audio now will fail at the processing stages."
+      say ""
+      say " Finish the native side (creates local venvs and downloads ~3.2 GB"
+      say " of sha-verified model weights, then starts the services under"
+      say " launchd):"
+      say "   ./scripts/metal/voxint-metal.sh setup"
+      say "   ./scripts/metal/voxint-metal.sh up"
+      say "   ./scripts/metal/voxint-metal.sh status"
+      say " Expected status: whisper device cpu, pyannote device mps (Apple"
+      say " GPU), titanet device cpu."
+      say ""
+      say " Stop everything with:"
+      say "   ./scripts/metal/voxint-metal.sh down"
+      say "   docker compose -f compose.yaml -f compose.metal.yaml down"
       ;;
     rocm)
       say " The AMD (ROCm) model services were STARTED alongside the core stack."
