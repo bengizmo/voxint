@@ -33,6 +33,12 @@ paths = [
     '''^\.gitleaks\.toml$''',
     '''(^|/)uv\.lock$''',
 ]
+# Deliberately secret-SHAPED fake tokens in the installer test suite: the tests
+# assert these values never reach stdout/stderr/argv, so they must look like
+# real hf_ tokens. Named individually — never allowlist a broad hf_ pattern.
+regexes = [
+    '''hf_(TESTSECRETTOKEN123|NEWSECRET456|PREFLIGHTSECRET789)''',
+]
 # 29ce5b5a: parity doc/test comments named the measurement host (a bare machine
 # nickname — no address or credential). Scrubbed from the worktree in the v0.4.0
 # release commit; the historical commit is allowlisted because published history
