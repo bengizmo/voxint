@@ -1,6 +1,16 @@
 # Plan: Bare-metal Apple Silicon ("metal") compute tier — v1
 
-> Status: approved 2026-08-14. Phase 0 (MPS spike) in progress.
+> Status: approved 2026-08-14. Phase 0 (MPS spike) completed same day: **GO**.
+> On maintainer Apple Silicon hardware (M1 Pro 16 GB, macOS 26.4.1, torch
+> 2.5.0): pyannote warm inference ~5× faster on MPS than native CPU (rtf
+> ~0.065 vs ~0.33), DER/speaker-counts/turns identical to CPU on all three
+> VoxConverse spike files, 3× repeat runs bit-stable (pairwise DER 0.0), both
+> nets verified resident on mps, zero op failures with
+> `PYTORCH_ENABLE_MPS_FALLBACK` unset (first run pays ~10 s Metal shader
+> warm-up). CT2 4.8.1 + faster-whisper 1.2.1 arm64 macOS wheels resolve under
+> uv. Environment finding: uv venvs need `setuptools<81` for
+> pyannote.database's `pkg_resources` import (newer setuptools removed it) —
+> carry the pin in `services/pyannote/requirements.metal.txt`.
 
 ## Context
 
