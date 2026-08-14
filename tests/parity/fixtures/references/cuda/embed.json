@@ -1,7 +1,8 @@
 {
   "meta": {
-    "generated_on": "2026-08-13",
-    "image_tag": "0.4.0",
+    "generated_on": "2026-08-14",
+    "tier": "cuda",
+    "image_tag": "0.9.0",
     "image_digest": null,
     "hardware": "maintainer NVIDIA hardware",
     "corpus_sha256": {
