@@ -22,6 +22,7 @@ from voxint.db.models import (
     SpeakerEmbedding,
 )
 from voxint.speakers.matching import MatchingGates
+from voxint.speakers.roster import rename_speaker
 
 SPACE = "titanet-large-v1"
 GATES = MatchingGates()
@@ -237,16 +238,60 @@ def test_key_reused_with_different_payload_conflicts(
                 gates=GATES,
             )
         session.rollback()
-        with pytest.raises(ConflictingReplayError):
-            enroll_new_speaker(
-                session,
-                run_id=run_id,
-                diarization_label="S0",
-                display_name="Someone Else",
-                operator="ben",
-                idempotency_key="k-payload",
-                gates=GATES,
-            )
+        # Same key, same run/label/operator but a different NAME is still a
+        # replay: display_name is mutable (roster rename), so it is deliberately
+        # NOT part of the replay comparison — the durable identity is the ledger
+        # row. The original outcome comes back; no second speaker is minted.
+        replayed = enroll_new_speaker(
+            session,
+            run_id=run_id,
+            diarization_label="S0",
+            display_name="Someone Else",
+            operator="ben",
+            idempotency_key="k-payload",
+            gates=GATES,
+        )
+        assert replayed.created_speaker is False
+        alice_id = session.execute(
+            select(Speaker.id).where(Speaker.display_name == "Alice")
+        ).scalar_one()
+        assert replayed.speaker_id == alice_id
+
+
+def test_replay_still_succeeds_after_rename(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The rename-breaks-replay bug: a replayed enrollment POST arriving after
+    the speaker was renamed must return the original outcome, not conflict."""
+    with session_factory() as session:
+        run_id = make_completed_run(session)
+        add_turn(session, run_id, 0, "S0")
+        add_turn(session, run_id, 1, "S0")
+        session.commit()
+        original = enroll_new_speaker(
+            session,
+            run_id=run_id,
+            diarization_label="S0",
+            display_name="Alice",
+            operator="ben",
+            idempotency_key="k-rename-replay",
+            gates=GATES,
+        )
+        session.commit()
+        rename_speaker(session, original.speaker_id, "Alice Verified")
+        session.commit()
+        replayed = enroll_new_speaker(
+            session,
+            run_id=run_id,
+            diarization_label="S0",
+            display_name="Alice",  # the stale form still carries the old name
+            operator="ben",
+            idempotency_key="k-rename-replay",
+            gates=GATES,
+        )
+        assert replayed.created_speaker is False
+        assert replayed.speaker_id == original.speaker_id
+        assert replayed.decision_id == original.decision_id
 
 
 def test_key_reused_from_non_assign_decision_refused(

@@ -34,9 +34,11 @@ from sqlalchemy.orm import Session
 from voxint.db.models import (
     AssignmentMethod,
     DiarizationTurn,
+    Speaker,
     SpeakerAssignment,
     SpeakerEmbedding,
 )
+from voxint.speakers.roster import active_speaker_clause
 
 if TYPE_CHECKING:
     from voxint.config import Settings
@@ -312,11 +314,16 @@ def replace_run_proposals(
 
 
 def _roster_centroids(session: Session, space: str) -> dict[uuid.UUID, np.ndarray]:
-    """One unit centroid per enrolled speaker, within one embedding space."""
+    """One unit centroid per active enrolled speaker, within one embedding space.
+
+    Merged and archived speakers leave the matching roster: a merge repoints
+    its embeddings anyway (belt and braces here), and an archived speaker must
+    stop attracting proposals until restored.
+    """
     rows = session.execute(
-        select(SpeakerEmbedding.speaker_id, SpeakerEmbedding.embedding).where(
-            SpeakerEmbedding.embedding_space == space
-        )
+        select(SpeakerEmbedding.speaker_id, SpeakerEmbedding.embedding)
+        .join(Speaker, Speaker.id == SpeakerEmbedding.speaker_id)
+        .where(SpeakerEmbedding.embedding_space == space, active_speaker_clause())
     ).all()
     grouped: dict[uuid.UUID, list[np.ndarray]] = {}
     for speaker_id, embedding in rows:

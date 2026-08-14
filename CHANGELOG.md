@@ -5,6 +5,27 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Speaker roster page** (`/speakers`, #7): view every enrolled speaker with
+  its enrollment provenance, machine-proposal count, and a deterministic
+  voiceprint strip derived from its own centroid. Curation actions: rename,
+  merge duplicates, archive/restore, and remove a bad enrollment embedding —
+  all without ever rewriting the append-only decision ledger. Merges keep the
+  source speaker as a tombstone (`merged_into_id`, migration 0007) and readers
+  canonicalize at read time, so historical rulings render under the merge
+  target while the ledger rows stay byte-identical.
+
+### Changed
+- Speaker matching, the workbench assign dropdown, and the decide route now
+  consider **active** speakers only — merged and archived speakers stop
+  attracting proposals and decisions (archiving also removes the speaker's
+  machine proposals; restore does not resurrect them).
+
+### Fixed
+- Enrollment replay now validates against durable provenance (run, label,
+  operator) instead of the current display name, so renaming a speaker can no
+  longer make a replayed enrollment POST falsely conflict.
+
 ## [0.6.0] — 2026-08-14
 
 Token-free onboarding: the diarization weights are vendored (#24). No

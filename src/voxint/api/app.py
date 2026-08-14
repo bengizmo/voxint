@@ -55,6 +55,11 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
+    CSRF_ROSTER_ARCHIVE,
+    CSRF_ROSTER_EMBEDDING_DELETE,
+    CSRF_ROSTER_MERGE,
+    CSRF_ROSTER_RENAME,
+    CSRF_ROSTER_RESTORE,
     CSRF_SETTINGS,
     CSRF_SETUP,
     CSRF_SUBMIT,
@@ -127,6 +132,19 @@ from voxint.media.serving import (
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 from voxint.speakers.matching import gates_from_settings
+from voxint.speakers.roster import (
+    RosterError,
+    RosterNotFoundError,
+    active_speakers,
+    archive_speaker,
+    delete_embedding,
+    merge_speakers,
+    rename_speaker,
+    restore_speaker,
+    roster_overview,
+    voiceprint_bars,
+)
+from voxint.speakers.roster import is_active as roster_is_active
 from voxint.tutorial.steps import (
     STEP_COPY,
     STEP_PAGE,
@@ -411,9 +429,9 @@ def _workbench_context(
 ) -> dict[str, Any]:
     settings: Settings = request.app.state.settings
     states = label_states(session, run.id)
-    speakers = list(
-        session.execute(select(Speaker).order_by(Speaker.display_name)).scalars()
-    )
+    # Assignable identities only — merged and archived speakers are curated out
+    # of the roster and must not attract new decisions.
+    speakers = active_speakers(session)
     return {
         "request": request,
         "run": run,
@@ -566,6 +584,49 @@ def _labels_response(
             _workbench_context(request, session, run, token),
         )
     return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
+
+
+def _roster_context(
+    request: Request, session: Session, error: str | None = None
+) -> dict[str, Any]:
+    """Template context for the roster page and its htmx fragment."""
+    overview = roster_overview(session)
+    secret = request.app.state.csrf_secret
+    return {
+        "request": request,
+        "overview": overview,
+        "voiceprints": {
+            entry.speaker.id: voiceprint_bars(entry.embeddings)
+            for entry in overview.active
+        },
+        "roster_error": error,
+        "active_nav": "speakers",
+        "csrf_rename": mint_csrf_token(secret, CSRF_ROSTER_RENAME),
+        "csrf_merge": mint_csrf_token(secret, CSRF_ROSTER_MERGE),
+        "csrf_archive": mint_csrf_token(secret, CSRF_ROSTER_ARCHIVE),
+        "csrf_restore": mint_csrf_token(secret, CSRF_ROSTER_RESTORE),
+        "csrf_embedding_delete": mint_csrf_token(
+            secret, CSRF_ROSTER_EMBEDDING_DELETE
+        ),
+    }
+
+
+def _roster_response(
+    request: Request, session: Session, error: str | None = None
+) -> Response:
+    """Post-mutation response, mirroring ``_labels_response``: htmx gets the
+    refreshed roster fragment (operator errors rendered inline), a plain form
+    POST gets a 303 back to the page — or the full page when it carries an
+    error to show. CSRF/auth failures never come here; they stay real 403s."""
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request, "fragments/roster.html", _roster_context(request, session, error)
+        )
+    if error is not None:
+        return templates.TemplateResponse(
+            request, "speakers.html", _roster_context(request, session, error)
+        )
+    return RedirectResponse("/speakers", status_code=303)
 
 
 def _register_routes(app: FastAPI) -> None:
@@ -1224,8 +1285,18 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=422, detail="assign requires speaker_id; others forbid it"
             )
-        if speaker_id is not None and session.get(Speaker, speaker_id) is None:
-            raise HTTPException(status_code=422, detail=f"no speaker {speaker_id}")
+        if speaker_id is not None:
+            speaker = session.get(Speaker, speaker_id)
+            if speaker is None:
+                raise HTTPException(status_code=422, detail=f"no speaker {speaker_id}")
+            if not roster_is_active(speaker):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"speaker {speaker.display_name!r} is no longer an active"
+                        " roster identity — refresh and pick another"
+                    ),
+                )
         if label not in {s.label for s in label_states(session, run_id)}:
             raise HTTPException(status_code=404, detail=f"no label {label!r} in run")
         try:
@@ -1357,6 +1428,115 @@ def _register_routes(app: FastAPI) -> None:
         clear_tutorial_completion(session)
         session.commit()
         return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
+
+    # ---- Speaker roster curation (issue #7) ------------------------------------
+    # View, rename, merge, archive/restore, and remove enrollment embeddings.
+    # The append-only decision ledger is never written here — every mutation goes
+    # through speakers.roster, which curates only the mutable side. Each POST
+    # verifies its own per-action CSRF token before any write; operator-level
+    # refusals (RosterError) re-render the roster with the message inline, while
+    # missing speakers/embeddings stay real 404s.
+
+    @protected.get("/speakers")
+    def speakers_page(
+        request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        return templates.TemplateResponse(
+            request, "speakers.html", _roster_context(request, session)
+        )
+
+    @protected.post("/speakers/{speaker_id}/rename")
+    def speaker_rename(
+        speaker_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        display_name: Annotated[str, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_ROSTER_RENAME, csrf_token)
+        try:
+            rename_speaker(session, speaker_id, display_name)
+        except RosterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RosterError as exc:
+            session.rollback()
+            return _roster_response(request, session, error=str(exc))
+        return _roster_response(request, session)
+
+    @protected.post("/speakers/{speaker_id}/merge")
+    def speaker_merge(
+        speaker_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        target_id: Annotated[uuid.UUID, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_ROSTER_MERGE, csrf_token)
+        try:
+            merge_speakers(session, speaker_id, target_id)
+        except RosterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RosterError as exc:
+            session.rollback()
+            return _roster_response(request, session, error=str(exc))
+        return _roster_response(request, session)
+
+    @protected.post("/speakers/{speaker_id}/archive")
+    def speaker_archive(
+        speaker_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_ROSTER_ARCHIVE, csrf_token)
+        try:
+            archive_speaker(session, speaker_id)
+        except RosterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RosterError as exc:
+            session.rollback()
+            return _roster_response(request, session, error=str(exc))
+        return _roster_response(request, session)
+
+    @protected.post("/speakers/{speaker_id}/restore")
+    def speaker_restore(
+        speaker_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_ROSTER_RESTORE, csrf_token)
+        try:
+            restore_speaker(session, speaker_id)
+        except RosterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RosterError as exc:
+            session.rollback()
+            return _roster_response(request, session, error=str(exc))
+        return _roster_response(request, session)
+
+    @protected.post("/speakers/{speaker_id}/embeddings/{embedding_id}/delete")
+    def speaker_embedding_delete(
+        speaker_id: uuid.UUID,
+        embedding_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_ROSTER_EMBEDDING_DELETE, csrf_token)
+        try:
+            delete_embedding(session, speaker_id, embedding_id)
+        except RosterNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RosterError as exc:
+            session.rollback()
+            return _roster_response(request, session, error=str(exc))
+        return _roster_response(request, session)
 
     @protected.get("/media/{run_id}")
     @protected.head("/media/{run_id}")

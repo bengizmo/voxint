@@ -1,0 +1,126 @@
+{# The speaker roster — full-page include and htmx post-mutation refresh target.
+   Operator refusals (RosterError) arrive as roster_error and render inline;
+   destructive forms carry hx-confirm (the plain no-JS path has no confirm —
+   htmx is vendored and always served, so that path is a deliberate fallback). #}
+{% if roster_error %}<p class="error" role="alert">{{ roster_error }}</p>{% endif %}
+
+{% for entry in overview.active %}
+<div class="label-card roster-card">
+  <h2>
+    {% set bars = voiceprints.get(entry.speaker.id) %}
+    {% if bars %}
+    {# Signature: a deterministic strip derived from this speaker's own
+       enrollment centroid — real data, same voice → same strip. #}
+    <svg class="voiceprint" viewBox="0 0 96 22" aria-hidden="true">
+      {%- for h in bars -%}
+      <rect x="{{ loop.index0 * 2 }}" y="{{ "%.2f"|format(11 - 10 * h) }}"
+            width="1.4" height="{{ "%.2f"|format([20 * h, 0.6]|max) }}"/>
+      {%- endfor -%}
+    </svg>
+    {% endif %}
+    {{ entry.speaker.display_name }}
+  </h2>
+  <p class="muted">
+    {{ entry.embeddings|length }} enrollment{{ "s" if entry.embeddings|length != 1 }}
+    ({{ entry.embeddings|map(attribute="embedding_space")|unique|join(", ") or "none" }})
+    · {{ entry.assignment_count }} machine proposal{{ "s" if entry.assignment_count != 1 }}
+    · last seen {{ entry.last_seen_at.strftime("%Y-%m-%d") if entry.last_seen_at else "never" }}
+  </p>
+
+  <div class="roster-actions">
+    <form class="inline" method="post"
+          action="/speakers/{{ entry.speaker.id }}/rename"
+          hx-post="/speakers/{{ entry.speaker.id }}/rename"
+          hx-target="#roster" hx-swap="innerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_rename }}">
+      <input type="text" name="display_name" value="{{ entry.speaker.display_name }}"
+             minlength="1" maxlength="120" required
+             aria-label="New name for {{ entry.speaker.display_name }}">
+      <button type="submit">Rename</button>
+    </form>
+
+    {% set targets = overview.active | rejectattr("speaker.id", "equalto", entry.speaker.id) | list %}
+    {% if targets %}
+    <form class="inline" method="post"
+          action="/speakers/{{ entry.speaker.id }}/merge"
+          hx-post="/speakers/{{ entry.speaker.id }}/merge"
+          hx-target="#roster" hx-swap="innerHTML"
+          hx-confirm="Merge {{ entry.speaker.display_name }} into the selected speaker? Its enrollments and machine proposals move over, and the merge cannot be undone.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_merge }}">
+      <select name="target_id" required
+              aria-label="Merge {{ entry.speaker.display_name }} into">
+        <option value="" disabled selected>— merge into… —</option>
+        {% for other in targets %}
+        <option value="{{ other.speaker.id }}">{{ other.speaker.display_name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">Merge</button>
+    </form>
+    {% endif %}
+
+    <form class="inline" method="post"
+          action="/speakers/{{ entry.speaker.id }}/archive"
+          hx-post="/speakers/{{ entry.speaker.id }}/archive"
+          hx-target="#roster" hx-swap="innerHTML"
+          hx-confirm="Archive {{ entry.speaker.display_name }}? It leaves speaker matching and its machine proposals are removed. You can restore it later.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_archive }}">
+      <button type="submit">Archive</button>
+    </form>
+  </div>
+
+  {% if entry.embeddings %}
+  <details class="embeddings">
+    <summary>Enrollments</summary>
+    {% for e in entry.embeddings %}
+    {% set last_in_space = entry.embeddings | selectattr("embedding_space", "equalto", e.embedding_space) | list | length == 1 %}
+    <div class="embedding-row">
+      <span>{{ e.embedding_space }}</span>
+      <span class="muted">
+        {{ e.created_at.strftime("%Y-%m-%d") }}
+        {% if e.source_diarization_label %}· label {{ e.source_diarization_label }}{% endif %}
+        {% if e.source_pipeline_run_id %}· <a href="/runs/{{ e.source_pipeline_run_id }}">source run</a>{% endif %}
+      </span>
+      {% if last_in_space %}
+      <span class="muted">last one — removing it makes this speaker unmatchable in {{ e.embedding_space }}</span>
+      {% endif %}
+      <form class="inline" method="post"
+            action="/speakers/{{ entry.speaker.id }}/embeddings/{{ e.id }}/delete"
+            hx-post="/speakers/{{ entry.speaker.id }}/embeddings/{{ e.id }}/delete"
+            hx-target="#roster" hx-swap="innerHTML"
+            hx-confirm="Remove this enrollment of {{ entry.speaker.display_name }}? All of its machine proposals are removed with it. The decision history stays.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_embedding_delete }}">
+        <button type="submit">Remove</button>
+      </form>
+    </div>
+    {% endfor %}
+  </details>
+  {% endif %}
+</div>
+{% else %}
+<p class="muted">No speakers yet — enroll voices from the review workbench.</p>
+{% endfor %}
+
+{% if overview.inactive %}
+<details class="roster-inactive">
+  <summary>Former speakers ({{ overview.inactive|length }})</summary>
+  {% for entry in overview.inactive %}
+  <div class="embedding-row">
+    <span>{{ entry.speaker.display_name }}</span>
+    {% if entry.merged_into_name %}
+    <span class="muted">merged into {{ entry.merged_into_name }}
+      {% if entry.speaker.merged_at %}on {{ entry.speaker.merged_at.strftime("%Y-%m-%d") }}{% endif %}</span>
+    {% else %}
+    <span class="muted">archived
+      {% if entry.speaker.deleted_at %}{{ entry.speaker.deleted_at.strftime("%Y-%m-%d") }}{% endif %}</span>
+    <form class="inline" method="post"
+          action="/speakers/{{ entry.speaker.id }}/restore"
+          hx-post="/speakers/{{ entry.speaker.id }}/restore"
+          hx-target="#roster" hx-swap="innerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_restore }}">
+      <button type="submit">Restore</button>
+    </form>
+    {% endif %}
+  </div>
+  {% endfor %}
+</details>
+{% endif %}

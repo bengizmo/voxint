@@ -33,8 +33,14 @@ from voxint.speakers.matching import (
     eligible_label_vectors,
     label_centroid,
 )
-
-MAX_DISPLAY_NAME_LENGTH = 120
+from voxint.speakers.roster import (
+    MAX_DISPLAY_NAME_LENGTH as MAX_DISPLAY_NAME_LENGTH,  # re-export (API imports it here)
+)
+from voxint.speakers.roster import (
+    describe_name_owner,
+    is_active,
+    normalize_display_name,
+)
 
 
 class EnrollmentError(Exception):
@@ -62,14 +68,18 @@ def enroll_new_speaker(
 
     Caller owns the transaction: everything here commits or rolls back as one.
     """
-    name = display_name.strip()
-    if not name or len(name) > MAX_DISPLAY_NAME_LENGTH:
-        raise EnrollmentError("display name must be 1-120 characters")
+    try:
+        name = normalize_display_name(display_name)
+    except ValueError as exc:
+        raise EnrollmentError(str(exc)) from exc
 
     # Replay first: a duplicate POST of a completed enrollment must return the
     # original outcome, not attempt a second speaker. Only an exact replay
-    # qualifies — the same run, label, operator, and speaker name; anything
-    # else reusing the key is a bug or a stale form, never a silent success.
+    # qualifies — the same run, label, and operator; anything else reusing the
+    # key is a bug or a stale form, never a silent success. The submitted name
+    # is deliberately NOT compared: display_name is mutable (roster rename), so
+    # a replay arriving after a rename must still resolve to the original
+    # outcome — the durable identity is the ledger row, not the name.
     existing = session.execute(
         select(AdjudicationDecision).where(
             AdjudicationDecision.idempotency_key == idempotency_key
@@ -78,14 +88,10 @@ def enroll_new_speaker(
     if existing is not None:
         if existing.speaker_id is None:
             raise EnrollmentError("idempotency key was used for a non-assign decision")
-        original_name = session.execute(
-            select(Speaker.display_name).where(Speaker.id == existing.speaker_id)
-        ).scalar_one()
         if (
             existing.pipeline_run_id != run_id
             or existing.diarization_label != diarization_label
             or existing.operator != operator
-            or original_name != name
         ):
             raise ConflictingReplayError(idempotency_key)
         return EnrollmentResult(
@@ -94,14 +100,19 @@ def enroll_new_speaker(
             created_speaker=False,
         )
 
-    if session.execute(
-        select(Speaker.id).where(Speaker.display_name == name)
-    ).scalar_one_or_none() is not None:
+    owner = session.execute(
+        select(Speaker).where(Speaker.display_name == name)
+    ).scalar_one_or_none()
+    if owner is not None:
         # Enrolling means a NEW voice; attaching to an existing identity is
-        # the plain assign flow, which needs no centroid.
-        raise EnrollmentError(
-            f"speaker {name!r} already exists — use assign-to-existing instead"
-        )
+        # the plain assign flow, which needs no centroid. Names are globally
+        # unique across the whole lifecycle — a merged or archived owner gets
+        # lifecycle-specific guidance instead.
+        if is_active(owner):
+            raise EnrollmentError(
+                f"speaker {name!r} already exists — use assign-to-existing instead"
+            )
+        raise EnrollmentError(describe_name_owner(owner))
 
     by_label = eligible_label_vectors(session, run_id, gates)
     if diarization_label not in by_label:

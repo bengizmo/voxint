@@ -43,6 +43,7 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
 )
+from voxint.speakers.roster import canonicalize, merge_map
 
 # A run-id the correlated SQL predicates accept: either a literal UUID (single
 # run) or an outer column such as ``PipelineRun.id`` (correlated per row).
@@ -203,9 +204,18 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
     }
     decisions = effective_decisions(session, run_id)
 
-    speaker_ids = {p.speaker_id for p in cosine_by_label.values() if p.speaker_id} | {
-        d.speaker_id for d in decisions.values() if d.speaker_id
-    }
+    # Merged speakers canonicalize at read time: an old ledger assign(B) renders
+    # as B's merge target. The ledger row itself (effective_decision) stays the
+    # immutable historical reference — canonicalization is presentation.
+    tombstones = merge_map(session)
+
+    def canonical(speaker_id: uuid.UUID | None) -> uuid.UUID | None:
+        return canonicalize(speaker_id, tombstones) if speaker_id else None
+
+    speaker_ids = {
+        canonical(p.speaker_id) for p in cosine_by_label.values() if p.speaker_id
+    } | {canonical(d.speaker_id) for d in decisions.values() if d.speaker_id}
+    speaker_ids.discard(None)
     names: dict[uuid.UUID, str] = (
         {
             sid: name
@@ -227,17 +237,18 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
         if decision is not None:
             if decision.decision == Decision.ASSIGN.value:
                 resolution = Resolution.HUMAN_ASSIGN
-                speaker_id = decision.speaker_id
+                speaker_id = canonical(decision.speaker_id)
             elif decision.decision == Decision.EXCLUDE.value:
                 resolution = Resolution.HUMAN_EXCLUDE
             else:
                 resolution = Resolution.HUMAN_UNKNOWN
         elif cosine is not None and cosine.grounded:
             resolution = Resolution.GROUNDED_COSINE
-            speaker_id = cosine.speaker_id
+            speaker_id = canonical(cosine.speaker_id)
         else:
             resolution = Resolution.UNRESOLVED
 
+        cosine_speaker_id = canonical(cosine.speaker_id) if cosine else None
         states.append(
             LabelState(
                 label=label,
@@ -246,9 +257,9 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
                 resolution=resolution,
                 speaker_id=speaker_id,
                 speaker_name=names.get(speaker_id) if speaker_id else None,
-                cosine_speaker_id=cosine.speaker_id if cosine else None,
+                cosine_speaker_id=cosine_speaker_id,
                 cosine_speaker_name=(
-                    names.get(cosine.speaker_id) if cosine and cosine.speaker_id else None
+                    names.get(cosine_speaker_id) if cosine_speaker_id else None
                 ),
                 cosine_confidence=cosine.confidence if cosine else None,
                 cosine_grounded=bool(cosine.grounded) if cosine else False,

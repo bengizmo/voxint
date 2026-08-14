@@ -327,11 +327,40 @@ class DiarizationTurn(Base):
 
 
 class Speaker(Base):
+    """Roster identity with a curation lifecycle (issue #7).
+
+    A speaker is *active* while ``merged_into_id`` and ``deleted_at`` are both
+    NULL — only active speakers participate in matching, dropdowns, and new
+    decisions. Merging retains the source row as a tombstone (``merged_into_id``
+    self-FK) so ledger FKs stay valid; readers canonicalize through it. Archive
+    is reversible (``deleted_at``). ``display_name`` stays globally unique
+    across every lifecycle state — restore or merge, never re-create a name.
+    """
+
     __tablename__ = "speakers"
+    __table_args__ = (
+        CheckConstraint(
+            "merged_into_id IS NULL OR merged_into_id != id",
+            name="speakers_no_self_merge_check",
+        ),
+        CheckConstraint(
+            "(merged_into_id IS NULL) = (merged_at IS NULL)",
+            name="speakers_merge_fields_together_check",
+        ),
+        CheckConstraint(
+            "merged_into_id IS NULL OR deleted_at IS NULL",
+            name="speakers_not_merged_and_deleted_check",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     display_name: Mapped[str] = mapped_column(Text, unique=True)
     notes: Mapped[str | None] = mapped_column(Text)
+    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("speakers.id"), index=True
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

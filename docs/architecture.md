@@ -63,7 +63,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0006)
+## Data model (alembic revisions 0001–0007)
 
 | Table | Role |
 |---|---|
@@ -75,7 +75,7 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `audio_chunks` | chunk boundaries for long-file processing |
 | `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag |
 | `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
-| `speakers` | the grown speaker roster |
+| `speakers` | the grown speaker roster, with a curation lifecycle: `merged_into_id`/`merged_at` (merge tombstones) and `deleted_at` (reversible archive) (revision 0007) |
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
 | `speaker_assignments` | **machine proposals** (method, confidence, grounded flag; `llm_hint` rows carry `proposed_name`, method-shape CHECKs keep the two shapes disjoint) |
 | `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key) |
@@ -92,6 +92,35 @@ Three invariants worth naming:
 - **One embedding space at a time.** Cosine similarity is only meaningful within a
   single `embedding_space`; all vector SQL lives in one module and always filters
   by space.
+
+### Speaker lifecycle (roster curation, revision 0007)
+
+The roster page (`/speakers`) can rename, merge, archive/restore speakers and
+remove bad enrollment embeddings — all through `speakers.roster`, and none of it
+ever writes the decision ledger:
+
+- A speaker is **active** while `merged_into_id` and `deleted_at` are both NULL.
+  The one active predicate (`roster.active_speaker_clause`) governs matching
+  centroids, the workbench assign dropdown, and the decide route — merged and
+  archived speakers stop attracting proposals and decisions.
+- **Merge B→A** repoints B's `speaker_embeddings` and `speaker_assignments` to A
+  and keeps B as a tombstone (`merged_into_id = A`), so historical ledger FKs
+  stay valid. Readers canonicalize through the merge map at read time — an old
+  `assign(B)` decision *renders* as A while the ledger row keeps B forever.
+  Writes collapse chains to depth 1; readers still follow chains defensively and
+  fail loudly on a cycle.
+- **Archive** is reversible (`deleted_at`) and deletes the speaker's cosine
+  assignments — stale machine grounding must not outlive the operator's verdict.
+  Embeddings and human decisions are preserved; restore does not resurrect the
+  purged proposals (matching re-proposes on future runs).
+- **Removing an embedding** hard-deletes the derived centroid (the minting
+  decision and the raw `diarization_turns` vectors survive) and deletes all of
+  that speaker's cosine assignments — assignments carry no centroid lineage, so
+  narrower invalidation would be a guess.
+- **Names stay globally unique** across every lifecycle state. Re-creating an
+  archived name is refused with restore guidance; enrollment replay validates
+  against durable provenance (run, label, operator), never the mutable
+  `display_name`, so a rename can never break a replayed enrollment POST.
 
 ## URL ingestion & SSRF (the ACQUIRE stage)
 

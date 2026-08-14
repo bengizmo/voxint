@@ -68,6 +68,16 @@
                         margin-top: .8rem; }
     .settings dl { margin: 1rem 0; }
     .settings dt { font-weight: 600; margin-top: .8rem; }
+    .roster-card h2 { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .3rem; }
+    .voiceprint { width: 6rem; height: 1.1rem; flex: none; opacity: .75; }
+    .voiceprint rect { fill: currentColor; }
+    .roster-actions { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
+                      margin-top: .5rem; }
+    details.embeddings, details.roster-inactive { margin: .6rem 0; }
+    details.embeddings summary, details.roster-inactive summary {
+      cursor: pointer; font-size: .9rem; opacity: .8; }
+    .embedding-row { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap;
+                     padding: .25rem 0; font-size: .9rem; }
   </style>
 </head>
 <body>
@@ -75,6 +85,7 @@
   <nav class="top">
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
     <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
+    <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
     <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>
   {% endblock %}

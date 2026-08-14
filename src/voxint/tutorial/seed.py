@@ -73,6 +73,7 @@ from voxint.speakers.matching import (
     NameHintProposal,
     replace_run_proposals,
 )
+from voxint.speakers.roster import canonicalize, merge_map
 from voxint.tutorial import resources
 
 # Stable identity of the bundled sample under MEDIA_ROOT — a reserved sentinel,
@@ -201,6 +202,15 @@ def _get_or_create_roster_speaker(
             ).scalar_one_or_none()
             if speaker is None:
                 raise  # not the expected UNIQUE(display_name) race — surface it
+    # Roster curation (issue #7) may have merged or archived a previously seeded
+    # tutorial speaker; the tutorial needs its grounded anchor active again.
+    if speaker.merged_into_id is not None:
+        canonical_id = canonicalize(speaker.id, merge_map(session))
+        canonical = session.get(Speaker, canonical_id)
+        assert canonical is not None  # FK guarantees the merge target exists
+        speaker = canonical
+    if speaker.deleted_at is not None:
+        speaker.deleted_at = None
     has_embedding = session.execute(
         select(SpeakerEmbedding.id).where(
             SpeakerEmbedding.speaker_id == speaker.id,

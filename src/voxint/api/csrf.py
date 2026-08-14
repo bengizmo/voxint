@@ -51,6 +51,15 @@ CSRF_SETUP = "setup"
 # a single row, so a token minted for one being valid on the other is a harmless
 # replay (mirrors CSRF_SETUP's single-flow rationale).
 CSRF_SETTINGS = "settings"
+# Speaker roster curation (issue #7). Per-action tokens — unlike the wizard and
+# settings surfaces these are independent mutations with different blast radii
+# (a rename token must not be replayable as a merge), so each form mints and
+# verifies under its own action.
+CSRF_ROSTER_RENAME = "roster-rename"
+CSRF_ROSTER_MERGE = "roster-merge"
+CSRF_ROSTER_ARCHIVE = "roster-archive"
+CSRF_ROSTER_RESTORE = "roster-restore"
+CSRF_ROSTER_EMBEDDING_DELETE = "roster-embedding-delete"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:
