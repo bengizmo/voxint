@@ -622,6 +622,47 @@ class TestCpuImageProvenance:
         assert set().union(*pins.values()) == {version.group(1)}, (
             f"compose pins {pins} disagree with pyproject version {version.group(1)}"
         )
+        # The runtime constant and the .env.example override comment are part
+        # of the same atomic bump: `voxint --version` and /healthz report
+        # __version__, and users who uncomment the documented VOXINT_IMAGE_TAG
+        # would silently run the previous release (bit the 0.5.1 draft: both
+        # still said 0.5.0 after pyproject/compose were bumped).
+        import voxint
+
+        assert voxint.__version__ == version.group(1), (
+            f"voxint.__version__ {voxint.__version__} disagrees with "
+            f"pyproject version {version.group(1)}"
+        )
+        env_example = (REPO_ROOT / ".env.example").read_text()
+        env_pin = re.search(r"VOXINT_IMAGE_TAG=([0-9][0-9.]*)", env_example)
+        assert env_pin is not None, ".env.example lost its VOXINT_IMAGE_TAG line"
+        assert env_pin.group(1) == version.group(1), (
+            f".env.example VOXINT_IMAGE_TAG {env_pin.group(1)} disagrees with "
+            f"pyproject version {version.group(1)}"
+        )
+
+    def test_long_running_services_have_restart_policy(self) -> None:
+        # Issue #23: a transient model-service crash left the stack down
+        # because nothing carried a restart policy. Every long-running service
+        # in every overlay must self-heal; only the one-shot migrate job may
+        # (and must) opt out — restarting it after exit 0 would loop alembic.
+        import yaml
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        base = yaml.safe_load((REPO_ROOT / "compose.yaml").read_text())["services"]
+        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml"):
+            services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
+            for svc_name, svc in services.items():
+                # Overlay entries are partial overrides that compose merges
+                # onto the base file — a missing key there inherits the base
+                # service's policy.
+                restart = svc.get("restart", base.get(svc_name, {}).get("restart"))
+                expected = "no" if svc_name == "migrate" else "unless-stopped"
+                assert restart == expected, (
+                    f"{name}:{svc_name} effective restart policy is {restart!r}, "
+                    f"expected {expected!r}"
+                )
 
     def test_torch_pins_match_across_flavors(self) -> None:
         # A one-sided torch bump silently changes cross-flavor numerics; the

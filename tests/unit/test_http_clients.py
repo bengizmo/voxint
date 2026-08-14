@@ -10,7 +10,7 @@ import pytest
 from voxint.clients.asr import HttpASRClient
 from voxint.clients.diarize import HttpDiarizerClient
 from voxint.clients.embed import MAX_WINDOWS_PER_REQUEST, HttpEmbedderClient
-from voxint.clients.errors import ProtocolError, ServiceError
+from voxint.clients.errors import ProtocolError, ServiceError, error_from_transport
 
 MEDIA_ROOT = Path("/data/media")
 AUDIO = MEDIA_ROOT / "runs/abc/normalized.wav"
@@ -158,8 +158,8 @@ def test_transport_failure_retryable() -> None:
 
 
 def test_connect_failure_names_service_host() -> None:
-    # A dead/unresolvable service container should read as "the container is
-    # down", naming the host, not as a bare resolver error (issue #23).
+    # A dead/unresolvable service should read as "the service is down", naming
+    # the host, not as a bare resolver error (issue #23).
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("[Errno -2] Name or service not known", request=request)
 
@@ -167,24 +167,22 @@ def test_connect_failure_names_service_host() -> None:
     with pytest.raises(ServiceError) as exc_info:
         client.transcribe(AUDIO)
     assert exc_info.value.retryable is True
-    assert "'test'" in exc_info.value.message
-    assert "container is likely down" in exc_info.value.message
+    assert "could not connect to 'test'" in exc_info.value.message
+    assert "likely down" in exc_info.value.message
 
 
 def test_connect_failure_without_request_still_maps() -> None:
     # httpx.ConnectError.request raises RuntimeError when never attached; the
     # hint must degrade gracefully rather than mask the transport error.
-    from voxint.clients.errors import error_from_transport
-
     err = error_from_transport(httpx.ConnectError("refused"))
     assert err.code == "transport_error"
     assert err.retryable is True
-    assert "the service" in err.message
+    assert "could not connect to the service:" in err.message
 
 
-def test_timeout_failure_keeps_plain_message() -> None:
-    # Only connect failures get the "container down" hint — a read timeout on a
-    # reachable service must not claim the container is down.
+def test_read_timeout_keeps_plain_message() -> None:
+    # Only connect failures get the "likely down" hint — a read timeout on a
+    # reachable service must not claim the service is down.
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("read timed out", request=request)
 
@@ -192,7 +190,24 @@ def test_timeout_failure_keeps_plain_message() -> None:
     with pytest.raises(ServiceError) as exc_info:
         client.transcribe(AUDIO)
     assert exc_info.value.code == "transport_error"
-    assert "container is likely down" not in exc_info.value.message
+    assert exc_info.value.retryable is True
+    assert "likely down" not in exc_info.value.message
+
+
+def test_connect_timeout_keeps_plain_message() -> None:
+    # Deliberate taxonomy decision (issue #23 review): ConnectTimeout is a
+    # sibling of ConnectError, not a subclass, and stays PLAIN — a timeout on
+    # a reachable host usually means overload or slow startup, not a dead
+    # container. This pins the choice so a future widening is conscious.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("connect timed out", request=request)
+
+    client = make_client(HttpASRClient, handler)
+    with pytest.raises(ServiceError) as exc_info:
+        client.transcribe(AUDIO)
+    assert exc_info.value.code == "transport_error"
+    assert exc_info.value.retryable is True
+    assert "likely down" not in exc_info.value.message
 
 
 def test_non_json_2xx_is_protocol_violation() -> None:

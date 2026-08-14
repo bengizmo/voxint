@@ -81,16 +81,19 @@ def error_from_transport(exc: httpx.HTTPError) -> ServiceError:
     """Timeouts, refused connections, dead sockets — presumed transient."""
     message = f"{type(exc).__name__}: {exc}"
     if isinstance(exc, httpx.ConnectError):
-        # A DNS failure or refused connection inside the compose network almost
-        # always means the service container is down, not that the network broke
-        # — say so instead of leaving a raw resolver error in the run ledger.
+        # A DNS failure or refused connection almost always means the service
+        # process is down (in the compose network: its container), not that the
+        # network broke — say so instead of leaving a raw resolver error in the
+        # run ledger. Deliberately NOT extended to ConnectTimeout: a timeout on
+        # a reachable host usually means overload or slow startup, and claiming
+        # "down" there would misdirect diagnosis.
         try:
             host = exc.request.url.host
         except RuntimeError:  # httpx raises if no request is attached
             host = None
         target = f"'{host}'" if host else "the service"
         message += (
-            f" — could not connect to {target}: the service container is likely"
-            " down or restarting (check `docker compose ps`)"
+            f" — could not connect to {target}: the service is likely down or"
+            " restarting (compose deployments: check `docker compose ps`)"
         )
     return ServiceError("transport_error", message, retryable=True)

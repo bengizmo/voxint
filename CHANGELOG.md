@@ -19,8 +19,9 @@ changes.
   the service DNS name stops resolving or the connection is refused —
   inside the compose network this almost always means the container is
   down — the worker's ledger error names the service host and says the
-  container is likely down or restarting, instead of surfacing a raw
-  resolver error that reads as a network problem (#23).
+  service is likely down or restarting (pointing compose deployments at
+  `docker compose ps`), instead of surfacing a raw resolver error that
+  reads as a network problem (#23).
 
 ## [0.5.0] — 2026-08-14
 
@@ -265,7 +266,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/bengizmo/voxint/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bengizmo/voxint/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/bengizmo/voxint/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/bengizmo/voxint/compare/v0.3.0...v0.4.0
