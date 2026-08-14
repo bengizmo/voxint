@@ -10,10 +10,11 @@
 #
 # What this installs: the CORE control plane (Postgres, Redis, the API + review
 # console, the Celery worker and beat) plus, if you choose one, a compute tier
-# for the model services -- GPU (compose.gpu.yaml, NVIDIA) or CPU
-# (compose.cpu.yaml, runs anywhere). Transcription, diarization, and speaker
-# embedding need a tier; the pyannote diarization weights additionally need a
-# Hugging Face token (both compute overlays refuse to start without one), so
+# for the model services -- GPU (compose.gpu.yaml, NVIDIA), ROCm
+# (compose.rocm.yaml, AMD GPU for ASR) or CPU (compose.cpu.yaml, runs
+# anywhere). Transcription, diarization, and speaker embedding need a tier;
+# the pyannote diarization weights additionally need a
+# Hugging Face token (every compute overlay refuses to start without one), so
 # the installer collects that too. Skipping the token starts the core stack
 # only and the completion notice explains how to finish.
 #
@@ -64,13 +65,14 @@ fi
 # Managed keys we own in .env. Unset any inherited shell exports of these so
 # they cannot silently shadow the .env values during Compose interpolation
 # (shell environment outranks the .env file). We do not touch DATABASE_URL etc.
-unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER 2>/dev/null || true
+unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER VOXINT_RENDER_GID 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Compute-tier state. COMPUTE_TIER_VALUE is what the user chose (cpu|gpu|none,
-# persisted in .env as VOXINT_COMPOSE_TIER). EFFECTIVE_TIER is what this run
-# actually starts: it downgrades to "none" (core only) when a cpu/gpu choice
-# has no usable HF token, because BOTH compute overlays interpolate
+# Compute-tier state. COMPUTE_TIER_VALUE is what the user chose
+# (cpu|gpu|rocm|none, persisted in .env as VOXINT_COMPOSE_TIER).
+# EFFECTIVE_TIER is what this run
+# actually starts: it downgrades to "none" (core only) when a compute-tier
+# choice has no usable HF token, because ALL compute overlays interpolate
 # ${HF_TOKEN:?} and refuse to start without one. DEFERRED_TIER records that
 # downgrade so the handoff can explain how to finish.
 # ---------------------------------------------------------------------------
@@ -79,10 +81,25 @@ EFFECTIVE_TIER="none"
 DEFERRED_TIER=""
 HF_TOKEN_VALUE=""
 PREFLIGHT_TOKEN=""
+RENDER_GID_VALUE=""
 COMPOSE_FILE_ARGS="-f compose.yaml"
 
+# ROCm tier: the host "render" group gid owning /dev/kfd + /dev/dri/renderD*
+# is allocated per host, so the rocm overlay interpolates it from .env
+# (VOXINT_RENDER_GID). Detect it whenever the rocm tier is chosen; empty on
+# hosts without a render group (the overlay then falls back to its default
+# and the model service will say so loudly if that gid is wrong).
+detect_render_gid() {
+  RENDER_GID_VALUE=$(getent group render 2>/dev/null | cut -d: -f3)
+  if [ -z "$RENDER_GID_VALUE" ]; then
+    say "  NOTE: no 'render' group found on this host; if the whisper service"
+    say "  cannot open /dev/kfd, set VOXINT_RENDER_GID in .env to the group"
+    say "  that owns it (ls -ln /dev/kfd)."
+  fi
+}
+
 normalize_tier() {
-  case ${1:-} in cpu|gpu|none) printf '%s' "$1" ;; *) printf '%s' "" ;; esac
+  case ${1:-} in cpu|gpu|rocm|none) printf '%s' "$1" ;; *) printf '%s' "" ;; esac
 }
 
 # One helper owns the tier -> Compose-file mapping, and EVERY Compose
@@ -90,8 +107,9 @@ normalize_tier() {
 # about which overlay is active.
 compose_file_args_for_tier() {
   case $(normalize_tier "${1:-}") in
-    cpu) printf '%s' '-f compose.yaml -f compose.cpu.yaml' ;;
-    gpu) printf '%s' '-f compose.yaml -f compose.gpu.yaml' ;;
+    cpu)  printf '%s' '-f compose.yaml -f compose.cpu.yaml' ;;
+    gpu)  printf '%s' '-f compose.yaml -f compose.gpu.yaml' ;;
+    rocm) printf '%s' '-f compose.yaml -f compose.rocm.yaml' ;;
     *)   printf '%s' '-f compose.yaml' ;;
   esac
 }
@@ -269,34 +287,43 @@ resolve_port() {
 }
 
 # Which compute tier should run the model services. Suggests GPU when an
-# NVIDIA driver is visible on the host (advisory only -- the user decides).
+# NVIDIA driver is visible on the host, ROCm when an AMD compute node
+# (/dev/kfd) is (advisory only -- the user decides).
 prompt_compute_tier() {
   local def=c label ans
+  if [ -e /dev/kfd ]; then def=a; fi
   if command -v nvidia-smi >/dev/null 2>&1; then def=g; fi
   step "Choosing a compute tier for the model services"
   say "  Transcription, diarization, and speaker embedding run as model services."
   say "  Pick how they should run:"
   say "    [G] GPU tier  -- needs an NVIDIA GPU + driver (fastest; ~6-8 GB VRAM)"
+  say "    [A] AMD tier  -- needs an AMD GPU (amdgpu driver only; transcription"
+  say "                     runs on the GPU, diarization/embedding on CPU)"
   say "    [C] CPU tier  -- no GPU needed; works on any amd64/arm64 host"
   say "                     (much slower: long recordings take hours, not minutes)"
   say "    [N] None for now -- core console only; audio processing disabled"
-  if [ "$def" = g ]; then label='[G/c/n]'; else label='[C/g/n]'; fi
+  case $def in
+    g) label='[G/a/c/n]' ;;
+    a) label='[A/g/c/n]' ;;
+    *) label='[C/g/a/n]' ;;
+  esac
   while :; do
     printf 'Compute tier %s: ' "$label" >&2
     IFS= read -r ans || fail "No input."
     ans=${ans:-$def}
     case $ans in
-      g|G|gpu|GPU)        COMPUTE_TIER_VALUE=gpu;  return 0 ;;
-      c|C|cpu|CPU)        COMPUTE_TIER_VALUE=cpu;  return 0 ;;
-      n|N|none|None|NONE) COMPUTE_TIER_VALUE=none; return 0 ;;
+      g|G|gpu|GPU)          COMPUTE_TIER_VALUE=gpu;  return 0 ;;
+      a|A|amd|AMD|rocm|ROCm|ROCM) COMPUTE_TIER_VALUE=rocm; detect_render_gid; return 0 ;;
+      c|C|cpu|CPU)          COMPUTE_TIER_VALUE=cpu;  return 0 ;;
+      n|N|none|None|NONE)   COMPUTE_TIER_VALUE=none; return 0 ;;
     esac
-    say "  Please answer g, c, or n."
+    say "  Please answer g, a, c, or n."
   done
 }
 
 # Hugging Face token for the HF-gated pyannote diarization weights. Empty
 # input = skip (the chosen tier is recorded but only the core stack starts,
-# because both compute overlays refuse to interpolate without HF_TOKEN).
+# because every compute overlay refuses to interpolate without HF_TOKEN).
 prompt_hf_token() {
   step "Hugging Face token (needed by the diarization service)"
   say "  The pyannote diarization weights are gated on Hugging Face. You need a"
@@ -400,6 +427,7 @@ managed_replacement() {
     API_PORT)        if [ -n "${API_PORT_VALUE:-}" ]; then printf 'API_PORT=%s'     "$API_PORT_VALUE"; fi ;;
     HF_TOKEN)        if [ -n "${HF_TOKEN_VALUE:-}" ]; then printf 'HF_TOKEN=%s' "$(dotenv_squote "$HF_TOKEN_VALUE")"; fi ;;
     VOXINT_COMPOSE_TIER) if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf 'VOXINT_COMPOSE_TIER=%s' "$COMPUTE_TIER_VALUE"; fi ;;
+    VOXINT_RENDER_GID) if [ -n "${RENDER_GID_VALUE:-}" ]; then printf 'VOXINT_RENDER_GID=%s' "$RENDER_GID_VALUE"; fi ;;
   esac
   return 0  # never let a non-matching / empty branch fail under `set -e`
 }
@@ -414,6 +442,7 @@ managed_keys_with_values() {
   if [ -n "${API_PORT_VALUE:-}" ]; then printf '%s\n' API_PORT; fi
   if [ -n "${HF_TOKEN_VALUE:-}" ];     then printf '%s\n' HF_TOKEN; fi
   if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf '%s\n' VOXINT_COMPOSE_TIER; fi
+  if [ -n "${RENDER_GID_VALUE:-}" ];   then printf '%s\n' VOXINT_RENDER_GID; fi
 }
 
 write_env() {
@@ -529,12 +558,13 @@ read_env_value() {
 }
 
 # Minimal atomic editor for a KEPT .env: replaces (or appends) ONLY
-# VOXINT_COMPOSE_TIER, plus HF_TOKEN when one was just entered. Backs up
+# VOXINT_COMPOSE_TIER, plus HF_TOKEN when one was just entered and
+# VOXINT_RENDER_GID when the rocm tier detected one. Backs up
 # first, validates with Compose, and preserves mode 0600. Everything else in
 # the file passes through byte-for-byte.
 update_env_keys() {
   backup_env
-  local tmp line wrote_tier=0 wrote_tok=0
+  local tmp line wrote_tier=0 wrote_tok=0 wrote_gid=0
   local old_umask; old_umask=$(umask); umask 077
   tmp=$(mktemp "$REPO_ROOT/.env.tmp.XXXXXX") || { umask "$old_umask"; fail "Could not create a temp file in $REPO_ROOT."; }
   _CLEANUP_TMP=$tmp
@@ -558,6 +588,16 @@ update_env_keys() {
           printf '%s\n' "$line" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
         fi
         ;;
+      VOXINT_RENDER_GID=*)
+        if [ -n "$RENDER_GID_VALUE" ]; then
+          if [ "$wrote_gid" = 0 ]; then
+            printf 'VOXINT_RENDER_GID=%s\n' "$RENDER_GID_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
+            wrote_gid=1
+          fi
+        else
+          printf '%s\n' "$line" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
+        fi
+        ;;
       *)
         printf '%s\n' "$line" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
         ;;
@@ -568,6 +608,9 @@ update_env_keys() {
   fi
   if [ -n "$HF_TOKEN_VALUE" ] && [ "$wrote_tok" = 0 ]; then
     printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
+  fi
+  if [ -n "$RENDER_GID_VALUE" ] && [ "$wrote_gid" = 0 ]; then
+    printf 'VOXINT_RENDER_GID=%s\n' "$RENDER_GID_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
   fi
   umask "$old_umask"
   # Validate with the file set this .env will actually run: the recorded tier's
@@ -855,6 +898,19 @@ print_handoff() {
       say " Stop the stack with:"
       say "   docker compose -f compose.yaml -f compose.gpu.yaml down"
       ;;
+    rocm)
+      say " The AMD (ROCm) model services were STARTED alongside the core stack."
+      say " Transcription runs on the AMD GPU; diarization and speaker embedding"
+      say " run on CPU (see docs/operations.md for why). Services may still be"
+      say " booting or downloading model weights on a first run -- check their"
+      say " status before submitting audio:"
+      say "   docker compose -f compose.yaml -f compose.rocm.yaml ps"
+      say " The CPU-bound stages are protected by the rocm timing profile"
+      say " (COMPUTE_TIER=rocm)."
+      say ""
+      say " Stop the stack with:"
+      say "   docker compose -f compose.yaml -f compose.rocm.yaml down"
+      ;;
     *)
       if [ -n "$DEFERRED_TIER" ]; then
         say " IMPORTANT -- only the CORE control plane is running. You chose the"
@@ -874,8 +930,9 @@ print_handoff() {
         say " embedding need the model services. Submitting audio now will fail at"
         say " those stages. To enable processing later, set HF_TOKEN in .env (the"
         say " pyannote weights are HF-gated) and bring up a compute tier:"
-        say "   docker compose -f compose.yaml -f compose.gpu.yaml up -d   # NVIDIA GPU"
-        say "   docker compose -f compose.yaml -f compose.cpu.yaml up -d   # no GPU"
+        say "   docker compose -f compose.yaml -f compose.gpu.yaml up -d    # NVIDIA GPU"
+        say "   docker compose -f compose.yaml -f compose.rocm.yaml up -d   # AMD GPU"
+        say "   docker compose -f compose.yaml -f compose.cpu.yaml up -d    # no GPU"
         say " (or re-run this installer and pick a tier)."
       fi
       say ""

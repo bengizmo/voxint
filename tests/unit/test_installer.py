@@ -52,7 +52,7 @@ def repo(tmp_path: Path) -> Path:
     (tmp_path / "scripts").mkdir()
     shutil.copy(REAL_REPO / "scripts" / "install.sh", tmp_path / "scripts" / "install.sh")
     shutil.copy(REAL_REPO / ".env.example", tmp_path / ".env.example")
-    for name in ("compose.yaml", "compose.cpu.yaml", "compose.gpu.yaml"):
+    for name in ("compose.yaml", "compose.cpu.yaml", "compose.gpu.yaml", "compose.rocm.yaml"):
         shutil.copy(REAL_REPO / name, tmp_path / name)
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
@@ -96,6 +96,7 @@ def run_lib(
     [
         ("cpu", "-f compose.yaml -f compose.cpu.yaml"),
         ("gpu", "-f compose.yaml -f compose.gpu.yaml"),
+        ("rocm", "-f compose.yaml -f compose.rocm.yaml"),
         ("none", "-f compose.yaml"),
         ("junk", "-f compose.yaml"),
         ("", "-f compose.yaml"),
@@ -109,7 +110,16 @@ def test_compose_file_args_for_tier(repo: Path, tier: str, expected: str) -> Non
 
 @pytest.mark.parametrize(
     ("value", "expected"),
-    [("cpu", "cpu"), ("gpu", "gpu"), ("none", "none"), ("CPU", ""), ("banana", ""), ("", "")],
+    [
+        ("cpu", "cpu"),
+        ("gpu", "gpu"),
+        ("rocm", "rocm"),
+        ("none", "none"),
+        ("CPU", ""),
+        ("ROCM", ""),
+        ("banana", ""),
+        ("", ""),
+    ],
 )
 def test_normalize_tier(repo: Path, value: str, expected: str) -> None:
     proc = run_lib(repo, f'normalize_tier "{value}"')
@@ -229,6 +239,30 @@ def test_update_env_keys_appends_tier_and_backs_up(repo: Path) -> None:
     backups = list(repo.glob(".env.backup.*"))
     assert len(backups) == 1
     assert backups[0].read_text() == LEGACY_ENV
+
+
+def test_update_env_keys_writes_render_gid_for_rocm(repo: Path) -> None:
+    (repo / ".env").write_text(LEGACY_ENV + "VOXINT_COMPOSE_TIER=cpu\nVOXINT_RENDER_GID=111\n")
+    proc = run_lib(
+        repo,
+        "COMPUTE_TIER_VALUE=rocm\nHF_TOKEN_VALUE=\nRENDER_GID_VALUE=990\nupdate_env_keys",
+    )
+    assert proc.returncode == 0, proc.stderr
+    content = (repo / ".env").read_text()
+    assert content.count("VOXINT_RENDER_GID=") == 1
+    assert "VOXINT_RENDER_GID=990" in content
+    assert "VOXINT_COMPOSE_TIER=rocm" in content
+
+
+def test_update_env_keys_keeps_existing_render_gid_when_not_detected(repo: Path) -> None:
+    (repo / ".env").write_text(LEGACY_ENV + "VOXINT_RENDER_GID=111\n")
+    proc = run_lib(
+        repo,
+        "COMPUTE_TIER_VALUE=cpu\nHF_TOKEN_VALUE=\nRENDER_GID_VALUE=\nupdate_env_keys",
+    )
+    assert proc.returncode == 0, proc.stderr
+    content = (repo / ".env").read_text()
+    assert "VOXINT_RENDER_GID=111" in content  # untouched passthrough
 
 
 def test_update_env_keys_replaces_existing_tier_and_token(repo: Path) -> None:
