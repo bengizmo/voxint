@@ -82,4 +82,7 @@ def test_default_or_empty_credentials_refused_off_loopback(password: str) -> Non
 
 
 def test_default_credentials_fine_on_loopback() -> None:
-    assert Settings(api_host="127.0.0.1").voxint_password == "change-me"
+    # Hermetic: _env_file=None makes pydantic-settings skip the dotenv, so this
+    # exercises the code default rather than whatever .env is on disk (an
+    # installed .env would otherwise override voxint_password and fail this).
+    assert Settings(api_host="127.0.0.1", _env_file=None).voxint_password == "change-me"

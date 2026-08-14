@@ -42,6 +42,35 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   with the same poll loop and exit codes (the run id stays alone on stdout;
   progress goes to stderr).
 
+### Fixed
+- **macOS/BSD media-download teardown raised the wrong error (#26).** On a
+  download timeout, if the yt-dlp process-group leader had already been reaped
+  and the survivor was a zombie reparented to launchd, `killpg` returns `EPERM`
+  (not `ESRCH`); the raw `PermissionError` escaped the teardown and replaced the
+  intended redacted `AcquisitionError`. Both teardown signals now suppress
+  `PermissionError` alongside `ProcessLookupError`. (Linux returns `ESRCH`, so
+  this was macOS/BSD-only; validated by a new monkeypatched unit test — a real
+  Mac run is the true confirmation.)
+- **Installer could offer the busy port as its own "alternate" (#27).** On
+  macOS/BSD a listener with a full accept-backlog refuses further connects, so
+  the `/dev/tcp` probe can misread a bound port as free; `resolve_port` then
+  re-scanned starting *at* the known-busy default and could suggest it right
+  back. It now searches strictly above the busy port, so the offered alternate
+  is always distinct. The probe stays advisory (Compose remains the collision
+  authority); its residual limitation is now documented in-script.
+
+### Changed
+- **Fresh `uv sync --extra dev` checkout is green again (#28).** The loopback
+  default-credentials test is now hermetic (`_env_file=None`, so an on-disk
+  `.env` can't override the code default), and the two librosa-dependent mel
+  contract tests `importorskip("librosa")` (it ships only in the `parity`
+  extra) — they still run in the parity lane, and no assertions were weakened.
+- **Documented the CPU-tier host-RAM floor (#29).** The CPU tier holds the
+  models in RAM (~6 GiB idle; whisper alone ~4.8 GiB) and needs **≥ 8 GB**
+  available to the container host — on Docker Desktop the VM's memory limit, not
+  the physical machine — or services are OOM-killed with an opaque exit. Noted
+  in `docs/operations.md`, `docs/onboarding.md`, and the installer's tier prompt.
+
 ## [0.7.0] — 2026-08-14
 
 Speaker roster management (#7): the roster is no longer write-only.

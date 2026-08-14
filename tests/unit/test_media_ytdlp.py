@@ -7,6 +7,7 @@ so the process-group timeout kill and the flag lockdown are tested deterministic
 
 import os
 import shlex
+import signal
 import subprocess
 import time
 import traceback
@@ -87,6 +88,36 @@ def test_timeout_kills_group_even_when_leader_exits_first(tmp_path: Path) -> Non
 
     assert _wait_gone(_read_pid(pidfile)), (
         "descendant survived after the group leader exited first"
+    )
+
+
+def test_kill_process_group_swallows_eperm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """macOS/BSD zombie-reparented-to-launchd case (issue #26): once the group
+    leader is reaped and the survivor is a zombie owned by launchd, killpg returns
+    EPERM (PermissionError), not ESRCH. Teardown must swallow it on BOTH the
+    SIGTERM and SIGKILL call sites so it never escapes and masks the intended
+    redacted AcquisitionError. Linux returns ESRCH, so this is only reachable via
+    monkeypatch here."""
+
+    class _FakeProc:
+        pid = 424242
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0  # leader already reaped; return promptly, no TimeoutExpired
+
+    signals: list[int] = []
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        signals.append(sig)
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    # Must not raise — both PermissionErrors are suppressed inside the teardown.
+    _kill_process_group(_FakeProc(), grace_seconds=0.0)  # type: ignore[arg-type]
+
+    assert signals == [signal.SIGTERM, signal.SIGKILL], (
+        "both killpg call sites must run despite EPERM on the first"
     )
 
 

@@ -35,7 +35,10 @@ bash, not `sh`; no runtime dependency beyond Docker). It:
 - prompts for an **admin password**, a **media folder**, and a **compute
   tier** for the model services (GPU / CPU / none-for-now; it suggests GPU
   when `nvidia-smi` is present), and auto-generates the rest (including a
-  random `CSRF_SECRET`);
+  random `CSRF_SECRET`). The **CPU tier holds the models in RAM** and needs
+  **≥ 8 GB** available to the container host — on Docker Desktop that is the
+  **VM memory limit**, not the physical machine; see
+  [operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier);
 - renders `.env` from `.env.example` — never overwriting an existing `.env`
   without first taking a timestamped backup. The tier choice is recorded as
   `VOXINT_COMPOSE_TIER`, so re-runs start the same overlay (a pre-0.4.1 `.env`

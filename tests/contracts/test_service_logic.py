@@ -524,6 +524,11 @@ class TestMelConstantsPinnedToCheckpoint:
         assert cfg["frame_splicing"] == 1  # mel.py implements splicing == 1 only
 
     def test_frame_count_formula(self) -> None:
+        # mel_spectrogram() lazily imports librosa (mel.py:_filterbank); librosa
+        # ships only in the optional `parity` extra, so skip cleanly rather than
+        # hard-fail on a `uv sync --extra dev` checkout. Still runs in the parity
+        # lane (`uv run --extra dev --extra parity pytest`).
+        pytest.importorskip("librosa")
         mel = load_service_module("titanet", "mel")
         # floor(L / hop) + 1; output is exactly the valid frames — NEVER padded
         # to NeMo's pad_to (the exported graph has no conv masking, so padding
@@ -552,6 +557,9 @@ class TestMelEdgeCases:
             mel.mel_spectrogram(np.zeros(511, dtype=np.float32))
 
     def test_frame_count_table(self) -> None:
+        # See test_frame_count_formula: mel_spectrogram() needs librosa (parity
+        # extra); skip cleanly when it is absent rather than erroring.
+        pytest.importorskip("librosa")
         mel = load_service_module("titanet", "mel")
         # floor(L / hop) + 1 across the range the service can produce.
         for samples, frames in [(512, 4), (16000, 101), (16001, 101), (16160, 102), (64000, 401)]:

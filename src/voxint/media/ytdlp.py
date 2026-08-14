@@ -97,12 +97,17 @@ def _kill_process_group(
     the leader itself has reaped, so a descendant that ignored SIGTERM cannot
     outlive us. ``ProcessLookupError`` (an already-empty group) is benign.
     """
+    # On macOS/BSD, once the leader has been reaped and the survivor is a zombie
+    # reparented to launchd, ``killpg`` returns EPERM (``PermissionError``) rather
+    # than the ESRCH (``ProcessLookupError``) Linux gives — equally benign here,
+    # since we are only tearing the group down on a timeout. Suppress both so a
+    # cleanup signal never escapes and masks the redacted ``AcquisitionError``.
     pgid = proc.pid
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGTERM)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=grace_seconds)
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGKILL)
 
 
