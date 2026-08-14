@@ -1,0 +1,87 @@
+# Voxint AMD (ROCm) hybrid-tier model services — overlay on compose.yaml:
+#   docker compose -f compose.yaml -f compose.rocm.yaml up -d
+# amd64 hosts with an AMD GPU. Only the amdgpu kernel driver is required on
+# the host — the whisper `-rocm` image carries its ROCm runtime libraries.
+# Same /v1 + /healthz contracts as the GPU stack (docs/gpu-contracts.md);
+# pyannote still needs HF_TOKEN in .env.
+#
+# Hybrid tier, honestly stated: ASR (whisper) runs on the AMD GPU via the
+# CTranslate2 ROCm build — same engine and code path as CUDA, measured 4.8×
+# the CPU baseline on RDNA4. Diarization (pyannote) and speaker embedding
+# (titanet) run the `-cpu` images: MIOpen convolutions fail on current AMD
+# consumer GPUs in both shipping torch-ROCm wheel lines, and titanet's CPU
+# path is already far faster than real-time (tracked in issue #4).
+# Expected /healthz.device per service: whisper=rocm, pyannote=cpu,
+# titanet=cpu.
+#
+# COMPUTE_TIER=rocm below is load-bearing, not cosmetic: it scales the default
+# inference timeouts / stage leases / Celery visibility horizon for the
+# CPU-bound stages (docs/timeouts-and-leases.md). Explicitly-set timeout env
+# vars are never scaled.
+#
+# Do NOT set HSA_OVERRIDE_GFX_VERSION for natively supported GPUs — it
+# corrupts kernel selection. See docs/operations.md for the tested host
+# driver/ROCm combination.
+services:
+  api:
+    environment:
+      COMPUTE_TIER: rocm
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  worker:
+    environment:
+      COMPUTE_TIER: rocm
+      ASR_URL: http://whisper:8022
+      DIARIZER_URL: http://pyannote:8024
+      EMBEDDER_URL: http://titanet:8021
+
+  whisper:
+    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.4.1}-rocm
+    pull_policy: missing
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    # The container runs non-root; GPU device nodes are host-group-owned.
+    # "video" (gid 44) is stable across distros and resolvable in-image; the
+    # "render" group's gid is allocated dynamically per host, so it must be
+    # passed numerically — the installer detects and records it in .env, or
+    # set it yourself: VOXINT_RENDER_GID=$(getent group render | cut -d: -f3)
+    group_add:
+      - video
+      - "${VOXINT_RENDER_GID:-992}"
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+    ports:
+      - "127.0.0.1:8022:8022"
+
+  pyannote:
+    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.4.1}-cpu
+    pull_policy: missing
+    environment:
+      MEDIA_ROOT: /data/media
+      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+      # Gated weights download at first startup; persist them across recreates.
+      - pyannote-models:/app/models
+    ports:
+      - "127.0.0.1:8024:8024"
+
+  titanet:
+    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.4.1}-cpu
+    pull_policy: missing
+    environment:
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media:ro
+    ports:
+      - "127.0.0.1:8021:8021"
+
+volumes:
+  pyannote-models:

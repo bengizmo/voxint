@@ -1,0 +1,112 @@
+# Voxint whisper service — ROCm flavor (amd64 only; AMD GPUs).
+# Same engine and code path as the CUDA/CPU images: faster-whisper 1.2.1 on
+# CTranslate2 int8, large-v2 baked at build. Only the CTranslate2 build and
+# base image differ — CT2 4.8.1 ships ROCm wheels as GitHub release assets
+# (absent from PyPI), so the wheel is pinned by release URL + sha256 below.
+# Contract: docs/gpu-contracts.md (POST /v1/transcribe, GET /healthz).
+#
+# The CT2 ROCm wheel does NOT bundle the ROCm runtime (unlike torch ROCm
+# wheels): the image installs the minimal runtime-library set from
+# repo.radeon.com, measured via ldd on the wheel's libctranslate2
+# (hipblas/hipblaslt/rocblas/rocsolver/hiprand/rocrand + HIP runtime).
+# The host still needs ONLY the amdgpu kernel driver and device nodes; run
+# via compose.rocm.yaml (--device /dev/kfd --device /dev/dri, video+render
+# groups). CT2's ROCm build exposes the GPU through the CUDA-alias API, so
+# DEVICE stays "cuda" here; /healthz reports the honest "rocm" label (see
+# app/transcription.py resolve_device_name).
+#
+# Do NOT set HSA_OVERRIDE_GFX_VERSION on natively supported GPUs (e.g.
+# gfx1200) — it corrupts kernel selection.
+#
+# Run the stack with COMPUTE_TIER=rocm (compose.rocm.yaml) so stage leases
+# scale for the still-CPU stages — see docs/timeouts-and-leases.md.
+
+FROM ubuntu:24.04 AS rocm-base
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# ROCm runtime libraries only — no compilers, no dev headers, no MIOpen.
+# Version-pinned apt suite; noble = ubuntu 24.04 (python3.12).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://repo.radeon.com/rocm/rocm.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg \
+    && echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/7.0.2 noble main' \
+        > /etc/apt/sources.list.d/rocm.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        hip-runtime-amd hipblas hipblaslt rocblas rocsolver hiprand rocrand \
+        python3.12 python3.12-venv \
+        libgomp1 libsndfile1 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# The runtime debs do not register /opt/rocm/lib with ld.so.
+ENV LD_LIBRARY_PATH=/opt/rocm/lib
+
+FROM rocm-base AS builder
+
+WORKDIR /build
+RUN python3.12 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# CT2 ROCm wheel: GitHub release asset, sha256-verified. Installed BEFORE
+# requirements.rocm.txt so faster-whisper's ctranslate2>=4.0,<5 range is
+# already satisfied and pip never reaches for the (CUDA) PyPI build.
+ARG CT2_ZIP_URL=https://github.com/OpenNMT/CTranslate2/releases/download/v4.8.1/rocm-python-wheels-Linux.zip
+ARG CT2_ZIP_SHA256=2b454399aace4c76fe373e912f8d6a0d2033d6aa58dbfd438840aceca7cc64db
+ARG CT2_WHEEL=ctranslate2-4.8.1-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl
+RUN apt-get update && apt-get install -y --no-install-recommends unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fL -o /tmp/ct2-rocm.zip "${CT2_ZIP_URL}" \
+    && echo "${CT2_ZIP_SHA256}  /tmp/ct2-rocm.zip" | sha256sum -c - \
+    && unzip -j /tmp/ct2-rocm.zip "temp-linux/${CT2_WHEEL}" -d /tmp \
+    && pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir "/tmp/${CT2_WHEEL}" \
+    && rm /tmp/ct2-rocm.zip "/tmp/${CT2_WHEEL}"
+
+COPY requirements.rocm.txt .
+RUN pip install --no-cache-dir -r requirements.rocm.txt
+
+# Bake the model at build time so the image needs no network at runtime.
+# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md. The HF
+# revision pin keeps rebuilds baking byte-identical weights (same pin as the
+# CPU image). device='cpu' here only constructs the loader — no GPU at build.
+ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
+RUN python -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v2', device='cpu', download_root='/opt/whisper_models', revision='${WHISPER_HF_REVISION}')"
+
+FROM rocm-base AS runtime
+
+ENV HF_HOME=/app/.cache/huggingface
+ENV XDG_CACHE_HOME=/app/.cache
+ENV OMP_NUM_THREADS=4
+
+RUN groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/whisper_models /app/.cache/whisper
+ENV PATH="/opt/venv/bin:$PATH"
+
+WORKDIR /app
+RUN mkdir -p /app/.cache/huggingface && chown -R voxint:voxint /app
+COPY --chown=voxint:voxint app/ /app/app/
+
+USER voxint
+ENV HOME=/app
+
+ENV MEDIA_ROOT=/data/media
+ENV WHISPER_MODEL=large-v2
+ENV WHISPER_DOWNLOAD_ROOT=/app/.cache/whisper
+# "cuda" is the CT2 device string for its ROCm build (CUDA-alias API);
+# /healthz reports "rocm" — see resolve_device_name.
+ENV DEVICE=cuda
+ENV COMPUTE_TYPE=int8
+ENV BATCH_SIZE=16
+ENV PORT=8022
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/healthz || exit 1
+
+EXPOSE 8022
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

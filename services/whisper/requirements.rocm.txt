@@ -1,0 +1,16 @@
+# Pins for the ROCm image (Dockerfile.rocm, Python 3.12 on ubuntu:24.04).
+# Torch-free by design: faster-whisper 1.2.x runs its Silero VAD on
+# onnxruntime, and the app's torch usage is optional (guarded imports in
+# app/transcription.py). ctranslate2 itself is NOT listed here — the ROCm
+# build installs from a sha256-pinned GitHub release wheel BEFORE this file
+# resolves (it is absent from PyPI), and faster-whisper's `ctranslate2>=4.0,<5`
+# range is satisfied by it.
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+
+# faster-whisper 1.2.x: BatchedInferencePipeline + built-in Silero VAD
+faster-whisper==1.2.1
+# numpy 1.24.x has no cp312 wheels; 1.26.4 is the same-era pin for py3.12.
+numpy==1.26.4
+soundfile==0.12.1

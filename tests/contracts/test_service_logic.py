@@ -522,7 +522,7 @@ class TestCpuImageProvenance:
         from tests.contracts.conftest import REPO_ROOT
 
         pins: dict[str, set[str]] = {}
-        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml"):
+        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml"):
             found = set(
                 re.findall(r"VOXINT_IMAGE_TAG:-([0-9][0-9.]*)", (REPO_ROOT / name).read_text())
             )

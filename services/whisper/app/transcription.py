@@ -30,16 +30,28 @@ class DecodeError(ValueError):
 
 
 def resolve_device_name(device_type: str) -> str:
-    """Honest /healthz device reporting: torch built for ROCm masquerades as
-    CUDA (``torch.cuda.is_available()`` is true, device type is ``cuda``), so
-    report ``rocm`` whenever ``torch.version.hip`` is set. CT2 itself has no
-    HIP backend today, but the health label must not lie if it ever does (the
-    bundled torch is the runtime the VAD path actually uses)."""
+    """Honest /healthz device reporting: both torch-ROCm and the CTranslate2
+    ROCm build masquerade as CUDA (``device="cuda"`` selects the AMD GPU), so
+    report ``rocm`` whenever a HIP runtime is actually behind the "cuda"
+    label. Two signals, either sufficient: ``torch.version.hip`` when torch is
+    present, else the HIP runtime library the loaded CT2 extension links
+    (visible in ``/proc/self/maps`` — call this only after the model is
+    constructed). The ``-rocm`` image ships no torch at all (the faster-whisper
+    1.2.x VAD is onnxruntime-based), so the maps probe is its only signal."""
     if device_type == "cuda":
-        import torch
+        try:
+            import torch
 
-        if getattr(torch.version, "hip", None):
-            return "rocm"
+            if getattr(torch.version, "hip", None):
+                return "rocm"
+        except ImportError:
+            pass
+        try:
+            with open("/proc/self/maps") as maps:
+                if "libamdhip64" in maps.read():
+                    return "rocm"
+        except OSError:
+            pass
     return device_type
 
 
@@ -392,7 +404,11 @@ class WhisperTranscriber:
         # torch.cuda).
         if not self.is_initialized:
             return
-        import torch
+        try:
+            import torch
+        except ImportError:
+            # The -rocm image is torch-free; CT2 manages its own device memory.
+            return
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
