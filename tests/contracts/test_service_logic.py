@@ -736,18 +736,33 @@ class TestCpuImageProvenance:
         # release-process.md step 1 requires an ATOMIC pin bump across all
         # compose files; this makes it machine-checked. A partial bump ships
         # a mixed-version stack — e.g. an app that predates COMPUTE_TIER and
-        # silently ignores it.
+        # silently ignores it. Globbed so a new overlay is checked the day it
+        # appears: files with zero pins are exempt (rewiring-only overlays
+        # like compose.metal.yaml and the :dev build overlays carry no
+        # published-image pins by design), but the four image-bearing files
+        # must each keep exactly one — a glob that stopped finding those
+        # would make this test vacuously green.
         import re
 
         from tests.contracts.conftest import REPO_ROOT
 
+        image_bearing = {
+            "compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml",
+        }
         pins: dict[str, set[str]] = {}
-        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml"):
-            found = set(
-                re.findall(r"VOXINT_IMAGE_TAG:-([0-9][0-9.]*)", (REPO_ROOT / name).read_text())
-            )
-            assert len(found) == 1, f"{name} has inconsistent internal pins: {found}"
-            pins[name] = found
+        seen = set()
+        for path in sorted(REPO_ROOT.glob("compose*.yaml")):
+            seen.add(path.name)
+            found = set(re.findall(r"VOXINT_IMAGE_TAG:-([0-9][0-9.]*)", path.read_text()))
+            if path.name in image_bearing:
+                assert len(found) == 1, (
+                    f"{path.name} must carry exactly one VOXINT_IMAGE_TAG pin, found: {found}"
+                )
+            elif not found:
+                continue
+            assert len(found) == 1, f"{path.name} has inconsistent internal pins: {found}"
+            pins[path.name] = found
+        assert image_bearing <= seen, f"image-bearing compose files missing: {image_bearing - seen}"
         assert len(set().union(*pins.values())) == 1, f"compose pin skew: {pins}"
         # The pins must also match the package version: a release commit that
         # bumps pyproject but not the compose defaults ships pulls of tags
@@ -787,7 +802,13 @@ class TestCpuImageProvenance:
         from tests.contracts.conftest import REPO_ROOT
 
         base = yaml.safe_load((REPO_ROOT / "compose.yaml").read_text())["services"]
-        for name in ("compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml"):
+        for name in (
+            "compose.yaml",
+            "compose.gpu.yaml",
+            "compose.cpu.yaml",
+            "compose.rocm.yaml",
+            "compose.metal.yaml",
+        ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():
                 # Overlay entries are partial overrides that compose merges
@@ -799,6 +820,43 @@ class TestCpuImageProvenance:
                     f"{name}:{svc_name} effective restart policy is {restart!r}, "
                     f"expected {expected!r}"
                 )
+
+    def test_metal_overlay_is_rewiring_only(self) -> None:
+        # The metal tier's model services run natively on the host — the
+        # overlay's ONLY job is pointing api/worker at them and stamping the
+        # tier. An image, volume, or port sneaking in here would silently
+        # turn "bare-metal tier" back into a container deployment (or expose
+        # a listener) without any gate noticing.
+        import yaml
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        doc = yaml.safe_load((REPO_ROOT / "compose.metal.yaml").read_text())
+        assert set(doc) == {"services"}, f"unexpected top-level keys: {set(doc) - {'services'}}"
+        services = doc["services"]
+        # BOTH core callers must be rewired: a missing one would resolve the
+        # base compose.yaml URLs and call services that do not exist.
+        assert set(services) == {"api", "worker"}, f"unexpected services: {set(services)}"
+        expected_urls = {
+            "ASR_URL": "http://host.docker.internal:8022",
+            "DIARIZER_URL": "http://host.docker.internal:8024",
+            "EMBEDDER_URL": "http://host.docker.internal:8021",
+        }
+        for svc_name, svc in services.items():
+            assert set(svc) <= {"environment", "extra_hosts"}, (
+                f"{svc_name} carries non-rewiring keys: {set(svc) - {'environment', 'extra_hosts'}}"
+            )
+            env = svc["environment"]
+            assert env.get("COMPUTE_TIER") == "metal", f"{svc_name} missing COMPUTE_TIER: metal"
+            for key, url in expected_urls.items():
+                assert env.get(key) == url, (
+                    f"{svc_name} {key} is {env.get(key)!r}, expected {url!r}"
+                )
+            # host-gateway keeps host.docker.internal resolving on engines
+            # that don't provide the name natively (Docker Desktop does).
+            assert "host.docker.internal:host-gateway" in svc.get("extra_hosts", []), (
+                f"{svc_name} missing the host-gateway extra_hosts mapping"
+            )
 
     def test_torch_pins_match_across_flavors(self) -> None:
         # A one-sided torch bump silently changes cross-flavor numerics; the

@@ -1,0 +1,40 @@
+# Voxint metal-tier core overlay — overlay on compose.yaml:
+#   docker compose -f compose.yaml -f compose.metal.yaml up -d
+# Bare-metal Apple Silicon tier: Docker runs ONLY the core stack
+# (postgres/redis/migrate/api/worker/beat). The three model services run
+# natively on the host — set up and supervised by the native launcher
+# (scripts/metal/voxint-metal.sh) — so pyannote can use the Apple GPU via
+# MPS, which Docker Desktop cannot pass through. Same /v1 + /healthz
+# contracts as every other tier (docs/gpu-contracts.md).
+#
+# This overlay is REWIRING ONLY (contract-tested): it must not add images,
+# volumes, or ports. api/worker resolve the model services through
+# host.docker.internal, which Docker Desktop routes to the host's loopback —
+# the native services deliberately bind 127.0.0.1 only. The extra_hosts
+# host-gateway mapping keeps the same name working on engines that don't
+# provide it natively; reachability is verified by the metal launcher's
+# doctor, and submissions fail cleanly (not silently) while the native
+# services are down.
+#
+# COMPUTE_TIER=metal keeps GPU-class timing (docs/timeouts-and-leases.md):
+# diarization is MPS-accelerated, but v1 whisper runs on host CPU under
+# those same budgets — honest expectation: transcribe-bound, roughly
+# 1.5–1.8x real-time overall on maintainer hardware, not GPU-stack speed.
+services:
+  api:
+    environment:
+      COMPUTE_TIER: metal
+      ASR_URL: http://host.docker.internal:8022
+      DIARIZER_URL: http://host.docker.internal:8024
+      EMBEDDER_URL: http://host.docker.internal:8021
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  worker:
+    environment:
+      COMPUTE_TIER: metal
+      ASR_URL: http://host.docker.internal:8022
+      DIARIZER_URL: http://host.docker.internal:8024
+      EMBEDDER_URL: http://host.docker.internal:8021
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
