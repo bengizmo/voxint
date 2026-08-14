@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Changed
+- **Metal parity bounds ratcheted from Gate M evidence** (slice 9, panel
+  consult recorded in the commit): pyannote boundary drift ≤ 0.10 s (was
+  0.25), agreement vs reference ≥ 0.97 (was 0.95), MPS-vs-CPU ≥ 0.995 (was
+  0.99); whisper transcript similarity ≥ 0.96 (was 0.95), confidence drift
+  ≤ 0.05 (was 0.15). Repeat/segment/count bounds unchanged. Three deferred
+  decisions closed as measured no-ops: CoreML EP default stays off (no
+  speedup), no metal timeout factor (0.38–0.45× RT transcribe fits
+  GPU-class budgets), no committed metal reference oracle (re-affirmed).
+  See docs/gpu-contracts.md metal verdict table.
+
 ## [0.9.0] — 2026-08-14
 
 The Apple Silicon "metal" compute tier (#1): native macOS model services

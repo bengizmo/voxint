@@ -8,8 +8,8 @@ equivalence is measured, not assumed. Smoke-level comparison against
 transcript similarity, segment count, and confidence drift, through the real
 service ``WhisperTranscriber`` (same code path as production).
 
-Pre-registered smoke bounds; the post-measurement pass (plan slice 9)
-ratchets them from recorded numbers. Maintainer-run (Gate M in
+Smoke bounds were pre-registered before measurement, then ratcheted from
+the recorded Gate M numbers (plan slice 9). Maintainer-run (Gate M in
 docs/release-process.md): prerequisites are plain SKIPs everywhere else —
 ``VOXINT_PARITY_REQUIRED`` is never applied to metal lanes. Needs
 faster-whisper in the running interpreter (the metal whisper venv +
@@ -36,10 +36,16 @@ CUDA_TRANSCRIBE_JSON = (
     REPO / "tests" / "parity" / "fixtures" / "references" / "cuda" / "transcribe.json"
 )
 
-# --- Pre-registered smoke bounds (ratcheted post-measurement, plan slice 9).
-TRANSCRIPT_MIN_SIMILARITY = 0.95  # difflib ratio on normalized transcripts
+# --- Smoke bounds, ratcheted from the Gate M measurement (plan slice 9;
+# evidence: docs/gpu-contracts.md metal verdict, M1 Pro / macOS 26.5.2).
+# Measured 0.9907 similarity (vad_true) / 0.0015 confidence drift on ONE
+# chip and ONE arm64 CT2 wheel build; on the ~430-char fixture the difflib
+# character-sequence ratio is coarse (a changed word costs several points),
+# so bounds keep cross-chip margin.
+# Loosening any of these is a numerics decision.
+TRANSCRIPT_MIN_SIMILARITY = 0.96  # difflib ratio on normalized transcripts
 SEGMENT_COUNT_MAX_DIFF = 1
-CONFIDENCE_MAX_DRIFT = 0.15
+CONFIDENCE_MAX_DRIFT = 0.05
 
 # Must match WHISPER_HF_REVISION in scripts/metal/voxint-metal.sh — the lane
 # measures exactly the snapshot the launcher pins; ANY other cached snapshot

@@ -186,10 +186,10 @@ expectations:
   prints both (`git describe` vs `VOXINT_IMAGE_TAG`) — pair a tagged tree
   with the matching image tag for supported runs.
 - **`COMPUTE_TIER=metal`** keeps GPU-class timing
-  ([timeouts-and-leases.md](timeouts-and-leases.md)); note v1 runs whisper
-  on CPU under those budgets — very long recordings on slow Macs may need
-  the CPU-tier profile instead until the post-measurement pass settles a
-  metal factor.
+  ([timeouts-and-leases.md](timeouts-and-leases.md)) — a measured decision,
+  not a placeholder: Gate M clocked v1's CPU whisper at 0.38–0.45× RT,
+  well inside those budgets. Unusually slow Macs can still override
+  individual timeouts via env (never silently scaled).
 - **Memory budget (16 GB Macs)**: whisper int8 ~4 GB + pyannote/MPS ~3 GB +
   titanet ~1 GB run natively; cap the Docker Desktop VM around 4 GB — it
   only runs the core stack.

@@ -60,7 +60,7 @@ open a duplicate-execution window in production.
 |------|---------|--------|
 | `gpu` | CUDA services (`compose.gpu.yaml`) | Baseline defaults (4 h call / 6 h lease / 12 h diarize_embed / 48 h visibility) |
 | `rocm` | AMD-accelerated services | GPU-class timing (same defaults) |
-| `metal` | Bare-metal Apple Silicon services (`compose.metal.yaml` + native launcher) | GPU-class timing (same defaults). v1 runs whisper on CPU under these budgets; a metal-specific factor is a post-measurement decision. |
+| `metal` | Bare-metal Apple Silicon services (`compose.metal.yaml` + native launcher) | GPU-class timing (same defaults). Measured decision (Gate M, M1 Pro): no metal factor — CPU whisper runs 0.38–0.45× RT and MPS diarization ~0.105× RT, so even a 6 h recording transcribes in ~2.7 h against the 4 h per-call budget (docs/gpu-contracts.md, metal verdict). |
 | `cpu` | CPU-only services (`compose.cpu.yaml`) | Baseline × `CPU_TIER_TIMEOUT_FACTOR` (4×): 16 h call / 24 h lease / 48 h diarize_embed / 192 h visibility |
 
 Design decision — **per-tier static profile, not per-request scaling**. The

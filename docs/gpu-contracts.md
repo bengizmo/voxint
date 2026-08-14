@@ -453,22 +453,52 @@ numbers come from `tools/generate_parity_references.py --tier metal`
 (3 repeat runs against the running native services); test-lane numbers from
 the three parity modules, all green.
 
-| Gate | Pre-registered smoke bound | Measured |
-|---|---|---|
-| pyannote speaker count (mps = cpu = cuda ref) | equal | equal (3 = 3 = 3, all runs) |
-| pyannote turn boundary drift vs cuda ref | ≤ 0.25 s | 0.000 s (turns identical to ref) |
-| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.99 / ≥ 0.95 | 1.00 / 1.00 (lane pass; service turns exactly match ref) |
-| pyannote MPS repeat agreement | ≥ 0.999 | 1.000 (3× runs bit-identical) |
-| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | agree (lane pass) |
-| whisper transcript similarity vs cuda ref | ≥ 0.95 | 0.9907 (vad_true) / 1.0000 (vad_false) |
-| whisper segment count / confidence drift | ± 1 / ≤ 0.15 | 0 (2 = 2, 7 = 7) / 0.0015 |
-| titanet 3-level gate on arm64 CPU EP | existing ratcheted bounds | 7/7 pass; min window cosine 0.9999966 vs ref (floor 0.9995), repeat min 0.99999982 |
+| Gate | Pre-registered smoke bound | Measured | Ratcheted to (slice 9) |
+|---|---|---|---|
+| pyannote speaker count (mps = cpu = cuda ref) | equal | equal (3 = 3 = 3, all runs) | equal (unchanged) |
+| pyannote turn boundary drift vs cuda ref | ≤ 0.25 s | 0.000 s (turns identical to ref) | ≤ 0.10 s |
+| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.99 / ≥ 0.95 | 1.00 / 1.00 (lane pass; service turns exactly match ref) | ≥ 0.995 / ≥ 0.97 |
+| pyannote MPS repeat agreement | ≥ 0.999 | 1.000 (3× runs bit-identical) | ≥ 0.999 (unchanged) |
+| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | agree (lane pass) | unchanged |
+| whisper transcript similarity vs cuda ref | ≥ 0.95 | 0.9907 (vad_true) / 1.0000 (vad_false) | ≥ 0.96 |
+| whisper segment count / confidence drift | ± 1 / ≤ 0.15 | 0 (2 = 2, 7 = 7) / 0.0015 | ± 1 (unchanged) / ≤ 0.05 |
+| titanet 3-level gate on arm64 CPU EP | existing ratcheted bounds | 7/7 pass; min window cosine 0.9999966 vs ref (floor 0.9995), repeat min 0.99999982 | unchanged (already ratcheted) |
+
+The ratchets deliberately keep cross-chip margin rather than pinning to the
+measured (mostly exact) values: the evidence is one chip (M1 Pro) on one
+macOS build, MPS kernels are tuned per Apple GPU family, and the arm64 CT2
+wheel is a distinct build whose VAD-path variance the ~67-word fixture
+amplifies (difflib ratio drops points per word). Cross-backend agreement
+(mps vs cpu, ≥ 0.995) is intentionally looser than same-device repeat
+stability (≥ 0.999) — different statistical objects. Panel consult recorded
+in the slice-9 commit; the split (0.97 vs 0.98 vs-ref agreement, 0.96 vs
+0.965 whisper similarity) resolved toward the looser value each time because
+loosening later is a formal numerics decision while re-tightening on new
+multi-chip evidence is cheap.
 
 CoreML EP experiment (`VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider`,
 provider honored — validated post-construction): the full 3-level gate also
 passes 7/7, with wall time indistinguishable from the CPU EP (~15 s either
 way) — consistent with ORT partitioning this dynamic-length graph back to
 CPU. Nothing here argues for flipping the CoreML default.
+
+**CoreML EP default: CLOSED (slice 9) — stays off.** The measured basis: no
+wall-time benefit over the CPU EP on this graph, identical 7/7 gate results,
+and the CoreML path adds a cross-chip variance surface with nothing to pay
+for it. Re-opening requires new measured evidence (a different graph export
+or an ORT release that stops partitioning it back to CPU).
+
+**Metal timeout factor: CLOSED (slice 9) — none needed.** Measured metal
+stage speeds (transcribe 0.38–0.45× RT, diarize_embed ~0.105× RT) sit
+comfortably inside the GPU-class budgets the tier inherits (4 h per-call
+HTTP timeout ⇒ a 6 h recording transcribes in ~2.7 h). `metal` stays out of
+the `_apply_compute_tier_profile` scaling on purpose; see
+docs/timeouts-and-leases.md.
+
+**No-metal-references call: re-affirmed by data.** 3× MPS repeats were
+bit-identical on this chip, but the cross-chip argument (M1–M4 kernel
+families, macOS toolchain churn) is unchanged — canonical references stay
+CPU/CUDA.
 
 Pipeline wall-times on the same hardware (console-submitted VoxConverse
 clips, worker → native services): 80.2 s clip → transcribe 30.1 s +
@@ -480,9 +510,10 @@ Basis for the pre-registration: the Phase 0 MPS spike (2026-08-14, M1 Pro
 16 GB, torch 2.5.0, vendored 3.1 pipeline) measured warm MPS diarization
 ~5× native-CPU speed with DER/speaker-counts/turns **identical** to CPU on
 all three spike files and 3× repeats bit-stable, with zero MPS op fallbacks
-(`PYTORCH_ENABLE_MPS_FALLBACK` unset). The post-measurement pass ratchets
-the bounds from the Gate M numbers above; loosening any bound afterwards is
-a numerics decision, not a test fix.
+(`PYTORCH_ENABLE_MPS_FALLBACK` unset). The slice-9 post-measurement pass
+ratcheted the bounds from the Gate M numbers above (see "Ratcheted to"
+column); loosening any bound afterwards is a numerics decision, not a test
+fix.
 
 ## Contract tests
 

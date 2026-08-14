@@ -12,15 +12,15 @@ parity corpus and measures:
   clustering-threshold sweep bracketing the service default: the knife-edge
   test — MPS and CPU must flip speaker counts at the SAME thresholds.
 * **Boundary level** — turn-count equality and per-boundary drift vs the CUDA
-  reference within a pre-registered smoke bound.
+  reference within a smoke bound.
 * **Mapping level** — frame-level label agreement (greedy overlap mapping)
   between MPS/CPU/reference, and an MPS repeat run for run-to-run stability.
 
-Bounds below are PRE-REGISTERED smoke bounds (the Phase 0 spike measured
-MPS ≡ CPU exactly on its corpus: identical DER/speaker counts/turns, 3x
-repeats bit-stable). The post-measurement pass (plan slice 9) ratchets them
-from recorded per-chip numbers; loosening any of them afterwards is a
-numerics decision, not a test fix.
+Bounds below were pre-registered before measurement (the Phase 0 spike
+measured MPS ≡ CPU exactly on its corpus: identical DER/speaker
+counts/turns, 3x repeats bit-stable) and then RATCHETED from the recorded
+Gate M numbers (plan slice 9 — see docs/gpu-contracts.md metal verdict);
+loosening any of them is a numerics decision, not a test fix.
 
 Runs only on maintainer Apple Silicon hardware (Gate M in
 docs/release-process.md): every prerequisite below is a plain SKIP elsewhere
@@ -57,11 +57,15 @@ CHECKPOINT_NAMES = ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"
 # /v1/diarize with exactly these (schema defaults).
 DIARIZE_KWARGS = {"min_speakers": 1, "max_speakers": 10, "min_turn_seconds": 0.5}
 
-# --- Pre-registered smoke bounds (ratcheted post-measurement, plan slice 9).
-TURN_BOUNDARY_TOLERANCE_S = 0.25  # per matched boundary vs the CUDA reference
-FRAME_AGREEMENT_VS_REFERENCE = 0.95  # greedy-mapped label agreement
-FRAME_AGREEMENT_MPS_VS_CPU = 0.99  # spike measured exact agreement
-FRAME_AGREEMENT_REPEAT = 0.999  # spike measured bit-stable repeats
+# --- Smoke bounds, ratcheted from the Gate M measurement (plan slice 9;
+# evidence: docs/gpu-contracts.md metal verdict, M1 Pro / macOS 26.5.2).
+# Measured values were exact (0.000 s drift, 1.00 agreement) on ONE chip —
+# bounds keep cross-chip margin for other Apple GPU families and macOS MPS
+# kernel revisions. Loosening any of these is a numerics decision.
+TURN_BOUNDARY_TOLERANCE_S = 0.10  # per matched boundary vs the CUDA reference
+FRAME_AGREEMENT_VS_REFERENCE = 0.97  # greedy-mapped label agreement
+FRAME_AGREEMENT_MPS_VS_CPU = 0.995  # cross-backend floor (not a repeat bound)
+FRAME_AGREEMENT_REPEAT = 0.999  # same-device repeats measured bit-stable
 # Brackets the service-default clustering threshold (0.55): counts must agree
 # between devices at every point, including wherever the flip happens.
 THRESHOLD_SWEEP = (0.50, 0.60)

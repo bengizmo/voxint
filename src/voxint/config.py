@@ -143,9 +143,9 @@ class Settings(BaseSettings):
     # healthy-but-slow CPU run is never reclaimed as hung mid-stage
     # (docs/timeouts-and-leases.md). Explicitly-set values are never scaled.
     # "rocm", "metal" (bare-metal Apple Silicon services, compose.metal.yaml)
-    # and future accelerated tiers keep GPU-class timing. Note the metal tier's
-    # v1 runs whisper on CPU under these GPU-class budgets — whether that
-    # earns its own timeout factor is a post-measurement decision.
+    # and future accelerated tiers keep GPU-class timing. The metal tier's v1
+    # CPU whisper measured 0.38-0.45x RT under these budgets (Gate M), so
+    # metal intentionally has no factor of its own (docs/gpu-contracts.md).
     compute_tier: Literal["gpu", "cpu", "rocm", "metal"] = "gpu"
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
