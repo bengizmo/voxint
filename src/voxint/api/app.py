@@ -9,6 +9,7 @@ harmless replay, while a new submission is a new decision (corrections are
 appends; the newest ruling per label wins at read time).
 """
 
+import json
 import logging
 import secrets
 import uuid
@@ -54,6 +55,7 @@ from voxint.api.auth import require_operator
 from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_FETCH,
+    CSRF_NOTES,
     CSRF_REQUEUE,
     CSRF_ROSTER_ARCHIVE,
     CSRF_ROSTER_EMBEDDING_DELETE,
@@ -117,6 +119,7 @@ from voxint.export import (
     TranscriptFormat,
     render_transcript,
     to_rttm,
+    transcript_payload,
 )
 from voxint.ingest import (
     MissingStageError,
@@ -169,6 +172,9 @@ logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _MEDIA_CHUNK_BYTES = 256 * 1024
+# Bound on the per-run operator notes (issue #36) — hygiene for a TEXT column,
+# generous enough for real operator prose.
+MAX_OPERATOR_NOTES_CHARS = 10_000
 # Slack over the per-file upload cap for multipart framing (boundaries,
 # Content-Disposition headers, the submission_id field) so the coarse
 # Content-Length gate never rejects a legitimately max-sized file; the exact
@@ -1130,6 +1136,11 @@ def _register_routes(app: FastAPI) -> None:
                 "csrf_requeue": mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_REQUEUE
                 ),
+                # Acquisition context (issue #36): the write-once snapshot, or
+                # None for uploads / pre-capture URL runs. Scraped metadata and
+                # the operator's own notes render in separate sections.
+                "source_metadata": run.media_item.source_metadata,
+                "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
                 "tutorial": _tutorial_banner(
                     request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
                 ),
@@ -1192,6 +1203,93 @@ def _register_routes(app: FastAPI) -> None:
         # recovery sweep rather than failing the request.
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
+
+    @protected.post("/runs/{run_id}/notes")
+    def save_operator_notes(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        notes: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        """Save the run's operator notes (issue #36) — human context, stored
+        apart from scraped source metadata and deliberately OUTSIDE the CAS
+        revision: notes are operator prose, not pipeline state, so a plain
+        last-write-wins update is the honest single-operator semantics (unlike
+        /requeue, where a stale tab acting on pipeline state must 409)."""
+        _require_csrf(request, CSRF_NOTES, csrf_token)
+        run = _run_or_404(session, run_id)
+        cleaned = notes.strip()
+        if len(cleaned) > MAX_OPERATOR_NOTES_CHARS:
+            raise HTTPException(
+                status_code=422,
+                detail=f"notes exceed {MAX_OPERATOR_NOTES_CHARS} characters",
+            )
+        run.operator_notes = cleaned or None
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @protected.get("/runs/{run_id}/export.json")
+    def export_run_json(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+    ) -> Response:
+        """Run-level JSON export (issue #36): an object envelope carrying the
+        run, its acquisition metadata snapshot, the operator notes, and the
+        same segment objects as the pinned transcript export. A NEW endpoint on
+        purpose — /review/{run_id}/export.json is a frozen bare-array contract
+        consumed as-is, so context rides a versioned envelope here instead of a
+        breaking shape change there."""
+        run = _run_or_404(session, run_id)
+        try:
+            variant = parse_transcript_text(text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        snapshot = run.media_item.source_metadata
+        source_metadata = (
+            {
+                "source_kind": snapshot.source_kind,
+                "title": snapshot.title,
+                "uploader": snapshot.uploader,
+                "uploader_url": snapshot.uploader_url,
+                "channel": snapshot.channel,
+                "channel_url": snapshot.channel_url,
+                "description": snapshot.description,
+                "upload_date": (
+                    snapshot.upload_date.isoformat() if snapshot.upload_date else None
+                ),
+                "duration_seconds": snapshot.duration_seconds,
+                "tags": snapshot.tags,
+                "canonical_url": snapshot.canonical_url,
+                "extractor": snapshot.extractor,
+                "extractor_version": snapshot.extractor_version,
+                "raw": snapshot.raw,
+                "raw_schema_version": snapshot.raw_schema_version,
+                "acquired_at": snapshot.acquired_at.isoformat(),
+            }
+            if snapshot is not None
+            else None
+        )
+        envelope = {
+            "schema_version": 1,
+            "run": {
+                "id": str(run.id),
+                "status": run.status,
+                "created_at": run.created_at.isoformat(),
+                "operator_notes": run.operator_notes,
+            },
+            "source_metadata": source_metadata,
+            "segments": transcript_payload(
+                attributed_transcript(session, run_id, text=variant)
+            ),
+        }
+        return Response(
+            content=json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
+            media_type=MEDIA_TYPES["json"],
+        )
 
     @protected.get("/review")
     def review_queue(

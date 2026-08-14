@@ -52,10 +52,62 @@ up, then requeue.</p>
   {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
   {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
   {% if run.status == "completed" %}<a href="/review/{{ run.id }}">Review</a>{% endif %}
+  <a href="/runs/{{ run.id }}/export.json">Export (JSON)</a>
   {% if not audio_available and not transcript_available %}
     <span class="muted">No audio or transcript yet.</span>
   {% endif %}
 </p>
+
+{% if source_metadata %}
+{# Scraped acquisition context (issue #36) — write-once, shown apart from the
+   operator's own notes so human and scraped input are never conflated. The
+   URLs here are sanitized allowlist values (absolute http(s), no userinfo),
+   unlike the raw source_url, which never reaches a template. #}
+<h2>Source metadata</h2>
+<dl>
+  {% if source_metadata.title %}<dt>Title</dt><dd>{{ source_metadata.title }}</dd>{% endif %}
+  {% if source_metadata.uploader or source_metadata.channel %}
+  <dt>Uploader</dt>
+  <dd>
+    {{ source_metadata.uploader or source_metadata.channel }}
+    {% if source_metadata.channel and source_metadata.uploader and source_metadata.channel != source_metadata.uploader %}
+      · {{ source_metadata.channel }}
+    {% endif %}
+    {% if source_metadata.channel_url %}
+      · <a href="{{ source_metadata.channel_url }}" rel="noopener noreferrer">channel</a>
+    {% endif %}
+  </dd>
+  {% endif %}
+  {% if source_metadata.upload_date %}<dt>Uploaded</dt><dd>{{ source_metadata.upload_date.isoformat() }}</dd>{% endif %}
+  {% if source_metadata.duration_seconds %}
+  <dt>Claimed duration</dt>
+  <dd>{{ "%d:%02d" | format(source_metadata.duration_seconds // 60, source_metadata.duration_seconds % 60) }}
+      <span class="muted">(source-reported, not measured)</span></dd>
+  {% endif %}
+  {% if source_metadata.tags %}<dt>Tags</dt><dd>{{ source_metadata.tags | join(", ") }}</dd>{% endif %}
+  {% if source_metadata.canonical_url %}
+  <dt>Page</dt><dd><a href="{{ source_metadata.canonical_url }}" rel="noopener noreferrer">{{ source_metadata.canonical_url }}</a></dd>
+  {% endif %}
+  {% if source_metadata.extractor %}
+  <dt>Extractor</dt>
+  <dd><code>{{ source_metadata.extractor }}</code>{% if source_metadata.extractor_version %} <span class="muted">(yt-dlp {{ source_metadata.extractor_version }})</span>{% endif %}</dd>
+  {% endif %}
+</dl>
+{% if source_metadata.description %}
+<details>
+  <summary>Description</summary>
+  <p class="muted">{{ source_metadata.description }}</p>
+</details>
+{% endif %}
+{% endif %}
+
+<h2>Operator notes</h2>
+<form method="post" action="/runs/{{ run.id }}/notes" class="notes">
+  <input type="hidden" name="csrf_token" value="{{ csrf_notes }}">
+  <textarea name="notes" rows="4" maxlength="10000"
+            placeholder="Your notes for this run (who is speaking, context, follow-ups…)">{{ run.operator_notes or "" }}</textarea>
+  <button type="submit">Save notes</button>
+</form>
 
 <h2>Stage ledger</h2>
 {% if not stage_runs %}

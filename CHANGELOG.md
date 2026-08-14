@@ -16,6 +16,20 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   context a past adjudication was made against. New nullable
   `pipeline_runs.operator_notes` keeps human input structurally apart from
   scraped metadata. Migration 0009 (additive, clean downgrade).
+- **Metadata capture at acquisition** (#36): the yt-dlp invocation now also
+  writes a clean info-JSON (`--write-info-json --clean-info-json
+  --no-write-playlist-metafiles`, typed `infojson:` output — same invocation,
+  no extra network exposure); ACQUIRE sanitizes it through a strict allowlist
+  (secret-bearing keys — `formats`, `http_headers`, `cookies`, signed URLs —
+  are never copied), publishes a hash-addressed replay sidecar before the
+  media file, and inserts the write-once snapshot row. Best-effort: bad
+  metadata logs a warning, never fails an acquisition.
+- **Operator notes + surfacing** (#36): run detail gains a Source-metadata
+  section and an editable Operator-notes form (`POST /runs/{id}/notes`,
+  CSRF-gated, 10K-char cap); the runs browser shows the source title with
+  media-path fallback; new `GET /runs/{id}/export.json` returns a versioned
+  envelope (run + source_metadata + operator_notes + segments) while the
+  pinned bare-array `/review/{id}/export.json` contract stays frozen.
 
 ### Changed
 - **Metal parity bounds ratcheted from Gate M evidence** (slice 9, panel

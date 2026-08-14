@@ -32,7 +32,13 @@ from voxint.adjudication.resolver import (
     unresolved_label_count,
     unresolved_label_exists,
 )
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, TranscriptSegment
+from voxint.db.models import (
+    MediaItem,
+    MediaSourceMetadata,
+    PipelineRun,
+    RunStatus,
+    TranscriptSegment,
+)
 from voxint.db.search import ts_headline, ts_query, ts_vector
 from voxint.speakers.roster import alias_ids
 
@@ -159,6 +165,9 @@ class RunListItem:
     claim_live: bool
     claimed_by: str | None
     snippet: Snippet | None = None
+    # Source title from the acquisition metadata snapshot (issue #36); None for
+    # uploads and pre-#36 URL runs — the template falls back to source_path.
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -322,11 +331,16 @@ def list_runs(
             PipelineRun.created_at,
             PipelineRun.review_claimed_by,
             MediaItem.source_path,
+            MediaSourceMetadata.title.label("source_title"),
             unresolved_label_count(PipelineRun.id).label("unresolved_count"),
             label_count(PipelineRun.id).label("label_count"),
             claim_live.label("claim_live"),
         )
         .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        # Outer: most media has no metadata snapshot (uploads, pre-#36 runs).
+        .outerjoin(
+            MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
+        )
         .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
         .limit(page_size + 1)
     )
@@ -416,6 +430,7 @@ def list_runs(
             claim_live=row.claim_live,
             claimed_by=row.review_claimed_by if row.claim_live else None,
             snippet=snippets.get(row.id),
+            title=row.source_title,
         )
         for row in rows
     ]

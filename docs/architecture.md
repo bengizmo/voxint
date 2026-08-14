@@ -63,13 +63,14 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0008)
+## Data model (alembic revisions 0001–0009)
 
 | Table | Role |
 |---|---|
 | `app_settings` | single-row instance configuration set by the first-run setup wizard — onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, and guided-tutorial state (revision 0006) |
 | `media_items` | media identity — one row per source file; `source_path` (UNIQUE) — already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs — plus a nullable, non-unique `source_url` for URL provenance (revision 0005) |
-| `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) |
+| `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity — nothing here feeds attribution; a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
+| `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) and the operator's free-text `operator_notes` (revision 0009 — human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
 | `audio_chunks` | chunk boundaries for long-file processing |
@@ -159,6 +160,24 @@ own default (we never pass `--enable-file-urls`). `--proxy` is passed **always**
 "explicit direct connection", so an ambient `HTTP(S)_PROXY` in the worker env can
 never silently reroute egress. `--cookies` is passed only when `ytdlp_cookies_file`
 is set. Both are treated as credentials — scrubbed verbatim from any surfaced error.
+
+**Source metadata capture** (issue #36) rides the SAME invocation:
+`--write-info-json --clean-info-json --no-write-playlist-metafiles` with a typed
+`infojson:` output pinning `source.info.json` — never a second `--dump-json`
+call, which would double bot-block exposure and could describe different
+upstream state than the downloaded bytes. The stage sanitizes the info-JSON
+through a strict allowlist (`media.source_metadata` — secret-bearing keys like
+`formats`/`http_headers`/`cookies` are never copied), publishes the sanitized
+snapshot as a hash-addressed sidecar (`source.<sha256>.metadata.v1.json`,
+linked BEFORE the media file so a crash between publish and DB commit replays
+to a repaired row without re-downloading), and inserts the write-once
+`media_source_metadata` row. The raw info-JSON never leaves the attempt temp
+dir. Capture is **best-effort**: a missing/malformed/oversized info-JSON logs a
+warning and never fails an otherwise-valid acquisition. Surfaced on the run
+detail page, the runs browser (title), and `GET /runs/{id}/export.json` — a
+versioned object envelope (run + source_metadata + operator_notes + the same
+segment objects as the pinned bare-array `/review/{id}/export.json`, which
+stays frozen).
 
 **Residual — needs network policy, not a userland check.** yt-dlp re-resolves the
 host *independently* when it connects, and its generic extractor follows HTTP

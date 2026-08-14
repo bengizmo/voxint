@@ -55,6 +55,10 @@ CSRF_SETTINGS = "settings"
 # settings surfaces these are independent mutations with different blast radii
 # (a rename token must not be replayable as a merge), so each form mints and
 # verifies under its own action.
+# Per-run operator notes (issue #36): a single dedicated action for the run
+# detail page's notes form — an independent mutation surface, so it never
+# shares a token with requeue/claim on the same page.
+CSRF_NOTES = "notes"
 CSRF_ROSTER_RENAME = "roster-rename"
 CSRF_ROSTER_MERGE = "roster-merge"
 CSRF_ROSTER_ARCHIVE = "roster-archive"

@@ -93,7 +93,12 @@
         {% else %}<span class="muted">—</span>{% endif %}
         {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
       </td>
-      <td><code>{{ it.source_path }}</code></td>
+      <td>
+        {# Source title from the acquisition metadata (issue #36); uploads and
+           pre-capture runs fall back to the media path. #}
+        {% if it.title %}{{ it.title }}<br><code class="muted">{{ it.source_path }}</code>
+        {% else %}<code>{{ it.source_path }}</code>{% endif %}
+      </td>
       <td>{{ it.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
     </tr>
     {% if it.snippet %}

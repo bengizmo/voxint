@@ -132,13 +132,14 @@ def to_vtt(lines: Sequence[TranscriptLine]) -> str:
     return "WEBVTT\n\n" + "\n".join(cues)
 
 
-def to_json(lines: Sequence[TranscriptLine]) -> str:
-    """A stable UTF-8 array of ``{start_seconds, end_seconds, speaker, text}``.
+def transcript_payload(lines: Sequence[TranscriptLine]) -> "list[dict[str, object]]":
+    """The one segment-object shape every JSON transport emits.
 
-    ``ensure_ascii=False`` keeps Unicode text intact; the fixed key order and
-    2-space indent make the output diff-stable and human-readable.
+    Shared by :func:`to_json` (the pinned bare-array transcript export) and the
+    run-level export envelope (issue #36), so the two can never drift on what a
+    segment looks like.
     """
-    payload = [
+    return [
         {
             "start_seconds": line.start_seconds,
             "end_seconds": line.end_seconds,
@@ -147,7 +148,15 @@ def to_json(lines: Sequence[TranscriptLine]) -> str:
         }
         for line in lines
     ]
-    return json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+
+
+def to_json(lines: Sequence[TranscriptLine]) -> str:
+    """A stable UTF-8 array of ``{start_seconds, end_seconds, speaker, text}``.
+
+    ``ensure_ascii=False`` keeps Unicode text intact; the fixed key order and
+    2-space indent make the output diff-stable and human-readable.
+    """
+    return json.dumps(transcript_payload(lines), ensure_ascii=False, indent=2) + "\n"
 
 
 def to_rttm(turns: Sequence[RttmTurn], file_id: str) -> str:
