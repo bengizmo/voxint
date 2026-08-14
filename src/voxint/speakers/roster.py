@@ -130,6 +130,24 @@ def canonicalize(
     return current
 
 
+def alias_ids(session: Session, speaker_id: uuid.UUID) -> set[uuid.UUID]:
+    """Every id whose merge chain lands on ``speaker_id``'s canonical identity.
+
+    The inverse of ``canonicalize``, for SQL predicates that compare stored
+    ``speaker_id`` columns against a search target: historical ledger rows
+    keep the merged source's id (canonicalization is presentation, never a
+    rewrite), so "attributed to X" must match X plus every tombstone that
+    canonicalizes into X — chain-safe, like the reader side. The input is
+    itself canonicalized first, so a stale reference to a since-merged
+    speaker resolves to the same set as its target.
+    """
+    mapping = merge_map(session)
+    target = canonicalize(speaker_id, mapping)
+    return {target} | {
+        source for source in mapping if canonicalize(source, mapping) == target
+    }
+
+
 @dataclass(frozen=True)
 class EmbeddingInfo:
     """One enrollment centroid with its provenance, for the roster page."""

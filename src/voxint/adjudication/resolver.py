@@ -17,6 +17,7 @@ at least one unresolved label is in the adjudication queue.
 
 import enum
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TypeAlias
@@ -29,9 +30,10 @@ from sqlalchemy import (
     and_,
     distinct,
     func,
+    or_,
     select,
 )
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from voxint.db.models import (
     AdjudicationDecision,
@@ -115,6 +117,91 @@ def unresolved_label_count(run_id: RunIdRef) -> ScalarSelect[int]:
             _label_unresolved(run_id, DiarizationTurn.label),
         )
         .scalar_subquery()
+    )
+
+
+def speaker_attributed_exists(
+    run_id: RunIdRef, speaker_ids: Collection[uuid.UUID]
+) -> Exists:
+    """EXISTS a turn label of ``run_id`` whose effective attribution is in the set.
+
+    SQL mirror of ``label_states``' attribution branch, kept beside
+    ``_label_unresolved`` so the definitions move together. Unlike that binary,
+    newest-decision-wins matters here: an ``assign`` superseded by a newer
+    ``exclude``/``unknown``/re-``assign`` must not match, so the decision
+    branch demands the effective row — no strictly newer ledger row exists,
+    "newer" being the exact ``(created_at DESC, id DESC)`` tuple order
+    ``effective_decisions`` uses. The cosine branch counts only when NO
+    decision of any kind exists (any decision suppresses machine evidence)
+    and the proposal is grounded.
+
+    ``speaker_ids`` must be pre-expanded through the merge map
+    (``roster.alias_ids``): ledger rows keep merged sources' ids, so matching
+    the stored id against the expanded set is equivalent to comparing
+    canonicalized identities. Labels are anchored in ``diarization_turns``
+    exactly as ``label_states`` does.
+    """
+    ids = list(speaker_ids)
+    newer = aliased(AdjudicationDecision)
+    effective_assign = (
+        select(1)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.diarization_label == DiarizationTurn.label,
+            AdjudicationDecision.decision == Decision.ASSIGN.value,
+            AdjudicationDecision.speaker_id.in_(ids),
+            ~(
+                select(1)
+                .where(
+                    newer.pipeline_run_id == run_id,
+                    newer.diarization_label == DiarizationTurn.label,
+                    or_(
+                        newer.created_at > AdjudicationDecision.created_at,
+                        and_(
+                            newer.created_at == AdjudicationDecision.created_at,
+                            newer.id > AdjudicationDecision.id,
+                        ),
+                    ),
+                )
+                # Pin every outer level: the run/turn (as _label_unresolved
+                # warns) AND the candidate decision row, or SQLAlchemy folds
+                # adjudication_decisions back into this FROM and the
+                # newest-row guard collapses.
+                .correlate(PipelineRun, DiarizationTurn, AdjudicationDecision)
+                .exists()
+            ),
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+    has_decision = (
+        select(1)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.diarization_label == DiarizationTurn.label,
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+    grounded_cosine_in_set = (
+        select(1)
+        .where(
+            SpeakerAssignment.pipeline_run_id == run_id,
+            SpeakerAssignment.diarization_label == DiarizationTurn.label,
+            SpeakerAssignment.method == AssignmentMethod.COSINE.value,
+            SpeakerAssignment.grounded.is_(True),
+            SpeakerAssignment.speaker_id.in_(ids),
+        )
+        .correlate(PipelineRun, DiarizationTurn)
+        .exists()
+    )
+    return (
+        select(1)
+        .where(
+            DiarizationTurn.pipeline_run_id == run_id,
+            or_(effective_assign, and_(~has_decision, grounded_cosine_in_set)),
+        )
+        .exists()
     )
 
 
