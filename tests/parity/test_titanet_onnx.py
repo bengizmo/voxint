@@ -140,10 +140,23 @@ def test_onnx_artifact_matches_committed_provenance() -> None:
 @pytest.fixture(scope="session")
 def onnx_outcomes(corpus_windows: list[dict[str, Any]]) -> dict[str, Any]:
     """Run the real ONNX engine (same code path as the service) on the full
-    corpus once; every vector/decision test reads from this."""
-    saved_env = {k: os.environ.get(k) for k in ("TITANET_ONNX_PATH", "EMBED_ENGINE")}
+    corpus once; every vector/decision test reads from this.
+
+    ``VOXINT_PARITY_ORT_PROVIDERS`` threads straight into the engine's
+    ``TITANET_ORT_PROVIDERS`` so the FULL 3-level gate can be run against the
+    CUDA references under an alternative EP (e.g. CoreML on Apple Silicon:
+    ``VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider``). Unset, the gate
+    measures the shipped default (CPU EP) exactly as before.
+    """
+    saved_env = {
+        k: os.environ.get(k)
+        for k in ("TITANET_ONNX_PATH", "EMBED_ENGINE", "TITANET_ORT_PROVIDERS")
+    }
     os.environ["TITANET_ONNX_PATH"] = str(ONNX_PATH)
     os.environ["EMBED_ENGINE"] = "onnx"
+    parity_providers = os.getenv("VOXINT_PARITY_ORT_PROVIDERS")
+    if parity_providers:
+        os.environ["TITANET_ORT_PROVIDERS"] = parity_providers
     try:
         with service_package("titanet"):
             from app.embedding import create_embedder
@@ -162,6 +175,11 @@ def onnx_outcomes(corpus_windows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "engine": embedder.engine,
         "engine_version": embedder.engine_version,
+        # After the TITANET_ORT_PROVIDERS change this reflects the primary EP
+        # ("cpu", "metal" for CoreML, ...) — recorded so a verdict report can
+        # never misattribute which provider the gate actually measured.
+        "device": embedder.device_name,
+        "requested_providers": parity_providers or "(default: CPUExecutionProvider)",
         "by_id": {w["id"]: outcome for w, outcome in zip(corpus_windows, outcomes, strict=True)},
     }
 
@@ -324,3 +342,63 @@ class TestDecisionLevel:
             print(f"top1 flips (window, cuda_top1, onnx_top1, cuda_margin): {top1_changes[:10]}")
         assert not top1_changes
         assert float(drifts.max()) <= TOP1_MARGIN_MAX_DRIFT
+
+
+class TestRepeatDeterminism:
+    """Same-window repeat through ONE engine session.
+
+    The shipped CPU EP is deterministic — a repeat must be bitwise identical,
+    and any drift is an engine-stack regression. Alternative EPs threaded in
+    via ``VOXINT_PARITY_ORT_PROVIDERS`` (CoreML on Apple Silicon) may not be:
+    the probe prints the measured drift for the per-chip verdict report and
+    holds a pre-registered smoke bound (cosine ≥ 0.99999) that a ratcheting
+    pass tightens once real numbers exist.
+    """
+
+    def test_same_window_repeat_is_stable(
+        self, corpus_windows: list[dict[str, Any]]
+    ) -> None:
+        window = next(
+            w for w in corpus_windows if w["expected_skip_reason"] is None
+        )
+        saved_env = {
+            k: os.environ.get(k)
+            for k in ("TITANET_ONNX_PATH", "EMBED_ENGINE", "TITANET_ORT_PROVIDERS")
+        }
+        os.environ["TITANET_ONNX_PATH"] = str(ONNX_PATH)
+        os.environ["EMBED_ENGINE"] = "onnx"
+        parity_providers = os.getenv("VOXINT_PARITY_ORT_PROVIDERS")
+        if parity_providers:
+            os.environ["TITANET_ORT_PROVIDERS"] = parity_providers
+        try:
+            with service_package("titanet"):
+                from app.embedding import create_embedder
+
+                embedder = create_embedder()
+                embedder.load_model()
+                bounds = [(window["start_seconds"], window["end_seconds"])] * 2
+                outcomes = embedder.embed_windows(
+                    str(CORPUS_DIR / "embed-corpus.wav"), bounds
+                )
+        finally:
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        first = np.asarray(outcomes[0].embedding, dtype=np.float64)
+        second = np.asarray(outcomes[1].embedding, dtype=np.float64)
+        max_abs = float(np.max(np.abs(first - second)))
+        print(
+            f"\nrepeat-determinism ({embedder.device_name}, "
+            f"providers={parity_providers or 'default'}): max abs diff {max_abs:.3e}"
+        )
+        if parity_providers:
+            assert _cosine(first, second) >= 0.99999, (
+                f"repeat drift under {parity_providers}: cosine "
+                f"{_cosine(first, second)} — record in the verdict report"
+            )
+        else:
+            assert np.array_equal(first, second), (
+                f"CPU EP repeat must be bitwise identical (max abs {max_abs:.3e})"
+            )

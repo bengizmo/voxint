@@ -65,7 +65,9 @@ version` — the legacy v1 `docker-compose` binary cannot parse this stack).
 > see [No NVIDIA GPU? (CPU tier)](#no-nvidia-gpu-cpu-tier). **AMD GPU?** The
 > ROCm tier accelerates transcription on it (4.8× the CPU baseline, amdgpu
 > kernel driver is the only host requirement) — use `compose.rocm.yaml` —
-> see [AMD GPU? (ROCm tier)](#amd-gpu-rocm-tier).
+> see [AMD GPU? (ROCm tier)](#amd-gpu-rocm-tier). **Apple Silicon Mac?** The
+> metal tier runs the model services natively so diarization uses the Apple
+> GPU — see [Apple Silicon Mac? (metal tier)](#apple-silicon-mac-metal-tier).
 
 ```bash
 git clone https://github.com/bengizmo/voxint.git && cd voxint
@@ -176,6 +178,25 @@ container toolkit; the `-rocm` image carries its own ROCm runtime. The
 overlay sets `COMPUTE_TIER=rocm` (GPU-speed ASR, CPU-scaled leases for the
 rest). Details:
 [docs/operations.md](docs/operations.md#running-on-an-amd-gpu-rocm-tier).
+
+### Apple Silicon Mac? (metal tier)
+
+Docker Desktop has no GPU passthrough, so on a Mac the containerized tiers
+are CPU-only. The metal tier keeps the core stack in Docker but runs the
+three model services **natively** so diarization uses the Apple GPU
+(torch-MPS — measured ~5× native-CPU diarization on an M1 Pro, identical
+outputs). Transcription stays on the host CPU in v1, so runs remain
+transcribe-bound — faster than the Docker CPU tier, not GPU-stack fast:
+
+```bash
+./scripts/install.sh                  # choose [M]
+./scripts/metal/voxint-metal.sh setup # native venvs + sha-verified weights
+./scripts/metal/voxint-metal.sh up    # services under launchd
+```
+
+Weights come from the same sha-pinned release assets the images use — still
+no Hugging Face account or token. Details:
+[docs/operations.md](docs/operations.md#running-on-apple-silicon-metal-tier).
 
 To run the source you checked out instead of the release images, layer the
 build overlays (exactly one service owns each build — see

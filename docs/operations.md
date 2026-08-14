@@ -134,6 +134,63 @@ the `-cpu` images. Honest expectations and constraints:
   without a GPU — the real-GPU gate runs on maintainer AMD hardware before a
   release.
 
+### Running on Apple Silicon (metal tier)
+
+```bash
+./scripts/install.sh                 # choose [M] — starts the Docker core stack
+./scripts/metal/voxint-metal.sh setup   # venvs + sha-verified weights (~3.2 GB)
+./scripts/metal/voxint-metal.sh up      # native services under launchd
+./scripts/metal/voxint-metal.sh status  # whisper cpu / pyannote mps / titanet cpu
+```
+
+Docker Desktop on macOS has no GPU passthrough, so the Docker CPU tier
+cannot touch the Apple GPU. The metal tier splits the deployment instead:
+the core stack (postgres/redis/api/worker/beat) stays in Docker via the
+`compose.metal.yaml` rewiring overlay, and the three model services run
+**natively on the host**, bound to 127.0.0.1 and supervised by launchd
+(`KeepAlive` restarts crashes — the native analogue of
+`restart: unless-stopped`). api/worker reach them through
+`host.docker.internal`, which is Docker-Desktop-specific — `voxint-metal.sh
+doctor` verifies the loopback path from the worker container. Honest
+expectations:
+
+- **What accelerates: diarization only (v1).** pyannote runs on the Apple
+  GPU via torch-MPS — the Phase 0 spike measured warm MPS diarization about
+  **5× native-CPU speed** on an M1 Pro with decision outputs identical to
+  CPU. Whisper runs CTranslate2 on the host CPU (a native ASR Metal engine
+  is a tracked follow-up), so end-to-end runs stay transcribe-bound —
+  expect roughly 1.5–1.8× media duration overall against ~2.5× for the
+  Docker CPU tier on the same hardware (Gate M confirms per chip). titanet
+  runs the ONNX CPU EP — already far faster than real-time.
+- **No silent device fallback.** The launcher forces `DIARIZER_DEVICE=mps`:
+  if MPS is missing or fails the tensor-op sanity probe, pyannote refuses
+  to start rather than quietly landing on CPU (`logs pyannote` shows why;
+  `VOXINT_METAL_DIARIZER_DEVICE=cpu` overrides deliberately).
+  `TITANET_ORT_PROVIDERS=CoreMLExecutionProvider` enables the CoreML
+  experiment for titanet — requested providers must be verifiably active or
+  the service fails at load.
+- **Weights are fetched, sha-verified, never trusted blind**: the same
+  release assets and provenance sha256s the images bake
+  (`pyannote-models-v1`, `titanet-onnx-v1`), plus whisper large-v2 at the
+  same pinned HF revision as the images with a local drift-detection
+  manifest. No HF account or token.
+- **Version skew is visible, not prevented**: native services run your
+  working tree; the core runs pinned images. `voxint-metal.sh status`
+  prints both (`git describe` vs `VOXINT_IMAGE_TAG`) — pair a tagged tree
+  with the matching image tag for supported runs.
+- **`COMPUTE_TIER=metal`** keeps GPU-class timing
+  ([timeouts-and-leases.md](timeouts-and-leases.md)); note v1 runs whisper
+  on CPU under those budgets — very long recordings on slow Macs may need
+  the CPU-tier profile instead until the post-measurement pass settles a
+  metal factor.
+- **Memory budget (16 GB Macs)**: whisper int8 ~4 GB + pyannote/MPS ~3 GB +
+  titanet ~1 GB run natively; cap the Docker Desktop VM around 4 GB — it
+  only runs the core stack.
+- `voxint-metal.sh doctor` checks the lot: weights vs provenance, vendored
+  config params, MEDIA_ROOT agreement with `.env` (physically resolved),
+  port collisions (a leftover CPU-tier stack on 8021/8022/8024 is the
+  classic one), the MPS probe, ORT providers, and worker→host loopback.
+
 ### Schema migrations
 
 A one-shot `migrate` service runs `alembic upgrade head` after Postgres is

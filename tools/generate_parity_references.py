@@ -20,6 +20,16 @@ reference can never be silently paired with the wrong corpus or engine. By
 default services must report ``device: cuda`` (--allow-device overrides for
 experiments; the committed references must stay CUDA).
 
+``--tier metal`` records the NATIVE Apple Silicon services instead (whisper
+cpu / pyannote mps / titanet cpu-or-metal, per plan decision 1), stamps
+chip/macOS metadata, and requires a scratch ``--out-dir``: metal output is
+per-chip measurement evidence for a committed verdict REPORT, never a
+committed reference oracle — MPS/CoreML are not run-to-run or cross-chip
+stable enough to be one (plan decision 3). Point the native services'
+MEDIA_ROOT at the corpus directory (e.g. a re-run of voxint-metal.sh with
+.env MEDIA_ROOT temporarily set there, or `run <svc> --foreground` with the
+corpus as media root).
+
 The script also cross-checks the corpus's expected skip_reason/snr_db per
 window against the live service and fails on any mismatch — validating the
 locally-computed expectations against the real implementation.
@@ -30,6 +40,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import sys
 import urllib.request
 from datetime import date
@@ -41,6 +52,15 @@ CORPUS_DIR = REPO / "tests" / "parity" / "fixtures" / "corpus"
 REFS_DIR = REPO / "tests" / "parity" / "fixtures" / "references" / "cuda"
 
 SNR_REPORT_TOLERANCE_DB = 0.05
+
+# Per-tier expected /healthz device values. The metal tier is heterogeneous
+# BY DESIGN (plan decision 1): whisper runs CT2 on host CPU, pyannote on the
+# Apple GPU via torch-MPS, titanet on the ONNX CPU EP by default ("metal"
+# only when the CoreML EP experiment is explicitly enabled).
+TIER_EXPECTED_DEVICES: dict[str, dict[str, set[str]]] = {
+    "cuda": {"asr": {"cuda"}, "diarizer": {"cuda"}, "embedder": {"cuda"}},
+    "metal": {"asr": {"cpu"}, "diarizer": {"mps"}, "embedder": {"cpu", "metal"}},
+}
 
 
 def _http_json(url: str, payload: dict[str, Any] | None = None, timeout: float = 3600.0) -> Any:
@@ -56,15 +76,15 @@ def _http_json(url: str, payload: dict[str, Any] | None = None, timeout: float =
         return json.loads(resp.read())
 
 
-def _healthz(base_url: str, allow_device: str | None) -> dict[str, Any]:
+def _healthz(base_url: str, expected_devices: set[str], allow_device: str | None) -> dict[str, Any]:
     health = _http_json(f"{base_url}/healthz")
     if health.get("status") != "ok":
         raise SystemExit(f"{base_url}/healthz not ok: {health}")
     device = health.get("device")
-    if device != "cuda" and device != allow_device:
+    if device not in expected_devices and device != allow_device:
         raise SystemExit(
-            f"{base_url} reports device={device!r}; committed references must be CUDA "
-            "(use --allow-device only for uncommitted experiments)"
+            f"{base_url} reports device={device!r}; this tier expects "
+            f"{sorted(expected_devices)} (use --allow-device only for uncommitted experiments)"
         )
     if not health.get("engine"):
         # Pre-Phase-0 images (<= 0.3.0) predate the engine/runtime health
@@ -88,7 +108,14 @@ def main() -> int:
         "--image-digest", default=None,
         help="optional immutable image digest (sha256:...) recorded next to --tag",
     )
-    parser.add_argument("--allow-device", default=None, help="accept a non-cuda device value")
+    parser.add_argument(
+        "--tier", choices=sorted(TIER_EXPECTED_DEVICES), default="cuda",
+        help="expected service devices per tier (default cuda). metal expects "
+        "whisper cpu / pyannote mps / titanet cpu-or-metal and REFUSES the "
+        "committed reference dir: metal output is measurement evidence for a "
+        "per-chip verdict report, never a committed oracle (plan decision 3)",
+    )
+    parser.add_argument("--allow-device", default=None, help="accept an unexpected device value")
     parser.add_argument(
         "--out-dir", type=Path, default=REFS_DIR,
         help="output directory (default: the committed CUDA reference dir)",
@@ -100,11 +127,15 @@ def main() -> int:
     args = parser.parse_args()
     which = set(args.only or ["embed", "transcribe", "diarize"])
     out_dir: Path = args.out_dir
-    if args.allow_device and out_dir.resolve() == REFS_DIR.resolve():
-        # The escape hatch must never overwrite the committed CUDA baseline.
+    expected = TIER_EXPECTED_DEVICES[args.tier]
+    if (args.allow_device or args.tier != "cuda") and out_dir.resolve() == REFS_DIR.resolve():
+        # Neither escape hatch may ever overwrite the committed CUDA baseline:
+        # canonical references stay CUDA (the embedding/diarization spaces are
+        # defined parametrically, device-independent); other tiers gate
+        # AGAINST them with measured tolerances.
         raise SystemExit(
-            "--allow-device writes non-CUDA output; pass --out-dir pointing "
-            f"somewhere other than {REFS_DIR}"
+            f"--tier {args.tier} / --allow-device write non-CUDA output; pass "
+            f"--out-dir pointing somewhere other than {REFS_DIR}"
         )
 
     provenance = json.loads((CORPUS_DIR / "provenance.json").read_text())
@@ -127,18 +158,34 @@ def main() -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     def meta(health: dict[str, Any]) -> dict[str, Any]:
-        return {
+        doc: dict[str, Any] = {
             "generated_on": date.today().isoformat(),
+            "tier": args.tier,
             "image_tag": args.tag,
             "image_digest": args.image_digest,
-            "hardware": "maintainer NVIDIA hardware",
+            "hardware": (
+                "maintainer NVIDIA hardware" if args.tier == "cuda"
+                else "maintainer Apple Silicon hardware"
+            ),
             "corpus_sha256": provenance["wav_sha256"],
             "corpus_files_sha256": corpus_files_sha256,
             "service_healthz": health,
         }
+        if args.tier == "metal":
+            # Metal outputs are per-chip measurement evidence: MPS/CoreML are
+            # not run-to-run or cross-chip stable, so the verdict report must
+            # pin exactly what was measured. Engine/runtime versions come from
+            # the recorded healthz identity above.
+            doc["host"] = {
+                "machine": platform.machine(),
+                "processor": platform.processor(),
+                "macos_version": platform.mac_ver()[0],
+                "python_version": platform.python_version(),
+            }
+        return doc
 
     if "embed" in which:
-        health = _healthz(args.embedder_url, args.allow_device)
+        health = _healthz(args.embedder_url, expected["embedder"], args.allow_device)
         windows_doc = json.loads((CORPUS_DIR / "embed-windows.json").read_text())
         windows = windows_doc["windows"]
         response = _http_json(
@@ -185,7 +232,7 @@ def main() -> int:
         print(f"embed.json: {n_ok}/{len(results)} embedded, space={response['embedding_space']}")
 
     if "transcribe" in which:
-        health = _healthz(args.asr_url, args.allow_device)
+        health = _healthz(args.asr_url, expected["asr"], args.allow_device)
         variants = {}
         for vad in (True, False):
             variants[f"vad_{str(vad).lower()}"] = _http_json(
@@ -200,7 +247,7 @@ def main() -> int:
               f"confidence {variants['vad_true']['confidence']:.3f}")
 
     if "diarize" in which:
-        health = _healthz(args.diarizer_url, args.allow_device)
+        health = _healthz(args.diarizer_url, expected["diarizer"], args.allow_device)
         response = _http_json(
             f"{args.diarizer_url}/v1/diarize",
             {"path": manifest["diarize"]["wav"], "min_speakers": 1, "max_speakers": 10},

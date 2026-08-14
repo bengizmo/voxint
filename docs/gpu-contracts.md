@@ -79,7 +79,9 @@ same contract.
     `/proc/self/maps`, checked after model construction) and reports
     `"rocm"`. `"mps"`
     is torch Metal Performance Shaders (host adapters); `"metal"` is
-    non-torch Metal backends (e.g. whisper.cpp/ggml).
+    non-torch Metal backends (e.g. whisper.cpp/ggml, or onnxruntime's CoreML
+    EP — the titanet engine reports `"metal"` only when the CoreML EP is
+    verified active in the session, never merely requested).
   - `engine` / `engine_version` identify the **inference engine only** — e.g.
     `faster-whisper`, `pyannote.audio`, `nemo`, `onnxruntime`, `whisper.cpp` —
     never the driver or userspace stack. `model` stays the weights identity:
@@ -402,6 +404,66 @@ callers index results by window position):
   definition above (resample 16 kHz mono → slice → noise reduction → LUFS −16
   → peak 0.95 → TitaNet → L2); reference code in
   `services/titanet/app/preprocess.py`.
+
+## Metal tier (bare-metal Apple Silicon) — measured status
+
+The `metal` compute tier runs the three services natively on macOS
+(`scripts/metal/voxint-metal.sh`; core stack stays in Docker via
+`compose.metal.yaml`). Same `/v1` + `/healthz` contracts; heterogeneous
+devices BY DESIGN:
+
+| Service | Engine | Device | Notes |
+|---|---|---|---|
+| whisper | faster-whisper / CT2 | `cpu` | Same pinned large-v2 revision + int8 as the images, but the macOS arm64 CT2 wheel is a different build — measured, not assumed (`tests/parity/test_whisper_metal.py`). A Metal ASR engine is a tracked follow-up behind a pre-registered gate. |
+| pyannote | pyannote.audio / torch | `mps` | `DIARIZER_DEVICE=mps` is FORCED by the launcher: backend must exist and pass the tensor-op probe or the service refuses to start — no silent CPU fallback. |
+| titanet | onnxruntime | `cpu` (default) | Exactly the graph + `requirements.cpu.txt` chain the amd64 verdict measured; the macOS arm64 measurement pays down the arm64 debt flagged above. `TITANET_ORT_PROVIDERS=CoreMLExecutionProvider` enables the CoreML experiment (`device: "metal"`); the default flips only via an evidence-linked commit. |
+
+**No committed metal reference oracle** (plan decision 3): MPS and CoreML are
+not run-to-run or cross-chip (M1–M4) stable, and macOS toolchain updates
+reschedule kernels unpinnably. Canonical references stay CPU/CUDA — the
+spaces are defined parametrically, device-independent — and metal outputs
+gate AGAINST them:
+
+- `tests/parity/test_pyannote_metal.py` — forced-MPS vs forced-CPU vs
+  `references/cuda/diarize.json`: speaker-count equality, boundary drift,
+  greedy-mapped label agreement, MPS repeat stability, and a
+  clustering-threshold sweep (MPS and CPU must flip speaker counts at the
+  same knife edges).
+- `tests/parity/test_whisper_metal.py` — native CT2 transcript vs
+  `references/cuda/transcribe.json` (similarity / segments / confidence).
+- `tests/parity/test_titanet_onnx.py` — the FULL 3-level gate re-run on
+  arm64; `VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider` re-runs it
+  under the CoreML EP, plus a same-window repeat-determinism probe.
+
+These lanes are maintainer-run on Apple Silicon (Gate M,
+docs/release-process.md) — `VOXINT_PARITY_REQUIRED` is never applied to them
+(no shared CI has the hardware; GitHub's `macos-14+` arm64 runners are a
+tracked follow-up). Evidence lands as committed per-chip verdict reports
+(chip, macOS + library versions, margins vs every bound, repeat runs) —
+generalizing the ONNX verdict-table pattern above. Reference data for such
+reports comes from `tools/generate_parity_references.py --tier metal
+--out-dir <scratch>` (refuses the committed reference dir).
+
+#### Verdict — metal tier: PENDING (pre-registered bounds; Gate M not yet run)
+
+| Gate | Pre-registered smoke bound | Measured |
+|---|---|---|
+| pyannote speaker count (mps = cpu = cuda ref) | equal | — |
+| pyannote turn boundary drift vs cuda ref | ≤ 0.25 s | — |
+| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.99 / ≥ 0.95 | — |
+| pyannote MPS repeat agreement | ≥ 0.999 | — |
+| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | — |
+| whisper transcript similarity vs cuda ref | ≥ 0.95 | — |
+| whisper segment count / confidence drift | ± 1 / ≤ 0.15 | — |
+| titanet 3-level gate on arm64 CPU EP | existing ratcheted bounds | — |
+
+Basis for the pre-registration: the Phase 0 MPS spike (2026-08-14, M1 Pro
+16 GB, torch 2.5.0, vendored 3.1 pipeline) measured warm MPS diarization
+~5× native-CPU speed with DER/speaker-counts/turns **identical** to CPU on
+all three spike files and 3× repeats bit-stable, with zero MPS op fallbacks
+(`PYTORCH_ENABLE_MPS_FALLBACK` unset). The post-measurement pass ratchets
+the bounds from Gate M numbers and records the verdict here; loosening any
+bound afterwards is a numerics decision, not a test fix.
 
 ## Contract tests
 

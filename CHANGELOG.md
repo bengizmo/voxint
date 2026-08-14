@@ -5,6 +5,26 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Apple Silicon "metal" compute tier**: the core stack stays in Docker
+  (`compose.metal.yaml` rewires api/worker to `host.docker.internal`) while
+  the three model services run natively on macOS — set up, sha-verified,
+  and supervised under launchd by the new `scripts/metal/voxint-metal.sh`
+  (`setup / up / down / status / logs / doctor / run --foreground`) — so
+  diarization runs on the Apple GPU via torch-MPS (~5× native-CPU
+  diarization measured on an M1 Pro, identical outputs; transcription stays
+  on host CPU in v1 and remains the bottleneck). The installer grew an `[M]`
+  option (default on Apple Silicon) that starts the core and hands off
+  honestly. New device-control contracts, both tier-independent:
+  `DIARIZER_DEVICE=auto|cuda|mps|cpu` (a forced device must pass the sanity
+  probe or the service refuses to start) and `TITANET_ORT_PROVIDERS`
+  (requested ONNX EPs must be verifiably active — no silent fallback
+  anywhere). Metal parity lanes gate against the committed CUDA references
+  (no metal oracle by design): `tests/parity/test_pyannote_metal.py`,
+  `test_whisper_metal.py`, `VOXINT_PARITY_ORT_PROVIDERS` threading for the
+  titanet 3-level gate, and `tools/generate_parity_references.py --tier
+  metal`. Maintainer-run Gate M documented in the release process.
+
 ### Fixed
 - **Installer port probe on macOS**: a listener with a full accept queue (a
   wedged service, or another process mid-collision-check) made macOS drop the

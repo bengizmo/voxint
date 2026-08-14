@@ -80,6 +80,20 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
   the CI build is engine-identical — not byte-identical — to what was
   smoked. After the release publishes, optionally re-run the smoke against
   the published `X.Y.Z-rocm` tag on the AMD box.
+- **Metal tier (Gate M)** — the metal tier ships no images at all (native
+  services from the working tree + the standard core images), so like ROCm
+  it cannot smoke in shared CI; unlike ROCm, the hardware *does* exist in
+  GitHub's `macos-14+` arm64 runner pool — automating part of this gate is a
+  tracked follow-up. Until then it is a **maintainer-run gate on Apple
+  Silicon BEFORE tagging a release that touches the metal lane**: with the
+  tag checked out, `voxint-metal.sh setup && up && doctor`, then run the
+  metal parity lanes from the metal venvs
+  (`tests/parity/test_pyannote_metal.py`, `test_whisper_metal.py`, and
+  `test_titanet_onnx.py` on arm64 — see docs/gpu-contracts.md "Metal tier"),
+  and record/refresh the per-chip verdict report. `VOXINT_PARITY_REQUIRED`
+  is deliberately never set for these lanes; the compensating control is
+  this gate being listed here and the PENDING verdict table in
+  gpu-contracts.md, which a release must not leave stale.
 
 ## Cutting a release
 
