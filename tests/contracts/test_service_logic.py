@@ -5,6 +5,7 @@ Not wire-schema tests, but they pin the behaviors the contract documents
 """
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -17,6 +18,7 @@ postprocess = load_service_module("pyannote", "postprocess")
 diarizer = load_service_module("pyannote", "diarizer")
 embedding = load_service_module("titanet", "embedding")
 preprocess = load_service_module("titanet", "preprocess")
+engine_onnx = load_service_module("titanet", "engine_onnx")
 
 
 class TestRepetitionDetector:
@@ -494,6 +496,146 @@ class TestEngineFactory:
             embedder = embedding.create_embedder()
         assert embedder.engine == "onnxruntime"
         assert embedder.runtime == "onnxruntime"
+
+
+def _fake_ort(available: list[str], session_providers: list[str]) -> SimpleNamespace:
+    """Stub onnxruntime: a session that reports session_providers regardless
+    of what was requested — exactly ORT's silent-degradation behavior."""
+
+    class _FakeSession:
+        def __init__(self, path: str, providers: list[str] | None = None) -> None:
+            self._providers = list(session_providers)
+
+        def get_providers(self) -> list[str]:
+            return list(self._providers)
+
+        def get_inputs(self) -> list[SimpleNamespace]:
+            return [SimpleNamespace(name="audio_signal"), SimpleNamespace(name="length")]
+
+        def get_outputs(self) -> list[SimpleNamespace]:
+            return [SimpleNamespace(name="embs")]
+
+    return SimpleNamespace(
+        __version__="0.0-test",
+        get_available_providers=lambda: list(available),
+        InferenceSession=_FakeSession,
+    )
+
+
+class TestOrtProviderSelection:
+    """TITANET_ORT_PROVIDERS: priority-ordered EP selection with no silent
+    fallback — a requested-but-unavailable EP fails BEFORE session
+    construction, and a session that quietly degraded (ORT drops an EP it
+    cannot initialize with only a log line) fails AFTER, so healthz can never
+    report a device that is not actually in use."""
+
+    def test_parse_priority_order_and_blank_entries(self) -> None:
+        raw = " CoreMLExecutionProvider , CPUExecutionProvider ,,"
+        assert engine_onnx.parse_ort_providers(raw) == [
+            "CoreMLExecutionProvider",
+            "CPUExecutionProvider",
+        ]
+
+    def test_parse_blank_means_unset(self) -> None:
+        # A compose-style ${TITANET_ORT_PROVIDERS:-} passes "" through; that
+        # must behave like unset (caller falls back to the default), not crash.
+        assert engine_onnx.parse_ort_providers("") == []
+        assert engine_onnx.parse_ort_providers(" , ") == []
+
+    def test_default_is_exactly_the_measured_cpu_chain(self) -> None:
+        # Shipped images set no TITANET_ORT_PROVIDERS — the default must stay
+        # exactly what the committed parity verdict measured.
+        assert engine_onnx.DEFAULT_ORT_PROVIDERS == ["CPUExecutionProvider"]
+
+    def test_unavailable_provider_fails_before_construction(self) -> None:
+        with pytest.raises(RuntimeError, match="CoreMLExecutionProvider"):
+            engine_onnx.validate_requested_providers(
+                ["CoreMLExecutionProvider"], ["CPUExecutionProvider"]
+            )
+
+    def test_available_subset_passes(self) -> None:
+        engine_onnx.validate_requested_providers(
+            ["CPUExecutionProvider"],
+            ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        )
+
+    def test_silent_degradation_fails_at_load(self) -> None:
+        with pytest.raises(RuntimeError, match="silently degraded"):
+            engine_onnx.assert_session_honors_providers(
+                ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+                ["CPUExecutionProvider"],
+            )
+
+    def test_appended_cpu_fallback_is_tolerated(self) -> None:
+        # ORT always appends the CPU EP as final fallback; requesting CoreML
+        # alone must accept ["CoreML", "CPU"] back (prefix rule, not equality).
+        engine_onnx.assert_session_honors_providers(
+            ["CoreMLExecutionProvider"],
+            ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+        )
+
+    def test_device_name_mapping(self) -> None:
+        assert engine_onnx.provider_device_name("CPUExecutionProvider") == "cpu"
+        assert engine_onnx.provider_device_name("CoreMLExecutionProvider") == "metal"
+        assert engine_onnx.provider_device_name("CUDAExecutionProvider") == "cuda"
+        assert engine_onnx.provider_device_name("ROCMExecutionProvider") == "rocm"
+
+    def test_load_model_refuses_unavailable_provider(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Wiring, not just helpers: load_model must consult availability
+        # before constructing a session (the fake would accept anything).
+        onnx = tmp_path / "graph.onnx"
+        onnx.write_bytes(b"")
+        monkeypatch.setenv("TITANET_ONNX_PATH", str(onnx))
+        monkeypatch.setenv("TITANET_ORT_PROVIDERS", "CoreMLExecutionProvider")
+        monkeypatch.setitem(
+            sys.modules,
+            "onnxruntime",
+            _fake_ort(["CPUExecutionProvider"], ["CPUExecutionProvider"]),
+        )
+        embedder = engine_onnx.OnnxEmbedder()
+        with pytest.raises(RuntimeError, match="only provides"):
+            embedder.load_model()
+        assert embedder.model_loaded is False
+
+    def test_load_model_detects_silent_degradation(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        onnx = tmp_path / "graph.onnx"
+        onnx.write_bytes(b"")
+        monkeypatch.setenv("TITANET_ONNX_PATH", str(onnx))
+        monkeypatch.setenv("TITANET_ORT_PROVIDERS", "CoreMLExecutionProvider")
+        monkeypatch.setitem(
+            sys.modules,
+            "onnxruntime",
+            _fake_ort(
+                ["CoreMLExecutionProvider", "CPUExecutionProvider"],
+                ["CPUExecutionProvider"],  # session dropped CoreML anyway
+            ),
+        )
+        embedder = engine_onnx.OnnxEmbedder()
+        with pytest.raises(RuntimeError, match="silently degraded"):
+            embedder.load_model()
+        assert embedder.model_loaded is False
+
+    def test_load_model_default_reports_cpu(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Unset env → the shipped-image behavior, bit-for-bit: CPU EP only.
+        onnx = tmp_path / "graph.onnx"
+        onnx.write_bytes(b"")
+        monkeypatch.setenv("TITANET_ONNX_PATH", str(onnx))
+        monkeypatch.delenv("TITANET_ORT_PROVIDERS", raising=False)
+        monkeypatch.setitem(
+            sys.modules,
+            "onnxruntime",
+            _fake_ort(["CPUExecutionProvider"], ["CPUExecutionProvider"]),
+        )
+        embedder = engine_onnx.OnnxEmbedder()
+        embedder.load_model()
+        assert embedder.device_name == "cpu"
+        assert embedder.model_loaded is True
 
 
 class TestMelConstantsPinnedToCheckpoint:

@@ -14,6 +14,7 @@ space id only because the measured-equivalence gate
 import logging
 import os
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -28,6 +29,68 @@ from app.mel import mel_spectrogram, num_valid_frames
 logger = logging.getLogger(__name__)
 
 DEFAULT_ONNX_PATH = "/app/models/titanet-large.onnx"
+
+# Shipped images set no TITANET_ORT_PROVIDERS: the default must stay exactly
+# the CPU EP chain the committed parity verdict measured
+# (docs/gpu-contracts.md — the verdict binds to requirements.cpu.txt + CPU EP).
+DEFAULT_ORT_PROVIDERS = ["CPUExecutionProvider"]
+
+# healthz honesty (docs/gpu-contracts.md): device_name reports where inference
+# actually runs. "metal" means the CoreML EP is active (Apple GPU/ANE through
+# onnxruntime) — distinct from "mps", which only the pyannote service reports
+# (torch Metal). EPs outside this map degrade to their lowercased stem
+# ("ROCMExecutionProvider" -> "rocm") so a new provider is honest, if terse.
+_PROVIDER_DEVICE_NAMES = {
+    "CPUExecutionProvider": "cpu",
+    "CoreMLExecutionProvider": "metal",
+    "CUDAExecutionProvider": "cuda",
+}
+
+
+def parse_ort_providers(raw: str) -> list[str]:
+    """Parse ``TITANET_ORT_PROVIDERS``: comma-separated, priority-ordered EPs.
+
+    Blank entries are dropped; an entirely blank string parses to ``[]`` and
+    the caller falls back to ``DEFAULT_ORT_PROVIDERS`` (so a compose-style
+    ``${TITANET_ORT_PROVIDERS:-}`` passing "" through behaves like unset).
+    """
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def provider_device_name(provider: str) -> str:
+    stem = provider.removesuffix("ExecutionProvider").lower()
+    return _PROVIDER_DEVICE_NAMES.get(provider, stem or provider.lower())
+
+
+def validate_requested_providers(
+    requested: Sequence[str], available: Sequence[str]
+) -> None:
+    """Fail BEFORE session construction when a requested EP is not built in."""
+    missing = [p for p in requested if p not in available]
+    if missing:
+        raise RuntimeError(
+            f"TITANET_ORT_PROVIDERS requests {missing}, but this onnxruntime "
+            f"build only provides {sorted(available)} — refusing to build a "
+            "session that would silently run on a different EP"
+        )
+
+
+def assert_session_honors_providers(
+    requested: Sequence[str], actual: Sequence[str]
+) -> None:
+    """Fail AFTER construction unless the session runs the requested EPs.
+
+    ORT drops an EP it cannot initialize with only a log line and falls back
+    down the list, so a session can come up healthy-looking on the wrong
+    device. The requested chain must be a prefix of what the session reports
+    (prefix, not equality: ORT always appends the CPU EP as final fallback).
+    """
+    if list(actual[: len(requested)]) != list(requested):
+        raise RuntimeError(
+            f"onnxruntime session runs {list(actual)} but TITANET_ORT_PROVIDERS "
+            f"requested {list(requested)} — ORT silently degraded; failing at "
+            "load so healthz cannot report a device that is not in use"
+        )
 
 
 class OnnxEmbedder(TitanetEmbedderBase):
@@ -49,10 +112,17 @@ class OnnxEmbedder(TitanetEmbedderBase):
                 f"TITANET_ONNX_PATH not found: {self.onnx_path} "
                 "(export with tools/export_titanet_onnx.py)"
             )
-        logger.info("Loading TitaNet ONNX graph from %s", self.onnx_path)
+        requested = parse_ort_providers(os.getenv("TITANET_ORT_PROVIDERS", ""))
+        if not requested:
+            requested = list(DEFAULT_ORT_PROVIDERS)
+        validate_requested_providers(requested, ort.get_available_providers())
+        logger.info(
+            "Loading TitaNet ONNX graph from %s (providers=%s)", self.onnx_path, requested
+        )
         start = time.time()
-        self.session = ort.InferenceSession(self.onnx_path, providers=["CPUExecutionProvider"])
-        self.device_name = "cpu"
+        self.session = ort.InferenceSession(self.onnx_path, providers=requested)
+        assert_session_honors_providers(requested, self.session.get_providers())
+        self.device_name = provider_device_name(requested[0])
         inputs = {i.name for i in self.session.get_inputs()}
         outputs = [o.name for o in self.session.get_outputs()]
         # Bind graph I/O by name, never by declaration order — a re-export
