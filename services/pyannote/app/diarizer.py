@@ -102,16 +102,31 @@ class Diarizer:
         # Default model source: the vendored pipeline baked into the image
         # (offline, no token). An explicit DIARIZER_MODEL_NAME wins; when the
         # vendored config is absent too (bare-host venv runs), fall back to
-        # the HF repo id, which needs HF_TOKEN for its gate.
-        vendored = os.getenv("VOXINT_VENDORED_PIPELINE", "/app/vendored/config.yaml")
+        # the HF repo id, which needs HF_TOKEN for its gate. model_name stays
+        # the canonical pipeline identity for /healthz (docs/gpu-contracts.md)
+        # — only an explicit override changes it; model_source is what
+        # actually gets loaded.
+        vendored_env = os.getenv("VOXINT_VENDORED_PIPELINE")
+        vendored = vendored_env or "/app/vendored/config.yaml"
         explicit = os.getenv("DIARIZER_MODEL_NAME")
         if explicit:
             self.model_name = explicit
-        elif os.path.exists(vendored):
-            self.model_name = vendored
+            self.model_source = explicit
+        elif os.path.isfile(vendored):
+            self.model_name = "pyannote/speaker-diarization-3.1"
+            self.model_source = vendored
+        elif vendored_env is not None:
+            # An explicitly configured vendored path that is missing must not
+            # silently degrade to a gated network fetch — that turns a typo or
+            # a bad bind-mount into a confusing HF-gate error.
+            raise RuntimeError(
+                f"VOXINT_VENDORED_PIPELINE={vendored_env} does not exist — "
+                "fix the path or rebuild/re-pull the image"
+            )
         else:
             self.model_name = "pyannote/speaker-diarization-3.1"
-        self.model_is_local = os.path.exists(self.model_name)
+            self.model_source = self.model_name
+        self.model_is_local = os.path.isfile(self.model_source)
         self.hf_token = os.getenv("HF_TOKEN") or None
         self.device_name = "cpu"
 
@@ -154,7 +169,7 @@ class Diarizer:
 
         logger.info(
             "Loading diarization pipeline: %s (%s)",
-            self.model_name,
+            self.model_source,
             "vendored/local" if self.model_is_local else "hugging face",
         )
         start = time.time()
@@ -164,22 +179,31 @@ class Diarizer:
         self.runtime_version = torch.__version__
         # The auth kwarg name differs between pyannote releases:
         # 3.1.x wants use_auth_token=, 4.x wants token=. Try 4.x first.
+        local_hint = "corrupt or incomplete vendored files — rebuild/re-pull the image"
         try:
-            self.model = Pipeline.from_pretrained(self.model_name, token=self.hf_token)
-        except TypeError as exc:
-            if "token" not in str(exc):
-                raise
-            self.model = Pipeline.from_pretrained(
-                self.model_name, use_auth_token=self.hf_token
-            )
+            try:
+                self.model = Pipeline.from_pretrained(self.model_source, token=self.hf_token)
+            except TypeError as exc:
+                if "token" not in str(exc):
+                    raise
+                self.model = Pipeline.from_pretrained(
+                    self.model_source, use_auth_token=self.hf_token
+                )
+        except Exception as exc:
+            # A missing/truncated checkpoint behind an existing vendored config
+            # surfaces as a raw torch/FileNotFound error; keep the actionable
+            # hint attached instead of letting it read like a code bug.
+            if self.model_is_local and not isinstance(exc, TypeError):
+                raise RuntimeError(
+                    f"Failed to load the vendored pipeline {self.model_source} — {local_hint}"
+                ) from exc
+            raise
         if self.model is None:
-            hint = (
-                "corrupt or incomplete vendored files — rebuild/re-pull the image"
-                if self.model_is_local
-                else "usually an unaccepted HF gate or invalid HF_TOKEN"
+            hint = local_hint if self.model_is_local else (
+                "usually an unaccepted HF gate or invalid HF_TOKEN"
             )
             raise RuntimeError(
-                f"Pipeline.from_pretrained returned None for {self.model_name} — {hint}"
+                f"Pipeline.from_pretrained returned None for {self.model_source} — {hint}"
             )
 
         device = select_device()

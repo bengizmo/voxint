@@ -85,9 +85,13 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, json
           prov = json.load(open("services/pyannote/models/provenance.json"))["files"]
-          for name in ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"):
+          bins = [n for n in prov if n.endswith(".bin")]
+          if len(bins) != 2:
+              raise SystemExit(f"expected 2 .bin entries in provenance, found {bins}")
+          for name in bins:
               digest = hashlib.sha256(open(f"services/pyannote/models/{name}", "rb").read()).hexdigest()
-              assert digest == prov[name]["sha256"], f"{name}: {digest} != provenance"
+              if digest != prov[name]["sha256"]:
+                  raise SystemExit(f"{name}: {digest} does not match provenance")
           print("vendored checkpoints match provenance")
           PYEOF
       - uses: docker/setup-buildx-action@v3
@@ -273,9 +277,13 @@ jobs:
           python3 - <<'PYEOF'
           import hashlib, json
           prov = json.load(open("services/pyannote/models/provenance.json"))["files"]
-          for name in ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"):
+          bins = [n for n in prov if n.endswith(".bin")]
+          if len(bins) != 2:
+              raise SystemExit(f"expected 2 .bin entries in provenance, found {bins}")
+          for name in bins:
               digest = hashlib.sha256(open(f"services/pyannote/models/{name}", "rb").read()).hexdigest()
-              assert digest == prov[name]["sha256"], f"{name}: {digest} != provenance"
+              if digest != prov[name]["sha256"]:
+                  raise SystemExit(f"{name}: {digest} does not match provenance")
           print("vendored checkpoints match provenance")
           PYEOF
       - uses: docker/setup-buildx-action@v3

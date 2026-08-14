@@ -2,11 +2,11 @@
 
 The installer sources with ``VOXINT_INSTALL_LIB=1`` (no main), which lets these
 tests exercise the pure-shell logic — tier→Compose-file mapping, port-collision
-handling, .env rendering/updating, and the HF-token preflight — without a
-Docker daemon or network. Every test runs in a throwaway fixture "repo" (the
-script resolves ``REPO_ROOT`` from its own path, so copying it into tmp_path
-fully isolates the real checkout's .env), with fake ``docker`` / ``curl``
-executables on PATH that log their argv.
+handling, .env rendering/updating, and render-gid detection — without a Docker
+daemon or network. Every test runs in a throwaway fixture "repo" (the script
+resolves ``REPO_ROOT`` from its own path, so copying it into tmp_path fully
+isolates the real checkout's .env), with a fake ``docker`` executable on PATH
+that logs its argv.
 """
 
 from __future__ import annotations
@@ -27,26 +27,6 @@ printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
 exit 0
 """
 
-# Emits an http_code like curl -w '%{http_code}' would; drains stdin (the
-# -K - config carrying the Authorization header) so the pipe never breaks.
-# FAKE_CURL_CODES (a file of one code per line, consumed head-first) lets a
-# test sequence per-call responses (whoami vs each gated repo); otherwise
-# every call answers ${FAKE_CURL_CODE:-200}.
-FAKE_CURL = """#!/usr/bin/env bash
-cat > /dev/null
-printf '%s\\n' "$*" >> "${FAKE_CURL_LOG:?}"
-if [ -n "${FAKE_CURL_CODES:-}" ] && [ -s "${FAKE_CURL_CODES}" ]; then
-  code=$(head -n1 "$FAKE_CURL_CODES")
-  tail -n +2 "$FAKE_CURL_CODES" > "$FAKE_CURL_CODES.tmp"
-  mv "$FAKE_CURL_CODES.tmp" "$FAKE_CURL_CODES"
-else
-  code="${FAKE_CURL_CODE:-200}"
-fi
-printf '%s' "$code"
-exit 0
-"""
-
-
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / "scripts").mkdir()
@@ -56,10 +36,9 @@ def repo(tmp_path: Path) -> Path:
         shutil.copy(REAL_REPO / name, tmp_path / name)
     fakebin = tmp_path / "fakebin"
     fakebin.mkdir()
-    for exe, body in (("docker", FAKE_DOCKER), ("curl", FAKE_CURL)):
-        p = fakebin / exe
-        p.write_text(body)
-        p.chmod(0o755)
+    p = fakebin / "docker"
+    p.write_text(FAKE_DOCKER)
+    p.chmod(0o755)
     return tmp_path
 
 
@@ -73,7 +52,6 @@ def run_lib(
     env["VOXINT_INSTALL_LIB"] = "1"
     env["PATH"] = f"{repo / 'fakebin'}:{env['PATH']}"
     env["FAKE_DOCKER_LOG"] = str(repo / "docker.log")
-    env["FAKE_CURL_LOG"] = str(repo / "curl.log")
     if extra_env:
         env.update(extra_env)
     full = f'source "{repo}/scripts/install.sh"\n{script}'

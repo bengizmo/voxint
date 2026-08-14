@@ -17,7 +17,9 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r voxint && useradd -r -g voxint -s /bin/bash voxint
 
-RUN pip3 install --no-cache-dir --upgrade pip setuptools wheel
+# setuptools pinned <81: pyannote.database imports pkg_resources at startup,
+# which setuptools 81 removed (same pin + boot canary as Dockerfile.cpu).
+RUN pip3 install --no-cache-dir --upgrade pip wheel "setuptools>=70,<81"
 
 # numpy first, then torch from the cu118 index, then everything else — the
 # order prevents the resolver from dragging in incompatible torch builds.
@@ -28,6 +30,9 @@ RUN pip3 install --no-cache-dir \
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
+# Build-time boot canary: if a future requirements resolve drags setuptools
+# past 81 (or anything else breaks pkg_resources), fail HERE, not at startup.
+RUN python3 -c "import pkg_resources"
 
 WORKDIR /app
 # Weights cache for the optional online HF path (DIARIZER_MODEL_NAME override);
@@ -41,9 +46,12 @@ RUN mkdir -p /app/models && chown -R voxint:voxint /app
 # path substrings (see models/config.vendored.yaml).
 ARG SEGMENTATION_SHA256=da85c29829d4002daedd676e012936488234d9255e65e86dfab9bec6b1729298
 ARG WESPEAKER_SHA256=366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56
-COPY models/config.vendored.yaml /app/vendored/config.yaml
-COPY models/segmentation-3.0.bin /app/vendored/pyannote/segmentation-3.0.bin
-COPY models/wespeaker-voxceleb-resnet34-LM.bin /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin
+COPY --chown=voxint:voxint models/config.vendored.yaml /app/vendored/config.yaml
+# provenance.json ships in-image: the image itself redistributes the weights,
+# so the CC-BY-4.0/MIT attribution travels with them.
+COPY --chown=voxint:voxint models/provenance.json /app/vendored/provenance.json
+COPY --chown=voxint:voxint models/segmentation-3.0.bin /app/vendored/pyannote/segmentation-3.0.bin
+COPY --chown=voxint:voxint models/wespeaker-voxceleb-resnet34-LM.bin /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin
 RUN printf '%s\n' \
       "${SEGMENTATION_SHA256}  /app/vendored/pyannote/segmentation-3.0.bin" \
       "${WESPEAKER_SHA256}  /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin" \

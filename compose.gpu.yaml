@@ -43,8 +43,10 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
-      # Optional: only used when DIARIZER_MODEL_NAME points at a Hugging Face
-      # repo — the default vendored pipeline is baked into the image.
+      # Optional overrides: the default vendored pipeline is baked into the
+      # image; DIARIZER_MODEL_NAME selects a different (HF) pipeline, and
+      # HF_TOKEN is only used when that pipeline is gated.
+      DIARIZER_MODEL_NAME: ${DIARIZER_MODEL_NAME:-}
       HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro

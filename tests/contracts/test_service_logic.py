@@ -282,6 +282,57 @@ class TestWhisperFlavorPinParity:
         assert "torch" not in rocm, "the rocm image is torch-free by design"
 
 
+class TestDiarizerModelResolution:
+    """The offline-by-default model resolution that closes issue #24: explicit
+    DIARIZER_MODEL_NAME > existing vendored config > HF repo id fallback —
+    with /healthz always reporting the canonical pipeline identity unless an
+    explicit override changes it."""
+
+    CANONICAL = "pyannote/speaker-diarization-3.1"
+
+    def test_explicit_model_name_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIARIZER_MODEL_NAME", "someorg/custom-pipeline")
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        d = diarizer.Diarizer()
+        assert d.model_name == "someorg/custom-pipeline"
+        assert d.model_source == "someorg/custom-pipeline"
+        assert d.model_is_local is False
+
+    def test_vendored_config_is_default_and_keeps_canonical_identity(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        vendored = tmp_path / "config.yaml"  # type: ignore[operator]
+        vendored.write_text("version: 3.1.0\n")
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", str(vendored))
+        d = diarizer.Diarizer()
+        assert d.model_name == self.CANONICAL  # /healthz identity contract
+        assert d.model_source == str(vendored)
+        assert d.model_is_local is True
+
+    def test_unset_vendored_and_missing_default_falls_back_to_hf(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Bare-host venv runs: no env, no /app/vendored — the online HF path
+        # is the only option and identity stays canonical.
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.delenv("VOXINT_VENDORED_PIPELINE", raising=False)
+        d = diarizer.Diarizer()
+        assert d.model_name == self.CANONICAL
+        assert d.model_source == self.CANONICAL
+        assert d.model_is_local is False
+
+    def test_explicitly_configured_missing_vendored_path_fails_fast(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A typo'd/broken explicit vendored path must not silently degrade to
+        # a gated network fetch.
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        with pytest.raises(RuntimeError, match="does not exist"):
+            diarizer.Diarizer()
+
+
 class TestDeviceCascade:
     """pyannote's cuda → mps → cpu selection, every candidate probe-gated."""
 
@@ -582,6 +633,56 @@ class TestCpuImageProvenance:
         assert f"embedding: {embedding}" in config
         assert "segmentation: /app/vendored/pyannote/segmentation-3.0.bin" in config
         assert "pyannote" in embedding
+
+    @pytest.mark.parametrize("dockerfile_name", ["Dockerfile", "Dockerfile.cpu"])
+    def test_pyannote_dockerfiles_bake_the_vendored_tree(self, dockerfile_name: str) -> None:
+        # The sha ARGs alone don't guarantee the checkpoints land where the
+        # vendored config points: a one-sided edit of a COPY destination
+        # builds green and fails only at container boot. Pin the full wiring.
+        from tests.contracts.conftest import REPO_ROOT
+
+        dockerfile = (REPO_ROOT / "services" / "pyannote" / dockerfile_name).read_text()
+        for line in (
+            "models/config.vendored.yaml /app/vendored/config.yaml",
+            "models/provenance.json /app/vendored/provenance.json",
+            "models/segmentation-3.0.bin /app/vendored/pyannote/segmentation-3.0.bin",
+            "models/wespeaker-voxceleb-resnet34-LM.bin"
+            " /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin",
+            "ENV VOXINT_VENDORED_PIPELINE=/app/vendored/config.yaml",
+        ):
+            assert line in dockerfile, f"{dockerfile_name} lost: {line}"
+
+    def test_pyannote_vendored_config_params_match_provenance(self) -> None:
+        # The sha gates cover the checkpoints; the pipeline hyperparameters in
+        # the vendored config are pinned here against the values recorded from
+        # the upstream config at its pinned revision — a silent edit to
+        # clustering/segmentation params must fail a contract, not ship.
+        import json
+
+        import yaml
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        models_dir = REPO_ROOT / "services" / "pyannote" / "models"
+        cfg = yaml.safe_load((models_dir / "config.vendored.yaml").read_text())
+        pinned = json.loads((models_dir / "provenance.json").read_text())["pipeline_params"]
+
+        assert str(cfg["version"]) == pinned["version"]
+        assert cfg["pipeline"]["name"] == pinned["pipeline_name"]
+        pp = cfg["pipeline"]["params"]
+        assert pp["clustering"] == pinned["clustering"]
+        assert pp["embedding_batch_size"] == pinned["embedding_batch_size"]
+        assert pp["embedding_exclude_overlap"] == pinned["embedding_exclude_overlap"]
+        assert pp["segmentation_batch_size"] == pinned["segmentation_batch_size"]
+        clustering = cfg["params"]["clustering"]
+        assert clustering["method"] == pinned["clustering_method"]
+        assert clustering["min_cluster_size"] == pinned["clustering_min_cluster_size"]
+        assert clustering["threshold"] == pytest.approx(
+            pinned["clustering_threshold"], abs=0.0
+        )
+        assert cfg["params"]["segmentation"]["min_duration_off"] == pytest.approx(
+            pinned["segmentation_min_duration_off"], abs=0.0
+        )
 
     def test_cpu_requirements_mirror_cuda_preprocess_pins(self) -> None:
         from tests.contracts.conftest import REPO_ROOT

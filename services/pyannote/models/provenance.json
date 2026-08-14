@@ -4,6 +4,19 @@
   "pipeline": "pyannote/speaker-diarization-3.1",
   "pipeline_revision": "84fd25912480287da0247647c3d2b4853cb3ee5d",
   "pyannote_audio_version": "3.1.1",
+  "pipeline_params": {
+    "note": "verbatim from the upstream config.yaml at the pinned revision; config.vendored.yaml must match these exactly (contract-tested) — only the two model references are repointed",
+    "version": "3.1.0",
+    "pipeline_name": "pyannote.audio.pipelines.SpeakerDiarization",
+    "clustering": "AgglomerativeClustering",
+    "embedding_batch_size": 32,
+    "embedding_exclude_overlap": true,
+    "segmentation_batch_size": 32,
+    "clustering_method": "centroid",
+    "clustering_min_cluster_size": 12,
+    "clustering_threshold": 0.7045654963945799,
+    "segmentation_min_duration_off": 0.0
+  },
   "files": {
     "segmentation-3.0.bin": {
       "upstream_repo": "pyannote/segmentation-3.0",

@@ -558,6 +558,11 @@ resolve_kept_env_tier() {
   fi
   EFFECTIVE_TIER=$tier
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
+  # Validate the kept .env against the file set that will actually start, so
+  # a hand-edited .env fails here with a clear message instead of mid-`up`.
+  if ! dc config --quiet >/dev/null 2>&1; then
+    fail "The existing .env failed Compose validation for the recorded tier ($tier). Fix it or re-run and choose to regenerate."
+  fi
 }
 
 backup_env() {
@@ -757,8 +762,8 @@ print_handoff() {
   case $EFFECTIVE_TIER in
     cpu)
       say " The CPU-tier model services were STARTED alongside the core stack."
-      say " They may still be booting or downloading model weights on a first"
-      say " run -- check their status before submitting audio:"
+      say " They may still be booting and loading models on a first run --"
+      say " check their status before submitting audio:"
       say "   docker compose -f compose.yaml -f compose.cpu.yaml ps"
       say " Expect CPU inference to be much slower than a GPU -- a long recording"
       say " can take hours. Slow-but-healthy runs are protected by the CPU timing"
@@ -769,8 +774,8 @@ print_handoff() {
       ;;
     gpu)
       say " The GPU-tier model services were STARTED alongside the core stack."
-      say " They may still be booting or downloading model weights on a first"
-      say " run -- check their status before submitting audio:"
+      say " They may still be booting and loading models on a first run --"
+      say " check their status before submitting audio:"
       say "   docker compose -f compose.yaml -f compose.gpu.yaml ps"
       say " A run submitted before they are ready retries with backoff, so a"
       say " brief warmup is harmless; if a run does land failed, requeue it from"
@@ -783,8 +788,8 @@ print_handoff() {
       say " The AMD (ROCm) model services were STARTED alongside the core stack."
       say " Transcription runs on the AMD GPU; diarization and speaker embedding"
       say " run on CPU (see docs/operations.md for why). Services may still be"
-      say " booting or downloading model weights on a first run -- check their"
-      say " status before submitting audio:"
+      say " booting and loading models on a first run -- check their status"
+      say " before submitting audio:"
       say "   docker compose -f compose.yaml -f compose.rocm.yaml ps"
       say " The CPU-bound stages are protected by the rocm timing profile"
       say " (COMPUTE_TIER=rocm)."

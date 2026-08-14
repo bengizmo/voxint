@@ -44,7 +44,10 @@ use `pull_policy: never` on the local tag and fail fast if it's missing):
 # app image only (core stack):
 docker compose -f compose.yaml -f compose.build.yaml build api
 docker compose -f compose.yaml -f compose.build.yaml up -d
-# app + GPU model services:
+# app + GPU model services. The pyannote build needs the vendored checkpoints
+# in place first (they are gitignored; sha256s in services/pyannote/models/provenance.json):
+gh release download pyannote-models-v1 -R bengizmo/voxint \
+   --pattern '*.bin' --dir services/pyannote/models
 docker compose -f compose.yaml -f compose.gpu.yaml \
                -f compose.build.yaml -f compose.gpu.build.yaml \
                build api whisper pyannote titanet

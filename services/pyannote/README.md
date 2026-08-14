@@ -46,7 +46,7 @@ pyannote.audio 3.1.1 · huggingface_hub 0.23.4 (pin — 0.26+ removes the
 `use_auth_token=` kwarg pyannote 3.1.1 uses). VRAM: ~1–2 GB loaded.
 
 ```bash
-docker pull ghcr.io/bengizmo/voxint-pyannote:0.4.0  # prebuilt release image
+docker pull ghcr.io/bengizmo/voxint-pyannote:0.5.1  # prebuilt release image
 docker build -t voxint-pyannote services/pyannote   # …or build from source
 docker run --rm --gpus all -p 127.0.0.1:8024:8024 \
   -v /path/to/media:/data/media:ro voxint-pyannote
