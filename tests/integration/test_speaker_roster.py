@@ -457,3 +457,112 @@ def test_matching_gates_still_default() -> None:
     # Guard: the module-level GATES fixture must stay at defaults — several
     # geometry assertions above depend on the grounded thresholds.
     assert MatchingGates() == GATES
+
+
+def test_merge_when_both_speakers_hold_assignments_in_same_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Regression pin: the proposal key is (run, label, method) — speaker_id is
+    NOT part of it, so repointing source rows can never collide with the
+    target's rows in the same run. (A review raised this as a suspected
+    IntegrityError; this proves the schema reasoning executable.)"""
+    with session_factory() as session:
+        run_id, alice, bob = seed_two_speakers(session)
+        replace_run_proposals(
+            session,
+            run_id,
+            (
+                CosineProposal(
+                    diarization_label="S0",
+                    speaker_id=alice,
+                    similarity=0.95,
+                    margin=0.5,
+                    vote_agreement=1.0,
+                    grounded=True,
+                ),
+                CosineProposal(
+                    diarization_label="S1",
+                    speaker_id=bob,
+                    similarity=0.95,
+                    margin=0.5,
+                    vote_agreement=1.0,
+                    grounded=True,
+                ),
+            ),
+            (),
+        )
+        session.commit()
+
+        result = merge_speakers(session, bob, alice)
+        session.commit()
+
+        assert result.assignments_moved == 1
+        rows = session.execute(
+            select(SpeakerAssignment.diarization_label, SpeakerAssignment.speaker_id)
+        ).all()
+        assert sorted(rows) == [("S0", alice), ("S1", alice)]
+
+
+def test_replace_run_proposals_drops_stale_proposal_for_curated_speaker(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Lifecycle race guard: a proposal computed before an archive landed is
+    dropped at write time instead of resurrecting the curated-away speaker."""
+    with session_factory() as session:
+        run_id, alice, bob = seed_two_speakers(session)
+        archive_speaker(session, bob)
+        session.commit()
+        replace_run_proposals(
+            session,
+            run_id,
+            (
+                CosineProposal(
+                    diarization_label="S0",
+                    speaker_id=alice,
+                    similarity=0.95,
+                    margin=0.5,
+                    vote_agreement=1.0,
+                    grounded=True,
+                ),
+                CosineProposal(
+                    diarization_label="S1",
+                    speaker_id=bob,  # stale: archived after compute
+                    similarity=0.95,
+                    margin=0.5,
+                    vote_agreement=1.0,
+                    grounded=True,
+                ),
+            ),
+            (),
+        )
+        session.commit()
+        rows = session.execute(select(SpeakerAssignment.speaker_id)).scalars().all()
+        assert rows == [alice]
+
+
+def test_voiceprint_uses_dominant_space_only() -> None:
+    """A multi-space speaker's strip derives from ONE space, never a cross-space
+    mean (the repo's one-space rule applies to presentation too)."""
+    from datetime import UTC, datetime
+
+    from voxint.speakers.roster import EmbeddingInfo, voiceprint_bars
+
+    def info(space: str, vector: tuple[float, ...] | None) -> EmbeddingInfo:
+        return EmbeddingInfo(
+            id=uuid.uuid4(),
+            embedding_space=space,
+            created_at=datetime.now(UTC),
+            source_pipeline_run_id=None,
+            source_diarization_label=None,
+            vector=vector,
+        )
+
+    a = (1.0,) + (0.0,) * 191
+    b = (0.0, 1.0) + (0.0,) * 190
+    dominant_only = voiceprint_bars([info("space-a", a), info("space-a", a)])
+    mixed = voiceprint_bars(
+        [info("space-a", a), info("space-a", a), info("space-b", b)]
+    )
+    assert dominant_only == mixed  # space-b's vector never contaminates the strip
+    # Entries without loaded vectors (inactive speakers) are ignored entirely.
+    assert voiceprint_bars([info("space-a", None)]) is None

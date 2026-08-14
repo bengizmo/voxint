@@ -38,6 +38,7 @@ Design notes:
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import uuid
@@ -75,6 +76,8 @@ from voxint.speakers.matching import (
 )
 from voxint.speakers.roster import canonicalize, merge_map
 from voxint.tutorial import resources
+
+logger = logging.getLogger(__name__)
 
 # Stable identity of the bundled sample under MEDIA_ROOT — a reserved sentinel,
 # reused across rebuilds so its UNIQUE source_path never collides after a run
@@ -203,14 +206,28 @@ def _get_or_create_roster_speaker(
             if speaker is None:
                 raise  # not the expected UNIQUE(display_name) race — surface it
     # Roster curation (issue #7) may have merged or archived a previously seeded
-    # tutorial speaker; the tutorial needs its grounded anchor active again.
+    # tutorial speaker; the tutorial needs its grounded anchor active again. A
+    # merge is followed to the canonical identity (the tutorial centroid moved
+    # with it), but auto-restoring is reserved for the tutorial's own identity —
+    # un-archiving a REAL speaker the operator deliberately archived, just
+    # because the tutorial anchor was merged into it, would silently undo their
+    # curation. In that case the seed proceeds without touching deleted_at and
+    # says so; the operator restores by hand if they want the tutorial grounded.
     if speaker.merged_into_id is not None:
-        canonical_id = canonicalize(speaker.id, merge_map(session))
-        canonical = session.get(Speaker, canonical_id)
-        assert canonical is not None  # FK guarantees the merge target exists
+        canonical = session.get(Speaker, canonicalize(speaker.id, merge_map(session)))
+        if canonical is None:  # FK makes this unreachable; fail loud, not silent
+            raise TutorialSeedError("tutorial speaker merge target missing")
         speaker = canonical
     if speaker.deleted_at is not None:
-        speaker.deleted_at = None
+        if speaker.display_name == name:
+            speaker.deleted_at = None
+        else:
+            logger.warning(
+                "tutorial anchor was merged into archived speaker %r;"
+                " leaving it archived — restore it via /speakers to re-ground"
+                " the tutorial",
+                speaker.display_name,
+            )
     has_embedding = session.execute(
         select(SpeakerEmbedding.id).where(
             SpeakerEmbedding.speaker_id == speaker.id,

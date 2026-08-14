@@ -224,3 +224,20 @@ def test_not_found_and_stale_target(
     )
     assert resp.status_code == 200
     assert "no longer an active" in resp.text
+
+
+def test_display_names_are_escaped_in_attributes_and_text(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Names land inside attribute values (input value, aria-label, hx-confirm)
+    and text nodes — autoescape must neutralize quotes and angle brackets."""
+    alice, _ = seed_roster(session_factory)
+    hostile = 'Al "x" <b>&\''
+    resp = client.post(
+        f"/speakers/{alice}/rename",
+        data={"display_name": hostile, "csrf_token": token(CSRF_ROSTER_RENAME)},
+        headers={"HX-Request": "true"},
+    )
+    assert resp.status_code == 200
+    assert "<b>" not in resp.text
+    assert 'Al &#34;x&#34; &lt;b&gt;&amp;&#39;' in resp.text

@@ -1286,7 +1286,14 @@ def _register_routes(app: FastAPI) -> None:
                 status_code=422, detail="assign requires speaker_id; others forbid it"
             )
         if speaker_id is not None:
-            speaker = session.get(Speaker, speaker_id)
+            # FOR SHARE: a concurrent archive/merge takes FOR UPDATE on this
+            # row, so the active check and the ledger append below serialize
+            # with roster curation instead of racing it.
+            speaker = session.execute(
+                select(Speaker)
+                .where(Speaker.id == speaker_id)
+                .with_for_update(read=True)
+            ).scalar_one_or_none()
             if speaker is None:
                 raise HTTPException(status_code=422, detail=f"no speaker {speaker_id}")
             if not roster_is_active(speaker):

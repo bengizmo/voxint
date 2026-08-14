@@ -34,9 +34,6 @@ from voxint.speakers.matching import (
     label_centroid,
 )
 from voxint.speakers.roster import (
-    MAX_DISPLAY_NAME_LENGTH as MAX_DISPLAY_NAME_LENGTH,  # re-export (API imports it here)
-)
-from voxint.speakers.roster import (
     describe_name_owner,
     is_active,
     normalize_display_name,

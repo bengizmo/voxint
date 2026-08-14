@@ -44,15 +44,17 @@ MAX_DISPLAY_NAME_LENGTH = 120
 
 
 class RosterError(Exception):
-    """The operation cannot proceed as requested — operator-visible (HTTP 400)."""
+    """The operation cannot proceed as requested. Operator-visible: the API
+    re-renders the roster with this message inline (htmx swaps need a 2xx)."""
 
 
 class RosterConflictError(RosterError):
-    """The roster changed under the operator's form — retry after a refresh (409)."""
+    """The roster changed under the operator's form — rendered inline like any
+    ``RosterError``; the refreshed roster the response carries IS the retry."""
 
 
 class RosterNotFoundError(RosterError):
-    """The referenced speaker or embedding does not exist (404)."""
+    """The referenced speaker or embedding does not exist (HTTP 404)."""
 
 
 def normalize_display_name(raw: str) -> str:
@@ -137,7 +139,9 @@ class EmbeddingInfo:
     created_at: datetime
     source_pipeline_run_id: uuid.UUID | None
     source_diarization_label: str | None
-    vector: tuple[float, ...]
+    # Loaded only for ACTIVE speakers (voiceprint rendering); None on tombstones
+    # and archived entries, whose vectors the page never shows.
+    vector: tuple[float, ...] | None
 
 
 @dataclass(frozen=True)
@@ -163,10 +167,27 @@ def roster_overview(session: Session) -> RosterOverview:
     )
     by_id = {s.id: s for s in speakers}
 
+    # Vectors are heavy (192 floats each) and only the active entries' voiceprints
+    # consume them — fetch provenance for everyone, vectors for active speakers only.
+    vectors: dict[uuid.UUID, tuple[float, ...]] = {
+        embedding_id: tuple(float(v) for v in embedding)
+        for embedding_id, embedding in session.execute(
+            select(SpeakerEmbedding.id, SpeakerEmbedding.embedding)
+            .join(Speaker, Speaker.id == SpeakerEmbedding.speaker_id)
+            .where(active_speaker_clause())
+        )
+    }
     embeddings: dict[uuid.UUID, list[EmbeddingInfo]] = {}
     for row in session.execute(
-        select(SpeakerEmbedding).order_by(SpeakerEmbedding.created_at)
-    ).scalars():
+        select(
+            SpeakerEmbedding.id,
+            SpeakerEmbedding.speaker_id,
+            SpeakerEmbedding.embedding_space,
+            SpeakerEmbedding.created_at,
+            SpeakerEmbedding.source_pipeline_run_id,
+            SpeakerEmbedding.source_diarization_label,
+        ).order_by(SpeakerEmbedding.created_at)
+    ):
         embeddings.setdefault(row.speaker_id, []).append(
             EmbeddingInfo(
                 id=row.id,
@@ -174,7 +195,7 @@ def roster_overview(session: Session) -> RosterOverview:
                 created_at=row.created_at,
                 source_pipeline_run_id=row.source_pipeline_run_id,
                 source_diarization_label=row.source_diarization_label,
-                vector=tuple(float(v) for v in row.embedding),
+                vector=vectors.get(row.id),
             )
         )
 
@@ -210,7 +231,17 @@ def roster_overview(session: Session) -> RosterOverview:
     return RosterOverview(active=tuple(active), inactive=tuple(inactive))
 
 
-def _require_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker:
+def _require_speaker(
+    session: Session, speaker_id: uuid.UUID, *, for_update: bool = False
+) -> Speaker:
+    """Fetch a speaker or raise. ``for_update`` takes the row lock every
+    lifecycle mutation must hold, so archive/restore/embedding-delete serialize
+    with merge (which locks the same rows) instead of racing the not-merged-
+    and-deleted CHECK into an IntegrityError 500."""
+    if for_update:
+        session.execute(
+            select(Speaker.id).where(Speaker.id == speaker_id).with_for_update()
+        )
     speaker = session.get(Speaker, speaker_id)
     if speaker is None:
         raise RosterNotFoundError("speaker not found")
@@ -220,7 +251,7 @@ def _require_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker:
 def rename_speaker(session: Session, speaker_id: uuid.UUID, new_name: str) -> Speaker:
     """Rename an active speaker. Pure metadata — decisions store ids, never
     names, so historical attribution re-renders under the new name."""
-    speaker = _require_speaker(session, speaker_id)
+    speaker = _require_speaker(session, speaker_id, for_update=True)
     if not is_active(speaker):
         raise RosterError("only active speakers can be renamed")
     try:
@@ -338,7 +369,7 @@ def merge_speakers(
 def archive_speaker(session: Session, speaker_id: uuid.UUID) -> int:
     """Reversibly archive a speaker and delete its cosine assignments (stale
     machine grounding must not survive). Returns assignments deleted."""
-    speaker = _require_speaker(session, speaker_id)
+    speaker = _require_speaker(session, speaker_id, for_update=True)
     if speaker.merged_into_id is not None:
         raise RosterError("merged speakers are historical tombstones — nothing to archive")
     if speaker.deleted_at is not None:
@@ -363,9 +394,11 @@ def archive_speaker(session: Session, speaker_id: uuid.UUID) -> int:
 def restore_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker:
     """Reverse an archive. Deleted machine assignments are NOT resurrected —
     matching re-proposes on future runs."""
-    speaker = _require_speaker(session, speaker_id)
+    speaker = _require_speaker(session, speaker_id, for_update=True)
     if speaker.merged_into_id is not None:
         raise RosterError("merged speakers cannot be restored — they live on in the target")
+    if speaker.deleted_at is None:
+        return speaker  # replayed restore — already active
     speaker.deleted_at = None
     session.flush()
     return speaker
@@ -391,7 +424,7 @@ def delete_embedding(
     All of the speaker's cosine assignments are deleted with it — they may have
     been grounded through this centroid and carry no lineage to prove otherwise.
     """
-    speaker = _require_speaker(session, speaker_id)
+    speaker = _require_speaker(session, speaker_id, for_update=True)
     embedding = session.get(SpeakerEmbedding, embedding_id)
     if embedding is None or embedding.speaker_id != speaker_id:
         raise RosterNotFoundError("embedding not found for this speaker")
@@ -443,13 +476,20 @@ def voiceprint_bars(
 ) -> list[float] | None:
     """Deterministic bar heights (0..1) derived from a speaker's centroid.
 
-    Presentation, not comparison: the mean embedding is chunked and rectified
-    into a small "voiceprint" strip so the operator can tell speakers apart at
-    a glance on the roster page. Same embeddings -> same strip, always.
+    Presentation, not comparison — but the one-space rule still applies: a
+    speaker enrolled in several spaces gets its strip from the space with the
+    most embeddings (ties break lexicographically), never from a cross-space
+    mean, so "same voice → same strip" holds within the chosen space.
+    Entries without a loaded vector (inactive speakers) are ignored.
     """
-    if not entries:
+    with_vectors = [e for e in entries if e.vector is not None]
+    if not with_vectors:
         return None
-    vectors = np.asarray([e.vector for e in entries], dtype=np.float64)
+    by_space: dict[str, list[EmbeddingInfo]] = {}
+    for entry in with_vectors:
+        by_space.setdefault(entry.embedding_space, []).append(entry)
+    chosen = min(by_space, key=lambda space: (-len(by_space[space]), space))
+    vectors = np.asarray([e.vector for e in by_space[chosen]], dtype=np.float64)
     mean = vectors.mean(axis=0)
     norm = float(np.linalg.norm(mean))
     if norm > 0.0:

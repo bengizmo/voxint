@@ -284,6 +284,33 @@ def replace_run_proposals(
         if not name or len(name) > MAX_PROPOSED_NAME_LENGTH:
             raise ProposalError(f"invalid proposed name: {hint.proposed_name!r:.200}")
 
+    # Roster lifecycle race guard: proposals were computed from a snapshot of
+    # the roster, but archive/merge/embedding-removal may have landed since.
+    # Re-check activity here, under FOR SHARE locks so a concurrent lifecycle
+    # mutation (which takes FOR UPDATE) serializes with this write — a stale
+    # proposal for a curated-away speaker is dropped, mirroring what the
+    # curation itself would have purged.
+    proposal_speaker_ids = {cp.speaker_id for cp in cosine}
+    if proposal_speaker_ids:
+        active_ids = set(
+            session.execute(
+                select(Speaker.id)
+                .where(Speaker.id.in_(proposal_speaker_ids), active_speaker_clause())
+                .with_for_update(read=True)
+            ).scalars()
+        )
+        stale = tuple(cp for cp in cosine if cp.speaker_id not in active_ids)
+        if stale:
+            for cp in stale:
+                logger.warning(
+                    "run %s label %s: dropping proposal for speaker %s —"
+                    " no longer an active roster identity",
+                    run_id,
+                    cp.diarization_label,
+                    cp.speaker_id,
+                )
+            cosine = tuple(cp for cp in cosine if cp.speaker_id in active_ids)
+
     session.execute(
         delete(SpeakerAssignment).where(SpeakerAssignment.pipeline_run_id == run_id)
     )
