@@ -95,13 +95,13 @@ def _kill_process_group(
     descendants (a fragment fetcher, a muxer) are still alive, silently leaving
     them running. Escalate to SIGKILL after the grace period regardless of whether
     the leader itself has reaped, so a descendant that ignored SIGTERM cannot
-    outlive us. ``ProcessLookupError`` (an already-empty group) is benign.
+    outlive us. A failing teardown signal is benign and must never escape to mask
+    the redacted ``AcquisitionError``: ``ProcessLookupError`` (ESRCH, an
+    already-empty group) on every platform, and on macOS/BSD also
+    ``PermissionError`` (EPERM) — which ``killpg`` returns instead of ESRCH once
+    the leader has been reaped and the survivor is a zombie reparented to launchd.
+    Both are suppressed on both signals.
     """
-    # On macOS/BSD, once the leader has been reaped and the survivor is a zombie
-    # reparented to launchd, ``killpg`` returns EPERM (``PermissionError``) rather
-    # than the ESRCH (``ProcessLookupError``) Linux gives — equally benign here,
-    # since we are only tearing the group down on a timeout. Suppress both so a
-    # cleanup signal never escapes and masks the redacted ``AcquisitionError``.
     pgid = proc.pid
     with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGTERM)

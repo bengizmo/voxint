@@ -283,7 +283,11 @@ resolve_port() {
   # $def would let a macOS/BSD backlog-full misread (see port_in_use) return the
   # busy port right back as the "alternate". +1 guarantees a distinct suggestion.
   if [ "$def" -ge 65535 ]; then
-    suggested=$def   # no port above 65535 to offer; prompt validates the answer
+    # No port above 65535 exists to offer. Leave the suggestion EMPTY rather than
+    # defaulting the prompt to the known-busy $def (which would violate the
+    # "offered alternate never equals the busy port" invariant); the loop below
+    # then requires the operator to type a valid free port.
+    suggested=
   else
     suggested=$(next_free_port "$((def + 1))")
   fi

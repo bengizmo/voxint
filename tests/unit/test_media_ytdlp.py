@@ -121,6 +121,28 @@ def test_kill_process_group_swallows_eperm(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+def test_kill_process_group_does_not_swallow_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guard against the suppression widening to `suppress(Exception)`: only the
+    two benign errnos (ESRCH/EPERM) are swallowed. A genuinely unexpected teardown
+    error must still propagate, not be hidden."""
+
+    class _FakeProc:
+        pid = 424242
+
+        def wait(self, timeout: float | None = None) -> int:
+            return 0
+
+    def _fake_killpg(pgid: int, sig: int) -> None:
+        raise RuntimeError("unexpected teardown failure")
+
+    monkeypatch.setattr(os, "killpg", _fake_killpg)
+
+    with pytest.raises(RuntimeError, match="unexpected teardown failure"):
+        _kill_process_group(_FakeProc(), grace_seconds=0.0)  # type: ignore[arg-type]
+
+
 def test_timeout_error_does_not_leak_argv_in_traceback() -> None:
     """The timeout AcquisitionError must NOT chain the raw TimeoutExpired, whose
     __str__ embeds the whole argv (the signed source URL). Assert the sentinel is

@@ -524,19 +524,19 @@ class TestMelConstantsPinnedToCheckpoint:
         assert cfg["frame_splicing"] == 1  # mel.py implements splicing == 1 only
 
     def test_frame_count_formula(self) -> None:
-        # mel_spectrogram() lazily imports librosa (mel.py:_filterbank); librosa
-        # ships only in the optional `parity` extra, so skip cleanly rather than
-        # hard-fail on a `uv sync --extra dev` checkout. Still runs in the parity
-        # lane (`uv run --extra dev --extra parity pytest`).
-        pytest.importorskip("librosa")
         mel = load_service_module("titanet", "mel")
         # floor(L / hop) + 1; output is exactly the valid frames — NEVER padded
         # to NeMo's pad_to (the exported graph has no conv masking, so padding
         # leaks into convolutions; measured 0.988 vs 0.999999 cosine on 1 s).
-        audio = np.zeros(16000, dtype=np.float32)
-        out = mel.mel_spectrogram(audio)
+        # This frame-count arithmetic is pure (no librosa) — always runs.
         valid = mel.num_valid_frames(16000)
         assert valid == 101
+        # mel_spectrogram() lazily imports librosa (mel.py:_filterbank), which
+        # ships only in the optional `parity` extra — skip just the spectrogram
+        # shape check on a `uv sync --extra dev` checkout (it still runs in the
+        # parity lane: `uv run --extra dev --extra parity pytest`).
+        pytest.importorskip("librosa")
+        out = mel.mel_spectrogram(np.zeros(16000, dtype=np.float32))
         assert out.shape == (mel.N_MELS, valid)
 
 
@@ -557,13 +557,16 @@ class TestMelEdgeCases:
             mel.mel_spectrogram(np.zeros(511, dtype=np.float32))
 
     def test_frame_count_table(self) -> None:
-        # See test_frame_count_formula: mel_spectrogram() needs librosa (parity
-        # extra); skip cleanly when it is absent rather than erroring.
-        pytest.importorskip("librosa")
         mel = load_service_module("titanet", "mel")
         # floor(L / hop) + 1 across the range the service can produce.
-        for samples, frames in [(512, 4), (16000, 101), (16001, 101), (16160, 102), (64000, 401)]:
+        table = [(512, 4), (16000, 101), (16001, 101), (16160, 102), (64000, 401)]
+        # Frame-count arithmetic is pure (no librosa) — always runs.
+        for samples, frames in table:
             assert mel.num_valid_frames(samples) == frames, samples
+        # The spectrogram shape check needs librosa (parity extra); skip only that
+        # part on a librosa-less dev lane — it still runs under `--extra parity`.
+        pytest.importorskip("librosa")
+        for samples, frames in table:
             out = mel.mel_spectrogram(np.zeros(samples, dtype=np.float32))
             assert out.shape == (mel.N_MELS, frames), samples
 

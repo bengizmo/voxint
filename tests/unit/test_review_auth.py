@@ -81,8 +81,10 @@ def test_default_or_empty_credentials_refused_off_loopback(password: str) -> Non
         Settings(api_host="0.0.0.0", voxint_password=password)
 
 
-def test_default_credentials_fine_on_loopback() -> None:
-    # Hermetic: _env_file=None makes pydantic-settings skip the dotenv, so this
-    # exercises the code default rather than whatever .env is on disk (an
-    # installed .env would otherwise override voxint_password and fail this).
+def test_default_credentials_fine_on_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fully hermetic: exercise the *code* default, not the ambient environment.
+    # Settings source precedence is init kwargs > process env > dotenv, so both
+    # need neutralizing: _env_file=None skips any on-disk .env, and delenv drops
+    # an exported VOXINT_PASSWORD (either would otherwise flip this assertion).
+    monkeypatch.delenv("VOXINT_PASSWORD", raising=False)
     assert Settings(api_host="127.0.0.1", _env_file=None).voxint_password == "change-me"
