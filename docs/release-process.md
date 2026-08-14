@@ -12,12 +12,14 @@ because the image workflow only runs on GitHub (`release.yml` is guarded by
 | `ghcr.io/bengizmo/voxint:X.Y.Z` (app: api/worker/beat/migrate) — **multi-arch amd64+arm64** | GHCR | `release.yml` `build-multiarch` → `merge-multiarch` |
 | `ghcr.io/bengizmo/voxint-{whisper,pyannote,titanet}:X.Y.Z` (CUDA, amd64) | GHCR | `release.yml` `publish-images` matrix |
 | `ghcr.io/bengizmo/voxint-{whisper,pyannote,titanet}:X.Y.Z-cpu` — **multi-arch amd64+arm64** | GHCR | `release.yml` `build-multiarch` → `merge-multiarch` |
+| `ghcr.io/bengizmo/voxint-whisper:X.Y.Z-rocm` (AMD GPU, amd64, build-only in CI — see Gate R) | GHCR | `release.yml` `publish-whisper-rocm` |
 | `voxint X.Y.Z` sdist + wheel | PyPI | manual `uv build` + `uv publish` (not in CI) |
 | Release notes | GitHub Releases | manual `gh release create` |
 
 Tag semantics (immutable exact-semver, per the non-NVIDIA plan): unsuffixed
-model-service tags are **CUDA**; `-cpu` is the multi-arch CPU flavor; a future
-`-rocm` is AMD. `docker/metadata-action` also emits mutable `X.Y` / `X.Y-cpu`
+model-service tags are **CUDA**; `-cpu` is the multi-arch CPU flavor;
+`-rocm` is the AMD whisper flavor (amd64). `docker/metadata-action` also
+emits mutable `X.Y` / `X.Y-cpu` / `X.Y-rocm`
 tags for full releases; compose files must keep referencing the exact `X.Y.Z`.
 Pre-release versions (e.g. `v0.0.0-test`) get only their exact tag — useful for
 exercising the workflow without polluting `X.Y`.
@@ -62,8 +64,11 @@ assets under an existing tag are immutable by policy, never replaced.
   `services/whisper/Dockerfile.rocm` on an AMD box, run it via the
   `compose.rocm.yaml` passthrough stanza against the parity corpus, and
   assert `/healthz device: rocm` + a correct transcription at GPU speed.
-  The CT2 ROCm wheel is sha256-pinned in the Dockerfile, so the CI build is
-  byte-reproducible against what was smoked.
+  The CT2 ROCm wheel is sha256-pinned in the Dockerfile; the ROCm userspace
+  debs are suite-pinned (`apt/7.0.2`) and the ubuntu:24.04 base floats, so
+  the CI build is engine-identical — not byte-identical — to what was
+  smoked. After the release publishes, optionally re-run the smoke against
+  the published `X.Y.Z-rocm` tag on the AMD box.
 
 ## Cutting a release
 

@@ -10,8 +10,9 @@
 # repo.radeon.com, measured via ldd on the wheel's libctranslate2
 # (hipblas/hipblaslt/rocblas/rocsolver/hiprand/rocrand + HIP runtime).
 # The host still needs ONLY the amdgpu kernel driver and device nodes; run
-# via compose.rocm.yaml (--device /dev/kfd --device /dev/dri, video+render
-# groups). CT2's ROCm build exposes the GPU through the CUDA-alias API, so
+# via compose.rocm.yaml (--device /dev/kfd --device /dev/dri plus the host
+# gid owning them, VOXINT_RENDER_GID). CT2's ROCm build exposes the GPU
+# through the CUDA-alias API, so
 # DEVICE stays "cuda" here; /healthz reports the honest "rocm" label (see
 # app/transcription.py resolve_device_name).
 #

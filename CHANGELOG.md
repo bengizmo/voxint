@@ -22,13 +22,15 @@ flavors.
   image's smoke measured faster still); host needs only the amdgpu kernel
   driver.
 - **`compose.rocm.yaml` overlay**: whisper on the GPU (`/dev/kfd` +
-  `/dev/dri` passthrough, `video` group + host render gid via
-  `VOXINT_RENDER_GID`), pyannote/titanet on the `-cpu` images,
+  `/dev/dri` passthrough + the owning host gid via `VOXINT_RENDER_GID`;
+  no `video` group, no `seccomp:unconfined` — both verified unnecessary on
+  real hardware), pyannote/titanet on the `-cpu` images,
   `COMPUTE_TIER=rocm` timing profile. Pin-parity contract test now covers it.
 - **Installer AMD tier**: `[A]` in the compute-tier prompt (suggested when
   `/dev/kfd` exists and no NVIDIA driver is), records
-  `VOXINT_COMPOSE_TIER=rocm` and auto-detects + records the host's `render`
-  group gid in `.env` (`VOXINT_RENDER_GID`).
+  `VOXINT_COMPOSE_TIER=rocm` and auto-detects + records the gid owning
+  `/dev/kfd` in `.env` (`VOXINT_RENDER_GID`); kept-`.env` re-runs re-detect
+  and refresh it (the gid is per-host).
 - **Honest `/healthz` device reporting without torch**: the CT2 ROCm build
   masquerades as CUDA and the `-rocm` image carries no torch, so
   `resolve_device_name` now also detects the loaded HIP runtime
@@ -246,7 +248,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bengizmo/voxint/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/bengizmo/voxint/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/bengizmo/voxint/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/bengizmo/voxint/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/bengizmo/voxint/compare/v0.1.0...v0.2.0

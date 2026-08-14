@@ -241,6 +241,35 @@ def test_update_env_keys_appends_tier_and_backs_up(repo: Path) -> None:
     assert backups[0].read_text() == LEGACY_ENV
 
 
+def _fake_getent(repo: Path, body: str) -> None:
+    p = repo / "fakebin" / "getent"
+    p.write_text(body)
+    p.chmod(0o755)
+
+
+def test_detect_render_gid_parses_getent(repo: Path) -> None:
+    # /dev/kfd does not exist in the test env, so the getent fallback runs.
+    _fake_getent(repo, "#!/bin/sh\necho 'render:x:990:ben'\n")
+    proc = run_lib(repo, 'detect_render_gid\nprintf "%s" "$RENDER_GID_VALUE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "990"
+
+
+def test_detect_render_gid_rejects_non_numeric_and_notes(repo: Path) -> None:
+    _fake_getent(repo, "#!/bin/sh\necho 'garbage output'\n")
+    proc = run_lib(repo, 'detect_render_gid\nprintf "[%s]" "$RENDER_GID_VALUE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[]"
+    assert "VOXINT_RENDER_GID" in proc.stderr  # the NOTE tells the user what to set
+
+
+def test_detect_render_gid_empty_when_getent_fails(repo: Path) -> None:
+    _fake_getent(repo, "#!/bin/sh\nexit 2\n")
+    proc = run_lib(repo, 'detect_render_gid\nprintf "[%s]" "$RENDER_GID_VALUE"')
+    assert proc.returncode == 0, proc.stderr  # set -eu must survive the failure
+    assert proc.stdout == "[]"
+
+
 def test_update_env_keys_writes_render_gid_for_rocm(repo: Path) -> None:
     (repo / ".env").write_text(LEGACY_ENV + "VOXINT_COMPOSE_TIER=cpu\nVOXINT_RENDER_GID=111\n")
     proc = run_lib(

@@ -84,17 +84,25 @@ PREFLIGHT_TOKEN=""
 RENDER_GID_VALUE=""
 COMPOSE_FILE_ARGS="-f compose.yaml"
 
-# ROCm tier: the host "render" group gid owning /dev/kfd + /dev/dri/renderD*
-# is allocated per host, so the rocm overlay interpolates it from .env
-# (VOXINT_RENDER_GID). Detect it whenever the rocm tier is chosen; empty on
-# hosts without a render group (the overlay then falls back to its default
-# and the model service will say so loudly if that gid is wrong).
+# ROCm tier: the gid owning /dev/kfd + /dev/dri/renderD* is allocated per
+# host, so the rocm overlay interpolates it from .env (VOXINT_RENDER_GID).
+# Prefer the ACTUAL owner of /dev/kfd (ground truth) over the "render" group
+# name; fall back to getent when the device is absent (e.g. pre-driver
+# install). Empty when neither works — the overlay then falls back to its
+# default and this NOTE tells the user what to set.
 detect_render_gid() {
-  RENDER_GID_VALUE=$(getent group render 2>/dev/null | cut -d: -f3)
+  RENDER_GID_VALUE=""
+  if [ -e /dev/kfd ]; then
+    RENDER_GID_VALUE=$(stat -c %g /dev/kfd 2>/dev/null || true)
+  fi
   if [ -z "$RENDER_GID_VALUE" ]; then
-    say "  NOTE: no 'render' group found on this host; if the whisper service"
-    say "  cannot open /dev/kfd, set VOXINT_RENDER_GID in .env to the group"
-    say "  that owns it (ls -ln /dev/kfd)."
+    RENDER_GID_VALUE=$(getent group render 2>/dev/null | cut -d: -f3)
+  fi
+  case $RENDER_GID_VALUE in *[!0-9]*) RENDER_GID_VALUE="" ;; esac
+  if [ -z "$RENDER_GID_VALUE" ]; then
+    say "  NOTE: could not detect the gid owning /dev/kfd; if the whisper"
+    say "  service cannot open the GPU, set VOXINT_RENDER_GID in .env to the"
+    say "  owning group (stat -c %g /dev/kfd)."
   fi
 }
 
@@ -654,6 +662,21 @@ resolve_kept_env_tier() {
     update_env_keys
   fi
   COMPUTE_TIER_VALUE=$tier
+  # Kept rocm tier: re-detect the render gid every run — the recorded value
+  # goes stale when the checkout moves hosts (the gid is per-host), and a
+  # hand-set VOXINT_COMPOSE_TIER=rocm never went through the prompt at all.
+  if [ "$tier" = "rocm" ]; then
+    local recorded_gid
+    recorded_gid=$(read_env_value VOXINT_RENDER_GID)
+    detect_render_gid
+    if [ -n "$RENDER_GID_VALUE" ] && [ "$RENDER_GID_VALUE" != "$recorded_gid" ]; then
+      if [ -n "$recorded_gid" ]; then
+        say "  Recorded VOXINT_RENDER_GID ($recorded_gid) does not match this host"
+        say "  ($RENDER_GID_VALUE) -- updating .env."
+      fi
+      update_env_keys
+    fi
+  fi
   PREFLIGHT_TOKEN=$(read_env_value HF_TOKEN)
   if [ "$tier" != "none" ] && [ -z "$PREFLIGHT_TOKEN" ]; then
     DEFERRED_TIER=$tier

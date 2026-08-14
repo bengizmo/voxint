@@ -117,7 +117,11 @@ the `-cpu` images. Honest expectations and constraints:
 - **Host requirements: amdgpu kernel driver only.** No host ROCm install, no
   container toolkit — the `-rocm` image carries its own ROCm runtime
   libraries. The overlay passes `/dev/kfd` + `/dev/dri` through and adds the
-  `video`/`render` groups. Do **not** set `HSA_OVERRIDE_GFX_VERSION` for
+  gid that owns them (allocated per host, so it cannot be a baked default).
+  The installer detects and records it; **manual setups must set it in
+  `.env`**: `VOXINT_RENDER_GID=$(stat -c %g /dev/kfd)` — a wrong gid shows
+  up as the whisper service failing to open the GPU, not as a clear
+  permission error. Do **not** set `HSA_OVERRIDE_GFX_VERSION` for
   natively supported GPUs — it corrupts kernel selection.
 - **`COMPUTE_TIER=rocm`** scales timeouts/leases for the still-CPU stages
   (GPU-class timing for ASR; see [timeouts-and-leases.md](timeouts-and-leases.md)).

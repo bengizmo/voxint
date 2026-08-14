@@ -38,21 +38,19 @@ services:
       EMBEDDER_URL: http://titanet:8021
 
   whisper:
-    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.4.1}-rocm
+    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.5.0}-rocm
     pull_policy: missing
     devices:
       - /dev/kfd
       - /dev/dri
-    # The container runs non-root; GPU device nodes are host-group-owned.
-    # "video" (gid 44) is stable across distros and resolvable in-image; the
-    # "render" group's gid is allocated dynamically per host, so it must be
-    # passed numerically — the installer detects and records it in .env, or
-    # set it yourself: VOXINT_RENDER_GID=$(getent group render | cut -d: -f3)
+    # The container runs non-root; /dev/kfd and /dev/dri/renderD* are owned
+    # by the host's "render" group, whose gid is allocated per host — so it
+    # must be passed numerically. The installer detects and records it in
+    # .env; manual setup: VOXINT_RENDER_GID=$(stat -c %g /dev/kfd).
+    # (The "video" group is NOT needed: ROCm compute uses only kfd+renderD*,
+    # verified on real hardware. Docker's default seccomp profile is fine.)
     group_add:
-      - video
       - "${VOXINT_RENDER_GID:-992}"
-    security_opt:
-      - seccomp:unconfined
     environment:
       MEDIA_ROOT: /data/media
     volumes:
@@ -61,7 +59,7 @@ services:
       - "127.0.0.1:8022:8022"
 
   pyannote:
-    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.4.1}-cpu
+    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.5.0}-cpu
     pull_policy: missing
     environment:
       MEDIA_ROOT: /data/media
@@ -74,7 +72,7 @@ services:
       - "127.0.0.1:8024:8024"
 
   titanet:
-    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.4.1}-cpu
+    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.5.0}-cpu
     pull_policy: missing
     environment:
       MEDIA_ROOT: /data/media

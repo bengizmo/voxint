@@ -173,9 +173,12 @@ class TestL2Normalize:
         assert abs(float(np.linalg.norm(out)) - 1.0) < 1e-6
 
 
-# Both services carry their own copy by design (separate images, no shared
-# package); the contract is the same, so both copies are pinned here.
-@pytest.mark.parametrize("module", [embedding, diarizer], ids=["titanet", "pyannote"])
+# The services carry their own copy by design (separate images, no shared
+# package); the contract is the same, so every copy is pinned here. whisper's
+# copy additionally falls through to a HIP-runtime probe (tested below).
+@pytest.mark.parametrize(
+    "module", [embedding, diarizer, detector], ids=["titanet", "pyannote", "whisper"]
+)
 class TestResolveDeviceName:
     """Honest /healthz device reporting: rocm must never report as cuda."""
 
@@ -196,6 +199,87 @@ class TestResolveDeviceName:
         fake_torch = SimpleNamespace(version=SimpleNamespace(hip="6.2.41133"))
         monkeypatch.setitem(sys.modules, "torch", fake_torch)
         assert module.resolve_device_name("cuda") == "rocm"
+
+
+class TestWhisperHipRuntimeProbe:
+    """whisper's torch-free rocm detection: the -rocm image ships no torch,
+    so the ONLY honest-device signal is the HIP runtime library the loaded
+    CT2 extension maps (gpu-contracts.md device honesty requirement)."""
+
+    def _drop_torch(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # sys.modules[name] = None makes `import torch` raise ImportError.
+        monkeypatch.setitem(sys.modules, "torch", None)
+
+    def test_reports_rocm_when_hip_mapped_and_no_torch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._drop_torch(monkeypatch)
+        monkeypatch.setattr(detector, "_hip_runtime_loaded", lambda: True)
+        assert detector.resolve_device_name("cuda") == "rocm"
+
+    def test_stays_cuda_when_no_hip_and_no_torch(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._drop_torch(monkeypatch)
+        monkeypatch.setattr(detector, "_hip_runtime_loaded", lambda: False)
+        assert detector.resolve_device_name("cuda") == "cuda"
+
+    def test_probe_matches_hip_library_in_binary_maps(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        import builtins
+        import io
+
+        real_open = builtins.open
+
+        def fake_open(path: object, *args: object, **kwargs: object) -> object:
+            if path == "/proc/self/maps":
+                return io.BytesIO(
+                    b"7f0 r-xp /opt/rocm-7.0.2/lib/libamdhip64.so.7\n"
+                )
+            return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+        assert detector._hip_runtime_loaded() is True
+
+    def test_probe_never_raises_on_unreadable_maps(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import builtins
+
+        def raise_oserror(*args: object, **kwargs: object) -> object:
+            raise OSError("no /proc here")
+
+        monkeypatch.setattr(builtins, "open", raise_oserror)
+        assert detector._hip_runtime_loaded() is False
+        # And through the public entry point it degrades to the raw label.
+        self._drop_torch(monkeypatch)
+        assert detector.resolve_device_name("cuda") == "cuda"
+
+
+class TestWhisperFlavorPinParity:
+    def test_rocm_requirements_mirror_shared_pins(self) -> None:
+        # Same philosophy as the titanet cpu/cuda pin mirror: a one-sided
+        # bump of a shared package silently forks behavior across flavors.
+        # numpy and torch are DELIBERATELY exempt: the rocm image is py3.12
+        # (numpy 1.26.4 vs 1.24.3) and torch-free (documented in
+        # requirements.rocm.txt).
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        def pins(name: str) -> dict[str, str]:
+            text = (REPO_ROOT / "services" / "whisper" / name).read_text()
+            return dict(re.findall(r"^([A-Za-z0-9_\[\]-]+)==([0-9.]+)$", text, re.MULTILINE))
+
+        base = pins("requirements.txt")
+        rocm = pins("requirements.rocm.txt")
+        for pkg in ("fastapi", "uvicorn[standard]", "pydantic", "faster-whisper", "soundfile"):
+            assert pkg in base and pkg in rocm, f"{pkg} pin missing from a flavor file"
+            assert base[pkg] == rocm[pkg], (
+                f"{pkg}: base {base[pkg]} != rocm {rocm[pkg]} — bump both or neither"
+            )
+        assert "torch" not in rocm, "the rocm image is torch-free by design"
 
 
 class TestDeviceCascade:
@@ -529,6 +613,15 @@ class TestCpuImageProvenance:
             assert len(found) == 1, f"{name} has inconsistent internal pins: {found}"
             pins[name] = found
         assert len(set().union(*pins.values())) == 1, f"compose pin skew: {pins}"
+        # The pins must also match the package version: a release commit that
+        # bumps pyproject but not the compose defaults ships pulls of tags
+        # that do not exist yet (bit the 0.5.0 draft: 0.4.1-rocm never existed).
+        pyproject = (REPO_ROOT / "pyproject.toml").read_text()
+        version = re.search(r'^version = "([0-9.]+)"', pyproject, re.MULTILINE)
+        assert version is not None
+        assert set().union(*pins.values()) == {version.group(1)}, (
+            f"compose pins {pins} disagree with pyproject version {version.group(1)}"
+        )
 
     def test_torch_pins_match_across_flavors(self) -> None:
         # A one-sided torch bump silently changes cross-flavor numerics; the

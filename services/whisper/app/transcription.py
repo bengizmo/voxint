@@ -29,6 +29,17 @@ class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
 
 
+def _hip_runtime_loaded() -> bool:
+    """True when the process has the HIP runtime library mapped (the CT2 ROCm
+    build links it). Read as bytes — non-UTF-8 mapped paths must not raise —
+    and swallow OSError: the probe must never fail device detection."""
+    try:
+        with open("/proc/self/maps", "rb") as maps:
+            return b"libamdhip64" in maps.read()
+    except OSError:
+        return False
+
+
 def resolve_device_name(device_type: str) -> str:
     """Honest /healthz device reporting: both torch-ROCm and the CTranslate2
     ROCm build masquerade as CUDA (``device="cuda"`` selects the AMD GPU), so
@@ -44,14 +55,12 @@ def resolve_device_name(device_type: str) -> str:
 
             if getattr(torch.version, "hip", None):
                 return "rocm"
-        except ImportError:
+        except (ImportError, OSError):
+            # OSError: a broken torch install (missing shared libs) must not
+            # take device detection down with it.
             pass
-        try:
-            with open("/proc/self/maps") as maps:
-                if "libamdhip64" in maps.read():
-                    return "rocm"
-        except OSError:
-            pass
+        if _hip_runtime_loaded():
+            return "rocm"
     return device_type
 
 
