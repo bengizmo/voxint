@@ -46,6 +46,13 @@ Downloader = Callable[[str, Path, int], None]
 
 # yt-dlp stderr can run long; keep only the tail in the surfaced error.
 _STDERR_LIMIT = 2000
+
+# The metadata sidecar yt-dlp writes next to the download (issue #36). The
+# name is pinned via a typed output template so the ACQUIRE stage can match it
+# exactly — it is excluded from the stage's "exactly one media file" guard and
+# consumed by voxint.media.source_metadata, never published as-is (the raw
+# info-JSON carries signed URLs and must not leave the attempt directory).
+INFO_JSON_FILENAME = "source.info.json"
 # Grace for a SIGTERM'd process group to exit before we SIGKILL it.
 _KILL_GRACE_SECONDS = 5.0
 
@@ -237,6 +244,18 @@ def build_ytdlp_downloader(
             "2",
             "--extractor-retries",
             "1",
+            # Metadata capture (issue #36): the info-JSON rides the SAME
+            # invocation as the download — a second --dump-json call would
+            # double the network/bot-block exposure and could observe different
+            # upstream state than the bytes it describes. --clean-info-json
+            # (pinned explicitly, though it is yt-dlp's default) strips
+            # filenames/internal fields at the source;
+            # --no-write-playlist-metafiles keeps a playlist URL from dropping
+            # a second metafile past the stage's file-count guard. The typed
+            # infojson output template below pins the exact filename.
+            "--write-info-json",
+            "--clean-info-json",
+            "--no-write-playlist-metafiles",
         ]
         # Egress options ride among the flags, before the ``--`` URL terminator.
         # --proxy is ALWAYS passed (empty string = explicit direct) so an ambient
@@ -254,6 +273,8 @@ def build_ytdlp_downloader(
             "--no-progress",
             "--output",
             str(dest_dir / "source.%(ext)s"),
+            "--output",
+            f"infojson:{dest_dir / INFO_JSON_FILENAME}",
             "--",
             url,
         ]

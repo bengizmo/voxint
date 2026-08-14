@@ -267,6 +267,29 @@ def test_downloader_argv_wires_proxy_and_cookies_only_when_set(tmp_path: Path) -
     assert args[-2:] == ["--", "https://example.com/video"]
 
 
+def test_downloader_argv_captures_info_json_alongside_the_download(
+    tmp_path: Path,
+) -> None:
+    """Metadata capture (issue #36) rides the SAME invocation — no second
+    network call — writing a clean info-JSON to the pinned filename, with
+    playlist metafiles suppressed so the stage's file-count guard holds."""
+    from voxint.media.ytdlp import INFO_JSON_FILENAME
+
+    args = _record_argv(tmp_path)
+    assert "--write-info-json" in args
+    assert "--clean-info-json" in args
+    assert "--no-write-playlist-metafiles" in args
+    dest = tmp_path / "out"
+    # The typed infojson template pins the exact output name...
+    assert f"infojson:{dest / INFO_JSON_FILENAME}" in args
+    # ...riding among the flags, before the ``--`` URL terminator, with the
+    # media template unchanged.
+    term = args.index("--")
+    assert args.index(f"infojson:{dest / INFO_JSON_FILENAME}") < term
+    assert str(dest / "source.%(ext)s") in args
+    assert args[-2:] == ["--", "https://example.com/video"]
+
+
 def test_run_download_command_scrubs_extra_secret_from_stderr() -> None:
     """A cookies path echoed as prose in stderr (no --cookies flag) is scrubbed via
     the extra_secrets channel the downloader threads through — the structural

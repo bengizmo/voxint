@@ -73,6 +73,11 @@ class StageContext:
     # Authoritative post-download size cap the stage re-checks (also handed to the
     # downloader as an early --max-filesize hint).
     ytdlp_max_bytes: int = 5 * 1024**3
+    # Caller-known secret literals (configured proxy string, cookies path)
+    # scrubbed verbatim from RETAINED metadata text (media/source_metadata.py) —
+    # the same contract the downloader threads to redact() for error text. The
+    # values live inside the downloader closure, so the stage needs its own copy.
+    metadata_secrets: tuple[str, ...] = ()
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     llm_policy: LLMPolicy = LLMPolicy()
@@ -113,6 +118,14 @@ def build_stage_context(settings: Settings) -> StageContext:
             cookies_file=settings.ytdlp_cookies_file,
         ),
         ytdlp_max_bytes=settings.ytdlp_max_bytes,
+        metadata_secrets=tuple(
+            secret
+            for secret in (
+                settings.ytdlp_proxy,
+                str(settings.ytdlp_cookies_file) if settings.ytdlp_cookies_file else "",
+            )
+            if secret
+        ),
         ffmpeg_bin=settings.ffmpeg_bin,
         ffprobe_bin=settings.ffprobe_bin,
         llm_policy=LLMPolicy(
