@@ -29,9 +29,21 @@ non-baked model downloads at startup and needs network + writable cache).
 
 ## Image matrix
 
-Python 3.10 · CUDA 12.4.1 runtime (cuDNN 9, symlinked to cuDNN-8 names for
-CTranslate2) · torch/torchaudio 2.1.1+cu121 · faster-whisper 1.2.1 ·
-numpy 1.24.3. VRAM: ~1.5 GB (large-v2 int8) + batch overhead.
+**CUDA** (`Dockerfile`): Python 3.10 · CUDA 12.4.1 runtime (cuDNN 9,
+symlinked to cuDNN-8 names for CTranslate2) · torch/torchaudio 2.1.1+cu121 ·
+faster-whisper 1.2.1 · numpy 1.24.3. VRAM: ~1.5 GB (large-v2 int8) + batch
+overhead.
+
+**CPU** (`Dockerfile.cpu`, `-cpu` tag): Python 3.11 · multi-arch
+(amd64 + arm64) · torch 2.1.1 CPU wheels · same faster-whisper pin.
+
+**ROCm** (`Dockerfile.rocm`, `-rocm` tag): Python 3.12 · amd64 only ·
+CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned — not
+on PyPI) on ubuntu:24.04 with the minimal ROCm 7.0.2 runtime-library set ·
+torch-free (the 1.2.x VAD is onnxruntime-based) · numpy 1.26.4 (cp312).
+Same engine, same code path; `DEVICE` stays `cuda` (CT2's ROCm build uses
+the CUDA-alias API) and `/healthz` honestly reports `device: "rocm"`. Run
+via `compose.rocm.yaml` (device passthrough + host render gid).
 
 ```bash
 docker pull ghcr.io/bengizmo/voxint-whisper:0.4.0   # prebuilt release image

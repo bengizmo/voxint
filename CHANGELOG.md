@@ -5,6 +5,46 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-08-14
+
+AMD-GPU acceleration for ASR (#4). The ROCm tier is a hybrid: whisper runs on
+the AMD GPU, pyannote/titanet stay on CPU. No numerical changes to existing
+flavors.
+
+### Added
+- **whisper `-rocm` image** (`services/whisper/Dockerfile.rocm`, amd64):
+  same faster-whisper 1.2.1 / CTranslate2 engine and code path as CUDA —
+  the CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned;
+  not on PyPI) on ubuntu:24.04 with the minimal measured ROCm 7.0.2
+  runtime-library set. Torch-free (the 1.2.x Silero VAD is
+  onnxruntime-based). Measured on RDNA4 (RX 9060 XT, gfx1200): warm
+  transcription 4.8× the CPU baseline on the parity corpus clip (this
+  image's smoke measured faster still); host needs only the amdgpu kernel
+  driver.
+- **`compose.rocm.yaml` overlay**: whisper on the GPU (`/dev/kfd` +
+  `/dev/dri` passthrough, `video` group + host render gid via
+  `VOXINT_RENDER_GID`), pyannote/titanet on the `-cpu` images,
+  `COMPUTE_TIER=rocm` timing profile. Pin-parity contract test now covers it.
+- **Installer AMD tier**: `[A]` in the compute-tier prompt (suggested when
+  `/dev/kfd` exists and no NVIDIA driver is), records
+  `VOXINT_COMPOSE_TIER=rocm` and auto-detects + records the host's `render`
+  group gid in `.env` (`VOXINT_RENDER_GID`).
+- **Honest `/healthz` device reporting without torch**: the CT2 ROCm build
+  masquerades as CUDA and the `-rocm` image carries no torch, so
+  `resolve_device_name` now also detects the loaded HIP runtime
+  (`libamdhip64` in `/proc/self/maps`) and reports `device: "rocm"`.
+- **`release.yml` `publish-whisper-rocm` lane** — build-only in CI (GitHub
+  has no AMD-GPU runners); the real-GPU inference gate is a maintainer step
+  on AMD hardware before tagging (Gate R, `docs/release-process.md`).
+- Docs: `docs/operations.md` ROCm-tier section (incl. why pyannote/titanet
+  stay CPU — MIOpen convolutions fail on current AMD consumer GPUs in both
+  shipping torch-ROCm wheel lines), README AMD callout,
+  `docs/gpu-contracts.md` device-reporting note, whisper README image matrix.
+
+### Changed
+- `cleanup_memory` in the whisper service tolerates a torch-free image
+  (guarded import; CT2 manages its own device memory).
+
 ## [0.4.1] — 2026-08-14
 
 Onboarding patch: closes the v0.4.0 first-run traps (#17–#22). No model

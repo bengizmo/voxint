@@ -72,7 +72,12 @@ same contract.
   - `device` is the compute device actually used for inference. **Honest
     reporting is required**: torch built for ROCm masquerades as CUDA
     (`torch.cuda.is_available()` is true and the device type is `"cuda"`), so
-    services must report `"rocm"` whenever `torch.version.hip` is set. `"mps"`
+    services must report `"rocm"` whenever `torch.version.hip` is set. The
+    CTranslate2 ROCm build masquerades the same way (`device="cuda"` selects
+    the AMD GPU) and carries no torch signal — the torch-free whisper `-rocm`
+    image detects the loaded HIP runtime library instead (`libamdhip64` in
+    `/proc/self/maps`, checked after model construction) and reports
+    `"rocm"`. `"mps"`
     is torch Metal Performance Shaders (host adapters); `"metal"` is
     non-torch Metal backends (e.g. whisper.cpp/ggml).
   - `engine` / `engine_version` identify the **inference engine only** — e.g.

@@ -59,10 +59,13 @@ Requires Docker Engine with the **Compose plugin ≥ 2.24** (`docker compose
 version` — the legacy v1 `docker-compose` binary cannot parse this stack).
 
 > **No NVIDIA GPU? Start here too.** Voxint does not need one — the CPU tier
-> runs the full pipeline on plain amd64/arm64 servers, AMD boxes, and Apple
-> Silicon with zero GPU configuration. Follow the same quickstart, then use the
+> runs the full pipeline on plain amd64/arm64 servers and Apple Silicon with
+> zero GPU configuration. Follow the same quickstart, then use the
 > `compose.cpu.yaml` overlay where the GPU one appears —
-> see [No NVIDIA GPU? (CPU tier)](#no-nvidia-gpu-cpu-tier).
+> see [No NVIDIA GPU? (CPU tier)](#no-nvidia-gpu-cpu-tier). **AMD GPU?** The
+> ROCm tier accelerates transcription on it (4.8× the CPU baseline, amdgpu
+> kernel driver is the only host requirement) — use `compose.rocm.yaml` —
+> see [AMD GPU? (ROCm tier)](#amd-gpu-rocm-tier).
 
 ```bash
 git clone https://github.com/bengizmo/voxint.git && cd voxint
@@ -145,7 +148,7 @@ Per-service details, env tunables, and image matrices:
 
 The same three model services ship as multi-arch
 (amd64 + arm64) `-cpu` images — no GPU, no NVIDIA toolkit, runs on plain
-servers, AMD boxes, and Apple Silicon via Docker Desktop:
+servers and Apple Silicon via Docker Desktop:
 
 ```bash
 docker compose -f compose.yaml -f compose.cpu.yaml up -d
@@ -158,6 +161,25 @@ timeouts and stage leases so slow-but-healthy runs aren't reclaimed as hung.
 Same contracts, same embedding space (TitaNet runs on ONNX Runtime under a
 measured-equivalence parity gate). Details:
 [docs/operations.md](docs/operations.md#running-without-an-nvidia-gpu-cpu-tier).
+
+### AMD GPU? (ROCm tier)
+
+A hybrid tier for amd64 hosts with an AMD GPU: transcription (whisper) runs
+on the GPU via the CTranslate2 ROCm build — same engine, same code path,
+measured **4.8× the CPU baseline** on RDNA4 — while diarization and speaker
+embedding run the `-cpu` images (MIOpen convolutions currently fail on AMD
+consumer GPUs; tracked in
+[#4](https://github.com/bengizmo/voxint/issues/4)):
+
+```bash
+docker compose -f compose.yaml -f compose.rocm.yaml up -d
+```
+
+The host needs **only the amdgpu kernel driver** — no ROCm install, no
+container toolkit; the `-rocm` image carries its own ROCm runtime. The
+overlay sets `COMPUTE_TIER=rocm` (GPU-speed ASR, CPU-scaled leases for the
+rest). Details:
+[docs/operations.md](docs/operations.md#running-on-an-amd-gpu-rocm-tier).
 
 To run the source you checked out instead of the release images, layer the
 build overlays (exactly one service owns each build — see

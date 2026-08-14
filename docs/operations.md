@@ -60,8 +60,8 @@ consume the tag it produces. Do not give several `build:` services a shared
 
 Every model service also ships a **`-cpu` image flavor** — multi-arch
 (amd64 + arm64), no GPU, no NVIDIA container toolkit. This is the supported
-path for Apple Silicon (via Docker Desktop), AMD-GPU boxes (until the ROCm
-tier lands), and plain CPU servers:
+path for Apple Silicon (via Docker Desktop) and plain CPU servers (AMD-GPU
+boxes have the faster ROCm tier below):
 
 ```bash
 docker compose -f compose.yaml -f compose.cpu.yaml up -d
@@ -88,9 +88,43 @@ What changes relative to the GPU overlay — and what doesn't:
   (see [gpu-contracts.md](gpu-contracts.md)).
 - **pyannote still needs `HF_TOKEN`** in `.env` — the diarization weights are
   HF-gated regardless of compute tier.
-- **Mixing tiers is fine.** The overlays are per-service compositions; a later
-  accelerated tier (e.g. ROCm pyannote) swaps individual services without
-  touching the others.
+- **Mixing tiers is fine.** The overlays are per-service compositions; an
+  accelerated tier swaps individual services without touching the others —
+  the ROCm tier below is exactly that (GPU whisper + CPU pyannote/titanet).
+
+### Running on an AMD GPU (ROCm tier)
+
+```bash
+docker compose -f compose.yaml -f compose.rocm.yaml up -d
+```
+
+The ROCm overlay is a **hybrid tier**: ASR (whisper) runs on the AMD GPU via
+the `-rocm` image; diarization (pyannote) and speaker embedding (titanet) run
+the `-cpu` images. Honest expectations and constraints:
+
+- **What accelerates.** whisper keeps the exact faster-whisper/CTranslate2
+  engine and code path — the `-rocm` image swaps only the CTranslate2 build
+  (the 4.8.1 ROCm wheel, published as a GitHub release asset, absent from
+  PyPI). Measured on an RDNA4 card (RX 9060 XT, gfx1200): **4.8× the CPU
+  baseline** on the parity corpus clip. `/healthz` reports `device: "rocm"`.
+- **Why pyannote and titanet stay CPU.** MIOpen convolutions fail on current
+  AMD consumer GPUs (verified on RDNA4 in BOTH shipping torch-ROCm wheel
+  lines — rocm6.4 and rocm7.2); everything conv-based dies at inference while
+  GEMM-based engines (CTranslate2) work. titanet's CPU path is already far
+  faster than real-time and does not need a GPU. Tracked upstream in
+  issue #4 — the overlay swaps per service, so a working pyannote `-rocm`
+  can slot in later without touching the rest.
+- **Host requirements: amdgpu kernel driver only.** No host ROCm install, no
+  container toolkit — the `-rocm` image carries its own ROCm runtime
+  libraries. The overlay passes `/dev/kfd` + `/dev/dri` through and adds the
+  `video`/`render` groups. Do **not** set `HSA_OVERRIDE_GFX_VERSION` for
+  natively supported GPUs — it corrupts kernel selection.
+- **`COMPUTE_TIER=rocm`** scales timeouts/leases for the still-CPU stages
+  (GPU-class timing for ASR; see [timeouts-and-leases.md](timeouts-and-leases.md)).
+- **pyannote still needs `HF_TOKEN`** in `.env`, same as every tier.
+- **amd64 only** (the CT2 ROCm wheels are x86_64), and CI builds this image
+  without a GPU — the real-GPU gate runs on maintainer AMD hardware before a
+  release.
 
 ### Schema migrations
 

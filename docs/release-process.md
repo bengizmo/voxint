@@ -55,12 +55,22 @@ assets under an existing tag are immutable by policy, never replaced.
   **explicit SKIP** in the step summary, never a silent pass.
   `merge-multiarch` then tags only smoke-passed digests and verifies each
   manifest list exposes exactly `linux/amd64` + `linux/arm64`.
+- **`publish-whisper-rocm`** — the AMD whisper image (`-rocm`, amd64 only)
+  is **build-only in CI**: GitHub has no AMD-GPU runners, so its inference
+  path cannot smoke there. The compensating gate is a **maintainer-run
+  real-GPU smoke on AMD hardware BEFORE tagging** (Gate R): build
+  `services/whisper/Dockerfile.rocm` on an AMD box, run it via the
+  `compose.rocm.yaml` passthrough stanza against the parity corpus, and
+  assert `/healthz device: rocm` + a correct transcription at GPU speed.
+  The CT2 ROCm wheel is sha256-pinned in the Dockerfile, so the CI build is
+  byte-reproducible against what was smoked.
 
 ## Cutting a release
 
 1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
-   `compose.yaml` + `compose.gpu.yaml` + `compose.cpu.yaml` (and its
+   `compose.yaml` + `compose.gpu.yaml` + `compose.cpu.yaml` +
+   `compose.rocm.yaml` (and its
    `.env.example` comment) to the new version — the default stack always runs
    the release this checkout documents. Run the gates (`ruff` / `mypy` /
    `pytest` with the pgvector test DB) and both gitleaks scans
@@ -69,16 +79,17 @@ assets under an existing tag are immutable by policy, never replaced.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`
    (push the tag to the private origin too). The tag must point at the release
    commit so images are built from exactly what the compose files pin.
-4. **Watch `release.yml`** (3 CUDA matrix jobs + 2 parity runs + 8 per-arch
-   multi-arch builds + 2 per-arch smokes + 4 merges — smoke runs BEFORE
-   merge, on digests; whisper builds are the slow ones, 25–45 min each).
+4. **Watch `release.yml`** (3 CUDA matrix jobs + 1 rocm build + 2 parity
+   runs + 8 per-arch multi-arch builds + 2 per-arch smokes + 4 merges —
+   smoke runs BEFORE merge, on digests; whisper builds are the slow ones,
+   25–45 min each).
    `fail-fast` is off, so one failed matrix entry leaves the others published —
    a failure in `docker/metadata-action` *before* the build step has been
    transient GitHub infrastructure: re-run failed jobs
    (`gh api -X POST repos/…/actions/runs/<id>/rerun-failed-jobs`; this `gh`
    version's `run rerun` has no `--failed` flag).
 5. **Verify anonymous pull** of all published images — app (both arches),
-   three CUDA, three `-cpu` (both arches) — with no login:
+   three CUDA, three `-cpu` (both arches), whisper `-rocm` — with no login:
    the packages inherit public visibility from the repo via the
    `org.opencontainers.image.source` label, but confirm — fetch each manifest
    with an anonymous GHCR token and expect 200. Optionally
