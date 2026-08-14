@@ -436,9 +436,12 @@ gate AGAINST them:
   under the CoreML EP, plus a same-window repeat-determinism probe.
 
 These lanes are maintainer-run on Apple Silicon (Gate M,
-docs/release-process.md) — `VOXINT_PARITY_REQUIRED` is never applied to them
-(no shared CI has the hardware; GitHub's `macos-14+` arm64 runners are a
-tracked follow-up). Evidence lands as committed per-chip verdict reports
+docs/release-process.md) — `VOXINT_PARITY_REQUIRED` is never applied to them.
+The nightly `metal-lane` workflow additionally runs them on GitHub's
+`macos-15` arm64 runners (real MPS) as a regression net; its junit guard —
+fail if an expected module ran zero non-skipped tests — is that lane's
+substitute for the strict mode these modules deliberately lack.
+Evidence lands as committed per-chip verdict reports
 (chip, macOS + library versions, margins vs every bound, repeat runs) —
 generalizing the ONNX verdict-table pattern above. Reference data for such
 reports comes from `tools/generate_parity_references.py --tier metal

@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **macOS arm64 CI lane** (`.github/workflows/metal-lane.yml`, issue #34):
+  nightly + manual-dispatch partial Gate M automation on `macos-15` runners
+  (real MPS) — launcher unit tests on real macOS, then the whisper/pyannote/
+  titanet parity modules from the launcher's own sha-verified per-service
+  venvs, with provenance-keyed weight caches, an MPS tensor-op probe, and a
+  junit guard that fails the lane if an expected module green-boards
+  fully-skipped. Maintainer Gate M (per-chip verdict refreshes) is
+  unchanged — this catches regressions between refreshes.
 - **Metal-tier log rotation** (metal review follow-up): `voxint-metal.sh up`
   now installs a daily launchd job (`com.voxint.metal.logrotate`) that
   copy-truncates any service log over 50 MB to a timestamped archive,
