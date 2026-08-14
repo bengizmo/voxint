@@ -5,6 +5,43 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Structured & subtitle transcript exports.** The review console now offers
+  SubRip (`.srt`), WebVTT (`.vtt`), JSON, and diarization RTTM (`.rttm`)
+  alongside the existing plain-text export, at
+  `GET /review/{run_id}/export.{srt,vtt,json,rttm}` (all accept `?text=raw|
+  enhanced`, default enhanced; RTTM carries raw diarization labels). SRT/VTT/
+  JSON/TXT share one set of pure formatters (`voxint.export`) with the CLI, so a
+  downloaded file and a piped export are byte-identical.
+- **`voxint export <run_id> --format srt|vtt|json|rttm|txt`** — headless
+  transcript export to stdout or `-o PATH` (refuses to overwrite without
+  `--force`); `--text raw|enhanced` selects the transcript variant.
+- **`voxint list`** — a CLI run browser (newest first) mirroring the `/runs`
+  query, with `--status`, `--limit` (1–500, default `runs_page_size`), and
+  `--json`.
+- **`voxint doctor`** — read-only preflight diagnostics: Postgres, Redis, and
+  each model service's `/healthz` (reporting the compute `device`) are hard
+  checks (exit 1 if any is down); the Hugging Face token and LLM endpoint are
+  advisory (reported, never fail the exit). Credentials are never printed.
+- **`voxint stats`** — an aggregate, read-only system summary: run counts by
+  status, failed stage attempts by stage, average per-stage duration (over
+  finished attempts), roster size, and runs created in a window (`--since`,
+  accepting `<n>h`/`<n>d`/ISO-8601, default 24h). `--json` emits a stable object.
+- **`GET /metrics`** — a Prometheus text-exposition endpoint (format 0.0.4)
+  built on the same query module, on the authenticated router (scrape it with
+  `basic_auth`, keeping the "everything but `/healthz` authenticates" invariant).
+  Every `RunStatus`/`Stage` series is zero-filled so a series never disappears
+  between scrapes; the one windowed gauge bakes its window into its name
+  (`voxint_runs_created_24h`).
+- **`voxint watch <run_id>`** — follow a run until it stops advancing, with a
+  live progress line on stderr. Exit codes: `0` completed, `1` failed/cancelled,
+  `2` missing run, `3` awaiting adjudication (paused — needs a human ruling),
+  `124` timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune
+  the poll.
+- **`voxint submit --wait`** — enqueue, then follow the new run to a stop state
+  with the same poll loop and exit codes (the run id stays alone on stdout;
+  progress goes to stderr).
+
 ## [0.7.0] — 2026-08-14
 
 Speaker roster management (#7): the roster is no longer write-only.

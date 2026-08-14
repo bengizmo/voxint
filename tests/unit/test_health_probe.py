@@ -77,6 +77,34 @@ def test_all_services_up() -> None:
         assert r.latency_ms is not None and r.latency_ms >= 0.0
 
 
+def test_device_surfaced_when_service_reports_it() -> None:
+    # The additive `device` field (docs/gpu-contracts.md) flows through to
+    # ServiceHealth so `voxint doctor` can show the compute tier.
+    ready_rocm = httpx.Response(
+        200, json={"status": "ok", "model": "m", "model_loaded": True, "device": "rocm"}
+    )
+    client = _client(
+        {_ASR_PORT: ready_rocm, _DIARIZER_PORT: _healthy("p"), _EMBEDDER_PORT: _healthy("t")}
+    )
+    results = _by_name(probe_services(_settings(), client=client))
+    assert results["transcription"].device == "rocm"
+    # A ready service that omits `device` reports None (not an error).
+    assert results["diarization"].up is True
+    assert results["diarization"].device is None
+
+
+def test_non_string_device_is_ignored() -> None:
+    weird = httpx.Response(
+        200, json={"status": "ok", "model": "m", "model_loaded": True, "device": 123}
+    )
+    client = _client(
+        {_ASR_PORT: weird, _DIARIZER_PORT: _healthy("p"), _EMBEDDER_PORT: _healthy("t")}
+    )
+    asr = _by_name(probe_services(_settings(), client=client))["transcription"]
+    assert asr.up is True
+    assert asr.device is None
+
+
 def test_degraded_503_is_down_but_distinguished() -> None:
     degraded = httpx.Response(503, json={"status": "degraded", "model": None})
     client = _client(

@@ -220,6 +220,66 @@ def test_full_review_flow(
         assert run is not None and run.review_claim_token is None
 
 
+def test_export_formats_content_types_and_payloads(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Structured/subtitle exports share the CLI formatters; here we prove the
+    # routes wire the right media type and the attributed data through. S0 is
+    # grounded ("Known Voice"); S1 stays a raw label until ruled on.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    srt = client.get(f"/review/{run_id}/export.srt")
+    assert srt.status_code == 200
+    assert srt.headers["content-type"].startswith("application/x-subrip")
+    assert "1\n00:00:00,000 --> 00:00:08,000\nKnown Voice:\nhello there\n" in srt.text
+
+    vtt = client.get(f"/review/{run_id}/export.vtt")
+    assert vtt.status_code == 200
+    assert vtt.headers["content-type"].startswith("text/vtt")
+    assert vtt.text.startswith("WEBVTT\n")
+    assert "00:00:00.000 --> 00:00:08.000" in vtt.text
+
+    resp = client.get(f"/review/{run_id}/export.json")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/json")
+    rows = resp.json()
+    assert [r["speaker"] for r in rows] == ["Known Voice", "S1", "Known Voice"]
+    assert rows[0] == {
+        "start_seconds": 0.0,
+        "end_seconds": 8.0,
+        "speaker": "Known Voice",
+        "text": "hello there",
+    }
+
+    rttm = client.get(f"/review/{run_id}/export.rttm")
+    assert rttm.status_code == 200
+    assert rttm.headers["content-type"].startswith("text/plain")
+    # RTTM carries the four raw diarization turns (labels, never resolved names).
+    lines = rttm.text.splitlines()
+    assert len(lines) == 4
+    assert lines[0] == f"SPEAKER {run_id} 1 0.000 8.000 <NA> <NA> S0 <NA> <NA>"
+    assert "Known Voice" not in rttm.text
+
+
+def test_export_text_variant_and_errors(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    # ?text=raw yields the immutable ASR text (here identical to enhanced, which
+    # is NULL in the seed) and is accepted; an unknown variant is a 422.
+    assert client.get(f"/review/{run_id}/export.srt", params={"text": "raw"}).status_code == 200
+    assert (
+        client.get(f"/review/{run_id}/export.srt", params={"text": "bogus"}).status_code == 422
+    )
+
+    # An unknown run 404s before any formatting.
+    assert client.get(f"/review/{uuid.uuid4()}/export.json").status_code == 404
+    assert client.get(f"/review/{uuid.uuid4()}/export.rttm").status_code == 404
+
+
 def test_decision_correction_and_stale_token(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
@@ -361,3 +421,20 @@ def test_media_rejects_non_audio_artifact(
         (media_root / artifact.path).write_bytes(b"definitely not audio")
         session.commit()
     assert client.get(f"/media/{run_id}").status_code == 404
+
+
+def test_metrics_endpoint_renders_prometheus(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        seed_run(session, media_root)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+    body = resp.text
+    # A seeded completed run + one enrolled speaker are reflected in the series.
+    assert '# TYPE voxint_runs gauge' in body
+    assert 'voxint_runs{status="completed"} 1' in body
+    assert 'voxint_runs{status="failed"} 0' in body  # zero-filled, never absent
+    assert 'voxint_roster_speakers 1' in body
+    assert body.endswith("\n")

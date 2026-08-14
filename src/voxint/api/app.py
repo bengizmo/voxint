@@ -13,13 +13,13 @@ import logging
 import secrets
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
-    PlainTextResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -90,6 +90,7 @@ from voxint.api.setup_wizard import (
     scan_media_folders,
     validate_llm_enable,
 )
+from voxint.api.stats_query import collect_stats, render_prometheus
 from voxint.app_settings import (
     clear_tutorial_completion,
     complete_onboarding,
@@ -102,6 +103,7 @@ from voxint.app_settings import (
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
     Decision,
+    DiarizationTurn,
     PipelineRun,
     RunStatus,
     Speaker,
@@ -109,6 +111,12 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.export import (
+    MEDIA_TYPES,
+    TranscriptFormat,
+    render_transcript,
+    to_rttm,
+)
 from voxint.ingest import (
     MissingStageError,
     RunNotFailedError,
@@ -1352,18 +1360,79 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
-    @protected.get("/review/{run_id}/export.txt")
-    def export_transcript(
-        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep
-    ) -> PlainTextResponse:
+    # Transcript downloads: one attributed read shaped by a pure formatter (see
+    # voxint/export). The sibling extensions (.txt/.srt/.vtt/.json) share the CLI's
+    # exact byte output through render_transcript, so a download and a piped
+    # `voxint export … --format …` can never disagree. RTTM lives on its own route
+    # (it reads diarization turns, not attributed lines). All accept ?text=raw|
+    # enhanced (default enhanced), except RTTM which is speaker-label-only.
+    def _export_transcript(
+        run_id: uuid.UUID, session: Session, fmt: TranscriptFormat, text: str | None
+    ) -> Response:
         _run_or_404(session, run_id)
-        lines = attributed_transcript(session, run_id, text=TranscriptText.ENHANCED)
-        body = "\n".join(
-            f"[{line.start_seconds:9.2f} {line.end_seconds:9.2f}]"
-            f" {line.speaker}: {line.text}"
-            for line in lines
+        try:
+            variant = parse_transcript_text(text)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        lines = attributed_transcript(session, run_id, text=variant)
+        return Response(
+            content=render_transcript(lines, fmt), media_type=MEDIA_TYPES[fmt.value]
         )
-        return PlainTextResponse(body + ("\n" if lines else ""))
+
+    @protected.get("/review/{run_id}/export.txt")
+    def export_transcript_txt(
+        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+    ) -> Response:
+        return _export_transcript(run_id, session, TranscriptFormat.TXT, text)
+
+    @protected.get("/review/{run_id}/export.srt")
+    def export_transcript_srt(
+        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+    ) -> Response:
+        return _export_transcript(run_id, session, TranscriptFormat.SRT, text)
+
+    @protected.get("/review/{run_id}/export.vtt")
+    def export_transcript_vtt(
+        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+    ) -> Response:
+        return _export_transcript(run_id, session, TranscriptFormat.VTT, text)
+
+    @protected.get("/review/{run_id}/export.json")
+    def export_transcript_json(
+        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+    ) -> Response:
+        return _export_transcript(run_id, session, TranscriptFormat.JSON, text)
+
+    @protected.get("/review/{run_id}/export.rttm")
+    def export_transcript_rttm(
+        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        _run_or_404(session, run_id)
+        turns = (
+            session.execute(
+                select(DiarizationTurn)
+                .where(DiarizationTurn.pipeline_run_id == run_id)
+                .order_by(DiarizationTurn.turn_index)
+            )
+            .scalars()
+            .all()
+        )
+        return Response(content=to_rttm(turns, str(run_id)), media_type=MEDIA_TYPES["rttm"])
+
+    # ---- Prometheus metrics ----------------------------------------------------
+    # Read-only aggregate exposition on the *protected* router: Prometheus scrapes
+    # it with basic_auth, so the "everything but /healthz authenticates" invariant
+    # holds without a new flag or token path. The one windowed series
+    # (voxint_runs_created_24h) bakes its window into the metric name.
+
+    @protected.get("/metrics")
+    def metrics(operator: OperatorDep, session: SessionDep) -> Response:
+        now = datetime.now(UTC)
+        stats = collect_stats(session, since=now - timedelta(hours=24), now=now)
+        return Response(
+            content=render_prometheus(stats),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ---- Settings + guided-tutorial lifecycle (issue #3, slice 6) --------------
     # The persistent, re-runnable entry point: re-open the setup wizard, and
