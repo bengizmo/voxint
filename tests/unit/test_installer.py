@@ -27,12 +27,22 @@ printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
 exit 0
 """
 
-# Emits ${FAKE_CURL_CODE:-200} like curl -w '%{http_code}' would; drains stdin
-# (the -K - config carrying the Authorization header) so the pipe never breaks.
+# Emits an http_code like curl -w '%{http_code}' would; drains stdin (the
+# -K - config carrying the Authorization header) so the pipe never breaks.
+# FAKE_CURL_CODES (a file of one code per line, consumed head-first) lets a
+# test sequence per-call responses (whoami vs each gated repo); otherwise
+# every call answers ${FAKE_CURL_CODE:-200}.
 FAKE_CURL = """#!/usr/bin/env bash
 cat > /dev/null
 printf '%s\\n' "$*" >> "${FAKE_CURL_LOG:?}"
-printf '%s' "${FAKE_CURL_CODE:-200}"
+if [ -n "${FAKE_CURL_CODES:-}" ] && [ -s "${FAKE_CURL_CODES}" ]; then
+  code=$(head -n1 "$FAKE_CURL_CODES")
+  tail -n +2 "$FAKE_CURL_CODES" > "$FAKE_CURL_CODES.tmp"
+  mv "$FAKE_CURL_CODES.tmp" "$FAKE_CURL_CODES"
+else
+  code="${FAKE_CURL_CODE:-200}"
+fi
+printf '%s' "$code"
 exit 0
 """
 
@@ -245,6 +255,39 @@ def test_read_env_value_last_wins_and_strips_quotes(repo: Path) -> None:
     assert proc.stdout == "second"
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ('HF_TOKEN="hf_dq"', "hf_dq"),  # double quotes stripped like Compose does
+        ('HF_TOKEN=""', ""),  # empty double-quoted value reads EMPTY (defers tier)
+        ("HF_TOKEN=''", ""),
+        ("HF_TOKEN=hf_plain", "hf_plain"),
+        ("HF_TOKEN=hf_crlf\r", "hf_crlf"),  # CRLF-edited .env
+        ("HF_TOKEN=  hf_pad  ", "hf_pad"),  # surrounding blanks trimmed
+        ("HF_TOKEN='", "'"),  # lone quote is a literal, not a pair
+    ],
+)
+def test_read_env_value_normalization(repo: Path, raw: str, expected: str) -> None:
+    (repo / ".env").write_text(raw + "\n")
+    proc = run_lib(repo, "read_env_value HF_TOKEN")
+    assert proc.stdout == expected
+
+
+def test_update_env_keys_dedupes_duplicate_key_lines(repo: Path) -> None:
+    (repo / ".env").write_text(
+        "VOXINT_PASSWORD='pw'\nHF_TOKEN='a'\nHF_TOKEN='b'\nVOXINT_COMPOSE_TIER=gpu\n"
+    )
+    proc = run_lib(repo, "COMPUTE_TIER_VALUE=cpu\nHF_TOKEN_VALUE='hf_new'\nupdate_env_keys")
+    assert proc.returncode == 0, proc.stderr
+    content = (repo / ".env").read_text()
+    assert content.count("HF_TOKEN=") == 1
+    assert "HF_TOKEN='hf_new'" in content
+    assert content.count("VOXINT_COMPOSE_TIER=") == 1
+    # Validation ran against the recorded tier's overlay (token present).
+    log = (repo / "docker.log").read_text()
+    assert "-f compose.cpu.yaml" in log
+
+
 # --------------------------------------------------------------------------- #
 # HF token preflight (advisory; secret hygiene)
 # --------------------------------------------------------------------------- #
@@ -284,6 +327,23 @@ def test_hf_preflight_network_failure_is_nonfatal(repo: Path) -> None:
     )
     assert proc.returncode == 0, proc.stderr
     assert "Could not verify the token" in proc.stderr
+    assert "SURVIVED" in proc.stdout
+
+
+def test_hf_preflight_gate_not_accepted_warns_per_repo(repo: Path) -> None:
+    # whoami 200, first gated repo 403, second 200: warn about the first repo
+    # only, never claim access looks good, and never fail the install.
+    codes = repo / "curl.codes"
+    codes.write_text("200\n403\n200\n")
+    proc = run_lib(
+        repo,
+        "PREFLIGHT_TOKEN='hf_x'\nhf_preflight\necho SURVIVED",
+        extra_env={"FAKE_CURL_CODES": str(codes)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "Token is valid" in proc.stderr
+    assert "cannot access pyannote/speaker-diarization-3.1" in proc.stderr
+    assert "Gated model access looks good" not in proc.stderr
     assert "SURVIVED" in proc.stdout
 
 

@@ -603,7 +603,10 @@ def _register_routes(app: FastAPI) -> None:
             # Presence only, never the value: the pyannote weights are HF-gated,
             # so a missing token is the usual reason the diarizer can't start
             # (both compute overlays refuse to interpolate without HF_TOKEN).
-            context["hf_token_set"] = bool(os.environ.get("HF_TOKEN"))
+            # Read from the process env — under compose the api service loads
+            # .env via env_file; a bare-host run without HF_TOKEN exported may
+            # read "not set" even if a dotenv file holds one (advisory row only).
+            context["hf_token_set"] = bool((os.environ.get("HF_TOKEN") or "").strip())
         return templates.TemplateResponse(request, "setup.html", context)
 
     def _setup_redirect(step: WizardStep) -> RedirectResponse:

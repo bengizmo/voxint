@@ -45,7 +45,9 @@ _cleanup() { [ -n "${_CLEANUP_TMP:-}" ] && rm -f "$_CLEANUP_TMP"; return 0; }
 # ${BASH_SOURCE[0]} (not $0) so the path is correct when the script is sourced
 # in library mode by the test harness, as well as when executed directly.
 SCRIPT_SELF=${BASH_SOURCE[0]:-$0}
-SCRIPT_DIR=$(CDPATH= cd -P -- "$(dirname -- "$SCRIPT_SELF")" && pwd)
+# No `--` for dirname: it is a GNU-ism some BSD dirnames reject, and
+# SCRIPT_SELF derives from BASH_SOURCE so it cannot begin with a dash.
+SCRIPT_DIR=$(CDPATH= cd -P -- "$(dirname "$SCRIPT_SELF")" && pwd)
 REPO_ROOT=$(CDPATH= cd -P -- "$SCRIPT_DIR/.." && pwd)
 cd "$REPO_ROOT"
 
@@ -228,6 +230,7 @@ prompt_media_root() {
   case $ans in
     "~/"*) ans="$HOME/${ans#\~/}" ;;
     "~")   ans="$HOME" ;;
+    "~"*)  fail "Media path '~user/...' forms are not expanded here -- type the absolute path instead." ;;
   esac
   # `read` never expands $VAR, so a typed `$HOME/media` would create a literal
   # directory named `$HOME`. A ':' breaks the Compose short-volume syntax. Refuse
@@ -283,9 +286,9 @@ prompt_compute_tier() {
     IFS= read -r ans || fail "No input."
     ans=${ans:-$def}
     case $ans in
-      g|G|gpu|GPU)    COMPUTE_TIER_VALUE=gpu;  return 0 ;;
-      c|C|cpu|CPU)    COMPUTE_TIER_VALUE=cpu;  return 0 ;;
-      n|N|none|None)  COMPUTE_TIER_VALUE=none; return 0 ;;
+      g|G|gpu|GPU)        COMPUTE_TIER_VALUE=gpu;  return 0 ;;
+      c|C|cpu|CPU)        COMPUTE_TIER_VALUE=cpu;  return 0 ;;
+      n|N|none|None|NONE) COMPUTE_TIER_VALUE=none; return 0 ;;
     esac
     say "  Please answer g, c, or n."
   done
@@ -314,6 +317,12 @@ prompt_hf_token() {
     if ends_with_backslash "$tok"; then
       say "  The token must not end with a backslash (\\)."; continue
     fi
+    # A double-quote would break the curl -K config line the preflight builds;
+    # whitespace/control characters mean a mangled paste (tokens are hf_ + alnum).
+    case $tok in
+      *\"*)          say "  The token must not contain a double-quote (\") character."; continue ;;
+      *[[:space:]]*) say "  The token must not contain whitespace -- re-paste it as one line."; continue ;;
+    esac
     HF_TOKEN_VALUE=$tok
     return 0
   done
@@ -499,11 +508,23 @@ decide_existing_env() {
 
 # Read one key's value from the kept .env without sourcing it. Echoes the
 # value of the LAST uncommented KEY= line (Compose dotenv semantics: last one
-# wins), with optional single-quote wrapping stripped.
+# wins), normalized: a trailing CR (CRLF-edited files), surrounding blanks,
+# and one MATCHED pair of single or double quotes are stripped -- so a
+# hand-edited HF_TOKEN="" reads as empty and HF_TOKEN="hf_x" as hf_x, matching
+# what Compose interpolation sees. (export-prefixed or indented lines are not
+# matched; installer-managed files never contain them.)
 read_env_value() {
   local raw
   raw=$(grep -E "^${1}=" .env 2>/dev/null | tail -n1 | cut -d= -f2-) || raw=""
-  raw=${raw#\'}; raw=${raw%\'}
+  raw=${raw%$'\r'}
+  raw=${raw#"${raw%%[![:blank:]]*}"}
+  raw=${raw%"${raw##*[![:blank:]]}"}
+  if [ "${#raw}" -ge 2 ]; then
+    case $raw in
+      \'*\') raw=${raw#\'}; raw=${raw%\'} ;;
+      \"*\") raw=${raw#\"}; raw=${raw%\"} ;;
+    esac
+  fi
   printf '%s' "$raw"
 }
 
@@ -520,13 +541,19 @@ update_env_keys() {
   while IFS= read -r line || [ -n "$line" ]; do
     case $line in
       VOXINT_COMPOSE_TIER=*)
-        printf 'VOXINT_COMPOSE_TIER=%s\n' "$COMPUTE_TIER_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
-        wrote_tier=1
+        # Rewrite the first occurrence; drop later duplicates (Compose is
+        # last-wins, so keeping them would leave a stale-looking earlier line).
+        if [ "$wrote_tier" = 0 ]; then
+          printf 'VOXINT_COMPOSE_TIER=%s\n' "$COMPUTE_TIER_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
+          wrote_tier=1
+        fi
         ;;
       HF_TOKEN=*)
         if [ -n "$HF_TOKEN_VALUE" ]; then
-          printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
-          wrote_tok=1
+          if [ "$wrote_tok" = 0 ]; then
+            printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
+            wrote_tok=1
+          fi
         else
           printf '%s\n' "$line" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
         fi
@@ -543,7 +570,19 @@ update_env_keys() {
     printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
   fi
   umask "$old_umask"
-  if ! docker compose --env-file "$tmp" config --quiet >/dev/null 2>&1; then
+  # Validate with the file set this .env will actually run: the recorded tier's
+  # overlay when it will be startable (token present -- either just entered or
+  # already in the pre-update .env), else the core file only. Mirrors write_env.
+  local vtok vargs
+  vtok=$HF_TOKEN_VALUE
+  if [ -z "$vtok" ]; then vtok=$(read_env_value HF_TOKEN); fi
+  if [ "$COMPUTE_TIER_VALUE" != "none" ] && [ -n "$vtok" ]; then
+    vargs=$(compose_file_args_for_tier "$COMPUTE_TIER_VALUE")
+  else
+    vargs=$(compose_file_args_for_tier none)
+  fi
+  # shellcheck disable=SC2086  # intentional word-splitting of the -f arguments
+  if ! docker compose $vargs --env-file "$tmp" config --quiet >/dev/null 2>&1; then
     fail "Updated .env failed Compose validation. This is a bug -- please report it."
   fi
   mv -f "$tmp" .env || fail "Could not move the updated .env into place."
@@ -592,6 +631,9 @@ backup_env() {
   local dest=$base i=1
   while [ -e "$dest" ]; do dest="$base.$i"; i=$((i + 1)); done
   cp -p .env "$dest" || fail "Could not back up existing .env to $dest."
+  # cp -p copies the SOURCE mode -- a hand-created 0644 .env would yield a
+  # world-readable backup full of secrets. Force 0600 regardless.
+  chmod 600 "$dest" 2>/dev/null || true
   say "  Backed up existing .env -> $dest"
 }
 
@@ -664,14 +706,19 @@ pull_and_start() {
   else
     step "Starting the stack (core + $EFFECTIVE_TIER model services)"
   fi
-  if ! dc up -d; then
+  # --remove-orphans: on a re-run that switched tier (e.g. gpu -> none, or a
+  # deferred token), containers from the previously-active overlay are no
+  # longer in the file set and would otherwise keep running while the handoff
+  # claims core-only. Compose removes exactly those; same-name services on a
+  # gpu<->cpu switch are recreated, not orphaned.
+  if ! dc up -d --remove-orphans; then
     say ""
     say "Startup failed. Current services:"
     dc ps -a >&2 || true
     say ""
     say "Inspect the one-shot migration and API logs with:"
-    say "  docker compose logs migrate"
-    say "  docker compose logs api"
+    say "  docker compose $COMPOSE_FILE_ARGS logs migrate"
+    say "  docker compose $COMPOSE_FILE_ARGS logs api"
     fail "docker compose up did not succeed."
   fi
 }
@@ -739,8 +786,8 @@ wait_for_health() {
   say ""
   say "Timed out after 180s waiting for the API to report healthy. It may still be"
   say "starting (a slow first pull/migrate). Check status and logs with:"
-  say "  docker compose ps -a"
-  say "  docker compose logs migrate api"
+  say "  docker compose $COMPOSE_FILE_ARGS ps -a"
+  say "  docker compose $COMPOSE_FILE_ARGS logs migrate api"
   fail "API health check timed out."
 }
 
@@ -756,7 +803,7 @@ print_handoff() {
     *)
       # Fallback if `docker compose port` fails: read the configured API_PORT from
       # .env rather than assuming the default (which would be wrong on an override).
-      port=$(grep -m1 '^API_PORT=' .env 2>/dev/null | cut -d= -f2 | tr -d "'\" ")
+      port=$(read_env_value API_PORT)
       [ -n "$port" ] || port=8080
       url="http://127.0.0.1:$port/"
       ;;
@@ -767,7 +814,10 @@ print_handoff() {
   if [ "$EFFECTIVE_TIER" = "none" ]; then
     say " Voxint core stack is up."
   else
-    say " Voxint is up (core + $EFFECTIVE_TIER-tier model services)."
+    # "core is up" is what wait_for_health verified; the model services were
+    # started but are NOT health-checked here (first boot downloads weights,
+    # which can take minutes) -- the tier section below says how to check them.
+    say " Voxint core is up; $EFFECTIVE_TIER-tier model services were started."
   fi
   say ""
   say "   Console:  $url"
@@ -782,17 +832,25 @@ print_handoff() {
   say ""
   case $EFFECTIVE_TIER in
     cpu)
-      say " Audio processing is ENABLED on the CPU tier. Expect it to be much"
-      say " slower than a GPU -- a long recording can take hours. Slow-but-healthy"
-      say " runs are protected by the CPU timing profile (COMPUTE_TIER=cpu)."
+      say " The CPU-tier model services were STARTED alongside the core stack."
+      say " They may still be booting or downloading model weights on a first"
+      say " run -- check their status before submitting audio:"
+      say "   docker compose -f compose.yaml -f compose.cpu.yaml ps"
+      say " Expect CPU inference to be much slower than a GPU -- a long recording"
+      say " can take hours. Slow-but-healthy runs are protected by the CPU timing"
+      say " profile (COMPUTE_TIER=cpu)."
       say ""
       say " Stop the stack with:"
       say "   docker compose -f compose.yaml -f compose.cpu.yaml down"
       ;;
     gpu)
-      say " Audio processing is ENABLED on the GPU tier. First submissions also"
-      say " download model weights inside the services, so the very first run can"
-      say " take a while before it starts making progress."
+      say " The GPU-tier model services were STARTED alongside the core stack."
+      say " They may still be booting or downloading model weights on a first"
+      say " run -- check their status before submitting audio:"
+      say "   docker compose -f compose.yaml -f compose.gpu.yaml ps"
+      say " A run submitted before they are ready retries with backoff, so a"
+      say " brief warmup is harmless; if a run does land failed, requeue it from"
+      say " the run's page once the services are up."
       say ""
       say " Stop the stack with:"
       say "   docker compose -f compose.yaml -f compose.gpu.yaml down"

@@ -12,10 +12,12 @@ Day-2 operations (migrations, recovery, backup, endpoint reference) live in
 
 The manual path — copy `.env.example`, edit it, `docker compose up -d`, learn the
 review workflow by reading — works, but it front-loads every decision before you
-have seen the tool run once. The onboarding path defers all of that: the
-installer asks for the two things it genuinely cannot invent (an admin password
-and a media folder), and everything else is set from inside the running console,
-against a sample you can see working before you point Voxint at your own audio.
+have seen the tool run once. The onboarding path defers what it can: the
+installer asks for the things it genuinely cannot invent — an admin password, a
+media folder, which compute tier should run the model services, and (for the
+GPU/CPU tiers) a Hugging Face token for the gated diarization weights — and
+everything else is set from inside the running console, against a sample you
+can see working before you point Voxint at your own audio.
 
 ## 1. Guided installer
 
@@ -24,8 +26,8 @@ git clone https://github.com/bengizmo/voxint.git && cd voxint
 ./scripts/install.sh
 ```
 
-`scripts/install.sh` is a POSIX/Bash 3.2+ script (macOS and Linux, no runtime
-dependency beyond Docker). It:
+`scripts/install.sh` is a Bash 3.2+ script (macOS and Linux — run it with
+bash, not `sh`; no runtime dependency beyond Docker). It:
 
 - preflights Docker and the Compose plugin (**≥ 2.24** — the legacy v1
   `docker-compose` binary cannot parse this stack);

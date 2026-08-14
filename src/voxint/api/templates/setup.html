@@ -142,8 +142,9 @@
      (<code>compose.gpu.yaml</code>) or, with no NVIDIA GPU, the CPU overlay
      (<code>compose.cpu.yaml</code>); see the README's quickstart. This check is advisory —
      you can finish setup regardless. But a run submitted while a service it needs is down
-     will retry with backoff for a while and then land <strong>failed</strong>; once the
-     services are up, requeue it from the run's page.</p>
+     will retry with backoff (about five attempts over roughly an hour and a half) and then
+     land <strong>failed</strong>; once the services are up, requeue it from the run's
+     page.</p>
   <div class="actions">
     <a href="/setup?step=services">Re-check</a>
     <a href="/setup?step=finish">Continue →</a>
