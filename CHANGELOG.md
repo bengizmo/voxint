@@ -5,6 +5,68 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-08-14
+
+Onboarding patch: closes the v0.4.0 first-run traps (#17–#22). No model
+service, pipeline, or numerical changes — images rebuild, numerics untouched.
+
+### Added
+- **Installer compute-tier selection** (GPU / CPU / none-for-now; suggests GPU
+  when `nvidia-smi` is present), remembered in `.env` as
+  `VOXINT_COMPOSE_TIER`; one helper owns the tier → compose-file mapping and
+  every installer Compose invocation goes through it, so the pull/up/status
+  commands can never disagree about the active overlay (#18).
+- **Installer Hugging Face token prompt** (hidden input, both pyannote gate
+  URLs explained) with an advisory two-stage check — token validity, then
+  access to each gated repo (terms accepted). Warnings only, never blocks;
+  the token reaches curl via stdin config, never argv. Skipping the token
+  records the tier but starts the core stack only (both compute overlays
+  refuse to interpolate without `HF_TOKEN`), and the completion notice spells
+  out the three steps to finish (#17).
+- **Setup wizard SERVICES step**: a Hugging Face token presence row (never
+  the value) and guidance covering both compute tiers, not just GPU (#17, #18).
+- **Run page**: static guidance when a run failed at a model stage — start a
+  compute tier, wait for it, requeue (#18).
+- **`docs/interpreting-diarization.md`**: segment labels are a
+  dominant-overlap projection and can under-report speakers (the turn ledger
+  is the source of truth); short clips can over-split; honest note that
+  `min/max_speakers` is service-API-only today (#22).
+- **Offline installer test suite** (33 tests) driving the
+  `VOXINT_INSTALL_LIB=1` seam with fake `docker`/`curl` on PATH: tier
+  mapping, port-collision handling (#21), `.env` render/update/backup/0600,
+  dotenv normalization, and secret non-disclosure (token never in
+  stdout/stderr/argv).
+
+### Fixed
+- **Installer port-collision prompts were invisible**: after the first
+  detected collision, a stray `exec … 2>/dev/null` in `port_in_use`
+  permanently redirected the whole script's stderr to /dev/null — every
+  later prompt and message vanished (#21).
+- Installer re-runs that switch tier (or defer on a removed token) no longer
+  strand the previous overlay's model containers
+  (`docker compose up --remove-orphans`).
+- Kept-`.env` reads now match Compose dotenv semantics (trailing CR,
+  surrounding blanks, matched single/double quotes) — a hand-edited
+  `HF_TOKEN=""` no longer defeats the skip-token deferral or produces a
+  false "token rejected" warning.
+- `.env` backups are forced to mode 0600 (`cp -p` had preserved a loose
+  source mode).
+- The false "a run simply waits on any service it needs" claim (wizard +
+  onboarding docs) replaced with the real behavior: retry with backoff
+  (about five attempts over roughly an hour and a half), then FAILED, then
+  requeue from the run's page.
+
+### Changed
+- README leads non-NVIDIA users to the CPU tier from the top of the
+  quickstart ("No NVIDIA GPU? Start here too"), and the CPU section is a
+  linkable heading (#20).
+- README and `voxint score --help` now state exactly what the harness
+  scores: speaker attribution (name accuracy / agreement / ensemble) — ASR
+  accuracy / WER is out of scope (#19).
+- The installer handoff is honest about readiness: only the API is
+  health-checked; model services are reported as *started* with the ps
+  command to check them, not "enabled".
+
 ## [0.4.0] — 2026-08-13
 
 CPU tier: run Voxint's full pipeline with **no NVIDIA GPU** — on plain
