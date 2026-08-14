@@ -29,21 +29,31 @@ dependency beyond Docker). It:
 
 - preflights Docker and the Compose plugin (**≥ 2.24** — the legacy v1
   `docker-compose` binary cannot parse this stack);
-- prompts only for an **admin password** and a **media folder**, and
-  auto-generates the rest (including a random `CSRF_SECRET`);
+- prompts for an **admin password**, a **media folder**, a **compute tier** for
+  the model services (GPU / CPU / none-for-now; it suggests GPU when
+  `nvidia-smi` is present), and — for the GPU/CPU tiers — a **Hugging Face
+  token** (the pyannote diarization weights are HF-gated), and auto-generates
+  the rest (including a random `CSRF_SECRET`);
+- advisory-checks the token: is it valid, and can it reach both gated pyannote
+  repos (terms accepted)? Warnings only — it never blocks the install;
 - renders `.env` from `.env.example` — never overwriting an existing `.env`
-  without first taking a timestamped backup;
+  without first taking a timestamped backup. The tier choice is recorded as
+  `VOXINT_COMPOSE_TIER`, so re-runs start the same overlay (a pre-0.4.1 `.env`
+  is asked once and updated in place, with a backup);
 - detects host-port collisions (`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`) and
   offers a free alternate;
-- pulls the pinned release images, starts the stack, polls the API container's
-  healthcheck, then prints the console URL.
+- pulls the pinned release images, starts the stack — core control plane plus
+  the chosen tier's model services — polls the API container's healthcheck,
+  then prints the console URL.
 
-It is safe to re-run. What it brings up is the **core control plane** — console,
-review UI, and durable pipeline state — which is enough to open the console and
-adjudicate, but **not** to transcribe: audio processing needs the GPU model
-services (`compose.gpu.yaml`; see the README's GPU section and
-[gpu-contracts.md](gpu-contracts.md)). The installer says so explicitly rather
-than letting a run silently stall on a missing service.
+It is safe to re-run. With a tier and a token, the stack it starts can process
+audio end-to-end. If you picked a tier but skipped the token, only the **core
+control plane** starts (both compute overlays refuse to start without
+`HF_TOKEN` — the weights are gated), and the completion notice spells out the
+three steps to finish: create a token, accept both model gates, set `HF_TOKEN`
+in `.env`, then re-run the installer or start the overlay by hand. The
+installer says so explicitly rather than letting a run silently fail on a
+missing service.
 
 ## 2. First-run setup wizard
 
@@ -61,7 +71,7 @@ The wizard is six steps, each optional and revisitable:
 | Media folders | `/setup/media` | Register folders under `MEDIA_ROOT` (one relative path per line). An optional **bounded scan** (`/setup/scan`) previews audio/video not yet known to Voxint and batch-registers it for transcription. |
 | Vocabulary | `/setup/vocabulary` | Names, jargon, acronyms, preferred spellings — one per line. Fed to both the Whisper `initial_prompt` and the LLM name-attribution context, so unusual terms transcribe and attribute correctly. |
 | LLM enhancement | `/setup/llm` | Toggle optional transcript enhancement and set an OpenAI-compatible endpoint/model. Best-effort by design — a slow or failing model never blocks a run, enhancement is simply skipped. |
-| Model services | `/setup/services` | Live reachability check of the ASR / diarizer / embedder GPU services. Advisory only — you can finish regardless, and a run waits on any service it needs. |
+| Model services | `/setup/services` | Live reachability check of the ASR / diarizer / embedder model services (GPU or CPU tier). Advisory only — you can finish regardless. A run submitted while a needed service is down retries with backoff and eventually **fails**; requeue it from the run's page once services are up. |
 | Finish | `/setup/finish` | Commits onboarding, releases the gate, and (if the tutorial is seeded) launches the guided tutorial. |
 
 Two behaviors worth knowing:
@@ -126,9 +136,16 @@ nav) is the durable entry point for both flows:
   (through `/setup/finish`) to release it.
 - **A vocabulary or LLM change "did nothing."** Preferences are snapshotted at run
   start; they apply to your *next* submission, not to runs already in flight.
-- **Model-services step shows everything down.** The core stack has no GPU
-  services; start the GPU overlay (`compose.gpu.yaml`). The check is advisory —
-  you can finish setup and a run will simply wait on the services it needs.
+- **Model-services step shows everything down.** The core stack has no model
+  services; start an overlay — GPU (`compose.gpu.yaml`) or CPU
+  (`compose.cpu.yaml`). The check is advisory — you can finish setup — but a run
+  submitted while a needed service is down retries with backoff (roughly five
+  attempts over an hour and a half) and then lands **failed**; bring the
+  services up and requeue it from the run's page.
+- **Diarization output looks wrong** (transcript shows fewer speakers than you
+  heard, or a short clip splits one voice in two). Usually correct behavior
+  being misread — see
+  [interpreting-diarization.md](interpreting-diarization.md).
 - **`voxint tutorial seed` reports an existing run.** It is idempotent by design;
   the bundled sample is seeded once and reused. Use **Replay** from Settings to go
   through it again.

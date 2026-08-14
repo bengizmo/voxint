@@ -619,7 +619,13 @@ def cmd_ensemble(args: argparse.Namespace) -> int:
 def register(subparsers: Any) -> None:
     """Attach the ``score`` command group to the top-level CLI subparsers."""
     score_p = subparsers.add_parser(
-        "score", help="offline scoring harness (file-based, no DB)"
+        "score",
+        help="offline speaker-attribution scoring harness (file-based, no DB)",
+        description=(
+            "Score speaker-attribution quality over curated golden vectors: "
+            "name accuracy, acoustic agreement, and ensemble fusion. "
+            "ASR accuracy / WER measurement is out of scope."
+        ),
     )
     score_sub = score_p.add_subparsers(dest="score_command", required=True)
 

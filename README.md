@@ -32,9 +32,11 @@ What makes it different is the orchestration "glue" most pipelines skip:
   per-stage attempt ledger), bounded file upload, and yt-dlp URL ingestion, from the same app.
   Submission is durable-first: a broker outage leaves the run queued for the recovery sweep,
   never lost. The console is append-only — no delete, no cancel.
-- **Measurement harnesses** — name-accuracy scoring (McNemar / bootstrap / Wilson) and a
-  golden-dataset agreement labeler, runnable as CLIs (worked example under
-  [`examples/`](examples/README.md)).
+- **Measurement harnesses** — **speaker-attribution** scoring, runnable as CLIs:
+  name-accuracy against ground truth (McNemar / bootstrap / Wilson), acoustic
+  agreement verdicts, and verdict-level ensemble fusion (worked example under
+  [`examples/`](examples/README.md)). They score *who spoke*, not *what was
+  transcribed* — ASR accuracy / WER measurement is out of scope today.
 
 ## The adjudication console
 
@@ -56,6 +58,12 @@ assign / enroll / exclude / unknown actions. (Synthetic demo data pictured.)
 Requires Docker Engine with the **Compose plugin ≥ 2.24** (`docker compose
 version` — the legacy v1 `docker-compose` binary cannot parse this stack).
 
+> **No NVIDIA GPU? Start here too.** Voxint does not need one — the CPU tier
+> runs the full pipeline on plain amd64/arm64 servers, AMD boxes, and Apple
+> Silicon with zero GPU configuration. Follow the same quickstart, then use the
+> `compose.cpu.yaml` overlay where the GPU one appears —
+> see [No NVIDIA GPU? (CPU tier)](#no-nvidia-gpu-cpu-tier).
+
 ```bash
 git clone https://github.com/bengizmo/voxint.git && cd voxint
 ```
@@ -66,13 +74,18 @@ git clone https://github.com/bengizmo/voxint.git && cd voxint
 ./scripts/install.sh
 ```
 
-It asks only for an admin password and a media folder, generates everything
-else (including a random `CSRF_SECRET`), pulls the pinned release images, starts
-the stack, waits for the API to report healthy, and prints the console URL. It
+It asks for an admin password, a media folder, a **compute tier** for the model
+services (GPU / CPU / none for now), and — for the GPU/CPU tiers — a **Hugging
+Face token** (the pyannote diarization weights are HF-gated; the installer
+explains the two model gates to accept and checks the token, warnings only).
+It generates everything else (including a random `CSRF_SECRET`), pulls the
+pinned release images, starts the core stack plus your chosen tier's model
+services, waits for the API to report healthy, and prints the console URL. It
 is safe to re-run — an existing `.env` is kept unless you ask to regenerate it
-(which backs the old one up first). This brings up the **core control plane**
-(console, review UI, durable pipeline state) — enough to open the console and
-adjudicate; audio processing additionally needs the GPU model services (below).
+(which backs the old one up first), and your tier choice is remembered
+(`VOXINT_COMPOSE_TIER`). Skip the token and only the **core control plane**
+starts (console, review UI, durable pipeline state — enough to adjudicate, not
+to process audio); the completion notice explains how to finish.
 
 **Or configure by hand:**
 
@@ -128,7 +141,9 @@ Per-service details, env tunables, and image matrices:
 `services/*/README.md`; wire contracts:
 [docs/gpu-contracts.md](docs/gpu-contracts.md).
 
-**No NVIDIA GPU?** The same three model services ship as multi-arch
+### No NVIDIA GPU? (CPU tier)
+
+The same three model services ship as multi-arch
 (amd64 + arm64) `-cpu` images — no GPU, no NVIDIA toolkit, runs on plain
 servers, AMD boxes, and Apple Silicon via Docker Desktop:
 
@@ -162,8 +177,9 @@ uv run uvicorn voxint.api.app:app --reload
 ```
 
 The scoring harness needs none of the stack — `pip install voxint` gives you
-the `voxint score` CLI (pure file-in/file-out, no database or GPU services);
-see [`examples/`](examples/README.md).
+the `voxint score` CLI (pure file-in/file-out, no database or GPU services;
+speaker-attribution metrics only, no ASR/WER); see
+[`examples/`](examples/README.md).
 
 ## Deployment model
 
