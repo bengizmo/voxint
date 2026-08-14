@@ -472,6 +472,97 @@ def test_env_file_parsing_strips_installer_quoting(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Log rotation — copytruncate semantics (launchd holds the StandardOutPath fd)
+# --------------------------------------------------------------------------- #
+def test_rotate_log_below_threshold_is_untouched(tmp_path: Path) -> None:
+    log = tmp_path / "whisper.log"
+    log.write_bytes(b"small\n")
+    proc = run_lib(tmp_path, f'rotate_log_file "{log}" 1 5')
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_bytes() == b"small\n"
+    assert list(tmp_path.glob("whisper_*.log")) == []
+
+
+def test_rotate_log_missing_file_is_a_noop(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, f'rotate_log_file "{tmp_path}/absent.log" 1 5')
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_rotate_log_archives_and_truncates_in_place(tmp_path: Path) -> None:
+    # copytruncate: the archive gets the bytes, the LIVE file keeps its inode
+    # (launchd's fd) and ends up empty — an mv-style rotation would leave the
+    # running service writing into the archive until restart.
+    log = tmp_path / "whisper.log"
+    payload = b"x" * (1024 * 1024 + 1)
+    log.write_bytes(payload)
+    inode_before = log.stat().st_ino
+    proc = run_lib(tmp_path, f'rotate_log_file "{log}" 1 5')
+    assert proc.returncode == 0, proc.stderr
+    assert log.stat().st_size == 0
+    assert log.stat().st_ino == inode_before, "rotation replaced the live inode"
+    archives = list(tmp_path.glob("whisper_*.log"))
+    assert len(archives) == 1
+    assert archives[0].read_bytes() == payload
+
+
+def test_prune_keeps_only_newest_archives(tmp_path: Path) -> None:
+    log = tmp_path / "pyannote.log"
+    log.write_bytes(b"live")
+    stamps = [f"2026-08-{day:02d}-03-17-00" for day in (10, 11, 12, 13)]
+    for stamp in stamps:
+        (tmp_path / f"pyannote_{stamp}.log").write_bytes(b"old")
+    # An unrelated file matching neither name nor stamp shape must survive.
+    (tmp_path / "pyannote_notes.log").write_bytes(b"keep")
+    proc = run_lib(tmp_path, f'prune_log_archives "{log}" 2')
+    assert proc.returncode == 0, proc.stderr
+    remaining = sorted(p.name for p in tmp_path.glob("pyannote_*.log"))
+    assert remaining == [
+        f"pyannote_{stamps[-2]}.log",
+        f"pyannote_{stamps[-1]}.log",
+        "pyannote_notes.log",
+    ]
+    assert log.read_bytes() == b"live"
+
+
+def test_cmd_rotate_logs_covers_all_services_and_its_own_log(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    for name in ("whisper", "pyannote", "titanet", "logrotate"):
+        (logs_dir / f"{name}.log").write_bytes(b"y" * (1024 * 1024 + 1))
+    proc = run_lib(
+        tmp_path, "cmd_rotate_logs", extra_env={"VOXINT_METAL_LOG_MAX_MB": "1"}
+    )
+    assert proc.returncode == 0, proc.stderr
+    for name in ("whisper", "pyannote", "titanet", "logrotate"):
+        assert (logs_dir / f"{name}.log").stat().st_size == 0
+        assert len(list(logs_dir.glob(f"{name}_*.log"))) == 1
+
+
+def test_logrotate_plist_is_a_daily_oneshot(tmp_path: Path) -> None:
+    out = tmp_path / "logrotate.plist"
+    proc = run_lib(tmp_path, f'render_logrotate_plist "{out}"')
+    assert proc.returncode == 0, proc.stderr
+    with out.open("rb") as fh:
+        plist = plistlib.load(fh)
+    assert plist["Label"] == "com.voxint.metal.logrotate"
+    args = plist["ProgramArguments"]
+    assert args[0] == "/bin/bash"
+    assert args[1].endswith("scripts/metal/voxint-metal.sh")
+    assert args[2] == "rotate-logs"
+    # launchd inherits no shell env — the job must carry its own home + knobs.
+    env = plist["EnvironmentVariables"]
+    assert env["VOXINT_METAL_HOME"] == str(tmp_path)
+    assert env["VOXINT_METAL_LOG_MAX_MB"] == "50"
+    assert env["VOXINT_METAL_LOG_ARCHIVES"] == "5"
+    # One-shot daily: calendar-fired, never RunAtLoad, never KeepAlive (a
+    # KeepAlive here would respawn the rotation in a loop).
+    assert plist["RunAtLoad"] is False
+    assert plist["StartCalendarInterval"] == {"Hour": 3, "Minute": 17}
+    assert "KeepAlive" not in plist
+    assert plist["StandardOutPath"] == f"{tmp_path}/logs/logrotate.log"
+
+
+# --------------------------------------------------------------------------- #
 # CLI surface
 # --------------------------------------------------------------------------- #
 def test_no_args_prints_usage_and_fails(tmp_path: Path) -> None:

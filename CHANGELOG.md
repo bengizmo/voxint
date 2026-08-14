@@ -6,6 +6,13 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **Metal-tier log rotation** (metal review follow-up): `voxint-metal.sh up`
+  now installs a daily launchd job (`com.voxint.metal.logrotate`) that
+  copy-truncates any service log over 50 MB to a timestamped archive,
+  keeping the newest 5 — launchd's `StandardOutPath` never rotates and
+  `KeepAlive` keeps services up for months. `VOXINT_METAL_LOG_MAX_MB` /
+  `VOXINT_METAL_LOG_ARCHIVES` override; new `rotate-logs` subcommand runs a
+  pass by hand; `logs -f` now follows with `tail -F`.
 - **Parity references now record the exact request payloads** they were
   generated with (`tools/generate_parity_references.py` writes a
   `meta.request` block per reference): parity lanes replay hardcoded

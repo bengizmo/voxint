@@ -62,6 +62,11 @@ TITANET_ONNX_RELEASE=titanet-onnx-v1
 WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
 WHISPER_MODEL_REPO=Systran/faster-whisper-large-v2
 LAUNCHD_PREFIX=com.voxint.metal
+# Log rotation knobs (launchd StandardOutPath never rotates; KeepAlive keeps
+# services up for months). copytruncate rotation runs from cmd_up and from a
+# daily launchd job (com.voxint.metal.logrotate).
+VOXINT_METAL_LOG_MAX_MB=${VOXINT_METAL_LOG_MAX_MB:-50}
+VOXINT_METAL_LOG_ARCHIVES=${VOXINT_METAL_LOG_ARCHIVES:-5}
 
 say()  { printf '%s\n' "$*" >&2; }
 step() { printf '\n== %s\n' "$*" >&2; }
@@ -132,6 +137,94 @@ port_in_use() {
     sleep 0.1
   done
   wait "$probe_pid"
+}
+
+# ---------------------------------------------------------------------------
+# Log rotation. launchd opened each service's StandardOutPath fd ONCE at
+# bootstrap: an mv-style rotation would leave the running service writing
+# into the archive's inode until the next restart. copytruncate (cp then
+# truncate the live inode) matches that fd reality; the few bytes a service
+# may write between the cp and the truncate are accepted losses for
+# single-operator stdout logs. No lock file: the only invokers are cmd_up and
+# the daily launchd job, a collision at worst duplicates an archive (pruned
+# next round), while a stale lock would silently stop rotation forever.
+# ---------------------------------------------------------------------------
+rotate_log_file() {
+  # $1 = live log path, $2 = max size in MB, $3 = newest archives to keep.
+  # Below-threshold and missing logs are left untouched.
+  local log=$1 max_mb=$2 keep=$3 size stamp archive
+  [ -f "$log" ] || return 0
+  size=$(wc -c < "$log")
+  [ "$size" -ge $((max_mb * 1024 * 1024)) ] || return 0
+  stamp=$(date +%Y-%m-%d-%H-%M-%S)
+  archive=${log%.log}_$stamp.log
+  cp "$log" "$archive" || return 1
+  : > "$log"
+  say "rotated $(basename "$log") ($size bytes) -> $(basename "$archive")"
+  prune_log_archives "$log" "$keep"
+}
+
+prune_log_archives() {
+  # $1 = live log path, $2 = newest archives to keep. The timestamp format
+  # sorts lexicographically == chronologically, so `sort -r | tail +N` drops
+  # exactly the oldest ones. macOS head has no negative -n; tail -n +K is
+  # POSIX on both platforms.
+  local log=$1 keep=$2 dir base old
+  dir=$(dirname "$log")
+  base=$(basename "$log" .log)
+  ls -1 "$dir" 2>/dev/null \
+    | grep -E "^${base}_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}\.log$" \
+    | sort -r | tail -n +$((keep + 1)) | while IFS= read -r old; do
+      rm -f "$dir/$old"
+    done
+}
+
+cmd_rotate_logs() {
+  # Rotates the three service logs AND the rotation job's own log.
+  local svc rc=0
+  mkdir -p "$VOXINT_METAL_HOME/logs"
+  for svc in $METAL_SERVICES logrotate; do
+    rotate_log_file "$(service_log "$svc")" \
+      "$VOXINT_METAL_LOG_MAX_MB" "$VOXINT_METAL_LOG_ARCHIVES" || rc=1
+  done
+  return $rc
+}
+
+render_logrotate_plist() {
+  # $1 = output path. Daily one-shot (03:17 — an arbitrary quiet minute, off
+  # the exact hour where periodic jobs pile up); launchd coalesces intervals
+  # missed while the Mac slept into one run on wake. No KeepAlive: a clean
+  # exit stays exited until the next calendar fire.
+  local out=$1
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+    printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    printf '<plist version="1.0">\n<dict>\n'
+    printf '  <key>Label</key><string>%s</string>\n' "$(plist_label logrotate)"
+    printf '  <key>ProgramArguments</key>\n  <array>\n'
+    printf '    <string>/bin/bash</string>\n'
+    printf '    <string>%s</string>\n' "$(xml_escape "$METAL_SCRIPT_DIR/voxint-metal.sh")"
+    printf '    <string>rotate-logs</string>\n'
+    printf '  </array>\n'
+    printf '  <key>EnvironmentVariables</key>\n  <dict>\n'
+    printf '    <key>VOXINT_METAL_HOME</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_METAL_HOME")"
+    printf '    <key>VOXINT_METAL_LOG_MAX_MB</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_METAL_LOG_MAX_MB")"
+    printf '    <key>VOXINT_METAL_LOG_ARCHIVES</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_METAL_LOG_ARCHIVES")"
+    printf '  </dict>\n'
+    printf '  <key>RunAtLoad</key><false/>\n'
+    printf '  <key>StartCalendarInterval</key>\n  <dict>\n'
+    printf '    <key>Hour</key><integer>3</integer>\n'
+    printf '    <key>Minute</key><integer>17</integer>\n'
+    printf '  </dict>\n'
+    printf '  <key>StandardOutPath</key><string>%s</string>\n' \
+      "$(xml_escape "$(service_log logrotate)")"
+    printf '  <key>StandardErrorPath</key><string>%s</string>\n' \
+      "$(xml_escape "$(service_log logrotate)")"
+    printf '</dict>\n</plist>\n'
+  } > "$out"
 }
 
 # ---------------------------------------------------------------------------
@@ -557,6 +650,24 @@ cmd_up() {
     || fail "titanet ONNX graph missing -- run: $0 setup"
   whisper_weights_ok "$VOXINT_METAL_HOME" \
     || fail "whisper weights missing or failing the local manifest -- run: $0 setup"
+  # Rotate oversized logs now AND (re)install the daily rotation job — under
+  # KeepAlive the services can run for months without another `up`, so the
+  # inline rotation alone would not bound log growth.
+  cmd_rotate_logs || true
+  plist=$(plist_path logrotate)
+  label=$(plist_label logrotate)
+  render_logrotate_plist "$plist"
+  plutil -lint -s "$plist" || fail "generated plist failed plutil lint: $plist"
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  i=0
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -le 50 ] || fail "$label did not unload within 10s (launchctl bootout race)"
+    sleep 0.2
+  done
+  launchctl bootstrap "gui/$(id -u)" "$plist" \
+    || fail "launchctl bootstrap failed for $label (see $(service_log logrotate))"
+  say "installed $label (daily, keeps $VOXINT_METAL_LOG_ARCHIVES archives over ${VOXINT_METAL_LOG_MAX_MB}MB)"
   for svc in $METAL_SERVICES; do
     plist=$(plist_path "$svc")
     label=$(plist_label "$svc")
@@ -582,7 +693,7 @@ cmd_up() {
 
 cmd_down() {
   local svc label rc=0
-  for svc in $METAL_SERVICES; do
+  for svc in $METAL_SERVICES logrotate; do
     label=$(plist_label "$svc")
     if launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then
       say "stopped $label"
@@ -623,10 +734,13 @@ cmd_status() {
 
 cmd_logs() {
   local svc=${1:-} follow=${2:-}
-  [ -n "$svc" ] || fail "usage: $0 logs <whisper|pyannote|titanet> [-f]"
-  service_port "$svc" >/dev/null || fail "unknown service: $svc"
+  [ -n "$svc" ] || fail "usage: $0 logs <whisper|pyannote|titanet|logrotate> [-f]"
+  [ "$svc" = "logrotate" ] || service_port "$svc" >/dev/null \
+    || fail "unknown service: $svc"
   if [ "$follow" = "-f" ]; then
-    tail -f "$(service_log "$svc")"
+    # -F, not -f: rotation truncates in place (same inode), but a manually
+    # deleted/recreated log would strand a plain -f follower silently.
+    tail -F "$(service_log "$svc")"
   else
     tail -n 100 "$(service_log "$svc")"
   fi
@@ -812,15 +926,18 @@ main() {
     logs)   cmd_logs "$@" ;;
     doctor) cmd_doctor "$@" ;;
     run)    cmd_run "$@" ;;
+    rotate-logs) cmd_rotate_logs "$@" ;;
     *)
       say "voxint-metal.sh -- native model services for the metal tier"
-      say "usage: $0 <setup|up|down|status|logs|doctor|run>"
+      say "usage: $0 <setup|up|down|status|logs|doctor|run|rotate-logs>"
       say "  setup                 venvs + weights (network required)"
       say "  up / down             start/stop under launchd"
       say "  status                healthz + supervision + version skew"
       say "  logs <svc> [-f]       show/follow a service log"
       say "  doctor                environment checks"
       say "  run <svc> --foreground  debug one service in the foreground"
+      say "  rotate-logs           copytruncate-rotate oversized service logs"
+      say "                        (also runs daily via launchd once 'up' has run)"
       exit 1
       ;;
   esac
