@@ -5,6 +5,18 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Source media metadata capture** (#36, schema slice): new write-once
+  `media_source_metadata` table (1:1 with `media_items`) holding normalized
+  extractor context — title, uploader/channel (+URLs), description, upload
+  date, source-claimed duration, tags, canonical URL, extractor
+  name/version — plus a bounded, allowlisted, schema-versioned `raw` JSONB
+  subset and the acquisition timestamp. Metadata is context, not identity:
+  a MediaItem is per-acquisition, so a snapshot can never rewrite the
+  context a past adjudication was made against. New nullable
+  `pipeline_runs.operator_notes` keeps human input structurally apart from
+  scraped metadata. Migration 0009 (additive, clean downgrade).
+
 ### Changed
 - **Metal parity bounds ratcheted from Gate M evidence** (slice 9, panel
   consult recorded in the commit): pyannote boundary drift ≤ 0.10 s (was

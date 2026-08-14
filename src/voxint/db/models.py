@@ -15,7 +15,7 @@ Design notes (see docs/architecture.md when it lands):
 
 import enum
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, ClassVar
 
 from pgvector.sqlalchemy import Vector
@@ -24,6 +24,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -93,6 +94,13 @@ class ArtifactKind(enum.StrEnum):
     TRANSCRIPT_EXPORT = "transcript_export"
 
 
+class SourceKind(enum.StrEnum):
+    # 'rss' is reserved for future feed-item acquisition (issue #36 schema
+    # accommodation); only 'ytdlp' rows are written today.
+    YTDLP = "ytdlp"
+    RSS = "rss"
+
+
 class AssignmentMethod(enum.StrEnum):
     COSINE = "cosine"
     LLM_HINT = "llm_hint"
@@ -136,6 +144,78 @@ class MediaItem(Base):
     )
 
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
+    source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
+        back_populates="media_item"
+    )
+
+
+class MediaSourceMetadata(Base):
+    """Write-once acquisition context for a MediaItem (issue #36).
+
+    Scraped source metadata — what the extractor knew about the recording at
+    acquisition time. It is **context, not identity**: nothing here feeds
+    speaker attribution. One row per MediaItem, inserted by the ACQUIRE stage
+    and never updated: a MediaItem is already per-acquisition (URL submission
+    mints a fresh uuid ``source_path``; the published bytes are immutable), so
+    re-acquiring a URL creates a new MediaItem + snapshot and can never rewrite
+    the context a past adjudication was made against. Human input (operator
+    notes) lives on ``pipeline_runs`` — the two are never conflated.
+
+    Normalized columns are the stable query/display surface;``raw`` holds the
+    bounded, allowlisted, ``raw_schema_version``-stamped subset of the
+    extractor's info-JSON built by ``media/source_metadata.py`` — never the
+    full document (its ``formats``/``http_headers`` carry signed URLs and
+    cookies, which must not persist at rest). ``duration_seconds`` is the
+    *source-claimed* duration (context), distinct from the probed
+    ``media_items.duration_seconds`` (measurement); it feeds nothing downstream.
+    """
+
+    __tablename__ = "media_source_metadata"
+    __table_args__ = (
+        CheckConstraint(
+            f"source_kind IN ({_enum_values(SourceKind)})",
+            name="media_source_metadata_kind_check",
+        ),
+        CheckConstraint(
+            "duration_seconds IS NULL OR duration_seconds >= 0",
+            name="media_source_metadata_duration_nonneg_check",
+        ),
+        CheckConstraint(
+            "raw_schema_version >= 1",
+            name="media_source_metadata_raw_schema_version_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    media_item_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("media_items.id"), unique=True
+    )
+    source_kind: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    uploader: Mapped[str | None] = mapped_column(Text)
+    uploader_url: Mapped[str | None] = mapped_column(Text)
+    channel: Mapped[str | None] = mapped_column(Text)
+    channel_url: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    # Parsed from yt-dlp's YYYYMMDD string; NULL when absent or unparseable.
+    upload_date: Mapped[date | None] = mapped_column(Date)
+    duration_seconds: Mapped[float | None] = mapped_column(Float)
+    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # The extractor's canonical webpage URL (post-redirect) — sanitized by the
+    # extraction allowlist, never a signed transport URL.
+    canonical_url: Mapped[str | None] = mapped_column(Text)
+    extractor: Mapped[str | None] = mapped_column(Text)
+    extractor_version: Mapped[str | None] = mapped_column(Text)
+    raw: Mapped[dict[str, Any] | None] = mapped_column()
+    raw_schema_version: Mapped[int] = mapped_column(Integer)
+    # When the extractor observed the source (carried in the sidecar so a
+    # crash-replay repair reuses the original capture time deterministically).
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    media_item: Mapped[MediaItem] = relationship(back_populates="source_metadata")
 
 
 class PipelineRun(Base):
@@ -173,6 +253,11 @@ class PipelineRun(Base):
     review_claimed_by: Mapped[str | None] = mapped_column(Text)
     review_claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     review_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Operator's free-text notes for this run (issue #36) — human input, kept
+    # structurally apart from scraped source metadata (media_source_metadata).
+    # Editable, last-write-wins, deliberately outside the CAS revision: notes
+    # are operator prose, not pipeline state.
+    operator_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
