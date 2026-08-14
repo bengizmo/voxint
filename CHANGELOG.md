@@ -5,6 +5,10 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-08-14
+
+Speaker roster management (#7): the roster is no longer write-only.
+
 ### Added
 - **Speaker roster page** (`/speakers`, #7): view every enrolled speaker with
   its enrollment provenance, machine-proposal count, and a deterministic
