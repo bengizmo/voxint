@@ -5,6 +5,14 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-08-14
+
+Runs search (#8) plus CLI/observability ergonomics (#25, #32): the runs
+browser gains transcript full-text search and facets, and the CLI grows
+export, list, doctor, stats, and watch alongside a Prometheus `/metrics`
+endpoint. Also carries the cross-platform / dev-experience hardening bundle
+(#26, #27, #28, #29).
+
 ### Added
 - **Search on the runs browser** (`/runs`, #8): transcript full-text search
   (`q=`, Postgres `websearch_to_tsquery` syntax — quotes, `-word`, `OR`) with
@@ -401,7 +409,10 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/bengizmo/voxint/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/bengizmo/voxint/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/bengizmo/voxint/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/bengizmo/voxint/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bengizmo/voxint/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/bengizmo/voxint/compare/v0.4.0...v0.4.1
