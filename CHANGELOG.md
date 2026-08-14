@@ -5,6 +5,25 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Structured & subtitle transcript exports.** The review console now offers
+  SubRip (`.srt`), WebVTT (`.vtt`), JSON, and diarization RTTM (`.rttm`)
+  alongside the existing plain-text export, at
+  `GET /review/{run_id}/export.{srt,vtt,json,rttm}` (all accept `?text=raw|
+  enhanced`, default enhanced; RTTM carries raw diarization labels). SRT/VTT/
+  JSON/TXT share one set of pure formatters (`voxint.export`) with the CLI, so a
+  downloaded file and a piped export are byte-identical.
+- **`voxint export <run_id> --format srt|vtt|json|rttm|txt`** — headless
+  transcript export to stdout or `-o PATH` (refuses to overwrite without
+  `--force`); `--text raw|enhanced` selects the transcript variant.
+- **`voxint list`** — a CLI run browser (newest first) mirroring the `/runs`
+  query, with `--status`, `--limit` (1–500, default `runs_page_size`), and
+  `--json`.
+- **`voxint doctor`** — read-only preflight diagnostics: Postgres, Redis, and
+  each model service's `/healthz` (reporting the compute `device`) are hard
+  checks (exit 1 if any is down); the Hugging Face token and LLM endpoint are
+  advisory (reported, never fail the exit). Credentials are never printed.
+
 ## [0.5.1] — 2026-08-14
 
 Robustness patch for burst-load resilience (#23). No inference or contract

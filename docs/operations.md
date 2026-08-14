@@ -158,13 +158,55 @@ docker compose exec api voxint submit path/to/file.mp3   # local path relative t
 docker compose exec api voxint fetch <url>               # yt-dlp URL ingestion (reads the URL from stdin if omitted)
 docker compose exec api voxint status <run-id>           # run state + per-stage attempt ledger
 docker compose exec api voxint requeue <run-id>          # re-enter a FAILED run at its failed stage
+docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
+docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
+docker compose exec api voxint doctor                    # read-only preflight for every dependency
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
 worker — the CLI never executes a stage itself. `fetch` does the same for a
 remote URL, recording it as `MediaItem.source_url`; the worker's ACQUIRE stage
 downloads it (see below). `status` shows the run's current state plus every
-stage attempt with its error, straight from the persisted ledger.
+stage attempt with its error, straight from the persisted ledger. `list`
+enumerates runs (the same query as the `/runs` page); `--json` prints a machine-
+readable array.
+
+**`voxint doctor`** probes every dependency without changing anything: Postgres
+(`SELECT 1`), Redis (`PING`), and each model service's `/healthz` (reporting its
+compute `device`, e.g. `rocm`/`cpu`) are **hard** checks — the command exits
+non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
+whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
+but never failing the exit code, because the default install needs neither. No
+credentials, tokens, or connection URLs are printed.
+
+### Exporting transcripts
+
+Every run's speaker-attributed transcript exports in five formats, from the CLI
+or over HTTP. Both paths share the same formatters, so a downloaded file and a
+piped export are byte-identical.
+
+```bash
+docker compose exec -T api voxint export <run-id> --format srt   > out.srt
+docker compose exec -T api voxint export <run-id> --format vtt   > out.vtt
+docker compose exec -T api voxint export <run-id> --format json  > out.json
+docker compose exec -T api voxint export <run-id> --format rttm  > out.rttm
+docker compose exec -T api voxint export <run-id> --format txt   > out.txt
+```
+
+- `--format` — `srt` (SubRip), `vtt` (WebVTT), `json` (array of
+  `{start_seconds, end_seconds, speaker, text}`), `rttm` (NIST diarization
+  format), or `txt` (bracketed plain text). Default `txt`.
+- `--text raw|enhanced` — which transcript variant to render (default
+  `enhanced`, the LLM-cleaned text; `raw` is the immutable ASR output). Ignored
+  for `rttm`, which carries raw diarization labels, not attributed text.
+- `-o PATH` — write to a file instead of stdout (refuses to overwrite an
+  existing file unless `--force`).
+
+The same exports are available over HTTP at
+`GET /review/{run_id}/export.{txt,srt,vtt,json,rttm}` (add `?text=raw` for the
+raw variant). RTTM uses the run's UUID as the file id and the raw diarization
+labels (`SPEAKER_00` …), so it round-trips against diarization scoring tools —
+it deliberately does **not** substitute adjudicated speaker names.
 
 ### The browser console
 
@@ -265,7 +307,8 @@ finished — so `/review` below becomes reachable only after onboarding complete
    separate from machine proposals; adjudication precedence is defined in
    quality-gates.md.
 4. **Release / export** — release the claim for the next reviewer, or export
-   the speaker-attributed transcript (`/review/{run_id}/export.txt`).
+   the speaker-attributed transcript (`/review/{run_id}/export.{txt,srt,vtt,
+   json,rttm}`, or `voxint export` — see "Exporting transcripts" above).
 
 ## HTTP endpoints
 
@@ -289,7 +332,8 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}` | Adjudication workbench |
 | `POST /review/{run_id}/labels/{label}/decision` | Record a human ruling for a label |
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
-| `GET /review/{run_id}/export.txt` | Speaker-attributed transcript export |
+| `GET /review/{run_id}/export.{txt,srt,vtt,json}?text=raw\|enhanced` | Speaker-attributed transcript export (plain text, SubRip, WebVTT, JSON) |
+| `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings: re-run the wizard, start/replay/complete the tutorial |

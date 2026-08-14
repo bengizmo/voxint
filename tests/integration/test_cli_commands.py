@@ -9,8 +9,48 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.cli import main
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, Stage
+from voxint.db.models import (
+    DiarizationTurn,
+    MediaItem,
+    PipelineRun,
+    RunStatus,
+    Stage,
+    TranscriptSegment,
+)
 from voxint.pipeline.engine import submit
+
+
+def _seed_completed_run(session: Session) -> uuid.UUID:
+    """A completed run with two transcript segments and two diarization turns."""
+    media = MediaItem(source_path="incoming/talk.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    for index, (label, text) in enumerate([("SPEAKER_00", "hello"), ("SPEAKER_01", "hi")]):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=float(index),
+                end_seconds=float(index) + 1.0,
+                raw_text=text,
+                diarization_label=label,
+            )
+        )
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run.id,
+                turn_index=index,
+                start_seconds=float(index),
+                end_seconds=float(index) + 1.0,
+                label=label,
+                skip_reason="too_short",
+            )
+        )
+    session.commit()
+    return run.id
 
 
 @pytest.fixture()
@@ -204,6 +244,65 @@ def test_requeue_failed_without_stage_refuses_to_guess(
         f"error: run {run_id} is FAILED with no current_stage; refusing to guess"
     )
     assert enqueued == []
+
+
+def test_list_shows_runs_table_and_json(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    assert main(["list"]) == 0
+    table = capsys.readouterr().out
+    assert str(run_id) in table
+    assert "completed" in table
+    assert "incoming/talk.wav" in table
+
+    import json
+
+    assert main(["list", "--json", "--status", "completed"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["run_id"] for r in rows] == [str(run_id)]
+    assert rows[0]["source_path"] == "incoming/talk.wav"
+
+
+def test_list_empty_reports_no_runs(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["list"]) == 0
+    assert "(no runs)" in capsys.readouterr().out
+
+
+def test_export_formats_and_file_output(
+    session_factory: sessionmaker[Session], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    assert main(["export", str(run_id), "--format", "srt"]) == 0
+    srt = capsys.readouterr().out
+    assert "1\n00:00:00,000 --> 00:00:01,000\nSPEAKER_00:\nhello\n" in srt
+
+    # RTTM reads the diarization turns (raw labels, run-uuid file id).
+    assert main(["export", str(run_id), "--format", "rttm"]) == 0
+    rttm = capsys.readouterr().out
+    assert rttm.splitlines()[0] == f"SPEAKER {run_id} 1 0.000 1.000 <NA> <NA> SPEAKER_00 <NA> <NA>"
+
+    # -o writes the file and reports the path (no stdout payload).
+    out = tmp_path / "t.json"
+    assert main(["export", str(run_id), "--format", "json", "-o", str(out)]) == 0
+    assert f"wrote {out}" in capsys.readouterr().out
+    import json
+
+    assert [r["text"] for r in json.loads(out.read_text())] == ["hello", "hi"]
+
+
+def test_export_unknown_run_errors(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = uuid.uuid4()
+    assert main(["export", str(missing), "--format", "json"]) == 2
+    assert f"no run {missing}" in capsys.readouterr().out
 
 
 def test_submit_publishes_only_after_commit(

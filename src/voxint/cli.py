@@ -194,6 +194,148 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _export(args: argparse.Namespace) -> int:
+    """Write a run's transcript in a structured/subtitle format (or RTTM).
+
+    Renders through the same ``voxint.export`` formatters the API export routes
+    use, so a piped export and a downloaded file are byte-identical. RTTM reads
+    diarization turns (raw labels); every other format reads attributed lines.
+    """
+    from sqlalchemy import select
+
+    from voxint.adjudication.transcript import attributed_transcript, parse_transcript_text
+    from voxint.db.models import DiarizationTurn, PipelineRun
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.export import TranscriptFormat, render_transcript, to_rttm
+
+    try:
+        variant = parse_transcript_text(args.text)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    # Refuse to clobber before touching the DB — a surprised operator keeps their file.
+    out_path = Path(args.output) if args.output else None
+    if out_path is not None and out_path.exists() and not args.force:
+        print(f"error: {out_path} exists (use --force to overwrite)")
+        return 2
+
+    factory = build_session_factory(build_engine())
+    with factory() as session:
+        if session.get(PipelineRun, args.run_id) is None:
+            print(f"error: no run {args.run_id}")
+            return 2
+        if args.format == "rttm":
+            turns = (
+                session.execute(
+                    select(DiarizationTurn)
+                    .where(DiarizationTurn.pipeline_run_id == args.run_id)
+                    .order_by(DiarizationTurn.turn_index)
+                )
+                .scalars()
+                .all()
+            )
+            output = to_rttm(turns, str(args.run_id))
+        else:
+            lines = attributed_transcript(session, args.run_id, text=variant)
+            output = render_transcript(lines, TranscriptFormat(args.format))
+
+    if out_path is None:
+        sys.stdout.write(output)
+    else:
+        out_path.write_text(output, encoding="utf-8")
+        print(f"wrote {out_path}")
+    return 0
+
+
+def _list(args: argparse.Namespace) -> int:
+    """Browse the newest runs from the CLI (mirrors the /runs page's query)."""
+    import json
+
+    from voxint.api.runs_query import list_runs, parse_status_filter
+    from voxint.config import get_settings
+    from voxint.db.session import build_engine, build_session_factory
+
+    try:
+        status = parse_status_filter(args.status)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    settings = get_settings()
+    limit = args.limit if args.limit is not None else settings.runs_page_size
+    if not 1 <= limit <= 500:
+        print("error: --limit must be between 1 and 500")
+        return 2
+
+    factory = build_session_factory(build_engine())
+    with factory() as session:
+        page = list_runs(session, status=status, review=None, cursor=None, page_size=limit)
+
+    if args.json:
+        print(
+            json.dumps(
+                [
+                    {
+                        "run_id": str(item.run_id),
+                        "status": item.status,
+                        "source_path": item.source_path,
+                        "created_at": item.created_at.isoformat(),
+                        "unresolved_count": item.unresolved_count,
+                        "label_count": item.label_count,
+                        "claim_live": item.claim_live,
+                        "claimed_by": item.claimed_by,
+                    }
+                    for item in page.items
+                ],
+                indent=2,
+            )
+        )
+        return 0
+
+    if not page.items:
+        print("(no runs)")
+        return 0
+    for item in page.items:
+        created = item.created_at.strftime("%Y-%m-%d %H:%M")
+        print(
+            f"{item.run_id}  {item.status:<10}  {created}"
+            f"  {item.unresolved_count}/{item.label_count} unresolved  {item.source_path}"
+        )
+    return 0
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    """Preflight: check every dependency and report a single pass/fail verdict."""
+    del args
+    import httpx
+
+    from voxint import diagnostics
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_engine
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")  # already sanitized of credentials by get_settings
+        return 2
+
+    engine = build_engine()
+    try:
+        with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
+            results = diagnostics.run_diagnostics(settings, engine, http_client=client)
+    finally:
+        engine.dispose()
+
+    for result in results:
+        tag = "ok  " if result.ok else ("FAIL" if result.hard else "warn")
+        print(f"[{tag}] {result.name}: {result.detail}")
+    code = diagnostics.exit_code(results)
+    verdict = "all hard dependencies OK" if code == 0 else "a hard dependency is down"
+    print(f"\ndoctor: {verdict}")
+    return code
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -219,6 +361,34 @@ def build_parser() -> argparse.ArgumentParser:
         "URL out of argv and shell history)",
     )
     fetch_p.set_defaults(fn=_fetch)
+
+    export_p = sub.add_parser("export", help="export a run's transcript (srt/vtt/json/rttm/txt)")
+    export_p.add_argument("run_id", type=uuid.UUID)
+    export_p.add_argument(
+        "--format",
+        choices=["txt", "srt", "vtt", "json", "rttm"],
+        default="txt",
+        help="output format (default: txt)",
+    )
+    export_p.add_argument(
+        "--text",
+        choices=["raw", "enhanced"],
+        help="which transcript text to render (default: enhanced; ignored for rttm)",
+    )
+    export_p.add_argument("-o", "--output", help="write to PATH instead of stdout")
+    export_p.add_argument(
+        "--force", action="store_true", help="overwrite an existing --output file"
+    )
+    export_p.set_defaults(fn=_export)
+
+    list_p = sub.add_parser("list", help="list the most recent runs, newest first")
+    list_p.add_argument("--status", help="filter by run status (e.g. completed, failed)")
+    list_p.add_argument("--limit", type=int, help="max rows (1..500, default runs_page_size)")
+    list_p.add_argument("--json", action="store_true", help="emit a JSON array instead of a table")
+    list_p.set_defaults(fn=_list)
+
+    doctor_p = sub.add_parser("doctor", help="preflight diagnostics for every dependency")
+    doctor_p.set_defaults(fn=_doctor)
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)
