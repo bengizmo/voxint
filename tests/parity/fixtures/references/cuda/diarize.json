@@ -1,7 +1,7 @@
 {
   "meta": {
     "generated_on": "2026-08-13",
-    "image_tag": "0.3.0",
+    "image_tag": "0.4.0",
     "image_digest": null,
     "hardware": "maintainer NVIDIA hardware",
     "corpus_sha256": {
@@ -25,6 +25,10 @@
       "contract_version": "v1",
       "model": "pyannote/speaker-diarization-3.1",
       "device": "cuda",
+      "engine": "pyannote.audio",
+      "engine_version": "3.1.1",
+      "runtime": "torch",
+      "runtime_version": "2.5.0+cu118",
       "model_loaded": true
     }
   },

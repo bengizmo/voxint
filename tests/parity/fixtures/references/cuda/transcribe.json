@@ -1,7 +1,7 @@
 {
   "meta": {
     "generated_on": "2026-08-13",
-    "image_tag": "0.3.0",
+    "image_tag": "0.4.0",
     "image_digest": null,
     "hardware": "maintainer NVIDIA hardware",
     "corpus_sha256": {
@@ -25,6 +25,10 @@
       "contract_version": "v1",
       "model": "large-v2",
       "device": "cuda",
+      "engine": "faster-whisper",
+      "engine_version": "1.2.1",
+      "runtime": "ctranslate2",
+      "runtime_version": "4.8.1",
       "model_loaded": true
     }
   },
