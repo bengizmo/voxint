@@ -5,6 +5,21 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Search on the runs browser** (`/runs`, #8): transcript full-text search
+  (`q=`, Postgres `websearch_to_tsquery` syntax — quotes, `-word`, `OR`) with
+  a highlighted first-hit snippet per run, a speaker facet (runs whose
+  read-time attribution — human ruling or grounded cosine, merge tombstones
+  canonicalized — is the selected speaker; archived speakers stay listed,
+  marked), a source-path substring facet, and UTC date-range bounds. All
+  facets AND-compose with the existing status/review filters and keyset
+  pagination. Backed by two GIN expression indexes (migration 0008) over
+  `raw_text` AND `enhanced_text` separately — enhancement never makes the raw
+  rendering of a term unfindable, and vice versa. Dictionary is `english`
+  (stemming recall); a stopword-only query matches nothing by design. Results
+  stay newest-first — no relevance ranking pre-1.0 — and the search document
+  is one segment (terms split across segments of a run don't AND-match).
+
 ## [0.7.0] — 2026-08-14
 
 Speaker roster management (#7): the roster is no longer write-only.

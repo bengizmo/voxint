@@ -22,7 +22,7 @@ expression.
 
 from typing import Any
 
-from sqlalchemy import ColumnElement, func, literal_column
+from sqlalchemy import ColumnElement, ColumnExpressionArgument, func, literal_column
 
 TS_CONFIG = "english"
 
@@ -32,7 +32,9 @@ ENHANCED_FTS_INDEX_NAME = "transcript_segments_enhanced_fts_idx"
 _CONFIG_LITERAL: ColumnElement[str] = literal_column(f"'{TS_CONFIG}'")
 
 
-def ts_vector(text_column: ColumnElement[str] | ColumnElement[str | None]) -> ColumnElement[Any]:
+def ts_vector(
+    text_column: ColumnExpressionArgument[str] | ColumnExpressionArgument[str | None],
+) -> ColumnElement[Any]:
     """``to_tsvector('<config>', column)`` matching the 0008 index expressions."""
     return func.to_tsvector(_CONFIG_LITERAL, text_column)
 
@@ -40,3 +42,12 @@ def ts_vector(text_column: ColumnElement[str] | ColumnElement[str | None]) -> Co
 def ts_query(user_query: str) -> ColumnElement[Any]:
     """Parse operator input with ``websearch_to_tsquery`` — never raises on syntax."""
     return func.websearch_to_tsquery(_CONFIG_LITERAL, user_query)
+
+
+def ts_headline(
+    document: ColumnExpressionArgument[str] | ColumnExpressionArgument[str | None],
+    query: ColumnElement[Any],
+    options: str,
+) -> ColumnElement[str]:
+    """``ts_headline('<config>', document, query, options)`` for hit snippets."""
+    return func.ts_headline(_CONFIG_LITERAL, document, query, options)

@@ -97,6 +97,23 @@ def describe_name_owner(owner: Speaker) -> str:
     return f"speaker {name!r} already exists"
 
 
+def searchable_speakers(session: Session) -> list[Speaker]:
+    """Canonical identities for the runs search facet: active, then archived.
+
+    Archived speakers stay listed (the UI marks them) because their human
+    decisions remain effective — hiding them would make those runs
+    undiscoverable. Merge tombstones are excluded; their history is found
+    through the canonical target via ``alias_ids``.
+    """
+    return list(
+        session.execute(
+            select(Speaker)
+            .where(Speaker.merged_into_id.is_(None))
+            .order_by(Speaker.deleted_at.is_not(None), Speaker.display_name)
+        ).scalars()
+    )
+
+
 def merge_map(session: Session) -> dict[uuid.UUID, uuid.UUID]:
     """Every tombstone's target, for read-time canonicalization."""
     return {

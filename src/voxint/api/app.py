@@ -73,6 +73,7 @@ from voxint.api.runs_query import (
     ReviewFilter,
     list_runs,
     parse_review_filter,
+    parse_search_filters,
     parse_status_filter,
     runs_url,
 )
@@ -142,6 +143,7 @@ from voxint.speakers.roster import (
     rename_speaker,
     restore_speaker,
     roster_overview,
+    searchable_speakers,
     voiceprint_bars,
 )
 from voxint.speakers.roster import is_active as roster_is_active
@@ -913,11 +915,23 @@ def _register_routes(app: FastAPI) -> None:
         status: str | None = None,
         review: str | None = None,
         cursor: str | None = None,
+        q: str | None = None,
+        speaker: str | None = None,
+        source: str | None = None,
+        created_from: str | None = None,
+        created_to: str | None = None,
     ) -> Response:
         settings: Settings = request.app.state.settings
         try:
             status_filter = parse_status_filter(status)
             review_filter = parse_review_filter(review)
+            search_filters = parse_search_filters(
+                q=q,
+                speaker=speaker,
+                source=source,
+                created_from=created_from,
+                created_to=created_to,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         parsed_cursor: Cursor | None = None
@@ -934,9 +948,15 @@ def _register_routes(app: FastAPI) -> None:
             review=review_filter,
             cursor=parsed_cursor,
             page_size=settings.runs_page_size,
+            filters=search_filters,
         )
         next_url = (
-            runs_url(status=status_filter, review=review_filter, cursor=page.next_cursor)
+            runs_url(
+                status=status_filter,
+                review=review_filter,
+                filters=search_filters,
+                cursor=page.next_cursor,
+            )
             if page.next_cursor
             else None
         )
@@ -950,6 +970,8 @@ def _register_routes(app: FastAPI) -> None:
                 "review": review_filter,
                 "statuses": list(RunStatus),
                 "reviews": list(ReviewFilter),
+                "filters": search_filters,
+                "facet_speakers": searchable_speakers(session),
                 "next_url": next_url,
                 # Server-issued per-render ids: each namespaces its form's path and
                 # makes a double-submit idempotent (see POST /submit, POST /fetch).
