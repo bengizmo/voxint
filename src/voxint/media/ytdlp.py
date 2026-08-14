@@ -95,14 +95,18 @@ def _kill_process_group(
     descendants (a fragment fetcher, a muxer) are still alive, silently leaving
     them running. Escalate to SIGKILL after the grace period regardless of whether
     the leader itself has reaped, so a descendant that ignored SIGTERM cannot
-    outlive us. ``ProcessLookupError`` (an already-empty group) is benign.
+    outlive us. ``ProcessLookupError`` (an already-empty group) is benign, and so
+    is ``PermissionError``: XNU returns EPERM (not ESRCH) for a group member
+    caught mid-exit-teardown — e.g. the SIGKILL escalation racing a descendant
+    the SIGTERM just felled — so on macOS it means "already dying", not an
+    actual permission problem (the group only ever holds our own children).
     """
     pgid = proc.pid
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGTERM)
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=grace_seconds)
-    with contextlib.suppress(ProcessLookupError):
+    with contextlib.suppress(ProcessLookupError, PermissionError):
         os.killpg(pgid, signal.SIGKILL)
 
 

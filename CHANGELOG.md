@@ -5,6 +5,18 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Fixed
+- **Installer port probe on macOS**: a listener with a full accept queue (a
+  wedged service, or another process mid-collision-check) made macOS drop the
+  probe's SYN silently, so `resolve_port` could report a busy port as free and
+  suggest it right back. The probe is now bounded (~2 s) and a hang counts as
+  "in use"; refused connections still resolve in milliseconds.
+- **Download timeout cleanup on macOS**: killing a stalled downloader's process
+  group could crash with `PermissionError` when the SIGKILL escalation raced a
+  descendant already dying from the SIGTERM (XNU reports EPERM, not ESRCH, for
+  processes mid-exit). Both signals now treat that as the benign
+  "already gone" case it is.
+
 ## [0.7.0] — 2026-08-14
 
 Speaker roster management (#7): the roster is no longer write-only.

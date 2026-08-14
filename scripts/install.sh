@@ -167,17 +167,32 @@ valid_port() {
   [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
 }
 
-# Advisory only: true if something already accepts a TCP connection on
-# 127.0.0.1:$1. Uses bash /dev/tcp (no netcat/lsof dependency). Compose remains
-# the authority -- this just lets us ask about a collision before we hit it.
+# Advisory only: true if something on 127.0.0.1:$1 accepts a TCP connection
+# OR leaves it hanging (a listener with a full accept queue -- macOS drops the
+# SYN silently instead of refusing, so a hung service would otherwise read as
+# free). Uses bash /dev/tcp (no netcat/lsof dependency). Compose remains the
+# authority -- this just lets us ask about a collision before we hit it.
 port_in_use() {
   case $1 in ''|*[!0-9]*) return 1 ;; esac
+  # The probe runs in a background subshell so a SYN-drop cannot hang the
+  # installer: refused connections fail in milliseconds, so anything still
+  # pending after ~2s is a wedged/backlogged listener -- treat it as in use.
   # The probe fd is opened INSIDE the subshell and dies with it -- nothing to
   # close here. (A previous `exec 3>&- 2>/dev/null` cleanup line was a bug: a
   # bare `exec` with redirections rebinds the CURRENT shell's stderr, so after
   # the first detected collision every later prompt went to /dev/null.)
-  (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1 || return 1
-  return 0
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1 &
+  local probe_pid=$! probe_tries=0
+  while kill -0 "$probe_pid" 2>/dev/null; do
+    probe_tries=$((probe_tries + 1))
+    if [ "$probe_tries" -ge 20 ]; then
+      kill "$probe_pid" 2>/dev/null
+      wait "$probe_pid" 2>/dev/null
+      return 0
+    fi
+    sleep 0.1
+  done
+  wait "$probe_pid"
 }
 
 next_free_port() {
