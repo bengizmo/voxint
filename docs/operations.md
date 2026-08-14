@@ -76,6 +76,13 @@ What changes relative to the GPU overlay — and what doesn't:
   slower than GPU: transcribing a multi-hour recording takes **hours**, not
   minutes. This is fine for overnight/batch use and correctness-identical; it
   is not an interactive experience.
+- **Host RAM floor — ≥ 8 GB.** The CPU tier holds the models in RAM instead of
+  VRAM: whisper alone is ~4.8 GiB resident (large-v2 int8 + CTranslate2 arenas)
+  and the tier idles around ~6 GiB total. Give the container host — on **Docker
+  Desktop (macOS/Windows) this is the VM's memory limit**, not the physical
+  machine's — at least **8 GB *including the core stack*** (Postgres, Redis, api,
+  worker share the same VM); **16 GB is comfortable**. Under the floor the
+  services are OOM-killed with an opaque exit, not a clear message.
 - **`COMPUTE_TIER=cpu` is load-bearing.** The overlay sets it on the api and
   worker: it multiplies the default inference timeouts, stage leases, and the
   Celery visibility horizon so a healthy 4-hour CPU transcription is never

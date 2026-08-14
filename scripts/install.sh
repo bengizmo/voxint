@@ -170,6 +170,12 @@ valid_port() {
 # Advisory only: true if something already accepts a TCP connection on
 # 127.0.0.1:$1. Uses bash /dev/tcp (no netcat/lsof dependency). Compose remains
 # the authority -- this just lets us ask about a collision before we hit it.
+#
+# Limitation (macOS/BSD): a connect() probe cannot distinguish "not bound" from
+# "bound, accept-backlog full" -- both refuse the connect -- and bash /dev/tcp
+# cannot bind() to test properly. So a saturated listener can read as free here,
+# and every probe has a TOCTOU race before Compose actually binds. resolve_port
+# compensates by only ever OFFERING ports strictly above a known-busy default.
 port_in_use() {
   case $1 in ''|*[!0-9]*) return 1 ;; esac
   # The probe fd is opened INSIDE the subshell and dies with it -- nothing to
@@ -273,7 +279,18 @@ resolve_port() {
   if ! port_in_use "$def"; then
     printf '%s' "$def"; return 0
   fi
-  suggested=$(next_free_port "$def")
+  # $def is known busy here, so search STRICTLY ABOVE it. Starting the scan at
+  # $def would let a macOS/BSD backlog-full misread (see port_in_use) return the
+  # busy port right back as the "alternate". +1 guarantees a distinct suggestion.
+  if [ "$def" -ge 65535 ]; then
+    # No port above 65535 exists to offer. Leave the suggestion EMPTY rather than
+    # defaulting the prompt to the known-busy $def (which would violate the
+    # "offered alternate never equals the busy port" invariant); the loop below
+    # then requires the operator to type a valid free port.
+    suggested=
+  else
+    suggested=$(next_free_port "$((def + 1))")
+  fi
   say "  Host port $def ($label) is already in use."
   while :; do
     printf '  Alternate %s port [%s]: ' "$label" "$suggested" >&2
@@ -300,7 +317,8 @@ prompt_compute_tier() {
   say "    [A] AMD tier  -- needs an AMD GPU (amdgpu driver only; transcription"
   say "                     runs on the GPU, diarization/embedding on CPU)"
   say "    [C] CPU tier  -- no GPU needed; works on any amd64/arm64 host"
-  say "                     (much slower: long recordings take hours, not minutes)"
+  say "                     (much slower: long recordings take hours, not minutes;"
+  say "                      needs >=8 GB RAM for the container host / Docker VM)"
   say "    [N] None for now -- core console only; audio processing disabled"
   case $def in
     g) label='[G/a/c/n]' ;;
