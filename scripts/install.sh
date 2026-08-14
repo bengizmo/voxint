@@ -777,6 +777,10 @@ print_handoff() {
   say "======================================================================"
   if [ "$EFFECTIVE_TIER" = "none" ]; then
     say " Voxint core stack is up."
+  elif [ "$EFFECTIVE_TIER" = "metal" ]; then
+    # The metal overlay starts NO model services (they run natively) -- the
+    # headline must not claim otherwise; the tier section below hands off.
+    say " Voxint core is up; the native metal model services are NOT running yet."
   else
     # "core is up" is what wait_for_health verified; the model services were
     # started but are NOT health-checked here (first boot downloads weights,

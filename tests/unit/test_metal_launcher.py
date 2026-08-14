@@ -312,6 +312,23 @@ def test_pipe_in_metal_home_is_refused(tmp_path: Path) -> None:
     assert "must not contain" in proc.stderr
 
 
+def test_ampersand_in_metal_home_survives_the_rewrite(tmp_path: Path) -> None:
+    # sed replacement text expands '&' to the matched string — a legal path
+    # like "Ben & Co" must come through verbatim, not corrupted.
+    dest = tmp_path / "Ben & Co" / "vendored"
+    (dest / "pyannote").mkdir(parents=True)
+    for name in ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"):
+        (dest / "pyannote" / name).write_bytes(b"placeholder")
+    proc = run_lib(
+        tmp_path,
+        f'generate_vendored_config "{VENDORED_CONFIG}" "{dest}" "{PYANNOTE_PROVENANCE}"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    text = (dest / "config.yaml").read_text()
+    assert f"{dest}/pyannote/segmentation-3.0.bin" in text
+    assert "/app/vendored/" not in text
+
+
 # --------------------------------------------------------------------------- #
 # MEDIA_ROOT resolution — pwd -P physical paths
 # --------------------------------------------------------------------------- #
@@ -352,6 +369,65 @@ def test_env_file_parsing_last_assignment_wins(tmp_path: Path) -> None:
     assert proc.stdout.rstrip("\n") == "/second"
     proc = run_lib(tmp_path, f'image_tag_from_env_file "{envf}"')
     assert proc.stdout.rstrip("\n") == "0.7.0"
+
+
+def test_whisper_revision_pin_matches_parity_lane() -> None:
+    # The launcher downloads at WHISPER_HF_REVISION; the whisper parity lane
+    # only accepts that exact snapshot. Textual pin-parity so they cannot
+    # drift apart silently (parsed, not imported: the parity module skips
+    # itself off-Mac at import time).
+    import re
+
+    script_pin = re.search(
+        r"^WHISPER_HF_REVISION=([0-9a-f]{40})$", METAL_SCRIPT.read_text(), re.M
+    )
+    lane = (
+        METAL_SCRIPT.parents[2] / "tests" / "parity" / "test_whisper_metal.py"
+    ).read_text()
+    lane_pin = re.search(r'^WHISPER_HF_REVISION = "([0-9a-f]{40})"$', lane, re.M)
+    assert script_pin and lane_pin
+    assert script_pin.group(1) == lane_pin.group(1)
+
+
+def test_diarizer_override_rejects_auto(tmp_path: Path) -> None:
+    # 'auto' would cascade to CPU when MPS is missing — silently, under
+    # launchd supervision. Only the two honest values are allowed.
+    for value, ok in (("mps", True), ("cpu", True), ("auto", False), ("gpu", False)):
+        proc = run_lib(
+            tmp_path,
+            f'VOXINT_METAL_DIARIZER_DEVICE="{value}" validate_diarizer_override',
+        )
+        assert (proc.returncode == 0) is ok, (value, proc.stderr)
+        if not ok:
+            assert "silent CPU fallback" in proc.stderr
+
+
+def test_whisper_manifest_round_trip_and_refusals(tmp_path: Path) -> None:
+    mh = tmp_path / "metal-home"
+    wdir = mh / "models" / "whisper"
+    (wdir / "snapshots").mkdir(parents=True)
+    (wdir / "snapshots" / "model.bin").write_bytes(b"weights")
+    # Hub bookkeeping must be EXCLUDED from the manifest (it churns).
+    (wdir / ".locks").mkdir()
+    (wdir / ".locks" / "x.lock").write_bytes(b"")
+    ok = run_lib(tmp_path, f'write_whisper_manifest "{mh}" && whisper_weights_ok "{mh}"')
+    assert ok.returncode == 0, ok.stderr
+    manifest = wdir / ".voxint-manifest.sha256"
+    text = manifest.read_text()
+    assert text.startswith("# revision: ")
+    assert ".locks" not in text
+    # Corruption fails the check.
+    (wdir / "snapshots" / "model.bin").write_bytes(b"corrupted")
+    assert run_lib(tmp_path, f'whisper_weights_ok "{mh}"').returncode != 0
+    (wdir / "snapshots" / "model.bin").write_bytes(b"weights")
+    # An EMPTY manifest must refuse, never bless whatever is on disk.
+    manifest.write_text("")
+    assert run_lib(tmp_path, f'whisper_weights_ok "{mh}"').returncode != 0
+    # A manifest recorded under a different pin must refuse.
+    run_lib(tmp_path, f'write_whisper_manifest "{mh}"')
+    stale = manifest.read_text().replace("# revision: ", "# revision: 0000dead")
+    manifest.write_text(stale)
+    assert run_lib(tmp_path, f'whisper_weights_ok "{mh}"').returncode != 0
 
 
 def test_env_file_parsing_strips_installer_quoting(tmp_path: Path) -> None:

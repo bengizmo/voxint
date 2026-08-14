@@ -43,6 +43,13 @@ case $METAL_SCRIPT_DIR in
   *) METAL_SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) ;;
 esac
 REPO_ROOT=$(cd "$METAL_SCRIPT_DIR/../.." && pwd -P)
+# A symlinked invocation (~/bin/voxint-metal.sh) resolves $0 to the link's
+# directory and lands REPO_ROOT somewhere wrong; fail with the cause instead
+# of surfacing it later as missing-requirements noise.
+if [ ! -f "$REPO_ROOT/compose.metal.yaml" ]; then
+  printf 'ERROR: cannot locate the Voxint checkout from %s (symlinked? run the script from scripts/metal/ in the checkout)\n' "$0" >&2
+  exit 1
+fi
 
 VOXINT_METAL_HOME=${VOXINT_METAL_HOME:-$HOME/.voxint-metal}
 
@@ -142,7 +149,7 @@ env_value_from_file() {
   # interpolation sees the unquoted value, so a raw read here would disagree
   # with what the containers mount.
   local raw
-  raw=$(sed -n "s/^$1=//p" "$2" | tail -1)
+  raw=$(grep -E "^${1}=" "$2" 2>/dev/null | tail -1 | cut -d= -f2-) || raw=""
   raw=${raw%$'\r'}
   raw=${raw#"${raw%%[![:blank:]]*}"}
   raw=${raw%"${raw##*[![:blank:]]}"}
@@ -181,6 +188,18 @@ resolve_media_root() {
 # KEY=VALUE lines. launchd inherits no shell environment -- everything a
 # service needs must be listed here explicitly.
 # ---------------------------------------------------------------------------
+# The pyannote device override exists for CPU A/B parity measurement ONLY.
+# 'auto' (or anything else) is refused: auto would cascade to CPU when MPS is
+# missing, silently -- exactly the honesty failure DIARIZER_DEVICE=mps exists
+# to prevent. Called by cmd_up and cmd_run BEFORE env assembly, because a
+# failure inside the plist render pipe would not abort the script.
+validate_diarizer_override() {
+  case ${VOXINT_METAL_DIARIZER_DEVICE:-mps} in
+    mps|cpu) : ;;
+    *) fail "VOXINT_METAL_DIARIZER_DEVICE must be 'mps' or 'cpu' (got '${VOXINT_METAL_DIARIZER_DEVICE}'): 'auto' would re-open silent CPU fallback" ;;
+  esac
+}
+
 service_env() {
   local svc=$1 media_root=$2
   printf 'MEDIA_ROOT=%s\n' "$media_root"
@@ -194,6 +213,10 @@ service_env() {
       printf 'WHISPER_MODEL=large-v2\n'
       printf 'COMPUTE_TYPE=int8\n'
       printf 'WHISPER_DOWNLOAD_ROOT=%s/models/whisper\n' "$VOXINT_METAL_HOME"
+      # Pin the runtime load to the snapshot setup downloaded -- without it
+      # faster-whisper resolves "latest", which could re-download a different
+      # revision than the one the parity verdict measured.
+      printf 'WHISPER_REVISION=%s\n' "$WHISPER_HF_REVISION"
       ;;
     pyannote)
       printf 'VOXINT_VENDORED_PIPELINE=%s/models/pyannote/vendored/config.yaml\n' \
@@ -228,9 +251,13 @@ xml_escape() {
 
 render_plist() {
   # $1 = service, $2 = resolved MEDIA_ROOT, $3 = output path
-  local svc=$1 media_root=$2 out=$3 venv port line key value
+  local svc=$1 media_root=$2 out=$3 venv port line key value env_block
   venv=$(service_venv "$svc")
   port=$(service_port "$svc")
+  # Captured OUTSIDE the output block: a service_env failure inside the pipe
+  # below would be swallowed by the while-subshell and ship a partial env
+  # dict; here it aborts under set -e.
+  env_block=$(service_env "$svc" "$media_root")
   {
     printf '<?xml version="1.0" encoding="UTF-8"?>\n'
     printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
@@ -246,7 +273,7 @@ render_plist() {
     printf '  <key>WorkingDirectory</key><string>%s</string>\n' \
       "$(xml_escape "$REPO_ROOT/services/$svc")"
     printf '  <key>EnvironmentVariables</key>\n  <dict>\n'
-    service_env "$svc" "$media_root" | while IFS= read -r line; do
+    printf '%s\n' "$env_block" | while IFS= read -r line; do
       key=${line%%=*}
       value=${line#*=}
       printf '    <key>%s</key><string>%s</string>\n' \
@@ -274,7 +301,10 @@ verify_pyannote_checkpoints() {
   local dir=$1 prov=$2 name expected actual rc=0
   for name in segmentation-3.0.bin wespeaker-voxceleb-resnet34-LM.bin; do
     [ -f "$dir/$name" ] || { say "missing checkpoint: $dir/$name"; rc=1; continue; }
-    expected=$("$(metal_python)" -c "import json,sys; print(json.load(open(sys.argv[1]))['files'][sys.argv[2]]['sha256'])" "$prov" "$name")
+    expected=$("$(metal_python)" -c "import json,sys; print(json.load(open(sys.argv[1]))['files'][sys.argv[2]]['sha256'])" "$prov" "$name" 2>/dev/null) || expected=""
+    # A broken venv/provenance must not masquerade as a weights mismatch --
+    # the operator would re-download gigabytes to fix the wrong problem.
+    [ "${#expected}" -eq 64 ] || { say "cannot read expected sha256 for $name from $prov (venv or provenance problem, not a weights mismatch)"; rc=1; continue; }
     actual=$(sha256_of "$dir/$name")
     if [ "$expected" != "$actual" ]; then
       say "sha256 mismatch for $name: expected $expected got $actual"
@@ -288,12 +318,41 @@ verify_titanet_onnx() {
   # $1 = .onnx path, $2 = provenance.json path.
   local file=$1 prov=$2 expected actual
   [ -f "$file" ] || { say "missing ONNX graph: $file"; return 1; }
-  expected=$("$(metal_python)" -c "import json,sys; print(json.load(open(sys.argv[1]))['onnx_sha256'])" "$prov")
+  expected=$("$(metal_python)" -c "import json,sys; print(json.load(open(sys.argv[1]))['onnx_sha256'])" "$prov" 2>/dev/null) || expected=""
+  [ "${#expected}" -eq 64 ] || { say "cannot read expected sha256 from $prov (venv or provenance problem, not a weights mismatch)"; return 1; }
   actual=$(sha256_of "$file")
   if [ "$expected" != "$actual" ]; then
     say "sha256 mismatch for $(basename "$file"): expected $expected got $actual"
     return 1
   fi
+}
+
+whisper_manifest_path() { printf '%s/models/whisper/.voxint-manifest.sha256' "$1"; }
+
+whisper_weights_ok() {
+  # $1 = VOXINT_METAL_HOME. True when a NON-EMPTY manifest exists, its
+  # revision header matches the pinned WHISPER_HF_REVISION, and every
+  # recorded sha still verifies. Comment lines are stripped before shasum -c.
+  local mh=$1 manifest
+  manifest=$(whisper_manifest_path "$mh")
+  [ -s "$manifest" ] || return 1
+  head -1 "$manifest" | grep -qF "# revision: $WHISPER_HF_REVISION" || return 1
+  grep -cv '^#' "$manifest" >/dev/null 2>&1 || return 1
+  (cd "$mh/models/whisper" \
+    && grep -v '^#' "$manifest" | shasum -a 256 -c - >/dev/null 2>&1)
+}
+
+write_whisper_manifest() {
+  # $1 = VOXINT_METAL_HOME. Records the pinned revision plus per-file sha256s
+  # of the payload, excluding hub bookkeeping (.cache/.locks -- lockfiles and
+  # download metadata churn without the weights changing).
+  local mh=$1 manifest
+  manifest=$(whisper_manifest_path "$mh")
+  (cd "$mh/models/whisper" && {
+    printf '# revision: %s\n' "$WHISPER_HF_REVISION"
+    find . \( -name '.cache' -o -name '.locks' \) -prune -o \
+      -type f ! -name '.voxint-manifest.sha256' -exec shasum -a 256 {} +
+  } > "$manifest")
 }
 
 # ---------------------------------------------------------------------------
@@ -308,11 +367,17 @@ generate_vendored_config() {
   # in $2/pyannote/). Writes $2/config.yaml, then verifies the result against
   # the provenance params -- a silent sed slip must not ship a config whose
   # numerics differ from the images'.
-  local src=$1 dest=$2 prov=$3
+  local src=$1 dest=$2 prov=$3 dest_escaped nl
+  nl=$(printf '\nx'); nl=${nl%x}  # $() strips trailing newlines; keep one
   case $dest in
     *'|'*) fail "VOXINT_METAL_HOME must not contain '|' (used as sed delimiter)" ;;
+    *"$nl"*) fail "VOXINT_METAL_HOME must not contain a newline" ;;
   esac
-  sed "s|/app/vendored/pyannote/|$dest/pyannote/|" "$src" > "$dest/config.yaml"
+  # In sed REPLACEMENT text '&' expands to the matched string and '\' starts
+  # an escape -- a legal path like "/Volumes/Ben & Co" would silently corrupt
+  # the rewritten checkpoint paths without this escaping.
+  dest_escaped=$(printf '%s' "$dest" | sed -e 's/[&\\]/\\&/g')
+  sed "s|/app/vendored/pyannote/|$dest_escaped/pyannote/|g" "$src" > "$dest/config.yaml"
   "$(metal_python)" - "$dest/config.yaml" "$prov" <<'PYEOF'
 import json
 import os
@@ -324,11 +389,21 @@ cfg = yaml.safe_load(open(sys.argv[1]))
 prov = json.load(open(sys.argv[2]))["pipeline_params"]
 pp = cfg["pipeline"]["params"]
 emb, seg = pp["embedding"], pp["segmentation"]
-assert "pyannote" in os.path.dirname(emb), (
-    f"embedding path lost the load-bearing 'pyannote' substring: {emb}"
+
+
+# Explicit raises, not assert: PYTHONOPTIMIZE would strip asserts and let an
+# unverified config pass as "param-verified".
+def check(ok: bool, msg: str) -> None:
+    if not ok:
+        raise SystemExit(f"vendored config verification failed: {msg}")
+
+
+check(
+    "pyannote" in os.path.dirname(emb),
+    f"embedding path lost the load-bearing 'pyannote' substring: {emb}",
 )
-assert os.path.isfile(emb), f"embedding checkpoint missing: {emb}"
-assert os.path.isfile(seg), f"segmentation checkpoint missing: {seg}"
+check(os.path.isfile(emb), f"embedding checkpoint missing: {emb}")
+check(os.path.isfile(seg), f"segmentation checkpoint missing: {seg}")
 checks = {
     "version": str(cfg["version"]),
     "pipeline_name": cfg["pipeline"]["name"],
@@ -342,8 +417,9 @@ checks = {
     "segmentation_min_duration_off": cfg["params"]["segmentation"]["min_duration_off"],
 }
 for key, value in checks.items():
-    assert str(prov[key]) == str(value), (
-        f"{key}: generated {value!r} != provenance {prov[key]!r}"
+    check(
+        str(prov[key]) == str(value),
+        f"{key}: generated {value!r} != provenance {prov[key]!r}",
     )
 PYEOF
 }
@@ -418,10 +494,18 @@ cmd_setup() {
   say "  ONNX graph verified against provenance.json"
 
   step "Whisper large-v2 (pinned HF revision ${WHISPER_HF_REVISION})"
-  local manifest=$mh/models/whisper/.voxint-manifest.sha256
-  if [ -f "$manifest" ] && (cd "$mh/models/whisper" && shasum -a 256 -c "$manifest" >/dev/null 2>&1); then
+  if whisper_weights_ok "$mh"; then
     say "  already present and matching the local manifest"
   else
+    # A stale or corrupted cache must be CLEARED before re-downloading:
+    # huggingface_hub trusts existing blobs (no content re-hash), so a
+    # re-download over a corrupt tree would no-op and the fresh manifest
+    # would bless the corruption.
+    if [ -n "$(ls -A "$mh/models/whisper" 2>/dev/null)" ]; then
+      say "  cache missing, stale, or corrupt -- clearing and re-downloading"
+      rm -rf "$mh/models/whisper"
+      mkdir -p "$mh/models/whisper"
+    fi
     "$(service_venv whisper)/bin/python" -c "
 from faster_whisper import WhisperModel
 WhisperModel('$WHISPER_MODEL_REPO', device='cpu',
@@ -430,8 +514,9 @@ WhisperModel('$WHISPER_MODEL_REPO', device='cpu',
 " >&2 || fail "whisper model download failed"
     # No committed sha authority exists for the HF blobs (revision-pinned
     # instead); record what we downloaded so later drift is detectable.
-    (cd "$mh/models/whisper" \
-      && find . -type f ! -name '.voxint-manifest.sha256' -exec shasum -a 256 {} + > "$manifest")
+    # The revision header binds the manifest to the pin; hub bookkeeping
+    # (.cache/.locks metadata) is excluded -- it is not stable content.
+    write_whisper_manifest "$mh" || fail "could not record the whisper manifest"
     say "  downloaded and recorded to the local manifest"
   fi
 
@@ -455,15 +540,38 @@ resolved_media_root_or_fail() {
 
 cmd_up() {
   require_macos
-  local media_root svc plist label
+  validate_diarizer_override
+  local media_root svc plist label i
   media_root=$(resolved_media_root_or_fail)
+  # Preflight the setup artifacts: bootstrapping a service with a missing
+  # venv or weights would crash-loop under launchd KeepAlive with only a
+  # cryptic log to show for it -- fail fast with the actual remedy instead.
+  mkdir -p "$VOXINT_METAL_HOME/run" "$VOXINT_METAL_HOME/logs"
+  for svc in $METAL_SERVICES; do
+    [ -x "$(service_venv "$svc")/bin/python" ] \
+      || fail "$svc venv missing -- run: $0 setup"
+  done
+  [ -f "$VOXINT_METAL_HOME/models/pyannote/vendored/config.yaml" ] \
+    || fail "vendored pyannote config missing -- run: $0 setup"
+  [ -f "$VOXINT_METAL_HOME/models/titanet/titanet-large.onnx" ] \
+    || fail "titanet ONNX graph missing -- run: $0 setup"
+  whisper_weights_ok "$VOXINT_METAL_HOME" \
+    || fail "whisper weights missing or failing the local manifest -- run: $0 setup"
   for svc in $METAL_SERVICES; do
     plist=$(plist_path "$svc")
     label=$(plist_label "$svc")
     render_plist "$svc" "$media_root" "$plist"
     plutil -lint -s "$plist" || fail "generated plist failed plutil lint: $plist"
-    # Idempotent restart: bootout is a no-op error when not loaded.
+    # Idempotent restart: bootout is a no-op error when not loaded. It also
+    # RETURNS BEFORE the job is fully unloaded -- an immediate bootstrap
+    # races it and fails with EIO -- so wait (bounded) for the unload.
     launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    i=0
+    while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+      i=$((i + 1))
+      [ "$i" -le 50 ] || fail "$label did not unload within 10s (launchctl bootout race)"
+      sleep 0.2
+    done
     launchctl bootstrap "gui/$(id -u)" "$plist" \
       || fail "launchctl bootstrap failed for $label (see $(service_log "$svc"))"
     say "started $label (port $(service_port "$svc"))"
@@ -571,6 +679,11 @@ cmd_doctor() {
   else
     doctor_report FAIL "vendored pyannote config missing -- run: $0 setup"
   fi
+  if whisper_weights_ok "$mh"; then
+    doctor_report PASS "whisper weights match the local manifest (revision $WHISPER_HF_REVISION)"
+  else
+    doctor_report FAIL "whisper weights missing, stale, or failing the local manifest -- run: $0 setup"
+  fi
 
   step "MEDIA_ROOT agreement (.env vs native services)"
   local envf=$REPO_ROOT/.env raw resolved
@@ -672,6 +785,7 @@ cmd_run() {
   service_port "$svc" >/dev/null || fail "unknown service: $svc"
   [ "$mode" = "--foreground" ] \
     || fail "only --foreground is supported (background runs go through: $0 up)"
+  validate_diarizer_override
   media_root=$(resolved_media_root_or_fail)
   # Same env assembly the plists use -- the debug path may not drift.
   while IFS= read -r line; do

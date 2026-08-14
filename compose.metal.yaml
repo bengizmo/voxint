@@ -10,11 +10,13 @@
 # This overlay is REWIRING ONLY (contract-tested): it must not add images,
 # volumes, or ports. api/worker resolve the model services through
 # host.docker.internal, which Docker Desktop routes to the host's loopback —
-# the native services deliberately bind 127.0.0.1 only. The extra_hosts
-# host-gateway mapping keeps the same name working on engines that don't
-# provide it natively; reachability is verified by the metal launcher's
-# doctor, and submissions fail cleanly (not silently) while the native
-# services are down.
+# the native services deliberately bind 127.0.0.1 only. Docker Desktop is
+# the SUPPORTED engine for this tier: on other engines (Colima, OrbStack,
+# plain dockerd) the extra_hosts host-gateway mapping resolves the name to
+# the bridge gateway, which does NOT reach loopback-bound services — the
+# metal launcher's doctor verifies actual reachability from the worker, and
+# submissions fail cleanly (not silently) while the native services are
+# unreachable or down.
 #
 # COMPUTE_TIER=metal keeps GPU-class timing (docs/timeouts-and-leases.md):
 # diarization is MPS-accelerated, but v1 whisper runs on host CPU under

@@ -270,6 +270,10 @@ class WhisperTranscriber:
             # time; without passing it, faster-whisper would look in the HF hub
             # cache and re-download at runtime.
             download_root = os.getenv("WHISPER_DOWNLOAD_ROOT") or None
+            # WHISPER_REVISION pins the exact HF snapshot at load time (the
+            # metal launcher sets it to the revision it pre-downloaded);
+            # unset keeps the images' existing latest-in-cache behavior.
+            revision = os.getenv("WHISPER_REVISION") or None
             self.model = WhisperModel(
                 self.model_name,
                 device=self.device,
@@ -277,6 +281,7 @@ class WhisperTranscriber:
                 cpu_threads=4,
                 num_workers=1,
                 download_root=download_root,
+                revision=revision,
             )
             self.pipeline = BatchedInferencePipeline(model=self.model)
             # CT2 got the raw device string above; only the reported name is

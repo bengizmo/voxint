@@ -26,6 +26,21 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   metal`. Maintainer-run Gate M documented in the release process.
 
 ### Fixed
+- **Metal tier review hardening** (pre-landing multi-model review): the
+  installer's metal handoff no longer claims model services "were started";
+  whisper's runtime load is pinned to the same HF revision setup downloads
+  (`WHISPER_REVISION`, launcher-set — unset keeps image behavior), the local
+  manifest records that revision and excludes HF cache bookkeeping, and a
+  stale/corrupt cache is cleared before re-download instead of being
+  re-blessed; `voxint-metal.sh up` preflights venvs/weights/config and waits
+  out the launchd bootout-vs-bootstrap race instead of crash-looping under
+  KeepAlive; `VOXINT_METAL_DIARIZER_DEVICE` accepts only `mps`/`cpu` (`auto`
+  would re-open silent CPU fallback); vendored-config generation escapes sed
+  metacharacters in the destination path and fails explicitly under
+  `PYTHONOPTIMIZE`; doctor now verifies whisper weights; sha verifiers
+  distinguish unreadable provenance from weight mismatch; metal parity lanes
+  fail closed on empty diarizations, pin the whisper snapshot, and shed
+  ambient `TITANET_ORT_PROVIDERS` / `PYANNOTE_*` env.
 - **Metal launcher `.env` reading**: `voxint-metal.sh` read `MEDIA_ROOT`
   verbatim from `.env`, but the installer writes it single-quoted — the
   launcher hard-failed on every installer-generated file ("does not resolve

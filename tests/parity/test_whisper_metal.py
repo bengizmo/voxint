@@ -41,6 +41,11 @@ TRANSCRIPT_MIN_SIMILARITY = 0.95  # difflib ratio on normalized transcripts
 SEGMENT_COUNT_MAX_DIFF = 1
 CONFIDENCE_MAX_DRIFT = 0.15
 
+# Must match WHISPER_HF_REVISION in scripts/metal/voxint-metal.sh — the lane
+# measures exactly the snapshot the launcher pins; ANY other cached snapshot
+# would silently weaken the "same pinned revision as the images" claim.
+WHISPER_HF_REVISION = "f0fe81560cb8b68660e564f55dd99207059c092e"
+
 
 def _model_root() -> Path | None:
     """The pinned large-v2 snapshot, wherever this machine caches it."""
@@ -48,8 +53,13 @@ def _model_root() -> Path | None:
         os.getenv("VOXINT_METAL_HOME", str(Path.home() / ".voxint-metal"))
     )
     root = Path(os.getenv("WHISPER_DOWNLOAD_ROOT", str(metal_home / "models" / "whisper")))
-    snapshots = root / "models--Systran--faster-whisper-large-v2" / "snapshots"
-    if snapshots.is_dir() and any(snapshots.glob("*/model.bin")):
+    snapshot = (
+        root
+        / "models--Systran--faster-whisper-large-v2"
+        / "snapshots"
+        / WHISPER_HF_REVISION
+    )
+    if (snapshot / "model.bin").is_file():
         return root
     return None
 
@@ -94,7 +104,10 @@ def native_output() -> Any:
     from tests.contracts.conftest import service_package
 
     saved = os.environ.get("WHISPER_DOWNLOAD_ROOT")
+    saved_rev = os.environ.get("WHISPER_REVISION")
     os.environ["WHISPER_DOWNLOAD_ROOT"] = str(_MODEL_ROOT)
+    # Pin the load to the measured snapshot, mirroring the launcher's env.
+    os.environ["WHISPER_REVISION"] = WHISPER_HF_REVISION
     try:
         with service_package("whisper"):
             from app.transcription import WhisperTranscriber
@@ -113,6 +126,10 @@ def native_output() -> Any:
             os.environ.pop("WHISPER_DOWNLOAD_ROOT", None)
         else:
             os.environ["WHISPER_DOWNLOAD_ROOT"] = saved
+        if saved_rev is None:
+            os.environ.pop("WHISPER_REVISION", None)
+        else:
+            os.environ["WHISPER_REVISION"] = saved_rev
 
 
 def _normalize(text: str) -> str:

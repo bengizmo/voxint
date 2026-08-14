@@ -159,15 +159,22 @@ def _run_diarize(
     (slice 4 semantics: broken/absent backend errors instead of degrading)."""
     from tests.contracts.conftest import service_package
 
+    # Pin EVERY PYANNOTE_* knob, not just the threshold: an ambient
+    # PYANNOTE_SEGMENTATION_BATCH_SIZE (etc.) in the maintainer's shell would
+    # silently shift what this lane measures away from the service defaults.
+    ambient_pyannote = [k for k in os.environ if k.startswith("PYANNOTE_")]
     saved = {
         k: os.environ.get(k)
         for k in (
             "VOXINT_VENDORED_PIPELINE",
             "DIARIZER_DEVICE",
             "DIARIZER_MODEL_NAME",
+            *ambient_pyannote,
             "PYANNOTE_CLUSTERING_THRESHOLD",
         )
     }
+    for k in ambient_pyannote:
+        os.environ.pop(k, None)
     os.environ["VOXINT_VENDORED_PIPELINE"] = str(local_config)
     os.environ["DIARIZER_DEVICE"] = device
     os.environ.pop("DIARIZER_MODEL_NAME", None)
@@ -254,8 +261,10 @@ def frame_agreement(
     def total(by: dict[str, list[tuple[float, float]]]) -> float:
         return sum(e - s for spans in by.values() for s, e in spans)
 
+    # Fail closed on empty/zero-duration diarizations: two empty outputs
+    # "agreeing" is a vacuous pass, not evidence.
     denom = max(total(by_a), total(by_b))
-    return matched / denom if denom else 1.0
+    return matched / denom if denom else 0.0
 
 
 class TestDecisionLevel:

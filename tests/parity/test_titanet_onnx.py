@@ -104,7 +104,12 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
 
 @pytest.fixture(scope="session")
 def corpus_windows() -> list[dict[str, Any]]:
-    return json.loads((CORPUS_DIR / "embed-windows.json").read_text())["windows"]
+    windows = json.loads((CORPUS_DIR / "embed-windows.json").read_text())["windows"]
+    # Duplicate ids would silently shrink coverage (later dicts keyed by id
+    # collapse) — a malformed corpus must fail loudly, not thin the gate.
+    ids = [w["id"] for w in windows]
+    assert len(set(ids)) == len(ids), "duplicate window ids in embed-windows.json"
+    return windows
 
 
 @pytest.fixture(scope="session")
@@ -157,6 +162,11 @@ def onnx_outcomes(corpus_windows: list[dict[str, Any]]) -> dict[str, Any]:
     parity_providers = os.getenv("VOXINT_PARITY_ORT_PROVIDERS")
     if parity_providers:
         os.environ["TITANET_ORT_PROVIDERS"] = parity_providers
+    else:
+        # The DEFAULT lane must measure the CPU EP: an ambient
+        # TITANET_ORT_PROVIDERS (e.g. a maintainer dogfooding CoreML) would
+        # otherwise be measured while the verdict records "default".
+        os.environ.pop("TITANET_ORT_PROVIDERS", None)
     try:
         with service_package("titanet"):
             from app.embedding import create_embedder
@@ -370,6 +380,11 @@ class TestRepeatDeterminism:
         parity_providers = os.getenv("VOXINT_PARITY_ORT_PROVIDERS")
         if parity_providers:
             os.environ["TITANET_ORT_PROVIDERS"] = parity_providers
+        else:
+            # The DEFAULT lane must measure the CPU EP: an ambient
+            # TITANET_ORT_PROVIDERS (e.g. a maintainer dogfooding CoreML) would
+            # otherwise be measured while the verdict records "default".
+            os.environ.pop("TITANET_ORT_PROVIDERS", None)
         try:
             with service_package("titanet"):
                 from app.embedding import create_embedder
