@@ -27,14 +27,18 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     SmallInteger,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+from voxint.db import search
 
 EMBEDDING_DIM = 192
 
@@ -263,6 +267,20 @@ class TranscriptSegment(Base):
         CheckConstraint(
             "start_seconds >= 0 AND end_seconds >= start_seconds",
             name="transcript_segments_interval_check",
+        ),
+        # FTS expression indexes (migration 0008). Declared here for the
+        # model↔migration parity tests; the DDL literals must match
+        # ``voxint.db.search`` (contract-tested). Safe to declare as ORM
+        # metadata: nothing calls ``create_all`` — schema comes from alembic.
+        Index(
+            search.RAW_FTS_INDEX_NAME,
+            text(f"to_tsvector('{search.TS_CONFIG}', raw_text)"),
+            postgresql_using="gin",
+        ),
+        Index(
+            search.ENHANCED_FTS_INDEX_NAME,
+            text(f"to_tsvector('{search.TS_CONFIG}', enhanced_text)"),
+            postgresql_using="gin",
         ),
     )
 
