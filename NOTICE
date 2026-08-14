@@ -5,13 +5,18 @@ This product includes software developed as part of the Voxint project
 (Apache License 2.0).
 
 Voxint orchestrates third-party models and libraries that are licensed
-separately and are NOT distributed with this repository:
+separately; model weights are not stored in this repository but ARE
+redistributed (sha256-pinned) via the project's model-asset releases and
+container images:
 
 - faster-whisper / OpenAI Whisper weights (MIT) — downloaded at build/run time
-- pyannote.audio and its speaker-diarization pipeline weights — gated on
-  Hugging Face; users must accept the model terms and supply their own
-  HF token. Voxint never vendors or redistributes these weights.
-- NVIDIA NeMo TitaNet-Large (CC-BY-4.0 model license) — downloaded at
-  build/run time
+- pyannote speaker-diarization-3.1 pipeline, vendored via the
+  pyannote-models-v1 asset release (services/pyannote/models/provenance.json):
+  - pyannote/segmentation-3.0 (MIT) — (c) pyannote contributors
+  - WeSpeaker ResNet34 speaker-embedding weights (CC-BY-4.0) — trained by the
+    WeSpeaker project (github.com/wenet-e2e/wespeaker) on VoxCeleb, repackaged
+    for pyannote.audio by Herve Bredin; redistributed with attribution
+- NVIDIA NeMo TitaNet-Large (CC-BY-4.0 model license) — vendored via the
+  titanet-onnx-v1 asset release with attribution
 
 Consult each upstream project for its exact license terms.

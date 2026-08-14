@@ -2,7 +2,8 @@
 #   docker compose -f compose.yaml -f compose.cpu.yaml up -d
 # No GPU required, any amd64/arm64 host (Apple Silicon via Docker Desktop,
 # AMD boxes, plain servers). Same /v1 + /healthz contracts as the GPU stack
-# (docs/gpu-contracts.md); pyannote still needs HF_TOKEN in .env.
+# (docs/gpu-contracts.md). No HF token needed:
+# the diarization weights are vendored into the pyannote image.
 #
 # Honest expectation: CPU inference is SLOW — long recordings take hours.
 # COMPUTE_TIER=cpu below is load-bearing, not cosmetic: it scales the default
@@ -44,10 +45,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
-      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+      # Optional: only used when DIARIZER_MODEL_NAME points at a Hugging Face
+      # repo — the default vendored pipeline is baked into the image.
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
-      # Gated weights download at first startup; persist them across recreates.
+      # Cache for the optional online HF path; unused by the vendored default.
       - pyannote-models:/app/models
     ports:
       - "127.0.0.1:8024:8024"

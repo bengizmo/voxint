@@ -1,7 +1,7 @@
 # Voxint GPU model services — overlay on compose.yaml:
 #   docker compose -f compose.yaml -f compose.gpu.yaml up -d
 # One NVIDIA GPU assumed; all three share it. Contracts: /v1/transcribe, /v1/diarize, /v1/embed, /healthz
-# (docs/gpu-contracts.md). pyannote requires HF_TOKEN in .env for its HF-gated weights.
+# (docs/gpu-contracts.md). No HF token needed: diarization weights are vendored.
 services:
   # Inside the compose network the model services are reached by service DNS name,
   # overriding the localhost defaults meant for bare-host development.
@@ -43,10 +43,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
-      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+      # Optional: only used when DIARIZER_MODEL_NAME points at a Hugging Face
+      # repo — the default vendored pipeline is baked into the image.
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
-      # Gated weights download at first startup; persist them across recreates.
+      # Cache for the optional online HF path; unused by the vendored default.
       - pyannote-models:/app/models
     ports:
       - "127.0.0.1:8024:8024"

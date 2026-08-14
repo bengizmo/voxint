@@ -165,10 +165,10 @@ Response:
 
 Model: **pyannote/speaker-diarization-3.1** on pyannote.audio **3.1.1**
 (pinned — 4.x drops the clustering hyperparameters this service tunes).
-Gated weights: the image contains **no weights**; users supply `HF_TOKEN` and
-must have accepted the conditions of **both**
-`pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0` on
-Hugging Face.
+Weights: vendored into the image (sha256-pinned from the `pyannote-models-v1`
+asset release; see `services/pyannote/models/provenance.json`) and loaded by
+default — no Hugging Face token involved. Setting `DIARIZER_MODEL_NAME` to an
+HF repo id restores the online path (`HF_TOKEN` required for gated repos).
 
 Request (unknown fields rejected; `min_speakers ≤ max_speakers` enforced):
 

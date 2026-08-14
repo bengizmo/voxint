@@ -1,8 +1,12 @@
 # Voxint pyannote service — pyannote/speaker-diarization-3.1 on pyannote.audio 3.1.1.
 # Contract: docs/gpu-contracts.md (POST /v1/diarize, GET /healthz).
-# The image ships NO model weights: they are HF-gated. Supply HF_TOKEN at runtime
-# after accepting the conditions of BOTH pyannote/speaker-diarization-3.1 and
-# pyannote/segmentation-3.0 on Hugging Face.
+# The image bakes the vendored diarization weights (~33 MB): before building,
+# place the two checkpoints at services/pyannote/models/*.bin — download them
+# from the pyannote-models-v1 asset release (CI path) or from the upstream HF
+# repos at the revisions pinned in models/provenance.json (maintainer path).
+# The build FAILS unless their sha256s match the ARGs below. HF_TOKEN is no
+# longer needed for the default pipeline; DIARIZER_MODEL_NAME + HF_TOKEN at
+# runtime restore the online Hugging Face path.
 FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -26,8 +30,28 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
 
 WORKDIR /app
-# HF weights cache — populated at first startup using the runtime HF_TOKEN.
+# Weights cache for the optional online HF path (DIARIZER_MODEL_NAME override);
+# the default vendored pipeline below needs no cache and no token.
 RUN mkdir -p /app/models && chown -R voxint:voxint /app
+
+# Vendored pipeline: sha256s must match models/provenance.json. Overriding the
+# ARGs produces a NON-PROVENANCE build (dev-only escape hatch); release CI
+# never overrides them. The checkpoints live under a "pyannote"-named
+# directory on purpose — pyannote.audio 3.1.1 dispatches embedding loaders on
+# path substrings (see models/config.vendored.yaml).
+ARG SEGMENTATION_SHA256=da85c29829d4002daedd676e012936488234d9255e65e86dfab9bec6b1729298
+ARG WESPEAKER_SHA256=366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56
+COPY models/config.vendored.yaml /app/vendored/config.yaml
+COPY models/segmentation-3.0.bin /app/vendored/pyannote/segmentation-3.0.bin
+COPY models/wespeaker-voxceleb-resnet34-LM.bin /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin
+RUN printf '%s\n' \
+      "${SEGMENTATION_SHA256}  /app/vendored/pyannote/segmentation-3.0.bin" \
+      "${WESPEAKER_SHA256}  /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin" \
+    | sha256sum -c - \
+    || { echo "vendored pyannote checkpoints do not match the committed provenance sha256s — \
+fetch the matching pyannote-models-v1 release assets (see models/provenance.json)" >&2; exit 1; }
+ENV VOXINT_VENDORED_PIPELINE=/app/vendored/config.yaml
+
 COPY --chown=voxint:voxint app/ /app/app/
 
 ENV TORCH_HOME=/app/models

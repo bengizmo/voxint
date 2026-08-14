@@ -11,7 +11,7 @@ Usage (services running with MEDIA_ROOT mounted at the corpus directory):
 
     docker run -d --gpus all -p 8022:8022 -v $PWD/tests/parity/fixtures/corpus:/data/media:ro \\
         ghcr.io/bengizmo/voxint-whisper:<tag>
-    ... (pyannote on 8024 with HF_TOKEN, titanet on 8021) ...
+    ... (pyannote on 8024 — weights vendored, no token; titanet on 8021) ...
     python tools/generate_parity_references.py --tag <image tag>
 
 Writes ``tests/parity/fixtures/references/cuda/{embed,transcribe,diarize}.json``.

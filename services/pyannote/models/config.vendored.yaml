@@ -1,0 +1,27 @@
+# Vendored speaker-diarization-3.1 pipeline config — loaded by default instead
+# of the HF-gated pyannote/speaker-diarization-3.1 repo (see provenance.json).
+# Params are verbatim from the upstream config.yaml at the pinned revision;
+# ONLY the two model references are repointed at the baked-in checkpoints.
+# The embedding path MUST contain the substring "pyannote": pyannote.audio
+# 3.1.1's PretrainedSpeakerEmbedding dispatches on substrings, and a
+# wespeaker-named path without "pyannote" routes to the ONNX loader (not
+# installed) instead of the PyTorch one the upstream repo id resolves to.
+version: 3.1.0
+
+pipeline:
+  name: pyannote.audio.pipelines.SpeakerDiarization
+  params:
+    clustering: AgglomerativeClustering
+    embedding: /app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin
+    embedding_batch_size: 32
+    embedding_exclude_overlap: true
+    segmentation: /app/vendored/pyannote/segmentation-3.0.bin
+    segmentation_batch_size: 32
+
+params:
+  clustering:
+    method: centroid
+    min_cluster_size: 12
+    threshold: 0.7045654963945799
+  segmentation:
+    min_duration_off: 0.0

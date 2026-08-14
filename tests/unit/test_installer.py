@@ -185,40 +185,36 @@ WRITE_ENV_PREAMBLE = (
 )
 
 
-def test_write_env_records_tier_and_token(repo: Path) -> None:
-    token = "hf_TESTSECRETTOKEN123"
+def test_write_env_records_tier(repo: Path) -> None:
     proc = run_lib(
         repo,
         WRITE_ENV_PREAMBLE
-        + f"HF_TOKEN_VALUE='{token}'\n"
-        "COMPUTE_TIER_VALUE=cpu\n"
+        + "COMPUTE_TIER_VALUE=cpu\n"
         "COMPOSE_FILE_ARGS=$(compose_file_args_for_tier cpu)\n"
         "write_env",
     )
     assert proc.returncode == 0, proc.stderr
     env_file = repo / ".env"
     content = env_file.read_text()
-    assert f"HF_TOKEN='{token}'" in content
     assert "VOXINT_COMPOSE_TIER=cpu" in content
     assert "VOXINT_PASSWORD='pw-for-test'" in content
     # mode 0600
     assert stat.S_IMODE(env_file.stat().st_mode) == 0o600
-    # The secret never reaches stdout/stderr.
-    assert token not in proc.stdout
-    assert token not in proc.stderr
     # Compose validation ran against the EFFECTIVE (cpu) file set.
     log = (repo / "docker.log").read_text()
     assert "-f compose.cpu.yaml" in log
 
 
-def test_write_env_without_token_keeps_template_line(repo: Path) -> None:
+def test_write_env_keeps_hf_token_template_line(repo: Path) -> None:
+    # HF_TOKEN is an optional override the installer never manages: the
+    # commented .env.example line must pass through untouched.
     proc = run_lib(
         repo,
         WRITE_ENV_PREAMBLE + "COMPUTE_TIER_VALUE=none\nwrite_env",
     )
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
-    assert "HF_TOKEN=\n" in content  # untouched template line
+    assert "# HF_TOKEN=\n" in content  # untouched template line
     assert "VOXINT_COMPOSE_TIER=none" in content
 
 
@@ -230,12 +226,12 @@ LEGACY_ENV = "VOXINT_PASSWORD='old-pw'\nMEDIA_ROOT='/data'\nHF_TOKEN=\n"
 
 def test_update_env_keys_appends_tier_and_backs_up(repo: Path) -> None:
     (repo / ".env").write_text(LEGACY_ENV)
-    proc = run_lib(repo, "COMPUTE_TIER_VALUE=gpu\nHF_TOKEN_VALUE=\nupdate_env_keys")
+    proc = run_lib(repo, "COMPUTE_TIER_VALUE=gpu\nupdate_env_keys")
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
     assert "VOXINT_COMPOSE_TIER=gpu" in content
     assert "VOXINT_PASSWORD='old-pw'" in content  # untouched passthrough
-    assert "HF_TOKEN=\n" in content  # not overwritten when no new token given
+    assert "HF_TOKEN=\n" in content  # optional-override line passes through untouched
     backups = list(repo.glob(".env.backup.*"))
     assert len(backups) == 1
     assert backups[0].read_text() == LEGACY_ENV
@@ -274,7 +270,7 @@ def test_update_env_keys_writes_render_gid_for_rocm(repo: Path) -> None:
     (repo / ".env").write_text(LEGACY_ENV + "VOXINT_COMPOSE_TIER=cpu\nVOXINT_RENDER_GID=111\n")
     proc = run_lib(
         repo,
-        "COMPUTE_TIER_VALUE=rocm\nHF_TOKEN_VALUE=\nRENDER_GID_VALUE=990\nupdate_env_keys",
+        "COMPUTE_TIER_VALUE=rocm\nRENDER_GID_VALUE=990\nupdate_env_keys",
     )
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
@@ -287,28 +283,23 @@ def test_update_env_keys_keeps_existing_render_gid_when_not_detected(repo: Path)
     (repo / ".env").write_text(LEGACY_ENV + "VOXINT_RENDER_GID=111\n")
     proc = run_lib(
         repo,
-        "COMPUTE_TIER_VALUE=cpu\nHF_TOKEN_VALUE=\nRENDER_GID_VALUE=\nupdate_env_keys",
+        "COMPUTE_TIER_VALUE=cpu\nRENDER_GID_VALUE=\nupdate_env_keys",
     )
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
     assert "VOXINT_RENDER_GID=111" in content  # untouched passthrough
 
 
-def test_update_env_keys_replaces_existing_tier_and_token(repo: Path) -> None:
-    (repo / ".env").write_text(LEGACY_ENV + "VOXINT_COMPOSE_TIER=none\n")
-    token = "hf_NEWSECRET456"
-    proc = run_lib(
-        repo,
-        f"COMPUTE_TIER_VALUE=cpu\nHF_TOKEN_VALUE='{token}'\nupdate_env_keys",
-    )
+def test_update_env_keys_replaces_tier_and_passes_token_through(repo: Path) -> None:
+    # HF_TOKEN is an optional override the installer never manages: an existing
+    # line must survive a tier rewrite byte-for-byte.
+    (repo / ".env").write_text(LEGACY_ENV + "VOXINT_COMPOSE_TIER=none\nHF_TOKEN='hf_KEEPME'\n")
+    proc = run_lib(repo, "COMPUTE_TIER_VALUE=cpu\nupdate_env_keys")
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
     assert content.count("VOXINT_COMPOSE_TIER=") == 1
     assert "VOXINT_COMPOSE_TIER=cpu" in content
-    assert f"HF_TOKEN='{token}'" in content
-    assert "HF_TOKEN=\n" not in content
-    assert token not in proc.stdout
-    assert token not in proc.stderr
+    assert "HF_TOKEN='hf_KEEPME'" in content
     assert stat.S_IMODE((repo / ".env").stat().st_mode) == 0o600
 
 
@@ -322,7 +313,7 @@ def test_read_env_value_last_wins_and_strips_quotes(repo: Path) -> None:
     ("raw", "expected"),
     [
         ('HF_TOKEN="hf_dq"', "hf_dq"),  # double quotes stripped like Compose does
-        ('HF_TOKEN=""', ""),  # empty double-quoted value reads EMPTY (defers tier)
+        ('HF_TOKEN=""', ""),  # empty double-quoted value reads EMPTY
         ("HF_TOKEN=''", ""),
         ("HF_TOKEN=hf_plain", "hf_plain"),
         ("HF_TOKEN=hf_crlf\r", "hf_crlf"),  # CRLF-edited .env
@@ -336,82 +327,17 @@ def test_read_env_value_normalization(repo: Path, raw: str, expected: str) -> No
     assert proc.stdout == expected
 
 
-def test_update_env_keys_dedupes_duplicate_key_lines(repo: Path) -> None:
+def test_update_env_keys_dedupes_duplicate_tier_lines(repo: Path) -> None:
     (repo / ".env").write_text(
-        "VOXINT_PASSWORD='pw'\nHF_TOKEN='a'\nHF_TOKEN='b'\nVOXINT_COMPOSE_TIER=gpu\n"
+        "VOXINT_PASSWORD='pw'\nVOXINT_COMPOSE_TIER=gpu\nVOXINT_COMPOSE_TIER=none\n"
     )
-    proc = run_lib(repo, "COMPUTE_TIER_VALUE=cpu\nHF_TOKEN_VALUE='hf_new'\nupdate_env_keys")
+    proc = run_lib(repo, "COMPUTE_TIER_VALUE=cpu\nupdate_env_keys")
     assert proc.returncode == 0, proc.stderr
     content = (repo / ".env").read_text()
-    assert content.count("HF_TOKEN=") == 1
-    assert "HF_TOKEN='hf_new'" in content
     assert content.count("VOXINT_COMPOSE_TIER=") == 1
-    # Validation ran against the recorded tier's overlay (token present).
+    assert "VOXINT_COMPOSE_TIER=cpu" in content
+    # Validation ran against the recorded tier's overlay.
     log = (repo / "docker.log").read_text()
     assert "-f compose.cpu.yaml" in log
 
 
-# --------------------------------------------------------------------------- #
-# HF token preflight (advisory; secret hygiene)
-# --------------------------------------------------------------------------- #
-def test_hf_preflight_valid_token_never_puts_secret_in_argv(repo: Path) -> None:
-    token = "hf_PREFLIGHTSECRET789"
-    proc = run_lib(
-        repo,
-        f"PREFLIGHT_TOKEN='{token}'\nhf_preflight",
-        extra_env={"FAKE_CURL_CODE": "200"},
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "Token is valid" in proc.stderr
-    assert "Gated model access looks good" in proc.stderr
-    # The token reaches curl via stdin config only — argv must be clean.
-    curl_log = (repo / "curl.log").read_text()
-    assert token not in curl_log
-    assert token not in proc.stdout
-    assert token not in proc.stderr
-
-
-def test_hf_preflight_rejected_token_warns_but_does_not_fail(repo: Path) -> None:
-    proc = run_lib(
-        repo,
-        "PREFLIGHT_TOKEN='hf_bad'\nhf_preflight\necho SURVIVED",
-        extra_env={"FAKE_CURL_CODE": "401"},
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "rejected the token" in proc.stderr
-    assert "SURVIVED" in proc.stdout
-
-
-def test_hf_preflight_network_failure_is_nonfatal(repo: Path) -> None:
-    proc = run_lib(
-        repo,
-        "PREFLIGHT_TOKEN='hf_x'\nhf_preflight\necho SURVIVED",
-        extra_env={"FAKE_CURL_CODE": "000"},
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "Could not verify the token" in proc.stderr
-    assert "SURVIVED" in proc.stdout
-
-
-def test_hf_preflight_gate_not_accepted_warns_per_repo(repo: Path) -> None:
-    # whoami 200, first gated repo 403, second 200: warn about the first repo
-    # only, never claim access looks good, and never fail the install.
-    codes = repo / "curl.codes"
-    codes.write_text("200\n403\n200\n")
-    proc = run_lib(
-        repo,
-        "PREFLIGHT_TOKEN='hf_x'\nhf_preflight\necho SURVIVED",
-        extra_env={"FAKE_CURL_CODES": str(codes)},
-    )
-    assert proc.returncode == 0, proc.stderr
-    assert "Token is valid" in proc.stderr
-    assert "cannot access pyannote/speaker-diarization-3.1" in proc.stderr
-    assert "Gated model access looks good" not in proc.stderr
-    assert "SURVIVED" in proc.stdout
-
-
-def test_hf_preflight_skipped_without_token(repo: Path) -> None:
-    proc = run_lib(repo, "PREFLIGHT_TOKEN=''\nhf_preflight\necho SURVIVED")
-    assert proc.returncode == 0, proc.stderr
-    assert "SURVIVED" in proc.stdout
-    assert not (repo / "curl.log").exists()

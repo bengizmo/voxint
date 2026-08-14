@@ -32,3 +32,7 @@ htmlcov/
 # ONNX export artifacts (regenerated via tools/export_titanet_onnx.py; sha256 in
 # tests/parity/fixtures/onnx/provenance.json).
 services/titanet/models/
+# Vendored pyannote checkpoints (fetched from the pyannote-models-v1 asset
+# release; sha256s in services/pyannote/models/provenance.json — the config
+# and provenance files ARE tracked, only the checkpoints stay out of git)
+services/pyannote/models/*.bin

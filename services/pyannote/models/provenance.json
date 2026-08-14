@@ -1,0 +1,49 @@
+{
+  "asset_release": "pyannote-models-v1",
+  "vendored": "2026-08-14",
+  "pipeline": "pyannote/speaker-diarization-3.1",
+  "pipeline_revision": "84fd25912480287da0247647c3d2b4853cb3ee5d",
+  "pyannote_audio_version": "3.1.1",
+  "files": {
+    "segmentation-3.0.bin": {
+      "upstream_repo": "pyannote/segmentation-3.0",
+      "upstream_file": "pytorch_model.bin",
+      "upstream_revision": "e66f3d3b9eb0873085418a7b813d3b369bf160bb",
+      "sha256": "da85c29829d4002daedd676e012936488234d9255e65e86dfab9bec6b1729298",
+      "size_bytes": 5905440,
+      "license": "MIT"
+    },
+    "wespeaker-voxceleb-resnet34-LM.bin": {
+      "upstream_repo": "pyannote/wespeaker-voxceleb-resnet34-LM",
+      "upstream_file": "pytorch_model.bin",
+      "upstream_revision": "837717ddb9ff5507820346191109dc79c958d614",
+      "sha256": "366edf44f4c80889a3eb7a9d7bdf02c4aede3127f7dd15e274dcdb826b143c56",
+      "size_bytes": 26645418,
+      "license": "CC-BY-4.0"
+    },
+    "speaker-diarization-3.1-config.yaml": {
+      "upstream_repo": "pyannote/speaker-diarization-3.1",
+      "upstream_file": "config.yaml",
+      "upstream_revision": "84fd25912480287da0247647c3d2b4853cb3ee5d",
+      "sha256": "04ad9cd59a93c3a7c754200ecc9e1c4ba87bf1657ef8a4debf7555e711daeeda",
+      "size_bytes": 469,
+      "license": "MIT",
+      "note": "reference copy of the upstream pipeline config; the shipped config.vendored.yaml reproduces its params verbatim with the two model references repointed at the vendored checkpoints"
+    },
+    "wespeaker-voxceleb-resnet34-LM-config.yaml": {
+      "upstream_repo": "pyannote/wespeaker-voxceleb-resnet34-LM",
+      "upstream_file": "config.yaml",
+      "upstream_revision": "837717ddb9ff5507820346191109dc79c958d614",
+      "sha256": "6ff718cff3c5d7a4493537ab7f4780cad7e3d32453f59099b4076aefa07a9974",
+      "size_bytes": 221,
+      "license": "CC-BY-4.0",
+      "note": "reference only — the pyannote-audio checkpoint embeds its hyperparameters; not loaded at runtime"
+    }
+  },
+  "attribution": {
+    "cc_by_4_0": "The WeSpeaker ResNet34 speaker-embedding weights were trained by the WeSpeaker project (github.com/wenet-e2e/wespeaker) on VoxCeleb and repackaged for pyannote.audio by Herve Bredin (huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM). Redistributed here under CC-BY-4.0 with attribution.",
+    "mit": "pyannote/segmentation-3.0 and the speaker-diarization-3.1 pipeline are (c) pyannote contributors, MIT license (huggingface.co/pyannote/segmentation-3.0)."
+  },
+  "gate_note": "The Hugging Face gates on the two pyannote-owned repos are HF's access mechanism, not a license term; all files above are redistributable (MIT / CC-BY-4.0). Verified 2026-08-14 via the HF API license tags and model cards.",
+  "regeneration": "download the four upstream files at the pinned revisions, verify the sha256s above, and publish a NEW asset release (pyannote-models-v2, ...) together with an updated provenance file — assets under a given tag are immutable"
+}

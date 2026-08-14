@@ -5,6 +5,19 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Changed
+- **No Hugging Face account or token needed** (#24): the
+  `speaker-diarization-3.1` pipeline weights are now vendored into the
+  pyannote images — sha256-pinned from the standing `pyannote-models-v1`
+  asset release (`services/pyannote/models/provenance.json`; segmentation-3.0
+  MIT, WeSpeaker embedding CC-BY-4.0, redistributed with attribution) and
+  loaded offline by default. Vendored-vs-HF parity verified byte-identical on
+  the parity clip. `HF_TOKEN` is demoted to an optional override for a custom
+  `DIARIZER_MODEL_NAME`; the installer no longer prompts for a token, the
+  compute overlays start without one (the `${HF_TOKEN:?}` guard is gone), the
+  setup wizard drops its token row, and pyannote's CI smoke runs
+  unconditionally (the secret-absent SKIP lane is deleted).
+
 ## [0.5.1] — 2026-08-14
 
 Robustness patch for burst-load resilience (#23). No inference or contract

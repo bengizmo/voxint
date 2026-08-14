@@ -548,6 +548,41 @@ class TestCpuImageProvenance:
         )
         assert match.group(1) == provenance["onnx_sha256"]
 
+    @pytest.mark.parametrize("dockerfile_name", ["Dockerfile", "Dockerfile.cpu"])
+    def test_pyannote_dockerfile_shas_match_provenance(self, dockerfile_name: str) -> None:
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        pyannote_dir = REPO_ROOT / "services" / "pyannote"
+        dockerfile = (pyannote_dir / dockerfile_name).read_text()
+        provenance = json.loads((pyannote_dir / "models" / "provenance.json").read_text())
+        for arg, filename in (
+            ("SEGMENTATION_SHA256", "segmentation-3.0.bin"),
+            ("WESPEAKER_SHA256", "wespeaker-voxceleb-resnet34-LM.bin"),
+        ):
+            match = re.search(rf"ARG {arg}=([0-9a-f]{{64}})", dockerfile)
+            assert match is not None, f"{dockerfile_name} lost its {arg} default"
+            assert match.group(1) == provenance["files"][filename]["sha256"], (
+                f"{dockerfile_name} {arg} drifted from models/provenance.json"
+            )
+
+    def test_pyannote_vendored_config_references_baked_paths(self) -> None:
+        # The vendored pipeline config must reference exactly the paths the
+        # Dockerfiles COPY the checkpoints to — and the embedding path must
+        # contain "pyannote", or pyannote.audio 3.1.1's substring dispatch
+        # routes it to the (uninstalled) ONNX WeSpeaker loader.
+        from tests.contracts.conftest import REPO_ROOT
+
+        config = (
+            REPO_ROOT / "services" / "pyannote" / "models" / "config.vendored.yaml"
+        ).read_text()
+        embedding = "/app/vendored/pyannote/wespeaker-voxceleb-resnet34-LM.bin"
+        assert f"embedding: {embedding}" in config
+        assert "segmentation: /app/vendored/pyannote/segmentation-3.0.bin" in config
+        assert "pyannote" in embedding
+
     def test_cpu_requirements_mirror_cuda_preprocess_pins(self) -> None:
         from tests.contracts.conftest import REPO_ROOT
 

@@ -13,10 +13,8 @@
 # for the model services -- GPU (compose.gpu.yaml, NVIDIA), ROCm
 # (compose.rocm.yaml, AMD GPU for ASR) or CPU (compose.cpu.yaml, runs
 # anywhere). Transcription, diarization, and speaker embedding need a tier;
-# the pyannote diarization weights additionally need a
-# Hugging Face token (every compute overlay refuses to start without one), so
-# the installer collects that too. Skipping the token starts the core stack
-# only and the completion notice explains how to finish.
+# all model weights (diarization included) are vendored into the images, so
+# no Hugging Face account or token is involved.
 #
 # Requirements: Docker Engine with the Compose plugin >= 2.24. No other runtime
 # dependency. Tested on Linux and macOS; Bash 3.2 compatible.
@@ -70,17 +68,11 @@ unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT H
 # ---------------------------------------------------------------------------
 # Compute-tier state. COMPUTE_TIER_VALUE is what the user chose
 # (cpu|gpu|rocm|none, persisted in .env as VOXINT_COMPOSE_TIER).
-# EFFECTIVE_TIER is what this run
-# actually starts: it downgrades to "none" (core only) when a compute-tier
-# choice has no usable HF token, because ALL compute overlays interpolate
-# ${HF_TOKEN:?} and refuse to start without one. DEFERRED_TIER records that
-# downgrade so the handoff can explain how to finish.
+# EFFECTIVE_TIER is what this run actually starts (same as the choice — the
+# model weights are vendored into the images, nothing to defer on).
 # ---------------------------------------------------------------------------
 COMPUTE_TIER_VALUE=""
 EFFECTIVE_TIER="none"
-DEFERRED_TIER=""
-HF_TOKEN_VALUE=""
-PREFLIGHT_TOKEN=""
 RENDER_GID_VALUE=""
 COMPOSE_FILE_ARGS="-f compose.yaml"
 
@@ -329,91 +321,6 @@ prompt_compute_tier() {
   done
 }
 
-# Hugging Face token for the HF-gated pyannote diarization weights. Empty
-# input = skip (the chosen tier is recorded but only the core stack starts,
-# because every compute overlay refuses to interpolate without HF_TOKEN).
-prompt_hf_token() {
-  step "Hugging Face token (needed by the diarization service)"
-  say "  The pyannote diarization weights are gated on Hugging Face. You need a"
-  say "  free Hugging Face account, a READ token, and to accept the terms of"
-  say "  BOTH gated models (open each page while signed in):"
-  say "    https://huggingface.co/pyannote/speaker-diarization-3.1"
-  say "    https://huggingface.co/pyannote/segmentation-3.0"
-  say "  Create a token at: https://huggingface.co/settings/tokens"
-  local tok
-  while :; do
-    printf 'Hugging Face token (input hidden; Enter to skip): ' >&2
-    IFS= read -r -s tok || fail "No input."
-    printf '\n' >&2
-    if [ -z "$tok" ]; then HF_TOKEN_VALUE=""; return 0; fi
-    if has_single_quote "$tok"; then
-      say "  The token must not contain a single-quote (') character."; continue
-    fi
-    if ends_with_backslash "$tok"; then
-      say "  The token must not end with a backslash (\\)."; continue
-    fi
-    # A double-quote would break the curl -K config line the preflight builds;
-    # whitespace/control characters mean a mangled paste (tokens are hf_ + alnum).
-    case $tok in
-      *\"*)          say "  The token must not contain a double-quote (\") character."; continue ;;
-      *[[:space:]]*) say "  The token must not contain whitespace -- re-paste it as one line."; continue ;;
-    esac
-    HF_TOKEN_VALUE=$tok
-    return 0
-  done
-}
-
-# Advisory two-stage token check: (1) is the token valid at all (whoami), and
-# (2) can it reach a file in each gated repo (gate accepted + scope OK). Warns,
-# never blocks -- the pyannote service is the authority at startup. The token
-# reaches curl via a stdin config file, NEVER argv (argv is visible in `ps`).
-# Requires curl; silently skipped (with a note) when curl is absent.
-hf_preflight() {
-  if [ -z "$PREFLIGHT_TOKEN" ]; then return 0; fi
-  if ! command -v curl >/dev/null 2>&1; then
-    say "  (curl not found -- skipping the advisory token check; the pyannote"
-    say "   service verifies the token when it starts.)"
-    return 0
-  fi
-  step "Verifying the Hugging Face token (advisory; never blocks the install)"
-  local code repo ok=1
-  code=$(printf 'header = "Authorization: Bearer %s"\n' "$PREFLIGHT_TOKEN" | \
-    curl -K - -s -o /dev/null -w '%{http_code}' --max-time 15 \
-      https://huggingface.co/api/whoami-v2 2>/dev/null) || code=000
-  case $code in
-    200) say "  Token is valid." ;;
-    401)
-      say "  WARNING: Hugging Face rejected the token (401 on whoami)."
-      say "  Diarization will fail to download its weights until the token is fixed"
-      say "  in .env (key HF_TOKEN)."
-      return 0
-      ;;
-    *)
-      say "  Could not verify the token (HTTP $code -- network issue?). Continuing."
-      return 0
-      ;;
-  esac
-  for repo in pyannote/speaker-diarization-3.1 pyannote/segmentation-3.0; do
-    code=$(printf 'header = "Authorization: Bearer %s"\n' "$PREFLIGHT_TOKEN" | \
-      curl -K - -sL -o /dev/null -w '%{http_code}' --max-time 15 \
-        "https://huggingface.co/$repo/resolve/main/config.yaml" 2>/dev/null) || code=000
-    case $code in
-      200) : ;;
-      401|403)
-        say "  WARNING: the token cannot access $repo (HTTP $code)."
-        say "  Accept the terms at https://huggingface.co/$repo while signed in, and"
-        say "  make sure the token's scope covers gated/public repos."
-        ok=0
-        ;;
-      *)
-        say "  Could not check access to $repo (HTTP $code). Continuing."
-        ;;
-    esac
-  done
-  if [ "$ok" = 1 ]; then say "  Gated model access looks good."; fi
-  return 0
-}
-
 # ---------------------------------------------------------------------------
 # Render .env by streaming .env.example and replacing only the keys we manage
 # (matching commented defaults too), then validate the candidate with Compose
@@ -433,7 +340,6 @@ managed_replacement() {
     POSTGRES_PORT)   if [ -n "${PG_PORT:-}" ];        then printf 'POSTGRES_PORT=%s' "$PG_PORT"; fi ;;
     REDIS_PORT)      if [ -n "${RD_PORT:-}" ];        then printf 'REDIS_PORT=%s'    "$RD_PORT"; fi ;;
     API_PORT)        if [ -n "${API_PORT_VALUE:-}" ]; then printf 'API_PORT=%s'     "$API_PORT_VALUE"; fi ;;
-    HF_TOKEN)        if [ -n "${HF_TOKEN_VALUE:-}" ]; then printf 'HF_TOKEN=%s' "$(dotenv_squote "$HF_TOKEN_VALUE")"; fi ;;
     VOXINT_COMPOSE_TIER) if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf 'VOXINT_COMPOSE_TIER=%s' "$COMPUTE_TIER_VALUE"; fi ;;
     VOXINT_RENDER_GID) if [ -n "${RENDER_GID_VALUE:-}" ]; then printf 'VOXINT_RENDER_GID=%s' "$RENDER_GID_VALUE"; fi ;;
   esac
@@ -448,7 +354,6 @@ managed_keys_with_values() {
   if [ -n "${PG_PORT:-}" ];        then printf '%s\n' POSTGRES_PORT; fi
   if [ -n "${RD_PORT:-}" ];        then printf '%s\n' REDIS_PORT; fi
   if [ -n "${API_PORT_VALUE:-}" ]; then printf '%s\n' API_PORT; fi
-  if [ -n "${HF_TOKEN_VALUE:-}" ];     then printf '%s\n' HF_TOKEN; fi
   if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf '%s\n' VOXINT_COMPOSE_TIER; fi
   if [ -n "${RENDER_GID_VALUE:-}" ];   then printf '%s\n' VOXINT_RENDER_GID; fi
 }
@@ -497,7 +402,7 @@ write_env() {
   # Let Compose parse the candidate as the authority on dotenv correctness
   # (this also proves the required VOXINT_PASSWORD interpolation resolves).
   # Validated against the EFFECTIVE file set, so a tier overlay that is about
-  # to be started is proven interpolable (HF_TOKEN included) before we commit.
+  # to be started is proven interpolable before we commit.
   if ! dc --env-file "$tmp" config --quiet >/dev/null 2>&1; then
     fail "Generated .env failed Compose validation. This is a bug -- please report it."
   fi
@@ -566,13 +471,13 @@ read_env_value() {
 }
 
 # Minimal atomic editor for a KEPT .env: replaces (or appends) ONLY
-# VOXINT_COMPOSE_TIER, plus HF_TOKEN when one was just entered and
-# VOXINT_RENDER_GID when the rocm tier detected one. Backs up
-# first, validates with Compose, and preserves mode 0600. Everything else in
-# the file passes through byte-for-byte.
+# VOXINT_COMPOSE_TIER, plus VOXINT_RENDER_GID when the rocm tier detected one.
+# Backs up first, validates with Compose, and preserves mode 0600. Everything
+# else in the file (an optional HF_TOKEN included) passes through
+# byte-for-byte.
 update_env_keys() {
   backup_env
-  local tmp line wrote_tier=0 wrote_tok=0 wrote_gid=0
+  local tmp line wrote_tier=0 wrote_gid=0
   local old_umask; old_umask=$(umask); umask 077
   tmp=$(mktemp "$REPO_ROOT/.env.tmp.XXXXXX") || { umask "$old_umask"; fail "Could not create a temp file in $REPO_ROOT."; }
   _CLEANUP_TMP=$tmp
@@ -584,16 +489,6 @@ update_env_keys() {
         if [ "$wrote_tier" = 0 ]; then
           printf 'VOXINT_COMPOSE_TIER=%s\n' "$COMPUTE_TIER_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
           wrote_tier=1
-        fi
-        ;;
-      HF_TOKEN=*)
-        if [ -n "$HF_TOKEN_VALUE" ]; then
-          if [ "$wrote_tok" = 0 ]; then
-            printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
-            wrote_tok=1
-          fi
-        else
-          printf '%s\n' "$line" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
         fi
         ;;
       VOXINT_RENDER_GID=*)
@@ -614,24 +509,15 @@ update_env_keys() {
   if [ "$wrote_tier" = 0 ]; then
     printf 'VOXINT_COMPOSE_TIER=%s\n' "$COMPUTE_TIER_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
   fi
-  if [ -n "$HF_TOKEN_VALUE" ] && [ "$wrote_tok" = 0 ]; then
-    printf 'HF_TOKEN=%s\n' "$(dotenv_squote "$HF_TOKEN_VALUE")" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
-  fi
   if [ -n "$RENDER_GID_VALUE" ] && [ "$wrote_gid" = 0 ]; then
     printf 'VOXINT_RENDER_GID=%s\n' "$RENDER_GID_VALUE" >>"$tmp" || { umask "$old_umask"; fail "Failed writing candidate .env."; }
   fi
   umask "$old_umask"
-  # Validate with the file set this .env will actually run: the recorded tier's
-  # overlay when it will be startable (token present -- either just entered or
-  # already in the pre-update .env), else the core file only. Mirrors write_env.
-  local vtok vargs
-  vtok=$HF_TOKEN_VALUE
-  if [ -z "$vtok" ]; then vtok=$(read_env_value HF_TOKEN); fi
-  if [ "$COMPUTE_TIER_VALUE" != "none" ] && [ -n "$vtok" ]; then
-    vargs=$(compose_file_args_for_tier "$COMPUTE_TIER_VALUE")
-  else
-    vargs=$(compose_file_args_for_tier none)
-  fi
+  # Validate with the file set this .env will actually run: the recorded
+  # tier's overlay (startable unconditionally — nothing gates on a token).
+  # Mirrors write_env.
+  local vargs
+  vargs=$(compose_file_args_for_tier "$COMPUTE_TIER_VALUE")
   # shellcheck disable=SC2086  # intentional word-splitting of the -f arguments
   if ! docker compose $vargs --env-file "$tmp" config --quiet >/dev/null 2>&1; then
     fail "Updated .env failed Compose validation. This is a bug -- please report it."
@@ -639,11 +525,7 @@ update_env_keys() {
   mv -f "$tmp" .env || fail "Could not move the updated .env into place."
   _CLEANUP_TMP=""
   chmod 600 .env 2>/dev/null || true
-  if [ -n "$HF_TOKEN_VALUE" ]; then
-    say "  Updated .env (recorded compute tier + HF token)."
-  else
-    say "  Updated .env (recorded compute tier)."
-  fi
+  say "  Updated .env (recorded compute tier)."
 }
 
 # Kept-.env path: honor a recorded VOXINT_COMPOSE_TIER; on a legacy .env
@@ -656,9 +538,6 @@ resolve_kept_env_tier() {
     say "  This .env predates tier selection (no VOXINT_COMPOSE_TIER) -- one question:"
     prompt_compute_tier
     tier=$COMPUTE_TIER_VALUE
-    if [ "$tier" != "none" ] && [ -z "$(read_env_value HF_TOKEN)" ]; then
-      prompt_hf_token
-    fi
     update_env_keys
   fi
   COMPUTE_TIER_VALUE=$tier
@@ -677,15 +556,7 @@ resolve_kept_env_tier() {
       update_env_keys
     fi
   fi
-  PREFLIGHT_TOKEN=$(read_env_value HF_TOKEN)
-  if [ "$tier" != "none" ] && [ -z "$PREFLIGHT_TOKEN" ]; then
-    DEFERRED_TIER=$tier
-    EFFECTIVE_TIER="none"
-    say "  The recorded tier is '$tier' but .env has no HF_TOKEN, so only the core"
-    say "  stack will start -- the completion notice explains how to finish."
-  else
-    EFFECTIVE_TIER=$tier
-  fi
+  EFFECTIVE_TIER=$tier
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
 }
 
@@ -713,20 +584,7 @@ configure() {
   prompt_password
   prompt_media_root
   prompt_compute_tier
-  if [ "$COMPUTE_TIER_VALUE" != "none" ]; then
-    prompt_hf_token
-    if [ -z "$HF_TOKEN_VALUE" ]; then
-      DEFERRED_TIER=$COMPUTE_TIER_VALUE
-      EFFECTIVE_TIER="none"
-      say "  No token entered. Your $COMPUTE_TIER_VALUE-tier choice is recorded, but only"
-      say "  the core stack will start now -- the completion notice explains how to finish."
-    else
-      EFFECTIVE_TIER=$COMPUTE_TIER_VALUE
-    fi
-  else
-    EFFECTIVE_TIER="none"
-  fi
-  PREFLIGHT_TOKEN=$HF_TOKEN_VALUE
+  EFFECTIVE_TIER=$COMPUTE_TIER_VALUE
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
 
   step "Checking host ports"
@@ -772,8 +630,8 @@ pull_and_start() {
   else
     step "Starting the stack (core + $EFFECTIVE_TIER model services)"
   fi
-  # --remove-orphans: on a re-run that switched tier (e.g. gpu -> none, or a
-  # deferred token), containers from the previously-active overlay are no
+  # --remove-orphans: on a re-run that switched tier (e.g. gpu -> none, any
+  # tier switch), containers from the previously-active overlay are no
   # longer in the file set and would otherwise keep running while the handoff
   # claims core-only. Compose removes exactly those; same-name services on a
   # gpu<->cpu switch are recreated, not orphaned.
@@ -935,29 +793,14 @@ print_handoff() {
       say "   docker compose -f compose.yaml -f compose.rocm.yaml down"
       ;;
     *)
-      if [ -n "$DEFERRED_TIER" ]; then
-        say " IMPORTANT -- only the CORE control plane is running. You chose the"
-        say " $DEFERRED_TIER tier, but no Hugging Face token is set, and the model"
-        say " services cannot start without one (the pyannote diarization weights"
-        say " are HF-gated). Submitting audio now WILL FAIL. To finish:"
-        say "   1. Create a free READ token: https://huggingface.co/settings/tokens"
-        say "   2. Accept the terms of BOTH gated models (while signed in):"
-        say "        https://huggingface.co/pyannote/speaker-diarization-3.1"
-        say "        https://huggingface.co/pyannote/segmentation-3.0"
-        say "   3. Set HF_TOKEN=<your token> in .env, then either re-run this"
-        say "      installer or start the model services yourself:"
-        say "        docker compose -f compose.yaml -f compose.$DEFERRED_TIER.yaml up -d"
-      else
-        say " IMPORTANT -- this is the CORE control plane only. You can open the"
-        say " console and adjudicate, but transcription, diarization, and speaker"
-        say " embedding need the model services. Submitting audio now will fail at"
-        say " those stages. To enable processing later, set HF_TOKEN in .env (the"
-        say " pyannote weights are HF-gated) and bring up a compute tier:"
-        say "   docker compose -f compose.yaml -f compose.gpu.yaml up -d    # NVIDIA GPU"
-        say "   docker compose -f compose.yaml -f compose.rocm.yaml up -d   # AMD GPU"
-        say "   docker compose -f compose.yaml -f compose.cpu.yaml up -d    # no GPU"
-        say " (or re-run this installer and pick a tier)."
-      fi
+      say " IMPORTANT -- this is the CORE control plane only. You can open the"
+      say " console and adjudicate, but transcription, diarization, and speaker"
+      say " embedding need the model services. Submitting audio now will fail at"
+      say " those stages. To enable processing later, bring up a compute tier:"
+      say "   docker compose -f compose.yaml -f compose.gpu.yaml up -d    # NVIDIA GPU"
+      say "   docker compose -f compose.yaml -f compose.rocm.yaml up -d   # AMD GPU"
+      say "   docker compose -f compose.yaml -f compose.cpu.yaml up -d    # no GPU"
+      say " (or re-run this installer and pick a tier)."
       say ""
       say " Stop the stack with:  docker compose down"
       ;;
@@ -983,7 +826,6 @@ main() {
     say "Keeping the existing .env."
     resolve_kept_env_tier
   fi
-  hf_preflight
   pull_and_start
   wait_for_health
   print_handoff

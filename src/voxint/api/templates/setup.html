@@ -131,13 +131,6 @@
     <span class="muted">{{ svc.detail }}{% if svc.latency_ms is not none %} · {{ "%.0f"|format(svc.latency_ms) }} ms{% endif %}</span>
   </div>
   {% endfor %}
-  <div class="svc">
-    <span class="dot {{ 'up' if hf_token_set else 'down' }}"></span>
-    <strong>Hugging Face token</strong>
-    <span class="muted">{% if hf_token_set %}set{% else %}not set — diarization unavailable: the
-      pyannote weights are HF-gated, and neither compute overlay starts without
-      <code>HF_TOKEN</code> in <code>.env</code>{% endif %}</span>
-  </div>
   <p class="muted">If a service is down, start the model services — the GPU overlay
      (<code>compose.gpu.yaml</code>) or, with no NVIDIA GPU, the CPU overlay
      (<code>compose.cpu.yaml</code>); see the README's quickstart. This check is advisory —

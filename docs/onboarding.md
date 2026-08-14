@@ -14,10 +14,11 @@ The manual path — copy `.env.example`, edit it, `docker compose up -d`, learn 
 review workflow by reading — works, but it front-loads every decision before you
 have seen the tool run once. The onboarding path defers what it can: the
 installer asks for the things it genuinely cannot invent — an admin password, a
-media folder, which compute tier should run the model services, and (for the
-GPU/CPU tiers) a Hugging Face token for the gated diarization weights — and
+media folder, and which compute tier should run the model services — and
 everything else is set from inside the running console, against a sample you
-can see working before you point Voxint at your own audio.
+can see working before you point Voxint at your own audio. All model weights,
+diarization included, are vendored into the images: no Hugging Face account or
+token is involved.
 
 ## 1. Guided installer
 
@@ -31,13 +32,10 @@ bash, not `sh`; no runtime dependency beyond Docker). It:
 
 - preflights Docker and the Compose plugin (**≥ 2.24** — the legacy v1
   `docker-compose` binary cannot parse this stack);
-- prompts for an **admin password**, a **media folder**, a **compute tier** for
-  the model services (GPU / CPU / none-for-now; it suggests GPU when
-  `nvidia-smi` is present), and — for the GPU/CPU tiers — a **Hugging Face
-  token** (the pyannote diarization weights are HF-gated), and auto-generates
-  the rest (including a random `CSRF_SECRET`);
-- advisory-checks the token: is it valid, and can it reach both gated pyannote
-  repos (terms accepted)? Warnings only — it never blocks the install;
+- prompts for an **admin password**, a **media folder**, and a **compute
+  tier** for the model services (GPU / CPU / none-for-now; it suggests GPU
+  when `nvidia-smi` is present), and auto-generates the rest (including a
+  random `CSRF_SECRET`);
 - renders `.env` from `.env.example` — never overwriting an existing `.env`
   without first taking a timestamped backup. The tier choice is recorded as
   `VOXINT_COMPOSE_TIER`, so re-runs start the same overlay (a pre-0.4.1 `.env`
@@ -48,13 +46,10 @@ bash, not `sh`; no runtime dependency beyond Docker). It:
   the chosen tier's model services — polls the API container's healthcheck,
   then prints the console URL.
 
-It is safe to re-run. With a tier and a token, the stack it starts can process
-audio end-to-end. If you picked a tier but skipped the token, only the **core
-control plane** starts (both compute overlays refuse to start without
-`HF_TOKEN` — the weights are gated), and the completion notice spells out the
-three steps to finish: create a token, accept both model gates, set `HF_TOKEN`
-in `.env`, then re-run the installer or start the overlay by hand. The
-installer says so explicitly rather than letting a run silently fail on a
+It is safe to re-run. With a tier chosen, the stack it starts can process
+audio end-to-end. If you picked "none for now", only the **core control
+plane** starts, and the completion notice says so explicitly — with the exact
+overlay command to run later — rather than letting a run silently fail on a
 missing service.
 
 ## 2. First-run setup wizard

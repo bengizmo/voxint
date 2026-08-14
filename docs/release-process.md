@@ -36,6 +36,17 @@ asset release (`titanet-onnx-v2`, …), update `provenance.json` and
 test pins them together), and bump `TITANET_ONNX_RELEASE` in `release.yml` —
 assets under an existing tag are immutable by policy, never replaced.
 
+### The pyannote model asset (release dependency)
+
+Same pattern: the diarization checkpoints (~33 MB, `segmentation-3.0.bin` +
+`wespeaker-voxceleb-resnet34-LM.bin`) are **not in git**. Every pyannote image
+build fetches them from the standing **`pyannote-models-v1`** asset release
+and verifies their sha256s against `services/pyannote/models/provenance.json`
+(the Dockerfiles re-verify at build time; a contract test pins the Dockerfile
+ARG defaults to the provenance file). A weights refresh publishes a **new**
+asset release (`pyannote-models-v2`, …), updates the provenance file and both
+Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
+
 ### Release gates wired into the workflow
 
 - **`parity-gate`** — the strict titanet ONNX parity harness
@@ -52,9 +63,9 @@ assets under an existing tag are immutable by policy, never replaced.
   embedding within cosine 0.999 of the **committed CUDA reference** — the
   ONNX graph provably executes on the shipped numerical stack; a `low_snr`
   skip response counts as failure, not success. The app image is booted too
-  (`import voxint`). pyannote's smoke needs a repo `HF_TOKEN` secret
-  (weights are HF-gated): present → real 3-speaker diarization; absent →
-  **explicit SKIP** in the step summary, never a silent pass.
+  (`import voxint`). pyannote smokes unconditionally — its weights are
+  vendored into the image (fetched from the `pyannote-models-v1` asset
+  release at build) — and must produce a real 3-speaker diarization.
   `merge-multiarch` then tags only smoke-passed digests and verifies each
   manifest list exposes exactly `linux/amd64` + `linux/arm64`.
 - **`publish-whisper-rocm`** — the AMD whisper image (`-rocm`, amd64 only)

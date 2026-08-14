@@ -24,14 +24,14 @@
 #   smoke-cpu — per arch, by digest: healthz identity fields, a real corpus
 #     transcription, and a titanet embedding checked against the committed
 #     CUDA reference vector (tools/smoke_cpu_services.py) — the ONNX graph
-#     provably executes on the shipped numerical stack. pyannote's HF-gated
-#     smoke needs secrets.HF_TOKEN: present → real diarization; absent →
-#     explicit SKIP in the step summary, never a false pass.
+#     provably executes on the shipped numerical stack. pyannote smokes
+#     unconditionally: its weights are vendored into the image (no HF gate).
 #
-# The ~100 MB titanet .onnx is NOT in git: jobs fetch it from the standing
-# model-asset release (TITANET_ONNX_RELEASE) and verify its sha256 against
-# tests/parity/fixtures/onnx/provenance.json before use. A re-export bumps
-# the asset release AND provenance together.
+# Model weights are NOT in git: jobs fetch the ~100 MB titanet .onnx from
+# TITANET_ONNX_RELEASE (sha256 in tests/parity/fixtures/onnx/provenance.json)
+# and the pyannote checkpoints from PYANNOTE_MODELS_RELEASE (sha256s in
+# services/pyannote/models/provenance.json) before building/verifying. A
+# weights refresh bumps the asset release AND its provenance file together.
 name: release
 
 on:
@@ -40,6 +40,7 @@ on:
 
 env:
   TITANET_ONNX_RELEASE: titanet-onnx-v1
+  PYANNOTE_MODELS_RELEASE: pyannote-models-v1
 
 jobs:
   # CUDA images — byte-identical build steps to previous releases; amd64-only.
@@ -70,6 +71,25 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
+      - name: Fetch the vendored diarization weights (pyannote only)
+        if: matrix.image == 'voxint-pyannote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PYANNOTE_MODELS_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.bin' \
+            --dir services/pyannote/models
+          # The Dockerfile re-verifies against its baked provenance shas; this
+          # early check just fails faster with a clearer message.
+          python3 - <<'PYEOF'
+          import hashlib, json
+          prov = json.load(open("services/pyannote/models/provenance.json"))["files"]
+          for name in ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"):
+              digest = hashlib.sha256(open(f"services/pyannote/models/{name}", "rb").read()).hexdigest()
+              assert digest == prov[name]["sha256"], f"{name}: {digest} != provenance"
+          print("vendored checkpoints match provenance")
+          PYEOF
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -239,6 +259,25 @@ jobs:
           # early check just fails faster with a clearer message.
           expected=$(python3 -c "import json; print(json.load(open('tests/parity/fixtures/onnx/provenance.json'))['onnx_sha256'])")
           echo "${expected}  services/titanet/models/titanet-large.onnx" | sha256sum -c -
+      - name: Fetch the vendored diarization weights (pyannote only)
+        if: matrix.target.image == 'voxint-pyannote'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PYANNOTE_MODELS_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.bin' \
+            --dir services/pyannote/models
+          # The Dockerfile re-verifies against its baked provenance shas; this
+          # early check just fails faster with a clearer message.
+          python3 - <<'PYEOF'
+          import hashlib, json
+          prov = json.load(open("services/pyannote/models/provenance.json"))["files"]
+          for name in ("segmentation-3.0.bin", "wespeaker-voxceleb-resnet34-LM.bin"):
+              digest = hashlib.sha256(open(f"services/pyannote/models/{name}", "rb").read()).hexdigest()
+              assert digest == prov[name]["sha256"], f"{name}: {digest} != provenance"
+          print("vendored checkpoints match provenance")
+          PYEOF
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -330,12 +369,8 @@ jobs:
             "${owner}/voxint-whisper@sha256:$(ls /tmp/digests/whisper)"
           docker run -d --name titanet -p 8021:8021 -v "$media:/data/media:ro" \
             "${owner}/voxint-titanet@sha256:$(ls /tmp/digests/titanet)"
-          if [ -n "${HF_TOKEN}" ]; then
-            docker run -d --name pyannote -p 8024:8024 -v "$media:/data/media:ro" \
-              -e HF_TOKEN "${owner}/voxint-pyannote@sha256:$(ls /tmp/digests/pyannote)"
-          fi
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          docker run -d --name pyannote -p 8024:8024 -v "$media:/data/media:ro" \
+            "${owner}/voxint-pyannote@sha256:$(ls /tmp/digests/pyannote)"
       - name: Wait for healthz
         run: |
           trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
@@ -349,26 +384,15 @@ jobs:
           }
           wait_for whisper http://localhost:8022 90
           wait_for titanet http://localhost:8021 60
-          if docker ps --format '{{.Names}}' | grep -q '^pyannote$'; then
-            wait_for pyannote http://localhost:8024 90
-          fi
+          wait_for pyannote http://localhost:8024 90
       - name: Smoke (real inference vs committed references)
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           trap 'echo "--- whisper logs:"; docker logs whisper || true; echo "--- titanet logs:"; docker logs titanet || true; docker logs pyannote 2>/dev/null || true' ERR
-          extra=""
-          if [ -n "${HF_TOKEN}" ]; then
-            extra="--pyannote http://localhost:8024"
-          else
-            echo "::warning::pyannote smoke SKIPPED — no HF_TOKEN secret configured (weights are HF-gated)"
-            echo "### pyannote smoke: SKIPPED (no HF_TOKEN secret)" >> "$GITHUB_STEP_SUMMARY"
-          fi
           python3 tools/smoke_cpu_services.py \
             --fixtures tests/parity/fixtures \
             --whisper http://localhost:8022 \
             --titanet http://localhost:8021 \
-            $extra
+            --pyannote http://localhost:8024
 
   # Only smoke-passed digests get tags. Names must match the build-multiarch
   # artifact keys exactly (see the prefix-collision note there).

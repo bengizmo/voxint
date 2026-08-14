@@ -86,8 +86,8 @@ What changes relative to the GPU overlay — and what doesn't:
   **same embedding space id** (`titanet-large-v1`) — kept on a measured
   three-level parity gate against the CUDA engine, not on faith
   (see [gpu-contracts.md](gpu-contracts.md)).
-- **pyannote still needs `HF_TOKEN`** in `.env` — the diarization weights are
-  HF-gated regardless of compute tier.
+- **No `HF_TOKEN` needed** — the diarization weights are vendored into the
+  pyannote image (sha256-pinned from the `pyannote-models-v1` asset release).
 - **Mixing tiers is fine.** The overlays are per-service compositions; an
   accelerated tier swaps individual services without touching the others —
   the ROCm tier below is exactly that (GPU whisper + CPU pyannote/titanet).
@@ -125,7 +125,8 @@ the `-cpu` images. Honest expectations and constraints:
   natively supported GPUs — it corrupts kernel selection.
 - **`COMPUTE_TIER=rocm`** scales timeouts/leases for the still-CPU stages
   (GPU-class timing for ASR; see [timeouts-and-leases.md](timeouts-and-leases.md)).
-- **pyannote still needs `HF_TOKEN`** in `.env`, same as every tier.
+- **No `HF_TOKEN` needed**, same as every tier — the diarization weights are
+  vendored into the pyannote image.
 - **amd64 only** (the CT2 ROCm wheels are x86_64), and CI builds this image
   without a GPU — the real-GPU gate runs on maintainer AMD hardware before a
   release.

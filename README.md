@@ -77,18 +77,15 @@ git clone https://github.com/bengizmo/voxint.git && cd voxint
 ./scripts/install.sh
 ```
 
-It asks for an admin password, a media folder, a **compute tier** for the model
-services (GPU / CPU / none for now), and — for the GPU/CPU tiers — a **Hugging
-Face token** (the pyannote diarization weights are HF-gated; the installer
-explains the two model gates to accept and checks the token, warnings only).
-It generates everything else (including a random `CSRF_SECRET`), pulls the
-pinned release images, starts the core stack plus your chosen tier's model
-services, waits for the API to report healthy, and prints the console URL. It
-is safe to re-run — an existing `.env` is kept unless you ask to regenerate it
-(which backs the old one up first), and your tier choice is remembered
-(`VOXINT_COMPOSE_TIER`). Skip the token and only the **core control plane**
-starts (console, review UI, durable pipeline state — enough to adjudicate, not
-to process audio); the completion notice explains how to finish.
+It asks for an admin password, a media folder, and a **compute tier** for the
+model services (GPU / CPU / none for now) — that's it: all model weights,
+diarization included, are vendored into the images, so no Hugging Face account
+or token is involved. It generates everything else (including a random
+`CSRF_SECRET`), pulls the pinned release images, starts the core stack plus
+your chosen tier's model services, waits for the API to report healthy, and
+prints the console URL. It is safe to re-run — an existing `.env` is kept
+unless you ask to regenerate it (which backs the old one up first), and your
+tier choice is remembered (`VOXINT_COMPOSE_TIER`).
 
 **Or configure by hand:**
 
@@ -121,11 +118,10 @@ Feed it work by uploading a file, pointing it at a URL (`docker compose exec api
 voxint fetch <url>`), or submitting a local path (`docker compose exec api voxint
 submit path/to/file.mp3`, relative to `MEDIA_ROOT`).
 
-To run the GPU model services too (one NVIDIA GPU assumed), first set
-`HF_TOKEN` in `.env` — the pyannote service's diarization weights are
-HF-gated, so you need a Hugging Face token with access to the pyannote
-models accepted (see `services/pyannote/README.md`); compose refuses the GPU
-overlay without it.
+To run the GPU model services too (one NVIDIA GPU assumed), just bring up the
+GPU overlay — the diarization weights are vendored into the pyannote image
+(sha256-pinned from the `pyannote-models-v1` asset release), so no Hugging
+Face token is needed (see `services/pyannote/README.md`).
 
 All three services share the one GPU. Their loaded weights total roughly
 **3.5–4.5 GB** of VRAM (whisper large-v2 int8 ~1.5 GB, pyannote ~1–2 GB,
@@ -224,6 +220,7 @@ meeting/podcast pack ships as the default.
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) — model weights (e.g. pyannote's
-HF-gated checkpoints) are subject to their own terms and are downloaded with **your** credentials;
-Voxint never vendors them.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE) — vendored model weights are
+redistributed under their own licenses with attribution (titanet: CC-BY-4.0; pyannote
+segmentation: MIT; WeSpeaker embedding: CC-BY-4.0 — see the provenance files under
+`services/*/models/` and the model-asset releases).

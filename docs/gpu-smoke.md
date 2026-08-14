@@ -16,7 +16,7 @@ mkdir -p /tmp/voxint-smoke/media
 ffmpeg -y -i your-interview.wav -t 60 -ac 1 -ar 16000 /tmp/voxint-smoke/media/smoke.wav
 
 docker build -t voxint-whisper:dev  services/whisper
-docker build -t voxint-pyannote:dev services/pyannote   # weights NOT baked (HF-gated)
+docker build -t voxint-pyannote:dev services/pyannote   # needs models/*.bin first (see services/pyannote/README.md)
 docker build -t voxint-titanet:dev  services/titanet
 ```
 
@@ -36,11 +36,10 @@ real-time throughput (reference: 60 s clip in ~1.7 s wall on a 3090).
 
 ## pyannote
 
-Needs `HF_TOKEN` with both gated repos accepted (see the service README).
+No token needed — the diarization weights are vendored into the image.
 
 ```bash
 docker run -d --name smoke-pyannote --gpus all -p 127.0.0.1:18024:8024 \
-  -e HF_TOKEN=hf_yourtoken \
   -v /tmp/voxint-smoke/media:/data/media:ro voxint-pyannote:dev
 curl -s localhost:18024/healthz
 curl -s -X POST localhost:18024/v1/diarize -H 'Content-Type: application/json' \

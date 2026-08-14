@@ -2,8 +2,8 @@
 #   docker compose -f compose.yaml -f compose.rocm.yaml up -d
 # amd64 hosts with an AMD GPU. Only the amdgpu kernel driver is required on
 # the host — the whisper `-rocm` image carries its ROCm runtime libraries.
-# Same /v1 + /healthz contracts as the GPU stack (docs/gpu-contracts.md);
-# pyannote still needs HF_TOKEN in .env.
+# Same /v1 + /healthz contracts as the GPU stack (docs/gpu-contracts.md).
+# No HF token needed: the diarization weights are vendored into the image.
 #
 # Hybrid tier, honestly stated: ASR (whisper) runs on the AMD GPU via the
 # CTranslate2 ROCm build — same engine and code path as CUDA, measured 4.8×
@@ -67,10 +67,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
-      HF_TOKEN: ${HF_TOKEN:?pyannote weights are HF-gated - set HF_TOKEN in .env}
+      # Optional: only used when DIARIZER_MODEL_NAME points at a Hugging Face
+      # repo — the default vendored pipeline is baked into the image.
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
-      # Gated weights download at first startup; persist them across recreates.
+      # Cache for the optional online HF path; unused by the vendored default.
       - pyannote-models:/app/models
     ports:
       - "127.0.0.1:8024:8024"

@@ -3,9 +3,14 @@
 Model policy: **pyannote/speaker-diarization-3.1** on pyannote.audio **3.1.1**.
 The 4.x line (community-1) silently rejects the classic ``clustering.threshold``
 / ``min_cluster_size`` hyperparameters this service tunes, so the 3.1 stack is
-a deliberate pin, not a lag. Weights are HF-gated: the image ships none, the
-user supplies ``HF_TOKEN`` and must have accepted the conditions of both
-``pyannote/speaker-diarization-3.1`` and ``pyannote/segmentation-3.0``.
+a deliberate pin, not a lag.
+
+Weights: the image bakes the vendored pipeline (config + sha256-verified
+checkpoints from the ``pyannote-models-v1`` asset release, see
+``services/pyannote/models/provenance.json``) at ``VOXINT_VENDORED_PIPELINE``
+and loads it by default — no Hugging Face account or token involved. Setting
+``DIARIZER_MODEL_NAME`` to an HF repo id restores the online path, where
+``HF_TOKEN`` is required for gated repos.
 """
 
 import logging
@@ -94,7 +99,19 @@ class Diarizer:
     def __init__(self) -> None:
         self.model: Any = None
         self.model_loaded = False
-        self.model_name = os.getenv("DIARIZER_MODEL_NAME", "pyannote/speaker-diarization-3.1")
+        # Default model source: the vendored pipeline baked into the image
+        # (offline, no token). An explicit DIARIZER_MODEL_NAME wins; when the
+        # vendored config is absent too (bare-host venv runs), fall back to
+        # the HF repo id, which needs HF_TOKEN for its gate.
+        vendored = os.getenv("VOXINT_VENDORED_PIPELINE", "/app/vendored/config.yaml")
+        explicit = os.getenv("DIARIZER_MODEL_NAME")
+        if explicit:
+            self.model_name = explicit
+        elif os.path.exists(vendored):
+            self.model_name = vendored
+        else:
+            self.model_name = "pyannote/speaker-diarization-3.1"
+        self.model_is_local = os.path.exists(self.model_name)
         self.hf_token = os.getenv("HF_TOKEN") or None
         self.device_name = "cpu"
 
@@ -130,12 +147,16 @@ class Diarizer:
         import torch
         from pyannote.audio import Pipeline
 
-        if not self.hf_token:
+        if not self.model_is_local and not self.hf_token:
             logger.warning(
                 "HF_TOKEN not set — the gated %s weights will not download", self.model_name
             )
 
-        logger.info("Loading diarization pipeline: %s", self.model_name)
+        logger.info(
+            "Loading diarization pipeline: %s (%s)",
+            self.model_name,
+            "vendored/local" if self.model_is_local else "hugging face",
+        )
         start = time.time()
         import pyannote.audio
 
@@ -152,9 +173,13 @@ class Diarizer:
                 self.model_name, use_auth_token=self.hf_token
             )
         if self.model is None:
+            hint = (
+                "corrupt or incomplete vendored files — rebuild/re-pull the image"
+                if self.model_is_local
+                else "usually an unaccepted HF gate or invalid HF_TOKEN"
+            )
             raise RuntimeError(
-                f"Pipeline.from_pretrained returned None for {self.model_name} — "
-                "usually an unaccepted HF gate or invalid HF_TOKEN"
+                f"Pipeline.from_pretrained returned None for {self.model_name} — {hint}"
             )
 
         device = select_device()
