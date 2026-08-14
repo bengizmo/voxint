@@ -134,14 +134,33 @@ port_in_use() {
 # physically resolved (pwd -P): APFS /tmp -> /private/tmp symlinks and
 # case-insensitive aliases would otherwise break the services' path contract.
 # ---------------------------------------------------------------------------
+env_value_from_file() {
+  # $1 = KEY, $2 = env file. Last assignment wins, matching dotenv semantics.
+  # Normalized exactly like install.sh read_env_value: trailing CR, surrounding
+  # blanks, and ONE matched pair of single or double quotes are stripped — the
+  # installer single-quotes MEDIA_ROOT (dotenv_squote), and Compose
+  # interpolation sees the unquoted value, so a raw read here would disagree
+  # with what the containers mount.
+  local raw
+  raw=$(sed -n "s/^$1=//p" "$2" | tail -1)
+  raw=${raw%$'\r'}
+  raw=${raw#"${raw%%[![:blank:]]*}"}
+  raw=${raw%"${raw##*[![:blank:]]}"}
+  if [ "${#raw}" -ge 2 ]; then
+    case $raw in
+      \'*\') raw=${raw#\'}; raw=${raw%\'} ;;
+      \"*\") raw=${raw#\"}; raw=${raw%\"} ;;
+    esac
+  fi
+  printf '%s' "$raw"
+}
+
 media_root_from_env_file() {
-  # Last assignment wins, matching dotenv semantics. Values are written by
-  # our installer (no quoting/expansion games in .env).
-  sed -n 's/^MEDIA_ROOT=//p' "$1" | tail -1
+  env_value_from_file MEDIA_ROOT "$1"
 }
 
 image_tag_from_env_file() {
-  sed -n 's/^VOXINT_IMAGE_TAG=//p' "$1" | tail -1
+  env_value_from_file VOXINT_IMAGE_TAG "$1"
 }
 
 resolve_media_root() {

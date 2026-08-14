@@ -26,6 +26,12 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   metal`. Maintainer-run Gate M documented in the release process.
 
 ### Fixed
+- **Metal launcher `.env` reading**: `voxint-metal.sh` read `MEDIA_ROOT`
+  verbatim from `.env`, but the installer writes it single-quoted — the
+  launcher hard-failed on every installer-generated file ("does not resolve
+  to an existing directory"). Values are now normalized exactly like the
+  installer reads them back (strip CR, blanks, and one matched pair of
+  quotes), matching what Compose interpolation passes to the containers.
 - **Installer port probe on macOS**: a listener with a full accept queue (a
   wedged service, or another process mid-collision-check) made macOS drop the
   probe's SYN silently, so `resolve_port` could report a busy port as free and

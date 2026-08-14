@@ -354,6 +354,20 @@ def test_env_file_parsing_last_assignment_wins(tmp_path: Path) -> None:
     assert proc.stdout.rstrip("\n") == "0.7.0"
 
 
+def test_env_file_parsing_strips_installer_quoting(tmp_path: Path) -> None:
+    # The installer writes MEDIA_ROOT single-quoted (dotenv_squote); Compose
+    # interpolation strips one matched pair of quotes, so the launcher must
+    # read the same unquoted value or the two worlds disagree on the path.
+    envf = tmp_path / ".env"
+    envf.write_text(
+        "MEDIA_ROOT='/with spaces/media'\nVOXINT_IMAGE_TAG=\"0.8.0\"\r\n"
+    )
+    proc = run_lib(tmp_path, f'media_root_from_env_file "{envf}"')
+    assert proc.stdout.rstrip("\n") == "/with spaces/media"
+    proc = run_lib(tmp_path, f'image_tag_from_env_file "{envf}"')
+    assert proc.stdout.rstrip("\n") == "0.8.0"
+
+
 # --------------------------------------------------------------------------- #
 # CLI surface
 # --------------------------------------------------------------------------- #
