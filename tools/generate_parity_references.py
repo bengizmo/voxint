@@ -157,7 +157,11 @@ def main() -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    def meta(health: dict[str, Any]) -> dict[str, Any]:
+    def meta(health: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+        # `request` records the exact /v1 payload the reference was generated
+        # with — parity lanes hardcode "service-default" request params, and
+        # without this record a regenerated reference could silently pair with
+        # different params than the lanes replay (metal review follow-up).
         doc: dict[str, Any] = {
             "generated_on": date.today().isoformat(),
             "tier": args.tier,
@@ -170,6 +174,7 @@ def main() -> int:
             "corpus_sha256": provenance["wav_sha256"],
             "corpus_files_sha256": corpus_files_sha256,
             "service_healthz": health,
+            "request": request,
         }
         if args.tier == "metal":
             # Metal outputs are per-chip measurement evidence: MPS/CoreML are
@@ -188,16 +193,14 @@ def main() -> int:
         health = _healthz(args.embedder_url, expected["embedder"], args.allow_device)
         windows_doc = json.loads((CORPUS_DIR / "embed-windows.json").read_text())
         windows = windows_doc["windows"]
-        response = _http_json(
-            f"{args.embedder_url}/v1/embed",
-            {
-                "path": windows_doc["wav"],
-                "windows": [
-                    {"start_seconds": w["start_seconds"], "end_seconds": w["end_seconds"]}
-                    for w in windows
-                ],
-            },
-        )
+        embed_payload = {
+            "path": windows_doc["wav"],
+            "windows": [
+                {"start_seconds": w["start_seconds"], "end_seconds": w["end_seconds"]}
+                for w in windows
+            ],
+        }
+        response = _http_json(f"{args.embedder_url}/v1/embed", embed_payload)
         results = response["results"]
         if len(results) != len(windows):
             raise SystemExit(f"embed returned {len(results)} results for {len(windows)} windows")
@@ -219,9 +222,19 @@ def main() -> int:
             for m in mismatches:
                 print(f"MISMATCH {m}", file=sys.stderr)
             raise SystemExit(f"{len(mismatches)} corpus-expectation mismatches — investigate")
+        # The window list is a pure (start, end) projection of the sha-bound
+        # embed-windows.json — record the projection rule, not 107 duplicate
+        # rows; corpus_files_sha256 already pins the source bytes.
+        embed_request = {
+            "path": embed_payload["path"],
+            "windows_source": "embed-windows.json (start_seconds/end_seconds "
+            "per window, in file order; sha-bound in corpus_files_sha256)",
+            "num_windows": len(windows),
+        }
         (out_dir / "embed.json").write_text(
             json.dumps(
-                {"meta": meta(health), "embedding_space": response["embedding_space"],
+                {"meta": meta(health, embed_request),
+                 "embedding_space": response["embedding_space"],
                  "windows": [
                      {"id": w["id"], **r} for w, r in zip(windows, results, strict=True)
                  ]},
@@ -234,13 +247,20 @@ def main() -> int:
     if "transcribe" in which:
         health = _healthz(args.asr_url, expected["asr"], args.allow_device)
         variants = {}
+        transcribe_requests = {}
         for vad in (True, False):
+            payload = {
+                "path": manifest["transcribe"]["wav"], "language": "en", "vad_filter": vad,
+            }
             variants[f"vad_{str(vad).lower()}"] = _http_json(
-                f"{args.asr_url}/v1/transcribe",
-                {"path": manifest["transcribe"]["wav"], "language": "en", "vad_filter": vad},
+                f"{args.asr_url}/v1/transcribe", payload
             )
+            transcribe_requests[f"vad_{str(vad).lower()}"] = payload
         (out_dir / "transcribe.json").write_text(
-            json.dumps({"meta": meta(health), "variants": variants}, indent=2) + "\n"
+            json.dumps(
+                {"meta": meta(health, transcribe_requests), "variants": variants},
+                indent=2,
+            ) + "\n"
         )
         seg = len(variants["vad_true"]["segments"])
         print(f"transcribe.json: {seg} segments (vad_true), "
@@ -248,12 +268,14 @@ def main() -> int:
 
     if "diarize" in which:
         health = _healthz(args.diarizer_url, expected["diarizer"], args.allow_device)
-        response = _http_json(
-            f"{args.diarizer_url}/v1/diarize",
-            {"path": manifest["diarize"]["wav"], "min_speakers": 1, "max_speakers": 10},
-        )
+        diarize_payload = {
+            "path": manifest["diarize"]["wav"], "min_speakers": 1, "max_speakers": 10,
+        }
+        response = _http_json(f"{args.diarizer_url}/v1/diarize", diarize_payload)
         (out_dir / "diarize.json").write_text(
-            json.dumps({"meta": meta(health), "response": response}, indent=2) + "\n"
+            json.dumps(
+                {"meta": meta(health, diarize_payload), "response": response}, indent=2
+            ) + "\n"
         )
         print(f"diarize.json: {response['num_speakers']} speakers, "
               f"{len(response['turns'])} turns")

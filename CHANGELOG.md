@@ -5,6 +5,20 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Parity references now record the exact request payloads** they were
+  generated with (`tools/generate_parity_references.py` writes a
+  `meta.request` block per reference): parity lanes replay hardcoded
+  "service-default" params, and a regenerated reference could otherwise pair
+  silently with different params than the lanes measure. Takes effect on the
+  next reference regeneration; committed references predate the field
+  (metal review follow-up).
+- **Contract test binding `compose.metal.yaml` ports to the metal launcher's
+  `service_port()`**: the overlay's `host.docker.internal:<port>` URLs and
+  the native services' bind ports were each pinned to their own literals —
+  a port moved in only one place would have kept both tests green while the
+  worker called a dead port (metal review follow-up).
+
 ### Changed
 - **Metal parity bounds ratcheted from Gate M evidence** (slice 9, panel
   consult recorded in the commit): pyannote boundary drift ≤ 0.10 s (was

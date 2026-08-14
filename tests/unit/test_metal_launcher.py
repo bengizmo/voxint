@@ -71,6 +71,33 @@ def test_service_ports(tmp_path: Path, svc: str, port: str) -> None:
     assert proc.stdout == port
 
 
+def test_compose_overlay_ports_bind_to_service_ports(tmp_path: Path) -> None:
+    # compose.metal.yaml points api/worker at host.docker.internal:<port> and
+    # the native services bind whatever service_port() assigns — two files,
+    # one invariant. The overlay contract test and test_service_ports each pin
+    # their own side to literals, so a port moved in only one place would keep
+    # both green while the worker calls a dead port; this binds them directly
+    # (metal review follow-up).
+    import yaml
+
+    doc = yaml.safe_load((REAL_REPO / "compose.metal.yaml").read_text())
+    url_to_service = {
+        "ASR_URL": "whisper",
+        "DIARIZER_URL": "pyannote",
+        "EMBEDDER_URL": "titanet",
+    }
+    for caller in ("api", "worker"):
+        env = doc["services"][caller]["environment"]
+        for key, svc in url_to_service.items():
+            compose_port = env[key].rsplit(":", 1)[1]
+            proc = run_lib(tmp_path, f"service_port {svc}")
+            assert proc.returncode == 0, proc.stderr
+            assert proc.stdout == compose_port, (
+                f"{caller} {key} targets port {compose_port} but "
+                f"service_port {svc} binds {proc.stdout}"
+            )
+
+
 def test_titanet_reuses_the_parity_measured_requirements(tmp_path: Path) -> None:
     # The committed ONNX parity verdict binds to exactly the CPU image's
     # dependency chain — the metal venv must not get its own flavor file.
