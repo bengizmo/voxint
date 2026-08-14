@@ -63,15 +63,19 @@ def check_redis(url: str, *, client: object | None = None) -> CheckResult:
     """
     import redis
 
-    r = client if client is not None else redis.Redis.from_url(
-        url, socket_connect_timeout=3.0, socket_timeout=3.0
-    )
+    # Construction is inside the try: redis.from_url raises ValueError on a
+    # malformed DSN, and that must normalize to a hard FAIL, not escape as a
+    # traceback (which would also violate the no-raw-exceptions rule).
+    r: object | None = None
     try:
+        r = client if client is not None else redis.Redis.from_url(
+            url, socket_connect_timeout=3.0, socket_timeout=3.0
+        )
         r.ping()  # type: ignore[attr-defined]
     except Exception as exc:
         return CheckResult("redis", False, True, f"unreachable ({_safe(exc)})")
     finally:
-        if client is None:
+        if client is None and r is not None:
             with contextlib.suppress(Exception):
                 r.close()  # type: ignore[attr-defined]
     return CheckResult("redis", True, True, "reachable")
@@ -102,9 +106,12 @@ def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
         return CheckResult("hugging face token", False, False, f"check failed ({_safe(exc)})")
     if resp.status_code == 200:
         try:
-            name = resp.json().get("name")
+            body = resp.json()
         except ValueError:
-            name = None
+            body = None
+        # A valid-JSON but non-object body (a captive portal/proxy answering 200
+        # with `[]` or `"ok"`) must not crash .get — guard the type explicitly.
+        name = body.get("name") if isinstance(body, dict) else None
         return CheckResult(
             "hugging face token", True, False, f"valid ({name})" if name else "valid"
         )
@@ -126,6 +133,10 @@ def check_llm(settings: Settings, *, client: httpx.Client) -> CheckResult | None
     headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
     try:
         resp = client.get(url, headers=headers)
+    except httpx.InvalidURL:
+        # InvalidURL is NOT an httpx.HTTPError; a malformed llm_base_url would
+        # otherwise escape this advisory check and abort the whole doctor run.
+        return CheckResult("llm endpoint", False, False, "invalid url")
     except httpx.HTTPError as exc:
         return CheckResult("llm endpoint", False, False, f"unreachable ({_safe(exc)})")
     return CheckResult("llm endpoint", True, False, f"reachable (HTTP {resp.status_code})")

@@ -13,7 +13,7 @@ strings. Callers own the DB read and the transport's error/response mapping.
 import enum
 import json
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Protocol, assert_never
 
 from voxint.adjudication.transcript import TranscriptLine
 
@@ -34,7 +34,7 @@ MEDIA_TYPES: dict[str, str] = {
     "txt": "text/plain; charset=utf-8",
     "srt": "application/x-subrip; charset=utf-8",
     "vtt": "text/vtt; charset=utf-8",
-    "json": "application/json",
+    "json": "application/json; charset=utf-8",
     "rttm": "text/plain; charset=utf-8",
 }
 
@@ -84,8 +84,15 @@ def _cue_text(line: TranscriptLine) -> str:
     Speaker on its own line (rather than an inline ``name: text`` prefix) keeps
     multi-line segment text readable and matches how players render a speaker
     tag above the line.
+
+    ``-->`` is the SRT/VTT cue-timing delimiter and is outright forbidden inside a
+    WebVTT cue payload; if it appears in speaker or transcript text it corrupts the
+    cue. Neutralize it to ``->`` — the only content mutation these subtitle formats
+    make, and only in this pathological case (JSON/TXT keep the text verbatim).
     """
-    return f"{line.speaker}:\n{line.text}"
+    speaker = line.speaker.replace("-->", "->")
+    text = line.text.replace("-->", "->")
+    return f"{speaker}:\n{text}"
 
 
 def to_txt(lines: Sequence[TranscriptLine]) -> str:
@@ -112,13 +119,17 @@ def to_srt(lines: Sequence[TranscriptLine]) -> str:
 
 
 def to_vtt(lines: Sequence[TranscriptLine]) -> str:
-    """WebVTT: the ``WEBVTT`` header then dot-separated cues (no cue numbers)."""
-    blocks = ["WEBVTT\n"]
+    """WebVTT: the ``WEBVTT`` header then dot-separated cues (no cue numbers).
+
+    The header is always followed by the mandatory blank line (``WEBVTT\\n\\n``) —
+    the file stays spec-valid even for an empty transcript.
+    """
+    cues = []
     for line in lines:
         start = _timestamp(line.start_seconds, sep=".")
         end = _timestamp(line.end_seconds, sep=".")
-        blocks.append(f"{start} --> {end}\n{_cue_text(line)}\n")
-    return "\n".join(blocks)
+        cues.append(f"{start} --> {end}\n{_cue_text(line)}\n")
+    return "WEBVTT\n\n" + "\n".join(cues)
 
 
 def to_json(lines: Sequence[TranscriptLine]) -> str:
@@ -147,8 +158,12 @@ def to_rttm(turns: Sequence[RttmTurn], file_id: str) -> str:
     (``SPEAKER_00`` …), never adjudicated speaker names, so it round-trips
     against diarization scoring tools. ``file_id`` is the run UUID.
     """
+    # Duration is clamped non-negative so a stray inverted interval can never emit
+    # a malformed record (the DB's diarization_turns_interval_check already forbids
+    # end <= start, so this only defends the pure function against bad callers).
     lines = [
-        f"SPEAKER {file_id} 1 {t.start_seconds:.3f} {t.end_seconds - t.start_seconds:.3f}"
+        f"SPEAKER {file_id} 1 {t.start_seconds:.3f}"
+        f" {max(t.end_seconds - t.start_seconds, 0.0):.3f}"
         f" <NA> <NA> {t.label} <NA> <NA>"
         for t in turns
     ]
@@ -170,3 +185,5 @@ def render_transcript(lines: Sequence[TranscriptLine], fmt: TranscriptFormat) ->
             return to_vtt(lines)
         case TranscriptFormat.JSON:
             return to_json(lines)
+        case _:  # a new TranscriptFormat member without a case is a bug, not a None body
+            assert_never(fmt)

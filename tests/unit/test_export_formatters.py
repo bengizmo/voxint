@@ -60,10 +60,26 @@ def test_srt_cue_numbering_and_comma_timestamps() -> None:
 
 def test_vtt_header_and_dot_timestamps() -> None:
     out = to_vtt(LINES)
-    assert out.startswith("WEBVTT\n")
+    # Header + mandatory blank line before the first cue.
+    assert out.startswith("WEBVTT\n\n")
     assert "00:00:00.000 --> 00:00:02.500\nAlice:\nHello there.\n" in out
     # WebVTT cues carry no 1-based index line (unlike SRT).
     assert "\n1\n" not in out
+
+
+def test_vtt_empty_is_valid_header() -> None:
+    # An empty transcript still yields a spec-valid WebVTT file (header + blank).
+    assert to_vtt([]) == "WEBVTT\n\n"
+
+
+def test_subtitle_cue_neutralizes_arrow_sequence() -> None:
+    # "-->" is the cue-timing delimiter and is forbidden inside a WebVTT payload;
+    # it is neutralized to "->" in SRT and VTT (but NOT in JSON/TXT).
+    line = [TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="go --> stop")]
+    assert "go -> stop" in to_srt(line) and "-->" not in to_srt(line).split("\n", 2)[2]
+    assert "go -> stop" in to_vtt(line)
+    assert "go --> stop" in to_json(line)  # structured formats keep text verbatim
+    assert "go --> stop" in to_txt(line)
 
 
 @pytest.mark.parametrize(
@@ -124,4 +140,4 @@ def test_dispatcher_matches_direct_formatters(fmt: TranscriptFormat) -> None:
 def test_media_types_cover_every_cli_format() -> None:
     # Every CLI/route format (incl. rttm) must have a declared content type.
     assert set(MEDIA_TYPES) == {"txt", "srt", "vtt", "json", "rttm"}
-    assert MEDIA_TYPES["json"] == "application/json"
+    assert MEDIA_TYPES["json"].startswith("application/json")

@@ -10,12 +10,51 @@ import argparse
 import sys
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from voxint import __version__
+
+if TYPE_CHECKING:
+    from sqlalchemy import Engine
 
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
 # touch — any of them.
+
+
+def _engine_or_report(*, connect_timeout: int | None = None) -> "tuple[Engine | None, int]":
+    """Build the DB engine, turning a config/URL failure into a sanitized exit 2.
+
+    A malformed ``DATABASE_URL`` (bad driver, unparseable DSN) or an invalid
+    ``Settings`` is a CLI/configuration error, not a down dependency — so it maps
+    to exit 2, and the message never echoes the connection string (a SQLAlchemy
+    URL error can embed the password). ``connect_timeout`` bounds the TCP connect
+    (``voxint doctor`` uses it so a firewalled DB fails fast instead of hanging on
+    the multi-minute OS default). Returns ``(engine, 0)`` or ``(None, 2)``.
+    """
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_engine
+
+    try:
+        if connect_timeout is None:
+            return build_engine(), 0
+        from sqlalchemy import create_engine
+
+        return (
+            create_engine(
+                get_settings().database_url,
+                pool_pre_ping=True,
+                connect_args={"connect_timeout": connect_timeout},
+            ),
+            0,
+        )
+    except SettingsError as exc:
+        print(f"error: {exc}")  # already credential-sanitized by get_settings
+        return None, 2
+    except Exception:
+        # Never interpolate the exception — a SQLAlchemy URL error can carry the DSN.
+        print("error: could not initialize the database engine (check DATABASE_URL)")
+        return None, 2
 
 
 def _submit(args: argparse.Namespace) -> int:
@@ -205,7 +244,7 @@ def _export(args: argparse.Namespace) -> int:
 
     from voxint.adjudication.transcript import attributed_transcript, parse_transcript_text
     from voxint.db.models import DiarizationTurn, PipelineRun
-    from voxint.db.session import build_engine, build_session_factory
+    from voxint.db.session import build_session_factory
     from voxint.export import TranscriptFormat, render_transcript, to_rttm
 
     try:
@@ -214,37 +253,51 @@ def _export(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 2
 
-    # Refuse to clobber before touching the DB — a surprised operator keeps their file.
+    # Refuse to clobber before touching the DB — a surprised operator keeps their
+    # file (the write below re-checks atomically to close the check/write race).
     out_path = Path(args.output) if args.output else None
     if out_path is not None and out_path.exists() and not args.force:
         print(f"error: {out_path} exists (use --force to overwrite)")
         return 2
 
-    factory = build_session_factory(build_engine())
-    with factory() as session:
-        if session.get(PipelineRun, args.run_id) is None:
-            print(f"error: no run {args.run_id}")
-            return 2
-        if args.format == "rttm":
-            turns = (
-                session.execute(
-                    select(DiarizationTurn)
-                    .where(DiarizationTurn.pipeline_run_id == args.run_id)
-                    .order_by(DiarizationTurn.turn_index)
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        factory = build_session_factory(engine)
+        with factory() as session:
+            if session.get(PipelineRun, args.run_id) is None:
+                print(f"error: no run {args.run_id}")
+                return 2
+            if args.format == "rttm":
+                turns = (
+                    session.execute(
+                        select(DiarizationTurn)
+                        .where(DiarizationTurn.pipeline_run_id == args.run_id)
+                        .order_by(DiarizationTurn.turn_index)
+                    )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
-            )
-            output = to_rttm(turns, str(args.run_id))
-        else:
-            lines = attributed_transcript(session, args.run_id, text=variant)
-            output = render_transcript(lines, TranscriptFormat(args.format))
+                output = to_rttm(turns, str(args.run_id))
+            else:
+                lines = attributed_transcript(session, args.run_id, text=variant)
+                output = render_transcript(lines, TranscriptFormat(args.format))
+    finally:
+        engine.dispose()
 
     if out_path is None:
         sys.stdout.write(output)
-    else:
-        out_path.write_text(output, encoding="utf-8")
-        print(f"wrote {out_path}")
+        return 0
+    # Exclusive create unless --force, so a file that appeared after the pre-DB
+    # check is not silently overwritten (nor a symlink followed).
+    try:
+        with open(out_path, "w" if args.force else "x", encoding="utf-8") as fh:
+            fh.write(output)
+    except FileExistsError:
+        print(f"error: {out_path} exists (use --force to overwrite)")
+        return 2
+    print(f"wrote {out_path}")
     return 0
 
 
@@ -253,8 +306,8 @@ def _list(args: argparse.Namespace) -> int:
     import json
 
     from voxint.api.runs_query import list_runs, parse_status_filter
-    from voxint.config import get_settings
-    from voxint.db.session import build_engine, build_session_factory
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory
 
     try:
         status = parse_status_filter(args.status)
@@ -262,15 +315,25 @@ def _list(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 2
 
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")  # credential-sanitized config error → exit 2
+        return 2
     limit = args.limit if args.limit is not None else settings.runs_page_size
     if not 1 <= limit <= 500:
         print("error: --limit must be between 1 and 500")
         return 2
 
-    factory = build_session_factory(build_engine())
-    with factory() as session:
-        page = list_runs(session, status=status, review=None, cursor=None, page_size=limit)
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        factory = build_session_factory(engine)
+        with factory() as session:
+            page = list_runs(session, status=status, review=None, cursor=None, page_size=limit)
+    finally:
+        engine.dispose()
 
     if args.json:
         print(
@@ -289,6 +352,7 @@ def _list(args: argparse.Namespace) -> int:
                     for item in page.items
                 ],
                 indent=2,
+                ensure_ascii=False,  # keep Unicode source paths readable (matches to_json)
             )
         )
         return 0
@@ -312,7 +376,6 @@ def _doctor(args: argparse.Namespace) -> int:
 
     from voxint import diagnostics
     from voxint.config import SettingsError, get_settings
-    from voxint.db.session import build_engine
 
     try:
         settings = get_settings()
@@ -320,7 +383,11 @@ def _doctor(args: argparse.Namespace) -> int:
         print(f"error: {exc}")  # already sanitized of credentials by get_settings
         return 2
 
-    engine = build_engine()
+    # A bounded connect timeout so a firewalled DB fails fast (the command promises
+    # a quick verdict); construction errors map to a sanitized exit 2.
+    engine, code = _engine_or_report(connect_timeout=5)
+    if engine is None:
+        return code
     try:
         with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
             results = diagnostics.run_diagnostics(settings, engine, http_client=client)

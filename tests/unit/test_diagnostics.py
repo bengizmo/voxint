@@ -96,6 +96,14 @@ def test_check_redis_failure_hides_url_and_message() -> None:
     assert "pw" not in result.detail and "host" not in result.detail
 
 
+def test_check_redis_malformed_url_is_hard_failure_not_traceback() -> None:
+    # A bad DSN raises ValueError inside Redis.from_url (construction), which must
+    # normalize to a hard FAIL — never escape doctor as a traceback.
+    result = check_redis("not-a-redis-url")
+    assert result.ok is False and result.hard is True
+    assert "not-a-redis-url" not in result.detail
+
+
 # ---- models -----------------------------------------------------------------
 
 
@@ -145,6 +153,14 @@ def test_check_hf_token_rejected_is_advisory_failure() -> None:
     assert result.ok is False and result.hard is False and result.detail == "rejected (401)"
 
 
+def test_check_hf_token_non_dict_200_body_does_not_crash() -> None:
+    # A valid-JSON but non-object 200 (a captive portal / proxy) must not raise
+    # AttributeError from .get — it resolves to "valid" without a name.
+    client = _http(lambda r: httpx.Response(200, json=["not", "a", "dict"]))
+    result = check_hf_token("hf_x", client=client)
+    assert result.ok is True and result.hard is False and result.detail == "valid"
+
+
 # ---- LLM (advisory) ---------------------------------------------------------
 
 
@@ -171,6 +187,19 @@ def test_check_llm_transport_error_is_advisory_failure() -> None:
     result = check_llm(settings, client=_http(handler))
     assert result is not None
     assert result.ok is False and result.hard is False
+
+
+def test_check_llm_invalid_url_does_not_crash() -> None:
+    # httpx.InvalidURL is not an httpx.HTTPError; a malformed llm_base_url must
+    # resolve to an advisory failure, not abort the whole doctor run.
+    settings = _settings(llm_enabled=True, llm_base_url="http://[::1")  # unparseable
+
+    def handler(_r: httpx.Request) -> httpx.Response:
+        raise AssertionError("request should not be attempted on an invalid url")
+
+    result = check_llm(settings, client=_http(handler))
+    assert result is not None
+    assert result.ok is False and result.hard is False and result.detail == "invalid url"
 
 
 # ---- run_diagnostics orchestration -----------------------------------------
