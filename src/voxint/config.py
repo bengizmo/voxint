@@ -142,8 +142,11 @@ class Settings(BaseSettings):
     # stage leases / visibility horizon by CPU_TIER_TIMEOUT_FACTOR so a
     # healthy-but-slow CPU run is never reclaimed as hung mid-stage
     # (docs/timeouts-and-leases.md). Explicitly-set values are never scaled.
-    # "rocm" and future accelerated tiers keep GPU-class timing.
-    compute_tier: Literal["gpu", "cpu", "rocm"] = "gpu"
+    # "rocm", "metal" (bare-metal Apple Silicon services, compose.metal.yaml)
+    # and future accelerated tiers keep GPU-class timing. Note the metal tier's
+    # v1 runs whisper on CPU under these GPU-class budgets — whether that
+    # earns its own timeout factor is a post-measurement decision.
+    compute_tier: Literal["gpu", "cpu", "rocm", "metal"] = "gpu"
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
     embedder_url: str = "http://localhost:8021"

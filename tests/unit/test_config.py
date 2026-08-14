@@ -189,8 +189,9 @@ def test_cpu_tier_scales_default_timing_chain() -> None:
     assert s.acquire_lease_seconds == 10800
 
 
-def test_rocm_tier_keeps_gpu_timing() -> None:
-    s = Settings(_env_file=None, compute_tier="rocm")
+@pytest.mark.parametrize("tier", ["rocm", "metal"])
+def test_accelerated_tiers_keep_gpu_timing(tier: str) -> None:
+    s = Settings(_env_file=None, compute_tier=tier)
     assert s.gpu_http_timeout_seconds == 14400.0
     assert s.stage_lease_seconds == 21600
 
