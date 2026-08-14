@@ -5,6 +5,11 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-08-14
+
+Token-free onboarding: the diarization weights are vendored (#24). No
+numerical changes — vendored-vs-HF diarization verified byte-identical.
+
 ### Changed
 - **No Hugging Face account or token needed** (#24): the
   `speaker-diarization-3.1` pipeline weights are now vendored into the
@@ -17,6 +22,19 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   compute overlays start without one (the `${HF_TOKEN:?}` guard is gone), the
   setup wizard drops its token row, and pyannote's CI smoke runs
   unconditionally (the secret-absent SKIP lane is deleted).
+- `DIARIZER_MODEL_NAME` is now interpolated from `.env` by every compute
+  overlay, so the documented override works without editing compose files.
+
+### Fixed
+- **CUDA pyannote image**: `setuptools` pinned `>=70,<81` with a build-time
+  `pkg_resources` canary — the unpinned upgrade would have shipped an image
+  that crashes on boot at the next rebuild (setuptools 81 removed
+  `pkg_resources`, which pyannote.database imports; the CPU flavor already
+  carried the pin).
+- `/healthz` keeps reporting the canonical `pyannote/speaker-diarization-3.1`
+  identity for the vendored default; an explicitly configured
+  `VOXINT_VENDORED_PIPELINE` that does not exist now fails fast instead of
+  silently degrading to a gated network fetch.
 
 ## [0.5.1] — 2026-08-14
 
