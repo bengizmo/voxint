@@ -161,6 +161,8 @@ docker compose exec api voxint requeue <run-id>          # re-enter a FAILED run
 docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
 docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
 docker compose exec api voxint doctor                    # read-only preflight for every dependency
+docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
+docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
@@ -178,6 +180,51 @@ non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
 whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
 but never failing the exit code, because the default install needs neither. No
 credentials, tokens, or connection URLs are printed.
+
+**`voxint watch <run-id>`** follows a run until it stops advancing, printing a
+live status line to **stderr** (so the run id stays clean on stdout). It exits
+`0` completed, `1` failed/cancelled, `2` on a missing run, `3` awaiting
+adjudication (the automated stages finished and a human ruling is needed — the
+state machine can still resume it, so it is not "success"), and `124` on
+timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune the
+poll; each poll opens a fresh session so it observes the worker's commits.
+**`voxint submit --wait`** composes submit + watch: it enqueues, prints the run
+id, then follows the new run with the same loop and exit codes.
+
+### Metrics & monitoring
+
+**`voxint stats`** prints an aggregate, read-only snapshot: run counts by status,
+failed stage *attempts* per stage, average per-stage duration over finished
+attempts, roster size, and runs created within a window. `--since` accepts a
+relative span (`24h`, `7d`) or an ISO-8601 datetime (default 24h); `--json`
+emits a stable object for scripting.
+
+```bash
+docker compose exec api voxint stats --since 7d          # human table
+docker compose exec -T api voxint stats --json           # machine-readable
+```
+
+The same aggregates are exposed for Prometheus at **`GET /metrics`** (text
+exposition format 0.0.4). It sits on the authenticated router, so scrape it with
+Basic Auth — that keeps the "everything but `/healthz` authenticates" invariant
+with no extra flag or token. Every `RunStatus`/`Stage` series is zero-filled so a
+series never vanishes between scrapes; the one windowed gauge names its window
+(`voxint_runs_created_24h`). A scrape config on the monitoring host:
+
+```yaml
+scrape_configs:
+  - job_name: voxint
+    metrics_path: /metrics
+    basic_auth:
+      username: ${VOXINT_USER}
+      password: ${VOXINT_PASSWORD}
+    static_configs:
+      - targets: ["voxint-host:8090"]   # the operator's voxint API address
+```
+
+Exposed series: `voxint_runs_total{status}`, `voxint_stage_failures_total{stage}`,
+`voxint_stage_duration_seconds{stage}`, `voxint_roster_speakers`,
+`voxint_runs_created_24h` (all gauges — recomputed from the database per scrape).
 
 ### Exporting transcripts
 
@@ -321,6 +368,7 @@ mutations are gated by their per-run claim token.
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access — schema readiness is the migrate gate's job) |
+| `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated — scrape with `basic_auth`) |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML) |

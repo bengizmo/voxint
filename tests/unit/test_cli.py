@@ -151,3 +151,121 @@ def test_doctor_prints_results_and_maps_exit_code(
     assert "[FAIL] redis:" in out
     assert "[warn] hugging face token:" in out  # advisory failure ⇒ warn, not FAIL
     assert "a hard dependency is down" in out
+
+
+# ---- watch / submit --wait: the poll loop (no DB, injected clock/sleep) ------
+
+
+def _make_factory(scripts: list[object]) -> tuple[object, dict[str, int]]:
+    """A fake session factory: poll N returns run state scripts[N] (last repeats).
+
+    Each element is ``(status, current_stage)`` for a run, or ``None`` for a
+    missing run. Mirrors ``_poll_until_stop``'s one-``get``-per-fresh-session use.
+    """
+    from types import SimpleNamespace
+
+    calls = {"n": 0}
+
+    def factory() -> object:
+        idx = min(calls["n"], len(scripts) - 1)
+        item = scripts[idx]
+        calls["n"] += 1
+
+        class _Sess:
+            def __enter__(self_: object) -> object:
+                return self_
+
+            def __exit__(self_: object, *_a: object) -> bool:
+                return False
+
+            def get(self_: object, _model: object, _rid: object) -> object:
+                if item is None:
+                    return None
+                status, stage = item  # type: ignore[misc]
+                return SimpleNamespace(status=status, current_stage=stage)
+
+        return _Sess()
+
+    return factory, calls
+
+
+def _poll(scripts: list[object], **kw: object) -> tuple[int, list[str], int]:
+    """Drive ``_poll_until_stop`` with a fake clock that advances on sleep."""
+    from voxint.cli import _poll_until_stop
+
+    factory, calls = _make_factory(scripts)
+    clock = {"t": 0.0}
+    buf: list[str] = []
+    defaults: dict[str, object] = dict(
+        interval=2.0,
+        timeout=100.0,
+        monotonic=lambda: clock["t"],
+        sleep=lambda s: clock.__setitem__("t", clock["t"] + s),
+        write=buf.append,
+        isatty=False,
+    )
+    defaults.update(kw)
+    code = _poll_until_stop(factory, uuid.uuid4(), **defaults)  # type: ignore[arg-type]
+    return code, buf, calls["n"]
+
+
+def test_poll_completed_immediately_exits_zero() -> None:
+    code, buf, polls = _poll([("completed", "finalize")])
+    assert code == 0
+    assert polls == 1
+    assert any("completed" in line for line in buf)
+
+
+def test_poll_running_then_completed() -> None:
+    code, buf, polls = _poll([("running", "transcribe"), ("completed", "-")])
+    assert code == 0
+    assert polls == 2
+    # non-tty prints only transitions: running line, then completed line
+    joined = "".join(buf)
+    assert "running" in joined
+    assert "completed" in joined
+
+
+def test_poll_failed_exits_one() -> None:
+    code, _buf, _polls = _poll([("failed", "transcribe")])
+    assert code == 1
+
+
+def test_poll_cancelled_exits_one() -> None:
+    code, _buf, _polls = _poll([("cancelled", "prepare")])
+    assert code == 1
+
+
+def test_poll_awaiting_adjudication_exits_three() -> None:
+    # awaiting_adjudication can resume to running (state machine), so it is a
+    # paused outcome, NOT success — its own exit code, never 0.
+    code, _buf, _polls = _poll([("awaiting_adjudication", "enhance_match")])
+    assert code == 3
+
+
+def test_poll_missing_run_exits_two() -> None:
+    code, buf, _polls = _poll([None])
+    assert code == 2
+    assert any("no run" in line for line in buf)
+
+
+def test_poll_timeout_exits_124() -> None:
+    code, buf, _polls = _poll([("running", "transcribe")], timeout=5.0, interval=2.0)
+    assert code == 124
+    assert any("timeout" in line for line in buf)
+
+
+def test_watch_rejects_bad_interval_before_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    _block_db(monkeypatch)
+    assert main(["watch", str(uuid.uuid4()), "--interval", "0"]) == 2
+
+
+def test_watch_rejects_negative_timeout_before_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    _block_db(monkeypatch)
+    assert main(["watch", str(uuid.uuid4()), "--timeout", "-1"]) == 2
+
+
+def test_watch_rejects_bad_uuid_via_argparse() -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["watch", "not-a-uuid"])
+    assert exc.value.code == 2

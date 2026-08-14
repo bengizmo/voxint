@@ -14,6 +14,7 @@ import os
 import secrets
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 
@@ -85,6 +86,7 @@ from voxint.api.setup_wizard import (
     scan_media_folders,
     validate_llm_enable,
 )
+from voxint.api.stats_query import collect_stats, render_prometheus
 from voxint.app_settings import (
     clear_tutorial_completion,
     complete_onboarding,
@@ -1346,6 +1348,21 @@ def _register_routes(app: FastAPI) -> None:
             .all()
         )
         return Response(content=to_rttm(turns, str(run_id)), media_type=MEDIA_TYPES["rttm"])
+
+    # ---- Prometheus metrics ----------------------------------------------------
+    # Read-only aggregate exposition on the *protected* router: Prometheus scrapes
+    # it with basic_auth, so the "everything but /healthz authenticates" invariant
+    # holds without a new flag or token path. The one windowed series
+    # (voxint_runs_created_24h) bakes its window into the metric name.
+
+    @protected.get("/metrics")
+    def metrics(operator: OperatorDep, session: SessionDep) -> Response:
+        now = datetime.now(UTC)
+        stats = collect_stats(session, since=now - timedelta(hours=24), now=now)
+        return Response(
+            content=render_prometheus(stats),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     # ---- Settings + guided-tutorial lifecycle (issue #3, slice 6) --------------
     # The persistent, re-runnable entry point: re-open the setup wizard, and

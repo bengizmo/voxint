@@ -15,6 +15,8 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     Stage,
+    StageRun,
+    StageStatus,
     TranscriptSegment,
 )
 from voxint.pipeline.engine import submit
@@ -345,3 +347,113 @@ def test_submit_keeps_committed_run_when_publish_fails(
     with session_factory() as session:
         run = session.execute(select(PipelineRun)).scalar_one()
         assert run.status == RunStatus.QUEUED.value
+
+
+def _seed_run_with_stages(session: Session) -> uuid.UUID:
+    """A completed run with finished stage attempts, incl. one transcribe failure."""
+    from datetime import UTC, datetime, timedelta
+
+    media = MediaItem(source_path="incoming/stats.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+
+    base = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    # A failed transcribe attempt (attempt 1) then a completed one (attempt 2):
+    # proves failures and durations count attempts, not distinct runs.
+    session.add(
+        StageRun(
+            pipeline_run_id=run.id,
+            stage=Stage.TRANSCRIBE.value,
+            status=StageStatus.FAILED.value,
+            attempt=1,
+            started_at=base,
+            finished_at=base + timedelta(seconds=5),
+            error="boom",
+        )
+    )
+    session.add(
+        StageRun(
+            pipeline_run_id=run.id,
+            stage=Stage.TRANSCRIBE.value,
+            status=StageStatus.COMPLETED.value,
+            attempt=2,
+            started_at=base + timedelta(seconds=10),
+            finished_at=base + timedelta(seconds=25),
+        )
+    )
+    session.commit()
+    return run.id
+
+
+def test_stats_text_and_json(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        _seed_run_with_stages(session)
+
+    assert main(["stats"]) == 0
+    text = capsys.readouterr().out
+    assert "completed" in text
+    assert "transcribe" in text  # both a failure line and a duration line
+
+    import json
+
+    assert main(["stats", "--json", "--since", "7d"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status_counts"]["completed"] == 1
+    assert payload["stage_failure_counts"]["transcribe"] == 1  # one failed attempt
+    durations = {d["stage"]: d for d in payload["stage_durations"]}
+    # two finished transcribe attempts (5s + 15s) → avg 10s
+    assert durations["transcribe"]["attempt_count"] == 2
+    assert durations["transcribe"]["avg_seconds"] == 10.0
+
+
+def test_watch_sees_committed_status_flip(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    import threading
+    import time
+
+    media = MediaItem(source_path="incoming/watch.wav")
+    with session_factory() as session:
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.RUNNING.value,
+            current_stage=Stage.TRANSCRIBE.value,
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    def flip() -> None:
+        time.sleep(0.4)
+        with session_factory() as s:
+            row = s.get(PipelineRun, run_id)
+            assert row is not None
+            row.status = RunStatus.COMPLETED.value
+            row.current_stage = None
+            s.commit()
+
+    worker = threading.Thread(target=flip)
+    worker.start()
+    try:
+        # A fresh session per poll must observe the other transaction's commit.
+        code = main(["watch", str(run_id), "--interval", "0.1", "--timeout", "10"])
+    finally:
+        worker.join()
+    assert code == 0
+    assert "completed" in capsys.readouterr().err
+
+
+def test_watch_missing_run_exits_two(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    del session_factory
+    code = main(["watch", str(uuid.uuid4()), "--interval", "0.1", "--timeout", "1"])
+    assert code == 2
+    assert "no run" in capsys.readouterr().err

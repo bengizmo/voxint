@@ -421,3 +421,20 @@ def test_media_rejects_non_audio_artifact(
         (media_root / artifact.path).write_bytes(b"definitely not audio")
         session.commit()
     assert client.get(f"/media/{run_id}").status_code == 404
+
+
+def test_metrics_endpoint_renders_prometheus(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        seed_run(session, media_root)
+    resp = client.get("/metrics")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
+    body = resp.text
+    # A seeded completed run + one enrolled speaker are reflected in the series.
+    assert '# TYPE voxint_runs_total gauge' in body
+    assert 'voxint_runs_total{status="completed"} 1' in body
+    assert 'voxint_runs_total{status="failed"} 0' in body  # zero-filled, never absent
+    assert 'voxint_roster_speakers 1' in body
+    assert body.endswith("\n")

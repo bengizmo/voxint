@@ -8,6 +8,7 @@ exception: file-based offline scoring that never touches settings or the DB.
 
 import argparse
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,7 +16,10 @@ from typing import TYPE_CHECKING
 from voxint import __version__
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy import Engine
+    from sqlalchemy.orm import Session, sessionmaker
 
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
@@ -75,16 +79,35 @@ def _submit(args: argparse.Namespace) -> int:
         print(f"error: {resolved} is not a regular file")
         return 2
 
+    if args.wait:
+        code = _validate_poll_args(args)
+        if code is not None:
+            return code
+
     # Celery import stays lazy in the caller — the ingest service is broker-free,
     # so we commit the durable run first, then publish (commit-before-publish).
     from voxint.worker.tasks import run_pipeline
 
-    factory = build_session_factory(build_engine())
-    with session_scope(factory) as session:
-        run_id = submit_media_item(session, str(relative)).id
-    run_pipeline.delay(str(run_id))
-    print(run_id)
-    return 0
+    engine = build_engine()
+    try:
+        factory = build_session_factory(engine)
+        with session_scope(factory) as session:
+            run_id = submit_media_item(session, str(relative)).id
+        # Publish AFTER the durable commit and OUTSIDE its transaction; only then
+        # is it safe to wait on a run the worker can actually pick up.
+        run_pipeline.delay(str(run_id))
+        print(run_id)  # the run id stays alone on stdout; --wait progress is stderr
+        if args.wait:
+            try:
+                return _poll_until_stop(
+                    factory, run_id, interval=args.interval, timeout=args.timeout
+                )
+            except KeyboardInterrupt:
+                print("interrupted", file=sys.stderr)
+                return 130
+        return 0
+    finally:
+        engine.dispose()
 
 
 def _status(args: argparse.Namespace) -> int:
@@ -119,6 +142,123 @@ def _status(args: argparse.Namespace) -> int:
                 line += f" — {attempt.error}"
             print(line)
     return 0
+
+
+def _validate_poll_args(args: argparse.Namespace) -> int | None:
+    """Range-check ``--interval``/``--timeout`` before any DB work. None = ok."""
+    if args.interval <= 0:
+        print("error: --interval must be greater than 0")
+        return 2
+    if args.timeout < 0:
+        print("error: --timeout must be 0 or greater")
+        return 2
+    return None
+
+
+def _poll_until_stop(
+    factory: "sessionmaker[Session]",
+    run_id: uuid.UUID,
+    *,
+    interval: float,
+    timeout: float,
+    monotonic: "Callable[[], float]" = time.monotonic,
+    sleep: "Callable[[float], None]" = time.sleep,
+    write: "Callable[[str], object] | None" = None,
+    isatty: bool | None = None,
+) -> int:
+    """Poll a run until it reaches a non-advancing state, or time out.
+
+    Exit contract: 0 completed · 1 failed/cancelled · 2 missing run · 3
+    awaiting_adjudication (paused, needs a human ruling — the state machine can
+    still resume it, so it is NOT reported as success) · 124 timeout. Progress is
+    written to ``write`` (stderr by default) so ``submit --wait`` keeps the run id
+    alone on stdout; on a TTY the line is redrawn with ``\\r``, otherwise only
+    transitions are printed. Each poll opens a fresh short session: the shared
+    factory sets ``expire_on_commit=False``, so a reused session's identity map
+    could hand back a stale run without re-querying.
+    """
+    from voxint.db.models import PipelineRun, RunStatus
+
+    # Resolve stderr at call time, not import time: capsys (and any stderr
+    # redirect) swaps sys.stderr per-call, and a default-bound method would keep
+    # writing to the original stream.
+    if write is None:
+        write = sys.stderr.write
+
+    stop_exit = {
+        RunStatus.COMPLETED: 0,
+        RunStatus.FAILED: 1,
+        RunStatus.CANCELLED: 1,
+        RunStatus.AWAITING_ADJUDICATION: 3,
+    }
+    if isatty is None:
+        isatty = sys.stderr.isatty()
+
+    deadline = monotonic() + timeout
+    last_line: str | None = None
+
+    def render(text: str, *, final: bool) -> None:
+        nonlocal last_line
+        if isatty:
+            write("\r\033[K" + text)
+            if final:
+                write("\n")
+        elif text != last_line:
+            write(text + "\n")
+        last_line = text
+
+    while True:
+        with factory() as session:
+            run = session.get(PipelineRun, run_id)
+        if run is None:
+            if isatty and last_line is not None:
+                write("\n")
+            write(f"error: no run {run_id}\n")
+            return 2
+
+        status = run.status
+        stage = run.current_stage or "-"
+        line = f"{status} — stage {stage}"
+
+        try:
+            resolved = RunStatus(status)
+        except ValueError:
+            resolved = None
+        if resolved in stop_exit:
+            render(line, final=True)
+            return stop_exit[resolved]
+
+        render(line, final=False)
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            if isatty and last_line is not None:
+                write("\n")
+            write(f"timeout after {timeout:g}s (last status: {status})\n")
+            return 124
+        sleep(min(interval, remaining))
+
+
+def _watch(args: argparse.Namespace) -> int:
+    """Follow a run until it stops advancing (see ``_poll_until_stop``)."""
+    from voxint.db.session import build_session_factory
+
+    code = _validate_poll_args(args)
+    if code is not None:
+        return code
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        factory = build_session_factory(engine)
+        return _poll_until_stop(
+            factory, args.run_id, interval=args.interval, timeout=args.timeout
+        )
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
+    finally:
+        engine.dispose()
 
 
 def _requeue(args: argparse.Namespace) -> int:
@@ -403,6 +543,43 @@ def _doctor(args: argparse.Namespace) -> int:
     return code
 
 
+def _stats(args: argparse.Namespace) -> int:
+    """Aggregate, read-only system summary (run/stage health + throughput)."""
+    import json
+    from datetime import UTC, datetime
+
+    from voxint.api.stats_query import (
+        collect_stats,
+        format_stats_text,
+        parse_since,
+        stats_to_json,
+    )
+    from voxint.db.session import build_session_factory
+
+    now = datetime.now(UTC)
+    try:
+        since = parse_since(args.since, now=now)
+    except ValueError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        factory = build_session_factory(engine)
+        with factory() as session:
+            stats = collect_stats(session, since=since, now=now)
+    finally:
+        engine.dispose()
+
+    if args.json:
+        print(json.dumps(stats_to_json(stats), indent=2, ensure_ascii=False))
+    else:
+        sys.stdout.write(format_stats_text(stats))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -410,11 +587,33 @@ def build_parser() -> argparse.ArgumentParser:
 
     submit_p = sub.add_parser("submit", help="submit a media file (path relative to MEDIA_ROOT)")
     submit_p.add_argument("path")
+    submit_p.add_argument(
+        "--wait", action="store_true", help="after enqueue, follow the run until it stops"
+    )
+    submit_p.add_argument(
+        "--timeout",
+        type=float,
+        default=3600.0,
+        help="--wait: give up after N seconds (default 3600)",
+    )
+    submit_p.add_argument(
+        "--interval", type=float, default=2.0, help="--wait: poll every N seconds (default 2)"
+    )
     submit_p.set_defaults(fn=_submit)
 
     status_p = sub.add_parser("status", help="show a run's state and stage ledger")
     status_p.add_argument("run_id")
     status_p.set_defaults(fn=_status)
+
+    watch_p = sub.add_parser("watch", help="follow a run until it stops advancing")
+    watch_p.add_argument("run_id", type=uuid.UUID)
+    watch_p.add_argument(
+        "--timeout", type=float, default=3600.0, help="give up after N seconds (default 3600)"
+    )
+    watch_p.add_argument(
+        "--interval", type=float, default=2.0, help="poll every N seconds (default 2)"
+    )
+    watch_p.set_defaults(fn=_watch)
 
     requeue_p = sub.add_parser("requeue", help="requeue a failed run at its failed stage")
     requeue_p.add_argument("run_id")
@@ -456,6 +655,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_p = sub.add_parser("doctor", help="preflight diagnostics for every dependency")
     doctor_p.set_defaults(fn=_doctor)
+
+    stats_p = sub.add_parser("stats", help="aggregate system health, throughput, and durations")
+    stats_p.add_argument(
+        "--since",
+        default="24h",
+        help="throughput window: '<n>h', '<n>d', or an ISO-8601 datetime (default: 24h)",
+    )
+    stats_p.add_argument("--json", action="store_true", help="emit a JSON object instead of text")
+    stats_p.set_defaults(fn=_stats)
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)

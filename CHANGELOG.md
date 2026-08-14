@@ -23,6 +23,24 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   each model service's `/healthz` (reporting the compute `device`) are hard
   checks (exit 1 if any is down); the Hugging Face token and LLM endpoint are
   advisory (reported, never fail the exit). Credentials are never printed.
+- **`voxint stats`** — an aggregate, read-only system summary: run counts by
+  status, failed stage attempts by stage, average per-stage duration (over
+  finished attempts), roster size, and runs created in a window (`--since`,
+  accepting `<n>h`/`<n>d`/ISO-8601, default 24h). `--json` emits a stable object.
+- **`GET /metrics`** — a Prometheus text-exposition endpoint (format 0.0.4)
+  built on the same query module, on the authenticated router (scrape it with
+  `basic_auth`, keeping the "everything but `/healthz` authenticates" invariant).
+  Every `RunStatus`/`Stage` series is zero-filled so a series never disappears
+  between scrapes; the one windowed gauge bakes its window into its name
+  (`voxint_runs_created_24h`).
+- **`voxint watch <run_id>`** — follow a run until it stops advancing, with a
+  live progress line on stderr. Exit codes: `0` completed, `1` failed/cancelled,
+  `2` missing run, `3` awaiting adjudication (paused — needs a human ruling),
+  `124` timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune
+  the poll.
+- **`voxint submit --wait`** — enqueue, then follow the new run to a stop state
+  with the same poll loop and exit codes (the run id stays alone on stdout;
+  progress goes to stderr).
 
 ## [0.5.1] — 2026-08-14
 
