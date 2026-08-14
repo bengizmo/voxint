@@ -42,6 +42,7 @@ class ServiceHealth:
     up: bool  # True iff a 2xx readiness response with the model loaded
     detail: str  # stable, plain-language outcome ("ready", "timeout", …)
     latency_ms: float | None  # round-trip for a completed attempt; None if none
+    device: str | None = None  # the service's reported compute device, when it says
 
 
 def probe_services(
@@ -69,8 +70,12 @@ def probe_services(
 
 
 def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
-    def outcome(*, up: bool, detail: str, latency_ms: float | None) -> ServiceHealth:
-        return ServiceHealth(name=name, url=base_url, up=up, detail=detail, latency_ms=latency_ms)
+    def outcome(
+        *, up: bool, detail: str, latency_ms: float | None, device: str | None = None
+    ) -> ServiceHealth:
+        return ServiceHealth(
+            name=name, url=base_url, up=up, detail=detail, latency_ms=latency_ms, device=device
+        )
 
     url = f"{base_url.rstrip('/')}/healthz"
     start = time.monotonic()
@@ -105,5 +110,9 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     if body.get("model_loaded") is False:
         return outcome(up=False, detail="model not loaded", latency_ms=latency_ms)
     if body.get("status") == "ok" and body.get("model_loaded") is True:
-        return outcome(up=True, detail="ready", latency_ms=latency_ms)
+        # ``device`` is an additive, optional field (docs/gpu-contracts.md); surface
+        # it only when the service reports a string so `doctor` can show cpu/cuda/rocm.
+        raw_device = body.get("device")
+        device = raw_device if isinstance(raw_device, str) else None
+        return outcome(up=True, detail="ready", latency_ms=latency_ms, device=device)
     return outcome(up=False, detail="not ready", latency_ms=latency_ms)

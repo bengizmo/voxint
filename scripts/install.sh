@@ -177,8 +177,11 @@ valid_port() {
 # Advisory only: true if something on 127.0.0.1:$1 accepts a TCP connection
 # OR leaves it hanging (a listener with a full accept queue -- macOS drops the
 # SYN silently instead of refusing, so a hung service would otherwise read as
-# free). Uses bash /dev/tcp (no netcat/lsof dependency). Compose remains the
-# authority -- this just lets us ask about a collision before we hit it.
+# free; the bounded watchdog below treats a still-pending connect as in-use).
+# Uses bash /dev/tcp (no netcat/lsof dependency). Compose remains the
+# authority -- this just lets us ask about a collision before we hit it, and
+# every probe has a TOCTOU race before Compose actually binds. resolve_port
+# compensates by only ever OFFERING ports strictly above a known-busy default.
 port_in_use() {
   case $1 in ''|*[!0-9]*) return 1 ;; esac
   # The probe runs in a background subshell so a SYN-drop cannot hang the
@@ -295,7 +298,18 @@ resolve_port() {
   if ! port_in_use "$def"; then
     printf '%s' "$def"; return 0
   fi
-  suggested=$(next_free_port "$def")
+  # $def is known busy here, so search STRICTLY ABOVE it. Starting the scan at
+  # $def would let a macOS/BSD backlog-full misread (see port_in_use) return the
+  # busy port right back as the "alternate". +1 guarantees a distinct suggestion.
+  if [ "$def" -ge 65535 ]; then
+    # No port above 65535 exists to offer. Leave the suggestion EMPTY rather than
+    # defaulting the prompt to the known-busy $def (which would violate the
+    # "offered alternate never equals the busy port" invariant); the loop below
+    # then requires the operator to type a valid free port.
+    suggested=
+  else
+    suggested=$(next_free_port "$((def + 1))")
+  fi
   say "  Host port $def ($label) is already in use."
   while :; do
     printf '  Alternate %s port [%s]: ' "$label" "$suggested" >&2
@@ -326,7 +340,8 @@ prompt_compute_tier() {
   say "    [A] AMD tier  -- needs an AMD GPU (amdgpu driver only; transcription"
   say "                     runs on the GPU, diarization/embedding on CPU)"
   say "    [C] CPU tier  -- no GPU needed; works on any amd64/arm64 host"
-  say "                     (much slower: long recordings take hours, not minutes)"
+  say "                     (much slower: long recordings take hours, not minutes;"
+  say "                      needs >=8 GB RAM for the container host / Docker VM)"
   say "    [M] Apple tier -- native model services on this Mac (Apple Silicon):"
   say "                     diarization uses the Apple GPU; needs a separate"
   say "                     native setup step AFTER this installer (uv, ~3.2 GB)"

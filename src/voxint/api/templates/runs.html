@@ -45,11 +45,36 @@
       {% endfor %}
     </select>
   </label>
+  <label>Transcript
+    <input type="search" name="q" value="{{ filters.q or "" }}"
+           placeholder='words, "a phrase", -excluded, this OR that'>
+  </label>
+  <label>Speaker
+    <select name="speaker">
+      <option value="">all</option>
+      {% for sp in facet_speakers %}
+      <option value="{{ sp.id }}"{% if filters.speaker_id == sp.id %} selected{% endif %}>
+        {{- sp.display_name }}{% if sp.deleted_at %} (archived){% endif -%}
+      </option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Source
+    <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
+  </label>
+  <label>From (UTC)
+    <input type="date" name="created_from"
+           value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
+  </label>
+  <label>To (UTC)
+    <input type="date" name="created_to"
+           value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
+  </label>
   <button type="submit">Filter</button>
 </form>
 
 {% if not page.items %}
-<p>No runs match these filters.</p>
+<p>No runs match these filters{% if filters.q %} and search{% endif %}.</p>
 {% else %}
 <table>
   <thead>
@@ -71,6 +96,16 @@
       <td><code>{{ it.source_path }}</code></td>
       <td>{{ it.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
     </tr>
+    {% if it.snippet %}
+    <tr class="snippet">
+      {# snippet.html is server-escaped with only our <mark> injected — see
+         runs_query._render_headline; transcript text itself is never trusted. #}
+      <td colspan="5" class="muted">
+        ⏱ {{ "%d:%02d" | format(it.snippet.start_seconds // 60, it.snippet.start_seconds % 60) }}
+        — {{ it.snippet.html }}
+      </td>
+    </tr>
+    {% endif %}
     {% endfor %}
   </tbody>
 </table>

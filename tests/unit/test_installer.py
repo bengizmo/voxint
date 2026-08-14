@@ -189,6 +189,42 @@ def test_port_in_use_true_for_bound_port(repo: Path) -> None:
     assert proc.stdout.strip() == "USED"
 
 
+def test_resolve_port_never_offers_busy_default_on_flaky_probe(
+    repo: Path, tmp_path: Path
+) -> None:
+    # Regression for #27's real failure mode. A real bound socket reads busy
+    # *consistently* on Linux, so it can't tell the fix from the pre-fix code
+    # (both then scan to def+1). The actual macOS/BSD bug is an INCONSISTENT
+    # probe: a backlog-full listener refuses the re-probe, so port_in_use flips
+    # the busy default to "free" the second time it is asked. We model exactly
+    # that with a stub — busy on the first probe of $BUSY_PORT, free after — which
+    # the pre-fix `next_free_port "$def"` re-scan would hand right back as the
+    # "alternate" (chosen == busy), and which the fix (`next_free_port def+1`)
+    # sidesteps by never re-probing the known-busy default.
+    marker = tmp_path / "probe_marker"  # must not exist yet
+    busy = 8080
+    script = (
+        "port_in_use() {\n"
+        '  if [ "$1" = "$BUSY_PORT" ] && [ ! -e "$PROBE_MARKER" ]; then\n'
+        '    : > "$PROBE_MARKER"; return 0\n'  # busy: first probe of the default
+        "  fi\n"
+        "  return 1\n"  # free: the re-probe of the default, and every other port
+        "}\n"
+        'resolve_port "API / web console" "$BUSY_PORT"'
+    )
+    proc = run_lib(
+        repo,
+        script,
+        stdin="\n",  # accept the suggested alternate
+        extra_env={"BUSY_PORT": str(busy), "PROBE_MARKER": str(marker)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert f"Host port {busy} (API / web console) is already in use" in proc.stderr
+    chosen = int(proc.stdout)
+    assert chosen != busy, "must never offer the known-busy default back as the alternate"
+    assert 1 <= chosen <= 65535
+
+
 # --------------------------------------------------------------------------- #
 # .env rendering (generate path)
 # --------------------------------------------------------------------------- #

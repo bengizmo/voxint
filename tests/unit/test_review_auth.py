@@ -35,6 +35,11 @@ def test_healthz_is_open(client: TestClient) -> None:
         ("POST", "/review/00000000-0000-0000-0000-000000000000/labels/S0/decision"),
         ("POST", "/review/00000000-0000-0000-0000-000000000000/labels/S0/enroll"),
         ("GET", "/review/00000000-0000-0000-0000-000000000000/export.txt"),
+        ("GET", "/review/00000000-0000-0000-0000-000000000000/export.srt"),
+        ("GET", "/review/00000000-0000-0000-0000-000000000000/export.vtt"),
+        ("GET", "/review/00000000-0000-0000-0000-000000000000/export.json"),
+        ("GET", "/review/00000000-0000-0000-0000-000000000000/export.rttm"),
+        ("GET", "/metrics"),
         ("GET", "/media/00000000-0000-0000-0000-000000000000"),
         ("POST", "/review/00000000-0000-0000-0000-000000000000/release"),
         ("GET", "/static/htmx.min.js"),
@@ -76,5 +81,10 @@ def test_default_or_empty_credentials_refused_off_loopback(password: str) -> Non
         Settings(api_host="0.0.0.0", voxint_password=password)
 
 
-def test_default_credentials_fine_on_loopback() -> None:
-    assert Settings(api_host="127.0.0.1").voxint_password == "change-me"
+def test_default_credentials_fine_on_loopback(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Fully hermetic: exercise the *code* default, not the ambient environment.
+    # Settings source precedence is init kwargs > process env > dotenv, so both
+    # need neutralizing: _env_file=None skips any on-disk .env, and delenv drops
+    # an exported VOXINT_PASSWORD (either would otherwise flip this assertion).
+    monkeypatch.delenv("VOXINT_PASSWORD", raising=False)
+    assert Settings(api_host="127.0.0.1", _env_file=None).voxint_password == "change-me"

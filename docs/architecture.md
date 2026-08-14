@@ -63,7 +63,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0007)
+## Data model (alembic revisions 0001–0008)
 
 | Table | Role |
 |---|---|
@@ -73,7 +73,7 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
 | `audio_chunks` | chunk boundaries for long-file processing |
-| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag |
+| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag; two GIN expression indexes (`english` tsvectors over each text variant separately, revision 0008) back the `/runs` transcript search — both variants stay searchable, enhancement never shadows raw |
 | `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
 | `speakers` | the grown speaker roster, with a curation lifecycle: `merged_into_id`/`merged_at` (merge tombstones) and `deleted_at` (reversible archive) (revision 0007) |
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
@@ -210,6 +210,16 @@ flow that genuinely blocks downstream processing — nothing enters it today.)
   effective human decision (newest ledger row per label — corrections are
   appends) beats grounded cosine beats nothing. `llm_hint` names render as
   evidence, never as identity; `exclude` suppresses attribution, never text.
+- **Runs search** (`GET /runs`, revision 0008): transcript full-text (`q=`,
+  `websearch_to_tsquery` over per-segment `english` tsvectors of raw AND
+  enhanced text separately — the search document is one segment), a speaker
+  facet answered by a SQL mirror of the resolver
+  (`speaker_attributed_exists`: effective decision or grounded cosine, merge
+  tombstones expanded via `roster.alias_ids`; archived speakers stay
+  offered, marked), source-substring and UTC date facets. Everything
+  AND-composes with status/review and the `(created_at, id)` keyset cursor —
+  results stay newest-first, no relevance ranking; matching runs get one
+  escaped `ts_headline` snippet (first matching segment).
 - **Reviewer slot**: claim columns on `pipeline_runs`, guarded by the same CAS
   `revision` as pipeline transitions. The claim token is an opaque per-claim
   secret required on every mutation; a re-claim rotates it, so a stale tab

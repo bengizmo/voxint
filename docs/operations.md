@@ -76,6 +76,13 @@ What changes relative to the GPU overlay — and what doesn't:
   slower than GPU: transcribing a multi-hour recording takes **hours**, not
   minutes. This is fine for overnight/batch use and correctness-identical; it
   is not an interactive experience.
+- **Host RAM floor — ≥ 8 GB.** The CPU tier holds the models in RAM instead of
+  VRAM: whisper alone is ~4.8 GiB resident (large-v2 int8 + CTranslate2 arenas)
+  and the tier idles around ~6 GiB total. Give the container host — on **Docker
+  Desktop (macOS/Windows) this is the VM's memory limit**, not the physical
+  machine's — at least **8 GB *including the core stack*** (Postgres, Redis, api,
+  worker share the same VM); **16 GB is comfortable**. Under the floor the
+  services are OOM-killed with an opaque exit, not a clear message.
 - **`COMPUTE_TIER=cpu` is load-bearing.** The overlay sets it on the api and
   worker: it multiplies the default inference timeouts, stage leases, and the
   Celery visibility horizon so a healthy 4-hour CPU transcription is never
@@ -219,13 +226,105 @@ docker compose exec api voxint submit path/to/file.mp3   # local path relative t
 docker compose exec api voxint fetch <url>               # yt-dlp URL ingestion (reads the URL from stdin if omitted)
 docker compose exec api voxint status <run-id>           # run state + per-stage attempt ledger
 docker compose exec api voxint requeue <run-id>          # re-enter a FAILED run at its failed stage
+docker compose exec api voxint list                      # recent runs, newest first (--status, --limit, --json)
+docker compose exec api voxint export <run-id> --format srt   # export a transcript (see below)
+docker compose exec api voxint doctor                    # read-only preflight for every dependency
+docker compose exec api voxint stats                     # aggregate health/throughput (--since, --json)
+docker compose exec api voxint watch <run-id>            # follow a run until it stops (--interval, --timeout)
 ```
 
 `submit` records the media item, creates a run, and enqueues it for the
 worker — the CLI never executes a stage itself. `fetch` does the same for a
 remote URL, recording it as `MediaItem.source_url`; the worker's ACQUIRE stage
 downloads it (see below). `status` shows the run's current state plus every
-stage attempt with its error, straight from the persisted ledger.
+stage attempt with its error, straight from the persisted ledger. `list`
+enumerates runs (the same query as the `/runs` page); `--json` prints a machine-
+readable array.
+
+**`voxint doctor`** probes every dependency without changing anything: Postgres
+(`SELECT 1`), Redis (`PING`), and each model service's `/healthz` (reporting its
+compute `device`, e.g. `rocm`/`cpu`) are **hard** checks — the command exits
+non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
+whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
+but never failing the exit code, because the default install needs neither. No
+credentials, tokens, or connection URLs are printed.
+
+**`voxint watch <run-id>`** follows a run until it stops advancing, printing a
+live status line to **stderr** (so the run id stays clean on stdout). It exits
+`0` completed, `1` failed/cancelled, `2` on a missing run, `3` awaiting
+adjudication (the automated stages finished and a human ruling is needed — the
+state machine can still resume it, so it is not "success"), and `124` on
+timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune the
+poll; each poll opens a fresh session so it observes the worker's commits.
+**`voxint submit --wait`** composes submit + watch: it enqueues, prints the run
+id, then follows the new run with the same loop and exit codes.
+
+### Metrics & monitoring
+
+**`voxint stats`** prints an aggregate, read-only snapshot: run counts by status,
+failed stage *attempts* per stage, average per-stage duration over finished
+attempts, roster size, and runs created within a window. `--since` accepts a
+relative span (`24h`, `7d`) or an ISO-8601 datetime (default 24h); `--json`
+emits a stable object for scripting.
+
+```bash
+docker compose exec api voxint stats --since 7d          # human table
+docker compose exec -T api voxint stats --json           # machine-readable
+```
+
+The same aggregates are exposed for Prometheus at **`GET /metrics`** (text
+exposition format 0.0.4). It sits on the authenticated router, so scrape it with
+Basic Auth — that keeps the "everything but `/healthz` authenticates" invariant
+with no extra flag or token. Every `RunStatus`/`Stage` series is zero-filled so a
+series never vanishes between scrapes; the one windowed gauge names its window
+(`voxint_runs_created_24h`). A scrape config on the monitoring host:
+
+```yaml
+scrape_configs:
+  - job_name: voxint
+    metrics_path: /metrics
+    basic_auth:
+      username: ${VOXINT_USER}
+      password: ${VOXINT_PASSWORD}
+    static_configs:
+      - targets: ["voxint-host:8090"]   # the operator's voxint API address
+```
+
+Exposed series (all gauges — recomputed from the database per scrape, so none
+carry a counter-style `_total` suffix): `voxint_runs{status}`,
+`voxint_stage_failures{stage}`, `voxint_stage_duration_seconds{stage}` with a
+companion `voxint_stage_duration_attempts{stage}` (so "no finished attempts" is
+distinguishable from a genuinely 0-second average), `voxint_roster_speakers`, and
+`voxint_runs_created_24h`.
+
+### Exporting transcripts
+
+Every run's speaker-attributed transcript exports in five formats, from the CLI
+or over HTTP. Both paths share the same formatters, so a downloaded file and a
+piped export are byte-identical.
+
+```bash
+docker compose exec -T api voxint export <run-id> --format srt   > out.srt
+docker compose exec -T api voxint export <run-id> --format vtt   > out.vtt
+docker compose exec -T api voxint export <run-id> --format json  > out.json
+docker compose exec -T api voxint export <run-id> --format rttm  > out.rttm
+docker compose exec -T api voxint export <run-id> --format txt   > out.txt
+```
+
+- `--format` — `srt` (SubRip), `vtt` (WebVTT), `json` (array of
+  `{start_seconds, end_seconds, speaker, text}`), `rttm` (NIST diarization
+  format), or `txt` (bracketed plain text). Default `txt`.
+- `--text raw|enhanced` — which transcript variant to render (default
+  `enhanced`, the LLM-cleaned text; `raw` is the immutable ASR output). Ignored
+  for `rttm`, which carries raw diarization labels, not attributed text.
+- `-o PATH` — write to a file instead of stdout (refuses to overwrite an
+  existing file unless `--force`).
+
+The same exports are available over HTTP at
+`GET /review/{run_id}/export.{txt,srt,vtt,json,rttm}` (add `?text=raw` for the
+raw variant). RTTM uses the run's UUID as the file id and the raw diarization
+labels (`SPEAKER_00` …), so it round-trips against diarization scoring tools —
+it deliberately does **not** substitute adjudicated speaker names.
 
 ### The browser console
 
@@ -326,7 +425,8 @@ finished — so `/review` below becomes reachable only after onboarding complete
    separate from machine proposals; adjudication precedence is defined in
    quality-gates.md.
 4. **Release / export** — release the claim for the next reviewer, or export
-   the speaker-attributed transcript (`/review/{run_id}/export.txt`).
+   the speaker-attributed transcript (`/review/{run_id}/export.{txt,srt,vtt,
+   json,rttm}`, or `voxint export` — see "Exporting transcripts" above).
 
 ## HTTP endpoints
 
@@ -339,6 +439,7 @@ mutations are gated by their per-run claim token.
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access — schema readiness is the migrate gate's job) |
+| `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated — scrape with `basic_auth`) |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML) |
@@ -350,7 +451,8 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}` | Adjudication workbench |
 | `POST /review/{run_id}/labels/{label}/decision` | Record a human ruling for a label |
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
-| `GET /review/{run_id}/export.txt` | Speaker-attributed transcript export |
+| `GET /review/{run_id}/export.{txt,srt,vtt,json}?text=raw\|enhanced` | Speaker-attributed transcript export (plain text, SubRip, WebVTT, JSON) |
+| `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings: re-run the wizard, start/replay/complete the tutorial |

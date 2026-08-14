@@ -47,16 +47,93 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   to an existing directory"). Values are now normalized exactly like the
   installer reads them back (strip CR, blanks, and one matched pair of
   quotes), matching what Compose interpolation passes to the containers.
-- **Installer port probe on macOS**: a listener with a full accept queue (a
-  wedged service, or another process mid-collision-check) made macOS drop the
-  probe's SYN silently, so `resolve_port` could report a busy port as free and
-  suggest it right back. The probe is now bounded (~2 s) and a hang counts as
-  "in use"; refused connections still resolve in milliseconds.
-- **Download timeout cleanup on macOS**: killing a stalled downloader's process
-  group could crash with `PermissionError` when the SIGKILL escalation raced a
-  descendant already dying from the SIGTERM (XNU reports EPERM, not ESRCH, for
-  processes mid-exit). Both signals now treat that as the benign
-  "already gone" case it is.
+
+## [0.8.0] — 2026-08-14
+
+Runs search (#8) plus CLI/observability ergonomics (#25, #32): the runs
+browser gains transcript full-text search and facets, and the CLI grows
+export, list, doctor, stats, and watch alongside a Prometheus `/metrics`
+endpoint. Also carries the cross-platform / dev-experience hardening bundle
+(#26, #27, #28, #29).
+
+### Added
+- **Search on the runs browser** (`/runs`, #8): transcript full-text search
+  (`q=`, Postgres `websearch_to_tsquery` syntax — quotes, `-word`, `OR`) with
+  a highlighted first-hit snippet per run, a speaker facet (runs whose
+  read-time attribution — human ruling or grounded cosine, merge tombstones
+  canonicalized — is the selected speaker; archived speakers stay listed,
+  marked), a source-path substring facet, and UTC date-range bounds. All
+  facets AND-compose with the existing status/review filters and keyset
+  pagination. Backed by two GIN expression indexes (migration 0008) over
+  `raw_text` AND `enhanced_text` separately — enhancement never makes the raw
+  rendering of a term unfindable, and vice versa. Dictionary is `english`
+  (stemming recall); a stopword-only query matches nothing by design. Results
+  stay newest-first — no relevance ranking pre-1.0 — and the search document
+  is one segment (terms split across segments of a run don't AND-match).
+- **Structured & subtitle transcript exports.** The review console now offers
+  SubRip (`.srt`), WebVTT (`.vtt`), JSON, and diarization RTTM (`.rttm`)
+  alongside the existing plain-text export, at
+  `GET /review/{run_id}/export.{srt,vtt,json,rttm}` (all accept `?text=raw|
+  enhanced`, default enhanced; RTTM carries raw diarization labels). SRT/VTT/
+  JSON/TXT share one set of pure formatters (`voxint.export`) with the CLI, so a
+  downloaded file and a piped export are byte-identical.
+- **`voxint export <run_id> --format srt|vtt|json|rttm|txt`** — headless
+  transcript export to stdout or `-o PATH` (refuses to overwrite without
+  `--force`); `--text raw|enhanced` selects the transcript variant.
+- **`voxint list`** — a CLI run browser (newest first) mirroring the `/runs`
+  query, with `--status`, `--limit` (1–500, default `runs_page_size`), and
+  `--json`.
+- **`voxint doctor`** — read-only preflight diagnostics: Postgres, Redis, and
+  each model service's `/healthz` (reporting the compute `device`) are hard
+  checks (exit 1 if any is down); the Hugging Face token and LLM endpoint are
+  advisory (reported, never fail the exit). Credentials are never printed.
+- **`voxint stats`** — an aggregate, read-only system summary: run counts by
+  status, failed stage attempts by stage, average per-stage duration (over
+  finished attempts), roster size, and runs created in a window (`--since`,
+  accepting `<n>h`/`<n>d`/ISO-8601, default 24h). `--json` emits a stable object.
+- **`GET /metrics`** — a Prometheus text-exposition endpoint (format 0.0.4)
+  built on the same query module, on the authenticated router (scrape it with
+  `basic_auth`, keeping the "everything but `/healthz` authenticates" invariant).
+  Every `RunStatus`/`Stage` series is zero-filled so a series never disappears
+  between scrapes; the one windowed gauge bakes its window into its name
+  (`voxint_runs_created_24h`).
+- **`voxint watch <run_id>`** — follow a run until it stops advancing, with a
+  live progress line on stderr. Exit codes: `0` completed, `1` failed/cancelled,
+  `2` missing run, `3` awaiting adjudication (paused — needs a human ruling),
+  `124` timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune
+  the poll.
+- **`voxint submit --wait`** — enqueue, then follow the new run to a stop state
+  with the same poll loop and exit codes (the run id stays alone on stdout;
+  progress goes to stderr).
+
+### Fixed
+- **macOS/BSD media-download teardown raised the wrong error (#26).** On a
+  download timeout, if the yt-dlp process-group leader had already been reaped
+  and the survivor was a zombie reparented to launchd, `killpg` returns `EPERM`
+  (not `ESRCH`); the raw `PermissionError` escaped the teardown and replaced the
+  intended redacted `AcquisitionError`. Both teardown signals now suppress
+  `PermissionError` alongside `ProcessLookupError`. (Linux returns `ESRCH`, so
+  this was macOS/BSD-only; validated by a new monkeypatched unit test — a real
+  Mac run is the true confirmation.)
+- **Installer could offer the busy port as its own "alternate" (#27).** On
+  macOS/BSD a listener with a full accept-backlog refuses further connects, so
+  the `/dev/tcp` probe can misread a bound port as free; `resolve_port` then
+  re-scanned starting *at* the known-busy default and could suggest it right
+  back. It now searches strictly above the busy port, so the offered alternate
+  is always distinct. The probe stays advisory (Compose remains the collision
+  authority); its residual limitation is now documented in-script.
+
+### Changed
+- **Fresh `uv sync --extra dev` checkout is green again (#28).** The loopback
+  default-credentials test is now hermetic (`_env_file=None`, so an on-disk
+  `.env` can't override the code default), and the two librosa-dependent mel
+  contract tests `importorskip("librosa")` (it ships only in the `parity`
+  extra) — they still run in the parity lane, and no assertions were weakened.
+- **Documented the CPU-tier host-RAM floor (#29).** The CPU tier holds the
+  models in RAM (~6 GiB idle; whisper alone ~4.8 GiB) and needs **≥ 8 GB**
+  available to the container host — on Docker Desktop the VM's memory limit, not
+  the physical machine — or services are OOM-killed with an opaque exit. Noted
+  in `docs/operations.md`, `docs/onboarding.md`, and the installer's tier prompt.
 
 ## [0.7.0] — 2026-08-14
 
@@ -375,7 +452,10 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/bengizmo/voxint/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/bengizmo/voxint/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/bengizmo/voxint/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/bengizmo/voxint/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bengizmo/voxint/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/bengizmo/voxint/compare/v0.4.0...v0.4.1

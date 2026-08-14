@@ -9,8 +9,50 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.cli import main
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, Stage
+from voxint.db.models import (
+    DiarizationTurn,
+    MediaItem,
+    PipelineRun,
+    RunStatus,
+    Stage,
+    StageRun,
+    StageStatus,
+    TranscriptSegment,
+)
 from voxint.pipeline.engine import submit
+
+
+def _seed_completed_run(session: Session) -> uuid.UUID:
+    """A completed run with two transcript segments and two diarization turns."""
+    media = MediaItem(source_path="incoming/talk.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    for index, (label, text) in enumerate([("SPEAKER_00", "hello"), ("SPEAKER_01", "hi")]):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=float(index),
+                end_seconds=float(index) + 1.0,
+                raw_text=text,
+                diarization_label=label,
+            )
+        )
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run.id,
+                turn_index=index,
+                start_seconds=float(index),
+                end_seconds=float(index) + 1.0,
+                label=label,
+                skip_reason="too_short",
+            )
+        )
+    session.commit()
+    return run.id
 
 
 @pytest.fixture()
@@ -206,6 +248,65 @@ def test_requeue_failed_without_stage_refuses_to_guess(
     assert enqueued == []
 
 
+def test_list_shows_runs_table_and_json(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    assert main(["list"]) == 0
+    table = capsys.readouterr().out
+    assert str(run_id) in table
+    assert "completed" in table
+    assert "incoming/talk.wav" in table
+
+    import json
+
+    assert main(["list", "--json", "--status", "completed"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["run_id"] for r in rows] == [str(run_id)]
+    assert rows[0]["source_path"] == "incoming/talk.wav"
+
+
+def test_list_empty_reports_no_runs(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert main(["list"]) == 0
+    assert "(no runs)" in capsys.readouterr().out
+
+
+def test_export_formats_and_file_output(
+    session_factory: sessionmaker[Session], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    assert main(["export", str(run_id), "--format", "srt"]) == 0
+    srt = capsys.readouterr().out
+    assert "1\n00:00:00,000 --> 00:00:01,000\nSPEAKER_00:\nhello\n" in srt
+
+    # RTTM reads the diarization turns (raw labels, run-uuid file id).
+    assert main(["export", str(run_id), "--format", "rttm"]) == 0
+    rttm = capsys.readouterr().out
+    assert rttm.splitlines()[0] == f"SPEAKER {run_id} 1 0.000 1.000 <NA> <NA> SPEAKER_00 <NA> <NA>"
+
+    # -o writes the file and reports the path (no stdout payload).
+    out = tmp_path / "t.json"
+    assert main(["export", str(run_id), "--format", "json", "-o", str(out)]) == 0
+    assert f"wrote {out}" in capsys.readouterr().out
+    import json
+
+    assert [r["text"] for r in json.loads(out.read_text())] == ["hello", "hi"]
+
+
+def test_export_unknown_run_errors(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    missing = uuid.uuid4()
+    assert main(["export", str(missing), "--format", "json"]) == 2
+    assert f"no run {missing}" in capsys.readouterr().out
+
+
 def test_submit_publishes_only_after_commit(
     session_factory: sessionmaker[Session],
     media_env: Path,
@@ -246,3 +347,199 @@ def test_submit_keeps_committed_run_when_publish_fails(
     with session_factory() as session:
         run = session.execute(select(PipelineRun)).scalar_one()
         assert run.status == RunStatus.QUEUED.value
+
+
+def _seed_run_with_stages(session: Session) -> uuid.UUID:
+    """A completed run with finished stage attempts, incl. one transcribe failure."""
+    from datetime import UTC, datetime, timedelta
+
+    media = MediaItem(source_path="incoming/stats.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+
+    base = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    # A failed transcribe attempt (attempt 1) then a completed one (attempt 2):
+    # proves failures and durations count attempts, not distinct runs.
+    session.add(
+        StageRun(
+            pipeline_run_id=run.id,
+            stage=Stage.TRANSCRIBE.value,
+            status=StageStatus.FAILED.value,
+            attempt=1,
+            started_at=base,
+            finished_at=base + timedelta(seconds=5),
+            error="boom",
+        )
+    )
+    session.add(
+        StageRun(
+            pipeline_run_id=run.id,
+            stage=Stage.TRANSCRIBE.value,
+            status=StageStatus.COMPLETED.value,
+            attempt=2,
+            started_at=base + timedelta(seconds=10),
+            finished_at=base + timedelta(seconds=25),
+        )
+    )
+    session.commit()
+    return run.id
+
+
+def test_stats_text_and_json(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        _seed_run_with_stages(session)
+
+    assert main(["stats"]) == 0
+    text = capsys.readouterr().out
+    assert "completed" in text
+    assert "transcribe" in text  # both a failure line and a duration line
+
+    import json
+
+    assert main(["stats", "--json", "--since", "7d"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status_counts"]["completed"] == 1
+    assert payload["stage_failure_counts"]["transcribe"] == 1  # one failed attempt
+    durations = {d["stage"]: d for d in payload["stage_durations"]}
+    # two finished transcribe attempts (5s + 15s) → avg 10s
+    assert durations["transcribe"]["attempt_count"] == 2
+    assert durations["transcribe"]["avg_seconds"] == 10.0
+
+
+def test_watch_sees_committed_status_flip(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    import threading
+    import time
+
+    media = MediaItem(source_path="incoming/watch.wav")
+    with session_factory() as session:
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.RUNNING.value,
+            current_stage=Stage.TRANSCRIBE.value,
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    errors: list[BaseException] = []
+
+    def flip() -> None:
+        # Capture any failure so it surfaces as a clear assertion below instead
+        # of an opaque 124 timeout in the main thread.
+        try:
+            time.sleep(0.4)
+            with session_factory() as s:
+                row = s.get(PipelineRun, run_id)
+                assert row is not None
+                row.status = RunStatus.COMPLETED.value
+                row.current_stage = None
+                s.commit()
+        except BaseException as exc:  # re-raised in the main thread
+            errors.append(exc)
+
+    worker = threading.Thread(target=flip)
+    worker.start()
+    try:
+        # A fresh session per poll must observe the other transaction's commit.
+        code = main(["watch", str(run_id), "--interval", "0.1", "--timeout", "10"])
+    finally:
+        worker.join()
+    if errors:
+        raise errors[0]
+    assert code == 0
+    assert "completed" in capsys.readouterr().err
+
+
+def test_watch_missing_run_exits_two(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    del session_factory
+    code = main(["watch", str(uuid.uuid4()), "--interval", "0.1", "--timeout", "1"])
+    assert code == 2
+    assert "no run" in capsys.readouterr().err
+
+
+def test_collect_stats_query_semantics(session_factory: sessionmaker[Session]) -> None:
+    """Direct query checks the pure renderers can't catch: tz-aware cutoff
+    inclusivity, negative-duration exclusion, and empty-stage behavior."""
+    from datetime import UTC, datetime, timedelta
+
+    from voxint.api.stats_query import collect_stats
+
+    now = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    cutoff = now - timedelta(hours=24)  # since = 2026-08-13T12:00:00Z
+
+    with session_factory() as session:
+        # Three runs straddling the cutoff: strictly before, exactly on, after.
+        for created, tag in [
+            (cutoff - timedelta(seconds=1), "before"),
+            (cutoff, "on"),
+            (cutoff + timedelta(seconds=1), "after"),
+        ]:
+            media = MediaItem(source_path=f"incoming/{tag}.wav")
+            session.add(media)
+            session.flush()
+            run = PipelineRun(
+                media_item_id=media.id, status=RunStatus.COMPLETED.value, created_at=created
+            )
+            session.add(run)
+            session.flush()
+            # A negative-duration attempt (clock skew) must be excluded from the
+            # average; a normal 4s attempt must be included.
+            base = datetime(2026, 8, 14, 10, 0, 0, tzinfo=UTC)
+            session.add(
+                StageRun(
+                    pipeline_run_id=run.id,
+                    stage=Stage.PREPARE.value,
+                    status=StageStatus.COMPLETED.value,
+                    attempt=1,
+                    started_at=base,
+                    finished_at=base + timedelta(seconds=4),
+                )
+            )
+            session.add(
+                StageRun(
+                    pipeline_run_id=run.id,
+                    stage=Stage.PREPARE.value,
+                    status=StageStatus.FAILED.value,
+                    attempt=2,
+                    started_at=base + timedelta(seconds=10),
+                    finished_at=base,  # finished_at < started_at → excluded
+                )
+            )
+        session.commit()
+
+        stats = collect_stats(session, since=cutoff, now=now)
+
+    # created_at >= since is inclusive: the "on" and "after" runs count, "before" does not.
+    assert stats.runs_created_count == 2
+    # Negative-duration attempts excluded → only the 4s attempts averaged.
+    prepare = {d.stage: d for d in stats.stage_durations}["prepare"]
+    assert prepare.attempt_count == 3  # one valid attempt per run, skew rows dropped
+    assert prepare.avg_seconds == 4.0
+    # Stages with no finished attempts don't appear in the list at all.
+    assert "finalize" not in {d.stage for d in stats.stage_durations}
+
+
+def test_collect_stats_empty_database(session_factory: sessionmaker[Session]) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from voxint.api.stats_query import collect_stats
+
+    now = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    with session_factory() as session:
+        stats = collect_stats(session, since=now - timedelta(hours=24), now=now)
+    assert stats.status_counts == {}
+    assert stats.stage_durations == ()
+    assert stats.stage_failure_counts == ()
+    assert stats.roster_size == 0
+    assert stats.runs_created_count == 0

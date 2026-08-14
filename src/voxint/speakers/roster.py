@@ -97,6 +97,23 @@ def describe_name_owner(owner: Speaker) -> str:
     return f"speaker {name!r} already exists"
 
 
+def searchable_speakers(session: Session) -> list[Speaker]:
+    """Canonical identities for the runs search facet: active, then archived.
+
+    Archived speakers stay listed (the UI marks them) because their human
+    decisions remain effective — hiding them would make those runs
+    undiscoverable. Merge tombstones are excluded; their history is found
+    through the canonical target via ``alias_ids``.
+    """
+    return list(
+        session.execute(
+            select(Speaker)
+            .where(Speaker.merged_into_id.is_(None))
+            .order_by(Speaker.deleted_at.is_not(None), Speaker.display_name)
+        ).scalars()
+    )
+
+
 def merge_map(session: Session) -> dict[uuid.UUID, uuid.UUID]:
     """Every tombstone's target, for read-time canonicalization."""
     return {
@@ -128,6 +145,24 @@ def canonicalize(
             raise RosterError(f"speaker merge chain contains a cycle at {current}")
         visited.add(current)
     return current
+
+
+def alias_ids(session: Session, speaker_id: uuid.UUID) -> set[uuid.UUID]:
+    """Every id whose merge chain lands on ``speaker_id``'s canonical identity.
+
+    The inverse of ``canonicalize``, for SQL predicates that compare stored
+    ``speaker_id`` columns against a search target: historical ledger rows
+    keep the merged source's id (canonicalization is presentation, never a
+    rewrite), so "attributed to X" must match X plus every tombstone that
+    canonicalizes into X — chain-safe, like the reader side. The input is
+    itself canonicalized first, so a stale reference to a since-merged
+    speaker resolves to the same set as its target.
+    """
+    mapping = merge_map(session)
+    target = canonicalize(speaker_id, mapping)
+    return {target} | {
+        source for source in mapping if canonicalize(source, mapping) == target
+    }
 
 
 @dataclass(frozen=True)

@@ -17,19 +17,24 @@ import base64
 import enum
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
-from sqlalchemy import and_, func, or_
+from markupsafe import Markup, escape
+from sqlalchemy import ColumnElement, and_, case, func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import (
     label_count,
+    speaker_attributed_exists,
     unresolved_label_count,
     unresolved_label_exists,
 )
-from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.db.models import MediaItem, PipelineRun, RunStatus, TranscriptSegment
+from voxint.db.search import ts_headline, ts_query, ts_vector
+from voxint.speakers.roster import alias_ids
 
 
 class ReviewFilter(enum.StrEnum):
@@ -75,6 +80,73 @@ class Cursor:
 
 
 @dataclass(frozen=True)
+class SearchFilters:
+    """The search facets, all optional and AND-composed with status/review."""
+
+    q: str | None = None
+    speaker_id: uuid.UUID | None = None
+    source: str | None = None
+    created_from: date | None = None
+    created_to: date | None = None
+
+    def active(self) -> bool:
+        return any(
+            (self.q, self.speaker_id, self.source, self.created_from, self.created_to)
+        )
+
+
+def parse_search_filters(
+    *,
+    q: str | None,
+    speaker: str | None,
+    source: str | None,
+    created_from: str | None,
+    created_to: str | None,
+) -> SearchFilters:
+    """Blank/absent values mean 'off', mirroring the status/review parsers."""
+    speaker_id: uuid.UUID | None = None
+    if speaker not in (None, ""):
+        try:
+            speaker_id = uuid.UUID(speaker)
+        except ValueError as exc:
+            raise ValueError(f"invalid speaker id {speaker!r}") from exc
+
+    def parse_date(raw: str | None, name: str) -> date | None:
+        if not raw:
+            return None
+        try:
+            parsed = date.fromisoformat(raw)
+        except ValueError as exc:
+            raise ValueError(f"invalid {name} date {raw!r}") from exc
+        if parsed == date.max:
+            # date.max + 1 day (the exclusive upper bound) would overflow with
+            # an ArithmeticError the route's ValueError→422 mapping misses.
+            raise ValueError(f"invalid {name} date {raw!r}")
+        return parsed
+
+    return SearchFilters(
+        q=(q.strip() or None) if q is not None else None,
+        speaker_id=speaker_id,
+        source=source if source not in (None, "") else None,
+        created_from=parse_date(created_from, "created_from"),
+        created_to=parse_date(created_to, "created_to"),
+    )
+
+
+def _escape_like(fragment: str) -> str:
+    """Escape LIKE metacharacters so operator input is a literal substring."""
+    return fragment.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@dataclass(frozen=True)
+class Snippet:
+    """One highlighted hit fragment for a run — pre-escaped, template-safe."""
+
+    html: Markup
+    start_seconds: float
+
+
+@dataclass(frozen=True)
 class RunListItem:
     """One row of the browser — everything the template renders per run."""
 
@@ -86,6 +158,7 @@ class RunListItem:
     label_count: int
     claim_live: bool
     claimed_by: str | None
+    snippet: Snippet | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +192,7 @@ def runs_url(
     *,
     status: RunStatus | None = None,
     review: ReviewFilter | None = None,
+    filters: SearchFilters | None = None,
     cursor: Cursor | None = None,
 ) -> str:
     """Build a ``/runs`` URL preserving the active filters (+ optional cursor)."""
@@ -127,9 +201,104 @@ def runs_url(
         params.append(("status", status.value))
     if review is not None:
         params.append(("review", review.value))
+    if filters is not None:
+        if filters.q is not None:
+            params.append(("q", filters.q))
+        if filters.speaker_id is not None:
+            params.append(("speaker", str(filters.speaker_id)))
+        if filters.source is not None:
+            params.append(("source", filters.source))
+        if filters.created_from is not None:
+            params.append(("created_from", filters.created_from.isoformat()))
+        if filters.created_to is not None:
+            params.append(("created_to", filters.created_to.isoformat()))
     if cursor is not None:
         params.append(("cursor", cursor.encode()))
     return "/runs" + (f"?{urlencode(params)}" if params else "")
+
+
+# ts_headline sentinels: ASCII markers no transcript should contain. If one
+# ever does, the failure mode is a stray highlight in already-escaped text —
+# never markup injection, because escaping happens before substitution.
+_START_SEL = "[[voxint-hit[["
+_STOP_SEL = "]]voxint-hit]]"
+_HEADLINE_OPTIONS = (
+    f"StartSel={_START_SEL}, StopSel={_STOP_SEL}, "
+    "MaxWords=18, MinWords=6, MaxFragments=2, FragmentDelimiter=\" … \""
+)
+
+
+def _render_headline(fragment: str) -> Markup:
+    """Escape the whole ts_headline output, THEN promote sentinels to <mark>.
+
+    ts_headline emits the document text verbatim around its selectors; a
+    transcript can contain hostile markup, so it must never reach the template
+    trusted. Escaping first makes the sentinel substitution the only source of
+    live HTML.
+    """
+    escaped = str(escape(fragment))
+    return Markup(
+        escaped.replace(str(escape(_START_SEL)), "<mark>").replace(
+            str(escape(_STOP_SEL)), "</mark>"
+        )
+    )
+
+
+def _segment_matches(tsq: ColumnElement[Any]) -> ColumnElement[bool]:
+    """The one match predicate both the run filter and the snippet query share.
+
+    Both text variants, OR'd — never coalesced — so the filter and snippet
+    paths cannot drift apart on which segments count as hits.
+    """
+    return or_(
+        ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq),
+        ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq),
+    )
+
+
+def _snippets_for(
+    session: Session, run_ids: list[uuid.UUID], q: str
+) -> dict[uuid.UUID, Snippet]:
+    """One highlighted hit per displayed run — the first matching segment.
+
+    Bounded work: DISTINCT ON over only the page's run ids, so ts_headline
+    runs on at most page_size short segments. "First by segment_index", not
+    "best" — there is no ranking pre-1.0. The headline is computed over the
+    text variant that actually matched, preferring enhanced (the variant the
+    reader sees in the workbench) when both do.
+    """
+    if not run_ids:
+        return {}
+    tsq = ts_query(q)
+    enhanced_matches = ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq)
+    headline = sa_select(
+        TranscriptSegment.pipeline_run_id,
+        TranscriptSegment.start_seconds,
+        case(
+            (
+                enhanced_matches,
+                ts_headline(
+                    TranscriptSegment.enhanced_text, tsq, _HEADLINE_OPTIONS
+                ),
+            ),
+            else_=ts_headline(
+                TranscriptSegment.raw_text, tsq, _HEADLINE_OPTIONS
+            ),
+        ).label("fragment"),
+    ).where(
+        TranscriptSegment.pipeline_run_id.in_(run_ids),
+        _segment_matches(tsq),
+    )
+    stmt = headline.distinct(TranscriptSegment.pipeline_run_id).order_by(
+        TranscriptSegment.pipeline_run_id, TranscriptSegment.segment_index
+    )
+    return {
+        row.pipeline_run_id: Snippet(
+            html=_render_headline(row.fragment),
+            start_seconds=row.start_seconds,
+        )
+        for row in session.execute(stmt)
+    }
 
 
 def list_runs(
@@ -139,6 +308,7 @@ def list_runs(
     review: ReviewFilter | None,
     cursor: Cursor | None,
     page_size: int,
+    filters: SearchFilters | None = None,
 ) -> RunsPage:
     """One bounded, newest-first keyset page of runs matching the filters."""
     claim_live = and_(
@@ -181,6 +351,41 @@ def list_runs(
     elif review is ReviewFilter.CLAIMED:
         stmt = stmt.where(claim_live)
 
+    # Search facets: plain AND-composed predicates, applied before the keyset
+    # clause so pagination walks exactly the filtered set.
+    if filters is not None and filters.q is not None:
+        stmt = stmt.where(
+            sa_select(1)
+            .where(
+                TranscriptSegment.pipeline_run_id == PipelineRun.id,
+                _segment_matches(ts_query(filters.q)),
+            )
+            .correlate(PipelineRun)
+            .exists()
+        )
+    if filters is not None and filters.speaker_id is not None:
+        stmt = stmt.where(
+            speaker_attributed_exists(
+                PipelineRun.id, alias_ids(session, filters.speaker_id)
+            )
+        )
+    if filters is not None and filters.source is not None:
+        stmt = stmt.where(
+            MediaItem.source_path.ilike(f"%{_escape_like(filters.source)}%", escape="\\")
+        )
+    if filters is not None and filters.created_from is not None:
+        stmt = stmt.where(
+            PipelineRun.created_at
+            >= datetime.combine(filters.created_from, datetime.min.time(), tzinfo=UTC)
+        )
+    if filters is not None and filters.created_to is not None:
+        stmt = stmt.where(
+            PipelineRun.created_at
+            < datetime.combine(
+                filters.created_to + timedelta(days=1), datetime.min.time(), tzinfo=UTC
+            )
+        )
+
     if cursor is not None:
         stmt = stmt.where(
             or_(
@@ -195,6 +400,11 @@ def list_runs(
     rows = session.execute(stmt).all()
     has_more = len(rows) > page_size
     rows = rows[:page_size]
+    snippets = (
+        _snippets_for(session, [row.id for row in rows], filters.q)
+        if filters is not None and filters.q is not None
+        else {}
+    )
     items = [
         RunListItem(
             run_id=row.id,
@@ -205,6 +415,7 @@ def list_runs(
             label_count=row.label_count,
             claim_live=row.claim_live,
             claimed_by=row.review_claimed_by if row.claim_live else None,
+            snippet=snippets.get(row.id),
         )
         for row in rows
     ]
