@@ -18,10 +18,11 @@ import enum
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from urllib.parse import urlencode
 
 from markupsafe import Markup, escape
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import ColumnElement, and_, case, func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
@@ -114,12 +115,17 @@ def parse_search_filters(
         if not raw:
             return None
         try:
-            return date.fromisoformat(raw)
+            parsed = date.fromisoformat(raw)
         except ValueError as exc:
             raise ValueError(f"invalid {name} date {raw!r}") from exc
+        if parsed == date.max:
+            # date.max + 1 day (the exclusive upper bound) would overflow with
+            # an ArithmeticError the route's ValueError→422 mapping misses.
+            raise ValueError(f"invalid {name} date {raw!r}")
+        return parsed
 
     return SearchFilters(
-        q=q if q not in (None, "") else None,
+        q=(q.strip() or None) if q is not None else None,
         speaker_id=speaker_id,
         source=source if source not in (None, "") else None,
         created_from=parse_date(created_from, "created_from"),
@@ -238,6 +244,18 @@ def _render_headline(fragment: str) -> Markup:
     )
 
 
+def _segment_matches(tsq: ColumnElement[Any]) -> ColumnElement[bool]:
+    """The one match predicate both the run filter and the snippet query share.
+
+    Both text variants, OR'd — never coalesced — so the filter and snippet
+    paths cannot drift apart on which segments count as hits.
+    """
+    return or_(
+        ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq),
+        ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq),
+    )
+
+
 def _snippets_for(
     session: Session, run_ids: list[uuid.UUID], q: str
 ) -> dict[uuid.UUID, Snippet]:
@@ -253,7 +271,6 @@ def _snippets_for(
         return {}
     tsq = ts_query(q)
     enhanced_matches = ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq)
-    raw_matches = ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq)
     headline = sa_select(
         TranscriptSegment.pipeline_run_id,
         TranscriptSegment.start_seconds,
@@ -270,7 +287,7 @@ def _snippets_for(
         ).label("fragment"),
     ).where(
         TranscriptSegment.pipeline_run_id.in_(run_ids),
-        or_(raw_matches, enhanced_matches),
+        _segment_matches(tsq),
     )
     stmt = headline.distinct(TranscriptSegment.pipeline_run_id).order_by(
         TranscriptSegment.pipeline_run_id, TranscriptSegment.segment_index
@@ -337,15 +354,11 @@ def list_runs(
     # Search facets: plain AND-composed predicates, applied before the keyset
     # clause so pagination walks exactly the filtered set.
     if filters is not None and filters.q is not None:
-        tsq = ts_query(filters.q)
         stmt = stmt.where(
             sa_select(1)
             .where(
                 TranscriptSegment.pipeline_run_id == PipelineRun.id,
-                or_(
-                    ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq),
-                    ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq),
-                ),
+                _segment_matches(ts_query(filters.q)),
             )
             .correlate(PipelineRun)
             .exists()

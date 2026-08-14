@@ -11,7 +11,7 @@ escaping, and an EXPLAIN assertion that the compiled predicate can use the
 import html
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.conftest import seed_onboarded
 from tests.integration.test_runs_api import make_run
 from voxint.api.app import create_app
-from voxint.api.runs_query import SearchFilters, list_runs
+from voxint.api.runs_query import ReviewFilter, SearchFilters, list_runs
 from voxint.config import Settings
 from voxint.db.models import RunStatus, Speaker, TranscriptSegment
 from voxint.db.search import ts_query, ts_vector
@@ -54,16 +54,25 @@ def search(
     q: str | None = None,
     speaker_id: uuid.UUID | None = None,
     source: str | None = None,
+    created_from: date | None = None,
+    created_to: date | None = None,
     status: RunStatus | None = None,
+    review: ReviewFilter | None = None,
     page_size: int = 50,
 ) -> list[uuid.UUID]:
     page = list_runs(
         session,
         status=status,
-        review=None,
+        review=review,
         cursor=None,
         page_size=page_size,
-        filters=SearchFilters(q=q, speaker_id=speaker_id, source=source),
+        filters=SearchFilters(
+            q=q,
+            speaker_id=speaker_id,
+            source=source,
+            created_from=created_from,
+            created_to=created_to,
+        ),
     )
     return [item.run_id for item in page.items]
 
@@ -177,6 +186,56 @@ class TestSpeakerAndCompositionFacets:
                 speaker_id=speaker_id,
                 status=RunStatus.COMPLETED,
             ) == [match]
+
+    def test_date_bounds_are_utc_day_inclusive_exclusive(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            day = date(2026, 8, 10)
+            at_from_midnight = make_run(
+                session, created_at=datetime(2026, 8, 10, 0, 0, 0, tzinfo=UTC)
+            )
+            late_on_to_day = make_run(
+                session, created_at=datetime(2026, 8, 12, 23, 59, 59, tzinfo=UTC)
+            )
+            before = make_run(
+                session, created_at=datetime(2026, 8, 9, 23, 59, 59, tzinfo=UTC)
+            )
+            after = make_run(
+                session, created_at=datetime(2026, 8, 13, 0, 0, 0, tzinfo=UTC)
+            )
+            hits = search(
+                session, created_from=day, created_to=date(2026, 8, 12)
+            )
+            assert at_from_midnight in hits
+            assert late_on_to_day in hits
+            assert before not in hits
+            assert after not in hits
+
+    def test_review_composes_with_speaker_facet(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # COMPLETED run with unresolved label A + grounded assign on label B:
+        # review=needed AND speaker=X must return it; review=resolved must not.
+        with session_factory() as session:
+            run = make_run(
+                session,
+                labels=["SPEAKER_00", "SPEAKER_01"],
+                grounded=["SPEAKER_01"],
+            )
+            speaker_id = session.execute(
+                text(
+                    "SELECT speaker_id FROM speaker_assignments"
+                    " WHERE pipeline_run_id = :r"
+                ),
+                {"r": run},
+            ).scalar_one()
+            assert search(
+                session, speaker_id=speaker_id, review=ReviewFilter.NEEDED
+            ) == [run]
+            assert search(
+                session, speaker_id=speaker_id, review=ReviewFilter.RESOLVED
+            ) == []
 
     def test_source_facet_is_literal_substring(
         self, session_factory: sessionmaker[Session]
@@ -332,15 +391,23 @@ class TestRoute:
         assert "Merged Away" not in page
 
 
+@pytest.mark.parametrize(
+    ("column_name", "index_name"),
+    [
+        ("raw_text", "transcript_segments_raw_fts_idx"),
+        ("enhanced_text", "transcript_segments_enhanced_fts_idx"),
+    ],
+)
 def test_fts_predicate_uses_expression_indexes(
-    session_factory: sessionmaker[Session],
+    session_factory: sessionmaker[Session], column_name: str, index_name: str
 ) -> None:
-    """Guard expression drift: the compiled predicate must be index-eligible."""
+    """Guard expression drift: the compiled predicates must be index-eligible."""
     with session_factory() as session:
         make_run(session, segments=[(None, "explainable condenser", "polished text")])
         session.execute(text("SET enable_seqscan = off"))
         tsq = ts_query("condenser")
-        predicate = ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq)
+        column = getattr(TranscriptSegment, column_name)
+        predicate = ts_vector(column).bool_op("@@")(tsq)
         compiled = predicate.compile(
             dialect=session.bind.dialect,  # type: ignore[union-attr]
             compile_kwargs={"literal_binds": True},
@@ -351,4 +418,4 @@ def test_fts_predicate_uses_expression_indexes(
                 f"WHERE {compiled}"
             )
         ).scalar_one()
-        assert "transcript_segments_raw_fts_idx" in json.dumps(plan)
+        assert index_name in json.dumps(plan)

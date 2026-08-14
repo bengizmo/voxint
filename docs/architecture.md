@@ -63,7 +63,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0007)
+## Data model (alembic revisions 0001–0008)
 
 | Table | Role |
 |---|---|

@@ -63,11 +63,19 @@ class TestParseSearchFilters:
             {"speaker": "not-a-uuid"},
             {"created_from": "2026-13-01"},
             {"created_to": "yesterday"},
+            # date.max would overflow the exclusive +1-day upper bound with an
+            # ArithmeticError the route's ValueError→422 mapping misses.
+            {"created_to": "9999-12-31"},
+            {"created_from": "9999-12-31"},
         ],
     )
     def test_invalid_values_raise(self, overrides: dict[str, str]) -> None:
         with pytest.raises(ValueError, match="invalid"):
             parse(**overrides)
+
+    def test_whitespace_only_q_means_off(self) -> None:
+        assert parse(q="   ") == SearchFilters()
+        assert parse(q="  compressor  ").q == "compressor"
 
 
 class TestEscapeLike:

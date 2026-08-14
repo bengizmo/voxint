@@ -62,11 +62,11 @@
   <label>Source
     <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
   </label>
-  <label>From
+  <label>From (UTC)
     <input type="date" name="created_from"
            value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
   </label>
-  <label>To
+  <label>To (UTC)
     <input type="date" name="created_to"
            value="{{ filters.created_to.isoformat() if filters.created_to else "" }}">
   </label>
