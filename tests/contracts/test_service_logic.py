@@ -399,6 +399,90 @@ class TestDeviceCascade:
         monkeypatch.setattr(diarizer, "probe_device", lambda name: True)
         assert diarizer.select_device() == "cpu"
 
+    # ---- DIARIZER_DEVICE forcing (no silent fallback, plan decision 6) ----
+
+    def test_forced_mps_probed_and_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Case-insensitive on purpose: an operator writing MPS must not get
+        # a confusing "not one of" error.
+        monkeypatch.setenv("DIARIZER_DEVICE", "MPS")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=True)
+        )
+        probed: list[str] = []
+
+        def probe(name: str) -> bool:
+            probed.append(name)
+            return True
+
+        monkeypatch.setattr(diarizer, "probe_device", probe)
+        assert diarizer.select_device() == "mps"
+        assert probed == ["mps"]
+
+    def test_forced_mps_without_backend_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DIARIZER_DEVICE", "mps")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=True, mps=False)
+        )
+
+        def boom(name: str) -> bool:
+            raise AssertionError("unavailable backend must fail before the probe")
+
+        monkeypatch.setattr(diarizer, "probe_device", boom)
+        with pytest.raises(RuntimeError, match="mps backend"):
+            diarizer.select_device()
+
+    def test_forced_cuda_without_backend_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DIARIZER_DEVICE", "cuda")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=True)
+        )
+        with pytest.raises(RuntimeError, match="cuda backend"):
+            diarizer.select_device()
+
+    def test_forced_mps_failing_probe_raises_not_falls_back(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # THE case the forcing exists for: a backend that is "available" but
+        # computes garbage must abort the service, not demote to CPU while an
+        # A/B measurement believes it ran on MPS.
+        monkeypatch.setenv("DIARIZER_DEVICE", "mps")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=True)
+        )
+        monkeypatch.setattr(diarizer, "probe_device", lambda name: False)
+        with pytest.raises(RuntimeError, match="sanity probe"):
+            diarizer.select_device()
+
+    def test_forced_cpu_never_probed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIARIZER_DEVICE", "cpu")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=True, mps=True)
+        )
+
+        def boom(name: str) -> bool:
+            raise AssertionError("forced cpu must not be probed")
+
+        monkeypatch.setattr(diarizer, "probe_device", boom)
+        assert diarizer.select_device() == "cpu"
+
+    def test_unknown_forced_value_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("DIARIZER_DEVICE", "tpu")
+        with pytest.raises(RuntimeError, match="auto\\|cuda\\|mps\\|cpu"):
+            diarizer.select_device()
+
+    def test_blank_env_means_auto(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Compose-style ${DIARIZER_DEVICE:-} passes "" through — that must
+        # run the normal cascade, not error.
+        monkeypatch.setenv("DIARIZER_DEVICE", "")
+        monkeypatch.setitem(
+            sys.modules, "torch", self._fake_torch(cuda=False, mps=False)
+        )
+        assert diarizer.select_device() == "cpu"
+
 
 class _ProbeTensor:
     """numpy-backed stand-in for torch tensors inside probe_device.

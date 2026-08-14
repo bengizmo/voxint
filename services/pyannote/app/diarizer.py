@@ -72,13 +72,53 @@ def probe_device(device_name: str) -> bool:
         return False
 
 
+def _device_backend_available(name: str) -> bool:
+    import torch
+
+    if name == "cuda":
+        return bool(torch.cuda.is_available())
+    if name == "mps":
+        mps_backend = getattr(torch.backends, "mps", None)
+        return mps_backend is not None and bool(mps_backend.is_available())
+    return name == "cpu"
+
+
 def select_device() -> str:
     """``cuda → mps → cpu`` cascade, each candidate gated by ``probe_device``.
 
     MPS is inert inside Linux containers (never available) — the branch exists
     for the Apple host-process path, where the same app code runs in a native
     venv. CPU is the unconditional floor and is not probed.
+
+    ``DIARIZER_DEVICE`` (default ``auto``) forces a device instead of
+    cascading: a forced device must have its backend available AND pass the
+    tensor-op probe, else the service refuses to start. No silent fallback —
+    a forced-MPS run that quietly lands on CPU would poison an A/B parity
+    measurement while healthz still looks green (plan decision 6).
     """
+    forced = (os.getenv("DIARIZER_DEVICE") or "auto").strip().lower()
+    if forced not in ("auto", "cuda", "mps", "cpu"):
+        raise RuntimeError(
+            f"DIARIZER_DEVICE={forced!r} is not one of auto|cuda|mps|cpu"
+        )
+    if forced == "cpu":
+        # The unconditional floor, same as the cascade: never probed.
+        return "cpu"
+    if forced != "auto":
+        if not _device_backend_available(forced):
+            raise RuntimeError(
+                f"DIARIZER_DEVICE={forced} was forced but the {forced} backend "
+                "is not available in this torch build/host — refusing to fall "
+                "back silently (use auto for the probe-gated cascade)"
+            )
+        if not probe_device(forced):
+            raise RuntimeError(
+                f"DIARIZER_DEVICE={forced} was forced but {forced} failed the "
+                "tensor-op sanity probe — refusing to run on a device that "
+                "crashes or computes wrong output"
+            )
+        return forced
+
     import torch
 
     candidates = []
