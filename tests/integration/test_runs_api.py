@@ -457,6 +457,39 @@ def test_run_detail_unknown_run_404(client: TestClient) -> None:
     assert client.get(f"/runs/{uuid.uuid4()}").status_code == 404
 
 
+def _set_current_stage(
+    session_factory: sessionmaker[Session], run_id: uuid.UUID, stage: str
+) -> None:
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.current_stage = stage
+        session.commit()
+
+
+def test_failed_model_stage_shows_service_hint(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A run failed at a model-service stage gets static guidance (start a
+    # compute tier, then requeue) — no live probe on this page.
+    with session_factory() as session:
+        run_id = make_run(session, status=RunStatus.FAILED, labels=["S0"])
+    _set_current_stage(session_factory, run_id, "transcribe")
+    body = client.get(f"/runs/{run_id}").text
+    assert "needs the model services" in body
+    assert "compose.cpu.yaml" in body and "compose.gpu.yaml" in body
+
+
+def test_failed_non_model_stage_has_no_service_hint(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, status=RunStatus.FAILED, labels=["S0"])
+    _set_current_stage(session_factory, run_id, "acquire")
+    body = client.get(f"/runs/{run_id}").text
+    assert "needs the model services" not in body
+
+
 def test_run_detail_present_only_links(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

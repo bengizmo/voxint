@@ -35,6 +35,17 @@ recovers — no action needed.</p>
   <button type="submit">Requeue</button>
   <span class="muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
 </form>
+{% if run.current_stage in ("transcribe", "diarize_embed") %}
+{# Static guidance only — no live probe on this page (a health check here would
+   add model-service latency to every failed-run view and flap with service
+   health; the setup wizard's SERVICES step owns live reachability). #}
+<p class="muted">This stage needs the model services (ASR / diarizer / embedder).
+If they aren't running, start a compute tier —
+<code>docker compose -f compose.yaml -f compose.gpu.yaml up -d</code> (NVIDIA GPU) or
+<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU;
+needs <code>HF_TOKEN</code> in <code>.env</code> either way) — wait for them to come
+up, then requeue.</p>
+{% endif %}
 {% endif %}
 
 <p>

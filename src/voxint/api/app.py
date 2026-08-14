@@ -10,6 +10,7 @@ appends; the newest ruling per label wins at read time).
 """
 
 import logging
+import os
 import secrets
 import uuid
 from collections.abc import Iterator
@@ -599,6 +600,10 @@ def _register_routes(app: FastAPI) -> None:
             # to pay on every wizard GET. Best-effort; probe_services never raises.
             settings: Settings = request.app.state.settings
             context["services"] = probe_services(settings)
+            # Presence only, never the value: the pyannote weights are HF-gated,
+            # so a missing token is the usual reason the diarizer can't start
+            # (both compute overlays refuse to interpolate without HF_TOKEN).
+            context["hf_token_set"] = bool(os.environ.get("HF_TOKEN"))
         return templates.TemplateResponse(request, "setup.html", context)
 
     def _setup_redirect(step: WizardStep) -> RedirectResponse:

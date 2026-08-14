@@ -122,8 +122,8 @@
 
 {% elif step.value == "services" %}
   <h1>Model services</h1>
-  <p>Voxint's transcription, diarization, and speaker-embedding run as separate GPU
-     services. Here's whether each is reachable right now:</p>
+  <p>Voxint's transcription, diarization, and speaker-embedding run as separate model
+     services (GPU or CPU tier). Here's whether each is reachable right now:</p>
   {% for svc in services %}
   <div class="svc">
     <span class="dot {{ 'up' if svc.up else 'down' }}"></span>
@@ -131,9 +131,19 @@
     <span class="muted">{{ svc.detail }}{% if svc.latency_ms is not none %} · {{ "%.0f"|format(svc.latency_ms) }} ms{% endif %}</span>
   </div>
   {% endfor %}
-  <p class="muted">If a service is down, start the GPU overlay (see the README's GPU
-     services section). This check is advisory — you can finish setup regardless, and a
-     run simply waits on any service it needs.</p>
+  <div class="svc">
+    <span class="dot {{ 'up' if hf_token_set else 'down' }}"></span>
+    <strong>Hugging Face token</strong>
+    <span class="muted">{% if hf_token_set %}set{% else %}not set — diarization unavailable: the
+      pyannote weights are HF-gated, and neither compute overlay starts without
+      <code>HF_TOKEN</code> in <code>.env</code>{% endif %}</span>
+  </div>
+  <p class="muted">If a service is down, start the model services — the GPU overlay
+     (<code>compose.gpu.yaml</code>) or, with no NVIDIA GPU, the CPU overlay
+     (<code>compose.cpu.yaml</code>); see the README's quickstart. This check is advisory —
+     you can finish setup regardless. But a run submitted while a service it needs is down
+     will retry with backoff for a while and then land <strong>failed</strong>; once the
+     services are up, requeue it from the run's page.</p>
   <div class="actions">
     <a href="/setup?step=services">Re-check</a>
     <a href="/setup?step=finish">Continue →</a>

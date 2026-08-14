@@ -1,4 +1,4 @@
-"""Best-effort readiness probe of the GPU model services (first-run wizard step 5).
+"""Best-effort readiness probe of the model services (first-run wizard step 5).
 
 The wizard shows the operator, in plain language, whether transcription
 (whisper), diarization (pyannote), and speaker embedding (titanet) are reachable,
@@ -47,7 +47,7 @@ class ServiceHealth:
 def probe_services(
     settings: Settings, *, client: httpx.Client | None = None
 ) -> list[ServiceHealth]:
-    """Probe each GPU service's ``/healthz``. Best-effort; never raises.
+    """Probe each model service's ``/healthz``. Best-effort; never raises.
 
     Pass ``client`` to inject a transport in tests (the caller then owns it);
     otherwise a short-timeout client is created and closed here. Probes run

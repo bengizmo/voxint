@@ -276,6 +276,45 @@ def test_get_services_renders_probe_results(
     assert "speaker embedding" in body
 
 
+def test_services_step_reports_missing_hf_token(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    client = make_client(
+        session_factory,
+        media_root,
+        asr_url="http://127.0.0.1:1",
+        diarizer_url="http://127.0.0.1:1",
+        embedder_url="http://127.0.0.1:1",
+    )
+    body = client.get("/setup?step=services").text
+    assert "Hugging Face token" in body
+    assert "not set" in body
+    # Truthful failure semantics replaced the old "simply waits" claim.
+    assert "simply waits" not in body
+    assert "requeue" in body
+
+
+def test_services_step_reports_hf_token_present_without_leaking_it(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("HF_TOKEN", "hf_SECRETVALUE")
+    client = make_client(
+        session_factory,
+        media_root,
+        asr_url="http://127.0.0.1:1",
+        diarizer_url="http://127.0.0.1:1",
+        embedder_url="http://127.0.0.1:1",
+    )
+    body = client.get("/setup?step=services").text
+    assert "Hugging Face token" in body
+    assert "hf_SECRETVALUE" not in body  # presence only, never the value
+
+
 # ------------------------------------------------------------------ finish step
 
 
