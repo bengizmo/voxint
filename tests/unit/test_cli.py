@@ -269,3 +269,60 @@ def test_watch_rejects_bad_uuid_via_argparse() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["watch", "not-a-uuid"])
     assert exc.value.code == 2
+
+
+def test_watch_rejects_nan_interval_before_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    # argparse(float) accepts nan/inf; nan interval would reach time.sleep(nan)
+    # and raise mid-loop — reject it up front (before any DB access).
+    _block_db(monkeypatch)
+    assert main(["watch", str(uuid.uuid4()), "--interval", "nan"]) == 2
+
+
+def test_watch_rejects_inf_timeout_before_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    # inf/nan timeout would silently disable the 124 deadline (remaining <= 0
+    # never true) — the headline watch contract. Reject it.
+    _block_db(monkeypatch)
+    assert main(["watch", str(uuid.uuid4()), "--timeout", "inf"]) == 2
+    assert main(["watch", str(uuid.uuid4()), "--timeout", "nan"]) == 2
+
+
+def test_poll_tty_redraws_line_and_terminates_with_newline() -> None:
+    # On a TTY the progress line is redrawn in place (\r + clear) and the final
+    # state ends the line with a newline.
+    code, buf, _polls = _poll([("completed", "finalize")], isatty=True)
+    assert code == 0
+    joined = "".join(buf)
+    assert "\r" in joined
+    assert joined.endswith("\n")
+
+
+def test_poll_unknown_status_notes_once_then_times_out() -> None:
+    # A status this CLI doesn't know keeps polling (forward-compat) but says so
+    # exactly once, rather than waiting silently to the timeout.
+    code, buf, _polls = _poll([("weird_new_status", "transcribe")], timeout=1.0, interval=0.5)
+    assert code == 124
+    notes = [line for line in buf if "unrecognized run status" in line]
+    assert len(notes) == 1
+
+
+def test_watch_keyboardinterrupt_returns_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Ctrl-C during the poll maps to 130 (the shell's SIGINT convention); the
+    # engine is still disposed on the way out.
+    import voxint.cli as cli
+    import voxint.db.session as db_session
+
+    disposed: list[bool] = []
+
+    class _FakeEngine:
+        def dispose(self) -> None:
+            disposed.append(True)
+
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (_FakeEngine(), 0))
+    monkeypatch.setattr(db_session, "build_session_factory", lambda _e: object())
+
+    def _boom(*_a: object, **_k: object) -> int:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_poll_until_stop", _boom)
+    assert main(["watch", str(uuid.uuid4())]) == 130
+    assert disposed == [True]  # finally still ran

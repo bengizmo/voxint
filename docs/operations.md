@@ -222,9 +222,12 @@ scrape_configs:
       - targets: ["voxint-host:8090"]   # the operator's voxint API address
 ```
 
-Exposed series: `voxint_runs_total{status}`, `voxint_stage_failures_total{stage}`,
-`voxint_stage_duration_seconds{stage}`, `voxint_roster_speakers`,
-`voxint_runs_created_24h` (all gauges — recomputed from the database per scrape).
+Exposed series (all gauges — recomputed from the database per scrape, so none
+carry a counter-style `_total` suffix): `voxint_runs{status}`,
+`voxint_stage_failures{stage}`, `voxint_stage_duration_seconds{stage}` with a
+companion `voxint_stage_duration_attempts{stage}` (so "no finished attempts" is
+distinguishable from a genuinely 0-second average), `voxint_roster_speakers`, and
+`voxint_runs_created_24h`.
 
 ### Exporting transcripts
 

@@ -120,20 +120,40 @@ def test_stats_to_json_zero_fills_every_status_and_serialises() -> None:
 
 def test_render_prometheus_zero_fills_all_series() -> None:
     text = render_prometheus(_sample())
-    # every RunStatus present, absent ones zero-filled
-    assert 'voxint_runs_total{status="completed"} 20' in text
-    assert 'voxint_runs_total{status="cancelled"} 0' in text
+    # every RunStatus present, absent ones zero-filled (gauge — no _total suffix)
+    assert 'voxint_runs{status="completed"} 20' in text
+    assert 'voxint_runs{status="cancelled"} 0' in text
     # every Stage present for failures + durations, zero-filled when absent
-    assert 'voxint_stage_failures_total{stage="transcribe"} 2' in text
-    assert 'voxint_stage_failures_total{stage="finalize"} 0' in text
+    assert 'voxint_stage_failures{stage="transcribe"} 2' in text
+    assert 'voxint_stage_failures{stage="finalize"} 0' in text
     assert 'voxint_stage_duration_seconds{stage="transcribe"} 42.5' in text
     assert 'voxint_stage_duration_seconds{stage="acquire"} 0.0' in text
     assert "voxint_roster_speakers 7" in text
     assert "voxint_runs_created_24h 5" in text
 
 
+def test_render_prometheus_duration_attempts_disambiguate_zero() -> None:
+    # The companion count lets a scrape tell "no finished attempts" (avg 0.0,
+    # attempts 0) from a genuinely instantaneous stage (avg 0.0, attempts > 0).
+    text = render_prometheus(_sample())
+    assert 'voxint_stage_duration_attempts{stage="transcribe"} 18' in text
+    assert 'voxint_stage_duration_attempts{stage="acquire"} 0' in text
+
+
+def test_render_prometheus_uses_gauge_not_total_suffix() -> None:
+    text = render_prometheus(_sample())
+    # gauges recomputed per scrape must not carry the counter `_total` suffix
+    assert "voxint_runs_total" not in text
+    assert "voxint_stage_failures_total" not in text
+
+
 def test_render_prometheus_has_help_type_and_trailing_newline() -> None:
     text = render_prometheus(_sample())
-    assert "# HELP voxint_runs_total" in text
-    assert "# TYPE voxint_runs_total gauge" in text
+    assert "# HELP voxint_runs " in text
+    assert "# TYPE voxint_runs gauge" in text
     assert text.endswith("\n")
+
+
+def test_parse_since_rejects_absurdly_large_window() -> None:
+    with pytest.raises(ValueError, match="too large"):
+        parse_since("999999999999d", now=_NOW)

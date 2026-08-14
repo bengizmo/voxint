@@ -82,8 +82,16 @@ def parse_since(raw: str, *, now: datetime) -> datetime:
     if match is not None:
         amount = int(match.group(1))
         unit = match.group(2)
-        delta = timedelta(hours=amount) if unit == "h" else timedelta(days=amount)
-        return (now - delta).astimezone(UTC)
+        try:
+            # OverflowError can fire either building the timedelta (C-int limits)
+            # or subtracting below datetime.min — a span so large it's a bad value,
+            # not a usable window. Map it to the same sanitized ValueError as any
+            # other unparseable --since (the CLI turns that into exit 2, not a
+            # traceback).
+            delta = timedelta(hours=amount) if unit == "h" else timedelta(days=amount)
+            return (now - delta).astimezone(UTC)
+        except OverflowError as exc:
+            raise ValueError(f"invalid --since {raw!r}: window is too large") from exc
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as exc:
@@ -256,20 +264,22 @@ def render_prometheus(stats: SystemStats) -> str:
     """
     out: list[str] = []
 
-    out.append("# HELP voxint_runs_total Pipeline runs grouped by status.")
-    out.append("# TYPE voxint_runs_total gauge")
+    # Gauges, not counters: these are recomputed from current DB contents each
+    # scrape and can decrease (rows deleted, a requeue clearing a failure), so
+    # they carry no `_total` suffix — that convention is reserved for monotonic
+    # counters and `promtool check metrics` flags it on a gauge.
+    out.append("# HELP voxint_runs Pipeline runs grouped by status.")
+    out.append("# TYPE voxint_runs gauge")
     for status in RunStatus:
         count = stats.status_counts.get(status.value, 0)
-        out.append(f'voxint_runs_total{{status="{_escape_label(status.value)}"}} {count}')
+        out.append(f'voxint_runs{{status="{_escape_label(status.value)}"}} {count}')
 
-    out.append("# HELP voxint_stage_failures_total Failed stage attempts grouped by stage.")
-    out.append("# TYPE voxint_stage_failures_total gauge")
+    out.append("# HELP voxint_stage_failures Failed stage attempts grouped by stage.")
+    out.append("# TYPE voxint_stage_failures gauge")
     failures = {f.stage: f.attempt_count for f in stats.stage_failure_counts}
     for stage in Stage:
         count = failures.get(stage.value, 0)
-        out.append(
-            f'voxint_stage_failures_total{{stage="{_escape_label(stage.value)}"}} {count}'
-        )
+        out.append(f'voxint_stage_failures{{stage="{_escape_label(stage.value)}"}} {count}')
 
     out.append(
         "# HELP voxint_stage_duration_seconds Average finished-attempt duration per stage."
@@ -280,6 +290,20 @@ def render_prometheus(stats: SystemStats) -> str:
         avg = durations.get(stage.value, 0.0)
         out.append(
             f'voxint_stage_duration_seconds{{stage="{_escape_label(stage.value)}"}} {avg}'
+        )
+
+    # A companion count so a scrape can tell "no finished attempts" (0 samples,
+    # avg zero-filled above) from "a genuinely instantaneous stage" — the average
+    # alone conflates them.
+    out.append(
+        "# HELP voxint_stage_duration_attempts Finished attempts behind each duration average."
+    )
+    out.append("# TYPE voxint_stage_duration_attempts gauge")
+    attempts = {d.stage: d.attempt_count for d in stats.stage_durations}
+    for stage in Stage:
+        n = attempts.get(stage.value, 0)
+        out.append(
+            f'voxint_stage_duration_attempts{{stage="{_escape_label(stage.value)}"}} {n}'
         )
 
     out.append("# HELP voxint_roster_speakers Enrolled speakers in the roster.")

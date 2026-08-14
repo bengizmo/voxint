@@ -430,14 +430,21 @@ def test_watch_sees_committed_status_flip(
         session.commit()
         run_id = run.id
 
+    errors: list[BaseException] = []
+
     def flip() -> None:
-        time.sleep(0.4)
-        with session_factory() as s:
-            row = s.get(PipelineRun, run_id)
-            assert row is not None
-            row.status = RunStatus.COMPLETED.value
-            row.current_stage = None
-            s.commit()
+        # Capture any failure so it surfaces as a clear assertion below instead
+        # of an opaque 124 timeout in the main thread.
+        try:
+            time.sleep(0.4)
+            with session_factory() as s:
+                row = s.get(PipelineRun, run_id)
+                assert row is not None
+                row.status = RunStatus.COMPLETED.value
+                row.current_stage = None
+                s.commit()
+        except BaseException as exc:  # re-raised in the main thread
+            errors.append(exc)
 
     worker = threading.Thread(target=flip)
     worker.start()
@@ -446,6 +453,8 @@ def test_watch_sees_committed_status_flip(
         code = main(["watch", str(run_id), "--interval", "0.1", "--timeout", "10"])
     finally:
         worker.join()
+    if errors:
+        raise errors[0]
     assert code == 0
     assert "completed" in capsys.readouterr().err
 
@@ -457,3 +466,80 @@ def test_watch_missing_run_exits_two(
     code = main(["watch", str(uuid.uuid4()), "--interval", "0.1", "--timeout", "1"])
     assert code == 2
     assert "no run" in capsys.readouterr().err
+
+
+def test_collect_stats_query_semantics(session_factory: sessionmaker[Session]) -> None:
+    """Direct query checks the pure renderers can't catch: tz-aware cutoff
+    inclusivity, negative-duration exclusion, and empty-stage behavior."""
+    from datetime import UTC, datetime, timedelta
+
+    from voxint.api.stats_query import collect_stats
+
+    now = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    cutoff = now - timedelta(hours=24)  # since = 2026-08-13T12:00:00Z
+
+    with session_factory() as session:
+        # Three runs straddling the cutoff: strictly before, exactly on, after.
+        for created, tag in [
+            (cutoff - timedelta(seconds=1), "before"),
+            (cutoff, "on"),
+            (cutoff + timedelta(seconds=1), "after"),
+        ]:
+            media = MediaItem(source_path=f"incoming/{tag}.wav")
+            session.add(media)
+            session.flush()
+            run = PipelineRun(
+                media_item_id=media.id, status=RunStatus.COMPLETED.value, created_at=created
+            )
+            session.add(run)
+            session.flush()
+            # A negative-duration attempt (clock skew) must be excluded from the
+            # average; a normal 4s attempt must be included.
+            base = datetime(2026, 8, 14, 10, 0, 0, tzinfo=UTC)
+            session.add(
+                StageRun(
+                    pipeline_run_id=run.id,
+                    stage=Stage.PREPARE.value,
+                    status=StageStatus.COMPLETED.value,
+                    attempt=1,
+                    started_at=base,
+                    finished_at=base + timedelta(seconds=4),
+                )
+            )
+            session.add(
+                StageRun(
+                    pipeline_run_id=run.id,
+                    stage=Stage.PREPARE.value,
+                    status=StageStatus.FAILED.value,
+                    attempt=2,
+                    started_at=base + timedelta(seconds=10),
+                    finished_at=base,  # finished_at < started_at → excluded
+                )
+            )
+        session.commit()
+
+        stats = collect_stats(session, since=cutoff, now=now)
+
+    # created_at >= since is inclusive: the "on" and "after" runs count, "before" does not.
+    assert stats.runs_created_count == 2
+    # Negative-duration attempts excluded → only the 4s attempts averaged.
+    prepare = {d.stage: d for d in stats.stage_durations}["prepare"]
+    assert prepare.attempt_count == 3  # one valid attempt per run, skew rows dropped
+    assert prepare.avg_seconds == 4.0
+    # Stages with no finished attempts don't appear in the list at all.
+    assert "finalize" not in {d.stage for d in stats.stage_durations}
+
+
+def test_collect_stats_empty_database(session_factory: sessionmaker[Session]) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from voxint.api.stats_query import collect_stats
+
+    now = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+    with session_factory() as session:
+        stats = collect_stats(session, since=now - timedelta(hours=24), now=now)
+    assert stats.status_counts == {}
+    assert stats.stage_durations == ()
+    assert stats.stage_failure_counts == ()
+    assert stats.roster_size == 0
+    assert stats.runs_created_count == 0

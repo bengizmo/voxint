@@ -7,6 +7,7 @@ exception: file-based offline scoring that never touches settings or the DB.
 """
 
 import argparse
+import math
 import sys
 import time
 import uuid
@@ -145,12 +146,18 @@ def _status(args: argparse.Namespace) -> int:
 
 
 def _validate_poll_args(args: argparse.Namespace) -> int | None:
-    """Range-check ``--interval``/``--timeout`` before any DB work. None = ok."""
-    if args.interval <= 0:
-        print("error: --interval must be greater than 0")
+    """Range-check ``--interval``/``--timeout`` before any DB work. None = ok.
+
+    ``argparse(type=float)`` accepts ``nan``/``inf``; both would corrupt the loop
+    (``--timeout nan`` makes ``remaining <= 0`` always False so the 124 deadline
+    never fires; ``--interval nan`` reaches ``time.sleep(nan)`` and raises), reject
+    non-finite values here rather than mid-poll.
+    """
+    if not math.isfinite(args.interval) or args.interval <= 0:
+        print("error: --interval must be a finite number greater than 0")
         return 2
-    if args.timeout < 0:
-        print("error: --timeout must be 0 or greater")
+    if not math.isfinite(args.timeout) or args.timeout < 0:
+        print("error: --timeout must be a finite number 0 or greater")
         return 2
     return None
 
@@ -196,6 +203,7 @@ def _poll_until_stop(
 
     deadline = monotonic() + timeout
     last_line: str | None = None
+    warned_unknown: set[str] = set()
 
     def render(text: str, *, final: bool) -> None:
         nonlocal last_line
@@ -227,6 +235,16 @@ def _poll_until_stop(
         if resolved in stop_exit:
             render(line, final=True)
             return stop_exit[resolved]
+
+        # An unknown status is treated as still-advancing (forward-compatible with
+        # a newer worker writing a status this CLI predates) rather than a stop —
+        # but say so once, so a genuinely corrupt row isn't a silent wait to 124.
+        if resolved is None and status not in warned_unknown:
+            warned_unknown.add(status)
+            if isatty and last_line is not None:
+                write("\n")
+                last_line = None
+            write(f"note: unrecognized run status {status!r}; polling until timeout\n")
 
         render(line, final=False)
         remaining = deadline - monotonic()

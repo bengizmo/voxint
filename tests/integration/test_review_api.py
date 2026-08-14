@@ -433,8 +433,8 @@ def test_metrics_endpoint_renders_prometheus(
     assert resp.headers["content-type"] == "text/plain; version=0.0.4; charset=utf-8"
     body = resp.text
     # A seeded completed run + one enrolled speaker are reflected in the series.
-    assert '# TYPE voxint_runs_total gauge' in body
-    assert 'voxint_runs_total{status="completed"} 1' in body
-    assert 'voxint_runs_total{status="failed"} 0' in body  # zero-filled, never absent
+    assert '# TYPE voxint_runs gauge' in body
+    assert 'voxint_runs{status="completed"} 1' in body
+    assert 'voxint_runs{status="failed"} 0' in body  # zero-filled, never absent
     assert 'voxint_roster_speakers 1' in body
     assert body.endswith("\n")
