@@ -444,26 +444,45 @@ generalizing the ONNX verdict-table pattern above. Reference data for such
 reports comes from `tools/generate_parity_references.py --tier metal
 --out-dir <scratch>` (refuses the committed reference dir).
 
-#### Verdict — metal tier: PENDING (pre-registered bounds; Gate M not yet run)
+#### Verdict — metal tier: PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-14)
+
+Measured on maintainer Apple Silicon hardware (Apple M1 Pro, 16 GB, macOS
+26.5.2), working tree `v0.7.0-12-gc6d6a72`, torch 2.5.0 / pyannote.audio
+3.1.1 / faster-whisper 1.2.1 / CT2 4.8.1 / onnxruntime 1.28.0. Service-lane
+numbers come from `tools/generate_parity_references.py --tier metal`
+(3 repeat runs against the running native services); test-lane numbers from
+the three parity modules, all green.
 
 | Gate | Pre-registered smoke bound | Measured |
 |---|---|---|
-| pyannote speaker count (mps = cpu = cuda ref) | equal | — |
-| pyannote turn boundary drift vs cuda ref | ≤ 0.25 s | — |
-| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.99 / ≥ 0.95 | — |
-| pyannote MPS repeat agreement | ≥ 0.999 | — |
-| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | — |
-| whisper transcript similarity vs cuda ref | ≥ 0.95 | — |
-| whisper segment count / confidence drift | ± 1 / ≤ 0.15 | — |
-| titanet 3-level gate on arm64 CPU EP | existing ratcheted bounds | — |
+| pyannote speaker count (mps = cpu = cuda ref) | equal | equal (3 = 3 = 3, all runs) |
+| pyannote turn boundary drift vs cuda ref | ≤ 0.25 s | 0.000 s (turns identical to ref) |
+| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.99 / ≥ 0.95 | 1.00 / 1.00 (lane pass; service turns exactly match ref) |
+| pyannote MPS repeat agreement | ≥ 0.999 | 1.000 (3× runs bit-identical) |
+| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | agree (lane pass) |
+| whisper transcript similarity vs cuda ref | ≥ 0.95 | 0.9907 (vad_true) / 1.0000 (vad_false) |
+| whisper segment count / confidence drift | ± 1 / ≤ 0.15 | 0 (2 = 2, 7 = 7) / 0.0015 |
+| titanet 3-level gate on arm64 CPU EP | existing ratcheted bounds | 7/7 pass; min window cosine 0.9999966 vs ref (floor 0.9995), repeat min 0.99999982 |
+
+CoreML EP experiment (`VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider`,
+provider honored — validated post-construction): the full 3-level gate also
+passes 7/7, with wall time indistinguishable from the CPU EP (~15 s either
+way) — consistent with ORT partitioning this dynamic-length graph back to
+CPU. Nothing here argues for flipping the CoreML default.
+
+Pipeline wall-times on the same hardware (console-submitted VoxConverse
+clips, worker → native services): 80.2 s clip → transcribe 30.1 s +
+diarize_embed 8.4 s (0.49× RT total); 122.2 s clip → 55.2 s + 12.8 s
+(0.56× RT) — vs ~2.5× RT for the Docker CPU tier on the same class of
+machine. These figures feed the slice-9 timeout/ratchet decisions.
 
 Basis for the pre-registration: the Phase 0 MPS spike (2026-08-14, M1 Pro
 16 GB, torch 2.5.0, vendored 3.1 pipeline) measured warm MPS diarization
 ~5× native-CPU speed with DER/speaker-counts/turns **identical** to CPU on
 all three spike files and 3× repeats bit-stable, with zero MPS op fallbacks
 (`PYTORCH_ENABLE_MPS_FALLBACK` unset). The post-measurement pass ratchets
-the bounds from Gate M numbers and records the verdict here; loosening any
-bound afterwards is a numerics decision, not a test fix.
+the bounds from the Gate M numbers above; loosening any bound afterwards is
+a numerics decision, not a test fix.
 
 ## Contract tests
 
