@@ -32,6 +32,11 @@ description = "Repo-level allowlist"
 paths = [
     '''^\.gitleaks\.toml$''',
     '''(^|/)uv\.lock$''',
+    # The nested PRIVATE maintainer-notes repo (gitignored, never part of this
+    # repo's git): hostnames are allowed there by design, and `gitleaks dir .`
+    # scans the filesystem regardless of .gitignore. The `git` scan still
+    # covers everything actually committed here.
+    '''^internal/''',
 ]
 # Deliberately secret-SHAPED fake tokens in the installer test suite: the tests
 # assert these values never reach stdout/stderr/argv, so they must look like
