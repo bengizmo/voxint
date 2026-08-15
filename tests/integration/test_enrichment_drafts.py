@@ -282,6 +282,141 @@ def test_idempotent_replay(session: Session, speaker_id: uuid.UUID) -> None:
         )
 
 
+def test_replay_with_divergent_body_conflicts(
+    session: Session, speaker_id: uuid.UUID
+) -> None:
+    """The idempotency contract covers the FULL payload: a reused key with
+    different candidates, evidence, or config is a conflict, never a silent
+    first-write-wins."""
+    scope = EnrichmentScope.speaker(speaker_id)
+    _record(session, scope, (_bio_draft(speaker_id, "The bio."),), key="body-key")
+
+    def _attempt(
+        candidates: tuple[CandidateDraft, ...],
+        config: dict[str, int] | None = None,
+        config_schema_version: int | None = None,
+    ) -> None:
+        record_producer_run(
+            session,
+            producer="name_miner",
+            producer_version="1.0",
+            scope=scope,
+            covered_fields=(ClaimField.BIO, ClaimField.NAME),
+            candidates=candidates,
+            idempotency_key="body-key",
+            started_at=NOW,
+            completed_at=NOW,
+            config=config,
+            config_schema_version=config_schema_version,
+        )
+
+    # different claim value
+    with pytest.raises(ConflictingReplayError):
+        _attempt((_bio_draft(speaker_id, "A different bio."),))
+    # different evidence for the same claim
+    with pytest.raises(ConflictingReplayError):
+        _attempt(
+            (
+                CandidateDraft(
+                    target=scope,
+                    field=ClaimField.BIO,
+                    value="The bio.",
+                    evidence=(UrlEvidence(url="https://example.com/elsewhere"),),
+                ),
+            )
+        )
+    # dropped candidates (would have been outcome='none')
+    with pytest.raises(ConflictingReplayError):
+        _attempt(())
+    # different config
+    with pytest.raises(ConflictingReplayError):
+        _attempt(
+            (_bio_draft(speaker_id, "The bio."),),
+            config={"budget": 9},
+            config_schema_version=1,
+        )
+    # ... while the identical payload still adopts
+    replayed = _record(
+        session, scope, (_bio_draft(speaker_id, "The bio."),), key="body-key"
+    )
+    assert replayed.idempotency_key == "body-key"
+
+
+def test_decision_beats_concurrent_supersession(
+    session_factory: sessionmaker[Session], speaker_id: uuid.UUID
+) -> None:
+    """READ COMMITTED race: a decision committed while the superseding run
+    waits on the candidate's row lock must survive — the waiting statement
+    must not stamp the just-decided candidate from its stale snapshot."""
+    import threading
+
+    with session_factory() as setup:
+        run = record_producer_run(
+            setup,
+            producer="name_miner",
+            producer_version="1.0",
+            scope=EnrichmentScope.speaker(speaker_id),
+            covered_fields=(ClaimField.BIO,),
+            candidates=(_bio_draft(speaker_id, "Contested bio."),),
+            idempotency_key="race-gen1",
+            started_at=NOW,
+            completed_at=NOW,
+        )
+        setup.commit()
+        assert run.generation == 1
+
+    decider = session_factory()
+    (view,) = candidates_for_speaker(decider, speaker_id)
+    record_profile_decision(
+        decider,
+        candidate_id=view.candidate.id,
+        decision=ProfileDecision.ACCEPT,
+        operator="ben",
+        idempotency_key="race-decide",
+    )
+    decider.flush()  # decision row inserted, candidate FOR UPDATE held, no commit
+
+    superseder_error: list[Exception] = []
+    started = threading.Event()
+
+    def _supersede() -> None:
+        try:
+            with session_factory() as other:
+                started.set()
+                record_producer_run(
+                    other,
+                    producer="name_miner",
+                    producer_version="1.0",
+                    scope=EnrichmentScope.speaker(speaker_id),
+                    covered_fields=(ClaimField.BIO,),
+                    candidates=(),
+                    idempotency_key="race-gen2",
+                    started_at=NOW,
+                    completed_at=NOW,
+                )
+                other.commit()
+        except Exception as exc:  # pragma: no cover - surfaced via assert below
+            superseder_error.append(exc)
+
+    thread = threading.Thread(target=_supersede)
+    thread.start()
+    started.wait(timeout=5)
+    # let the superseder reach the candidate row lock, then commit the decision
+    import time
+
+    time.sleep(0.5)
+    decider.commit()
+    thread.join(timeout=15)
+    decider.close()
+    assert not thread.is_alive(), "superseding run deadlocked"
+    assert superseder_error == []
+
+    with session_factory() as check:
+        (after,) = candidates_for_speaker(check, speaker_id)
+        assert after.state is CandidateState.ACCEPTED
+        assert after.candidate.superseded_by_producer_run_id is None
+
+
 def test_config_snapshot_roundtrip(session: Session, speaker_id: uuid.UUID) -> None:
     run = record_producer_run(
         session,

@@ -5,12 +5,13 @@ Revises: 0009
 Create Date: 2026-08-14 22:30:00.000000
 
 Machine-derived claims about speakers and runs live here as reviewable,
-evidence-backed drafts. Three triggers guard the layer's integrity at the
+evidence-backed drafts. Four triggers guard the layer's integrity at the
 persistence boundary (not just by convention, mirroring adjudication_decisions):
 
+- enrichment_producer_runs is write-once (a completed invocation is history);
 - profile_review_decisions is append-only (human trail, terminal per candidate);
-- enrichment_candidates content is immutable — only a write-once supersession
-  stamp may be applied;
+- enrichment_candidates content is immutable — rows are born unsuperseded and
+  only a write-once supersession stamp may later be applied;
 - enrichment_candidate_evidence is append-only.
 """
 from collections.abc import Sequence
@@ -381,6 +382,23 @@ def upgrade() -> None:
         ),
     )
 
+    # A completed invocation is history: its scope, coverage, generation, and
+    # outcome anchor candidate lineage and supersession, so nothing may ever
+    # rewrite or remove it.
+    op.execute("""
+        CREATE FUNCTION enrichment_producer_runs_append_only() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION
+                'enrichment_producer_runs is append-only (% blocked)', TG_OP;
+        END $$
+    """)
+    op.execute("""
+        CREATE TRIGGER enrichment_producer_runs_append_only_trigger
+        BEFORE UPDATE OR DELETE ON enrichment_producer_runs
+        FOR EACH ROW EXECUTE FUNCTION enrichment_producer_runs_append_only()
+    """)
+
     # The human trail is append-only at the persistence boundary, exactly like
     # adjudication_decisions.
     op.execute("""
@@ -398,11 +416,19 @@ def upgrade() -> None:
 
     # Claim content is immutable; the only permitted mutation is stamping the
     # supersession fact once (NULL -> a producer-run id). History may be
-    # referenced by the review trail, so DELETE is always blocked.
+    # referenced by the review trail, so DELETE is always blocked, and a row
+    # can never be born already-superseded.
     op.execute("""
         CREATE FUNCTION enrichment_candidates_content_immutable() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+            IF TG_OP = 'INSERT' THEN
+                IF NEW.superseded_by_producer_run_id IS NOT NULL THEN
+                    RAISE EXCEPTION
+                        'enrichment_candidates rows are born unsuperseded';
+                END IF;
+                RETURN NEW;
+            END IF;
             IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'enrichment_candidates is immutable (DELETE blocked)';
             END IF;
@@ -432,7 +458,7 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE TRIGGER enrichment_candidates_content_immutable_trigger
-        BEFORE UPDATE OR DELETE ON enrichment_candidates
+        BEFORE INSERT OR UPDATE OR DELETE ON enrichment_candidates
         FOR EACH ROW EXECUTE FUNCTION enrichment_candidates_content_immutable()
     """)
 
@@ -468,6 +494,11 @@ def downgrade() -> None:
         " ON profile_review_decisions"
     )
     op.execute("DROP FUNCTION IF EXISTS profile_review_decisions_append_only()")
+    op.execute(
+        "DROP TRIGGER IF EXISTS enrichment_producer_runs_append_only_trigger"
+        " ON enrichment_producer_runs"
+    )
+    op.execute("DROP FUNCTION IF EXISTS enrichment_producer_runs_append_only()")
     op.drop_table("profile_review_decisions")
     op.drop_index(
         op.f("ix_enrichment_candidate_evidence_candidate_id"),

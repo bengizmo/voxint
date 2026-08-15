@@ -161,6 +161,7 @@ def test_migration_0010_roundtrip(alembic_cfg: Config, engine: Engine) -> None:
     assert "profile_review_decisions_append_only" not in functions
     assert "enrichment_candidates_content_immutable" not in functions
     assert "enrichment_candidate_evidence_append_only" not in functions
+    assert "enrichment_producer_runs_append_only" not in functions
 
 
 @pytest.fixture()
@@ -336,6 +337,30 @@ def test_evidence_constraints(seeded: Engine) -> None:
         )
     with engine.connect() as conn, pytest.raises(DBAPIError):
         conn.execute(text("DELETE FROM enrichment_candidate_evidence"))
+
+
+def test_producer_run_append_only_trigger(seeded: Engine) -> None:
+    engine = seeded
+    with engine.connect() as conn, pytest.raises(DBAPIError):
+        conn.execute(text("UPDATE enrichment_producer_runs SET generation = 99"))
+    with engine.connect() as conn, pytest.raises(DBAPIError):
+        conn.execute(text("DELETE FROM enrichment_producer_runs"))
+
+
+def test_candidate_born_unsuperseded(seeded: Engine) -> None:
+    """An initial non-NULL supersession stamp is rejected at INSERT."""
+    engine = seeded
+    with engine.connect() as conn, pytest.raises(DBAPIError):
+        conn.execute(
+            text(
+                "INSERT INTO enrichment_candidates"
+                " (id, producer_run_id, target_kind, speaker_id, field, value,"
+                "  superseded_by_producer_run_id)"
+                " VALUES ('00000000-0000-0000-0000-000000000023',"
+                f" '{PRODUCER_RUN_ID}', 'speaker', '{SPEAKER_ID}', 'name',"
+                f" 'Jane', '{PRODUCER_RUN_ID}')"
+            )
+        )
 
 
 def test_candidate_immutability_trigger(seeded: Engine) -> None:

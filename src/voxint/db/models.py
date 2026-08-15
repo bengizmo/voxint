@@ -630,7 +630,9 @@ class EnrichmentProducerRun(Base):
     anything. Rows are inserted only at successful completion — atomically with
     their candidate rows — by the single sanctioned writer
     (``enrichment/drafts.py``); failed or partial attempts are not audited at
-    this layer.
+    this layer. A recorded invocation is history: a trigger rejects
+    UPDATE/DELETE, because scope, coverage, generation, and outcome anchor
+    candidate lineage and supersession.
 
     - ``outcome`` is derived by the writer: ``'none'`` iff the invocation
       produced zero candidates. "We looked and found nothing" is reviewable
@@ -755,7 +757,8 @@ class EnrichmentCandidate(Base):
     only acoustic evidence or a human ruling grounds attribution.
 
     Claim content is immutable (a DB trigger rejects DELETE and any UPDATE
-    except stamping ``superseded_by_producer_run_id``, write-once). There is no
+    except stamping ``superseded_by_producer_run_id``, write-once; rows are
+    born unsuperseded — an initial non-NULL stamp is rejected at INSERT). There is no
     stored review state: the effective state is derived at read time
     (``enrichment/queries.py``) — a ``profile_review_decisions`` row wins
     (accepted/rejected, terminal), else a set ``superseded_by_producer_run_id``

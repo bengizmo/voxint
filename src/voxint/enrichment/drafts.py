@@ -16,7 +16,13 @@ in one atomic finalization. The writer:
   caller's assertion of it;
 - supersedes only still-proposed candidates of the *same producer + same
   scope + lower generation* whose field is in the new run's
-  ``covered_fields`` — decided candidates are history and are never touched;
+  ``covered_fields`` — decided candidates are history and are never touched.
+  ⚠ Scope here means the **invocation** scope, not the candidate target: a
+  ``run``-scope rerun supersedes the run_label candidates its earlier
+  ``run``-scope sweeps emitted, but a ``run_label``-scope invocation is a
+  *different* scope and will never supersede claims from a ``run``-scope
+  sweep (they hold different locks and separate generation counters).
+  Producers must re-run at the scope kind they originally used;
 - replays idempotently: the same ``idempotency_key`` with the same payload
   returns the existing run, a different payload is an error (pattern:
   ``adjudication/ledger.py``).
@@ -32,12 +38,12 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import exists, func, select, text, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from voxint.db.models import (
     ClaimField,
@@ -339,13 +345,116 @@ def _scope_filter(scope: EnrichmentScope) -> tuple[Any, ...]:
     )
 
 
+def _canonical_timestamp(stamp: datetime | None) -> str | None:
+    return stamp.astimezone(UTC).isoformat() if stamp is not None else None
+
+
+def _draft_evidence_key(item: Evidence) -> list[object]:
+    if isinstance(item, MetadataEvidence):
+        kind_cols: list[object] = [
+            EvidenceKind.METADATA_FIELD.value,
+            str(item.source_metadata_id),
+            item.source_field,
+            None,
+            None,
+        ]
+    elif isinstance(item, TranscriptEvidence):
+        kind_cols = [
+            EvidenceKind.TRANSCRIPT_SEGMENT.value,
+            None,
+            None,
+            str(item.transcript_segment_id),
+            item.timestamp_seconds,
+        ]
+    else:
+        kind_cols = [EvidenceKind.URL.value, None, None, None, None]
+    url = item.url if isinstance(item, UrlEvidence) else None
+    retrieved = item.retrieved_at if isinstance(item, UrlEvidence) else None
+    return [
+        *kind_cols,
+        url,
+        _canonical_timestamp(retrieved),
+        item.snippet,
+        dict(item.detail) if item.detail is not None else None,
+        item.detail_schema_version,
+    ]
+
+
+def _draft_payload_fingerprint(drafts: Sequence[CandidateDraft]) -> str:
+    entries = [
+        [
+            draft.target.kind.value,
+            str(draft.target.speaker_id),
+            str(draft.target.pipeline_run_id),
+            draft.target.diarization_label,
+            draft.field.value,
+            draft.value,
+            draft.score,
+            sorted(
+                (key, float(component))
+                for key, component in draft.score_components.items()
+            ),
+            [_draft_evidence_key(item) for item in draft.evidence],
+        ]
+        for draft in drafts
+    ]
+    return json.dumps(sorted(entries, key=json.dumps), sort_keys=True)
+
+
+def _row_evidence_key(row: EnrichmentCandidateEvidence) -> list[object]:
+    return [
+        row.kind,
+        str(row.source_metadata_id) if row.source_metadata_id else None,
+        row.source_field,
+        str(row.transcript_segment_id) if row.transcript_segment_id else None,
+        row.timestamp_seconds,
+        row.url,
+        _canonical_timestamp(row.retrieved_at),
+        row.snippet,
+        row.detail,
+        row.detail_schema_version,
+    ]
+
+
+def _row_payload_fingerprint(row: EnrichmentProducerRun) -> str:
+    entries = [
+        [
+            candidate.target_kind,
+            str(candidate.speaker_id),
+            str(candidate.pipeline_run_id),
+            candidate.diarization_label,
+            candidate.field,
+            candidate.value,
+            candidate.score,
+            sorted(
+                (key, float(component))
+                for key, component in candidate.score_components.items()
+            ),
+            [
+                _row_evidence_key(item)
+                for item in sorted(candidate.evidence, key=lambda e: e.ordinal)
+            ],
+        ]
+        for candidate in row.candidates
+    ]
+    return json.dumps(sorted(entries, key=json.dumps), sort_keys=True)
+
+
 def _replay_matches(
     row: EnrichmentProducerRun,
     producer: str,
     producer_version: str,
     scope: EnrichmentScope,
     covered: tuple[ClaimField, ...],
+    candidates: Sequence[CandidateDraft],
+    started_at: datetime,
+    completed_at: datetime,
+    config: Mapping[str, Any] | None,
+    config_schema_version: int | None,
 ) -> bool:
+    """Full-payload replay equality — an identical replay adopts the stored
+    row; ANY divergence (candidates, evidence, config, timestamps included)
+    is a conflicting reuse of the key, never a silent first-write-wins."""
     return (
         row.producer == producer
         and row.producer_version == producer_version
@@ -354,6 +463,12 @@ def _replay_matches(
         and row.pipeline_run_id == scope.pipeline_run_id
         and row.diarization_label == scope.diarization_label
         and tuple(row.covered_fields) == tuple(f.value for f in covered)
+        and _canonical_timestamp(row.started_at) == _canonical_timestamp(started_at)
+        and _canonical_timestamp(row.completed_at)
+        == _canonical_timestamp(completed_at)
+        and row.config == (dict(config) if config is not None else None)
+        and row.config_schema_version == config_schema_version
+        and _row_payload_fingerprint(row) == _draft_payload_fingerprint(candidates)
     )
 
 
@@ -395,16 +510,34 @@ def record_producer_run(
 
     def _existing() -> EnrichmentProducerRun | None:
         return session.execute(
-            select(EnrichmentProducerRun).where(
-                EnrichmentProducerRun.idempotency_key == idempotency_key
+            select(EnrichmentProducerRun)
+            .where(EnrichmentProducerRun.idempotency_key == idempotency_key)
+            .options(
+                selectinload(EnrichmentProducerRun.candidates).selectinload(
+                    EnrichmentCandidate.evidence
+                )
             )
         ).scalar_one_or_none()
 
+    def _adopt_or_conflict(row: EnrichmentProducerRun) -> EnrichmentProducerRun:
+        if _replay_matches(
+            row,
+            producer,
+            producer_version,
+            scope,
+            covered,
+            candidates,
+            started_at,
+            completed_at,
+            config,
+            config_schema_version,
+        ):
+            return row
+        raise ConflictingReplayError(idempotency_key)
+
     existing = _existing()
     if existing is not None:
-        if _replay_matches(existing, producer, producer_version, scope, covered):
-            return existing
-        raise ConflictingReplayError(idempotency_key)
+        return _adopt_or_conflict(existing)
 
     # One finalization at a time per (producer, scope): generation allocation,
     # run+candidate insertion, and supersession must be atomic even when the
@@ -414,6 +547,11 @@ def record_producer_run(
         text("SELECT pg_advisory_xact_lock(hashtext(:producer), hashtext(:scope))"),
         {"producer": producer, "scope": scope.lock_key()},
     )
+    # Re-check after winning the lock: a same-key retry that raced the first
+    # check adopts here instead of burning an INSERT on a known conflict.
+    existing = _existing()
+    if existing is not None:
+        return _adopt_or_conflict(existing)
     generation = (
         session.execute(
             select(func.coalesce(func.max(EnrichmentProducerRun.generation), 0)).where(
@@ -457,9 +595,7 @@ def record_producer_run(
         existing = _existing()
         if existing is None:
             raise
-        if _replay_matches(existing, producer, producer_version, scope, covered):
-            return existing
-        raise ConflictingReplayError(idempotency_key) from None
+        return _adopt_or_conflict(existing)
     return run
 
 
@@ -528,17 +664,34 @@ def _supersede_prior(
         *_scope_filter(scope),
         EnrichmentProducerRun.generation < run.generation,
     )
-    session.execute(
-        update(EnrichmentCandidate)
-        .where(
-            EnrichmentCandidate.producer_run_id.in_(prior_runs),
-            EnrichmentCandidate.field.in_([f.value for f in covered]),
-            EnrichmentCandidate.superseded_by_producer_run_id.is_(None),
-            ~exists(
-                select(ProfileReviewDecision.id).where(
-                    ProfileReviewDecision.candidate_id == EnrichmentCandidate.id
-                )
-            ),
-        )
-        .values(superseded_by_producer_run_id=run.id)
+    eligibility = (
+        EnrichmentCandidate.producer_run_id.in_(prior_runs),
+        EnrichmentCandidate.field.in_([f.value for f in covered]),
+        EnrichmentCandidate.superseded_by_producer_run_id.is_(None),
+        ~exists(
+            select(ProfileReviewDecision.id).where(
+                ProfileReviewDecision.candidate_id == EnrichmentCandidate.id
+            )
+        ),
     )
+    # Two statements on purpose (assumes READ COMMITTED, the session default).
+    # A concurrent record_profile_decision holds FOR UPDATE on its candidate
+    # while inserting the decision; a single bulk UPDATE that blocks on that
+    # row lock would resume on its ORIGINAL statement snapshot (the row itself
+    # is unchanged, so no re-check happens) and stamp a just-decided
+    # candidate. Locking first, then updating, gives the UPDATE a fresh
+    # snapshot in which the committed decision is visible and the row is
+    # skipped.
+    locked_ids = (
+        session.execute(
+            select(EnrichmentCandidate.id).where(*eligibility).with_for_update()
+        )
+        .scalars()
+        .all()
+    )
+    if locked_ids:
+        session.execute(
+            update(EnrichmentCandidate)
+            .where(EnrichmentCandidate.id.in_(locked_ids), *eligibility)
+            .values(superseded_by_producer_run_id=run.id)
+        )
