@@ -92,6 +92,12 @@ RAW_ALLOWLIST: tuple[str, ...] = (
     "webpage_url",
 )
 
+# RAW_ALLOWLIST keys whose value is a URL: cleaned with the structural URL
+# policy (_clean_http_url) instead of the prose cleaner, so `raw` can never
+# hold a credential-bearing or scheme-smuggled URL the normalized columns
+# would refuse.
+_RAW_URL_KEYS = frozenset({"webpage_url"})
+
 
 class SourceMetadataError(Exception):
     """The info-JSON could not be used at all (oversized, unparseable, or not
@@ -149,11 +155,15 @@ def _clean_http_url(value: object, extra_secrets: tuple[str, ...]) -> str | None
 
     These fields (``webpage_url``, ``channel_url``, ``uploader_url``) are
     *retained for display*, so they must be structurally safe rather than
-    redacted-to-a-stub: refuse userinfo (``user:pass@``) and non-http schemes
-    outright instead of keeping a mangled remnant.
+    redacted-to-a-stub: refuse userinfo (``user:pass@``), non-http schemes,
+    and any surviving control/whitespace character (``_clean_text`` keeps
+    ``\\n``/``\\t`` for prose, but a URL destined for an href must be one
+    unbroken token) outright instead of keeping a mangled remnant.
     """
     text = _clean_text(value, max_chars=MAX_TEXT_CHARS, extra_secrets=extra_secrets)
     if text is None:
+        return None
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in text):
         return None
     lowered = text.lower()
     if not (lowered.startswith("https://") or lowered.startswith("http://")):
@@ -178,7 +188,10 @@ def _clean_duration(value: object) -> float | None:
     """Non-negative finite number, else None (bools are not durations)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    seconds = float(value)
+    try:
+        seconds = float(value)
+    except OverflowError:  # a JSON integer too large for a float is junk
+        return None
     if seconds != seconds or seconds in (float("inf"), float("-inf")) or seconds < 0:
         return None
     return seconds
@@ -222,6 +235,10 @@ def extract(
         info = json.loads(info_json_bytes)
     except (ValueError, UnicodeDecodeError) as exc:
         raise SourceMetadataError(f"info-JSON is not valid JSON: {exc}") from None
+    except RecursionError:
+        # Pathologically nested but syntactically valid JSON: totality demands
+        # this surfaces as the module's own error, never an ACQUIRE failure.
+        raise SourceMetadataError("info-JSON is nested too deeply") from None
     if not isinstance(info, dict):
         raise SourceMetadataError("info-JSON top level is not an object")
 
@@ -240,8 +257,16 @@ def extract(
                 continue  # NaN/inf would not survive JSONB round-tripping honestly
             raw[key] = value
         elif isinstance(value, str):
-            cleaned = _clean_text(
-                value, max_chars=MAX_TEXT_CHARS, extra_secrets=extra_secrets
+            # URL-valued keys get the structural URL policy, not the prose
+            # cleaner: a `https://user:token@host?sig=…` webpage_url passed
+            # through _clean_text would persist credentials into `raw` that
+            # the normalized canonical_url correctly refuses.
+            cleaned = (
+                _clean_http_url(value, extra_secrets)
+                if key in _RAW_URL_KEYS
+                else _clean_text(
+                    value, max_chars=MAX_TEXT_CHARS, extra_secrets=extra_secrets
+                )
             )
             if cleaned is not None:
                 raw[key] = cleaned
@@ -352,6 +377,8 @@ def load_sidecar(
         payload = json.loads(data)
     except (ValueError, UnicodeDecodeError) as exc:
         raise SourceMetadataError(f"sidecar is not valid JSON: {exc}") from None
+    except RecursionError:
+        raise SourceMetadataError("sidecar is nested too deeply") from None
     if not isinstance(payload, dict):
         raise SourceMetadataError("sidecar top level is not an object")
     if payload.get("sidecar_schema_version") != SIDECAR_SCHEMA_VERSION:
@@ -405,7 +432,7 @@ def load_sidecar(
         channel_url=_expect_str_or_none(snapshot.get("channel_url"), "channel_url"),
         description=_expect_str_or_none(snapshot.get("description"), "description"),
         upload_date=upload_date,
-        duration_seconds=float(duration) if duration is not None else None,
+        duration_seconds=_clean_duration(duration),
         tags=tuple(tags_raw),
         canonical_url=_expect_str_or_none(snapshot.get("canonical_url"), "canonical_url"),
         extractor=_expect_str_or_none(snapshot.get("extractor"), "extractor"),

@@ -227,16 +227,23 @@ def _publish_metadata_sidecar(
     except (SourceMetadataError, OSError) as exc:
         logger.warning("source metadata not captured: %s", exc)
         return
-    sidecar_tmp = tmp_dir / sidecar_filename(media_sha256)
-    sidecar_tmp.write_bytes(
-        to_sidecar_bytes(
-            meta, media_sha256=media_sha256, acquired_at=datetime.now(UTC)
+    # The write/link below must honour the same best-effort contract as the
+    # parse above: a sidecar-specific filesystem failure (disk full, quota,
+    # link refusal) loses metadata, never the acquisition — the media publish
+    # that follows is the load-bearing step. FileExistsError inside the link
+    # is SUCCESS, not failure: same bytes ⇒ same sidecar name, so an earlier
+    # attempt already published metadata for exactly these bytes.
+    try:
+        sidecar_tmp = tmp_dir / sidecar_filename(media_sha256)
+        sidecar_tmp.write_bytes(
+            to_sidecar_bytes(
+                meta, media_sha256=media_sha256, acquired_at=datetime.now(UTC)
+            )
         )
-    )
-    # Same bytes ⇒ same sidecar name: FileExistsError means an earlier attempt
-    # already published metadata for exactly these bytes; it is authoritative.
-    with contextlib.suppress(FileExistsError):
-        os.link(sidecar_tmp, canonical_dir / sidecar_tmp.name)
+        with contextlib.suppress(FileExistsError):
+            os.link(sidecar_tmp, canonical_dir / sidecar_tmp.name)
+    except OSError as exc:
+        logger.warning("source metadata sidecar not published: %s", exc)
 
 
 def _ensure_source_metadata_row(
@@ -294,6 +301,10 @@ def _ensure_source_metadata_row(
     try:
         with session.begin_nested():
             session.add(row)
-    except IntegrityError:
-        # A concurrent attempt inserted first; its identical-bytes row stands.
-        pass
+    except IntegrityError as exc:
+        # 23505 (unique violation) is the expected concurrent-attempt race: the
+        # first insert stands. Any OTHER integrity failure (a CHECK/FK trip
+        # from a tampered or corrupt sidecar) is still best-effort — the run
+        # proceeds without metadata — but must not vanish silently.
+        if getattr(exc.orig, "sqlstate", None) != "23505":
+            logger.warning("source metadata row rejected by the database: %s", exc)

@@ -200,7 +200,9 @@ class MediaSourceMetadata(Base):
     # Parsed from yt-dlp's YYYYMMDD string; NULL when absent or unparseable.
     upload_date: Mapped[date | None] = mapped_column(Date)
     duration_seconds: Mapped[float | None] = mapped_column(Float)
-    tags: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    tags: Mapped[list[str]] = mapped_column(
+        ARRAY(Text), default=list, server_default=text("'{}'::text[]")
+    )
     # The extractor's canonical webpage URL (post-redirect) — sanitized by the
     # extraction allowlist, never a signed transport URL.
     canonical_url: Mapped[str | None] = mapped_column(Text)

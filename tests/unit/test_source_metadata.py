@@ -156,6 +156,30 @@ class TestSecretsNeverSurvive:
         assert "198.51.100.9" not in meta.description
         assert "<redacted>" in meta.description
 
+    def test_credentialed_webpage_url_never_enters_raw(self) -> None:
+        """Multi-model review finding: raw's URL-valued keys must get the same
+        structural URL policy as the normalized columns — a credential-bearing
+        webpage_url must not ride into raw via the prose cleaner."""
+        meta = extract(
+            _payload({"webpage_url": "https://user:token@example.com/w?sig=SIGNED"})
+        )
+        assert meta.canonical_url is None
+        assert "webpage_url" not in meta.raw
+
+    def test_url_with_embedded_control_characters_dropped(self) -> None:
+        """A URL destined for an href must be one unbroken token: embedded
+        newlines/tabs (which the prose cleaner keeps) refuse the whole value."""
+        meta = extract(
+            _payload(
+                {
+                    "webpage_url": "https://example.com/a\nb",
+                    "channel_url": "https://example.com/c\td",
+                }
+            )
+        )
+        assert meta.canonical_url is None
+        assert meta.channel_url is None
+
     def test_credentialed_or_nonhttp_urls_dropped_not_mangled(self) -> None:
         meta = extract(
             _payload(
@@ -211,6 +235,23 @@ class TestTotality:
         raw = json.dumps({"duration": bad}, default=str).encode()
         meta = extract(raw)
         assert meta.duration_seconds is None
+
+    def test_astronomically_large_duration_dropped_not_raised(self) -> None:
+        """Multi-model review finding: float(310-digit JSON integer) raises
+        OverflowError — totality means it degrades to absent, never escapes
+        extract() to fail an acquisition."""
+        blob = ('{"duration": ' + "9" * 310 + "}").encode()
+        assert extract(blob).duration_seconds is None
+
+    def test_deeply_nested_document_refused_with_module_error(self) -> None:
+        """Multi-model review finding: pathological nesting raises
+        RecursionError inside json.loads — it must surface as
+        SourceMetadataError, the only exception the ACQUIRE handler treats as
+        best-effort no-metadata."""
+        depth = 100_000
+        blob = (b"[" * depth) + (b"]" * depth)
+        with pytest.raises(SourceMetadataError):
+            extract(blob)
 
     def test_nan_and_inf_never_enter_raw(self) -> None:
         # json.dumps writes bare NaN/Infinity tokens by default; python's loads

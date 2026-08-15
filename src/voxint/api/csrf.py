@@ -35,7 +35,7 @@ _NONCE_BYTES = 16
 
 # Stable per-route action strings. A form mints its token under one of these and
 # the matching POST route verifies under the same one, so a token is not
-# interchangeable between the three mutation forms.
+# interchangeable between mutation forms.
 CSRF_SUBMIT = "submit"
 CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
