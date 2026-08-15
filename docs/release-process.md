@@ -102,6 +102,28 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
   this gate being listed here and the PENDING verdict table in
   gpu-contracts.md, which a release must not leave stale.
 
+### Gate-evidence carry-over
+
+The maintainer-run gates re-verify the *model services*, so they re-run only
+when what they measure could have changed. Before tagging, check
+`git diff vPREV..main --stat -- services/`:
+
+- **Empty** → Gates A (CUDA reference regeneration) and R (ROCm smoke) carry
+  over from the previous release's evidence — the new images are rebuilds of
+  the same numerics (CI's parity + smoke jobs still run unconditionally and
+  prove the rebuild). Record the carry-over and the commit range it rests on
+  in the release-commit message (v0.10.0 is the precedent: `services/`
+  untouched since v0.9.0, A/R carried, Gate M satisfied by the committed
+  per-chip verdict plus a green `metal-lane` run on the pre-bump commit).
+- **Non-empty** → the affected gates re-run in full before tagging. Same
+  conditional already stated for Gate M above ("touches the metal lane" —
+  which includes `scripts/metal/`, the metal parity lanes, and
+  `metal-lane.yml`, not just `services/`).
+
+Carry-over is an evidence judgment, not a loophole: anything that shifts the
+numerics outside `services/` (parity fixtures, reference payloads, pinned
+model assets) voids it for the gate it feeds.
+
 ## Cutting a release
 
 1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
