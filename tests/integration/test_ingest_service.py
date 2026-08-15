@@ -621,3 +621,76 @@ def test_cancel_with_stale_expected_revision_rejects(
         result = cancel_run(session, run_id, expected_revision=live_revision)
         session.commit()
         assert result.status is RunStatus.CANCELLED
+
+
+def test_cancel_loser_of_concurrent_cas_is_idempotent(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Two cancels racing on the SAME live revision: one wins the CAS, the other
+    loses it — but must still return success (CANCELLED), not StaleRevisionError.
+    A genuine double-click / racing POST is idempotent, not a spurious 409."""
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/concurrent-cancel.wav").id
+        session.commit()
+
+    first = session_factory()
+    second = session_factory()
+    try:
+        # STRONG ref: keep `second`'s live copy alive in its (weak) identity map
+        # so cancel_run below reads THIS cached LIVE snapshot at the shared
+        # revision rather than re-querying a fresh already-cancelled row — that is
+        # what genuinely exercises the CAS-loss (idempotent) branch.
+        live = second.get(PipelineRun, run_id)
+        assert live is not None
+        rev = snapshot(live).revision
+        # `first` cancels and commits — the DB is now CANCELLED at rev + 1.
+        cancel_run(first, run_id, expected_revision=rev)
+        first.commit()
+        # `second` still holds the pre-cancel snapshot; its CAS loses, but the run
+        # is now CANCELLED, so cancel_run returns success rather than raising.
+        result = cancel_run(second, run_id, expected_revision=rev)
+        second.commit()
+        assert result.status is RunStatus.CANCELLED
+        assert live is not None  # keep the strong ref alive to here
+    finally:
+        first.close()
+        second.close()
+
+
+def test_cancel_cas_loss_to_non_cancel_reraises(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The idempotent-loss branch is NARROW: if the cancel CAS loses to a
+    non-cancel change (the run advanced a stage under us) the re-read is not
+    CANCELLED, so cancel_run re-raises StaleRevisionError rather than falsely
+    reporting success — mirrors the engine-level narrowing."""
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/advanced-cancel.wav").id
+        session.commit()
+    with session_factory() as session:
+        _drive_to_running(session, run_id, Stage.PREPARE)
+
+    first = session_factory()
+    second = session_factory()
+    try:
+        live = second.get(PipelineRun, run_id)  # strong ref → live cached snapshot
+        assert live is not None
+        rev = snapshot(live).revision
+        # `first` ADVANCES the run to the next stage (RUNNING, revision + 1) — not
+        # a cancel — and commits.
+        held = snapshot(first.get(PipelineRun, run_id))  # type: ignore[arg-type]
+        cas_update_run(
+            first,
+            held,
+            status=RunStatus.RUNNING,
+            current_stage=next_stage(held.current_stage),
+        )
+        first.commit()
+        # `second`'s cancel CAS loses; the run is RUNNING (not cancelled), so it
+        # must re-raise rather than swallow.
+        with pytest.raises(StaleRevisionError):
+            cancel_run(second, run_id, expected_revision=rev)
+        assert live is not None
+    finally:
+        first.close()
+        second.close()

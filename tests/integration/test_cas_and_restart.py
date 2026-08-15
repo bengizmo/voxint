@@ -20,6 +20,7 @@ from voxint.ingest import cancel_run
 from voxint.pipeline.engine import (
     StageFailedError,
     StageFn,
+    close_cancelled_run_claims,
     execute_run,
     recover_interrupted_runs,
     submit,
@@ -315,6 +316,62 @@ def test_cancel_during_failing_stage_body_stops_cleanly(
             )
         ).scalar_one()
         assert claim.status == StageStatus.SKIPPED.value
+        assert claim.error == "cancelled before commit"
+
+
+def test_recovery_closes_orphaned_claim_on_cancelled_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Crash-window backstop: a worker died AFTER a cancel committed but BEFORE
+    it closed its own claim, leaving a RUNNING claim on a CANCELLED run.
+    recover_interrupted_runs only scans RUNNING *runs* so it never touches it;
+    close_cancelled_run_claims (run from the beat) closes it SKIPPED and never
+    requeues the terminal run."""
+    run_id = make_run(session_factory, "/data/media/orphan-claim.wav")
+    advance_to(session_factory, run_id, Stage.TRANSCRIBE)
+    # A live worker's RUNNING claim, with an unexpired lease (so recovery would
+    # never steal it even if the run were RUNNING).
+    with session_factory() as session:
+        session.add(
+            StageRun(
+                pipeline_run_id=run_id,
+                stage=Stage.TRANSCRIBE.value,
+                attempt=1,
+                status=StageStatus.RUNNING.value,
+                worker_id="dead-worker",
+                lease_expires_at=datetime.now(UTC) + timedelta(seconds=300),
+            )
+        )
+        session.commit()
+    # Operator cancels; the worker never runs its cleanup (simulated crash).
+    with session_factory() as session:
+        cancel_run(session, run_id)
+        session.commit()
+
+    # recover_interrupted_runs ignores the cancelled run entirely...
+    with session_factory() as session:
+        assert recover_interrupted_runs(session) == []
+        claim = session.execute(
+            select(StageRun).where(StageRun.pipeline_run_id == run_id)
+        ).scalar_one()
+        assert claim.status == StageStatus.RUNNING.value  # still orphaned
+
+    # ...the cancel sweep closes it.
+    with session_factory() as session:
+        closed = close_cancelled_run_claims(session)
+        session.commit()
+        assert run_id in closed
+
+    with session_factory() as session:
+        claim = session.execute(
+            select(StageRun).where(StageRun.pipeline_run_id == run_id)
+        ).scalar_one()
+        assert claim.status == StageStatus.SKIPPED.value
+        assert claim.error == "cancelled before commit"
+        assert claim.finished_at is not None
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.CANCELLED.value  # not requeued
 
 
 def test_lost_advance_cas_from_non_cancel_still_raises(

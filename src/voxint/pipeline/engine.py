@@ -254,7 +254,15 @@ def execute_run(
         lease = leases[stage] if isinstance(leases, Mapping) else leases
         claim_id = _claim_stage(session_factory, held, stage, worker, lease)
         if claim_id is None:
-            return held  # another worker owns this stage right now
+            # Either another worker owns this stage right now, or the run moved
+            # out from under us (e.g. an operator cancel landing between the
+            # loop's top-of-iteration read and this claim, which _claim_stage
+            # rejects under its row lock). Re-read so the returned snapshot
+            # reflects the committed DB state, not the possibly-stale pre-claim
+            # view (an honest return value / log for a cancelled run).
+            with session_factory() as session:
+                current = session.get(PipelineRun, run_id)
+                return snapshot(current) if current is not None else held
 
         with session_factory() as session:
             try:
@@ -356,3 +364,34 @@ def recover_interrupted_runs(
             continue  # someone else moved it mid-sweep; their view wins
         recovered.append(held.id)
     return recovered
+
+
+def close_cancelled_run_claims(session: Session) -> list[uuid.UUID]:
+    """Close stage claims left RUNNING on a CANCELLED run — the crash-window
+    backstop for cooperative cancellation (issue #5).
+
+    :func:`execute_run` closes the abandoned claim itself in the happy path (via
+    ``_stop_if_cancelled``), but if the worker dies AFTER ``cancel_run`` commits
+    and BEFORE it reaches that cleanup, the claim is orphaned RUNNING forever:
+    ``recover_interrupted_runs`` only scans RUNNING *runs*, so it never touches a
+    cancelled one. This sweep (run from the beat) closes those orphans SKIPPED so
+    the console never shows a stage "running" on a cancelled run. It never
+    requeues — a CANCELLED run is terminal. Returns the run ids it touched.
+    """
+    claims = (
+        session.execute(
+            select(StageRun)
+            .join(PipelineRun, PipelineRun.id == StageRun.pipeline_run_id)
+            .where(
+                StageRun.status == StageStatus.RUNNING.value,
+                PipelineRun.status == RunStatus.CANCELLED.value,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    closed: list[uuid.UUID] = []
+    for claim in claims:
+        _finish_claim(session, claim.id, StageStatus.SKIPPED, "cancelled before commit")
+        closed.append(claim.pipeline_run_id)
+    return closed

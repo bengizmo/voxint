@@ -296,12 +296,26 @@ def cancel_run(
         raise RunNotCancellableError(run_id, held.status)
     if expected_revision is not None and held.revision != expected_revision:
         raise StaleRevisionError(run_id, expected_revision)
-    return cas_update_run(
-        session,
-        held,
-        status=RunStatus.CANCELLED,
-        current_stage=held.current_stage,
-    )
+    try:
+        return cas_update_run(
+            session,
+            held,
+            status=RunStatus.CANCELLED,
+            current_stage=held.current_stage,
+        )
+    except StaleRevisionError:
+        # A CONCURRENT cancel won the CAS between our read and write (two racing
+        # POSTs that both passed the revision guard on the same live revision).
+        # Re-read: if the run is now CANCELLED, this is still an idempotent
+        # success — a genuine double-click must not leave one operator with a
+        # spurious 409. Any other stale outcome (the run advanced under us) is a
+        # real stale-view conflict and re-raises. This is the concurrent twin of
+        # the already-CANCELLED short-circuit above.
+        session.expire(run)
+        fresh = snapshot(run)
+        if fresh.status is RunStatus.CANCELLED:
+            return fresh
+        raise
 
 
 def sanitize_upload_filename(filename: str) -> str:

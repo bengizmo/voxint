@@ -130,6 +130,62 @@ def test_cancel_queued_run_cancels(
     assert published == []
 
 
+def test_cancel_awaiting_adjudication_run(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # A human-paused run (no live worker) is cancellable through the route.
+    run_id, _ = _make_running_run(session_factory, stage=Stage.DIARIZE_EMBED)
+    with session_factory() as session:
+        held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
+        held = cas_update_run(
+            session,
+            held,
+            status=RunStatus.AWAITING_ADJUDICATION,
+            current_stage=Stage.DIARIZE_EMBED,
+        )
+        session.commit()
+        revision = held.revision
+
+    resp = client.post(
+        f"/runs/{run_id}/cancel",
+        data=_cd(revision=str(revision)),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.CANCELLED.value
+    assert published == []
+
+
+def test_cancel_completed_run_conflicts(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    published: list[uuid.UUID],
+) -> None:
+    # COMPLETED is terminal → 409, not 5xx.
+    run_id, _ = _make_running_run(session_factory, stage=STAGE_ORDER[-1])
+    with session_factory() as session:
+        held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
+        held = cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+        session.commit()
+        revision = held.revision
+
+    resp = client.post(
+        f"/runs/{run_id}/cancel",
+        data=_cd(revision=str(revision)),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 409
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.COMPLETED.value
+
+
 # --- exact-revision CAS guard -------------------------------------------------
 
 
