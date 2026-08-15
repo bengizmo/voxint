@@ -6,6 +6,30 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **Offline speaker-name suggestions** (#38): a new `names.offline`
+  enrichment producer mines evidence-backed name candidates from stored
+  source metadata (title/description/channel/tags) and transcript text
+  (self- and host-introductions) — fully offline, deterministic regex with
+  explicit false-positive guards, no LLM and no network. Cluster-level
+  (per-diarization-label) suggestions come **only** from self-introductions
+  inside that cluster's own segments; everything else stays a run-level
+  hint, so a title mention can never masquerade as cluster identity.
+  Scoring is explainable (max pattern reliability + small corroboration/
+  diversity/domain-pack-seed bonuses, capped at 0.95) with the full
+  component breakdown stored per candidate. Reruns supersede cleanly via an
+  input-signature idempotency key. Invoke with `voxint enrich names
+  <run_id>` (or `--all-completed`), or from the workbench. New settings:
+  `ENRICHMENT_NAMES_ENABLED` (default true), `ENRICHMENT_NAMES_LLM_ENABLED`
+  (default false, requires `LLM_ENABLED`).
+- **Name-suggestion review surface** (#38): the adjudication workbench now
+  shows a "Name hints" block (run-level) and per-label "Self-introduced
+  (unverified)" suggestions, each with its evidence snippet and score.
+  Operators can trigger/re-run the sweep (claim-gated, synchronous) and
+  accept or reject each suggestion — accepting records a profile-review
+  decision only, never a speaker, assignment, or adjudication ruling. An
+  accepted per-label suggestion prefills the Enroll input (editable, never
+  auto-submitted). Rerun duplicates group under their decided history
+  instead of re-presenting as new.
 - **Enrichment draft schema** (#37): machine-derived claims about speakers
   and runs now live as reviewable, evidence-backed drafts. Four new tables
   (migration 0010): `enrichment_producer_runs` (one row per completed

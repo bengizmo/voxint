@@ -106,6 +106,16 @@ draft state is derived at read time (human decision > supersession stamp >
 proposed) by `enrichment/queries.py`, mirroring how attribution is resolved
 below.
 
+The first producer (#38, `names.offline`) applies the rule with one further
+distinction: only a **self-introduction inside a cluster's own segment** can
+target that cluster (`run_label`); every other signal — titles, descriptions,
+channel names, "please welcome X" — stays a run-level hint ("this name is
+probably in the recording"), because knowing a name is present says nothing
+about which voice it belongs to. Accepting a per-label suggestion prefills
+the Enroll form but never submits it; the human act of enrollment (with its
+acoustic eligibility gates) remains the only path from a heard name to a
+roster identity.
+
 ## Adjudication precedence (P5)
 
 Attribution is resolved at read time, everywhere, by one rule

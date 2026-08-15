@@ -105,7 +105,27 @@ Three invariants worth naming:
   the human trail); each new producer run atomically supersedes only its own
   older still-proposed claims within the fields it covered.
 
-### Speaker lifecycle (roster curation, revision 0007)
+### Enrichment producers (issue #38: `names.offline`)
+
+Producers live under `voxint/enrichment/producers/` in three layers: pure
+pattern extraction (`name_patterns.py` — a bounded, versioned regex inventory
+over metadata and transcript text, capitalization-independent with explicit
+false-positive guards), pure per-target aggregation/scoring
+(`name_scoring.py` — max-reliability base plus small corroboration/diversity/
+seed bonuses capped at 0.95; no frequency reward; run_label claims are built
+from self-introductions only, so a title mention can never create or inflate
+a cluster-identity claim), and DB orchestration (`names.py`).
+
+`names.offline` always invokes at **run scope** — a run-scope invocation may
+emit both run-level and run_label-level candidates, and supersession keys on
+the invocation scope, so every rerun cleanly retires the prior generation.
+Its idempotency key is an **input signature** (producer/pattern/scoring
+versions + domain-pack seeds + exact metadata/segment content): identical
+inputs short-circuit to the stored row before fresh timestamps are minted,
+changed inputs mint a new key and a superseding generation, and
+`outcome='none'` is recorded only after a successful scan (read failures
+raise). Invocation is operator-triggered only — `voxint enrich names` or the
+workbench's claim-gated button — never a pipeline stage.
 
 The roster page (`/speakers`) can rename, merge, archive/restore speakers and
 remove bad enrollment embeddings — all through `speakers.roster`, and none of it
