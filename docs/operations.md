@@ -404,6 +404,42 @@ to RFC1918 / link-local / `169.254.169.254` (egress firewall or dedicated egress
 network). A blocked/refused download is a clean FAILED @ acquire the operator
 **Requeues**; it never loops.
 
+### Web research retrieval (issue #39; off by default)
+
+`voxint research search "<query>"` and `voxint research read <url>` are the
+operator surface of the controlled retrieval capability (`voxint.research` —
+the library the future research loop, issue #40, will consume). Everything is
+**off** until `VOXINT_WEB_RESEARCH=true`, and the capability is independent of
+`LLM_ENABLED` in both directions.
+
+Minimal enablement (SearxNG is the built-in provider — a LAN/private instance
+is the expected setup and explicitly allowed; every *result* URL is still held
+to the full public-address egress policy):
+
+```bash
+VOXINT_WEB_RESEARCH=true
+WEB_SEARCH_BASE_URL=http://<your-searxng-host>:8888   # must serve format=json
+# WEB_SEARCH_API_KEY=...   # only if your instance sits behind an auth proxy
+```
+
+Verify the egress policy by hand after enabling:
+
+```bash
+voxint research search "test query"          # normalized title/url/snippet list
+voxint research read https://example.com/    # extracted text
+voxint research read http://169.254.169.254/ # must refuse: invalid_input
+```
+
+Unlike yt-dlp ingestion, `read_url` owns its connections, so redirects and DNS
+rebinding ARE covered on this path: every redirect hop is re-validated and the
+connection is pinned to the vetted address (details in architecture.md, "Web
+research egress"). Caps (`WEB_READ_MAX_BYTES`, `WEB_READ_MAX_REDIRECTS`,
+`WEB_READ_TOTAL_SECONDS`, `WEB_READ_MAX_TEXT_CHARS`,
+`WEB_SEARCH_MAX_RESULTS`, timeouts) are all env-tunable — see `.env.example`.
+Compressed responses are refused by design (identity-only), and every fetch
+writes one attribution log line (feature, reason, host, verdict, bytes,
+duration; never the URL or query).
+
 The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
 `/runs/{id}/requeue`, and `POST /review/{id}/claim` (claiming mints the run's claim
 token, so it has none of its own to gate a forged POST). Set `CSRF_SECRET` to a

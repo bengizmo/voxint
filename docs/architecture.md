@@ -228,6 +228,56 @@ own because claiming is what *mints* the run's claim token — it has no unguess
 token of its own yet. The remaining review-workbench mutations (release, decision,
 enroll) are instead gated by that per-run claim token.
 
+## Web research egress (issue #39)
+
+`voxint.research` is the second outbound-fetch capability, and the THIRD
+consumer of the single egress policy in `media.netcheck` (`ip_is_public`, the
+shared string gate `parse_http_url`, and the fail-closed resolver core
+`resolve_public_addresses`) — one module to audit for every path that leaves
+the box. It is **off by default** (`VOXINT_WEB_RESEARCH=false`) and
+deliberately **independent of the LLM capability**: configuring an LLM never
+implies egress, enabling retrieval never requires an LLM, and a config
+validator coupling the two is contract-tested absent. When off, both
+operations return structured `disabled` outcomes before any DNS or socket
+work.
+
+Two operations, built as a library for the future research loop (issue #40)
+plus a feature-gated CLI (`voxint research search|read`):
+
+- **`web_search`** — one bounded query to a pluggable provider
+  (`SearchProvider` protocol; SearxNG built in, its base URL being
+  operator-configured egress in the same trust class as `LLM_BASE_URL`).
+  Everything the provider RETURNS is untrusted: result URLs pass the shared
+  string gate before being surfaced (refused ones are dropped and counted),
+  titles/snippets are sanitized and capped.
+- **`read_url`** — a hardened single-page fetcher that CLOSES, for its own
+  path, the redirect/rebinding residual documented above for yt-dlp (which it
+  can't close because yt-dlp owns its connections; this fetcher owns its own):
+  every hop — the submitted URL and each redirect target (301/302/303/307/308
+  only, `Location` resolved against the *logical* URL) — is re-gated and
+  re-resolved fail-closed, and the connection is **pinned** to a vetted
+  address: the request URL's host is rewritten to the vetted IP while the
+  `Host` header and TLS SNI carry the canonical (IDNA-encoded once) hostname,
+  on a FRESH client per attempt so no keepalive connection can cross host
+  identities. The checked address *is* the connected address. Responses must
+  be identity-encoded (compressed responses are refused, removing the
+  decompression-bomb class rather than bounding it), the streamed byte count
+  is authoritative over `Content-Length`, and only `text/html`,
+  `application/xhtml+xml`, and `text/plain` are readable. Extraction is
+  stdlib-only (`html.parser`; no C parser on attacker bytes) and strips
+  invisible-instruction characters (Unicode tag block, zero-width, bidi,
+  C0/C1); retrieved content is data, never instructions.
+
+Both operations take a mandatory bounded-identifier `Attribution` and an
+atomic per-invocation `ResearchBudget` (quotas enforced IN the tools; a spent
+budget yields a structured `budget_exhausted` outcome the #40 loop concludes
+from). Every outbound request logs one attribution line — feature, reason,
+host, verdict, bytes, duration — and no outcome, error, or log line ever
+carries a URL, query string, or redirect `Location` (`media.redaction`
+throughout). **Timing caveat:** the total wall clock bounds every HTTP
+operation via remaining-time propagation, but blocking DNS resolution cannot
+be hard-interrupted — DNS is the one non-hard-bounded step.
+
 ## Provider seams
 
 ASR, diarizer, embedder, and LLM sit behind typed protocols

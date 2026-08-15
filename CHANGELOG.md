@@ -5,6 +5,38 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Controlled web retrieval** (#39): a new `voxint.research` package —
+  `web_search` (pluggable `SearchProvider` protocol, SearxNG built in,
+  normalized title/url/snippet results with every result URL pre-filtered
+  through the shared egress string gate) and `read_url` (hardened
+  single-page fetcher: per-redirect-hop revalidation, DNS answers vetted
+  fail-closed, and the connection **pinned** to the vetted address with the
+  canonical hostname kept in `Host` + TLS SNI on a fresh client per attempt
+  — closing the redirect/rebinding residual for this path; identity-encoding
+  only, streamed byte cap, MIME allowlist, stdlib-only text extraction with
+  invisible-instruction-character stripping). **Off by default**
+  (`VOXINT_WEB_RESEARCH=false`) and fully independent of `LLM_ENABLED`.
+  Both tools enforce an atomic per-invocation budget (structured
+  `budget_exhausted` outcomes — the contract the future research loop, #40,
+  builds on), require a bounded `Attribution`, and log one host-only
+  attribution line per outbound request; no error, outcome, or log line
+  ever carries a URL, query string, or credential. Operator surface:
+  `voxint research search|read` (feature-gated, refuses before any DNS
+  when off). New settings: `VOXINT_WEB_RESEARCH`, `WEB_SEARCH_PROVIDER`,
+  `WEB_SEARCH_BASE_URL`, `WEB_SEARCH_API_KEY`, `WEB_SEARCH_MAX_RESULTS`,
+  `WEB_SEARCH_TIMEOUT_SECONDS`, `WEB_READ_MAX_BYTES`,
+  `WEB_READ_MAX_REDIRECTS`, `WEB_READ_TIMEOUT_SECONDS`,
+  `WEB_READ_TOTAL_SECONDS`, `WEB_READ_MAX_TEXT_CHARS`.
+
+### Changed
+- The string-level URL gate moved from `ingest.service` into
+  `media.netcheck.parse_http_url` (shared by ingestion and web research —
+  one egress policy module to audit); `validate_ingest_url` delegates and
+  its error messages are preserved byte-for-byte.
+  `assert_host_resolves_public` now wraps a new `resolve_public_addresses`
+  core that returns the vetted address set for connection pinning.
+
 ## [0.10.0] — 2026-08-15
 
 The enrichment foundation (#36, #37, #38): write-once source-metadata
