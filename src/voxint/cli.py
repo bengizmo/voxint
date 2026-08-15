@@ -62,6 +62,38 @@ def _engine_or_report(*, connect_timeout: int | None = None) -> "tuple[Engine | 
         return None, 2
 
 
+def _publish_or_defer(run_id: uuid.UUID) -> bool:
+    """Enqueue the run's pipeline task, degrading cleanly on a broker outage.
+
+    Mirrors the HTTP API's contract (``voxint.api.app._publish_or_defer``):
+    commit-before-publish means the durable QUEUED run already exists, so a
+    broker (Redis) outage is non-fatal — the run stays QUEUED for the beat
+    recovery sweep to re-enqueue once the broker returns. Only kombu's
+    ``OperationalError`` (its wrapper for every transport/connection failure)
+    is swallowed, with a warning to stderr; a genuine bug in the publish path
+    still raises. Returns ``True`` if published, ``False`` if deferred.
+    """
+    # apply_async(ignore_result=True), not .delay(): with a Redis result
+    # backend a dead broker makes .delay() raise a vague RuntimeError from the
+    # result consumer's reconnect loop, whereas ignoring the (unused) result
+    # surfaces the broker connect failure itself as OperationalError — the exact
+    # exception this guard catches. See voxint.api.app._publish_run.
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import run_pipeline
+
+    try:
+        run_pipeline.apply_async((str(run_id),), ignore_result=True)
+    except OperationalError:
+        print(
+            f"warning: broker unavailable; run {run_id} stays QUEUED for the "
+            "recovery sweep to re-enqueue",
+            file=sys.stderr,
+        )
+        return False
+    return True
+
+
 def _submit(args: argparse.Namespace) -> int:
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
@@ -85,20 +117,25 @@ def _submit(args: argparse.Namespace) -> int:
         if code is not None:
             return code
 
-    # Celery import stays lazy in the caller — the ingest service is broker-free,
-    # so we commit the durable run first, then publish (commit-before-publish).
-    from voxint.worker.tasks import run_pipeline
-
     engine = build_engine()
     try:
         factory = build_session_factory(engine)
         with session_scope(factory) as session:
             run_id = submit_media_item(session, str(relative)).id
-        # Publish AFTER the durable commit and OUTSIDE its transaction; only then
-        # is it safe to wait on a run the worker can actually pick up.
-        run_pipeline.delay(str(run_id))
-        print(run_id)  # the run id stays alone on stdout; --wait progress is stderr
+        # Print the id BEFORE publishing: the durable QUEUED run already exists,
+        # so a broker outage must never cost the operator the run id. The id
+        # stays alone on stdout; --wait progress and warnings go to stderr.
+        print(run_id)
+        # Publish AFTER the durable commit and OUTSIDE its transaction; a broker
+        # outage degrades cleanly (run stays QUEUED for the recovery sweep).
+        published = _publish_or_defer(run_id)
         if args.wait:
+            if not published:
+                print(
+                    "note: enqueue deferred (broker unavailable); polling will "
+                    "wait until the recovery sweep re-enqueues the run",
+                    file=sys.stderr,
+                )
             try:
                 return _poll_until_stop(
                     factory, run_id, interval=args.interval, timeout=args.timeout
@@ -282,9 +319,6 @@ def _requeue(args: argparse.Namespace) -> int:
     from voxint.ingest import IngestError, requeue_failed_run
     from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 
-    # Celery import stays lazy in the caller — the ingest service is broker-free.
-    from voxint.worker.tasks import run_pipeline
-
     factory = build_session_factory(build_engine())
     run_id = uuid.UUID(args.run_id)
     try:
@@ -296,8 +330,10 @@ def _requeue(args: argparse.Namespace) -> int:
     except (IngestError, StaleRevisionError, InvalidTransitionError) as exc:
         print(f"error: {exc}")
         return 2
-    run_pipeline.delay(str(run_id))
+    # Confirm the durable requeue BEFORE publishing so a broker outage never
+    # hides the fact that the run was re-queued; publish degrades cleanly.
     print(f"requeued {run_id}")
+    _publish_or_defer(run_id)
     return 0
 
 
@@ -335,10 +371,6 @@ def _fetch(args: argparse.Namespace) -> int:
         print("error: no URL provided (pass it as an argument or on stdin)")
         return 2
 
-    # Celery import stays lazy in the caller — the ingest service is broker-free,
-    # so we commit the durable run first, then publish (commit-before-publish).
-    from voxint.worker.tasks import run_pipeline
-
     factory = build_session_factory(build_engine())
     # No form here, so mint the idempotency id per invocation; it namespaces the
     # pre-assigned source_path the worker's ACQUIRE stage will download into.
@@ -349,8 +381,10 @@ def _fetch(args: argparse.Namespace) -> int:
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
         return 2
-    run_pipeline.delay(str(run_id))
+    # Print the id BEFORE publishing so a broker outage never costs the operator
+    # the run id (the durable QUEUED run already exists); publish degrades cleanly.
     print(run_id)
+    _publish_or_defer(run_id)
     return 0
 
 

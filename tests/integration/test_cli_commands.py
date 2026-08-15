@@ -57,11 +57,19 @@ def _seed_completed_run(session: Session) -> uuid.UUID:
 
 @pytest.fixture()
 def enqueued(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Capture run ids handed to the broker instead of touching Redis."""
+    """Capture run ids handed to the broker instead of touching Redis.
+
+    The CLI publishes via ``apply_async((run_id,), ignore_result=True)`` — not
+    ``.delay()`` — so a dead broker surfaces as OperationalError (the guard in
+    ``_publish_or_defer`` relies on this); the stub captures the first arg."""
     calls: list[str] = []
     from voxint.worker import tasks
 
-    monkeypatch.setattr(tasks.run_pipeline, "delay", lambda rid: calls.append(rid))
+    def _capture(args: object = None, **_kwargs: object) -> None:
+        assert isinstance(args, tuple)
+        calls.append(str(args[0]))
+
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", _capture)
     return calls
 
 
@@ -161,6 +169,31 @@ def test_fetch_reads_url_from_stdin_when_omitted(
         assert media.source_url == url
 
 
+def test_fetch_degrades_cleanly_on_broker_outage(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """fetch mirrors submit: a broker outage exits 0, keeps the id on stdout,
+    warns on stderr, and leaves the run QUEUED for the sweep (issue #31)."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker import tasks
+
+    def boom(args: tuple[str, ...], **_kwargs: object) -> None:
+        raise OperationalError("broker unreachable")
+
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", boom)
+    assert main(["fetch", "https://www.youtube.com/watch?v=abc"]) == 0
+    captured = capsys.readouterr()
+    printed_id = captured.out.strip()
+    assert "warning: broker unavailable" in captured.err
+    with session_factory() as session:
+        run = session.execute(select(PipelineRun)).scalar_one()
+        assert str(run.id) == printed_id
+        assert run.status == RunStatus.QUEUED.value
+
+
 def test_status_shows_run_and_ledger(
     session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -248,6 +281,46 @@ def test_requeue_failed_without_stage_refuses_to_guess(
     assert enqueued == []
 
 
+def test_requeue_degrades_cleanly_on_broker_outage(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """requeue mirrors submit: the durable FAILED->QUEUED transition commits,
+    the confirmation prints, and a broker outage only warns on stderr and exits
+    0 — the run stays QUEUED for the recovery sweep (issue #31)."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker import tasks
+
+    with session_factory() as session:
+        media = MediaItem(source_path="incoming/rq.wav")
+        session.add(media)
+        session.flush()
+        run_id = submit(session, media.id).id
+        session.commit()
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.status = RunStatus.FAILED.value
+        run.current_stage = Stage.TRANSCRIBE.value
+        session.commit()
+
+    def boom(args: tuple[str, ...], **_kwargs: object) -> None:
+        raise OperationalError("broker unreachable")
+
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", boom)
+    assert main(["requeue", str(run_id)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == f"requeued {run_id}"
+    assert "warning: broker unavailable" in captured.err
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.QUEUED.value
+        assert run.current_stage == Stage.TRANSCRIBE.value
+
+
 def test_list_shows_runs_table_and_json(
     session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -318,35 +391,58 @@ def test_submit_publishes_only_after_commit(
 
     seen: dict[str, str | None] = {}
 
-    def fake_delay(run_id: str) -> None:
+    def fake_publish(args: tuple[str, ...], **_kwargs: object) -> None:
         with session_factory() as session:
-            run = session.get(PipelineRun, uuid.UUID(run_id))
+            run = session.get(PipelineRun, uuid.UUID(args[0]))
             seen["status"] = run.status if run is not None else None
 
-    monkeypatch.setattr(tasks.run_pipeline, "delay", fake_delay)
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", fake_publish)
     assert main(["submit", "incoming/a.wav"]) == 0
     assert seen["status"] == RunStatus.QUEUED.value
 
 
-def test_submit_keeps_committed_run_when_publish_fails(
+def test_submit_degrades_cleanly_on_broker_outage(
+    session_factory: sessionmaker[Session],
+    media_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A broker outage at publish time must not roll back the durable run or
+    cost the operator the run id: submit exits 0, prints the id on stdout, warns
+    on stderr, and the QUEUED row survives for the recovery sweep (issue #31)."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker import tasks
+
+    def boom(args: tuple[str, ...], **_kwargs: object) -> None:
+        raise OperationalError("broker unreachable")
+
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", boom)
+    assert main(["submit", "incoming/a.wav"]) == 0
+    captured = capsys.readouterr()
+    printed_id = captured.out.strip()
+    assert "warning: broker unavailable" in captured.err
+    with session_factory() as session:
+        run = session.execute(select(PipelineRun)).scalar_one()
+        assert str(run.id) == printed_id  # the id reached stdout despite the outage
+        assert run.status == RunStatus.QUEUED.value
+
+
+def test_submit_reraises_non_broker_publish_bug(
     session_factory: sessionmaker[Session],
     media_env: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A broker outage at publish time must not roll back the durable run: the
-    QUEUED row survives so the recovery sweep can re-enqueue it."""
+    """The guard is OperationalError-only: a genuine bug in the publish path
+    must still raise, never be silently swallowed as a deferred enqueue."""
     from voxint.worker import tasks
 
-    def boom(run_id: str) -> None:
-        raise RuntimeError("broker unreachable")
+    def boom(args: tuple[str, ...], **_kwargs: object) -> None:
+        raise RuntimeError("bug, not a broker outage")
 
-    monkeypatch.setattr(tasks.run_pipeline, "delay", boom)
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", boom)
     with pytest.raises(RuntimeError):
         main(["submit", "incoming/a.wav"])
-
-    with session_factory() as session:
-        run = session.execute(select(PipelineRun)).scalar_one()
-        assert run.status == RunStatus.QUEUED.value
 
 
 def _seed_run_with_stages(session: Session) -> uuid.UUID:

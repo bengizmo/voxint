@@ -59,6 +59,18 @@ Exactly one service (`api`) declares the app `build:`; migrate/worker/beat
 consume the tag it produces. Do not give several `build:` services a shared
 `image:` tag — concurrent BuildKit writers race on it ("already exists").
 
+### Offline / air-gapped hosts
+
+Model weights are baked into the service images, and the whisper images set
+`HF_HUB_OFFLINE=1` plus a sha-pinned `WHISPER_REVISION`, so **no model service
+makes an outbound call at startup** — the stack comes up on a host with no
+internet access. (Earlier whisper images made an unadvertised Hugging Face
+revision check at startup, which stalled on restricted networks.)
+Network access is still required for URL ingestion (`yt-dlp`) and, if you
+opt into the online diarizer path, for `DIARIZER_MODEL_NAME`/`HF_TOKEN`
+downloads. On the metal tier, `voxint-metal.sh setup` downloads the pinned
+weights once; the running services are offline-clean the same way.
+
 ### Running without an NVIDIA GPU (CPU tier)
 
 Every model service also ships a **`-cpu` image flavor** — multi-arch
@@ -248,6 +260,16 @@ downloads it (see below). `status` shows the run's current state plus every
 stage attempt with its error, straight from the persisted ledger. `list`
 enumerates runs (the same query as the `/runs` page); `--json` prints a machine-
 readable array.
+
+`submit`, `fetch`, and `requeue` all commit the durable run **before**
+publishing the broker task, and degrade cleanly if the broker (Redis) is down
+— exactly like the HTTP API. The run id (or `requeued <id>`) is printed to
+stdout *before* the publish, so a broker outage never costs you the id; the
+publish failure is reported as a `warning:` on **stderr** and the command still
+exits `0`, leaving the run `QUEUED` for the recovery sweep to re-enqueue once
+the broker returns (see "Failure lanes and recovery"). A genuine bug in the
+publish path still raises. With `submit --wait`, a deferred enqueue prints a
+note that polling will wait for the sweep before the run advances.
 
 **`voxint doctor`** probes every dependency without changing anything: Postgres
 (`SELECT 1`), Redis (`PING`), and each model service's `/healthz` (reporting its

@@ -32,12 +32,34 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   `WEB_READ_TOTAL_SECONDS`, `WEB_READ_MAX_TEXT_CHARS`.
 
 ### Changed
+- **CLI `submit`/`fetch`/`requeue` degrade cleanly on a broker outage** (#31):
+  the three commands now mirror the HTTP API's commit-before-publish contract.
+  Each prints the run id (or `requeued <id>`) to stdout *before* publishing, so
+  a Redis outage never costs the operator the id; the publish is wrapped in the
+  same `OperationalError`-only guard the API uses (via
+  `apply_async(ignore_result=True)`, so a dead broker surfaces as
+  `OperationalError` rather than a vague `RuntimeError`), warning on stderr and
+  exiting `0` with the run left `QUEUED` for the beat recovery sweep. A genuine
+  bug in the publish path still raises. `submit --wait` notes when polling is
+  waiting on a deferred enqueue. Previously a broker outage produced an uncaught
+  traceback (and, for `submit`, lost the run id from stdout).
 - The string-level URL gate moved from `ingest.service` into
   `media.netcheck.parse_http_url` (shared by ingestion and web research —
   one egress policy module to audit); `validate_ingest_url` delegates and
   its error messages are preserved byte-for-byte.
   `assert_host_resolves_public` now wraps a new `resolve_public_addresses`
   core that returns the vetted address set for connection pinning.
+
+### Fixed
+- **Whisper startup is offline-clean** (#30): the whisper images set
+  `HF_HUB_OFFLINE=1` and pin `WHISPER_REVISION` to the baked snapshot, so
+  the service no longer makes an unadvertised Hugging Face revision check
+  at startup (which stalled/failed on air-gapped hosts and could have
+  re-downloaded a different revision than the one baked). The CUDA image's
+  build-time bake is now sha-pinned like the CPU/ROCm flavors, the metal
+  launcher exports the same offline guard, and a contract test holds all
+  four deployment flavors to one revision. Documented in
+  `docs/operations.md` ("Offline / air-gapped hosts").
 
 ## [0.10.0] — 2026-08-15
 

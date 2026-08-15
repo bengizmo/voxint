@@ -22,8 +22,10 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Bake the model at build time so the image needs no network at runtime.
-# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md.
-RUN python3.10 -c "from faster_whisper import WhisperModel; WhisperModel('large-v2', device='cpu', download_root='/opt/whisper_models')"
+# large-v2 is a deliberate policy pin — see docs/gpu-contracts.md. The HF
+# revision is sha-pinned so the bake cannot float with upstream main.
+ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
+RUN python3.10 -c "from faster_whisper import WhisperModel; WhisperModel('Systran/faster-whisper-large-v2', device='cpu', download_root='/opt/whisper_models', revision='${WHISPER_HF_REVISION}')"
 
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime
 
@@ -63,6 +65,12 @@ ENV HOME=/app
 ENV MEDIA_ROOT=/data/media
 ENV WHISPER_MODEL=large-v2
 ENV WHISPER_DOWNLOAD_ROOT=/app/.cache/whisper
+# Weights are baked — the service must never phone home at startup (a hub
+# revision check would stall/fail on air-gapped hosts). WHISPER_REVISION pins
+# the load to the baked snapshot so offline resolution needs no ref lookup.
+ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
+ENV WHISPER_REVISION=${WHISPER_HF_REVISION}
+ENV HF_HUB_OFFLINE=1
 ENV DEVICE=cuda
 ENV COMPUTE_TYPE=int8
 ENV BATCH_SIZE=16
