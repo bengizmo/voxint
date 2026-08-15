@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-15
+
 ### Added
 - **Web-research speaker profile enrichment** (#40): the `web_researcher`
   producer — an operator-initiated, per-speaker research job driving a
@@ -672,7 +674,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/bengizmo/voxint/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/bengizmo/voxint/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bengizmo/voxint/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/bengizmo/voxint/compare/v0.7.0...v0.8.0
