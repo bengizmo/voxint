@@ -30,6 +30,7 @@ from voxint.clients.llm import HttpLLMClient
 from voxint.config import get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.db.session import build_engine, build_session_factory
+from voxint.enrichment.research_jobs import execute_job
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
@@ -196,3 +197,16 @@ def recovery_sweep() -> dict[str, int]:
     for rid in {*recovered, *stale_queued}:
         run_pipeline.delay(str(rid))
     return {"recovered": len(recovered), "stale_queued": len(stale_queued)}
+
+
+@app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def research_speaker(job_id_str: str) -> None:
+    """Run one queued web-research job (issue #40).
+
+    No Celery retries on purpose: the loop is non-deterministic and its
+    failures land as honest, bounded error text on the job row for the
+    operator to see — hidden re-execution would be worse than a visible
+    failure. A duplicate delivery no-ops on the guarded queued→running claim.
+    """
+    factory, _ = _runtime()
+    execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
