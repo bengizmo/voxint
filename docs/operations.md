@@ -261,6 +261,16 @@ stage attempt with its error, straight from the persisted ledger. `list`
 enumerates runs (the same query as the `/runs` page); `--json` prints a machine-
 readable array.
 
+`submit`, `fetch`, and `requeue` all commit the durable run **before**
+publishing the broker task, and degrade cleanly if the broker (Redis) is down
+— exactly like the HTTP API. The run id (or `requeued <id>`) is printed to
+stdout *before* the publish, so a broker outage never costs you the id; the
+publish failure is reported as a `warning:` on **stderr** and the command still
+exits `0`, leaving the run `QUEUED` for the recovery sweep to re-enqueue once
+the broker returns (see "Failure lanes and recovery"). A genuine bug in the
+publish path still raises. With `submit --wait`, a deferred enqueue prints a
+note that polling will wait for the sweep before the run advances.
+
 **`voxint doctor`** probes every dependency without changing anything: Postgres
 (`SELECT 1`), Redis (`PING`), and each model service's `/healthz` (reporting its
 compute `device`, e.g. `rocm`/`cpu`) are **hard** checks — the command exits

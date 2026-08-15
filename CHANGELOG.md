@@ -5,6 +5,19 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Changed
+- **CLI `submit`/`fetch`/`requeue` degrade cleanly on a broker outage** (#31):
+  the three commands now mirror the HTTP API's commit-before-publish contract.
+  Each prints the run id (or `requeued <id>`) to stdout *before* publishing, so
+  a Redis outage never costs the operator the id; the publish is wrapped in the
+  same `OperationalError`-only guard the API uses (via
+  `apply_async(ignore_result=True)`, so a dead broker surfaces as
+  `OperationalError` rather than a vague `RuntimeError`), warning on stderr and
+  exiting `0` with the run left `QUEUED` for the beat recovery sweep. A genuine
+  bug in the publish path still raises. `submit --wait` notes when polling is
+  waiting on a deferred enqueue. Previously a broker outage produced an uncaught
+  traceback (and, for `submit`, lost the run id from stdout).
+
 ### Fixed
 - **Whisper startup is offline-clean** (#30): the whisper images set
   `HF_HUB_OFFLINE=1` and pin `WHISPER_REVISION` to the baked snapshot, so
