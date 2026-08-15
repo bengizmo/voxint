@@ -221,3 +221,16 @@ def test_gpu_timeout_must_fit_stage_leases() -> None:
     with pytest.raises(ValidationError, match="diarize_embed_lease_seconds"):
         Settings(_env_file=None, diarize_embed_lease_seconds=14500)
     Settings(_env_file=None)
+
+
+def test_names_llm_pass_requires_llm_enabled() -> None:
+    # The LLM name pass rides the enhancement endpoint; enabling it with no
+    # configured LLM would silently do nothing, so the combination is refused.
+    with pytest.raises(ValidationError, match="enrichment_names_llm_enabled"):
+        Settings(_env_file=None, enrichment_names_llm_enabled=True)
+    s = Settings(_env_file=None, llm_enabled=True, enrichment_names_llm_enabled=True)
+    assert s.enrichment_names_llm_enabled is True
+    # Offline producer defaults on; the LLM pass defaults off.
+    defaults = Settings(_env_file=None)
+    assert defaults.enrichment_names_enabled is True
+    assert defaults.enrichment_names_llm_enabled is False

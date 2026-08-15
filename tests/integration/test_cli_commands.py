@@ -543,3 +543,93 @@ def test_collect_stats_empty_database(session_factory: sessionmaker[Session]) ->
     assert stats.stage_failure_counts == ()
     assert stats.roster_size == 0
     assert stats.runs_created_count == 0
+
+
+# ---------------------------------------------------------------------------
+# enrich names (issue #38)
+# ---------------------------------------------------------------------------
+
+
+def _seed_completed_run_with_intro(session: Session, text: str) -> uuid.UUID:
+    media = MediaItem(source_path=f"incoming/enrich-{uuid.uuid4()}.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    session.add(
+        TranscriptSegment(
+            pipeline_run_id=run.id,
+            segment_index=0,
+            start_seconds=0.0,
+            end_seconds=5.0,
+            raw_text=text,
+            diarization_label="SPEAKER_00",
+        )
+    )
+    session.commit()
+    return run.id
+
+
+def test_enrich_names_single_run(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run_with_intro(session, "hi my name is jane doe")
+    assert main(["enrich", "names", str(run_id)]) == 0
+    out = capsys.readouterr().out
+    assert f"{run_id}: outcome=found generation=1 candidates=1" in out
+
+
+def test_enrich_names_requires_exactly_one_target(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["enrich", "names"]) == 2
+    assert main(["enrich", "names", str(uuid.uuid4()), "--all-completed"]) == 2
+    err = capsys.readouterr().err
+    assert "exactly one" in err
+
+
+def test_enrich_names_unknown_run_exits_two(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["enrich", "names", str(uuid.uuid4())]) == 2
+    assert "not found" in capsys.readouterr().err
+
+
+def test_enrich_names_disabled_flag_refuses(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("ENRICHMENT_NAMES_ENABLED", "false")
+    assert main(["enrich", "names", str(uuid.uuid4())]) == 2
+    assert "disabled" in capsys.readouterr().err
+
+
+def test_enrich_names_all_completed_isolates_failures(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with session_factory() as session:
+        first = _seed_completed_run_with_intro(session, "my name is jane doe")
+        second = _seed_completed_run_with_intro(session, "my name is bob smith")
+
+    from voxint.enrichment.producers import names as names_module
+
+    real = names_module.run_offline_name_producer
+
+    def flaky(session, *, run_id, settings):  # type: ignore[no-untyped-def]
+        if run_id == first:
+            raise names_module.NameProducerError("boom")
+        return real(session, run_id=run_id, settings=settings)
+
+    monkeypatch.setattr(names_module, "run_offline_name_producer", flaky)
+    assert main(["enrich", "names", "--all-completed"]) == 1
+    captured = capsys.readouterr()
+    assert f"{first}: error: boom" in captured.err
+    assert f"{second}: outcome=found" in captured.out
+
+
+def test_enrich_names_all_completed_empty(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["enrich", "names", "--all-completed"]) == 0
+    assert "no completed runs" in capsys.readouterr().out

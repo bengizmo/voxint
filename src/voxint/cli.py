@@ -269,9 +269,7 @@ def _watch(args: argparse.Namespace) -> int:
         return code
     try:
         factory = build_session_factory(engine)
-        return _poll_until_stop(
-            factory, args.run_id, interval=args.interval, timeout=args.timeout
-        )
+        return _poll_until_stop(factory, args.run_id, interval=args.interval, timeout=args.timeout)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return 130
@@ -370,9 +368,7 @@ def _tutorial_seed(args: argparse.Namespace) -> int:
     settings = get_settings()
     factory = build_session_factory(build_engine())
     with session_scope(factory) as session:
-        run_id = seed_tutorial_run(
-            session, media_root=settings.media_root, settings=settings
-        )
+        run_id = seed_tutorial_run(session, media_root=settings.media_root, settings=settings)
     print(run_id)
     return 0
 
@@ -598,6 +594,82 @@ def _stats(args: argparse.Namespace) -> int:
     return 0
 
 
+def _enrich_names(args: argparse.Namespace) -> int:
+    """Operator-triggered offline name-suggestion sweep (issue #38).
+
+    Runs the ``names.offline`` producer for one run (or every completed run)
+    and reports per-run outcomes. Batch mode isolates failures per run and
+    exits 1 if any run failed; single-run mode maps a producer error to 2.
+    """
+    if (args.run_id is not None) == args.all_completed:
+        print("error: provide exactly one of RUN_ID or --all-completed", file=sys.stderr)
+        return 2
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+
+    from sqlalchemy import func, select
+
+    from voxint.config import get_settings
+    from voxint.db.models import EnrichmentCandidate, PipelineRun, RunStatus
+    from voxint.db.session import build_session_factory, session_scope
+    from voxint.enrichment.producers.names import (
+        NameProducerError,
+        run_offline_name_producer,
+    )
+
+    settings = get_settings()
+    if not settings.enrichment_names_enabled:
+        print(
+            "error: name enrichment is disabled (ENRICHMENT_NAMES_ENABLED=false)",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        factory = build_session_factory(engine)
+        if args.run_id is not None:
+            run_ids = [args.run_id]
+        else:
+            with session_scope(factory) as session:
+                run_ids = list(
+                    session.execute(
+                        select(PipelineRun.id)
+                        .where(PipelineRun.status == RunStatus.COMPLETED.value)
+                        .order_by(PipelineRun.created_at)
+                    ).scalars()
+                )
+            if not run_ids:
+                print("no completed runs")
+                return 0
+
+        failures = 0
+        for run_id in run_ids:
+            try:
+                with session_scope(factory) as session:
+                    producer_run = run_offline_name_producer(
+                        session, run_id=run_id, settings=settings
+                    )
+                    count = session.execute(
+                        select(func.count())
+                        .select_from(EnrichmentCandidate)
+                        .where(EnrichmentCandidate.producer_run_id == producer_run.id)
+                    ).scalar_one()
+                    print(
+                        f"{run_id}: outcome={producer_run.outcome}"
+                        f" generation={producer_run.generation} candidates={count}"
+                    )
+            except NameProducerError as exc:
+                failures += 1
+                print(f"{run_id}: error: {exc}", file=sys.stderr)
+        if failures:
+            return 1 if args.all_completed else 2
+        return 0
+    finally:
+        engine.dispose()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -685,6 +757,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_p = sub.add_parser("serve", help="run the API + review console (binds from settings)")
     serve_p.set_defaults(fn=_serve)
+
+    enrich_p = sub.add_parser("enrich", help="offline enrichment producers (draft suggestions)")
+    enrich_sub = enrich_p.add_subparsers(dest="enrich_command", required=True)
+    names_p = enrich_sub.add_parser(
+        "names",
+        help="mine speaker-name suggestions from stored metadata + transcript (issue #38)",
+    )
+    names_p.add_argument(
+        "run_id", nargs="?", type=uuid.UUID, help="run to sweep (omit with --all-completed)"
+    )
+    names_p.add_argument(
+        "--all-completed",
+        action="store_true",
+        help="sweep every completed run (per-run failures reported, exit 1 if any)",
+    )
+    names_p.set_defaults(fn=_enrich_names)
 
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)

@@ -58,9 +58,7 @@ class Settings(BaseSettings):
     # land in a startup traceback. This only sanitizes str(err); the structured
     # .errors()/.json() still carry the raw input, so get_settings() re-raises a
     # sanitized SettingsError as the real production guarantee.
-    model_config = SettingsConfigDict(
-        env_file=".env", extra="ignore", hide_input_in_errors=True
-    )
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
     # Core services
     database_url: str = "postgresql+psycopg://voxint:voxint@localhost:5432/voxint"
@@ -241,6 +239,15 @@ class Settings(BaseSettings):
     # Domain pack (defaults to the bundled generic pack when unset)
     domain_pack_path: Path | None = None
 
+    # Name-candidate enrichment (#38): the offline producer mines speaker-name
+    # suggestions from stored metadata + transcript text. Dependency-free
+    # (regex over rows already in the DB), so it defaults on; gates the CLI
+    # command and the console trigger. The optional LLM pass is strictly
+    # additive and requires the enhancement LLM to be configured — the offline
+    # path must stay useful fully offline.
+    enrichment_names_enabled: bool = True
+    enrichment_names_llm_enabled: bool = False
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -300,6 +307,18 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _names_llm_pass_requires_llm(self) -> "Settings":
+        # The LLM name pass reuses the enhancement endpoint configuration; an
+        # enabled pass with no configured LLM would silently do nothing, so
+        # refuse the combination instead of masking it.
+        if self.enrichment_names_llm_enabled and not self.llm_enabled:
+            raise ValueError(
+                "enrichment_names_llm_enabled requires llm_enabled=true — the "
+                "LLM name pass reuses the configured enhancement endpoint"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _no_default_credentials_off_loopback(self) -> "Settings":
         # Loopback + default credentials is a fine dev setup; exposing the
         # review UI beyond loopback with the shipped (or an empty) password is
@@ -333,9 +352,7 @@ class Settings(BaseSettings):
             if grounded < proposal
         ]
         if lax:
-            raise ValueError(
-                f"grounding gates must be at least as strict as proposal gates: {lax}"
-            )
+            raise ValueError(f"grounding gates must be at least as strict as proposal gates: {lax}")
         return self
 
     @model_validator(mode="after")
