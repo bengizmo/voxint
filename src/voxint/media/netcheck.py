@@ -27,11 +27,26 @@ with no path to RFC1918 / link-local). See ``docs/architecture.md``.
 """
 
 import ipaddress
+import re
 import socket
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 _IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+# The string-level URL gate is an http(s)-only capability; anything else (file:,
+# data:, ftp:, a bare scheme-relative //host) is rejected at the string level.
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
+# A pasted URL that runs to kilobytes is almost certainly hostile or malformed;
+# 2048 is the de-facto interoperable URL length ceiling.
+MAX_URL_BYTES = 2048
+# A well-formed URL carries no raw whitespace (spaces/tabs/newlines must be
+# percent-encoded); an unencoded whitespace char is a splitting/smuggling smell.
+_URL_WHITESPACE = re.compile(r"\s")
+# Control characters (incl. NUL) are never valid anywhere in a URL.
+_URL_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
 # IPv6 prefixes carrying an IPv4 payload that ``is_global`` mis-judges as global.
 # RFC 6052 NAT64 well-known prefix (64:ff9b::/96) is legitimately globally
@@ -56,6 +71,109 @@ class HostNotPublicError(Exception):
     the **host** (never the full URL — the host is not a secret, but a URL's query
     can carry a signed token).
     """
+
+
+class UrlPolicyError(Exception):
+    """A URL is refused by the string-level HTTP(S) URL policy.
+
+    Messages describe the violated rule and never echo the URL (or any part of
+    it beyond, at most, nothing — a query string can carry a signed token).
+    Callers that need a context prefix re-raise with one (``validate_ingest_url``
+    prepends ``"ingest "``), keeping this module's messages context-neutral.
+    """
+
+
+@dataclass(frozen=True)
+class HttpUrl:
+    """The typed result of :func:`parse_http_url`.
+
+    ``url`` is the whitespace-trimmed original (safe to store/fetch verbatim);
+    ``host`` is the lowercased authority host with any trailing DNS root dot
+    stripped; ``ip`` is the parsed address when the host is an IP literal, else
+    ``None`` (a DNS name — whether it resolves publicly is deliberately not
+    judged at the string level; see :func:`resolve_public_addresses`).
+    """
+
+    url: str
+    scheme: str
+    host: str
+    port: int | None
+    ip: _IPAddress | None
+
+
+def parse_http_url(url: str, *, max_bytes: int = MAX_URL_BYTES) -> HttpUrl:
+    """Validate a URL at the string level and return its typed parts.
+
+    This is the SINGLE string-level gate for every outbound-fetch capability
+    (URL ingestion and web research). It enforces the shape a fetcher is
+    permitted to touch: an absolute http/https URL with a plain hostname, no
+    embedded credentials, no whitespace/control characters, under the length
+    ceiling, and — when the host is an IP *literal* — a globally routable
+    address per :func:`ip_is_public` (loopback/private/link-local/reserved/
+    multicast literals are refused, including the IPv4-in-IPv6 embeddings and
+    site-local that ``is_global`` alone mis-classifies).
+
+    It deliberately does **not** resolve DNS: a name that looks public now can
+    rebind before a worker fetches it, so the authoritative "resolves to a
+    public address" check belongs at fetch time (:func:`resolve_public_addresses`).
+    Only ``localhost`` is refused by name. Error messages never echo the URL,
+    so a signed/secret query string cannot leak into an error body or logs.
+    """
+    candidate = (url or "").strip()
+    if not candidate:
+        raise UrlPolicyError("URL is empty")
+    try:
+        url_bytes = len(candidate.encode("utf-8"))
+    except UnicodeEncodeError as exc:  # e.g. an unpaired surrogate — uphold the typed contract
+        raise UrlPolicyError("URL is not valid UTF-8") from exc
+    if url_bytes > max_bytes:
+        raise UrlPolicyError(f"URL exceeds {max_bytes} bytes")
+    if _URL_WHITESPACE.search(candidate) or _URL_CONTROL_CHARS.search(candidate):
+        raise UrlPolicyError("URL contains whitespace or control characters")
+    if "\\" in candidate:
+        # urlsplit keeps backslashes in the authority, but browsers/yt-dlp may
+        # treat "\" as "/" — a parser split we refuse rather than try to model.
+        raise UrlPolicyError("URL must not contain a backslash")
+    try:
+        parts = urlsplit(candidate)
+        # .port is lazily parsed; touch it so a bad port (":abc"/out-of-range)
+        # surfaces here rather than as an obscure failure deeper in a fetcher.
+        port = parts.port
+    except ValueError as exc:  # malformed IPv6 literal, un-castable/out-of-range port
+        raise UrlPolicyError("URL is malformed") from exc
+    if parts.scheme not in _ALLOWED_URL_SCHEMES:
+        raise UrlPolicyError("URL must be an absolute http/https URL")
+    if parts.username is not None or parts.password is not None:
+        raise UrlPolicyError("URL must not embed credentials")
+    host = parts.hostname
+    if not host:
+        raise UrlPolicyError("URL has no host")
+    # A trailing DNS root dot ("localhost.", "127.0.0.1.") resolves identically to
+    # the un-dotted form, so strip it before the policy checks — otherwise a lone
+    # dot side-steps both the localhost denylist and the IP-literal parse.
+    host = host.rstrip(".")
+    if not host:
+        raise UrlPolicyError("URL has no host")
+    bracketed = "[" in parts.netloc  # the authority was an IPv6/IPvFuture literal
+    if host == "localhost" or host.endswith(".localhost"):
+        # urlsplit lowercases .hostname, so a plain case check is exhaustive.
+        raise UrlPolicyError("URL host is not permitted")
+    ip: _IPAddress | None
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        if bracketed:
+            # A bracketed authority that is not a valid IPv6 literal (e.g. an
+            # IPvFuture "[v1.foo]") is ambiguous across parsers — refuse it rather
+            # than let it fall through to the DNS-name branch.
+            raise UrlPolicyError("URL has an invalid IPv6 host") from None
+        ip = None  # a DNS name — public-address check deferred to fetch time
+    if ip is not None and not ip_is_public(ip):
+        # Loopback/private/link-local/reserved/unspecified/multicast literals, plus
+        # site-local and the IPv4-in-IPv6 embeddings (::a.b.c.d, NAT64) that
+        # is_global alone mis-judges — ip_is_public is the single per-address policy.
+        raise UrlPolicyError("URL host is not permitted")
+    return HttpUrl(url=candidate, scheme=parts.scheme, host=host, port=port, ip=ip)
 
 
 def _embedded_ipv4(ip: ipaddress.IPv6Address) -> "ipaddress.IPv4Address | None":
@@ -107,25 +225,33 @@ def ip_is_public(ip: _IPAddress) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
-def assert_host_resolves_public(
+def resolve_public_addresses(
     host: str, *, resolver: Resolver = socket.getaddrinfo
-) -> None:
-    """Resolve ``host`` (A + AAAA) and raise :class:`HostNotPublicError` if ANY
-    resolved address is non-public.
+) -> tuple[_IPAddress, ...]:
+    """Resolve ``host`` (A + AAAA) and return its vetted addresses, raising
+    :class:`HostNotPublicError` if ANY resolved address is non-public.
 
     Rejects on the FIRST non-public address rather than requiring every answer to
     be private, so a host with even one private answer (a DNS-rebinding or
-    split-horizon trick) is refused. The per-address verdict is :func:`ip_is_public`,
-    which already unwraps IPv4-in-IPv6 embeddings and rejects site-local — so a
-    name resolving to ``64:ff9b::127.0.0.1`` or ``fec0::1`` is caught here too, not
-    just literal IPv4/IPv6.
+    split-horizon trick) is refused — the ENTIRE answer set is discarded, never
+    filtered down to its public members. The per-address verdict is
+    :func:`ip_is_public`, which already unwraps IPv4-in-IPv6 embeddings and
+    rejects site-local — so a name resolving to ``64:ff9b::127.0.0.1`` or
+    ``fec0::1`` is caught here too, not just literal IPv4/IPv6.
+
+    Returns the vetted addresses (deduplicated, answer order preserved) so a
+    caller that connects can PIN one — connecting to a returned address rather
+    than re-resolving closes the check-then-connect rebinding window for its own
+    fetch path.
 
     Fail-closed: an unresolvable host, a resolver that returns **no** addresses, or
     an answer that does not parse as an IP is each terminal (never proof of a
-    public address), so all raise ``HostNotPublicError`` — the worker refuses to
-    hand an unverifiable host to yt-dlp. ``resolver`` defaults to
+    public address), so all raise ``HostNotPublicError`` — a caller refuses to
+    fetch from an unverifiable host. ``resolver`` defaults to
     ``socket.getaddrinfo`` and is injected in tests so CI never touches real DNS.
-    Messages name only ``host``.
+    Messages name only ``host``, context-neutrally; callers needing a context
+    prefix re-raise with one (:func:`assert_host_resolves_public` prepends
+    ``"ingest "``).
     """
     try:
         infos = list(resolver(host, None))  # both A and AAAA; the port is irrelevant
@@ -133,23 +259,35 @@ def assert_host_resolves_public(
         # Unresolvable / transient DNS error. `from None`: a getaddrinfo error
         # names only the host (never the URL), but suppress the cause anyway to
         # match the module's "the message carries only the host" contract.
-        raise HostNotPublicError(
-            f"ingest host {host!r} could not be resolved"
-        ) from None
+        raise HostNotPublicError(f"host {host!r} could not be resolved") from None
     if not infos:
         # A resolver that returns an empty list without raising (a custom/future
         # resolver, a platform quirk) is not proof of a public address — fail closed
         # rather than sail through the (skipped) loop as a success.
-        raise HostNotPublicError(f"ingest host {host!r} resolved to no addresses")
+        raise HostNotPublicError(f"host {host!r} resolved to no addresses")
+    vetted: list[_IPAddress] = []
     for info in infos:
         address = info[4][0]  # sockaddr[0] is the address string for A and AAAA
         try:
             ip = ipaddress.ip_address(address)
         except ValueError:
             raise HostNotPublicError(
-                f"ingest host {host!r} resolved to an unparseable address"
+                f"host {host!r} resolved to an unparseable address"
             ) from None
         if not ip_is_public(ip):
-            raise HostNotPublicError(
-                f"ingest host {host!r} resolves to a non-public address"
-            )
+            raise HostNotPublicError(f"host {host!r} resolves to a non-public address")
+        if ip not in vetted:
+            vetted.append(ip)
+    return tuple(vetted)
+
+
+def assert_host_resolves_public(
+    host: str, *, resolver: Resolver = socket.getaddrinfo
+) -> None:
+    """Ingest-facing wrapper over :func:`resolve_public_addresses` — same
+    fail-closed policy, addresses discarded, messages prefixed ``"ingest "``
+    (preserving the historical ingest error strings byte-for-byte)."""
+    try:
+        resolve_public_addresses(host, resolver=resolver)
+    except HostNotPublicError as exc:
+        raise HostNotPublicError(f"ingest {exc}") from None

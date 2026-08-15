@@ -19,21 +19,19 @@ The two ``cas_update_run`` errors (:class:`StaleRevisionError`,
 
 import contextlib
 import hashlib
-import ipaddress
 import os
 import re
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
-from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.db.models import MediaItem, PipelineRun, RunStatus
-from voxint.media.netcheck import ip_is_public
+from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
     RunSnapshot,
@@ -51,15 +49,6 @@ _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 # for the ``.upload-XXXX.part`` sibling temp name mkstemp writes alongside it.
 _MAX_FILENAME_BYTES = 200
 
-# yt-dlp URL ingestion is an http(s)-only capability; anything else (file:, data:,
-# ftp:, a bare scheme-relative //host) is rejected at the string level.
-_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
-# A pasted URL that runs to kilobytes is almost certainly hostile or malformed;
-# 2048 is the de-facto interoperable URL length ceiling.
-_MAX_URL_BYTES = 2048
-# A well-formed URL carries no raw whitespace (spaces/tabs/newlines must be
-# percent-encoded); an unencoded whitespace char is a splitting/smuggling smell.
-_URL_WHITESPACE = re.compile(r"\s")
 
 
 class IngestError(Exception):
@@ -278,79 +267,20 @@ def sanitize_upload_filename(filename: str) -> str:
 def validate_ingest_url(url: str) -> str:
     """Validate an ingest URL at the string level, returning it whitespace-trimmed.
 
-    Enforces the shape yt-dlp is permitted to fetch: an absolute http/https URL
-    with a plain hostname, no embedded credentials, no whitespace/control
-    characters, under the length ceiling, and — when the host is an IP literal —
-    a globally routable address (loopback/private/link-local/reserved/multicast
-    literals are refused). This is the FIRST SSRF guard and gates row creation.
-
-    It deliberately does **not** resolve DNS: a name that looks public now can
-    rebind before the worker fetches it, so the authoritative "resolves to a
-    public address" check is re-done worker-side at download time (slice 6g).
-    A DNS *name* therefore passes here (only ``localhost`` is refused by name);
-    an IP *literal* is checked now because it needs no resolution — including the
-    IPv4-in-IPv6 embeddings (deprecated ``::a.b.c.d``, NAT64) and site-local that
-    ``is_global`` alone mis-classifies, which the shared :func:`ip_is_public`
-    unwraps/rejects here just as the worker gate does. Error messages never echo
-    the URL, so a signed/secret query string cannot leak into a 422 body or logs.
+    A thin wrapper over the shared string-level gate
+    :func:`voxint.media.netcheck.parse_http_url` — the SINGLE policy for every
+    outbound-fetch capability (URL ingestion and web research), so the rules can
+    never diverge between consumers. This is the FIRST SSRF guard and gates row
+    creation; the authoritative "resolves to a public address" check is re-done
+    worker-side at download time (slice 6g). Errors are re-raised as
+    :class:`UrlValidationError` with the historical ``"ingest "`` message prefix
+    preserved byte-for-byte; messages never echo the URL, so a signed/secret
+    query string cannot leak into a 422 body or logs.
     """
-    candidate = (url or "").strip()
-    if not candidate:
-        raise UrlValidationError("ingest URL is empty")
     try:
-        url_bytes = len(candidate.encode("utf-8"))
-    except UnicodeEncodeError as exc:  # e.g. an unpaired surrogate — uphold the typed contract
-        raise UrlValidationError("ingest URL is not valid UTF-8") from exc
-    if url_bytes > _MAX_URL_BYTES:
-        raise UrlValidationError(f"ingest URL exceeds {_MAX_URL_BYTES} bytes")
-    if _URL_WHITESPACE.search(candidate) or _CONTROL_CHARS.search(candidate):
-        raise UrlValidationError("ingest URL contains whitespace or control characters")
-    if "\\" in candidate:
-        # urlsplit keeps backslashes in the authority, but browsers/yt-dlp may
-        # treat "\" as "/" — a parser split we refuse rather than try to model.
-        raise UrlValidationError("ingest URL must not contain a backslash")
-    try:
-        parts = urlsplit(candidate)
-        # .port is lazily parsed; touch it so a bad port (":abc"/out-of-range)
-        # surfaces here rather than as an obscure failure deeper in the worker.
-        _ = parts.port
-    except ValueError as exc:  # malformed IPv6 literal, un-castable/out-of-range port
-        raise UrlValidationError("ingest URL is malformed") from exc
-    if parts.scheme not in _ALLOWED_URL_SCHEMES:
-        raise UrlValidationError("ingest URL must be an absolute http/https URL")
-    if parts.username is not None or parts.password is not None:
-        raise UrlValidationError("ingest URL must not embed credentials")
-    host = parts.hostname
-    if not host:
-        raise UrlValidationError("ingest URL has no host")
-    # A trailing DNS root dot ("localhost.", "127.0.0.1.") resolves identically to
-    # the un-dotted form, so strip it before the policy checks — otherwise a lone
-    # dot side-steps both the localhost denylist and the IP-literal parse.
-    host = host.rstrip(".")
-    if not host:
-        raise UrlValidationError("ingest URL has no host")
-    bracketed = "[" in parts.netloc  # the authority was an IPv6/IPvFuture literal
-    if host == "localhost" or host.endswith(".localhost"):
-        # urlsplit lowercases .hostname, so a plain case check is exhaustive.
-        raise UrlValidationError("ingest URL host is not permitted")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        if bracketed:
-            # A bracketed authority that is not a valid IPv6 literal (e.g. an
-            # IPvFuture "[v1.foo]") is ambiguous across parsers — refuse it rather
-            # than let it fall through to the DNS-name branch.
-            raise UrlValidationError("ingest URL has an invalid IPv6 host") from None
-        return candidate  # a DNS name — public-address check deferred to the worker (6g)
-    if not ip_is_public(ip):
-        # Loopback/private/link-local/reserved/unspecified/multicast literals, plus
-        # site-local and the IPv4-in-IPv6 embeddings (::a.b.c.d, NAT64) that
-        # is_global alone mis-judges. ip_is_public (media.netcheck) is the SINGLE
-        # per-address policy shared with the worker's resolved-host gate, so the
-        # literal check here and the DNS re-resolution there can never diverge on
-        # what "public" means.
-        raise UrlValidationError("ingest URL host is not permitted")
-    return candidate
+        return parse_http_url(url).url
+    except UrlPolicyError as exc:
+        raise UrlValidationError(f"ingest {exc}") from None
 
 
 def _submission_dir(submission_id: str) -> str:

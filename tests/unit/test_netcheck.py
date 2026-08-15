@@ -14,8 +14,11 @@ import pytest
 from voxint.media.netcheck import (
     HostNotPublicError,
     Resolver,
+    UrlPolicyError,
     assert_host_resolves_public,
     ip_is_public,
+    parse_http_url,
+    resolve_public_addresses,
 )
 
 
@@ -147,3 +150,111 @@ def test_error_message_names_only_the_host() -> None:
             "host.example.com", resolver=_resolver_returning("192.0.2.5")
         )
     assert "host.example.com" in str(exc.value)
+
+
+# --- resolve_public_addresses (the pinning-capable core the ingest gate wraps) ---
+
+
+def test_resolve_returns_vetted_addresses_in_answer_order() -> None:
+    vetted = resolve_public_addresses(
+        "cdn.example.com",
+        resolver=_resolver_returning("93.184.216.34", "2606:4700:4700::1111"),
+    )
+    assert vetted == (
+        ipaddress.ip_address("93.184.216.34"),
+        ipaddress.ip_address("2606:4700:4700::1111"),
+    )
+
+
+def test_resolve_deduplicates_repeated_answers() -> None:
+    vetted = resolve_public_addresses(
+        "cdn.example.com",
+        resolver=_resolver_returning("93.184.216.34", "93.184.216.34", "1.1.1.1"),
+    )
+    assert vetted == (
+        ipaddress.ip_address("93.184.216.34"),
+        ipaddress.ip_address("1.1.1.1"),
+    )
+
+
+def test_resolve_discards_entire_answer_set_on_one_private_member() -> None:
+    # Never filtered down to the public members — the whole set is refused.
+    with pytest.raises(HostNotPublicError, match="non-public"):
+        resolve_public_addresses(
+            "split.example.com",
+            resolver=_resolver_returning("93.184.216.34", "169.254.169.254"),
+        )
+
+
+def test_resolve_messages_are_context_neutral_ingest_wrapper_prefixes() -> None:
+    # The shared core's message carries no "ingest" prefix (web research reuses
+    # it); the ingest-facing wrapper preserves the historical string byte-for-byte.
+    resolver = _resolver_returning("192.0.2.5")
+    with pytest.raises(HostNotPublicError) as core:
+        resolve_public_addresses("host.example.com", resolver=resolver)
+    with pytest.raises(HostNotPublicError) as wrapped:
+        assert_host_resolves_public("host.example.com", resolver=resolver)
+    assert not str(core.value).startswith("ingest ")
+    assert str(wrapped.value) == f"ingest {core.value}"
+    assert str(wrapped.value) == (
+        "ingest host 'host.example.com' resolves to a non-public address"
+    )
+
+
+# --- parse_http_url (the shared string-level gate the ingest validator wraps) ---
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "example.com/watch",  # no scheme
+        "ftp://example.com/f.mp3",  # non-http(s) scheme
+        "http://user:pass@example.com/v",  # embedded credentials
+        "http://exa mple.com/v",  # internal whitespace
+        "http://example.com/\x00",  # control char
+        "http://[::1/v",  # malformed IPv6 literal
+        "http://localhost/v",  # localhost by name
+        "http://localhost./v",  # trailing root dot must not side-step the denylist
+        "http://127.0.0.1/v",  # loopback literal
+        "http://169.254.169.254/latest/meta-data",  # cloud metadata SSRF
+        "http://[64:ff9b::127.0.0.1]/v",  # NAT64 embedding loopback
+        "http://127.0.0.1\\/v",  # backslash parser split
+        "http://[v1.foo]/v",  # bracketed IPvFuture
+        "https://" + "a" * 2100 + ".com/v",  # over the length ceiling
+    ],
+)
+def test_parse_http_url_rejects_unsafe(url: str) -> None:
+    with pytest.raises(UrlPolicyError):
+        parse_http_url(url)
+
+
+def test_parse_http_url_messages_have_no_ingest_prefix() -> None:
+    with pytest.raises(UrlPolicyError) as exc:
+        parse_http_url("")
+    assert str(exc.value) == "URL is empty"
+
+
+def test_parse_http_url_typed_result_for_dns_name() -> None:
+    parsed = parse_http_url("  https://Sub.Example.co.uk:8443/a/b?c=d#frag\n")
+    assert parsed.url == "https://Sub.Example.co.uk:8443/a/b?c=d#frag"  # trimmed only
+    assert parsed.scheme == "https"
+    assert parsed.host == "sub.example.co.uk"  # urlsplit lowercases the host
+    assert parsed.port == 8443
+    assert parsed.ip is None  # a DNS name — resolution deferred to fetch time
+
+
+def test_parse_http_url_typed_result_for_ip_literal() -> None:
+    parsed = parse_http_url("https://8.8.8.8/v")
+    assert parsed.host == "8.8.8.8"
+    assert parsed.port is None
+    assert parsed.ip == ipaddress.ip_address("8.8.8.8")
+
+
+def test_parse_http_url_strips_trailing_root_dot_from_host() -> None:
+    assert parse_http_url("https://example.com./v").host == "example.com"
+
+
+def test_parse_http_url_custom_max_bytes() -> None:
+    with pytest.raises(UrlPolicyError, match="exceeds 64 bytes"):
+        parse_http_url("https://example.com/" + "a" * 64, max_bytes=64)
