@@ -1,4 +1,75 @@
 {# The label list — full-page include and htmx post-decision refresh target. #}
+{% macro hint_state_pill(hint) %}
+  {% if hint.state.value == "accepted" %}<span class="pill human">accepted</span>
+  {% elif hint.state.value == "rejected" %}<span class="pill human">rejected</span>
+  {% elif hint.state.value == "superseded" %}<span class="pill unresolved">superseded</span>
+  {% endif %}
+{% endmacro %}
+{% macro hint_decision_forms(hint) %}
+  {% if token and hint.state.value == "proposed" %}
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/candidates/{{ hint.candidate.id }}/decision"
+        hx-post="/review/{{ run.id }}/candidates/{{ hint.candidate.id }}/decision"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="hidden" name="verdict" value="accept">
+    <button type="submit">Accept</button>
+  </form>
+  <form class="inline" method="post"
+        action="/review/{{ run.id }}/candidates/{{ hint.candidate.id }}/decision"
+        hx-post="/review/{{ run.id }}/candidates/{{ hint.candidate.id }}/decision"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    <input type="hidden" name="verdict" value="reject">
+    <button type="submit">Reject</button>
+  </form>
+  {% endif %}
+{% endmacro %}
+
+{# Name suggestions (issue #38): read/heard names are drafts about identity,
+   never identity — accepting records the review, it assigns nothing. #}
+{% if names_enabled %}
+<div class="name-hints">
+  <h2>Name hints</h2>
+  {% if name_hints_run %}
+  <p class="muted">
+    Names probably in this recording, mined from its metadata and transcript.
+    Accepting records your review — it does not assign a speaker.
+  </p>
+  <ul>
+    {% for hint in name_hints_run %}
+    <li>
+      {{ hint.candidate.value }}
+      <span class="muted">({{ "%.2f"|format(hint.candidate.score or 0) }})</span>
+      {{ hint_state_pill(hint) }}
+      {% if hint.evidence %}
+      <span class="muted">— {{ hint.evidence[0].source_field or "transcript" }}:
+        “{{ hint.evidence[0].snippet or hint.candidate.value }}”</span>
+      {% endif %}
+      {{ hint_decision_forms(hint) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% elif names_last_run %}
+  <p class="muted">No name suggestions found in this recording's metadata or transcript.</p>
+  {% else %}
+  <p class="muted">No name sweep has run yet.</p>
+  {% endif %}
+  {% if token %}
+  <form class="inline" method="post" action="/review/{{ run.id }}/enrich/names"
+        hx-post="/review/{{ run.id }}/enrich/names"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <button type="submit">
+      {{ "Re-run name suggestions" if names_last_run else "Generate name suggestions" }}
+    </button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+
 {% for s in states %}
 <div class="label-card">
   <h2>
@@ -25,6 +96,18 @@
       Heard name (unverified): “{{ s.llm_hint_name }}”.
     {% endif %}
   </p>
+  {% if names_enabled and name_hints_labels.get(s.label) %}
+  <ul class="name-hints-label">
+    {% for hint in name_hints_labels[s.label] %}
+    <li>
+      Self-introduced (unverified): “{{ hint.candidate.value }}”
+      <span class="muted">({{ "%.2f"|format(hint.candidate.score or 0) }}{% if hint.evidence and hint.evidence[0].timestamp_seconds is not none %}, at {{ "%.0f"|format(hint.evidence[0].timestamp_seconds) }}s{% endif %})</span>
+      {{ hint_state_pill(hint) }}
+      {{ hint_decision_forms(hint) }}
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
   {% for seg in previews.get(s.label, []) %}
   <div class="preview">
     <span class="t">{{ "%.1f"|format(seg.start_seconds) }}s</span>
@@ -55,6 +138,7 @@
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="nonce" value="{{ nonce() }}">
     <input type="text" name="display_name" placeholder="new speaker name"
+           value="{{ enroll_prefill.get(s.label, '') }}"
            minlength="1" maxlength="120" required>
     <button type="submit">Enroll new</button>
   </form>

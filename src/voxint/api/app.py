@@ -105,15 +105,34 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
+    ClaimField,
     Decision,
     DiarizationTurn,
+    EnrichmentCandidate,
     PipelineRun,
+    ProfileDecision,
     RunStatus,
     Speaker,
     StageRun,
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.enrichment.drafts import EnrichmentScope
+from voxint.enrichment.producers.names import (
+    PRODUCER_NAME as NAMES_PRODUCER,
+)
+from voxint.enrichment.producers.names import (
+    NameProducerError,
+    run_offline_name_producer,
+)
+from voxint.enrichment.queries import (
+    CandidateState,
+    CandidateView,
+    candidates_for_run,
+    latest_producer_run,
+)
+from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
+from voxint.enrichment.review import StaleCandidateError, record_profile_decision
 from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
@@ -437,6 +456,58 @@ def _label_previews(
     return previews
 
 
+# Rendering precedence inside one (target, value) suggestion group: a human
+# decision is history and outranks a fresh proposed duplicate from a rerun
+# (decided candidates are terminal and never superseded), which outranks
+# superseded leftovers.
+_HINT_STATE_PRECEDENCE = {
+    CandidateState.ACCEPTED: 0,
+    CandidateState.REJECTED: 1,
+    CandidateState.PROPOSED: 2,
+    CandidateState.SUPERSEDED: 3,
+}
+
+
+def _name_suggestions(
+    session: Session, run_id: uuid.UUID
+) -> tuple[list[CandidateView], dict[str, list[CandidateView]]]:
+    """Representative NAME suggestions for the workbench: run-level + per-label.
+
+    Each (target, casefolded value) group renders one representative so rerun
+    duplicates beside decided history are never presented as new suggestions.
+    """
+    views = [
+        view
+        for view in candidates_for_run(session, run_id)
+        if view.candidate.field == ClaimField.NAME.value
+    ]
+    groups: dict[tuple[str | None, str], CandidateView] = {}
+    for view in views:
+        key = (view.candidate.diarization_label, view.candidate.value.casefold())
+        current = groups.get(key)
+        if (
+            current is None
+            or _HINT_STATE_PRECEDENCE[view.state] < _HINT_STATE_PRECEDENCE[current.state]
+        ):
+            groups[key] = view
+
+    def _order(view: CandidateView) -> tuple[int, float, str]:
+        return (
+            _HINT_STATE_PRECEDENCE[view.state],
+            -(view.candidate.score or 0.0),
+            view.candidate.value.casefold(),
+        )
+
+    run_level = sorted((view for (label, _), view in groups.items() if label is None), key=_order)
+    per_label: dict[str, list[CandidateView]] = {}
+    for (label, _), view in groups.items():
+        if label is not None:
+            per_label.setdefault(label, []).append(view)
+    for label_views in per_label.values():
+        label_views.sort(key=_order)
+    return run_level, per_label
+
+
 def _workbench_context(
     request: Request,
     session: Session,
@@ -448,13 +519,25 @@ def _workbench_context(
     # Assignable identities only — merged and archived speakers are curated out
     # of the roster and must not attract new decisions.
     speakers = active_speakers(session)
+    name_hints_run, name_hints_labels = _name_suggestions(session, run.id)
     return {
+        "name_hints_run": name_hints_run,
+        "name_hints_labels": name_hints_labels,
+        "names_enabled": settings.enrichment_names_enabled,
+        "names_last_run": latest_producer_run(session, NAMES_PRODUCER, EnrichmentScope.run(run.id)),
+        # An accepted per-label suggestion prefills the Enroll input (editable,
+        # never auto-submitted) — the one-click path from hint to enrollment.
+        "enroll_prefill": {
+            label: next(
+                (view.candidate.value for view in views if view.state is CandidateState.ACCEPTED),
+                "",
+            )
+            for label, views in name_hints_labels.items()
+        },
         "request": request,
         "run": run,
         "states": states,
-        "previews": _label_previews(
-            session, run.id, states, settings.review_preview_segments
-        ),
+        "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
         "speakers": speakers,
         "token": token,
         "resolution": Resolution,
@@ -602,9 +685,7 @@ def _labels_response(
     return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
 
 
-def _roster_context(
-    request: Request, session: Session, error: str | None = None
-) -> dict[str, Any]:
+def _roster_context(request: Request, session: Session, error: str | None = None) -> dict[str, Any]:
     """Template context for the roster page and its htmx fragment."""
     overview = roster_overview(session)
     secret = request.app.state.csrf_secret
@@ -612,8 +693,7 @@ def _roster_context(
         "request": request,
         "overview": overview,
         "voiceprints": {
-            entry.speaker.id: voiceprint_bars(entry.embeddings)
-            for entry in overview.active
+            entry.speaker.id: voiceprint_bars(entry.embeddings) for entry in overview.active
         },
         "roster_error": error,
         "active_nav": "speakers",
@@ -621,15 +701,11 @@ def _roster_context(
         "csrf_merge": mint_csrf_token(secret, CSRF_ROSTER_MERGE),
         "csrf_archive": mint_csrf_token(secret, CSRF_ROSTER_ARCHIVE),
         "csrf_restore": mint_csrf_token(secret, CSRF_ROSTER_RESTORE),
-        "csrf_embedding_delete": mint_csrf_token(
-            secret, CSRF_ROSTER_EMBEDDING_DELETE
-        ),
+        "csrf_embedding_delete": mint_csrf_token(secret, CSRF_ROSTER_EMBEDDING_DELETE),
     }
 
 
-def _roster_response(
-    request: Request, session: Session, error: str | None = None
-) -> Response:
+def _roster_response(request: Request, session: Session, error: str | None = None) -> Response:
     """Post-mutation response, mirroring ``_labels_response``: htmx gets the
     refreshed roster fragment (operator errors rendered inline), a plain form
     POST gets a 303 back to the page — or the full page when it carries an
@@ -692,9 +768,7 @@ def _register_routes(app: FastAPI) -> None:
         _require_csrf(request, CSRF_SETUP, csrf_token)
         settings: Settings = request.app.state.settings
         try:
-            folders = normalize_media_folders(
-                media_folders.splitlines(), settings.media_root
-            )
+            folders = normalize_media_folders(media_folders.splitlines(), settings.media_root)
         except SetupValidationError as exc:
             # Validation runs BEFORE any get_or_create, so a rejected save writes
             # nothing; re-render the step with the message and the raw input intact.
@@ -715,9 +789,7 @@ def _register_routes(app: FastAPI) -> None:
         # existing media" stays discoverable; the template offers a Continue link.
         return _setup_redirect(WizardStep.MEDIA)
 
-    def _scan_response(
-        request: Request, session: Session, result: ScanResult
-    ) -> Response:
+    def _scan_response(request: Request, session: Session, result: ScanResult) -> Response:
         """htmx → the scan preview/result fragment; a plain POST → back to the step.
 
         The scan feature is htmx-driven (a fragment swapped into the media step);
@@ -731,9 +803,7 @@ def _register_routes(app: FastAPI) -> None:
                 {
                     "request": request,
                     "result": result,
-                    "csrf_setup": mint_csrf_token(
-                        request.app.state.csrf_secret, CSRF_SETUP
-                    ),
+                    "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
                 },
             )
         return _setup_redirect(WizardStep.MEDIA)
@@ -795,9 +865,7 @@ def _register_routes(app: FastAPI) -> None:
                     "result": confirmed,
                     "queued": len(run_ids),
                     "published": published,
-                    "csrf_setup": mint_csrf_token(
-                        request.app.state.csrf_secret, CSRF_SETUP
-                    ),
+                    "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
                 },
             )
         return _setup_redirect(WizardStep.MEDIA)
@@ -995,9 +1063,7 @@ def _register_routes(app: FastAPI) -> None:
                 "fetch_submission_id": uuid.uuid4().hex,
                 # Per-form CSRF tokens, each bound to its own action so one form's
                 # token is not valid on the other's route (or on /requeue).
-                "csrf_submit": mint_csrf_token(
-                    request.app.state.csrf_secret, CSRF_SUBMIT
-                ),
+                "csrf_submit": mint_csrf_token(request.app.state.csrf_secret, CSRF_SUBMIT),
                 "csrf_fetch": mint_csrf_token(request.app.state.csrf_secret, CSRF_FETCH),
                 # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
                 # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
@@ -1111,9 +1177,7 @@ def _register_routes(app: FastAPI) -> None:
         except StageDataError:
             audio_available = False
         transcript_available = bool(
-            session.scalar(
-                select(exists().where(TranscriptSegment.pipeline_run_id == run_id))
-            )
+            session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
         )
         return templates.TemplateResponse(
             request,
@@ -1133,9 +1197,7 @@ def _register_routes(app: FastAPI) -> None:
                 # enqueue was deferred by a broker outage redirects here with it.
                 "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
                 # CSRF token for the requeue form (rendered only when FAILED).
-                "csrf_requeue": mint_csrf_token(
-                    request.app.state.csrf_secret, CSRF_REQUEUE
-                ),
+                "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
                 # Acquisition context (issue #36): the write-once snapshot, or
                 # None for uploads / pre-capture URL runs. Scraped metadata and
                 # the operator's own notes render in separate sections.
@@ -1258,9 +1320,7 @@ def _register_routes(app: FastAPI) -> None:
                 "channel": snapshot.channel,
                 "channel_url": snapshot.channel_url,
                 "description": snapshot.description,
-                "upload_date": (
-                    snapshot.upload_date.isoformat() if snapshot.upload_date else None
-                ),
+                "upload_date": (snapshot.upload_date.isoformat() if snapshot.upload_date else None),
                 "duration_seconds": snapshot.duration_seconds,
                 "tags": snapshot.tags,
                 "canonical_url": snapshot.canonical_url,
@@ -1282,9 +1342,7 @@ def _register_routes(app: FastAPI) -> None:
                 "operator_notes": run.operator_notes,
             },
             "source_metadata": source_metadata,
-            "segments": transcript_payload(
-                attributed_transcript(session, run_id, text=variant)
-            ),
+            "segments": transcript_payload(attributed_transcript(session, run_id, text=variant)),
         }
         return Response(
             content=json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
@@ -1292,9 +1350,7 @@ def _register_routes(app: FastAPI) -> None:
         )
 
     @protected.get("/review")
-    def review_queue(
-        request: Request, operator: OperatorDep, session: SessionDep
-    ) -> Response:
+    def review_queue(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         return templates.TemplateResponse(
             request,
             "queue.html",
@@ -1304,9 +1360,7 @@ def _register_routes(app: FastAPI) -> None:
                 "operator": operator,
                 # CSRF token for the per-row claim forms.
                 "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
-                "tutorial": _tutorial_banner(
-                    request, session, page=TutorialPage.REVIEW_QUEUE
-                ),
+                "tutorial": _tutorial_banner(request, session, page=TutorialPage.REVIEW_QUEUE),
                 "active_nav": "review",
             },
         )
@@ -1349,9 +1403,7 @@ def _register_routes(app: FastAPI) -> None:
             row = get_app_settings(session)
             if row is not None and row.tutorial_completed_at is None:
                 suffix = "&tutorial=adjudicate"
-        return RedirectResponse(
-            f"/review/{run_id}?token={token}{suffix}", status_code=303
-        )
+        return RedirectResponse(f"/review/{run_id}?token={token}{suffix}", status_code=303)
 
     @protected.get("/review/{run_id}")
     def workbench(
@@ -1418,9 +1470,7 @@ def _register_routes(app: FastAPI) -> None:
             # row, so the active check and the ledger append below serialize
             # with roster curation instead of racing it.
             speaker = session.execute(
-                select(Speaker)
-                .where(Speaker.id == speaker_id)
-                .with_for_update(read=True)
+                select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
             ).scalar_one_or_none()
             if speaker is None:
                 raise HTTPException(status_code=422, detail=f"no speaker {speaker_id}")
@@ -1480,6 +1530,77 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
+    @protected.post("/review/{run_id}/enrich/names")
+    def enrich_names(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+    ) -> Response:
+        """Operator-triggered offline name sweep (issue #38), synchronous.
+
+        Pure regex + DB over one run's stored rows — sub-second — so it runs
+        inline and the htmx response swaps the refreshed suggestion list in.
+        Claim-token-gated like every other workbench mutation.
+        """
+        settings: Settings = request.app.state.settings
+        if not settings.enrichment_names_enabled:
+            raise HTTPException(status_code=404, detail="name enrichment is disabled")
+        try:
+            run = verify_claim(session, run_id, token)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            run_offline_name_producer(session, run_id=run_id, settings=settings)
+        except NameProducerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _labels_response(request, session, run, token)
+
+    @protected.post("/review/{run_id}/candidates/{candidate_id}/decision")
+    def decide_name_candidate(
+        run_id: uuid.UUID,
+        candidate_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        nonce: Annotated[str, Form(min_length=8, max_length=64)],
+        verdict: Annotated[str, Form()],
+    ) -> Response:
+        """Accept/reject one name suggestion — a review record, never identity.
+
+        Writes the profile-review trail only: no speaker, assignment, or
+        adjudication ruling is created (drafts are suggestions about identity).
+        """
+        try:
+            run = verify_claim(session, run_id, token)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            decision = ProfileDecision(verdict)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"unknown verdict {verdict!r}") from exc
+        candidate = session.get(EnrichmentCandidate, candidate_id)
+        if candidate is None or candidate.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such candidate in this run")
+        try:
+            record_profile_decision(
+                session,
+                candidate_id=candidate_id,
+                decision=decision,
+                operator=operator,
+                idempotency_key=nonce,
+            )
+        except StaleCandidateError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="superseded by a newer sweep — refresh and re-review",
+            ) from exc
+        except EnrichmentReplayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _labels_response(request, session, run, token)
+
     # Transcript downloads: one attributed read shaped by a pure formatter (see
     # voxint/export). The sibling extensions (.txt/.srt/.vtt/.json) share the CLI's
     # exact byte output through render_transcript, so a download and a piped
@@ -1495,9 +1616,7 @@ def _register_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         lines = attributed_transcript(session, run_id, text=variant)
-        return Response(
-            content=render_transcript(lines, fmt), media_type=MEDIA_TYPES[fmt.value]
-        )
+        return Response(content=render_transcript(lines, fmt), media_type=MEDIA_TYPES[fmt.value])
 
     @protected.get("/review/{run_id}/export.txt")
     def export_transcript_txt(
@@ -1562,9 +1681,7 @@ def _register_routes(app: FastAPI) -> None:
     # never "complete" or "replay" an unseeded tutorial.
 
     @protected.get("/settings")
-    def settings_page(
-        request: Request, operator: OperatorDep, session: SessionDep
-    ) -> Response:
+    def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         tutorial_run = ready_tutorial_run_id(session)
         row = get_app_settings(session)
         return templates.TemplateResponse(
@@ -1584,9 +1701,7 @@ def _register_routes(app: FastAPI) -> None:
                     and row is not None
                     and row.tutorial_completed_at is not None
                 ),
-                "csrf_settings": mint_csrf_token(
-                    request.app.state.csrf_secret, CSRF_SETTINGS
-                ),
+                "csrf_settings": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS),
                 "active_nav": "settings",
             },
         )
@@ -1634,9 +1749,7 @@ def _register_routes(app: FastAPI) -> None:
     # missing speakers/embeddings stay real 404s.
 
     @protected.get("/speakers")
-    def speakers_page(
-        request: Request, operator: OperatorDep, session: SessionDep
-    ) -> Response:
+    def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         return templates.TemplateResponse(
             request, "speakers.html", _roster_context(request, session)
         )
@@ -1754,17 +1867,13 @@ def _register_routes(app: FastAPI) -> None:
             byte_range = parse_range(request.headers.get("range"), size)
         except RangeNotSatisfiableError:
             fh.close()
-            return Response(
-                status_code=416, headers={"Content-Range": f"bytes */{size}"}
-            )
+            return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
         headers = {"Accept-Ranges": "bytes", "Content-Type": "audio/wav"}
         if byte_range is None:
             status, start, length = 200, 0, size
         else:
             status, start, length = 206, byte_range.start, byte_range.length
-            headers["Content-Range"] = (
-                f"bytes {byte_range.start}-{byte_range.end}/{size}"
-            )
+            headers["Content-Range"] = f"bytes {byte_range.start}-{byte_range.end}/{size}"
         headers["Content-Length"] = str(length)
         if request.method == "HEAD":
             fh.close()
