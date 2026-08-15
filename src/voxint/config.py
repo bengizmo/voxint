@@ -7,6 +7,7 @@ hardcoded elsewhere. Values come from the environment (or an ``.env`` file in de
 import os
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -248,6 +249,36 @@ class Settings(BaseSettings):
     enrichment_names_enabled: bool = True
     enrichment_names_llm_enabled: bool = False
 
+    # Web research retrieval (#39): pluggable web_search + hardened read_url.
+    # OFF by default, and deliberately INDEPENDENT of llm_enabled — configuring
+    # an LLM must never imply outbound egress, and enabling retrieval must not
+    # require an LLM (no cross-validator, on purpose). When off, the research
+    # entrypoints return structured "disabled" outcomes without touching DNS or
+    # the network. The provider base URL is operator-configured egress (a LAN
+    # SearxNG is the expected setup) — the same trust class as llm_base_url,
+    # NOT subject to the public-address policy; every result URL a provider
+    # returns IS, via the shared netcheck string gate and read_url's per-hop
+    # resolved-address revalidation.
+    voxint_web_research: bool = False
+    web_search_provider: Literal["searxng"] = "searxng"
+    web_search_base_url: str = ""
+    # Credential for future key-bearing providers; unused by searxng. Treated
+    # as a secret everywhere (SettingsError sanitization, log redaction).
+    web_search_api_key: str = ""
+    web_search_max_results: int = Field(default=8, ge=1, le=20)
+    web_search_timeout_seconds: PositiveSeconds = 20.0
+    # read_url caps. Byte cap counts response body bytes as received (identity
+    # encoding is REQUIRED — compressed responses are refused outright, which
+    # removes the decompression-bomb class instead of bounding it).
+    web_read_max_bytes: int = Field(default=5 * 1024 * 1024, ge=1)
+    web_read_max_redirects: int = Field(default=5, ge=0)
+    # Per-hop httpx timeout; the whole call additionally runs under the total
+    # wall-clock budget below (DNS resolution is the one step a deadline cannot
+    # hard-interrupt — see docs/architecture.md).
+    web_read_timeout_seconds: PositiveSeconds = 30.0
+    web_read_total_seconds: PositiveSeconds = 60.0
+    web_read_max_text_chars: int = Field(default=60_000, ge=1)
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -321,6 +352,37 @@ class Settings(BaseSettings):
             raise ValueError(
                 "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
                 " — the LLM pass is additive to the offline name producer"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _web_research_provider_config(self) -> "Settings":
+        # Enabling retrieval with an unusable provider config would surface as
+        # a confusing runtime failure on the first search — refuse at startup
+        # instead. The base URL must be absolute http(s) and credential-free
+        # (provider auth goes in web_search_api_key, never the URL, so it can
+        # be redacted uniformly). Deliberately NO check against llm_enabled in
+        # either direction: the capabilities are independent by design.
+        if not self.voxint_web_research:
+            return self
+        base = self.web_search_base_url.strip()
+        if not base:
+            raise ValueError(
+                "voxint_web_research=true requires web_search_base_url — the"
+                " searxng provider has no default endpoint"
+            )
+        try:
+            parts = urlsplit(base)
+        except ValueError:
+            raise ValueError("web_search_base_url is malformed") from None
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(
+                "web_search_base_url must be an absolute http(s) URL"
+            )
+        if parts.username is not None or parts.password is not None:
+            raise ValueError(
+                "web_search_base_url must not embed credentials — use"
+                " web_search_api_key"
             )
         return self
 

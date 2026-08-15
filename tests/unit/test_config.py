@@ -246,3 +246,61 @@ def test_names_llm_pass_requires_offline_producer_enabled() -> None:
             enrichment_names_enabled=False,
             enrichment_names_llm_enabled=True,
         )
+
+
+def test_web_research_defaults_off_and_independent_of_llm() -> None:
+    s = Settings(_env_file=None)
+    assert s.voxint_web_research is False
+    assert s.web_search_provider == "searxng"
+    # Independence both ways: enabling the LLM does not enable retrieval, and
+    # enabling retrieval (with a provider URL) does not need the LLM.
+    s2 = Settings(_env_file=None, llm_enabled=True)
+    assert s2.voxint_web_research is False
+    s3 = Settings(
+        _env_file=None,
+        voxint_web_research=True,
+        web_search_base_url="http://searx.lan:8888",
+    )
+    assert s3.llm_enabled is False
+
+
+def test_web_research_env_flag(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    s = Settings(_env_file=None)
+    assert s.voxint_web_research is True
+    assert s.web_search_base_url == "http://searx.lan:8888"
+
+
+def test_web_research_enabled_requires_base_url() -> None:
+    with pytest.raises(ValidationError, match="web_search_base_url"):
+        Settings(_env_file=None, voxint_web_research=True)
+    # Disabled: an empty base URL is fine — no dead-config refusal.
+    Settings(_env_file=None, voxint_web_research=False)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "searx.lan:8888",  # no scheme
+        "ftp://searx.lan",  # wrong scheme
+        "http://",  # no host
+        "http://user:pass@searx.lan",  # embedded credentials
+    ],
+)
+def test_web_research_base_url_shape_is_validated(base_url: str) -> None:
+    with pytest.raises(ValidationError, match="web_search_base_url"):
+        Settings(
+            _env_file=None, voxint_web_research=True, web_search_base_url=base_url
+        )
+
+
+def test_web_research_api_key_never_in_settings_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # A bad enabled-config must not leak the provider credential into the
+    # sanitized SettingsError message.
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "")  # invalid while enabled
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "SUPERSECRETPROVIDERKEY")
+    with pytest.raises(SettingsError) as exc:
+        get_settings()
+    assert "SUPERSECRETPROVIDERKEY" not in str(exc.value)
