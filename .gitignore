@@ -36,3 +36,9 @@ services/titanet/models/
 # release; sha256s in services/pyannote/models/provenance.json — the config
 # and provenance files ARE tracked, only the checkpoints stay out of git)
 services/pyannote/models/*.bin
+
+# Maintainer-internal notes: a SEPARATE private repo nested here (never part
+# of this public repo; see CLAUDE.md "Internal notes").
+/internal/
+# Session prompts symlink into internal/ — session tooling writes here.
+/docs/session-prompts

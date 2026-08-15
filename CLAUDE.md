@@ -27,6 +27,24 @@ tests/{unit,contracts,integration,parity}/
 docs/                  # architecture, gpu-contracts, operations, release-process, ...
 ```
 
+## Working in this repo directly
+
+Development sessions root HERE (`~/dev/voxint`), not in a parent project.
+
+- **Internal notes** (session prompts, runbooks with machine names, reports,
+  plans) live in `internal/` — a nested, gitignored, SEPARATE git repo pushed
+  only to the private origin host. Nothing in `internal/` is ever part of
+  this public repo, and committed content here must never reference it by
+  URL or hostname.
+- **Session prompts**: `docs/session-prompts` is a gitignored symlink into
+  `internal/session-prompts/`, so `/next-session-prompt` and
+  `/start-next-session` work unchanged from this root. After writing one,
+  commit + push the `internal/` repo (its own git) so it follows you across
+  machines.
+- On a fresh clone, restore the pair:
+  `git clone <private-origin>/voxint-internal internal` then
+  `ln -s ../internal/session-prompts docs/session-prompts`.
+
 ## Hard Rules — public clean-room repo
 
 - **Never** commit internal hostnames, IPs, credentials, tokens, or `.env` —
