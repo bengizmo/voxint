@@ -11,8 +11,23 @@ connection pinning; see docs/architecture.md "Web research egress".
 """
 
 from voxint.research.budget import Attribution, ResearchBudget
+from voxint.research.fetch import FetchOutcome, read_url
+from voxint.research.search import (
+    SearchOutcome,
+    SearchProvider,
+    SearchResult,
+    provider_from_settings,
+    web_search,
+)
 
 __all__ = [
     "Attribution",
+    "FetchOutcome",
     "ResearchBudget",
+    "SearchOutcome",
+    "SearchProvider",
+    "SearchResult",
+    "provider_from_settings",
+    "read_url",
+    "web_search",
 ]
