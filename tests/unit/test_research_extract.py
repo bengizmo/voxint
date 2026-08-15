@@ -109,3 +109,31 @@ def test_plain_text_path_sanitizes_and_caps() -> None:
 def test_entities_are_decoded() -> None:
     out = extract_html_text(b"<p>a &amp; b &lt;tag&gt;</p>", charset=None, max_chars=100)
     assert "a & b <tag>" in out.text
+
+
+def test_entity_encoded_hostile_characters_are_stripped_too() -> None:
+    # convert_charrefs decodes entity references AFTER the pre-parse sanitize
+    # pass, so `&#xE0069;` (tag block), `&#x202E;` (bidi override), and
+    # `&#8203;` (zero-width space) would resurrect the stripped classes unless
+    # handle_data re-sanitizes (review regression: the bypass Kimi found).
+    html = (
+        b"<title>t&#x202E;x</title>"
+        b"<p>x &#xE0069;&#xE0067; &#x202E; &#8203; y</p>"
+    )
+    out = extract_html_text(html, charset=None, max_chars=1000)
+    for ch in out.text + out.title:
+        cp = ord(ch)
+        assert not (0xE0000 <= cp <= 0xE007F), "tag-block char survived"
+        assert cp != 0x202E, "bidi override survived"
+        assert cp != 0x200B, "zero-width space survived"
+    assert "x" in out.text and "y" in out.text
+
+
+def test_one_huge_text_node_cannot_exceed_the_cap() -> None:
+    # _append slices each piece to remaining capacity — a single giant text
+    # node must not blow past max_chars just because the cap was checked
+    # before the append (review finding).
+    html = b"<p>" + b"a" * 100_000 + b"</p>"
+    out = extract_html_text(html, charset=None, max_chars=500)
+    assert len(out.text) <= 500
+    assert out.truncated is True

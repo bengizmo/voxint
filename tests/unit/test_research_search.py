@@ -40,9 +40,15 @@ def provider_with(
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        if isinstance(handler_payload, (bytes, str)):
-            return httpx.Response(status, content=handler_payload)
-        return httpx.Response(status, json=handler_payload)
+        # Streamed body (iterator content): the provider reads via iter_raw,
+        # and a bytes-content MockTransport response would be pre-consumed.
+        if isinstance(handler_payload, bytes):
+            body = handler_payload
+        elif isinstance(handler_payload, str):
+            body = handler_payload.encode()
+        else:
+            body = json.dumps(handler_payload).encode()
+        return httpx.Response(status, content=iter([body]))
 
     provider = SearxngProvider(
         base_url=settings.web_search_base_url,
@@ -240,3 +246,23 @@ def test_search_result_is_frozen_contract() -> None:
     r = SearchResult(title="t", url="https://e.example.com/", snippet="s")
     with pytest.raises(AttributeError):
         r.title = "changed"  # type: ignore[misc]
+
+
+def test_percent_host_and_fragment_results_use_the_full_research_gate() -> None:
+    # Results the reader would always refuse (%-in-host) must be dropped, and
+    # #frag variants of one page must dedupe to the fragment-free canonical
+    # URL (review finding: search used a weaker gate than read_url).
+    payload = {
+        "results": [
+            {"title": "pct", "url": "http://ex%61mple.com/x", "content": ""},
+            {"title": "frag-a", "url": "https://ok.example.com/p#a", "content": ""},
+            {"title": "frag-b", "url": "https://ok.example.com/p#b", "content": ""},
+        ]
+    }
+    provider = provider_with(payload)
+    out = web_search(
+        "q", settings=make_settings(), budget=budget(), attribution=ATTR,
+        provider=provider,
+    )
+    assert [r.url for r in out.results] == ["https://ok.example.com/p"]
+    assert out.dropped_results == 1  # the percent-host entry

@@ -104,6 +104,7 @@ class _TextExtractor(HTMLParser):
         self._length = 0
         self._skip_depth = 0
         self._title_parts: list[str] = []
+        self._title_length = 0
         self._in_title = False
         self.truncated = False
 
@@ -129,16 +130,27 @@ class _TextExtractor(HTMLParser):
             self._append("\n")
 
     def handle_data(self, data: str) -> None:
-        if self._in_title and len("".join(self._title_parts)) < 500:
-            self._title_parts.append(data)
+        # Re-sanitize here: convert_charrefs decodes entity references AFTER
+        # the caller's pre-parse sanitize pass, so `&#xE0069;`/`&#x202E;`-style
+        # refs would otherwise resurrect the very characters that pass strips
+        # (found in review — the pre-parse pass alone is NOT sufficient).
+        data = sanitize_text(data)
+        if self._in_title and self._title_length < 500:
+            self._title_parts.append(data[: 500 - self._title_length])
+            self._title_length += min(len(data), 500 - self._title_length)
         if self._skip_depth == 0:
             self._append(_WS_RUN.sub(" ", data))
 
     def _append(self, piece: str) -> None:
-        if self._length >= self._max_chars:
+        remaining = self._max_chars - self._length
+        if remaining <= 0:
             if piece.strip():
                 self.truncated = True
             return
+        if len(piece) > remaining:
+            if piece[remaining:].strip():
+                self.truncated = True
+            piece = piece[:remaining]
         self._pieces.append(piece)
         self._length += len(piece)
 

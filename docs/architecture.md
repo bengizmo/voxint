@@ -271,10 +271,16 @@ plus a feature-gated CLI (`voxint research search|read`):
 Both operations take a mandatory bounded-identifier `Attribution` and an
 atomic per-invocation `ResearchBudget` (quotas enforced IN the tools; a spent
 budget yields a structured `budget_exhausted` outcome the #40 loop concludes
-from). Every outbound request logs one attribution line — feature, reason,
-host, verdict, bytes, duration — and no outcome, error, or log line ever
-carries a URL, query string, or redirect `Location` (`media.redaction`
-throughout). **Timing caveat:** the total wall clock bounds every HTTP
+from; quota is charged only after validation and the concurrency slot — a
+refusal that performed no network work never burns budget). Every outbound
+request logs one attribution line — feature, reason, host, verdict, bytes,
+duration — and no ERROR detail or log line ever carries a URL, query string,
+or redirect `Location` (`media.redaction` throughout). The one deliberate
+exception: `FetchOutcome.final_url` on a **successful** read is provenance —
+the fragment-free logical URL actually read, which evidence records (#40's
+`UrlEvidence`) require and which may carry a query; consumers store it
+deliberately and never echo it into shared logs (the CLI prints it
+query-stripped). **Timing caveat:** the total wall clock bounds every HTTP
 operation via remaining-time propagation, but blocking DNS resolution cannot
 be hard-interrupted — DNS is the one non-hard-bounded step.
 

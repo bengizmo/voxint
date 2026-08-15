@@ -19,9 +19,11 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   (`VOXINT_WEB_RESEARCH=false`) and fully independent of `LLM_ENABLED`.
   Both tools enforce an atomic per-invocation budget (structured
   `budget_exhausted` outcomes — the contract the future research loop, #40,
-  builds on), require a bounded `Attribution`, and log one host-only
-  attribution line per outbound request; no error, outcome, or log line
-  ever carries a URL, query string, or credential. Operator surface:
+  builds on; quota charged only after validation + concurrency slot),
+  require a bounded `Attribution`, and log one host-only attribution line
+  per outbound request; no error detail or log line ever carries a URL,
+  query string, or credential (`final_url` on a successful read is explicit
+  provenance, printed query-stripped by the CLI). Operator surface:
   `voxint research search|read` (feature-gated, refuses before any DNS
   when off). New settings: `VOXINT_WEB_RESEARCH`, `WEB_SEARCH_PROVIDER`,
   `WEB_SEARCH_BASE_URL`, `WEB_SEARCH_API_KEY`, `WEB_SEARCH_MAX_RESULTS`,

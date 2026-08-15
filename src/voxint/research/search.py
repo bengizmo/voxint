@@ -16,6 +16,7 @@ a header when configured and treated as a secret everywhere else — it joins
 the redaction pass on every surfaced error.
 """
 
+import json
 import logging
 import time
 from collections.abc import Callable
@@ -25,10 +26,10 @@ from typing import Any, Protocol
 import httpx
 
 from voxint.config import Settings
-from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.media.redaction import cap_length, redact
 from voxint.research.budget import Attribution, ResearchBudget
 from voxint.research.extract import sanitize_text
+from voxint.research.policy import UrlPolicyError, gate_research_url
 
 logger = logging.getLogger(__name__)
 
@@ -66,10 +67,16 @@ class SearchProvider(Protocol):
     """The pluggable provider contract: one bounded query → normalized results.
 
     Implementations raise :class:`ProviderError` for any transport, status, or
-    response-shape failure; ``web_search`` turns that into a structured outcome.
+    response-shape failure; ``web_search`` turns that into a structured
+    outcome. ``dropped_last`` reports how many entries of the LAST search were
+    refused by the URL gate or shape checks (0 when none) — part of the
+    protocol so "dropped and counted, not silently vanished" holds for every
+    provider, not just the built-in. Implementations must self-bound their
+    request time to the ``timeout_seconds`` they were constructed with.
     """
 
     name: str
+    dropped_last: int
 
     def search(self, query: str, *, max_results: int) -> list[SearchResult]: ...
 
@@ -107,8 +114,12 @@ def _normalize_entries(
             dropped += 1
             continue
         try:
-            gated_url = parse_http_url(raw_url).url
-        except UrlPolicyError:
+            # The FULL research gate (not just the base string gate): a result
+            # read_url would always refuse (%-in-host, non-IDNA) must never be
+            # surfaced as usable, and the fragment-free canonical URL also
+            # dedupes #frag variants of one page.
+            gated_url = gate_research_url(raw_url).url
+        except (UrlPolicyError, ValueError):
             dropped += 1
             continue
         if gated_url in seen_urls:
@@ -143,63 +154,99 @@ class SearxngProvider:
         self._api_key = api_key
         self._timeout = timeout_seconds
         self._client = client
-        self._dropped_last = 0
+        self.dropped_last = 0
 
-    @property
-    def dropped_last(self) -> int:
-        return self._dropped_last
-
-    def _do_get(self, url: str, params: dict[str, str]) -> httpx.Response:
+    def _bounded_get(self, url: str, params: dict[str, str]) -> bytes:
+        """GET with the body STREAMED against the size bound — a misbehaving
+        provider must not force an unbounded allocation before the check."""
         headers = {"Accept": "application/json"}
         if self._api_key:
             # SearxNG deployments behind an auth proxy commonly key on this.
             headers["X-API-Key"] = self._api_key
         if self._client is not None:
-            return self._client.get(url, params=params, headers=headers)
-        with httpx.Client(
-            follow_redirects=False,
-            trust_env=False,
-            timeout=httpx.Timeout(min(10.0, self._timeout), read=self._timeout,
-                                  write=self._timeout, pool=self._timeout),
-        ) as client:
-            return client.get(url, params=params, headers=headers)
+            client = self._client
+            owns_client = False
+        else:
+            client = httpx.Client(
+                follow_redirects=False,
+                trust_env=False,
+                timeout=httpx.Timeout(min(10.0, self._timeout), read=self._timeout,
+                                      write=self._timeout, pool=self._timeout),
+            )
+            owns_client = True
+        try:
+            request = client.build_request("GET", url, params=params, headers=headers)
+            response = client.send(request, stream=True)
+            try:
+                if response.status_code != 200:
+                    raise ProviderError(f"searxng answered HTTP {response.status_code}")
+                declared = response.headers.get("content-length")
+                if (
+                    declared is not None
+                    and declared.isdigit()
+                    and int(declared) > _MAX_PROVIDER_RESPONSE_BYTES
+                ):
+                    raise ProviderError("searxng response exceeds the size bound")
+                body = bytearray()
+                for chunk in response.iter_raw(65536):
+                    body.extend(chunk)
+                    if len(body) > _MAX_PROVIDER_RESPONSE_BYTES:
+                        raise ProviderError("searxng response exceeds the size bound")
+                return bytes(body)
+            finally:
+                response.close()
+        finally:
+            if owns_client:
+                client.close()
 
     def search(self, query: str, *, max_results: int) -> list[SearchResult]:
         try:
-            response = self._do_get(
+            raw = self._bounded_get(
                 f"{self._base_url}/search", {"q": query, "format": "json"}
             )
         except httpx.TimeoutException:
             raise ProviderError("searxng request timed out") from None
+        except httpx.InvalidURL:
+            # Not an HTTPError subclass; a malformed operator base URL must
+            # still surface as a structured provider failure, never a raw
+            # exception carrying the query-bearing request URL.
+            raise ProviderError("searxng base URL is malformed") from None
         except httpx.HTTPError as exc:
             # httpx error text can echo the request URL (which carries the
             # query) — surface the exception CLASS only.
             raise ProviderError(
                 f"searxng transport failure ({type(exc).__name__})"
             ) from None
-        if response.status_code != 200:
-            raise ProviderError(f"searxng answered HTTP {response.status_code}")
-        if len(response.content) > _MAX_PROVIDER_RESPONSE_BYTES:
-            raise ProviderError("searxng response exceeds the size bound")
         try:
-            data = response.json()
+            data = json.loads(raw)
         except ValueError:
             raise ProviderError("searxng response is not valid JSON") from None
         if not isinstance(data, dict) or not isinstance(data.get("results"), list):
             raise ProviderError("searxng response has an unexpected shape")
         kept, dropped = _normalize_entries(data["results"], max_results=max_results)
-        self._dropped_last = dropped
+        self.dropped_last = dropped
         return kept
 
 
 def provider_from_settings(
-    settings: Settings, *, client: httpx.Client | None = None
+    settings: Settings,
+    *,
+    client: httpx.Client | None = None,
+    timeout_seconds: float | None = None,
 ) -> SearchProvider:
-    """Build the configured provider (the Literal in Settings bounds the set)."""
+    """Build the configured provider (the Literal in Settings bounds the set).
+
+    ``timeout_seconds`` overrides the settings timeout — ``web_search`` uses it
+    to clamp the provider call to the budget's remaining wall clock.
+    """
     return SearxngProvider(
         base_url=settings.web_search_base_url,
         api_key=settings.web_search_api_key,
-        timeout_seconds=settings.web_search_timeout_seconds,
+        timeout_seconds=(
+            settings.web_search_timeout_seconds
+            if timeout_seconds is None
+            else timeout_seconds
+        ),
         client=client,
     )
 
@@ -234,7 +281,17 @@ def web_search(
             ok=False, error=ERROR_BUDGET_EXHAUSTED, error_detail="search budget exhausted"
         )
     started = clock()
-    chosen = provider if provider is not None else provider_from_settings(settings)
+    if provider is not None:
+        chosen = provider  # injected providers self-bound their timeout
+    else:
+        # Clamp the provider timeout to the budget's remaining wall clock so a
+        # call started near expiry cannot run the full configured timeout
+        # (try_consume_search above already refused an EXPIRED budget).
+        timeout = settings.web_search_timeout_seconds
+        budget_left = budget.remaining_seconds()
+        if budget_left is not None:
+            timeout = max(0.1, min(timeout, budget_left))
+        chosen = provider_from_settings(settings, timeout_seconds=timeout)
     verdict = "provider_error"
     result_count = 0
     try:

@@ -426,3 +426,53 @@ def test_research_read_failure_exits_2_without_url(
     out = capsys.readouterr().out
     assert "policy_refused" in out
     assert "SECRETQ" not in out
+
+
+def test_research_read_prints_query_stripped_final_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A redirect can mint a signed token into final_url; the terminal (and
+    # scrollback) must never retain it (review finding).
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searxng.example:8888")
+    import voxint.research as research
+    from voxint.research.fetch import FetchOutcome
+
+    def _fake_read(url: str, **_kwargs: object) -> FetchOutcome:
+        return FetchOutcome(
+            ok=True,
+            error=None,
+            error_detail="",
+            text="body",
+            final_url="https://a.example.com/doc?token=SECRETQTOKEN",
+            host="a.example.com",
+            bytes_fetched=4,
+        )
+
+    monkeypatch.setattr(research, "read_url", _fake_read)
+    assert main(["research", "read", "https://a.example.com/doc"]) == 0
+    out = capsys.readouterr().out
+    assert "SECRETQTOKEN" not in out
+    assert "query omitted" in out
+    assert "https://a.example.com/doc" in out
+
+
+def test_research_read_accepts_url_on_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searxng.example:8888")
+    monkeypatch.setattr("sys.stdin", io.StringIO("https://a.example.com/x\n"))
+    import voxint.research as research
+    from voxint.research.fetch import FetchOutcome
+
+    def _fake_read(url: str, **_kwargs: object) -> FetchOutcome:
+        assert url == "https://a.example.com/x"
+        return FetchOutcome(
+            ok=True, error=None, error_detail="", text="piped",
+            final_url="https://a.example.com/x", host="a.example.com",
+        )
+
+    monkeypatch.setattr(research, "read_url", _fake_read)
+    assert main(["research", "read"]) == 0
+    assert "piped" in capsys.readouterr().out

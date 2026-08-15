@@ -21,11 +21,19 @@ it CLOSES that residual for its path:
   class instead of bounding it; the streamed byte count is authoritative and
   ``Content-Length`` only an early refusal hint.
 
-Failures are structured outcomes (a closed error vocabulary), not exceptions —
-the issue #40 tool loop consumes them, and ``budget_exhausted`` in particular
-must be a value the LLM can conclude from. Every outbound request logs one
-attribution line; no message, outcome, or log line ever carries the URL, its
-query, or a redirect Location — the host at most.
+Failures are structured outcomes (a closed error vocabulary — ``http_status``
+carries its numeric code in ``FetchOutcome.status_code``, never a synthesized
+error name), not exceptions — the issue #40 tool loop consumes them, and
+``budget_exhausted`` in particular must be a value the LLM can conclude from.
+Every outbound request logs one attribution line; no ERROR detail or log line
+ever carries the URL, its query, or a redirect Location — the host at most.
+``FetchOutcome.final_url`` on a SUCCESSFUL read is deliberate provenance (the
+fragment-free logical URL actually read, which evidence records need and which
+MAY carry a query): consumers must treat it as data to store deliberately,
+never something to echo into shared logs. Redirect hops are stateless —
+mid-chain ``Set-Cookie`` is intentionally not forwarded (a fresh client per
+attempt is part of the pinning contract), so sessionful redirect flows will
+not work by design.
 
 The total wall clock bounds every HTTP operation via the remaining-time
 calculation; blocking DNS resolution is the one step a deadline cannot
@@ -69,6 +77,10 @@ ERROR_TOO_LARGE = "too_large"
 ERROR_TIMEOUT = "timeout"
 ERROR_TRANSPORT = "transport_error"
 ERROR_CONCURRENCY = "concurrency_limit"
+# Non-2xx, non-redirect HTTP answers: ONE stable error value; the numeric code
+# rides FetchOutcome.status_code (a synthesized "http_404" would make the
+# vocabulary open-ended and force prefix-matching on the #40 side).
+ERROR_HTTP_STATUS = "http_status"
 
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _ALLOWED_MIME = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
@@ -103,11 +115,14 @@ class FetchOutcome:
     text: str = ""
     title: str = ""
     truncated: bool = False
-    final_url: str = ""  # the logical URL actually read (evidence provenance)
+    # SUCCESS-only provenance: the fragment-free logical URL actually read.
+    # May carry a query — store deliberately (evidence), never echo to logs.
+    final_url: str = ""
     host: str = ""
     bytes_fetched: int = 0
     hops: int = 0
     duration_seconds: float = 0.0
+    status_code: int | None = None  # set for error == "http_status"
     sources_chain: tuple[str, ...] = field(default_factory=tuple)  # hop hosts
 
 
@@ -119,6 +134,8 @@ def _refusal(
     hops: int = 0,
     started: float | None = None,
     clock: Callable[[], float] = time.monotonic,
+    bytes_fetched: int = 0,
+    status_code: int | None = None,
 ) -> FetchOutcome:
     duration = 0.0 if started is None else max(0.0, clock() - started)
     return FetchOutcome(
@@ -128,6 +145,8 @@ def _refusal(
         host=host,
         hops=hops,
         duration_seconds=duration,
+        bytes_fetched=bytes_fetched,
+        status_code=status_code,
     )
 
 
@@ -164,8 +183,6 @@ def read_url(
     """
     if not settings.voxint_web_research:
         return _refusal(ERROR_DISABLED, "web research is disabled")
-    if not budget.try_consume_read():
-        return _refusal(ERROR_BUDGET_EXHAUSTED, "read budget exhausted")
 
     started = clock()
     deadline = started + settings.web_read_total_seconds
@@ -177,6 +194,9 @@ def read_url(
             left = min(left, budget_left)
         return left
 
+    # Charge order (contract for the #40 loop): validate, take the concurrency
+    # slot, and only THEN consume a read unit — a malformed URL or a
+    # concurrency refusal performs no network work and must not burn quota.
     try:
         gated = gate_research_url(url)
     except UrlPolicyError as exc:
@@ -187,6 +207,10 @@ def read_url(
             ERROR_CONCURRENCY, "too many concurrent reads", started=started, clock=clock
         )
     try:
+        if not budget.try_consume_read():
+            return _refusal(
+                ERROR_BUDGET_EXHAUSTED, "read budget exhausted", started=started, clock=clock
+            )
         return _follow_and_read(
             gated,
             settings=settings,
@@ -225,22 +249,32 @@ def _follow_and_read(
                 started=started,
                 clock=clock,
             )
-        try:
-            vetted = resolve_public_addresses(current.ascii_host, resolver=resolver)
-        except HostNotPublicError as exc:
-            _log_fetch(attribution, current.ascii_host, hop, "policy_refused", 0, started, clock)
-            return _refusal(
-                ERROR_POLICY_REFUSED,
-                str(exc),
-                host=current.ascii_host,
-                hops=hop,
-                started=started,
-                clock=clock,
-            )
+        if current.is_ip_literal:
+            # The string gate already judged the literal via ip_is_public; a
+            # DNS round-trip would add nothing (getaddrinfo echoes literals).
+            vetted_addresses = [current.ascii_host]
+        else:
+            try:
+                vetted = resolve_public_addresses(
+                    current.ascii_host, resolver=resolver
+                )
+            except HostNotPublicError as exc:
+                _log_fetch(
+                    attribution, current.ascii_host, hop, "policy_refused", 0, started, clock
+                )
+                return _refusal(
+                    ERROR_POLICY_REFUSED,
+                    str(exc),
+                    host=current.ascii_host,
+                    hops=hop,
+                    started=started,
+                    clock=clock,
+                )
+            vetted_addresses = [str(ip) for ip in vetted]
 
         step = _request_once(
             current,
-            vetted=[str(ip) for ip in vetted],
+            vetted=vetted_addresses,
             settings=settings,
             attribution=attribution,
             client_factory=client_factory,
@@ -262,11 +296,24 @@ def _follow_and_read(
                 bytes_fetched=step.bytes_fetched,
                 hops=hop,
                 duration_seconds=max(0.0, clock() - started),
+                status_code=step.status_code,
                 sources_chain=tuple(chain),
             )
-        # A redirect: gate the new logical target and loop.
+        # A redirect: gate the new logical target and loop. ValueError covers
+        # httpx/urllib parse failures a hostile Location can trigger BEFORE the
+        # gate sees the string (e.g. "http://[::1" raises from urljoin) — the
+        # contract is structured outcomes for any remote behavior.
         try:
             current = gate_research_url(step)
+        except ValueError as exc:
+            return _refusal(
+                ERROR_REDIRECT_INVALID,
+                f"redirect target is unparseable ({type(exc).__name__})",
+                host=current.ascii_host,
+                hops=hop + 1,
+                started=started,
+                clock=clock,
+            )
         except UrlPolicyError as exc:
             return _refusal(
                 ERROR_REDIRECT_INVALID,
@@ -305,6 +352,7 @@ def _request_once(
     any HTTP response — including an error status — is terminal for the hop.
     """
     last_transport_error = "no vetted address attempted"
+    last_was_timeout = False
     for address in vetted:
         left = remaining()
         if left <= 0:
@@ -358,20 +406,20 @@ def _request_once(
                 else:
                     verdict = "redirect"
                 return result
-        except httpx.TimeoutException:
+        except httpx.TimeoutException as exc:
+            # A per-attempt timeout against THIS vetted address is a failover
+            # signal like any other transport failure (a blackholed first
+            # answer on a dual-stack host must not fail the whole hop) — but
+            # only while total time remains; the loop header re-checks it.
             verdict = "timeout"
-            return _refusal(
-                ERROR_TIMEOUT,
-                f"request to host {target.ascii_host!r} timed out",
-                host=target.ascii_host,
-                hops=hop,
-                started=started,
-                clock=clock,
-            )
+            last_was_timeout = True
+            last_transport_error = cap_length(redact(f"{type(exc).__name__}: {exc}"))
+            continue
         except httpx.HTTPError as exc:
             # Connect/protocol failure against THIS vetted address — try the
             # next vetted one (never a re-resolution). Exception text can echo
             # the (pinned) request URL, so redact before keeping it.
+            last_was_timeout = False
             last_transport_error = cap_length(redact(f"{type(exc).__name__}: {exc}"))
             continue
         finally:
@@ -380,7 +428,7 @@ def _request_once(
                 attribution, target.ascii_host, hop, verdict, bytes_seen, started, clock
             )
     return _refusal(
-        ERROR_TRANSPORT,
+        ERROR_TIMEOUT if last_was_timeout else ERROR_TRANSPORT,
         f"host {target.ascii_host!r}: {last_transport_error}",
         host=target.ascii_host,
         hops=hop,
@@ -412,15 +460,28 @@ def _consume_response(
                 clock=clock,
             )
         # Resolve against the LOGICAL url — never the pinned-IP request URL.
-        return urljoin(target.url, locations[0].strip())
+        # urljoin itself parses the Location and raises ValueError on hostile
+        # syntax ("http://[::1"), so it needs the same structured refusal.
+        try:
+            return urljoin(target.url, locations[0].strip())
+        except ValueError as exc:
+            return _refusal(
+                ERROR_REDIRECT_INVALID,
+                f"Location header is unparseable ({type(exc).__name__})",
+                host=target.ascii_host,
+                hops=hop,
+                started=started,
+                clock=clock,
+            )
     if not (200 <= status < 300):
         return _refusal(
-            f"http_{status}",
+            ERROR_HTTP_STATUS,
             f"host {target.ascii_host!r} answered HTTP {status}",
             host=target.ascii_host,
             hops=hop,
             started=started,
             clock=clock,
+            status_code=status,
         )
 
     encoding = response.headers.get("content-encoding", "").strip().lower()
@@ -467,6 +528,7 @@ def _consume_response(
                 hops=hop,
                 started=started,
                 clock=clock,
+                bytes_fetched=len(body),
             )
         if remaining() <= 0:
             return _refusal(
@@ -476,6 +538,7 @@ def _consume_response(
                 hops=hop,
                 started=started,
                 clock=clock,
+                bytes_fetched=len(body),
             )
 
     if media_type == "text/plain":

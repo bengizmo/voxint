@@ -63,7 +63,10 @@ class ResearchBudget:
     ) -> None:
         if max_searches < 0 or max_reads < 0:
             raise ValueError("budget maxima must be >= 0")
-        if deadline_seconds is not None and deadline_seconds <= 0:
+        # `not > 0` (rather than `<= 0`) also rejects NaN, which would
+        # otherwise make every deadline comparison False and silently disable
+        # the wall clock — the one bound a runaway loop is stopped by.
+        if deadline_seconds is not None and not deadline_seconds > 0:
             raise ValueError("deadline_seconds must be positive when set")
         self._lock = threading.Lock()
         self._clock = clock

@@ -304,3 +304,19 @@ def test_web_research_api_key_never_in_settings_error(monkeypatch) -> None:  # t
     with pytest.raises(SettingsError) as exc:
         get_settings()
     assert "SUPERSECRETPROVIDERKEY" not in str(exc.value)
+
+
+def test_web_search_base_url_bad_port_and_decorations_fail_at_startup() -> None:
+    # A lazily-parsed bad port must fail at startup, not as an opaque
+    # provider_error on the first search (review finding); query/fragment/
+    # whitespace have no place in a bare endpoint.
+    for bad in [
+        "http://searxng.example:abc",
+        "http://searxng.example:99999999",
+        "http://searxng.example/search?q=x",
+        "http://searxng.example/#frag",
+        " http://searxng.example ",
+        "http://searxng.example\\path",
+    ]:
+        with pytest.raises(ValidationError, match="web_search_base_url"):
+            Settings(_env_file=None, voxint_web_research=True, web_search_base_url=bad)

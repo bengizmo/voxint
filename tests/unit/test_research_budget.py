@@ -89,3 +89,14 @@ def test_invalid_construction_rejected() -> None:
         ResearchBudget(max_searches=-1, max_reads=0)
     with pytest.raises(ValueError):
         ResearchBudget(max_searches=0, max_reads=0, deadline_seconds=0.0)
+
+
+def test_nan_and_inf_deadlines() -> None:
+    # NaN would make every deadline comparison False — the wall clock the #40
+    # loop relies on would silently never fire (review finding).
+    with pytest.raises(ValueError):
+        ResearchBudget(max_searches=1, max_reads=1, deadline_seconds=float("nan"))
+    # +inf is a harmless explicit "no deadline".
+    b = ResearchBudget(max_searches=1, max_reads=1, deadline_seconds=float("inf"))
+    assert b.expired is False
+    assert b.try_consume_read() is True

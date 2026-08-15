@@ -362,10 +362,14 @@ def _research_search(args: argparse.Namespace) -> int:
     so an operator can verify the provider config and egress policy by hand
     before anything (issue #40) consumes the tools programmatically.
     """
-    from voxint.config import get_settings
+    from voxint.config import SettingsError, get_settings
     from voxint.research import Attribution, ResearchBudget, web_search
 
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
     if not settings.voxint_web_research:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
@@ -392,16 +396,32 @@ def _research_search(args: argparse.Namespace) -> int:
 
 
 def _research_read(args: argparse.Namespace) -> int:
-    """Fetch one page as extracted text under the full egress policy (#39)."""
-    from voxint.config import get_settings
+    """Fetch one page as extracted text under the full egress policy (#39).
+
+    The URL can be piped on stdin instead of passed positionally (the same
+    rationale as ``voxint fetch``: argv leaks a signed URL to ps and shell
+    history). Output shows the final URL WITHOUT its query — a redirect can
+    mint a token the operator's terminal/scrollback must not retain.
+    """
+    from urllib.parse import urlsplit, urlunsplit
+
+    from voxint.config import SettingsError, get_settings
     from voxint.research import Attribution, ResearchBudget, read_url
 
-    settings = get_settings()
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
     if not settings.voxint_web_research:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
+    url = args.url if args.url is not None else sys.stdin.readline().strip()
+    if not url:
+        print("error: no URL provided (pass it as an argument or on stdin)")
+        return 2
     outcome = read_url(
-        args.url,
+        url,
         settings=settings,
         budget=ResearchBudget(max_searches=0, max_reads=1),
         attribution=Attribution(feature="cli", reason="operator-read"),
@@ -411,7 +431,10 @@ def _research_read(args: argparse.Namespace) -> int:
         return 2
     if outcome.title:
         print(f"# {outcome.title}")
-    print(f"# {outcome.final_url} ({outcome.bytes_fetched} bytes, {outcome.hops} hop(s))")
+    parts = urlsplit(outcome.final_url)
+    shown = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    suffix = " [query omitted]" if parts.query else ""
+    print(f"# {shown}{suffix} ({outcome.bytes_fetched} bytes, {outcome.hops} hop(s))")
     if outcome.truncated:
         print("# [truncated]")
     print(outcome.text)
@@ -893,7 +916,13 @@ def build_parser() -> argparse.ArgumentParser:
     rread_p = research_sub.add_parser(
         "read", help="fetch one page as extracted text under the egress policy"
     )
-    rread_p.add_argument("url", help="absolute http(s) URL (public hosts only)")
+    rread_p.add_argument(
+        "url",
+        nargs="?",
+        default=None,
+        help="absolute http(s) URL (public hosts only); omit to read one"
+        " line from stdin (keeps a signed URL out of ps/shell history)",
+    )
     rread_p.set_defaults(fn=_research_read)
 
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")

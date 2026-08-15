@@ -393,7 +393,10 @@ def test_http_error_status_is_terminal_with_status_code() -> None:
         client_factory=factory_for(handler),
         resolver=resolver_map({"example.com": [PUBLIC_A]}),
     )
-    assert out.error == "http_404"
+    # ONE stable error value; the numeric code rides a typed field (the #40
+    # loop branches on exact strings, never on prefix-matching "http_404").
+    assert out.error == "http_status"
+    assert out.status_code == 404
 
 
 def test_transport_error_retries_only_within_vetted_set() -> None:
@@ -587,3 +590,179 @@ def test_read_consumes_exactly_one_budget_unit_even_across_hops() -> None:
     )
     assert out.ok is True
     assert b.reads_left == 1  # two hops, ONE read consumed
+
+
+def test_invalid_input_and_concurrency_do_not_burn_read_budget() -> None:
+    # Charging order (review finding, 3/3 reviewers): validate, take the
+    # slot, THEN consume — refusals with no network work keep the quota.
+    b = budget(reads=3)
+    out = read_url(
+        "http://127.0.0.1/x",
+        settings=make_settings(),
+        budget=b,
+        attribution=ATTR,
+        client_factory=exploding_factory,
+        resolver=resolver_map({}),
+    )
+    assert out.error == "invalid_input"
+    assert b.reads_left == 3  # unchanged
+
+    acquired = 0
+    while fetch_mod._read_slots.acquire(blocking=False):
+        acquired += 1
+    try:
+        out2 = read_url(
+            "https://example.com/",
+            settings=make_settings(),
+            budget=b,
+            attribution=ATTR,
+            client_factory=exploding_factory,
+            resolver=resolver_map({"example.com": [PUBLIC_A]}),
+        )
+        assert out2.error == "concurrency_limit"
+        assert b.reads_left == 3  # still unchanged
+    finally:
+        for _ in range(acquired):
+            fetch_mod._read_slots.release()
+
+
+PUBLIC_V6 = "2606:4700:4700::1111"
+
+
+def test_ipv6_vetted_address_is_pinned_with_brackets() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return stream_response(
+            200, headers={"content-type": "text/plain"}, body=b"v6 ok"
+        )
+
+    def resolver(host: str, *args: object, **kwargs: object) -> list[
+        tuple[int, int, int, str, tuple[object, ...]]
+    ]:
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", (PUBLIC_V6, 0, 0, 0))]
+
+    out = read_url(
+        "https://example.com:8443/page",
+        settings=make_settings(),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver,
+    )
+    assert out.ok is True, out.error_detail
+    request = seen[0]
+    # httpx brackets the IPv6 host in the URL; .host exposes it unbracketed.
+    assert request.url.host == PUBLIC_V6
+    assert f"[{PUBLIC_V6}]:8443" in str(request.url)
+    assert request.headers["host"] == "example.com:8443"  # logical identity
+    assert request.extensions["sni_hostname"] == "example.com"
+
+
+def test_ipv6_literal_logical_url_pins_and_sets_bracketed_host_header() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return stream_response(
+            200, headers={"content-type": "text/plain"}, body=b"literal v6"
+        )
+
+    out = read_url(
+        f"http://[{PUBLIC_V6}]:8080/x",
+        settings=make_settings(),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver_map({}),  # IP literal: no DNS resolution happens
+    )
+    assert out.ok is True, out.error_detail
+    request = seen[0]
+    assert request.url.host == PUBLIC_V6
+    assert request.headers["host"] == f"[{PUBLIC_V6}]:8080"
+
+
+def test_unparseable_location_is_a_structured_outcome_not_an_exception() -> None:
+    # "http://[::1" raises ValueError in urljoin — and httpx's own protocol
+    # validation may intercept it even earlier as RemoteProtocolError. Either
+    # way the contract holds: remote behavior yields a STRUCTURED outcome
+    # (redirect_invalid from our guard, transport_error from httpx's), never
+    # an exception escaping read_url (review finding).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://[::1"})
+
+    out = read_url(
+        "https://example.com/",
+        settings=make_settings(),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    assert out.ok is False
+    assert out.error in ("redirect_invalid", "transport_error")
+    assert "[::1" not in out.error_detail  # hostile Location never surfaced
+
+
+def test_timeout_on_first_vetted_address_fails_over_to_second() -> None:
+    # A blackholed first answer (dual-stack AAAA) must not fail the hop while
+    # total time remains (review finding).
+    attempted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempted.append(request.url.host)
+        if request.url.host == PUBLIC_A:
+            raise httpx.ConnectTimeout("blackholed")
+        return stream_response(
+            200, headers={"content-type": "text/plain"}, body=b"failover ok"
+        )
+
+    out = read_url(
+        "https://example.com/",
+        settings=make_settings(),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver_map({"example.com": [PUBLIC_A, PUBLIC_B]}),
+    )
+    assert out.ok is True
+    assert out.text == "failover ok"
+    assert attempted == [PUBLIC_A, PUBLIC_B]
+
+
+def test_all_addresses_timing_out_reports_timeout_not_transport() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("blackholed")
+
+    out = read_url(
+        "https://example.com/",
+        settings=make_settings(),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver_map({"example.com": [PUBLIC_A, PUBLIC_B]}),
+    )
+    assert out.error == "timeout"
+
+
+def test_mid_body_too_large_reports_bytes_fetched() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        def gen() -> Iterator[bytes]:
+            for _ in range(64):
+                yield b"x" * 1024
+
+        return httpx.Response(
+            200, headers={"content-type": "text/plain"}, content=gen()
+        )
+
+    out = read_url(
+        "https://example.com/",
+        settings=make_settings(web_read_max_bytes=4096),
+        budget=budget(),
+        attribution=ATTR,
+        client_factory=factory_for(handler),
+        resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    assert out.error == "too_large"
+    assert out.bytes_fetched > 4096  # audit trail shows what was pulled

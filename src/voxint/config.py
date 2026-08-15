@@ -365,14 +365,21 @@ class Settings(BaseSettings):
         # either direction: the capabilities are independent by design.
         if not self.voxint_web_research:
             return self
-        base = self.web_search_base_url.strip()
-        if not base:
+        base = self.web_search_base_url
+        if not base.strip():
             raise ValueError(
                 "voxint_web_research=true requires web_search_base_url — the"
                 " searxng provider has no default endpoint"
             )
+        if base != base.strip() or any(c.isspace() for c in base) or "\\" in base:
+            raise ValueError(
+                "web_search_base_url must not contain whitespace or backslashes"
+            )
         try:
             parts = urlsplit(base)
+            # .port parses lazily; touch it so ":abc"/out-of-range fails at
+            # startup instead of as an opaque provider_error on first search.
+            _ = parts.port
         except ValueError:
             raise ValueError("web_search_base_url is malformed") from None
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -383,6 +390,10 @@ class Settings(BaseSettings):
             raise ValueError(
                 "web_search_base_url must not embed credentials — use"
                 " web_search_api_key"
+            )
+        if parts.query or parts.fragment:
+            raise ValueError(
+                "web_search_base_url must be a bare endpoint (no query/fragment)"
             )
         return self
 
