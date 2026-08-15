@@ -1,0 +1,191 @@
+# macOS arm64 lane for the metal tier — partial Gate M automation (issue #34).
+#
+# GitHub's macos arm64 runners have a real Apple GPU (MPS), so unlike the
+# ROCm gate this hardware DOES exist in shared CI. This lane runs the metal
+# launcher's unit tests on real macOS plus the three parity modules from the
+# SAME per-service venvs the launcher ships (built by `voxint-metal.sh
+# setup`, sha-verified weights and all) — measuring the exact dependency
+# chains the tier deploys, not a merged approximation.
+#
+# What this lane is NOT: a replacement for maintainer Gate M. Per-chip
+# verdict-report refreshes stay maintainer-run (docs/release-process.md) —
+# CI runners are one chip generation, and the committed bounds deliberately
+# keep cross-chip margin. This lane catches regressions between refreshes.
+#
+# Schedule: nightly + manual dispatch, never per-PR — macOS runners are a
+# scarcer pool, and the weights fetch is ~3.2 GB even when cached.
+#
+# Skip honesty: the metal parity modules skip themselves off-Mac by design
+# and deliberately never honor VOXINT_PARITY_REQUIRED (no shared CI had the
+# hardware when that decision was made). Here the hardware exists, so a
+# fully-skipped module must NOT green-board: the junit guard at the end
+# fails the lane if any expected module ran zero non-skipped tests. MPS on
+# the virtualized runners is probed first (same tensor-op probe as
+# `voxint-metal.sh doctor`); an absent backend skips the pyannote module
+# with a visible warning instead of a silent green.
+#
+# Runs only on the GitHub mirror (same server_url guard as release.yml):
+# Forgejo parses .github/workflows too and has no macos runners — a
+# scheduled job there would queue forever.
+name: metal-lane
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 7 * * *"  # nightly, off the top of the hour
+
+jobs:
+  # The launcher's own unit suite on real macOS: plutil lint runs instead of
+  # skipping, and every bash helper executes under the BSD userland it ships
+  # for (ubuntu CI exercises the same tests under GNU tools).
+  launcher-unit:
+    if: github.server_url == 'https://github.com'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install (dev extra)
+        run: uv sync --frozen --extra dev
+      - name: Launcher unit tests (plutil lint active on macOS)
+        run: uv run pytest tests/unit/test_metal_launcher.py -q
+
+  metal-parity:
+    if: github.server_url == 'https://github.com'
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Resolve the pinned whisper revision (cache key)
+        # Single source: the launcher's pin. hashFiles on the whole script
+        # would bust a ~3 GB cache on every unrelated edit.
+        run: |
+          rev=$(sed -n 's/^WHISPER_HF_REVISION=//p' scripts/metal/voxint-metal.sh)
+          test -n "$rev"
+          echo "WHISPER_HF_REVISION=$rev" >> "$GITHUB_ENV"
+      # Weights caches, keyed on the sha authorities — never restore-keys:
+      # a stale-but-near weights cache is worse than a cold download, and
+      # `setup` re-verifies whatever lands here against the provenance
+      # sha256s (a corrupt cache is cleared and re-fetched, not trusted).
+      - name: Cache pyannote checkpoints
+        uses: actions/cache@v4
+        with:
+          path: ~/.voxint-metal/models/pyannote
+          key: metal-pyannote-${{ runner.arch }}-${{ hashFiles('services/pyannote/models/provenance.json') }}
+      - name: Cache titanet ONNX graph
+        uses: actions/cache@v4
+        with:
+          path: ~/.voxint-metal/models/titanet
+          key: metal-titanet-${{ runner.arch }}-${{ hashFiles('tests/parity/fixtures/onnx/provenance.json') }}
+      - name: Cache whisper large-v2 snapshot
+        uses: actions/cache@v4
+        with:
+          path: ~/.voxint-metal/models/whisper
+          key: metal-whisper-${{ runner.arch }}-${{ env.WHISPER_HF_REVISION }}
+      - name: Cache uv wheel downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/uv
+          key: metal-uv-${{ runner.arch }}-${{ hashFiles('services/whisper/requirements.metal.txt', 'services/pyannote/requirements.metal.txt', 'services/pyannote/requirements.txt', 'services/titanet/requirements.cpu.txt') }}
+      - name: Launcher setup (venvs + sha-verified weights)
+        # The product path, not a CI reimplementation: per-service 3.11
+        # venvs from the shipped requirement files, weights fetched from the
+        # public asset releases and verified against the committed
+        # provenance sha256s, vendored pyannote config generated and
+        # param-checked. Free smoke coverage of `setup` itself on macOS.
+        run: ./scripts/metal/voxint-metal.sh setup
+      - name: Inject pytest into the service venvs
+        # The parity modules run in-process from each venv (the documented
+        # Gate M flow); pytest is the only addition to the shipped pins.
+        run: |
+          for svc in whisper pyannote titanet; do
+            uv pip install --quiet --python "$HOME/.voxint-metal/venvs/$svc/bin/python" pytest
+          done
+      - name: Probe MPS (tensor-op sanity, not just availability)
+        id: mps
+        # Same probe as `voxint-metal.sh doctor`: the backend must exist AND
+        # compute a correct matmul. Absent/broken MPS on a virtualized
+        # runner skips the pyannote module loudly (see the junit guard) —
+        # never a hard fail on nightly, because runner virtualization is not
+        # a numerics regression.
+        run: |
+          if "$HOME/.voxint-metal/venvs/pyannote/bin/python" - <<'PYEOF'
+          import torch
+
+          assert torch.backends.mps.is_available(), "MPS backend not available"
+          gen = torch.Generator().manual_seed(0)
+          x = torch.randn(64, 64, generator=gen)
+          ref = x @ x
+          out = (x.to("mps") @ x.to("mps")).cpu()
+          assert torch.allclose(out, ref, rtol=1e-2, atol=1e-2), "MPS wrong output"
+          PYEOF
+          then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::MPS unavailable on this runner — pyannote metal lane skipped"
+            echo "**MPS unavailable on this runner** — pyannote metal parity did not run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Whisper metal parity (arm64 CT2 vs CUDA reference)
+        run: |
+          "$HOME/.voxint-metal/venvs/whisper/bin/python" -m pytest \
+            tests/parity/test_whisper_metal.py -q -rs --junitxml=junit-whisper.xml
+      - name: Pyannote metal parity (forced-MPS vs forced-CPU vs CUDA reference)
+        if: steps.mps.outputs.available == 'true'
+        run: |
+          "$HOME/.voxint-metal/venvs/pyannote/bin/python" -m pytest \
+            tests/parity/test_pyannote_metal.py -q -rs --junitxml=junit-pyannote.xml
+      - name: Link the ONNX graph where the titanet harness expects it
+        # test_titanet_onnx.py looks in services/titanet/models/ (the
+        # release-workflow layout); the launcher's setup keeps its
+        # sha-verified copy under the metal home. Symlink, don't copy — the
+        # graph is ~100 MB and setup already provenance-verified it.
+        run: |
+          mkdir -p services/titanet/models
+          ln -sf "$HOME/.voxint-metal/models/titanet/titanet-large.onnx" \
+            services/titanet/models/titanet-large.onnx
+      - name: Titanet ONNX parity (strict, exact metal-tier wheel build)
+        # VOXINT_PARITY_REQUIRED applies here (unlike the metal modules):
+        # this harness has strict-mode support, and the release workflow
+        # already runs it strict on Linux arm64 — this covers the macOS
+        # arm64 wheels the metal tier actually installs.
+        env:
+          VOXINT_PARITY_REQUIRED: "1"
+        run: |
+          "$HOME/.voxint-metal/venvs/titanet/bin/python" -m pytest \
+            tests/parity/test_titanet_onnx.py -q -rs --junitxml=junit-titanet.xml
+      - name: Guard — every expected module actually ran
+        # A fully-skipped module is indistinguishable from a green one on
+        # the checks page; this is the lane's substitute for the strict mode
+        # the metal modules deliberately lack. pyannote is exempt only when
+        # the MPS probe said so (already surfaced as a warning above).
+        env:
+          MPS_AVAILABLE: ${{ steps.mps.outputs.available }}
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import sys
+          import xml.etree.ElementTree as ET
+
+          expected = ["junit-whisper.xml", "junit-titanet.xml"]
+          if os.environ.get("MPS_AVAILABLE") == "true":
+              expected.append("junit-pyannote.xml")
+          failures = []
+          for name in expected:
+              if not os.path.exists(name):
+                  failures.append(f"{name}: missing (module never ran)")
+                  continue
+              suite = ET.parse(name).getroot().find("testsuite")
+              tests = int(suite.get("tests", 0))
+              skipped = int(suite.get("skipped", 0))
+              ran = tests - skipped
+              print(f"{name}: {tests} collected, {skipped} skipped, {ran} ran")
+              if ran <= 0:
+                  failures.append(f"{name}: all {tests} tests skipped — green-boarded non-run")
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
+              sys.exit(1)
+          PYEOF

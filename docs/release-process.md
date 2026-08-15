@@ -83,9 +83,16 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
 - **Metal tier (Gate M)** — the metal tier ships no images at all (native
   services from the working tree + the standard core images), so like ROCm
   it cannot smoke in shared CI; unlike ROCm, the hardware *does* exist in
-  GitHub's `macos-14+` arm64 runner pool — automating part of this gate is a
-  tracked follow-up. Until then it is a **maintainer-run gate on Apple
-  Silicon BEFORE tagging a release that touches the metal lane**: with the
+  GitHub's macOS arm64 runner pool — the **`metal-lane` workflow**
+  (`.github/workflows/metal-lane.yml`, nightly + manual dispatch on
+  `macos-15`) automates the regression half: launcher unit tests on real
+  macOS plus the three parity modules from the launcher's own per-service
+  venvs, with an MPS tensor-op probe and a junit guard that fails the lane
+  if an expected module green-boards fully-skipped. That lane catches drift
+  *between* releases; the release gate itself stays a **maintainer-run gate
+  on Apple Silicon BEFORE tagging a release that touches the metal lane**
+  (CI runners are one chip generation, and the per-chip verdict report is
+  the release artifact): with the
   tag checked out, `voxint-metal.sh setup && up && doctor`, then run the
   metal parity lanes from the metal venvs
   (`tests/parity/test_pyannote_metal.py`, `test_whisper_metal.py`, and

@@ -193,6 +193,14 @@ expectations:
 - **Memory budget (16 GB Macs)**: whisper int8 ~4 GB + pyannote/MPS ~3 GB +
   titanet ~1 GB run natively; cap the Docker Desktop VM around 4 GB — it
   only runs the core stack.
+- **Logs rotate themselves**: launchd never rotates `StandardOutPath`, and
+  `KeepAlive` keeps services up for months, so `up` installs a fourth
+  launchd job (`com.voxint.metal.logrotate`, daily) that copy-truncates any
+  `~/.voxint-metal/logs/*.log` over 50 MB to a timestamped archive, keeping
+  the newest 5 (`VOXINT_METAL_LOG_MAX_MB` / `VOXINT_METAL_LOG_ARCHIVES`
+  override; `voxint-metal.sh rotate-logs` runs one pass by hand).
+  Copy-truncate, not rename: the running service keeps its open fd, so a
+  renamed log would just keep growing under the archive name.
 - `voxint-metal.sh doctor` checks the lot: weights vs provenance, vendored
   config params, MEDIA_ROOT agreement with `.env` (physically resolved),
   port collisions (a leftover CPU-tier stack on 8021/8022/8024 is the

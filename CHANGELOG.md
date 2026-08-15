@@ -30,6 +30,33 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   media-path fallback; new `GET /runs/{id}/export.json` returns a versioned
   envelope (run + source_metadata + operator_notes + segments) while the
   pinned bare-array `/review/{id}/export.json` contract stays frozen.
+- **macOS arm64 CI lane** (`.github/workflows/metal-lane.yml`, issue #34):
+  nightly + manual-dispatch partial Gate M automation on `macos-15` runners
+  (real MPS) — launcher unit tests on real macOS, then the whisper/pyannote/
+  titanet parity modules from the launcher's own sha-verified per-service
+  venvs, with provenance-keyed weight caches, an MPS tensor-op probe, and a
+  junit guard that fails the lane if an expected module green-boards
+  fully-skipped. Maintainer Gate M (per-chip verdict refreshes) is
+  unchanged — this catches regressions between refreshes.
+- **Metal-tier log rotation** (metal review follow-up): `voxint-metal.sh up`
+  now installs a daily launchd job (`com.voxint.metal.logrotate`) that
+  copy-truncates any service log over 50 MB to a timestamped archive,
+  keeping the newest 5 — launchd's `StandardOutPath` never rotates and
+  `KeepAlive` keeps services up for months. `VOXINT_METAL_LOG_MAX_MB` /
+  `VOXINT_METAL_LOG_ARCHIVES` override; new `rotate-logs` subcommand runs a
+  pass by hand; `logs -f` now follows with `tail -F`.
+- **Parity references now record the exact request payloads** they were
+  generated with (`tools/generate_parity_references.py` writes a
+  `meta.request` block per reference): parity lanes replay hardcoded
+  "service-default" params, and a regenerated reference could otherwise pair
+  silently with different params than the lanes measure. Takes effect on the
+  next reference regeneration; committed references predate the field
+  (metal review follow-up).
+- **Contract test binding `compose.metal.yaml` ports to the metal launcher's
+  `service_port()`**: the overlay's `host.docker.internal:<port>` URLs and
+  the native services' bind ports were each pinned to their own literals —
+  a port moved in only one place would have kept both tests green while the
+  worker called a dead port (metal review follow-up).
 
 ### Changed
 - **Metal parity bounds ratcheted from Gate M evidence** (slice 9, panel
