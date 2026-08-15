@@ -106,6 +106,17 @@ ships inside the images too). Rules:
   Release, optional Docker Hub mirror.
 - Image naming: exact `X.Y.Z` tags in compose; no `-fixed`/`-optimized`-style
   suffixes anywhere.
+- Build wall-clock: `release.yml`'s matrix jobs already run fully in
+  parallel on GitHub-hosted runners — the critical path is the slowest
+  single whisper image build, not serialization. If that ever needs to be
+  faster, the sanctioned approach is switching the workflow's layer cache
+  from `type=gha` to `type=registry` and pre-warming it from maintainer
+  hardware before tagging (donates layers only — CI still builds, smokes,
+  and publishes its own digests, so the gate ordering and provenance are
+  unchanged). Details and the per-machine fan-out live in the maintainer's
+  internal build runbook, not in this repo. Self-hosted runners are
+  deliberately NOT used: this is a public repo, and runner boxes would
+  enter the release supply chain.
 
 ## Development Workflow
 
