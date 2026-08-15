@@ -736,3 +736,61 @@ def test_enrich_names_llm_flag_requires_both_settings(
 ) -> None:
     assert main(["enrich", "names", str(uuid.uuid4()), "--llm"]) == 2
     assert "ENRICHMENT_NAMES_LLM_ENABLED" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# enrich assets (issue #41)
+# ---------------------------------------------------------------------------
+
+
+def test_enrich_assets_requires_gates(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["enrich", "assets", str(uuid.uuid4())]) == 2
+    assert "ENRICHMENT_RUN_ASSETS_ENABLED" in capsys.readouterr().out
+
+
+def test_enrich_assets_single_kind_inline(
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("ENRICHMENT_RUN_ASSETS_ENABLED", "true")
+
+    class FakeClient:
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+        def chat_json(self, messages: object) -> dict[str, object]:
+            return {"summary": "An abstract of the talk."}
+
+        def close(self) -> None: ...
+
+    monkeypatch.setattr("voxint.enrichment.asset_jobs.HttpLLMClient", FakeClient)
+    assert main(["enrich", "assets", str(run_id), "--kind", "summary"]) == 0
+    assert "summary: succeeded" in capsys.readouterr().out
+
+
+def test_enrich_assets_reports_failed_kind(
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+    monkeypatch.setenv("LLM_ENABLED", "true")
+    monkeypatch.setenv("ENRICHMENT_RUN_ASSETS_ENABLED", "true")
+
+    class EmptyTopicsClient:
+        def __init__(self, *args: object, **kwargs: object) -> None: ...
+
+        def chat_json(self, messages: object) -> dict[str, object]:
+            return {"topics": []}
+
+        def close(self) -> None: ...
+
+    monkeypatch.setattr("voxint.enrichment.asset_jobs.HttpLLMClient", EmptyTopicsClient)
+    assert main(["enrich", "assets", str(run_id), "--kind", "topics"]) == 1
+    out = capsys.readouterr().out
+    assert "topics: failed" in out
+    assert "no usable topics" in out

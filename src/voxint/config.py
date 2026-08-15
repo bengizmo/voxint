@@ -301,6 +301,21 @@ class Settings(BaseSettings):
     # job the moment it starts.
     research_deadline_seconds: float = Field(default=300.0, ge=30.0, allow_inf_nan=False)
 
+    # Run-level enrichment assets (#41): on-demand LLM-generated summary,
+    # topics, and entity mentions per run — three independently versioned,
+    # independently failing assets. OFF by default; requires the enhancement
+    # LLM (validated below) and nothing else — generation reads only rows
+    # already in the DB, no egress beyond the configured LLM endpoint.
+    enrichment_run_assets_enabled: bool = False
+    # Opt-in post-finalize step: enqueue the three asset jobs when a pipeline
+    # run completes (kinds whose current asset already matches the source are
+    # skipped). Best-effort — a broker outage defers, never fails the run.
+    enrichment_run_assets_autogenerate: bool = False
+    # Character bound on the rendered source document handed to the model.
+    # Longer transcripts are head+tail truncated (recorded in the asset's
+    # config snapshot); the staleness hash always covers the full source.
+    run_assets_max_input_chars: int = Field(default=48_000, ge=1_000)
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -393,6 +408,26 @@ class Settings(BaseSettings):
             raise ValueError(
                 "enrichment_web_research_enabled requires llm_enabled=true — the"
                 " producer reuses the configured enhancement endpoint"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _run_assets_require_llm(self) -> "Settings":
+        # The asset generators reuse the enhancement endpoint configuration;
+        # enabling them without an LLM would be a silently unusable
+        # configuration, so refuse the combination (names.llm precedent). The
+        # worker re-checks at execution time so queued jobs cannot outlive a
+        # capability shutdown.
+        if self.enrichment_run_assets_enabled and not self.llm_enabled:
+            raise ValueError(
+                "enrichment_run_assets_enabled requires llm_enabled=true — the"
+                " asset generators reuse the configured enhancement endpoint"
+            )
+        if self.enrichment_run_assets_autogenerate and not self.enrichment_run_assets_enabled:
+            raise ValueError(
+                "enrichment_run_assets_autogenerate requires"
+                " enrichment_run_assets_enabled=true — the post-finalize step"
+                " only enqueues the feature it rides on"
             )
         return self
 

@@ -497,11 +497,43 @@ automatic retries: a failed job shows its error on the card — fix the cause
 protocol) and start a fresh job. If the broker is down at start, the job
 stays queued; cancel it and retry once the broker is back.
 
+### Run-level assets (issue #41; off by default)
+
+The run detail page can carry three machine-generated assets — a **summary**,
+a **topic list**, and **entity mentions** (grounded spans referencing the
+transcript segments they occur in). Generation is on demand via the
+configured enhancement LLM and needs (refused at startup otherwise, and
+re-checked by the worker before any queued job runs):
+
+```bash
+ENRICHMENT_RUN_ASSETS_ENABLED=true
+LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+```
+
+Operate it from the run's detail page: "Generate all" or per-kind
+Generate/Regenerate buttons; while a job runs the block polls every 3 s with
+a Cancel control. The three kinds succeed and fail independently — one
+failing shows its error on its own card and never blocks or retires the
+others. Every asset shows when it was generated, by which model, and whether
+it is **stale** (the transcript, metadata, or notes changed since — e.g.
+enhancement rewrote segment text); regeneration supersedes, never edits.
+Long transcripts are head+tail truncated to `RUN_ASSETS_MAX_INPUT_CHARS`
+(the card says so). Assets ride the `/runs/{id}/export.json` envelope under
+the additive `enrichment_assets` key. `voxint enrich assets <run-uuid>
+[--kind summary|topics|entity_mentions]` runs generations inline for
+headless use. Optionally, `ENRICHMENT_RUN_ASSETS_AUTOGENERATE=true` enqueues
+generation automatically when a run completes (kinds whose current asset
+already matches the source are skipped; a broker outage defers, never fails
+the run). Summaries and topics are the model's reading, not a verified
+record — the UI labels them machine-generated; entity spans that cannot be
+located verbatim in their segment are dropped and counted rather than shown.
+
 The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
 `/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints the run's claim
-token, so it has none of its own to gate a forged POST), and the web-research
+token, so it has none of its own to gate a forged POST), the web-research
 forms on `/speakers` (start, cancel, and per-draft accept/reject — each under
-its own token action). Set `CSRF_SECRET` to a
+its own token action), and the run-asset forms on `/runs/{id}` (generate and
+cancel, each under its own token action). Set `CSRF_SECRET` to a
 persistent random value
 (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) — otherwise a
 random per-process secret is used, which invalidates open forms on restart and

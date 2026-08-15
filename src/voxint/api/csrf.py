@@ -70,6 +70,10 @@ CSRF_ROSTER_EMBEDDING_DELETE = "roster-embedding-delete"
 CSRF_RESEARCH_START = "research-start"
 CSRF_RESEARCH_CANCEL = "research-cancel"
 CSRF_PROFILE_DECISION = "profile-decision"
+# Run-level asset generation (issue #41): starting jobs (LLM spend) and
+# cancelling one are independent mutations with different blast radii.
+CSRF_ASSETS_GENERATE = "assets-generate"
+CSRF_ASSETS_CANCEL = "assets-cancel"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:

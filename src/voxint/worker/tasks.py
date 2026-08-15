@@ -16,6 +16,7 @@ Orchestration philosophy (design-gated with codex, P3):
   re-enqueues stale QUEUED runs whose task evaporated with the broker.
 """
 
+import logging
 import random
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -27,9 +28,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint import app_settings
 from voxint.clients.errors import ServiceError
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import get_settings
+from voxint.config import Settings, get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.db.session import build_engine, build_session_factory
+from voxint.enrichment import asset_jobs
 from voxint.enrichment.research_jobs import execute_job
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
@@ -51,6 +53,8 @@ from voxint.pipeline.transitions import (
     cas_update_run,
 )
 from voxint.worker.app import app
+
+logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
@@ -159,6 +163,8 @@ def run_pipeline(self: object, run_id_str: str) -> str:
             exc=exc, countdown=delay + random.uniform(0, delay * 0.1)
         )
     else:
+        if final.status is RunStatus.COMPLETED:
+            _autogenerate_run_assets(factory, run_id, settings)
         return final.status.value
     finally:
         # apply_run_preferences may build a per-run HttpLLMClient that owns its
@@ -197,6 +203,45 @@ def recovery_sweep() -> dict[str, int]:
     for rid in {*recovered, *stale_queued}:
         run_pipeline.delay(str(rid))
     return {"recovered": len(recovered), "stale_queued": len(stale_queued)}
+
+
+@app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def generate_run_asset(job_id_str: str) -> None:
+    """Run one queued run-asset generation job (issue #41).
+
+    No Celery retries on purpose (the research_speaker precedent): failures
+    land as honest, bounded error text on the job row for the operator to
+    see. A duplicate delivery no-ops on the guarded queued→running claim.
+    """
+    factory, _ = _runtime()
+    asset_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+
+
+def _autogenerate_run_assets(
+    factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings
+) -> None:
+    """Opt-in post-finalize step: enqueue asset jobs for kinds that are
+    missing or stale. Best-effort by contract — a completed run is COMPLETED
+    whatever happens here, so every failure is logged and swallowed."""
+    if not (
+        settings.enrichment_run_assets_autogenerate
+        and asset_jobs.run_asset_gates_open(settings)
+    ):
+        return
+    try:
+        with factory() as session:
+            needed = asset_jobs.kinds_needing_generation(session, run_id)
+            if not needed:
+                return
+            created, _ = asset_jobs.create_jobs(
+                session, pipeline_run_id=run_id, kinds=needed, settings=settings
+            )
+            session.commit()
+            job_ids = [str(job.id) for job in created]
+        for job_id in job_ids:
+            generate_run_asset.delay(job_id)
+    except Exception:
+        logger.exception("post-finalize run-asset enqueue failed for run %s", run_id)
 
 
 @app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

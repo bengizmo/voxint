@@ -9,6 +9,7 @@ harmless replay, while a new submission is a new decision (corrections are
 appends; the newest ruling per label wins at read time).
 """
 
+import contextlib
 import json
 import logging
 import secrets
@@ -54,6 +55,8 @@ from voxint.adjudication.transcript import (
 )
 from voxint.api.auth import require_operator
 from voxint.api.csrf import (
+    CSRF_ASSETS_CANCEL,
+    CSRF_ASSETS_GENERATE,
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_NOTES,
@@ -117,12 +120,23 @@ from voxint.db.models import (
     ProfileDecision,
     ResearchJob,
     ResearchJobStatus,
+    RunAssetJob,
+    RunAssetKind,
     RunStatus,
     Speaker,
     StageRun,
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.enrichment.asset_jobs import (
+    RunAssetJobError,
+    active_or_last_jobs,
+    create_jobs,
+    run_asset_gates_open,
+)
+from voxint.enrichment.asset_jobs import (
+    request_cancel as request_asset_cancel,
+)
 from voxint.enrichment.drafts import EnrichmentScope
 from voxint.enrichment.producers.names import (
     PRODUCER_NAME as NAMES_PRODUCER,
@@ -147,6 +161,12 @@ from voxint.enrichment.research_jobs import (
 )
 from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
 from voxint.enrichment.review import StaleCandidateError, record_profile_decision
+from voxint.enrichment.run_assets import (
+    RunAssetError,
+    latest_assets,
+    load_source,
+    source_content_hash,
+)
 from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
@@ -386,6 +406,28 @@ def _publish_research_job(job_id: uuid.UUID) -> bool:
     except OperationalError:
         logger.warning(
             "research enqueue deferred (broker unavailable); job %s stays QUEUED",
+            job_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _publish_run_asset_job(job_id: uuid.UUID) -> bool:
+    """Enqueue a committed run-asset job, returning False on a broker outage.
+
+    Mirrors ``_publish_research_job``: no recovery sweep (v1), so the console
+    shows a deferred job as queued with its age and the operator cancels and
+    retries."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import generate_run_asset
+
+    try:
+        generate_run_asset.apply_async((str(job_id),), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "run-asset enqueue deferred (broker unavailable); job %s stays QUEUED",
             job_id,
             exc_info=True,
         )
@@ -785,6 +827,78 @@ def _research_response(
             "request": request,
             "research": _research_state(session, request.app.state.settings, speaker, error),
             **_research_csrf(request),
+        },
+    )
+
+
+_RUN_ASSET_KINDS = tuple(kind.value for kind in RunAssetKind)
+_ASSET_KIND_TITLES = {
+    "summary": "Summary",
+    "topics": "Topics",
+    "entity_mentions": "Entity mentions",
+}
+
+
+def _run_assets_state(
+    session: Session, settings: Settings, run_id: uuid.UUID, error: str | None = None
+) -> dict[str, Any]:
+    """The run's asset block: per kind, the current asset (with staleness
+    against the freshly recomputed source hash) and the active/last job."""
+    assets = latest_assets(session, run_id)
+    jobs = active_or_last_jobs(session, run_id)
+    current_hash: str | None = None
+    source_problem: str | None = None
+    try:
+        current_hash = source_content_hash(load_source(session, run_id))
+    except RunAssetError as exc:
+        source_problem = str(exc)
+    kinds = []
+    any_active = False
+    for kind in _RUN_ASSET_KINDS:
+        asset = assets.get(kind)
+        job = jobs.get(kind)
+        active = job is not None and job.status in _ACTIVE_JOB_STATUSES
+        any_active = any_active or active
+        kinds.append(
+            {
+                "kind": kind,
+                "title": _ASSET_KIND_TITLES[kind],
+                "asset": asset,
+                "stale": (
+                    asset is not None
+                    and current_hash is not None
+                    and asset.source_content_hash != current_hash
+                ),
+                "job": job,
+                "job_active": active,
+            }
+        )
+    return {
+        "run_id": run_id,
+        "kinds": kinds,
+        "any_active": any_active,
+        "gates_open": run_asset_gates_open(settings),
+        "source_problem": source_problem,
+        "error": error,
+    }
+
+
+def _run_assets_response(
+    request: Request, session: Session, run_id: uuid.UUID, error: str | None = None
+) -> Response:
+    """The per-run assets fragment — the polling target and every asset
+    mutation's response."""
+    secret = request.app.state.csrf_secret
+    return templates.TemplateResponse(
+        request,
+        "fragments/run_assets.html",
+        {
+            "request": request,
+            "assets": _run_assets_state(
+                session, request.app.state.settings, run_id, error
+            ),
+            "csrf_assets_generate": mint_csrf_token(secret, CSRF_ASSETS_GENERATE),
+            "csrf_assets_cancel": mint_csrf_token(secret, CSRF_ASSETS_CANCEL),
         },
     )
 
@@ -1313,6 +1427,15 @@ def _register_routes(app: FastAPI) -> None:
                 # the operator's own notes render in separate sections.
                 "source_metadata": run.media_item.source_metadata,
                 "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
+                # Run-level assets (issue #41): current summary/topics/entity
+                # mentions with staleness, plus generation controls.
+                "assets": _run_assets_state(session, settings, run_id),
+                "csrf_assets_generate": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
+                ),
+                "csrf_assets_cancel": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_ASSETS_CANCEL
+                ),
                 "tutorial": _tutorial_banner(
                     request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
                 ),
@@ -1443,6 +1566,38 @@ def _register_routes(app: FastAPI) -> None:
             if snapshot is not None
             else None
         )
+        # Run-level assets (issue #41): latest successful asset per kind with
+        # full provenance + freshness. An ADDITIVE key under schema_version 1
+        # (nullable; absent kinds are simply missing) — failed/running attempts
+        # are operational state and stay off the portable export.
+        assets = latest_assets(session, run_id)
+        current_hash: str | None = None
+        # No transcript yet → staleness is simply unknown.
+        with contextlib.suppress(RunAssetError):
+            current_hash = source_content_hash(load_source(session, run_id))
+        enrichment_assets = (
+            {
+                kind: {
+                    "payload": asset.payload,
+                    "payload_schema_version": asset.payload_schema_version,
+                    "producer": asset.producer,
+                    "producer_version": asset.producer_version,
+                    "model": asset.model,
+                    "generation": asset.generation,
+                    "source_content_hash": asset.source_content_hash,
+                    "stale": (
+                        asset.source_content_hash != current_hash
+                        if current_hash is not None
+                        else None
+                    ),
+                    "machine_generated": True,
+                    "completed_at": asset.completed_at.isoformat(),
+                }
+                for kind, asset in sorted(assets.items())
+            }
+            if assets
+            else None
+        )
         envelope = {
             "schema_version": 1,
             "run": {
@@ -1453,6 +1608,7 @@ def _register_routes(app: FastAPI) -> None:
             },
             "source_metadata": source_metadata,
             "segments": transcript_payload(attributed_transcript(session, run_id, text=variant)),
+            "enrichment_assets": enrichment_assets,
         }
         return Response(
             content=json.dumps(envelope, ensure_ascii=False, indent=2) + "\n",
@@ -2104,6 +2260,73 @@ def _register_routes(app: FastAPI) -> None:
         except EnrichmentReplayError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _research_response(request, session, speaker)
+
+    @protected.get("/runs/{run_id}/assets")
+    def run_assets_fragment(
+        run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        _run_or_404(session, run_id)
+        return _run_assets_response(request, session, run_id)
+
+    @protected.post("/runs/{run_id}/assets/generate")
+    def run_assets_generate(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        kind: Annotated[str | None, Form()] = None,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Start generation jobs — one kind, or all three when none is named.
+
+        Kinds with an active job are skipped (create_jobs maps the partial
+        unique index to a per-kind skip), so "generate all" degrades per kind.
+        Commit-before-publish like every enqueue."""
+        _require_csrf(request, CSRF_ASSETS_GENERATE, csrf_token)
+        _run_or_404(session, run_id)
+        settings: Settings = request.app.state.settings
+        if kind is None:
+            kinds = tuple(RunAssetKind)
+        else:
+            try:
+                kinds = (RunAssetKind(kind),)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=422, detail=f"unknown asset kind {kind!r}"
+                ) from exc
+        try:
+            created, _skipped = create_jobs(
+                session, pipeline_run_id=run_id, kinds=kinds, settings=settings
+            )
+        except RunAssetJobError as exc:
+            session.rollback()
+            return _run_assets_response(request, session, run_id, error=str(exc))
+        job_ids = [job.id for job in created]
+        session.commit()
+        for job_id in job_ids:
+            _publish_run_asset_job(job_id)
+        return _run_assets_response(request, session, run_id)
+
+    @protected.post("/runs/{run_id}/assets/{job_id}/cancel")
+    def run_assets_cancel(
+        run_id: uuid.UUID,
+        job_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Cancel: resolves a QUEUED job outright; a RUNNING one is re-checked
+        after its LLM call, and a provably-dead one is force-cancelled."""
+        _require_csrf(request, CSRF_ASSETS_CANCEL, csrf_token)
+        _run_or_404(session, run_id)
+        job = session.get(RunAssetJob, job_id)
+        if job is None or job.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such asset job")
+        request_asset_cancel(session, job_id)
+        # Commit now so the executor's post-call check sees it immediately.
+        session.commit()
+        return _run_assets_response(request, session, run_id)
 
     @protected.get("/media/{run_id}")
     @protected.head("/media/{run_id}")

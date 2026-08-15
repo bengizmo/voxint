@@ -1,0 +1,114 @@
+{# One run's asset block (issue #41): per-kind current asset + generation
+   controls. Included on the run detail page AND served standalone by
+   GET /runs/{id}/assets — the div re-polls itself only while a job is
+   active, so a terminal render stops the polling. #}
+<div id="run-assets-{{ assets.run_id }}"
+     {% if assets.any_active %}hx-get="/runs/{{ assets.run_id }}/assets"
+     hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+<h2>Run assets</h2>
+<p class="muted">Machine-generated from the transcript and source metadata — a
+starting point, not a verified record.</p>
+
+{% if assets.error %}<p class="error" role="alert">{{ assets.error }}</p>{% endif %}
+
+{% if not assets.gates_open %}
+<p class="muted">
+  Run assets are off. They need ENRICHMENT_RUN_ASSETS_ENABLED and LLM_ENABLED —
+  both set in the environment.
+</p>
+{% elif assets.source_problem %}
+<p class="muted">{{ assets.source_problem }}</p>
+{% else %}
+<form class="inline" method="post" action="/runs/{{ assets.run_id }}/assets/generate"
+      hx-post="/runs/{{ assets.run_id }}/assets/generate"
+      hx-target="#run-assets-{{ assets.run_id }}" hx-swap="outerHTML">
+  <input type="hidden" name="csrf_token" value="{{ csrf_assets_generate }}">
+  <button type="submit">Generate all</button>
+</form>
+{% endif %}
+
+{% for entry in assets.kinds %}
+<details class="run-asset" {% if entry.asset or entry.job %}open{% endif %}>
+  <summary>{{ entry.title }}
+    {%- if entry.stale %} <span class="pill failed">stale</span>{% endif %}
+    {%- if entry.job_active %} <span class="pill running">{{ entry.job.status }}</span>{% endif %}
+  </summary>
+
+  {% if entry.job and not entry.job_active and entry.job.status != "succeeded" %}
+  <p class="muted">
+    Last generation {{ entry.job.status }}
+    {% if entry.job.finished_at %}at {{ entry.job.finished_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+    {% if entry.job.error %}<br><span class="error">{{ entry.job.error }}</span>{% endif %}
+  </p>
+  {% endif %}
+
+  {% if entry.job_active %}
+  <p class="muted">
+    Job {{ entry.job.status }}
+    {% if entry.job.started_at %}· started {{ entry.job.started_at.strftime("%Y-%m-%d %H:%M") }}
+    {% else %}· queued {{ entry.job.created_at.strftime("%Y-%m-%d %H:%M") }}{% endif %}
+  </p>
+  <form class="inline" method="post"
+        action="/runs/{{ assets.run_id }}/assets/{{ entry.job.id }}/cancel"
+        hx-post="/runs/{{ assets.run_id }}/assets/{{ entry.job.id }}/cancel"
+        hx-target="#run-assets-{{ assets.run_id }}" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_assets_cancel }}">
+    <button type="submit">Cancel</button>
+  </form>
+  {% endif %}
+
+  {% if entry.asset %}
+  {% if entry.kind == "summary" %}
+  <p>{{ entry.asset.payload.summary }}</p>
+  {% elif entry.kind == "topics" %}
+  <ul>
+    {% for topic in entry.asset.payload.topics %}
+    <li>{{ topic.label }}{% if topic.description %} <span class="muted">— {{ topic.description }}</span>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  {% if entry.asset.payload.mentions %}
+  <ul>
+    {% for mention in entry.asset.payload.mentions %}
+    <li>{{ mention.surface }}{% if mention.kind %} <span class="muted">({{ mention.kind }})</span>{% endif %}
+      <span class="muted">— segment{{ "s" if mention.occurrences|length != 1 }}
+      {% for occ in mention.occurrences %}{{ occ.segment_index }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No entities were grounded in the transcript.</p>
+  {% endif %}
+  {% if entry.asset.payload.diagnostics.dropped_unlocatable or entry.asset.payload.diagnostics.dropped_out_of_run %}
+  <p class="muted">
+    {{ entry.asset.payload.diagnostics.dropped_unlocatable + entry.asset.payload.diagnostics.dropped_out_of_run }}
+    ungrounded span{{ "s" if (entry.asset.payload.diagnostics.dropped_unlocatable + entry.asset.payload.diagnostics.dropped_out_of_run) != 1 }} dropped.
+  </p>
+  {% endif %}
+  {% endif %}
+  <p class="muted">
+    Generated {{ entry.asset.completed_at.strftime("%Y-%m-%d %H:%M") }}
+    · {{ entry.asset.model }} · generation {{ entry.asset.generation }}
+    {% if entry.asset.config and entry.asset.config.truncated %}
+    · <span class="pill">input truncated</span>
+    {% endif %}
+    {% if entry.stale %}
+    <br>The transcript or metadata changed since this was generated — regenerate to refresh.
+    {% endif %}
+  </p>
+  {% elif not entry.job_active and assets.gates_open and not assets.source_problem %}
+  <p class="muted">Not generated yet.</p>
+  {% endif %}
+
+  {% if assets.gates_open and not entry.job_active and not assets.source_problem %}
+  <form class="inline" method="post" action="/runs/{{ assets.run_id }}/assets/generate"
+        hx-post="/runs/{{ assets.run_id }}/assets/generate"
+        hx-target="#run-assets-{{ assets.run_id }}" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_assets_generate }}">
+    <input type="hidden" name="kind" value="{{ entry.kind }}">
+    <button type="submit">{% if entry.asset %}Regenerate{% else %}Generate{% endif %}</button>
+  </form>
+  {% endif %}
+</details>
+{% endfor %}
+</div>
