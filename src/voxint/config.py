@@ -279,6 +279,26 @@ class Settings(BaseSettings):
     web_read_total_seconds: PositiveSeconds = 60.0
     web_read_max_text_chars: int = Field(default=60_000, ge=1)
 
+    # Web-research speaker profile enrichment (#40): the operator-initiated
+    # `web_researcher` producer — an LLM tool loop over web_search/read_url plus
+    # a read-only roster lookup, writing reviewable drafts. OFF by default and
+    # requires BOTH prerequisites (validated below): retrieval provides the
+    # egress capability, the enhancement LLM provides the model. The budgets are
+    # rendered in the console's start preview and are deliberately NOT
+    # operator-raisable per job.
+    enrichment_web_research_enabled: bool = False
+    # Retrieval quotas handed to ResearchBudget for one job.
+    research_max_searches: int = Field(default=3, ge=1, le=10)
+    research_max_reads: int = Field(default=5, ge=1, le=20)
+    # Tool-loop bounds enforced by the orchestrator (a "round" is one model
+    # reply; each reply may carry a few actions). After the final round the
+    # model gets exactly one tools-disabled conclude request.
+    research_max_rounds: int = Field(default=5, ge=1, le=10)
+    research_max_actions_per_round: int = Field(default=3, ge=1, le=5)
+    # Wall-clock deadline for the whole job (LLM rounds + retrieval), enforced
+    # via ResearchBudget's monotonic deadline and checked between rounds.
+    research_deadline_seconds: PositiveSeconds = 300.0
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -356,6 +376,25 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _web_research_producer_requires_capabilities(self) -> "Settings":
+        # The producer composes two independent capabilities; enabling it with
+        # either prerequisite off would be a silently unusable configuration,
+        # so refuse the combination instead of masking it (the names.llm
+        # precedent). The worker re-checks all three flags at execution time so
+        # queued jobs cannot outlive a capability shutdown.
+        if self.enrichment_web_research_enabled and not self.voxint_web_research:
+            raise ValueError(
+                "enrichment_web_research_enabled requires voxint_web_research=true"
+                " — the producer's only egress is the controlled retrieval tools"
+            )
+        if self.enrichment_web_research_enabled and not self.llm_enabled:
+            raise ValueError(
+                "enrichment_web_research_enabled requires llm_enabled=true — the"
+                " producer reuses the configured enhancement endpoint"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _web_research_provider_config(self) -> "Settings":
         # Enabling retrieval with an unusable provider config would surface as
         # a confusing runtime failure on the first search — refuse at startup
@@ -372,9 +411,7 @@ class Settings(BaseSettings):
                 " searxng provider has no default endpoint"
             )
         if base != base.strip() or any(c.isspace() for c in base) or "\\" in base:
-            raise ValueError(
-                "web_search_base_url must not contain whitespace or backslashes"
-            )
+            raise ValueError("web_search_base_url must not contain whitespace or backslashes")
         try:
             parts = urlsplit(base)
             # .port parses lazily; touch it so ":abc"/out-of-range fails at
@@ -383,18 +420,13 @@ class Settings(BaseSettings):
         except ValueError:
             raise ValueError("web_search_base_url is malformed") from None
         if parts.scheme not in ("http", "https") or not parts.hostname:
-            raise ValueError(
-                "web_search_base_url must be an absolute http(s) URL"
-            )
+            raise ValueError("web_search_base_url must be an absolute http(s) URL")
         if parts.username is not None or parts.password is not None:
             raise ValueError(
-                "web_search_base_url must not embed credentials — use"
-                " web_search_api_key"
+                "web_search_base_url must not embed credentials — use web_search_api_key"
             )
         if parts.query or parts.fragment:
-            raise ValueError(
-                "web_search_base_url must be a bare endpoint (no query/fragment)"
-            )
+            raise ValueError("web_search_base_url must be a bare endpoint (no query/fragment)")
         return self
 
     @model_validator(mode="after")

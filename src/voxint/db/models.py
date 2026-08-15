@@ -49,9 +49,7 @@ EMBEDDING_DIM = 192
 
 
 class Base(DeclarativeBase):
-    type_annotation_map: ClassVar = {
-        dict[str, Any]: JSON().with_variant(JSONB(), "postgresql")
-    }
+    type_annotation_map: ClassVar = {dict[str, Any]: JSON().with_variant(JSONB(), "postgresql")}
 
 
 class RunStatus(enum.StrEnum):
@@ -172,9 +170,7 @@ class MediaItem(Base):
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     sha256: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
@@ -220,9 +216,7 @@ class MediaSourceMetadata(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    media_item_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("media_items.id"), unique=True
-    )
+    media_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("media_items.id"), unique=True)
     source_kind: Mapped[str] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
     uploader: Mapped[str | None] = mapped_column(Text)
@@ -246,9 +240,7 @@ class MediaSourceMetadata(Base):
     # When the extractor observed the source (carried in the sidecar so a
     # crash-replay repair reuses the original capture time deterministically).
     acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     media_item: Mapped[MediaItem] = relationship(back_populates="source_metadata")
 
@@ -293,9 +285,7 @@ class PipelineRun(Base):
     # Editable, last-write-wins, deliberately outside the CAS revision: notes
     # are operator prose, not pipeline state.
     operator_notes: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -317,9 +307,7 @@ class StageRun(Base):
     __table_args__ = (
         UniqueConstraint("pipeline_run_id", "stage", "attempt", name="stage_runs_attempt_key"),
         CheckConstraint(f"stage IN ({_enum_values(Stage)})", name="stage_runs_stage_check"),
-        CheckConstraint(
-            f"status IN ({_enum_values(StageStatus)})", name="stage_runs_status_check"
-        ),
+        CheckConstraint(f"status IN ({_enum_values(StageStatus)})", name="stage_runs_status_check"),
         CheckConstraint("attempt >= 1", name="stage_runs_attempt_positive_check"),
     )
 
@@ -330,9 +318,7 @@ class StageRun(Base):
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     worker_id: Mapped[str | None] = mapped_column(Text)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
     metrics: Mapped[dict[str, Any] | None] = mapped_column()
@@ -353,9 +339,7 @@ class AudioArtifact(Base):
     kind: Mapped[str] = mapped_column(Text)
     path: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict[str, Any] | None] = mapped_column()
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AudioChunk(Base):
@@ -380,9 +364,7 @@ class AudioChunk(Base):
 class TranscriptSegment(Base):
     __tablename__ = "transcript_segments"
     __table_args__ = (
-        UniqueConstraint(
-            "pipeline_run_id", "segment_index", name="transcript_segments_index_key"
-        ),
+        UniqueConstraint("pipeline_run_id", "segment_index", name="transcript_segments_index_key"),
         CheckConstraint("segment_index >= 0", name="transcript_segments_index_nonneg_check"),
         CheckConstraint(
             "start_seconds >= 0 AND end_seconds >= start_seconds",
@@ -436,9 +418,7 @@ class DiarizationTurn(Base):
             "start_seconds >= 0 AND end_seconds > start_seconds",
             name="diarization_turns_interval_check",
         ),
-        CheckConstraint(
-            "overlap_seconds >= 0", name="diarization_turns_overlap_nonneg_check"
-        ),
+        CheckConstraint("overlap_seconds >= 0", name="diarization_turns_overlap_nonneg_check"),
         # Exactly one of embedding / skip_reason, mirroring the titanet contract.
         CheckConstraint(
             "(embedding IS NULL) != (skip_reason IS NULL)",
@@ -494,14 +474,10 @@ class Speaker(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     display_name: Mapped[str] = mapped_column(Text, unique=True)
     notes: Mapped[str | None] = mapped_column(Text)
-    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("speakers.id"), index=True
-    )
+    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"), index=True)
     merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SpeakerEmbedding(Base):
@@ -523,18 +499,14 @@ class SpeakerEmbedding(Base):
     # Cosine comparisons are only valid within one embedding_space (e.g. "titanet-large-v1").
     embedding_space: Mapped[str] = mapped_column(Text, index=True)
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM))
-    source_pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("pipeline_runs.id")
-    )
+    source_pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("pipeline_runs.id"))
     # Enrollment provenance (P5): which local label and which human ruling
     # produced this centroid. Raw per-turn vectors stay in diarization_turns.
     source_diarization_label: Mapped[str | None] = mapped_column(Text)
     source_adjudication_decision_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("adjudication_decisions.id")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class SpeakerAssignment(Base):
@@ -588,9 +560,7 @@ class SpeakerAssignment(Base):
     # named != grounded: a name proposed by an LLM is NOT grounded until it has
     # embedding-level evidence or a human ruling.
     grounded: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AdjudicationDecision(Base):
@@ -615,9 +585,7 @@ class AdjudicationDecision(Base):
     speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
     operator: Mapped[str] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class EnrichmentProducerRun(Base):
@@ -652,9 +620,7 @@ class EnrichmentProducerRun(Base):
 
     __tablename__ = "enrichment_producer_runs"
     __table_args__ = (
-        UniqueConstraint(
-            "idempotency_key", name="enrichment_producer_runs_idempotency_key"
-        ),
+        UniqueConstraint("idempotency_key", name="enrichment_producer_runs_idempotency_key"),
         CheckConstraint(
             "length(trim(producer)) > 0",
             name="enrichment_producer_runs_producer_nonempty_check",
@@ -692,9 +658,7 @@ class EnrichmentProducerRun(Base):
             f"ARRAY[{_enum_values(ClaimField)}]::text[]",
             name="enrichment_producer_runs_covered_fields_check",
         ),
-        CheckConstraint(
-            "generation >= 1", name="enrichment_producer_runs_generation_check"
-        ),
+        CheckConstraint("generation >= 1", name="enrichment_producer_runs_generation_check"),
         CheckConstraint(
             f"outcome IN ({_enum_values(EnrichmentOutcome)})",
             name="enrichment_producer_runs_outcome_check",
@@ -721,9 +685,7 @@ class EnrichmentProducerRun(Base):
     producer: Mapped[str] = mapped_column(Text)
     producer_version: Mapped[str] = mapped_column(Text)
     target_kind: Mapped[str] = mapped_column(Text)
-    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("speakers.id"), index=True
-    )
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"), index=True)
     pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id"), index=True
     )
@@ -736,9 +698,7 @@ class EnrichmentProducerRun(Base):
     idempotency_key: Mapped[str] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     candidates: Mapped[list["EnrichmentCandidate"]] = relationship(
         back_populates="producer_run",
@@ -815,9 +775,7 @@ class EnrichmentCandidate(Base):
         ForeignKey("enrichment_producer_runs.id"), index=True
     )
     target_kind: Mapped[str] = mapped_column(Text)
-    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("speakers.id"), index=True
-    )
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"), index=True)
     pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id"), index=True
     )
@@ -834,9 +792,7 @@ class EnrichmentCandidate(Base):
     superseded_by_producer_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("enrichment_producer_runs.id")
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     producer_run: Mapped[EnrichmentProducerRun] = relationship(
         back_populates="candidates", foreign_keys=[producer_run_id]
@@ -864,9 +820,7 @@ class EnrichmentCandidateEvidence(Base):
         UniqueConstraint(
             "candidate_id", "ordinal", name="enrichment_candidate_evidence_ordinal_key"
         ),
-        CheckConstraint(
-            "ordinal >= 0", name="enrichment_candidate_evidence_ordinal_nonneg_check"
-        ),
+        CheckConstraint("ordinal >= 0", name="enrichment_candidate_evidence_ordinal_nonneg_check"),
         CheckConstraint(
             f"kind IN ({_enum_values(EvidenceKind)})",
             name="enrichment_candidate_evidence_kind_check",
@@ -940,9 +894,7 @@ class EnrichmentCandidateEvidence(Base):
     snippet: Mapped[str | None] = mapped_column(Text)
     detail: Mapped[dict[str, Any] | None] = mapped_column()
     detail_schema_version: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     candidate: Mapped[EnrichmentCandidate] = relationship(back_populates="evidence")
 
@@ -964,12 +916,8 @@ class ProfileReviewDecision(Base):
 
     __tablename__ = "profile_review_decisions"
     __table_args__ = (
-        UniqueConstraint(
-            "candidate_id", name="profile_review_decisions_candidate_key"
-        ),
-        UniqueConstraint(
-            "idempotency_key", name="profile_review_decisions_idempotency_key"
-        ),
+        UniqueConstraint("candidate_id", name="profile_review_decisions_candidate_key"),
+        UniqueConstraint("idempotency_key", name="profile_review_decisions_idempotency_key"),
         CheckConstraint(
             f"decision IN ({_enum_values(ProfileDecision)})",
             name="profile_review_decisions_decision_check",
@@ -985,16 +933,12 @@ class ProfileReviewDecision(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    candidate_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("enrichment_candidates.id")
-    )
+    candidate_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("enrichment_candidates.id"))
     decision: Mapped[str] = mapped_column(Text)
     operator: Mapped[str] = mapped_column(Text)
     note: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AppSettings(Base):
@@ -1011,9 +955,7 @@ class AppSettings(Base):
     """
 
     __tablename__ = "app_settings"
-    __table_args__ = (
-        CheckConstraint("id = 1", name="app_settings_single_row_check"),
-    )
+    __table_args__ = (CheckConstraint("id = 1", name="app_settings_single_row_check"),)
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1031,9 +973,85 @@ class AppSettings(Base):
         ForeignKey("pipeline_runs.id", ondelete="SET NULL")
     )
     tutorial_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class ResearchJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class ResearchJob(Base):
+    """One operator-initiated web-research job for a speaker (issue #40).
+
+    Mutable orchestration state only — progress counters, cooperative-cancel
+    flag, terminal status. The research *results* never live here: surviving
+    claims land as immutable #37 drafts via the single sanctioned writer, and
+    ``producer_run_id`` links the job to that record when one was written.
+    The job id doubles as the producer-run idempotency identity
+    (``web_researcher:speaker:{speaker_id}:{job_id}``): one job is one durable
+    execution — an intentional rerun is a NEW job, because web research is
+    non-deterministic and an input-derived key would wrongly suppress it.
+
+    ``status`` moves queued → running (guarded claim UPDATE, so a duplicate
+    Celery delivery no-ops) → succeeded | failed | cancelled. ``cancel_requested``
+    is the operator's cooperative signal; the loop re-reads it between rounds.
+    A ``failed``/``cancelled`` job records NO producer run — never an
+    authoritative 'none' that would retire prior drafts.
+    """
+
+    __tablename__ = "research_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            f"status IN ({_enum_values(ResearchJobStatus)})",
+            name="research_jobs_status_check",
+        ),
+        CheckConstraint(
+            "searches_used >= 0 AND reads_used >= 0 AND rounds_used >= 0",
+            name="research_jobs_counters_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(budget) = 'object'",
+            name="research_jobs_budget_object_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="research_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="research_jobs_finished_requires_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    speaker_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("speakers.id"), index=True)
+    # Set when the job came from a run page's "research unresolved speakers"
+    # fan-out; purely provenance, never a scope.
+    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id"), index=True
+    )
+    status: Mapped[str] = mapped_column(Text, default=ResearchJobStatus.QUEUED)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Snapshot of the budgets this job was started under (settings can change
+    # between enqueue and execution; the preview the operator approved wins).
+    budget: Mapped[dict[str, Any]] = mapped_column()
+    # Bounded operator-supplied note handed to the model as seed context.
+    operator_note: Mapped[str | None] = mapped_column(Text)
+    searches_used: Mapped[int] = mapped_column(Integer, default=0)
+    reads_used: Mapped[int] = mapped_column(Integer, default=0)
+    rounds_used: Mapped[int] = mapped_column(Integer, default=0)
+    # Bounded, redacted failure summary (closed vocabulary + safe detail only).
+    error: Mapped[str | None] = mapped_column(Text)
+    producer_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("enrichment_producer_runs.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
