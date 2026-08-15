@@ -256,4 +256,6 @@ def test_config_records_versions_and_signature(session: Session, run_id: uuid.UU
     assert producer_run.config["pattern_set_version"] == 1
     assert producer_run.config["scoring_version"] == 1
     assert producer_run.config["input_signature"]
-    assert producer_run.idempotency_key.endswith(producer_run.config["input_signature"][:16])
+    # The key carries the FULL input signature — no truncation, so a prefix
+    # collision can never adopt another payload's row.
+    assert producer_run.idempotency_key.endswith(producer_run.config["input_signature"])

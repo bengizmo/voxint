@@ -234,3 +234,15 @@ def test_names_llm_pass_requires_llm_enabled() -> None:
     defaults = Settings(_env_file=None)
     assert defaults.enrichment_names_enabled is True
     assert defaults.enrichment_names_llm_enabled is False
+
+
+def test_names_llm_pass_requires_offline_producer_enabled() -> None:
+    # LLM pass on with the offline producer off would be unusable — no CLI
+    # invocation could ever run it (the --llm flag rides `enrich names`).
+    with pytest.raises(ValidationError, match="enrichment_names_enabled"):
+        Settings(
+            _env_file=None,
+            llm_enabled=True,
+            enrichment_names_enabled=False,
+            enrichment_names_llm_enabled=True,
+        )

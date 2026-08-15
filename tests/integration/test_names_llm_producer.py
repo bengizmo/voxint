@@ -152,3 +152,42 @@ def test_identical_rerun_replays_without_requerying(session: Session, run_id: uu
     session.commit()
     assert second.id == first.id
     assert len(llm.calls) == 1  # the short-circuit never re-queried the model
+
+
+def test_substring_hit_is_not_verbatim_location(session: Session, run_id: uuid.UUID) -> None:
+    # "Ann" appears only inside "joanne" — a substring, not a whole-word
+    # match — so the hallucinated hint must be dropped, not evidenced.
+    session.add(
+        TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=2,
+            start_seconds=20.0,
+            end_seconds=25.0,
+            raw_text="joanne welcomed everyone to the studio",
+            diarization_label="S0",
+        )
+    )
+    session.commit()
+    llm = FakeLLM(name_hints=(SpeakerNameHint("S0", "Ann", "self"),))
+    producer_run = run_llm_name_producer(session, run_id=run_id, settings=SETTINGS, client=llm)
+    session.commit()
+    assert producer_run.outcome == "none"
+
+
+def test_batch_config_change_mints_new_generation(session: Session, run_id: uuid.UUID) -> None:
+    # Batching shapes the model's context, so it is part of the replay
+    # identity: a changed batch bound re-queries instead of replaying.
+    llm = FakeLLM(name_hints=(SpeakerNameHint("S0", "jane doe", "self"),))
+    first = run_llm_name_producer(session, run_id=run_id, settings=SETTINGS, client=llm)
+    session.commit()
+    resized = Settings(
+        _env_file=None,
+        llm_enabled=True,
+        enrichment_names_llm_enabled=True,
+        llm_batch_max_segments=1,
+    )
+    second = run_llm_name_producer(session, run_id=run_id, settings=resized, client=llm)
+    session.commit()
+    assert second.id != first.id
+    assert second.generation == 2
+    assert len(llm.calls) > 1

@@ -735,7 +735,9 @@ def _mention_from_match(
         reliability=pattern.reliability,
         attribution=pattern.attribution,
         source=source,
-        snippet=_snippet(text, name_start, name_start + len(match.group("name"))),
+        # Snippet spans the trimmed capture, not the raw regex span — the
+        # discourse stopwords cut from raw_span stay out of the display too.
+        snippet=_snippet(text, name_start, name_start + len(trimmed)),
         ambiguous=_is_ambiguous(name),
     )
 

@@ -285,3 +285,69 @@ def test_disabled_flag_hides_surface_and_blocks_trigger(
     assert "Name hints" not in page
     resp = client.post(f"/review/{run_id}/enrich/names", data={"token": token})
     assert resp.status_code == 404
+
+
+def test_non_name_candidate_is_not_decidable_here(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The route serves the NAME surface only: a BIO claim on the same run —
+    # never rendered here — must 404 even with a valid claim token.
+    from datetime import timedelta
+
+    from voxint.db.models import ClaimField
+    from voxint.enrichment.drafts import (
+        CandidateDraft,
+        EnrichmentScope,
+        UrlEvidence,
+        record_producer_run,
+    )
+
+    with session_factory() as session:
+        run_id = seed_run(session)
+        record_producer_run(
+            session,
+            producer="test.bio",
+            producer_version="1",
+            scope=EnrichmentScope.run(run_id),
+            covered_fields=(ClaimField.BIO,),
+            candidates=(
+                CandidateDraft(
+                    target=EnrichmentScope.run(run_id),
+                    field=ClaimField.BIO,
+                    value="A bio claim.",
+                    evidence=(UrlEvidence(url="https://example.com/about"),),
+                ),
+            ),
+            idempotency_key=f"bio-{run_id}",
+            started_at=NOW,
+            completed_at=NOW + timedelta(seconds=1),
+        )
+        session.commit()
+    bio_id = _candidate_id(session_factory, run_id, "A bio claim.")
+    token = claim_token(client, run_id)
+    resp = client.post(
+        f"/review/{run_id}/candidates/{bio_id}/decision",
+        data={"token": token, "nonce": uuid.uuid4().hex, "verdict": "accept"},
+    )
+    assert resp.status_code == 404
+
+
+def test_disabled_flag_blocks_decisions_too(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Seed candidates while enabled, then flip the flag off: the decision
+    # route disappears along with the surface.
+    enabled = _build_client(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session)
+    token = claim_token(enabled, run_id)
+    _enrich(enabled, run_id, token)
+    candidate_id = _candidate_id(session_factory, run_id, "Bob Smith")
+
+    disabled = _build_client(session_factory, enrichment_names_enabled=False)
+    token2 = claim_token(disabled, run_id)
+    resp = disabled.post(
+        f"/review/{run_id}/candidates/{candidate_id}/decision",
+        data={"token": token2, "nonce": uuid.uuid4().hex, "verdict": "accept"},
+    )
+    assert resp.status_code == 404

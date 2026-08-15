@@ -25,6 +25,8 @@ never be recorded as an authoritative ``outcome='none'``.
 
 import hashlib
 import json
+import re
+import unicodedata
 import uuid
 from datetime import UTC, datetime
 
@@ -58,11 +60,19 @@ LLM_DETAIL_SCHEMA_VERSION = 1
 LLM_CANDIDATE_SCORE = 0.5
 
 
-def _input_signature(*, run_id: uuid.UUID, model: str, segments: list[TranscriptSegment]) -> str:
+def _input_signature(
+    *, run_id: uuid.UUID, settings: Settings, segments: list[TranscriptSegment]
+) -> str:
+    # Batching shapes the LLM's per-request context (and therefore its hints),
+    # and the same model name can front different endpoints — both belong in
+    # the replay identity alongside the exact transcript content.
     payload: dict[str, object] = {
         "producer": LLM_PRODUCER_NAME,
         "producer_version": LLM_PRODUCER_VERSION,
-        "model": model,
+        "model": settings.llm_model,
+        "base_url": settings.llm_base_url,
+        "batch_max_segments": settings.llm_batch_max_segments,
+        "batch_max_chars": settings.llm_batch_max_chars,
         "run_id": str(run_id),
         "segments": [
             {
@@ -80,6 +90,13 @@ def _input_signature(*, run_id: uuid.UUID, model: str, segments: list[Transcript
 def _batches(
     segments: list[TranscriptSegment], *, max_segments: int, max_chars: int
 ) -> list[tuple[EnhancementRequestSegment, ...]]:
+    """Contiguous batches bounded by count and characters.
+
+    A single segment longer than ``max_chars`` travels alone rather than
+    being split or dropped — deliberate parity with ``enhance_match``'s
+    ``_build_batches`` (splitting mid-segment would break the label-scoped
+    evidence mapping the location check depends on).
+    """
     batches: list[tuple[EnhancementRequestSegment, ...]] = []
     current: list[EnhancementRequestSegment] = []
     chars = 0
@@ -101,19 +118,30 @@ def _batches(
     return batches
 
 
+# A letter for boundary purposes — the same class the extraction inventory
+# treats as a name character, so "Ann" can never anchor inside "Joanne".
+_LETTER = r"[^\W\d_]"
+
+
 def _locate(
     name: str, segments: list[TranscriptSegment], *, label: str | None
 ) -> TranscriptSegment | None:
-    """First segment whose text contains the name verbatim (casefolded).
+    """First segment containing the name as whole words (NFKC + casefolded).
 
     ``label`` restricts the search to that diarization label's own segments —
-    the requirement for a self-hint to become a cluster-level claim.
+    the requirement for a self-hint to become a cluster-level claim. The
+    match requires non-letter boundaries on both sides: a substring hit
+    inside a longer word is not verbatim evidence.
     """
-    needle = name.casefold()
+    needle = unicodedata.normalize("NFKC", name).casefold()
+    pattern = re.compile(rf"(?<!{_LETTER}){re.escape(needle)}(?!{_LETTER})", re.UNICODE)
     for segment in segments:
         if label is not None and segment.diarization_label != label:
             continue
-        if needle in (segment.enhanced_text or segment.raw_text).casefold():
+        haystack = unicodedata.normalize(
+            "NFKC", segment.enhanced_text or segment.raw_text
+        ).casefold()
+        if pattern.search(haystack):
             return segment
     return None
 
@@ -136,7 +164,6 @@ def run_llm_name_producer(
             "the LLM name pass is disabled — set ENRICHMENT_NAMES_LLM_ENABLED=true"
             " and LLM_ENABLED=true"
         )
-    started_at = datetime.now(tz=UTC)
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise NameProducerError(f"pipeline run {run_id} not found")
@@ -148,8 +175,8 @@ def run_llm_name_producer(
         ).scalars()
     )
 
-    signature = _input_signature(run_id=run_id, model=settings.llm_model, segments=segments)
-    idempotency_key = f"{LLM_PRODUCER_NAME}:{run_id}:{signature[:16]}"
+    signature = _input_signature(run_id=run_id, settings=settings, segments=segments)
+    idempotency_key = f"{LLM_PRODUCER_NAME}:{run_id}:{signature}"
     existing = session.execute(
         select(EnrichmentProducerRun).where(
             EnrichmentProducerRun.idempotency_key == idempotency_key
@@ -157,6 +184,9 @@ def run_llm_name_producer(
     ).scalar_one_or_none()
     if existing is not None:
         return existing
+    # Minted only after the short-circuit miss: a reused key must never reach
+    # the writer's full-payload replay fingerprint with fresh timestamps.
+    started_at = datetime.now(tz=UTC)
 
     hints: list[SpeakerNameHint] = []
     if segments:
@@ -231,6 +261,9 @@ def run_llm_name_producer(
     config = {
         "producer_version": LLM_PRODUCER_VERSION,
         "model": settings.llm_model,
+        "base_url": settings.llm_base_url,
+        "batch_max_segments": settings.llm_batch_max_segments,
+        "batch_max_chars": settings.llm_batch_max_chars,
         "input_signature": signature,
     }
     try:

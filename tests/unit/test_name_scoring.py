@@ -287,3 +287,15 @@ def test_empty_input() -> None:
 def test_candidate_is_frozen_value_object() -> None:
     (candidate,) = aggregate([_metadata_mention("Jane Doe")])
     assert isinstance(candidate, NameCandidate)
+
+
+def test_suspect_mention_cannot_vouch_for_ambiguous_name() -> None:
+    # The ambiguity gate uses suspect-adjusted reliability: a strong self-intro
+    # pattern inside a hallucination-flagged segment (0.9 -> 0.45) must not
+    # admit an ambiguous single-token name.
+    assert (
+        aggregate([_transcript_mention("Will", reliability=0.9, suspect=True, ambiguous=True)])
+        == []
+    )
+    (clean,) = aggregate([_transcript_mention("Will", reliability=0.9, ambiguous=True)])
+    assert clean.name == "Will"

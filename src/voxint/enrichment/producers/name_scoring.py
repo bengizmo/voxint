@@ -101,7 +101,9 @@ def _mention_sort_key(mention: RawMention) -> tuple[float, str, str, int, str]:
 def _passes_ambiguity_gate(mention: RawMention, seed_matched: bool) -> bool:
     if not mention.ambiguous:
         return True
-    return seed_matched or mention.reliability >= AMBIGUOUS_MIN_RELIABILITY
+    # Adjusted (suspect-penalized) reliability: a hallucination-flagged
+    # segment must not vouch for an ambiguous single-token name.
+    return seed_matched or _adjusted_reliability(mention) >= AMBIGUOUS_MIN_RELIABILITY
 
 
 def _score(mentions: Sequence[RawMention], seed_matched: bool) -> tuple[float, dict[str, float]]:

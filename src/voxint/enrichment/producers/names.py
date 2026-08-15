@@ -204,7 +204,6 @@ def run_offline_name_producer(
     Raises :class:`NameProducerError` when the run does not exist — and lets
     read errors propagate rather than recording a false ``outcome='none'``.
     """
-    started_at = datetime.now(tz=UTC)
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise NameProducerError(f"pipeline run {run_id} not found")
@@ -225,7 +224,7 @@ def run_offline_name_producer(
     signature = _input_signature(
         run_id=run_id, name_seeds=pack.name_seeds, metadata=metadata, segments=segments
     )
-    idempotency_key = f"{PRODUCER_NAME}:{run_id}:{signature[:16]}"
+    idempotency_key = f"{PRODUCER_NAME}:{run_id}:{signature}"
     existing = session.execute(
         select(EnrichmentProducerRun).where(
             EnrichmentProducerRun.idempotency_key == idempotency_key
@@ -233,6 +232,9 @@ def run_offline_name_producer(
     ).scalar_one_or_none()
     if existing is not None:
         return existing
+    # Minted only after the short-circuit miss: a reused key must never reach
+    # the writer's full-payload replay fingerprint with fresh timestamps.
+    started_at = datetime.now(tz=UTC)
 
     mentions: list[RawMention] = []
     if metadata is not None:

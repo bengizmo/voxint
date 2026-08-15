@@ -651,6 +651,15 @@ def _enrich_names(args: argparse.Namespace) -> int:
                 print("no completed runs")
                 return 0
 
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from voxint.enrichment.drafts import EnrichmentDraftError
+
+        # Per-run failure isolation covers the families a single bad run can
+        # raise (producer refusals, draft validation, per-run SQL errors) —
+        # a programming error still propagates rather than being masked.
+        per_run_errors = (NameProducerError, EnrichmentDraftError, SQLAlchemyError)
+
         failures = 0
         for run_id in run_ids:
             try:
@@ -663,10 +672,12 @@ def _enrich_names(args: argparse.Namespace) -> int:
                         .select_from(EnrichmentCandidate)
                         .where(EnrichmentCandidate.producer_run_id == producer_run.id)
                     ).scalar_one()
-                    print(
-                        f"{run_id}: outcome={producer_run.outcome}"
-                        f" generation={producer_run.generation} candidates={count}"
-                    )
+                # Printed only after session_scope committed — a commit
+                # failure must not leave a success line behind.
+                print(
+                    f"{run_id}: outcome={producer_run.outcome}"
+                    f" generation={producer_run.generation} candidates={count}"
+                )
                 if args.llm:
                     # Separate session scope: an LLM failure must not roll
                     # back the already-successful offline sweep.
@@ -681,11 +692,11 @@ def _enrich_names(args: argparse.Namespace) -> int:
                             .select_from(EnrichmentCandidate)
                             .where(EnrichmentCandidate.producer_run_id == llm_run.id)
                         ).scalar_one()
-                        print(
-                            f"{run_id}: llm outcome={llm_run.outcome}"
-                            f" generation={llm_run.generation} candidates={llm_count}"
-                        )
-            except NameProducerError as exc:
+                    print(
+                        f"{run_id}: llm outcome={llm_run.outcome}"
+                        f" generation={llm_run.generation} candidates={llm_count}"
+                    )
+            except per_run_errors as exc:
                 failures += 1
                 print(f"{run_id}: error: {exc}", file=sys.stderr)
         if failures:

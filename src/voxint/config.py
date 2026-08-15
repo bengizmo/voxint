@@ -308,13 +308,19 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _names_llm_pass_requires_llm(self) -> "Settings":
-        # The LLM name pass reuses the enhancement endpoint configuration; an
-        # enabled pass with no configured LLM would silently do nothing, so
+        # The LLM name pass reuses the enhancement endpoint configuration and
+        # rides the name-enrichment feature; enabling it with either
+        # prerequisite off would be a silently unusable configuration, so
         # refuse the combination instead of masking it.
         if self.enrichment_names_llm_enabled and not self.llm_enabled:
             raise ValueError(
                 "enrichment_names_llm_enabled requires llm_enabled=true — the "
                 "LLM name pass reuses the configured enhancement endpoint"
+            )
+        if self.enrichment_names_llm_enabled and not self.enrichment_names_enabled:
+            raise ValueError(
+                "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
+                " — the LLM pass is additive to the offline name producer"
             )
         return self
 

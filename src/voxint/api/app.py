@@ -488,6 +488,12 @@ def _name_suggestions(
         if (
             current is None
             or _HINT_STATE_PRECEDENCE[view.state] < _HINT_STATE_PRECEDENCE[current.state]
+            or (
+                # Equal state (e.g. names.offline and names.llm both proposed
+                # for the same value): the stronger-scored claim represents.
+                _HINT_STATE_PRECEDENCE[view.state] == _HINT_STATE_PRECEDENCE[current.state]
+                and (view.candidate.score or 0.0) > (current.candidate.score or 0.0)
+            )
         ):
             groups[key] = view
 
@@ -1573,6 +1579,9 @@ def _register_routes(app: FastAPI) -> None:
         Writes the profile-review trail only: no speaker, assignment, or
         adjudication ruling is created (drafts are suggestions about identity).
         """
+        settings: Settings = request.app.state.settings
+        if not settings.enrichment_names_enabled:
+            raise HTTPException(status_code=404, detail="name enrichment is disabled")
         try:
             run = verify_claim(session, run_id, token)
         except ClaimMismatchError as exc:
@@ -1582,7 +1591,13 @@ def _register_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"unknown verdict {verdict!r}") from exc
         candidate = session.get(EnrichmentCandidate, candidate_id)
-        if candidate is None or candidate.pipeline_run_id != run_id:
+        # This route serves the NAME surface only — a candidate from another
+        # run, or another claim field never rendered here, is not decidable.
+        if (
+            candidate is None
+            or candidate.pipeline_run_id != run_id
+            or candidate.field != ClaimField.NAME.value
+        ):
             raise HTTPException(status_code=404, detail="no such candidate in this run")
         try:
             record_profile_decision(
