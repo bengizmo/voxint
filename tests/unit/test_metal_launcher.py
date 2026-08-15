@@ -124,6 +124,9 @@ def test_whisper_env_is_cpu_int8_with_pinned_cache(tmp_path: Path) -> None:
     assert env["COMPUTE_TYPE"] == "int8"
     assert env["WHISPER_DOWNLOAD_ROOT"] == f"{tmp_path}/models/whisper"
     assert env["PYTHONUNBUFFERED"] == "1"
+    # Setup pre-downloads the sha-pinned snapshot; the running service must
+    # never phone home at startup (issue #30).
+    assert env["HF_HUB_OFFLINE"] == "1"
 
 
 def test_pyannote_env_forces_mps_and_vendored_pipeline(tmp_path: Path) -> None:

@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Fixed
+- **Whisper startup is offline-clean** (#30): the whisper images set
+  `HF_HUB_OFFLINE=1` and pin `WHISPER_REVISION` to the baked snapshot, so
+  the service no longer makes an unadvertised Hugging Face revision check
+  at startup (which stalled/failed on air-gapped hosts and could have
+  re-downloaded a different revision than the one baked). The CUDA image's
+  build-time bake is now sha-pinned like the CPU/ROCm flavors, the metal
+  launcher exports the same offline guard, and a contract test holds all
+  four deployment flavors to one revision. Documented in
+  `docs/operations.md` ("Offline / air-gapped hosts").
+
 ## [0.10.0] — 2026-08-15
 
 The enrichment foundation (#36, #37, #38): write-once source-metadata

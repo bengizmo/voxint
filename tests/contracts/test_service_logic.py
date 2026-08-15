@@ -1200,3 +1200,46 @@ class TestCpuImageProvenance:
         assert all(
             line.startswith(("torch==", "torchaudio==")) for line in extras
         ), f"unexpected additions in requirements.metal.txt: {sorted(extras)}"
+
+
+class TestWhisperOfflineStartup:
+    """Weights are baked/pre-downloaded, so no whisper deployment may phone
+    home at startup (issue #30): an unadvertised HF hub revision check would
+    stall or fail on air-gapped hosts and could re-download a different
+    revision than the one the numerics were measured against."""
+
+    WHISPER_DOCKERFILES = ("Dockerfile", "Dockerfile.cpu", "Dockerfile.rocm")
+
+    def test_all_whisper_deployments_pin_the_same_hf_revision(self) -> None:
+        # The bake, the runtime WHISPER_REVISION env, and the metal
+        # launcher's pre-download must all agree — a one-sided sha edit is
+        # silent revision drift between deployment flavors.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        shas: set[str] = set()
+        for name in self.WHISPER_DOCKERFILES:
+            text = (REPO_ROOT / "services" / "whisper" / name).read_text()
+            found = re.findall(r"ARG WHISPER_HF_REVISION=([0-9a-f]{40})", text)
+            assert found, f"whisper {name} lost its WHISPER_HF_REVISION default"
+            shas.update(found)
+        launcher = (REPO_ROOT / "scripts" / "metal" / "voxint-metal.sh").read_text()
+        match = re.search(r"^WHISPER_HF_REVISION=([0-9a-f]{40})$", launcher, re.M)
+        assert match is not None, "metal launcher lost its WHISPER_HF_REVISION pin"
+        shas.add(match.group(1))
+        assert len(shas) == 1, f"WHISPER_HF_REVISION drifted across deployments: {shas}"
+
+    @pytest.mark.parametrize("dockerfile_name", ("Dockerfile", "Dockerfile.cpu", "Dockerfile.rocm"))
+    def test_whisper_images_are_offline_clean(self, dockerfile_name: str) -> None:
+        # HF_HUB_OFFLINE forbids the hub call; WHISPER_REVISION pins the load
+        # to the baked snapshot (a bare sha resolves offline with no ref
+        # lookup — revision-less loads resolve "main", which HF_HUB_OFFLINE
+        # can only satisfy if the bake wrote refs/main).
+        from tests.contracts.conftest import REPO_ROOT
+
+        text = (REPO_ROOT / "services" / "whisper" / dockerfile_name).read_text()
+        assert "ENV HF_HUB_OFFLINE=1" in text, f"{dockerfile_name} lost HF_HUB_OFFLINE=1"
+        assert "ENV WHISPER_REVISION=${WHISPER_HF_REVISION}" in text, (
+            f"{dockerfile_name} runtime stage lost the WHISPER_REVISION pin"
+        )

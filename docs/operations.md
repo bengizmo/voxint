@@ -59,6 +59,18 @@ Exactly one service (`api`) declares the app `build:`; migrate/worker/beat
 consume the tag it produces. Do not give several `build:` services a shared
 `image:` tag — concurrent BuildKit writers race on it ("already exists").
 
+### Offline / air-gapped hosts
+
+Model weights are baked into the service images, and the whisper images set
+`HF_HUB_OFFLINE=1` plus a sha-pinned `WHISPER_REVISION`, so **no model service
+makes an outbound call at startup** — the stack comes up on a host with no
+internet access. (Before v0.11.0 the whisper service made an unadvertised
+Hugging Face revision check at startup, which stalled on restricted networks.)
+Network access is still required for URL ingestion (`yt-dlp`) and, if you
+opt into the online diarizer path, for `DIARIZER_MODEL_NAME`/`HF_TOKEN`
+downloads. On the metal tier, `voxint-metal.sh setup` downloads the pinned
+weights once; the running services are offline-clean the same way.
+
 ### Running without an NVIDIA GPU (CPU tier)
 
 Every model service also ships a **`-cpu` image flavor** — multi-arch

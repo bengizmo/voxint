@@ -310,6 +310,9 @@ service_env() {
       # faster-whisper resolves "latest", which could re-download a different
       # revision than the one the parity verdict measured.
       printf 'WHISPER_REVISION=%s\n' "$WHISPER_HF_REVISION"
+      # Setup already downloaded the pinned snapshot; the running service
+      # must never phone home (sha-pinned revisions resolve offline).
+      printf 'HF_HUB_OFFLINE=1\n'
       ;;
     pyannote)
       printf 'VOXINT_VENDORED_PIPELINE=%s/models/pyannote/vendored/config.yaml\n' \
