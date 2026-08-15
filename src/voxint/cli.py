@@ -354,6 +354,70 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_search(args: argparse.Namespace) -> int:
+    """One provider query via the controlled retrieval capability (issue #39).
+
+    Refuses up front when ``voxint_web_research`` is off — before any DNS or
+    network I/O, mirroring the ``_fetch``/``ytdlp_enabled`` precedent. Exists
+    so an operator can verify the provider config and egress policy by hand
+    before anything (issue #40) consumes the tools programmatically.
+    """
+    from voxint.config import get_settings
+    from voxint.research import Attribution, ResearchBudget, web_search
+
+    settings = get_settings()
+    if not settings.voxint_web_research:
+        print("error: web research is disabled (voxint_web_research is off)")
+        return 2
+    outcome = web_search(
+        args.query,
+        settings=settings,
+        budget=ResearchBudget(max_searches=1, max_reads=0),
+        attribution=Attribution(feature="cli", reason="operator-search"),
+    )
+    if not outcome.ok:
+        print(f"error: {outcome.error}: {outcome.error_detail}")
+        return 2
+    if outcome.dropped_results:
+        print(f"# {outcome.dropped_results} result(s) dropped by the egress URL policy")
+    for result in outcome.results:
+        print(result.url)
+        if result.title:
+            print(f"  {result.title}")
+        if result.snippet:
+            print(f"  {result.snippet}")
+    if not outcome.results:
+        print("# no results")
+    return 0
+
+
+def _research_read(args: argparse.Namespace) -> int:
+    """Fetch one page as extracted text under the full egress policy (#39)."""
+    from voxint.config import get_settings
+    from voxint.research import Attribution, ResearchBudget, read_url
+
+    settings = get_settings()
+    if not settings.voxint_web_research:
+        print("error: web research is disabled (voxint_web_research is off)")
+        return 2
+    outcome = read_url(
+        args.url,
+        settings=settings,
+        budget=ResearchBudget(max_searches=0, max_reads=1),
+        attribution=Attribution(feature="cli", reason="operator-read"),
+    )
+    if not outcome.ok:
+        print(f"error: {outcome.error}: {outcome.error_detail}")
+        return 2
+    if outcome.title:
+        print(f"# {outcome.title}")
+    print(f"# {outcome.final_url} ({outcome.bytes_fetched} bytes, {outcome.hops} hop(s))")
+    if outcome.truncated:
+        print("# [truncated]")
+    print(outcome.text)
+    return 0
+
+
 def _tutorial_seed(args: argparse.Namespace) -> int:
     """Idempotently seed the bundled guided-tutorial run and print its id.
 
@@ -815,6 +879,22 @@ def build_parser() -> argparse.ArgumentParser:
         " ENRICHMENT_NAMES_LLM_ENABLED and LLM_ENABLED; uses the env LLM config)",
     )
     names_p.set_defaults(fn=_enrich_names)
+
+    research_p = sub.add_parser(
+        "research",
+        help="controlled web retrieval (issue #39; requires VOXINT_WEB_RESEARCH=true)",
+    )
+    research_sub = research_p.add_subparsers(dest="research_command", required=True)
+    rsearch_p = research_sub.add_parser(
+        "search", help="query the configured search provider (normalized results)"
+    )
+    rsearch_p.add_argument("query", help="search query (bounded; never logged)")
+    rsearch_p.set_defaults(fn=_research_search)
+    rread_p = research_sub.add_parser(
+        "read", help="fetch one page as extracted text under the egress policy"
+    )
+    rread_p.add_argument("url", help="absolute http(s) URL (public hosts only)")
+    rread_p.set_defaults(fn=_research_read)
 
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)

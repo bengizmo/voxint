@@ -326,3 +326,103 @@ def test_watch_keyboardinterrupt_returns_130(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(cli, "_poll_until_stop", _boom)
     assert main(["watch", str(uuid.uuid4())]) == 130
     assert disposed == [True]  # finally still ran
+
+
+def test_research_refuses_when_disabled_before_any_network(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # voxint_web_research is enforced at the surface: exit 2 BEFORE any DNS or
+    # socket work — proven by making getaddrinfo explode if ever reached.
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "false")
+    import socket
+
+    def _no_dns(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("DNS must not be touched while research is disabled")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _no_dns)
+    assert main(["research", "search", "anything"]) == 2
+    assert "disabled" in capsys.readouterr().out
+    assert main(["research", "read", "https://example.com/"]) == 2
+    assert "disabled" in capsys.readouterr().out
+
+
+def test_research_search_prints_normalized_results(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import voxint.research as research
+    from voxint.research.search import SearchOutcome, SearchResult
+
+    def _fake_search(query: str, **_kwargs: object) -> SearchOutcome:
+        assert query == "hydronics podcast"
+        return SearchOutcome(
+            ok=True,
+            error=None,
+            error_detail="",
+            results=(
+                SearchResult(
+                    title="A Title", url="https://a.example.com/", snippet="snip"
+                ),
+            ),
+            dropped_results=2,
+        )
+
+    monkeypatch.setattr(research, "web_search", _fake_search)
+    assert main(["research", "search", "hydronics podcast"]) == 0
+    out = capsys.readouterr().out
+    assert "https://a.example.com/" in out
+    assert "A Title" in out
+    assert "2 result(s) dropped" in out
+
+
+def test_research_read_prints_extracted_text(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import voxint.research as research
+    from voxint.research.fetch import FetchOutcome
+
+    def _fake_read(url: str, **_kwargs: object) -> FetchOutcome:
+        assert url == "https://a.example.com/page"
+        return FetchOutcome(
+            ok=True,
+            error=None,
+            error_detail="",
+            text="the page text",
+            title="Page",
+            final_url="https://a.example.com/page",
+            host="a.example.com",
+            bytes_fetched=13,
+            hops=0,
+        )
+
+    monkeypatch.setattr(research, "read_url", _fake_read)
+    assert main(["research", "read", "https://a.example.com/page"]) == 0
+    out = capsys.readouterr().out
+    assert "# Page" in out
+    assert "the page text" in out
+
+
+def test_research_read_failure_exits_2_without_url(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import voxint.research as research
+    from voxint.research.fetch import FetchOutcome
+
+    def _fake_read(url: str, **_kwargs: object) -> FetchOutcome:
+        return FetchOutcome(
+            ok=False,
+            error="policy_refused",
+            error_detail="host 'x.example.com' resolves to a non-public address",
+            host="x.example.com",
+        )
+
+    monkeypatch.setattr(research, "read_url", _fake_read)
+    assert main(["research", "read", "https://x.example.com/?token=SECRETQ"]) == 2
+    out = capsys.readouterr().out
+    assert "policy_refused" in out
+    assert "SECRETQ" not in out
