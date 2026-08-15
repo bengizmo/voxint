@@ -6,6 +6,36 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **Web-research speaker profile enrichment** (#40): the `web_researcher`
+  producer — an operator-initiated, per-speaker research job driving a
+  budgeted LLM tool loop over exactly three tools (#39's `web_search` +
+  `read_url`, plus a read-only roster lookup) and quarantining findings as
+  #37 drafts for field-by-field review. The loop is a strict-JSON action
+  protocol over plain `/chat/completions` (new `HttpLLMClient.chat_json`;
+  no provider function-calling, no framework): unknown/malformed replies
+  get one repair attempt then the job fails — never a silent "not found".
+  Server-side evidence gate: a claim survives only when its source is a
+  server-issued id of a page the job actually fetched AND its snippet
+  locates verbatim (NFKC+casefold+whitespace-collapsed) in that page's
+  kept text; generic values ("the host", "Speaker 2") and non-URL `link`
+  values are dropped. Retrieved page text reaches the model only as a
+  4k-char untrusted-marked excerpt, and `read_url` accepts only URLs from
+  the job's own search results or operator-stored seed URLs — an injected
+  page cannot steer fetches. Durable `research_jobs` rows (migration 0011)
+  carry status, live counters, and a cooperative cancel flag; the speaker
+  card on `/speakers` gets a research block with a budget preview, 3 s
+  polling while active, cancel, and per-draft accept/reject (the review
+  decision surface now serves bio/affiliation/link; NAME stays on the
+  workbench). `found=false` records an authoritative `outcome='none'`
+  generation; failures/cancellation record nothing. Per-job idempotency
+  (`web_researcher:speaker:{id}:{job_id}`) — a rerun is a new superseding
+  generation, and there are deliberately no automatic retries or recovery
+  sweeps. CLI: `voxint research speaker <id> [--note …]` runs one inline.
+  **Off by default**: `ENRICHMENT_WEB_RESEARCH_ENABLED=false` requires
+  both `VOXINT_WEB_RESEARCH` and `LLM_ENABLED` (validated at startup,
+  re-checked in the worker). New settings: `RESEARCH_MAX_SEARCHES`,
+  `RESEARCH_MAX_READS`, `RESEARCH_MAX_ROUNDS`,
+  `RESEARCH_MAX_ACTIONS_PER_ROUND`, `RESEARCH_DEADLINE_SECONDS`.
 - **Controlled web retrieval** (#39): a new `voxint.research` package —
   `web_search` (pluggable `SearchProvider` protocol, SearxNG built in,
   normalized title/url/snippet results with every result URL pre-filtered

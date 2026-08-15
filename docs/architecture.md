@@ -284,6 +284,57 @@ query-stripped). **Timing caveat:** the total wall clock bounds every HTTP
 operation via remaining-time propagation, but blocking DNS resolution cannot
 be hard-interrupted — DNS is the one non-hard-bounded step.
 
+## Web-research speaker enrichment (issue #40)
+
+The `web_researcher` producer is the consumer #39 was built for: an
+**operator-initiated, per-speaker research job** that drives a bounded LLM
+tool loop (`voxint.research.agent`) and quarantines everything it finds in
+the #37 draft layer for field-by-field human review. Gated by
+`ENRICHMENT_WEB_RESEARCH_ENABLED=false`, which **requires both**
+`VOXINT_WEB_RESEARCH` and `LLM_ENABLED` at startup (fail-closed validator)
+and is re-checked in the worker so queued jobs cannot outlive a capability
+shutdown.
+
+- **The orchestrator owns everything.** The loop is a hand-rolled
+  strict-JSON action protocol over the plain `/chat/completions` transport
+  (`HttpLLMClient.chat_json`) — no provider function-calling, no agent
+  framework — so budgets, the allowed-tool set, and evidence rules live in
+  auditable application code, never in a prompt. Each round the model either
+  requests up to `RESEARCH_MAX_ACTIONS_PER_ROUND` actions from exactly three
+  tools (`web_search`, `read_url`, read-only `query_existing_speakers`) or
+  concludes; anything outside the closed schema gets one repair attempt,
+  then the job **fails** — never a silent `found=false`.
+- **Budgets are hard.** Retrieval quotas and the wall clock ride #39's
+  `ResearchBudget` (exhaustion is a structured tool result); rounds are
+  counted by the loop, and after the last round the model gets exactly one
+  tools-disabled conclude request. All budgets snapshot onto the job row —
+  the preview the operator approved is the contract.
+- **Retrieved pages are hostile data.** Page text reaches the model only as
+  a JSON-encoded, untrusted-marked tool result capped at a 4k-char excerpt;
+  `read_url` accepts only URLs from this job's own search results or the
+  operator-stored seed URLs (copied exactly), so an injected page cannot
+  steer fetches; and the server-side conclusion gate — the actual security
+  boundary — drops any claim whose `source` is not a server-issued id of a
+  page actually read, whose snippet does not locate verbatim
+  (NFKC + casefold + whitespace-collapsed) in that page's kept text, or
+  whose value is generic ("the host", "Speaker 2"). Surviving claims become
+  speaker-scoped bio/affiliation/link candidates with `UrlEvidence`.
+- **Jobs are durable, honest state.** `research_jobs` holds queued → running
+  (guarded claim; a duplicate Celery delivery no-ops) → succeeded | failed |
+  cancelled, plus progress counters the console polls (htmx, 3 s while
+  active) and a cooperative `cancel_requested` flag the loop re-reads
+  between rounds. A confident `found=false` records an authoritative
+  `outcome='none'` producer run; transport/LLM/contract failures and
+  cancellation record **nothing** — a failure must never retire prior
+  drafts. No automatic retries and no recovery sweep, deliberately: hidden
+  re-execution of a non-deterministic web loop is worse than a visible
+  stall the operator can cancel and restart.
+- **Idempotency is per job, not per input.** The producer-run key is
+  `web_researcher:speaker:{speaker_id}:{job_id}` — one durable execution.
+  Web research is non-deterministic, so an input-derived key would wrongly
+  suppress deliberate re-research; an intentional rerun is a new job minting
+  a new generation that supersedes still-proposed prior claims.
+
 ## Provider seams
 
 ASR, diarizer, embedder, and LLM sit behind typed protocols

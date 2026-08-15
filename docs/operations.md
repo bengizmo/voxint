@@ -462,9 +462,46 @@ Compressed responses are refused by design (identity-only), and every fetch
 writes one attribution log line (feature, reason, host, verdict, bytes,
 duration; never the URL or query).
 
+### Web-research speaker enrichment (issue #40; off by default)
+
+With retrieval verified, the `web_researcher` producer adds the research loop
+on top. It needs **all three** gates (refused at startup otherwise, and
+re-checked by the worker before any queued job runs):
+
+```bash
+ENRICHMENT_WEB_RESEARCH_ENABLED=true
+VOXINT_WEB_RESEARCH=true      # + WEB_SEARCH_BASE_URL, as above
+LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
+```
+
+Operate it from the speaker's card on `/speakers`: the "Web research" block
+shows the exact budget a job will run under (`RESEARCH_MAX_SEARCHES=3`,
+`RESEARCH_MAX_READS=5`, `RESEARCH_MAX_ROUNDS=5`,
+`RESEARCH_DEADLINE_SECONDS=300` — env-tunable, never raisable per job), an
+optional note passed to the researcher as seed context, and a Start button.
+While a job runs the block polls every 3 s with live search/read/round
+counters and a Cancel control (cooperative — the loop stops before its next
+round; an in-flight fetch finishes first). Jobs run on the Celery worker;
+`voxint research speaker <speaker-uuid> [--note …]` runs one inline for
+headless use.
+
+Findings land as **drafts** under the same block — field, value, source URL
+with fetch time, and the verbatim supporting quote — and nothing touches the
+speaker until you accept a draft, field by field. Accepted claims remain a
+reviewable collection (never a canonical profile, never identity; see
+`docs/quality-gates.md`). A job that ends `found=false` records an
+authoritative "looked, found nothing" generation that retires prior
+proposals; a **failed or cancelled** job records nothing. There are no
+automatic retries: a failed job shows its error on the card — fix the cause
+(provider down, LLM endpoint unreachable, model too weak to follow the
+protocol) and start a fresh job. If the broker is down at start, the job
+stays queued; cancel it and retry once the broker is back.
+
 The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
-`/runs/{id}/requeue`, and `POST /review/{id}/claim` (claiming mints the run's claim
-token, so it has none of its own to gate a forged POST). Set `CSRF_SECRET` to a
+`/runs/{id}/requeue`, `POST /review/{id}/claim` (claiming mints the run's claim
+token, so it has none of its own to gate a forged POST), and the web-research
+forms on `/speakers` (start, cancel, and per-draft accept/reject — each under
+its own token action). Set `CSRF_SECRET` to a
 persistent random value
 (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) — otherwise a
 random per-process secret is used, which invalidates open forms on restart and
