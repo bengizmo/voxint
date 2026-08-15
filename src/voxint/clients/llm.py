@@ -10,6 +10,8 @@ set; a misaligned or malformed reply fails the whole batch, never partially.
 
 import json
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass
 from types import TracebackType
 
 import httpx
@@ -47,6 +49,25 @@ Rules for "name_hints" (usually empty):
 — kind "other".
 - "label" must be one of the labels present in the input segments.
 - Never guess or infer names that are not explicitly spoken."""
+
+
+CHAT_ROLES = frozenset({"system", "user", "assistant"})
+# Ceiling on one chat_json reply. Generous — a research conclusion with several
+# claims plus snippets fits in a fraction of this — but a reply blowing past it
+# is a runaway generation, not an answer.
+MAX_CHAT_REPLY_CHARS = 100_000
+
+
+@dataclass(frozen=True)
+class ChatMessage:
+    """One message of a generic JSON-object chat exchange."""
+
+    role: str
+    content: str
+
+    def __post_init__(self) -> None:
+        if self.role not in CHAT_ROLES:
+            raise ValueError(f"unknown chat role {self.role!r}")
 
 
 class LLMError(Exception):
@@ -114,14 +135,55 @@ class HttpLLMClient:
             ],
         }
         try:
-            response = self._client.post(
-                "/chat/completions", json=payload, headers=self._headers
-            )
+            response = self._client.post("/chat/completions", json=payload, headers=self._headers)
         except httpx.HTTPError as exc:
             raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
             raise LLMError(f"HTTP {response.status_code}: {response.text[:500]}")
         return _parse_batch(response, segments)
+
+    def chat_json(self, messages: Sequence[ChatMessage]) -> dict[str, object]:
+        """One temperature-0 chat call whose reply must be a JSON object.
+
+        Generic transport for callers that own their own conversation and
+        validation (the research loop); no enhancement logic here. The reply is
+        held to the same strict envelope handling as ``enhance_segments`` plus a
+        size ceiling and a NUL check — anything else raises :class:`LLMError`.
+        """
+        if not messages:
+            raise LLMError("chat_json requires at least one message")
+        payload = {
+            "model": self._model,
+            "temperature": 0,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+        }
+        try:
+            response = self._client.post("/chat/completions", json=payload, headers=self._headers)
+        except httpx.HTTPError as exc:
+            raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
+        if response.status_code >= 400:
+            raise LLMError(f"HTTP {response.status_code}: {response.text[:500]}")
+        try:
+            content = response.json()["choices"][0]["message"]["content"]
+        except (ValueError, KeyError, IndexError, TypeError) as exc:
+            raise LLMError(f"malformed completion envelope: {exc!r}") from exc
+        if not isinstance(content, str):
+            raise LLMError("completion content is not a string")
+        if len(content) > MAX_CHAT_REPLY_CHARS:
+            raise LLMError(
+                f"completion content is {len(content)} chars against a"
+                f" {MAX_CHAT_REPLY_CHARS}-char bound"
+            )
+        if "\x00" in content:
+            # PostgreSQL rejects NUL in text; nothing downstream may persist it.
+            raise LLMError("completion content contains NUL")
+        try:
+            body = json.loads(_strip_fence(content))
+        except ValueError as exc:
+            raise LLMError(f"completion content is not valid JSON: {exc}") from exc
+        if not isinstance(body, dict):
+            raise LLMError(f"expected a JSON object, got {type(body).__name__}")
+        return body
 
     def close(self) -> None:
         if self._owns_client:
@@ -160,9 +222,7 @@ def _parse_batch(
         s.segment_index: len(s.text) * MAX_ENHANCED_GROWTH_FACTOR + MAX_ENHANCED_SLACK_CHARS
         for s in segments
     }
-    known_labels = {
-        s.diarization_label for s in segments if s.diarization_label is not None
-    }
+    known_labels = {s.diarization_label for s in segments if s.diarization_label is not None}
 
     raw_segments = body.get("segments")
     if not isinstance(raw_segments, list):
@@ -208,9 +268,7 @@ def _parse_batch(
             raise LLMError("name_hints entry has a blank name")
         if "\x00" in name:
             raise LLMError("name_hints entry contains NUL")
-        hints.append(
-            SpeakerNameHint(diarization_label=label, name=name.strip(), kind=kind)
-        )
+        hints.append(SpeakerNameHint(diarization_label=label, name=name.strip(), kind=kind))
     return EnhancementBatchResult(enhanced=enhanced, name_hints=tuple(hints))
 
 

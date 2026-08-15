@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 from voxint.clients.base import EnhancementRequestSegment
-from voxint.clients.llm import HttpLLMClient, LLMError
+from voxint.clients.llm import MAX_CHAT_REPLY_CHARS, ChatMessage, HttpLLMClient, LLMError
 
 SEGMENTS = (
     EnhancementRequestSegment(segment_index=0, text="hello there", diarization_label="SPEAKER_00"),
@@ -193,3 +193,62 @@ def test_transport_failure_raises_llm_error() -> None:
 
     with pytest.raises(LLMError):
         make_client(handler).enhance_segments(SEGMENTS, "")
+
+
+# ------------------------------------------------------------------ chat_json
+
+
+def test_chat_json_returns_object_and_sends_messages() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return completion({"actions": [{"tool": "web_search", "query": "x"}]})
+
+    result = make_client(handler).chat_json(
+        [ChatMessage(role="system", content="rules"), ChatMessage(role="user", content="go")]
+    )
+    assert result == {"actions": [{"tool": "web_search", "query": "x"}]}
+    payload = json.loads(seen[0].content)
+    assert payload["temperature"] == 0
+    assert payload["messages"] == [
+        {"role": "system", "content": "rules"},
+        {"role": "user", "content": "go"},
+    ]
+
+
+def test_chat_json_tolerates_fence_and_requires_object() -> None:
+    fenced = make_client(lambda r: completion('```json\n{"ok": true}\n```'))
+    assert fenced.chat_json([ChatMessage(role="user", content="go")]) == {"ok": True}
+    array = make_client(lambda r: completion("[1, 2]"))
+    with pytest.raises(LLMError, match="expected a JSON object"):
+        array.chat_json([ChatMessage(role="user", content="go")])
+
+
+def test_chat_json_rejects_oversize_nul_and_empty_input() -> None:
+    huge = make_client(lambda r: completion("x" * (MAX_CHAT_REPLY_CHARS + 1)))
+    with pytest.raises(LLMError, match="bound"):
+        huge.chat_json([ChatMessage(role="user", content="go")])
+    nul = make_client(lambda r: completion('{"a": "b\x00c"}'))
+    with pytest.raises(LLMError, match="NUL"):
+        nul.chat_json([ChatMessage(role="user", content="go")])
+    with pytest.raises(LLMError, match="at least one message"):
+        make_client(lambda r: completion("{}")).chat_json([])
+
+
+def test_chat_json_surfaces_http_and_transport_failures() -> None:
+    http_error = make_client(lambda r: httpx.Response(500, text="boom"))
+    with pytest.raises(LLMError, match="HTTP 500"):
+        http_error.chat_json([ChatMessage(role="user", content="go")])
+
+    def explode(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("nope", request=request)
+
+    transport = make_client(explode)
+    with pytest.raises(LLMError, match="transport failure"):
+        transport.chat_json([ChatMessage(role="user", content="go")])
+
+
+def test_chat_message_rejects_unknown_role() -> None:
+    with pytest.raises(ValueError, match="unknown chat role"):
+        ChatMessage(role="tool", content="x")
