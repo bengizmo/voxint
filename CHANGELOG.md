@@ -6,6 +6,24 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **Enrichment draft schema** (#37): machine-derived claims about speakers
+  and runs now live as reviewable, evidence-backed drafts. Four new tables
+  (migration 0010): `enrichment_producer_runs` (one row per completed
+  producer invocation — scope, covered fields, monotonic generation, and an
+  explicit `outcome='none'` when a producer looked and found nothing),
+  immutable `enrichment_candidates` (claim field/value, producer-local score
+  with visible components, write-once supersession stamp), normalized
+  `enrichment_candidate_evidence` (one claim can cite a metadata field,
+  transcript segments, and several URLs together), and the append-only
+  `profile_review_decisions` human trail — deliberately separate from the
+  attribution ledger. Review state is derived at read time (decision >
+  superseded > proposed), never stored. Single sanctioned writers in
+  `voxint.enrichment` (atomic per-scope finalization under an advisory lock;
+  terminal accept/reject with idempotent replay). Invariant unchanged: drafts
+  are suggestions *about* identity — accepting a name claim never touches
+  `speakers.display_name`, machine proposals, or attribution resolution.
+  Schema + writer layer only; the producers (#38, #40) and their console
+  surface come separately.
 - **Source media metadata capture** (#36, schema slice): new write-once
   `media_source_metadata` table (1:1 with `media_items`) holding normalized
   extractor context — title, uploader/channel (+URLs), description, upload

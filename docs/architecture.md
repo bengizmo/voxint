@@ -63,7 +63,7 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0009)
+## Data model (alembic revisions 0001–0010)
 
 | Table | Role |
 |---|---|
@@ -80,6 +80,10 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
 | `speaker_assignments` | **machine proposals** (method, confidence, grounded flag; `llm_hint` rows carry `proposed_name`, method-shape CHECKs keep the two shapes disjoint) |
 | `adjudication_decisions` | **immutable human ledger** (insert-only, idempotency key) |
+| `enrichment_producer_runs` | one row per **completed** enrichment-producer invocation (revision 0010): producer key + version, XOR target scope (speaker \| run \| run+label), declared `covered_fields`, monotonic per-scope `generation` (allocated under an advisory lock — supersession compares generations, never wall clock), derived `outcome` (`'none'` = "we looked and found nothing", reviewable information), bounded schema-versioned `config` snapshot, idempotency key |
+| `enrichment_candidates` | **immutable machine-derived claims** (revision 0010) — suggestions *about* identity, never identity: claim field/value, producer-local score + components. No stored review state; effective state is derived (decision > supersession stamp > proposed). A trigger blocks DELETE and every UPDATE except the write-once `superseded_by_producer_run_id` stamp |
+| `enrichment_candidate_evidence` | 1:many field-level provenance per claim (revision 0010): a `media_source_metadata` column/`raw.` key, a transcript segment (+ timestamp), or a fetched URL — so one claim can cite several sources together; append-only (trigger) |
+| `profile_review_decisions` | **append-only human trail for enrichment claims** (revision 0010), deliberately separate from `adjudication_decisions` — accepting a bio is a different act from ruling on who spoke. UNIQUE per candidate (terminal accept/reject); corrections arrive as fresh candidates from a producer re-run |
 
 Three invariants worth naming:
 
@@ -93,6 +97,13 @@ Three invariants worth naming:
 - **One embedding space at a time.** Cosine similarity is only meaningful within a
   single `embedding_space`; all vector SQL lives in one module and always filters
   by space.
+- **Drafts are suggestions about identity, not identity.** The `enrichment_*`
+  tables hold machine-derived claims as reviewable drafts; nothing there —
+  accepted or not — feeds attribution, mutates `speakers.display_name`/`notes`,
+  or writes the adjudication ledger. Writes go through the single sanctioned
+  writers in `voxint.enrichment` (`drafts.py` for producers, `review.py` for
+  the human trail); each new producer run atomically supersedes only its own
+  older still-proposed claims within the fields it covered.
 
 ### Speaker lifecycle (roster curation, revision 0007)
 

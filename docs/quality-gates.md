@@ -64,6 +64,14 @@ An unmatched or ineligible label produces **no row**: absence of evidence is
 not a low-confidence proposal. P4 never creates `speakers` rows for unknown
 voices — that is the adjudication UI's job (P5).
 
+> The enrichment draft layer (issue #37) records the complementary fact at a
+> *different* layer: a completed producer invocation that substantiated
+> nothing persists as an explicit `enrichment_producer_runs` row with
+> `outcome = 'none'`. The two rules do not conflict — "no proposal row"
+> keeps weak evidence out of the matching surface, while "we looked and
+> found nothing" is itself reviewable information about the *search*, not a
+> low-confidence claim. Enrichment candidates never enter matching at all.
+
 ## Confidence is not probability
 
 `speaker_assignments.confidence` stores `(cosine + 1) / 2`, clamped to
@@ -83,6 +91,20 @@ writer — `voxint.speakers.matching.replace_run_proposals` — through which
 every proposal insert passes. One hint per label: an explicit
 self-introduction ("I'm Jane…") beats being named by someone else; within a
 kind, the earliest heard wins.
+
+## Enrichment drafts (issue #37): read names stay suggestions
+
+The "named ≠ grounded" rule extends unchanged to the enrichment draft layer:
+a name mined from metadata, a transcript, or the web is stored in
+`enrichment_candidates` as a *suggestion about* identity with its evidence,
+and even an operator **accepting** it records only a `profile_review_decisions`
+row — it never writes `speakers.display_name`, never creates a proposal, and
+never resolves attribution (integration-tested). Draft `score` /
+`score_components` are producer-local signals like the transformed cosine
+above: not probabilities, and never comparable across producers. Effective
+draft state is derived at read time (human decision > supersession stamp >
+proposed) by `enrichment/queries.py`, mirroring how attribution is resolved
+below.
 
 ## Adjudication precedence (P5)
 
