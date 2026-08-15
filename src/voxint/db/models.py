@@ -11,6 +11,10 @@ Design notes (see docs/architecture.md when it lands):
   immutable human ledger. The two are never merged.
 - ``speaker_embeddings`` carry an ``embedding_space`` tag; vectors from different
   spaces must never be compared (enforced in ``speakers/matching.py`` queries).
+- The ``enrichment_*`` tables (issue #37) hold machine-derived draft claims
+  with evidence; ``profile_review_decisions`` is their separate append-only
+  human trail. Drafts are suggestions *about* identity, never identity — they
+  feed neither attribution nor the roster.
 """
 
 import enum
@@ -110,6 +114,35 @@ class Decision(enum.StrEnum):
     ASSIGN = "assign"
     EXCLUDE = "exclude"
     UNKNOWN = "unknown"
+
+
+class EnrichmentTargetKind(enum.StrEnum):
+    SPEAKER = "speaker"
+    RUN = "run"
+    RUN_LABEL = "run_label"
+
+
+class EnrichmentOutcome(enum.StrEnum):
+    FOUND = "found"
+    NONE = "none"
+
+
+class ClaimField(enum.StrEnum):
+    NAME = "name"
+    BIO = "bio"
+    AFFILIATION = "affiliation"
+    LINK = "link"
+
+
+class EvidenceKind(enum.StrEnum):
+    METADATA_FIELD = "metadata_field"
+    TRANSCRIPT_SEGMENT = "transcript_segment"
+    URL = "url"
+
+
+class ProfileDecision(enum.StrEnum):
+    ACCEPT = "accept"
+    REJECT = "reject"
 
 
 def _enum_values(e: type[enum.StrEnum]) -> str:
@@ -581,6 +614,380 @@ class AdjudicationDecision(Base):
     decision: Mapped[str] = mapped_column(Text)
     speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
     operator: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class EnrichmentProducerRun(Base):
+    """One **completed** enrichment-producer invocation (issue #37).
+
+    Enrichment producers (offline name mining, web research, …) generate
+    machine-derived claims about speakers and runs. This table records each
+    finished invocation: which producer (stable logical key + version), what
+    scope it examined, which claim fields it covered, and whether it found
+    anything. Rows are inserted only at successful completion — atomically with
+    their candidate rows — by the single sanctioned writer
+    (``enrichment/drafts.py``); failed or partial attempts are not audited at
+    this layer.
+
+    - ``outcome`` is derived by the writer: ``'none'`` iff the invocation
+      produced zero candidates. "We looked and found nothing" is reviewable
+      information, deliberately unlike ``speaker_assignments`` where absence
+      is modeled as no row (docs/quality-gates.md).
+    - ``generation`` is monotonic per (producer, scope), allocated by the
+      writer under a per-scope advisory lock; supersession compares
+      generations, never wall-clock, so out-of-order completion cannot make an
+      older run supersede a newer one. Uniqueness of (producer, scope,
+      generation) cannot be a UNIQUE constraint (the scope trio contains
+      NULLs) — it is writer-enforced under the lock.
+    - ``covered_fields`` declares which claim fields the producer actually
+      examined; a rerun supersedes only candidates in its covered fields.
+    - ``config`` is a bounded, schema-versioned snapshot of the settings that
+      shaped the invocation (budgets, model, thresholds) for reproducibility.
+    """
+
+    __tablename__ = "enrichment_producer_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="enrichment_producer_runs_idempotency_key"
+        ),
+        CheckConstraint(
+            "length(trim(producer)) > 0",
+            name="enrichment_producer_runs_producer_nonempty_check",
+        ),
+        CheckConstraint(
+            "length(trim(producer_version)) > 0",
+            name="enrichment_producer_runs_producer_version_nonempty_check",
+        ),
+        CheckConstraint(
+            f"target_kind IN ({_enum_values(EnrichmentTargetKind)})",
+            name="enrichment_producer_runs_target_kind_check",
+        ),
+        # Target shapes: exactly the columns of the declared kind, no strays.
+        CheckConstraint(
+            "target_kind != 'speaker' OR (speaker_id IS NOT NULL"
+            " AND pipeline_run_id IS NULL AND diarization_label IS NULL)",
+            name="enrichment_producer_runs_speaker_shape_check",
+        ),
+        CheckConstraint(
+            "target_kind != 'run' OR (pipeline_run_id IS NOT NULL"
+            " AND speaker_id IS NULL AND diarization_label IS NULL)",
+            name="enrichment_producer_runs_run_shape_check",
+        ),
+        CheckConstraint(
+            "target_kind != 'run_label' OR (pipeline_run_id IS NOT NULL"
+            " AND diarization_label IS NOT NULL AND speaker_id IS NULL)",
+            name="enrichment_producer_runs_run_label_shape_check",
+        ),
+        CheckConstraint(
+            "diarization_label IS NULL OR length(trim(diarization_label)) > 0",
+            name="enrichment_producer_runs_label_nonempty_check",
+        ),
+        CheckConstraint(
+            "cardinality(covered_fields) >= 1 AND covered_fields <@ "
+            f"ARRAY[{_enum_values(ClaimField)}]::text[]",
+            name="enrichment_producer_runs_covered_fields_check",
+        ),
+        CheckConstraint(
+            "generation >= 1", name="enrichment_producer_runs_generation_check"
+        ),
+        CheckConstraint(
+            f"outcome IN ({_enum_values(EnrichmentOutcome)})",
+            name="enrichment_producer_runs_outcome_check",
+        ),
+        CheckConstraint(
+            "(config IS NULL) = (config_schema_version IS NULL)",
+            name="enrichment_producer_runs_config_pair_check",
+        ),
+        CheckConstraint(
+            "config_schema_version IS NULL OR config_schema_version >= 1",
+            name="enrichment_producer_runs_config_schema_version_check",
+        ),
+        CheckConstraint(
+            "config IS NULL OR jsonb_typeof(config) = 'object'",
+            name="enrichment_producer_runs_config_object_check",
+        ),
+        CheckConstraint(
+            "completed_at >= started_at",
+            name="enrichment_producer_runs_completed_after_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    producer: Mapped[str] = mapped_column(Text)
+    producer_version: Mapped[str] = mapped_column(Text)
+    target_kind: Mapped[str] = mapped_column(Text)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("speakers.id"), index=True
+    )
+    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id"), index=True
+    )
+    diarization_label: Mapped[str | None] = mapped_column(Text)
+    covered_fields: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    generation: Mapped[int] = mapped_column(Integer)
+    outcome: Mapped[str] = mapped_column(Text)
+    config: Mapped[dict[str, Any] | None] = mapped_column()
+    config_schema_version: Mapped[int | None] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    candidates: Mapped[list["EnrichmentCandidate"]] = relationship(
+        back_populates="producer_run",
+        foreign_keys="EnrichmentCandidate.producer_run_id",
+    )
+
+
+class EnrichmentCandidate(Base):
+    """A reviewable machine-derived claim — a *suggestion about* identity, never
+    identity (issue #37).
+
+    Producers write claims here as evidence-backed drafts; nothing in this
+    table (accepted or not) ever feeds attribution, mutates
+    ``speakers.display_name``/``notes``, or touches the adjudication ledger.
+    A heard or read name is never grounded identity (docs/quality-gates.md) —
+    only acoustic evidence or a human ruling grounds attribution.
+
+    Claim content is immutable (a DB trigger rejects DELETE and any UPDATE
+    except stamping ``superseded_by_producer_run_id``, write-once). There is no
+    stored review state: the effective state is derived at read time
+    (``enrichment/queries.py``) — a ``profile_review_decisions`` row wins
+    (accepted/rejected, terminal), else a set ``superseded_by_producer_run_id``
+    means superseded, else the claim is proposed. ``score`` /
+    ``score_components`` are producer-local signals, never comparable across
+    producers. At least one evidence row per candidate is writer-enforced.
+    """
+
+    __tablename__ = "enrichment_candidates"
+    __table_args__ = (
+        CheckConstraint(
+            f"target_kind IN ({_enum_values(EnrichmentTargetKind)})",
+            name="enrichment_candidates_target_kind_check",
+        ),
+        CheckConstraint(
+            "target_kind != 'speaker' OR (speaker_id IS NOT NULL"
+            " AND pipeline_run_id IS NULL AND diarization_label IS NULL)",
+            name="enrichment_candidates_speaker_shape_check",
+        ),
+        CheckConstraint(
+            "target_kind != 'run' OR (pipeline_run_id IS NOT NULL"
+            " AND speaker_id IS NULL AND diarization_label IS NULL)",
+            name="enrichment_candidates_run_shape_check",
+        ),
+        CheckConstraint(
+            "target_kind != 'run_label' OR (pipeline_run_id IS NOT NULL"
+            " AND diarization_label IS NOT NULL AND speaker_id IS NULL)",
+            name="enrichment_candidates_run_label_shape_check",
+        ),
+        CheckConstraint(
+            "diarization_label IS NULL OR length(trim(diarization_label)) > 0",
+            name="enrichment_candidates_label_nonempty_check",
+        ),
+        CheckConstraint(
+            f"field IN ({_enum_values(ClaimField)})",
+            name="enrichment_candidates_field_check",
+        ),
+        CheckConstraint(
+            "length(trim(value)) > 0 AND char_length(value) <= 4000",
+            name="enrichment_candidates_value_check",
+        ),
+        CheckConstraint(
+            "score IS NULL OR (score >= 0 AND score <= 1)",
+            name="enrichment_candidates_score_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(score_components) = 'object'",
+            name="enrichment_candidates_score_components_object_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    producer_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("enrichment_producer_runs.id"), index=True
+    )
+    target_kind: Mapped[str] = mapped_column(Text)
+    speaker_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("speakers.id"), index=True
+    )
+    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id"), index=True
+    )
+    diarization_label: Mapped[str | None] = mapped_column(Text)
+    field: Mapped[str] = mapped_column(Text)
+    value: Mapped[str] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float)
+    score_components: Mapped[dict[str, Any]] = mapped_column(
+        default=dict, server_default=text("'{}'::jsonb")
+    )
+    # Machine lifecycle fact — the only mutable column (write-once, trigger
+    # enforced): set when a newer generation of the same producer + scope
+    # covering this claim's field replaces it.
+    superseded_by_producer_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("enrichment_producer_runs.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    producer_run: Mapped[EnrichmentProducerRun] = relationship(
+        back_populates="candidates", foreign_keys=[producer_run_id]
+    )
+    evidence: Mapped[list["EnrichmentCandidateEvidence"]] = relationship(
+        back_populates="candidate",
+        order_by="EnrichmentCandidateEvidence.ordinal",
+    )
+
+
+class EnrichmentCandidateEvidence(Base):
+    """Field-level provenance for one claim — 1:many so a single claim can cite
+    a metadata field, transcript segments, and several URLs together (#37).
+
+    Exactly one evidence shape per row (kind-shape CHECKs): a
+    ``media_source_metadata`` column/``raw.``-path, a transcript segment
+    (+ optional timestamp), or a fetched URL (+ optional retrieval time).
+    Rows are append-only (trigger): evidence never changes after the claim is
+    recorded. ``snippet`` is the bounded human-readable excerpt; ``detail`` is
+    a schema-versioned seam for kind-specific extension.
+    """
+
+    __tablename__ = "enrichment_candidate_evidence"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", "ordinal", name="enrichment_candidate_evidence_ordinal_key"
+        ),
+        CheckConstraint(
+            "ordinal >= 0", name="enrichment_candidate_evidence_ordinal_nonneg_check"
+        ),
+        CheckConstraint(
+            f"kind IN ({_enum_values(EvidenceKind)})",
+            name="enrichment_candidate_evidence_kind_check",
+        ),
+        # Evidence shapes: exactly the columns of the declared kind.
+        CheckConstraint(
+            "kind != 'metadata_field' OR (source_metadata_id IS NOT NULL"
+            " AND source_field IS NOT NULL AND transcript_segment_id IS NULL"
+            " AND timestamp_seconds IS NULL AND url IS NULL AND retrieved_at IS NULL)",
+            name="enrichment_candidate_evidence_metadata_shape_check",
+        ),
+        CheckConstraint(
+            "kind != 'transcript_segment' OR (transcript_segment_id IS NOT NULL"
+            " AND source_metadata_id IS NULL AND source_field IS NULL"
+            " AND url IS NULL AND retrieved_at IS NULL)",
+            name="enrichment_candidate_evidence_transcript_shape_check",
+        ),
+        CheckConstraint(
+            "kind != 'url' OR (url IS NOT NULL"
+            " AND source_metadata_id IS NULL AND source_field IS NULL"
+            " AND transcript_segment_id IS NULL AND timestamp_seconds IS NULL)",
+            name="enrichment_candidate_evidence_url_shape_check",
+        ),
+        CheckConstraint(
+            "source_field IS NULL OR length(trim(source_field)) > 0",
+            name="enrichment_candidate_evidence_source_field_nonempty_check",
+        ),
+        CheckConstraint(
+            "timestamp_seconds IS NULL OR timestamp_seconds >= 0",
+            name="enrichment_candidate_evidence_timestamp_nonneg_check",
+        ),
+        CheckConstraint(
+            "url IS NULL OR char_length(url) <= 2048",
+            name="enrichment_candidate_evidence_url_length_check",
+        ),
+        CheckConstraint(
+            "snippet IS NULL OR char_length(snippet) <= 1000",
+            name="enrichment_candidate_evidence_snippet_length_check",
+        ),
+        CheckConstraint(
+            "(detail IS NULL) = (detail_schema_version IS NULL)",
+            name="enrichment_candidate_evidence_detail_pair_check",
+        ),
+        CheckConstraint(
+            "detail_schema_version IS NULL OR detail_schema_version >= 1",
+            name="enrichment_candidate_evidence_detail_schema_version_check",
+        ),
+        CheckConstraint(
+            "detail IS NULL OR jsonb_typeof(detail) = 'object'",
+            name="enrichment_candidate_evidence_detail_object_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("enrichment_candidates.id"), index=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer)
+    kind: Mapped[str] = mapped_column(Text)
+    source_metadata_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("media_source_metadata.id")
+    )
+    # Normalized column name or "raw.<key>" path within the metadata snapshot.
+    source_field: Mapped[str | None] = mapped_column(Text)
+    transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("transcript_segments.id")
+    )
+    timestamp_seconds: Mapped[float | None] = mapped_column(Float)
+    url: Mapped[str | None] = mapped_column(Text)
+    retrieved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snippet: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict[str, Any] | None] = mapped_column()
+    detail_schema_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    candidate: Mapped[EnrichmentCandidate] = relationship(back_populates="evidence")
+
+
+class ProfileReviewDecision(Base):
+    """Append-only human trail for enrichment claims (issue #37) — deliberately
+    SEPARATE from ``adjudication_decisions``.
+
+    Accepting a bio is a different act from ruling on who spoke: this trail
+    records profile-review verdicts and never touches attribution. One decision
+    per candidate (UNIQUE) — accept/reject is terminal; a re-proposed claim
+    arrives as a fresh candidate row from a newer producer run, so corrections
+    happen by re-running the producer, not by editing history. Rows reject
+    UPDATE/DELETE via a trigger; writes go through the single idempotent
+    writer (``enrichment/review.py``). Accepting a ``name`` claim records the
+    act only — ``speakers.display_name`` and the attribution ledger are never
+    written from here.
+    """
+
+    __tablename__ = "profile_review_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "candidate_id", name="profile_review_decisions_candidate_key"
+        ),
+        UniqueConstraint(
+            "idempotency_key", name="profile_review_decisions_idempotency_key"
+        ),
+        CheckConstraint(
+            f"decision IN ({_enum_values(ProfileDecision)})",
+            name="profile_review_decisions_decision_check",
+        ),
+        CheckConstraint(
+            "length(trim(operator)) > 0",
+            name="profile_review_decisions_operator_nonempty_check",
+        ),
+        CheckConstraint(
+            "note IS NULL OR char_length(note) <= 2000",
+            name="profile_review_decisions_note_length_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    candidate_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("enrichment_candidates.id")
+    )
+    decision: Mapped[str] = mapped_column(Text)
+    operator: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
