@@ -64,6 +64,12 @@ CSRF_ROSTER_MERGE = "roster-merge"
 CSRF_ROSTER_ARCHIVE = "roster-archive"
 CSRF_ROSTER_RESTORE = "roster-restore"
 CSRF_ROSTER_EMBEDDING_DELETE = "roster-embedding-delete"
+# Web-research jobs and profile-draft review (issue #40). Per-action tokens:
+# starting a job (egress + LLM spend), cancelling one, and ruling on a draft
+# are independent mutations with different blast radii.
+CSRF_RESEARCH_START = "research-start"
+CSRF_RESEARCH_CANCEL = "research-cancel"
+CSRF_PROFILE_DECISION = "profile-decision"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:

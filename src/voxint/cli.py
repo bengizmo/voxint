@@ -388,6 +388,68 @@ def _fetch(args: argparse.Namespace) -> int:
     return 0
 
 
+def _research_speaker(args: argparse.Namespace) -> int:
+    """Run one web-research job for a speaker inline (issue #40).
+
+    The same code path the worker runs — a durable job row, the budgeted tool
+    loop, drafts via the #37 writer — executed synchronously so headless
+    operation and integration tests need no broker. Requires all three gates
+    (retrieval + LLM + the producer flag)."""
+    import uuid as _uuid
+
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.models import ResearchJob
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.enrichment.research_jobs import (
+        ResearchJobError,
+        create_job,
+        execute_job,
+    )
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+    try:
+        speaker_id = _uuid.UUID(args.speaker_id)
+    except ValueError:
+        print(f"error: {args.speaker_id!r} is not a speaker id")
+        return 2
+    factory = build_session_factory(build_engine(settings.database_url))
+    with factory() as session:
+        try:
+            job = create_job(
+                session,
+                speaker_id=speaker_id,
+                settings=settings,
+                operator_note=args.note,
+            )
+        except ResearchJobError as exc:
+            print(f"error: {exc}")
+            return 2
+        job_id = job.id
+        session.commit()
+    print(f"job {job_id}: researching speaker {speaker_id} ...")
+    execute_job(factory, job_id, settings=settings)
+    with factory() as session:
+        finished = session.get(ResearchJob, job_id)
+        assert finished is not None
+        print(
+            f"job {finished.status}: {finished.searches_used} searches,"
+            f" {finished.reads_used} reads, {finished.rounds_used} rounds"
+        )
+        if finished.error:
+            print(f"error: {finished.error}")
+            return 1
+        if finished.producer_run_id is not None:
+            print(
+                "drafts recorded — review them on the speaker's card in the"
+                " console (accept/reject per field)"
+            )
+    return 0
+
+
 def _research_search(args: argparse.Namespace) -> int:
     """One provider query via the controlled retrieval capability (issue #39).
 
@@ -958,6 +1020,18 @@ def build_parser() -> argparse.ArgumentParser:
         " line from stdin (keeps a signed URL out of ps/shell history)",
     )
     rread_p.set_defaults(fn=_research_read)
+    rspeaker_p = research_sub.add_parser(
+        "speaker",
+        help="run one budgeted research job for a speaker and record drafts"
+        " (issue #40; requires ENRICHMENT_WEB_RESEARCH_ENABLED + LLM_ENABLED)",
+    )
+    rspeaker_p.add_argument("speaker_id", help="roster speaker UUID")
+    rspeaker_p.add_argument(
+        "--note",
+        default=None,
+        help="optional bounded note handed to the researcher as seed context",
+    )
+    rspeaker_p.set_defaults(fn=_research_speaker)
 
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)

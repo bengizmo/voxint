@@ -1,0 +1,97 @@
+{# One speaker's web-research block (issue #40): latest job + start/cancel +
+   reviewable profile drafts. Included per roster card AND served standalone by
+   GET /speakers/{id}/research — the div re-polls itself only while a job is
+   active, so a terminal render stops the polling. #}
+<div id="research-{{ research.speaker.id }}"
+     {% if research.job_active %}hx-get="/speakers/{{ research.speaker.id }}/research"
+     hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
+<details class="research" {% if research.job or research.proposed %}open{% endif %}>
+  <summary>Web research
+    {%- if research.proposed %} ({{ research.proposed|length }} draft{{ "s" if research.proposed|length != 1 }} to review){% endif %}
+  </summary>
+
+  {% if research.error %}<p class="error" role="alert">{{ research.error }}</p>{% endif %}
+
+  {% if research.job %}
+  <p class="muted">
+    Job {{ research.job.status }}
+    · {{ research.job.searches_used }}/{{ research.job.budget.max_searches }} searches
+    · {{ research.job.reads_used }}/{{ research.job.budget.max_reads }} reads
+    · {{ research.job.rounds_used }}/{{ research.job.budget.max_rounds }} rounds
+    · started {{ research.job.created_at.strftime("%Y-%m-%d %H:%M") }}
+    {% if research.job.error %}<br>{{ research.job.error }}{% endif %}
+  </p>
+  {% if research.job_active %}
+  <form class="inline" method="post"
+        action="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel"
+        hx-post="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel"
+        hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_research_cancel }}">
+    <button type="submit">Cancel</button>
+  </form>
+  <p class="muted">Cancel stops the job before its next round — an in-flight fetch finishes first.</p>
+  {% endif %}
+  {% endif %}
+
+  {% if not research.gates_open %}
+  <p class="muted">
+    Web research is off. It needs ENRICHMENT_WEB_RESEARCH_ENABLED,
+    VOXINT_WEB_RESEARCH (with a configured search provider), and LLM_ENABLED —
+    all set in the environment.
+  </p>
+  {% elif not research.job_active %}
+  <form class="inline" method="post"
+        action="/speakers/{{ research.speaker.id }}/research/start"
+        hx-post="/speakers/{{ research.speaker.id }}/research/start"
+        hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_research_start }}">
+    <input type="text" name="operator_note" maxlength="1000"
+           placeholder="optional note for the researcher"
+           aria-label="Optional research note for {{ research.speaker.display_name }}">
+    <button type="submit">Research this speaker</button>
+  </form>
+  <p class="muted">
+    Budget: at most {{ research.budget.max_searches }} searches,
+    {{ research.budget.max_reads }} page reads,
+    {{ research.budget.max_rounds }} tool rounds,
+    {{ research.budget.deadline_seconds|int }}s wall clock. Findings appear
+    below as drafts with their sources — nothing is applied until you accept it.
+  </p>
+  {% endif %}
+
+  {% for view in research.proposed %}
+  <div class="candidate">
+    <p><strong>{{ view.candidate.field }}</strong>: {{ view.candidate.value }}</p>
+    {% for e in view.evidence %}{% if e.url %}
+    <p class="muted">
+      source: <a href="{{ e.url }}" target="_blank" rel="noreferrer noopener">{{ e.url }}</a>
+      {% if e.retrieved_at %}(fetched {{ e.retrieved_at.strftime("%Y-%m-%d %H:%M") }}){% endif %}
+    </p>
+    {% if e.snippet %}<blockquote class="muted">{{ e.snippet }}</blockquote>{% endif %}
+    {% endif %}{% endfor %}
+    <form class="inline" method="post"
+          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_profile_decision }}">
+      <input type="hidden" name="nonce" value="{{ nonce() }}">
+      <input type="hidden" name="verdict" value="accept">
+      <button type="submit">Accept</button>
+    </form>
+    <form class="inline" method="post"
+          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_profile_decision }}">
+      <input type="hidden" name="nonce" value="{{ nonce() }}">
+      <input type="hidden" name="verdict" value="reject">
+      <button type="submit">Reject</button>
+    </form>
+  </div>
+  {% endfor %}
+
+  {% if research.decided_count %}
+  <p class="muted">{{ research.decided_count }} decided draft{{ "s" if research.decided_count != 1 }} in history.</p>
+  {% endif %}
+</details>
+</div>
