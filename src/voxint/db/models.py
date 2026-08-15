@@ -1008,6 +1008,14 @@ class ResearchJob(Base):
 
     __tablename__ = "research_jobs"
     __table_args__ = (
+        # DB-enforced "one active job per speaker": the console's friendly
+        # pre-check is check-then-insert and can race; this index cannot.
+        Index(
+            "research_jobs_one_active_per_speaker",
+            "speaker_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
         CheckConstraint(
             f"status IN ({_enum_values(ResearchJobStatus)})",
             name="research_jobs_status_check",
@@ -1037,7 +1045,7 @@ class ResearchJob(Base):
     pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id"), index=True
     )
-    status: Mapped[str] = mapped_column(Text, default=ResearchJobStatus.QUEUED)
+    status: Mapped[str] = mapped_column(Text, default=ResearchJobStatus.QUEUED.value)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
     # Snapshot of the budgets this job was started under (settings can change
     # between enqueue and execution; the preview the operator approved wins).

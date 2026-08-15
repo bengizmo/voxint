@@ -18,7 +18,11 @@
     · {{ research.job.searches_used }}/{{ research.job.budget.max_searches }} searches
     · {{ research.job.reads_used }}/{{ research.job.budget.max_reads }} reads
     · {{ research.job.rounds_used }}/{{ research.job.budget.max_rounds }} rounds
-    · started {{ research.job.created_at.strftime("%Y-%m-%d %H:%M") }}
+    {% if research.job.started_at %}
+    · started {{ research.job.started_at.strftime("%Y-%m-%d %H:%M") }}
+    {% else %}
+    · queued {{ research.job.created_at.strftime("%Y-%m-%d %H:%M") }}
+    {% endif %}
     {% if research.job.error %}<br>{{ research.job.error }}{% endif %}
   </p>
   {% if research.job_active %}
@@ -64,7 +68,11 @@
     <p><strong>{{ view.candidate.field }}</strong>: {{ view.candidate.value }}</p>
     {% for e in view.evidence %}{% if e.url %}
     <p class="muted">
-      source: <a href="{{ e.url }}" target="_blank" rel="noreferrer noopener">{{ e.url }}</a>
+      source:
+      {# Defense-in-depth: only http(s) values ever become an active link. #}
+      {% if e.url.startswith("https://") or e.url.startswith("http://") %}
+      <a href="{{ e.url }}" target="_blank" rel="noreferrer noopener">{{ e.url }}</a>
+      {% else %}{{ e.url }}{% endif %}
       {% if e.retrieved_at %}(fetched {{ e.retrieved_at.strftime("%Y-%m-%d %H:%M") }}){% endif %}
     </p>
     {% if e.snippet %}<blockquote class="muted">{{ e.snippet }}</blockquote>{% endif %}

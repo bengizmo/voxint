@@ -416,6 +416,8 @@ def _research_speaker(args: argparse.Namespace) -> int:
     except ValueError:
         print(f"error: {args.speaker_id!r} is not a speaker id")
         return 2
+    from sqlalchemy.exc import IntegrityError
+
     factory = build_session_factory(build_engine(settings.database_url))
     with factory() as session:
         try:
@@ -425,11 +427,14 @@ def _research_speaker(args: argparse.Namespace) -> int:
                 settings=settings,
                 operator_note=args.note,
             )
+            job_id = job.id
+            session.commit()
         except ResearchJobError as exc:
             print(f"error: {exc}")
             return 2
-        job_id = job.id
-        session.commit()
+        except IntegrityError:
+            print("error: a research job is already active for this speaker")
+            return 2
     print(f"job {job_id}: researching speaker {speaker_id} ...")
     execute_job(factory, job_id, settings=settings)
     with factory() as session:

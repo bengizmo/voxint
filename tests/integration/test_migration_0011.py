@@ -88,15 +88,38 @@ def test_migration_0011_roundtrip_and_checks(alembic_cfg: Config, engine: Engine
         ).one()
         assert tuple(row) == (False, 0, 0, 0)  # server defaults
 
-    # Named CHECKs each reject a bad row.
+    # Named CHECKs each reject a bad row. Terminal statuses are used where the
+    # CHECK under test allows it, so the one-active-per-speaker unique index
+    # (exercised below) never masks the intended violation.
     with pytest.raises(IntegrityError, match="research_jobs_status_check"):
         _insert_job(engine, id="'00000000-0000-0000-0000-000000000111'", status="'paused'")
     with pytest.raises(IntegrityError, match="research_jobs_counters_check"):
-        _insert_job(engine, id="'00000000-0000-0000-0000-000000000112'", searches_used="-1")
+        _insert_job(
+            engine,
+            id="'00000000-0000-0000-0000-000000000112'",
+            status="'failed'",
+            searches_used="-1",
+        )
     with pytest.raises((IntegrityError, DBAPIError)):
-        _insert_job(engine, id="'00000000-0000-0000-0000-000000000113'", budget="'[]'::jsonb")
+        _insert_job(
+            engine,
+            id="'00000000-0000-0000-0000-000000000113'",
+            status="'failed'",
+            budget="'[]'::jsonb",
+        )
     with pytest.raises(IntegrityError, match="research_jobs_finished_requires_started_check"):
-        _insert_job(engine, id="'00000000-0000-0000-0000-000000000114'", finished_at="now()")
+        _insert_job(
+            engine,
+            id="'00000000-0000-0000-0000-000000000114'",
+            status="'failed'",
+            finished_at="now()",
+        )
+
+    # One active (queued|running) job per speaker, enforced by the partial
+    # unique index; a terminal row does not occupy the slot.
+    with pytest.raises(IntegrityError, match="research_jobs_one_active_per_speaker"):
+        _insert_job(engine, id="'00000000-0000-0000-0000-000000000115'")
+    _insert_job(engine, id="'00000000-0000-0000-0000-000000000116'", status="'failed'")
 
     # Downgrade removes the table again; head restored by the fixture.
     command.downgrade(alembic_cfg, "0010")

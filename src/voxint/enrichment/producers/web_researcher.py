@@ -258,6 +258,13 @@ def record_research_outcome(
                         "model": settings.llm_model,
                         "title": claim.title,
                         "source_id": claim.source_id,
+                        # Redirects can move the read: keep the URL the loop
+                        # authorized beside the final one actually fetched.
+                        **(
+                            {"requested_url": claim.requested_url}
+                            if claim.requested_url != claim.url
+                            else {}
+                        ),
                     },
                     detail_schema_version=DETAIL_SCHEMA_VERSION,
                 ),
@@ -315,18 +322,6 @@ def record_research_outcome(
         raise
 
 
-def existing_producer_run(
-    session: Session, *, job_id: uuid.UUID, speaker_id: uuid.UUID
-) -> EnrichmentProducerRun | None:
-    """Short-circuit for a redelivered job that already finalized."""
-    return session.execute(
-        select(EnrichmentProducerRun).where(
-            EnrichmentProducerRun.idempotency_key
-            == f"{PRODUCER_NAME}:speaker:{speaker_id}:{job_id}"
-        )
-    ).scalar_one_or_none()
-
-
 __all__ = [
     "PRODUCER_NAME",
     "PRODUCER_VERSION",
@@ -334,7 +329,6 @@ __all__ = [
     "ResearchConclusion",
     "WebResearcherError",
     "build_seed",
-    "existing_producer_run",
     "load_research_speaker",
     "make_roster_lookup",
     "record_research_outcome",

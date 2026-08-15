@@ -27,6 +27,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import exists, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -2024,6 +2025,13 @@ def _register_routes(app: FastAPI) -> None:
         except ResearchJobError as exc:
             session.rollback()
             return _research_response(request, session, speaker, error=str(exc))
+        except IntegrityError:
+            # The DB's one-active-job-per-speaker partial unique index caught a
+            # start the friendly pre-check raced past (double-submit, two tabs).
+            session.rollback()
+            return _research_response(
+                request, session, speaker, error="a research job is already active"
+            )
         job_id = job.id
         session.commit()
         _publish_research_job(job_id)

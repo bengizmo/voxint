@@ -202,6 +202,7 @@ def test_unvetted_url_refused_before_any_search() -> None:
     conclusion, fetched, _ = run(
         [
             {"actions": [{"tool": "read_url", "url": "https://example.com/jane"}]},
+            {"actions": [{"tool": "query_existing_speakers", "query": "Jane Doe"}]},
             conclude(found=False, reason="no sources"),
         ]
     )
@@ -276,36 +277,82 @@ def test_search_budget_exhaustion_is_structured_not_fatal() -> None:
     results = json.loads(llm.transcripts[1][-1].content)["tool_results"]
     assert results[0]["ok"] is True
     assert results[1] == {"tool": "web_search", "ok": False, "error": "budget_exhausted"}
-    assert conclusion.searches_used == 2  # both charged as attempts
+    # Counters report CONSUMED budget (authoritative from ResearchBudget) —
+    # the refused second attempt charged nothing and must not show as spend.
+    assert conclusion.searches_used == 1
 
 
-def test_unread_source_and_fabricated_snippet_dropped() -> None:
+def test_all_claims_failing_grounding_fails_the_job() -> None:
+    """Ungroundable output must never become an authoritative 'none' that
+    would retire prior drafts — the job fails and persists nothing."""
     bad_source = dict(CLAIM_OK, source="s9")
-    fabricated = dict(CLAIM_OK, snippet="Jane Doe won the Nobel Prize")
-    conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(bad_source, fabricated)])
-    assert conclusion.claims == ()
-    assert conclusion.dropped_claims == 2
-    assert conclusion.found is False  # found=true with zero surviving claims
+    fabricated = dict(CLAIM_OK, snippet="Jane Doe won the Nobel Prize in Building Science")
+    with pytest.raises(ResearchAgentError, match="failed evidence grounding"):
+        run([ACTION_SEARCH, ACTION_READ, conclude(bad_source, fabricated)])
 
 
-def test_generic_values_and_non_url_links_dropped() -> None:
+def test_generic_values_invented_and_non_url_links_dropped() -> None:
     generic = dict(CLAIM_OK, field="bio", value="Speaker 2")
     bad_link = dict(CLAIM_OK, field="link", value="Acme Corporation")
-    good_link = {
+    # Valid URL, genuinely quoted snippet — but the URL never appeared in this
+    # job's search results, seeds, or fetched pages: a model-invented (or
+    # page-injected) link must drop.
+    invented_link = {
         "field": "link",
         "value": "https://janedoe.example/about",
         "source": "s1",
         "snippet": "writes at https://janedoe.example/about",
     }
-    conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(generic, bad_link, good_link)])
+    good_link = dict(CLAIM_OK, field="link", value="https://example.com/jane")
+    conclusion, _, _ = run(
+        [ACTION_SEARCH, ACTION_READ, conclude(generic, bad_link, invented_link, good_link)]
+    )
     [claim] = conclusion.claims
     assert claim.field is ClaimField.LINK
+    assert claim.value == "https://example.com/jane"
+    assert conclusion.dropped_claims == 3
+
+
+def test_short_snippets_never_ground() -> None:
+    """A tiny 'quote' would locate in any page — below the floor it drops."""
+    one_char = dict(CLAIM_OK, snippet="J")
+    two_words = dict(CLAIM_OK, snippet="Jane Doe")
+    long_enough = dict(CLAIM_OK)  # the real multi-word quote
+    conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(one_char, two_words, long_enough)])
+    assert len(conclusion.claims) == 1
     assert conclusion.dropped_claims == 2
+
+
+def test_format_characters_cannot_dodge_the_generic_gate() -> None:
+    """Zero-width characters are stripped on both sides of every comparison:
+    a laced generic value still matches the denylist, and a laced (otherwise
+    honest) snippet still grounds against clean page text."""
+    laced_generic = dict(CLAIM_OK, field="bio", value="Spea​ker 2")
+    laced_snippet = dict(
+        CLAIM_OK,
+        snippet="Jane Doe is the chief​ scientist at Acme Corporation",
+    )
+    conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(laced_generic, laced_snippet)])
+    [claim] = conclusion.claims
+    assert claim.field is ClaimField.AFFILIATION
+    assert conclusion.dropped_claims == 1
 
 
 def test_found_false_must_carry_no_claims() -> None:
     with pytest.raises(ResearchAgentError, match="invalid conclusion"):
         run([ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK, found=False)])
+
+
+def test_found_true_requires_claims() -> None:
+    with pytest.raises(ResearchAgentError, match="invalid conclusion"):
+        run([ACTION_SEARCH, ACTION_READ, conclude(found=True)])
+
+
+def test_zero_work_found_false_fails_instead_of_recording_none() -> None:
+    """An immediate 'not found' with no tool activity is a model shortcut,
+    not an investigation — it must never mint an authoritative 'none'."""
+    with pytest.raises(ResearchAgentError, match="without investigating"):
+        run([conclude(found=False, reason="could not find anything")])
 
 
 def test_roster_tool_returns_only_names_and_ids() -> None:

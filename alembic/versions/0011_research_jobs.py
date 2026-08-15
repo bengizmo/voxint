@@ -23,7 +23,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("speaker_id", sa.Uuid(), nullable=False),
         sa.Column("pipeline_run_id", sa.Uuid(), nullable=True),
-        sa.Column("status", sa.Text(), nullable=False),
+        sa.Column("status", sa.Text(), server_default=sa.text("'queued'"), nullable=False),
         sa.Column(
             "cancel_requested",
             sa.Boolean(),
@@ -72,9 +72,19 @@ def upgrade() -> None:
     )
     op.create_index("ix_research_jobs_speaker_id", "research_jobs", ["speaker_id"])
     op.create_index("ix_research_jobs_pipeline_run_id", "research_jobs", ["pipeline_run_id"])
+    # DB-enforced "one active job per speaker" — the console's friendly
+    # pre-check is racy check-then-insert; this index is the real invariant.
+    op.create_index(
+        "research_jobs_one_active_per_speaker",
+        "research_jobs",
+        ["speaker_id"],
+        unique=True,
+        postgresql_where=sa.text("status IN ('queued', 'running')"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_index("research_jobs_one_active_per_speaker", table_name="research_jobs")
     op.drop_index("ix_research_jobs_pipeline_run_id", table_name="research_jobs")
     op.drop_index("ix_research_jobs_speaker_id", table_name="research_jobs")
     op.drop_table("research_jobs")

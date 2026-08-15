@@ -141,7 +141,13 @@ def test_rerun_supersedes_and_found_false_records_none(
 ) -> None:
     speaker_id = seed_speaker(session_factory)
     run_job(session_factory, speaker_id, [ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK)])
-    second = run_job(session_factory, speaker_id, [conclude(found=False, reason="nothing solid")])
+    # An authoritative "looked, found nothing" needs a real (bounded)
+    # investigation — a zero-work conclude would fail the job instead.
+    second = run_job(
+        session_factory,
+        speaker_id,
+        [ACTION_SEARCH, conclude(found=False, reason="nothing solid")],
+    )
     job = get_job(session_factory, second)
     assert job.status == ResearchJobStatus.SUCCEEDED.value
     with session_factory() as session:
@@ -164,19 +170,26 @@ def test_llm_failure_fails_job_and_records_no_producer_run(
     assert producer_runs(session_factory) == []
 
 
-def test_cancel_requested_stops_before_first_round(
+def test_cancel_before_delivery_wins_and_nothing_runs(
     session_factory: sessionmaker[Session],
 ) -> None:
+    """Cancel lands between enqueue and delivery: the claim refuses the job
+    (terminal CANCELLED), the loop never starts, nothing is persisted."""
     speaker_id = seed_speaker(session_factory)
     settings = research_settings()
     with session_factory() as session:
         job = create_job(session, speaker_id=speaker_id, settings=settings)
-        job.cancel_requested = True
         job_id = job.id
         session.commit()
+    with session_factory() as session:
+        assert request_cancel(session, job_id) is True
+        session.commit()
+    # The delivery arrives after the cancel: FakeLLM([]) would blow up on any
+    # call — the claim must refuse first.
     execute_job(session_factory, job_id, settings=settings, llm=FakeLLM([]))
     job_row = get_job(session_factory, job_id)
     assert job_row.status == ResearchJobStatus.CANCELLED.value
+    assert job_row.cancel_requested is True
     assert producer_runs(session_factory) == []
 
 
@@ -193,8 +206,11 @@ def test_duplicate_delivery_noops_and_cancel_of_queued_is_terminal(
         assert claim_job(session, job_id) is not None
     with session_factory() as session:
         assert claim_job(session, job_id) is None  # duplicate delivery
+    # A second speaker for the queued-cancel path — the first speaker's
+    # RUNNING job holds its one-active-job slot.
+    other_speaker = seed_speaker(session_factory, name="Bob Smith")
     with session_factory() as session:
-        other = create_job(session, speaker_id=speaker_id, settings=settings)
+        other = create_job(session, speaker_id=other_speaker, settings=settings)
         other_id = other.id
         session.commit()
     with session_factory() as session:
@@ -233,6 +249,103 @@ def test_create_job_refuses_gates_off_and_bad_targets(
             create_job(session, speaker_id=speaker_id, settings=Settings(_env_file=None))
         with pytest.raises(ResearchJobError, match="not found"):
             create_job(session, speaker_id=uuid.uuid4(), settings=research_settings())
+
+
+def test_concurrent_start_blocked_by_partial_unique_index(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The friendly pre-check is check-then-insert; the DB index is the real
+    one-active-job-per-speaker invariant."""
+    from sqlalchemy.exc import IntegrityError
+
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        create_job(session, speaker_id=speaker_id, settings=settings)
+        session.commit()
+    with (
+        session_factory() as session,
+        pytest.raises(IntegrityError, match="research_jobs_one_active_per_speaker"),
+    ):
+        create_job(session, speaker_id=speaker_id, settings=settings)
+        session.commit()
+    # A terminal job frees the slot.
+    with session_factory() as session:
+        [job] = session.execute(select(ResearchJob)).scalars()
+        job.status = ResearchJobStatus.FAILED.value
+        session.commit()
+    with session_factory() as session:
+        create_job(session, speaker_id=speaker_id, settings=settings)
+        session.commit()
+
+
+def test_stale_running_job_can_be_force_cancelled(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A worker crash leaves RUNNING; once the row provably outlived its own
+    wall-clock budget, cancel terminates it so the speaker is not blocked
+    forever."""
+    from datetime import UTC, datetime, timedelta
+
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    with session_factory() as session:
+        assert claim_job(session, job_id) is not None
+    # Fresh RUNNING: cancel only sets the cooperative flag.
+    with session_factory() as session:
+        assert request_cancel(session, job_id) is True
+        session.commit()
+    fresh = get_job(session_factory, job_id)
+    assert fresh.status == ResearchJobStatus.RUNNING.value
+    assert fresh.cancel_requested is True
+    # Backdate far past deadline + llm timeout + grace: now cancel terminates.
+    # (created_at moves too — the schema requires started_at >= created_at.)
+    with session_factory() as session:
+        row = session.get(ResearchJob, job_id)
+        assert row is not None
+        row.created_at = datetime.now(tz=UTC) - timedelta(hours=3)
+        row.started_at = datetime.now(tz=UTC) - timedelta(hours=2)
+        session.commit()
+    with session_factory() as session:
+        assert request_cancel(session, job_id) is True
+        session.commit()
+    stale = get_job(session_factory, job_id)
+    assert stale.status == ResearchJobStatus.CANCELLED.value
+    assert stale.finished_at is not None
+
+
+def test_execution_honors_the_budget_snapshot_not_live_settings(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The preview the operator approved is the budget that runs — a settings
+    change between enqueue and execution never silently applies."""
+    speaker_id = seed_speaker(session_factory)
+    approved = research_settings(research_max_searches=1, research_max_rounds=2)
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=approved)
+        job_id = job.id
+        session.commit()
+    inflated = research_settings(research_max_searches=9, research_max_rounds=9)
+    execute_job(
+        session_factory,
+        job_id,
+        settings=inflated,
+        llm=FakeLLM([ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK)]),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.SUCCEEDED.value
+    with session_factory() as session:
+        run = session.get(EnrichmentProducerRun, job_row.producer_run_id)
+        assert run is not None and run.config is not None
+        assert run.config["max_searches"] == 1  # the approved value, not 9
+        assert run.config["max_rounds"] == 2
 
 
 # ------------------------------------------------------------- console routes
@@ -344,6 +457,58 @@ def test_profile_decision_route_refuses_foreign_and_name_candidates(
     assert response.status_code == 404
     with session_factory() as session:
         assert session.execute(select(EnrichmentCandidate)).scalars().one().id == candidate_id
+
+
+def test_profile_decision_route_refuses_name_field_candidates(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The profile surface serves bio/affiliation/link only — a NAME claim,
+    even one correctly scoped to this speaker, stays on the workbench flow."""
+    from datetime import UTC, datetime
+
+    from voxint.db.models import ClaimField
+    from voxint.enrichment.drafts import (
+        CandidateDraft,
+        EnrichmentScope,
+        UrlEvidence,
+        record_producer_run,
+    )
+
+    client = _build_client(session_factory)
+    speaker_id = seed_speaker(session_factory)
+    with session_factory() as session:
+        scope = EnrichmentScope.speaker(speaker_id)
+        run = record_producer_run(
+            session,
+            producer="test_producer",
+            producer_version="1",
+            scope=scope,
+            covered_fields=(ClaimField.NAME,),
+            candidates=(
+                CandidateDraft(
+                    target=scope,
+                    field=ClaimField.NAME,
+                    value="Jane Doe",
+                    evidence=(UrlEvidence(url="https://example.com/jane"),),
+                ),
+            ),
+            idempotency_key=f"test-name-{speaker_id}",
+            started_at=datetime.now(tz=UTC),
+            completed_at=datetime.now(tz=UTC),
+        )
+        session.commit()
+        candidate_id = run.candidates[0].id
+    response = client.post(
+        f"/speakers/{speaker_id}/research/candidates/{candidate_id}/decision",
+        data={
+            "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_PROFILE_DECISION),
+            "nonce": uuid.uuid4().hex,
+            "verdict": "accept",
+        },
+    )
+    assert response.status_code == 404
+    with session_factory() as session:
+        assert accepted_claims(session, speaker_id) == []
 
 
 def test_research_fragment_disabled_copy_when_gates_off(

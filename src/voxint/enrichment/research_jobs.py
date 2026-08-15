@@ -14,11 +14,12 @@ operator cancels and starts a fresh job. Hidden re-execution of a
 non-deterministic web loop is worse than a visible stall.
 """
 
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.llm import HttpLLMClient
@@ -31,6 +32,7 @@ from voxint.enrichment.producers.web_researcher import (
     make_roster_lookup,
     record_research_outcome,
 )
+from voxint.media.netcheck import Resolver
 from voxint.research.agent import (
     ChatJsonClient,
     ProgressCounters,
@@ -40,6 +42,8 @@ from voxint.research.agent import (
 )
 from voxint.research.fetch import ClientFactory
 from voxint.research.search import SearchProvider
+
+logger = logging.getLogger(__name__)
 
 MAX_ERROR_CHARS = 500
 
@@ -58,15 +62,40 @@ def research_gates_open(settings: Settings) -> bool:
     )
 
 
+# snapshot key → the Settings field the loop actually reads. The worker
+# reconstructs its execution settings from the job's snapshot through this
+# map, so the preview the operator approved is the budget that runs — a
+# settings change between enqueue and execution never silently applies.
+_BUDGET_FIELDS: dict[str, str] = {
+    "max_searches": "research_max_searches",
+    "max_reads": "research_max_reads",
+    "max_rounds": "research_max_rounds",
+    "max_actions_per_round": "research_max_actions_per_round",
+    "deadline_seconds": "research_deadline_seconds",
+}
+
+
 def budget_snapshot(settings: Settings) -> dict[str, object]:
-    """The budgets the operator's start preview showed — frozen onto the job."""
-    return {
-        "max_searches": settings.research_max_searches,
-        "max_reads": settings.research_max_reads,
-        "max_rounds": settings.research_max_rounds,
-        "max_actions_per_round": settings.research_max_actions_per_round,
-        "deadline_seconds": settings.research_deadline_seconds,
+    """The budgets the operator's start preview showed — frozen onto the job.
+
+    ``llm_timeout_seconds`` rides along for the stale-RUNNING bound in
+    :func:`request_cancel`; it is not an operator-approved budget."""
+    snapshot: dict[str, object] = {
+        key: getattr(settings, field) for key, field in _BUDGET_FIELDS.items()
     }
+    snapshot["llm_timeout_seconds"] = settings.llm_timeout_seconds
+    return snapshot
+
+
+def _settings_from_snapshot(settings: Settings, budget: dict[str, object]) -> Settings:
+    """Execution settings honoring the job's approved budget snapshot; a key
+    missing from an older snapshot falls back to the live setting."""
+    update_fields = {
+        field: budget[key]
+        for key, field in _BUDGET_FIELDS.items()
+        if isinstance(budget.get(key), (int, float))
+    }
+    return settings.model_copy(update=update_fields) if update_fields else settings
 
 
 def create_job(
@@ -101,7 +130,9 @@ def create_job(
 
 def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
     """queued → running, exactly once. None means someone else has (or had) it —
-    a duplicate delivery no-ops instead of double-running the loop."""
+    a duplicate delivery no-ops instead of double-running the loop. A job whose
+    cancel flag is already set is refused too: a cancel that lands between
+    enqueue and delivery must win even if the status write raced."""
     claimed = cast(
         CursorResult[Any],
         session.execute(
@@ -109,10 +140,13 @@ def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
             .where(
                 ResearchJob.id == job_id,
                 ResearchJob.status == ResearchJobStatus.QUEUED.value,
+                ResearchJob.cancel_requested.is_(False),
             )
             .values(
                 status=ResearchJobStatus.RUNNING.value,
-                started_at=datetime.now(tz=UTC),
+                # DB clock, like created_at — an app-clock value could trip the
+                # started_at >= created_at CHECK under clock skew.
+                started_at=func.now(),
             )
         ),
     )
@@ -122,18 +156,72 @@ def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
     return session.get(ResearchJob, job_id)
 
 
+# Grace a provably-dead RUNNING job gets past its deadline before the operator
+# may force-cancel it: one in-flight LLM call is the only legitimate overrun.
+STALE_RUNNING_GRACE_SECONDS = 60.0
+
+
 def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
-    """Set the cooperative flag; a still-QUEUED job is cancelled outright
-    (its delivery will fail the claim and no-op). The caller commits."""
-    job = session.get(ResearchJob, job_id)
-    if job is None or job.status not in (
-        ResearchJobStatus.QUEUED.value,
-        ResearchJobStatus.RUNNING.value,
-    ):
+    """Cancel cooperatively — atomically, never clobbering a terminal state.
+
+    One guarded UPDATE sets the flag and resolves QUEUED outright (its delivery
+    will fail the claim and no-op); a RUNNING loop observes the flag between
+    rounds. A RUNNING job that provably outlived its own wall-clock budget
+    (deadline + one LLM timeout + grace) has no live loop left to observe
+    anything — cancel it outright so a worker crash cannot block the speaker
+    forever. The caller commits."""
+    flagged = cast(
+        CursorResult[Any],
+        session.execute(
+            update(ResearchJob)
+            .where(
+                ResearchJob.id == job_id,
+                ResearchJob.status.in_(
+                    (ResearchJobStatus.QUEUED.value, ResearchJobStatus.RUNNING.value)
+                ),
+            )
+            .values(
+                cancel_requested=True,
+                status=case(
+                    (
+                        ResearchJob.status == ResearchJobStatus.QUEUED.value,
+                        ResearchJobStatus.CANCELLED.value,
+                    ),
+                    else_=ResearchJob.status,
+                ),
+            )
+        ),
+    )
+    if flagged.rowcount != 1:
         return False
-    job.cancel_requested = True
-    if job.status == ResearchJobStatus.QUEUED.value:
-        job.status = ResearchJobStatus.CANCELLED.value
+    # Column select (not session.get) so the identity map cannot serve a
+    # pre-UPDATE snapshot of the row just mutated through Core.
+    status, started_at, budget = session.execute(
+        select(ResearchJob.status, ResearchJob.started_at, ResearchJob.budget).where(
+            ResearchJob.id == job_id
+        )
+    ).one()
+    if status == ResearchJobStatus.RUNNING.value and started_at is not None:
+        deadline = budget.get("deadline_seconds")
+        llm_timeout = budget.get("llm_timeout_seconds")
+        bound = (
+            float(deadline if isinstance(deadline, (int, float)) else 300.0)
+            + float(llm_timeout if isinstance(llm_timeout, (int, float)) else 90.0)
+            + STALE_RUNNING_GRACE_SECONDS
+        )
+        cutoff = datetime.now(tz=UTC) - timedelta(seconds=bound)
+        session.execute(
+            update(ResearchJob)
+            .where(
+                ResearchJob.id == job_id,
+                ResearchJob.status == ResearchJobStatus.RUNNING.value,
+                ResearchJob.started_at < cutoff,
+            )
+            .values(
+                status=ResearchJobStatus.CANCELLED.value,
+                finished_at=func.now(),
+            )
+        )
     return True
 
 
@@ -164,7 +252,7 @@ def execute_job(
     llm: ChatJsonClient | None = None,
     search_provider: SearchProvider | None = None,
     read_client_factory: ClientFactory | None = None,
-    read_resolver: object | None = None,
+    read_resolver: Resolver | None = None,
 ) -> None:
     """The worker body: claim, run the loop, finalize. Never raises for job
     outcomes — failures land on the row as bounded, honest ``error`` text.
@@ -208,7 +296,10 @@ def execute_job(
             )
             session.commit()
 
-        started_at = datetime.now(tz=UTC)
+        # The loop runs under the budgets the operator approved at start —
+        # never under settings changed since (the snapshot is the contract).
+        exec_settings = _settings_from_snapshot(settings, job.budget)
+        started_at = job.started_at or datetime.now(tz=UTC)
         owned_client: HttpLLMClient | None = None
         client: ChatJsonClient
         if llm is None:
@@ -224,14 +315,14 @@ def execute_job(
         try:
             conclusion = run_research_loop(
                 llm=client,
-                settings=settings,
+                settings=exec_settings,
                 seed=seed,
                 roster_lookup=make_roster_lookup(session, target_speaker_id=speaker.id),
                 should_cancel=should_cancel,
                 on_progress=on_progress,
                 search_provider=search_provider,
                 read_client_factory=read_client_factory,
-                read_resolver=read_resolver,  # type: ignore[arg-type]
+                read_resolver=read_resolver,
             )
         except ResearchCancelled:
             _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
@@ -239,30 +330,54 @@ def execute_job(
         except (ResearchAgentError, WebResearcherError) as exc:
             _finish(session, job_id, status=ResearchJobStatus.FAILED, error=str(exc))
             return
+        except Exception as exc:
+            # Last-resort honesty: an unexpected failure must never leave the
+            # job RUNNING forever. Closed-vocabulary error only — arbitrary
+            # exception text is not persist-safe; detail goes to the log.
+            logger.exception("research job %s failed unexpectedly", job_id)
+            session.rollback()
+            _finish(
+                session,
+                job_id,
+                status=ResearchJobStatus.FAILED,
+                error=f"unexpected error ({type(exc).__name__}) — see worker logs",
+            )
+            return
         finally:
             if owned_client is not None:
                 owned_client.close()
 
-        # Atomic finalization: the producer run and the job stamp commit together.
+        # Atomic finalization: the producer run and the job stamp commit
+        # together, and only while the row is still RUNNING — a force-cancelled
+        # job must not be stamped SUCCEEDED (nor keep its drafts).
         producer_run = record_research_outcome(
             session,
             job_id=job_id,
             speaker_id=speaker.id,
-            settings=settings,
+            settings=exec_settings,
             conclusion=conclusion,
             started_at=started_at,
         )
         session.flush()
-        session.execute(
-            update(ResearchJob)
-            .where(ResearchJob.id == job_id)
-            .values(
-                status=ResearchJobStatus.SUCCEEDED.value,
-                producer_run_id=producer_run.id,
-                searches_used=conclusion.searches_used,
-                reads_used=conclusion.reads_used,
-                rounds_used=conclusion.rounds_used,
-                finished_at=datetime.now(tz=UTC),
-            )
+        stamped = cast(
+            CursorResult[Any],
+            session.execute(
+                update(ResearchJob)
+                .where(
+                    ResearchJob.id == job_id,
+                    ResearchJob.status == ResearchJobStatus.RUNNING.value,
+                )
+                .values(
+                    status=ResearchJobStatus.SUCCEEDED.value,
+                    producer_run_id=producer_run.id,
+                    searches_used=conclusion.searches_used,
+                    reads_used=conclusion.reads_used,
+                    rounds_used=conclusion.rounds_used,
+                    finished_at=datetime.now(tz=UTC),
+                )
+            ),
         )
+        if stamped.rowcount != 1:
+            session.rollback()
+            return
         session.commit()

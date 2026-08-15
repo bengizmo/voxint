@@ -296,8 +296,10 @@ class Settings(BaseSettings):
     research_max_rounds: int = Field(default=5, ge=1, le=10)
     research_max_actions_per_round: int = Field(default=3, ge=1, le=5)
     # Wall-clock deadline for the whole job (LLM rounds + retrieval), enforced
-    # via ResearchBudget's monotonic deadline and checked between rounds.
-    research_deadline_seconds: PositiveSeconds = 300.0
+    # via ResearchBudget's monotonic deadline and checked between rounds. The
+    # floor keeps a fat-fingered near-zero value from producing a zero-work
+    # job the moment it starts.
+    research_deadline_seconds: float = Field(default=300.0, ge=30.0, allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
