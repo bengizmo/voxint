@@ -16,6 +16,7 @@ from voxint.db.models import (
     StageRun,
     StageStatus,
 )
+from voxint.ingest import cancel_run
 from voxint.pipeline.engine import (
     StageFailedError,
     StageFn,
@@ -26,6 +27,7 @@ from voxint.pipeline.engine import (
 from voxint.pipeline.transitions import (
     StaleRevisionError,
     cas_update_run,
+    next_stage,
     snapshot,
 )
 
@@ -231,3 +233,116 @@ def test_recovery_skips_active_lease_and_reclaims_expired(
     assert final.status is RunStatus.COMPLETED
     # resumed AT the interrupted stage — earlier stages not re-run, none skipped
     assert executed == [Stage.DIARIZE_EMBED, Stage.ENHANCE_MATCH, Stage.FINALIZE]
+
+
+# --- cooperative cancellation mid-stage (issue #5) ----------------------------
+
+
+def test_cancel_during_stage_body_stops_cleanly(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """An operator cancels while a stage body runs: the post-stage advance CAS
+    loses, but execute_run stops cleanly (no StaleRevisionError escapes), the run
+    stays CANCELLED at its stage, later stages never run, and the abandoned claim
+    is closed SKIPPED (not left RUNNING forever)."""
+    run_id = make_run(session_factory, "/data/media/cancel-mid.wav")
+    executed: list[Stage] = []
+
+    def cancel_then_return(stage: Stage) -> StageFn:
+        def fn(session: Session, rid: uuid.UUID) -> None:
+            executed.append(stage)
+            if stage is Stage.TRANSCRIBE:
+                # Simulate a concurrent operator cancel landing mid-stage, on a
+                # SEPARATE session/transaction (as the API would).
+                with session_factory() as other:
+                    cancel_run(other, rid)
+                    other.commit()
+
+        return fn
+
+    result = execute_run(
+        session_factory, run_id, {s: cancel_then_return(s) for s in Stage}
+    )
+    assert result.status is RunStatus.CANCELLED
+    assert result.current_stage is Stage.TRANSCRIBE
+    # ACQUIRE, PREPARE ran, then TRANSCRIBE — nothing past the cancel point.
+    assert executed == [Stage.ACQUIRE, Stage.PREPARE, Stage.TRANSCRIBE]
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.CANCELLED.value
+        assert run.current_stage == Stage.TRANSCRIBE.value
+        claim = session.execute(
+            select(StageRun).where(
+                StageRun.pipeline_run_id == run_id,
+                StageRun.stage == Stage.TRANSCRIBE.value,
+            )
+        ).scalar_one()
+        # Not left RUNNING — the abandoned attempt is honestly closed.
+        assert claim.status == StageStatus.SKIPPED.value
+        assert claim.error == "cancelled before commit"
+
+
+def test_cancel_during_failing_stage_body_stops_cleanly(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A stage fails AND the run is cancelled concurrently: the FAILED CAS loses,
+    and cancellation wins — execute_run returns CANCELLED rather than raising
+    StageFailedError, and the claim is closed SKIPPED."""
+    run_id = make_run(session_factory, "/data/media/cancel-fail.wav")
+
+    def cancel_then_raise(session: Session, rid: uuid.UUID) -> None:
+        with session_factory() as other:
+            cancel_run(other, rid)
+            other.commit()
+        raise RuntimeError("stage blew up as it was cancelled")
+
+    fns = dict(NOOP_FNS)
+    fns[Stage.TRANSCRIBE] = cancel_then_raise
+
+    result = execute_run(session_factory, run_id, fns)
+    assert result.status is RunStatus.CANCELLED
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.CANCELLED.value
+        claim = session.execute(
+            select(StageRun).where(
+                StageRun.pipeline_run_id == run_id,
+                StageRun.stage == Stage.TRANSCRIBE.value,
+            )
+        ).scalar_one()
+        assert claim.status == StageStatus.SKIPPED.value
+
+
+def test_lost_advance_cas_from_non_cancel_still_raises(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The cancel handling is NARROW: a post-stage CAS lost to something other
+    than a cancel (here a duplicate worker advancing the run) must still raise
+    StaleRevisionError — we never silently swallow a genuine race."""
+    run_id = make_run(session_factory, "/data/media/dup-worker.wav")
+
+    def advance_elsewhere(session: Session, rid: uuid.UUID) -> None:
+        # Simulate a stray duplicate worker completing this stage first: advance
+        # the run to the next stage (revision bumps, status stays RUNNING). The
+        # worker's own advance CAS then loses — and must NOT be swallowed.
+        with session_factory() as other:
+            held = snapshot(other.get(PipelineRun, rid))  # type: ignore[arg-type]
+            nxt = next_stage(held.current_stage)
+            assert nxt is not None
+            cas_update_run(other, held, status=RunStatus.RUNNING, current_stage=nxt)
+            other.commit()
+
+    fns = dict(NOOP_FNS)
+    fns[Stage.TRANSCRIBE] = advance_elsewhere
+
+    with pytest.raises(StaleRevisionError):
+        execute_run(session_factory, run_id, fns)
+
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.RUNNING.value  # not cancelled, not failed

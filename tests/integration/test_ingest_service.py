@@ -15,11 +15,13 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.db.models import STAGE_ORDER, MediaItem, PipelineRun, RunStatus, Stage
 from voxint.ingest import (
     MissingStageError,
+    RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
     UploadConflictError,
     UploadValidationError,
     UrlValidationError,
+    cancel_run,
     requeue_failed_run,
     submit_media_item,
     submit_media_item_if_new,
@@ -443,3 +445,179 @@ def test_submit_url_invalid_submission_id_writes_nothing(
     with session_factory() as session:
         assert session.execute(select(MediaItem)).scalars().all() == []
         assert session.execute(select(PipelineRun)).scalars().all() == []
+
+
+# --- cancel_run (issue #5) ----------------------------------------------------
+
+
+def _drive_to_running(session: Session, run_id: uuid.UUID, stage: Stage) -> RunSnapshot:
+    """Walk a QUEUED run to RUNNING at ``stage`` through real CAS transitions."""
+    held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
+    held = cas_update_run(
+        session, held, status=RunStatus.RUNNING, current_stage=held.current_stage or STAGE_ORDER[0]
+    )
+    while held.current_stage is not stage:
+        nxt = next_stage(held.current_stage)
+        assert nxt is not None, f"{stage!r} not reachable in STAGE_ORDER"
+        held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=nxt)
+    session.commit()
+    return held
+
+
+def test_cancel_missing_run_raises_not_found(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session, pytest.raises(RunNotFoundError):
+        cancel_run(session, uuid.uuid4())
+
+
+def test_cancel_queued_run_cancels_keeping_no_stage(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A fresh QUEUED run carries no current_stage; cancelling it before dispatch
+    # keeps that None (it never started a stage).
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/q-cancel.wav").id
+        session.commit()
+
+    with session_factory() as session:
+        result = cancel_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.CANCELLED
+        assert result.current_stage is None
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.CANCELLED.value
+        assert stored.current_stage is None
+
+
+def test_cancel_running_run_keeps_stage(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Cancelling a RUNNING run preserves current_stage so the console shows where
+    # it stopped.
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/run-cancel.wav").id
+        session.commit()
+        _drive_to_running(session, run_id, Stage.TRANSCRIBE)
+
+    with session_factory() as session:
+        result = cancel_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.CANCELLED
+        assert result.current_stage is Stage.TRANSCRIBE
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.CANCELLED.value
+        assert stored.current_stage == Stage.TRANSCRIBE.value
+
+
+def test_cancel_awaiting_adjudication_run(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A human-paused run (no live worker) is cancellable; stage is kept.
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/await-cancel.wav").id
+        session.commit()
+        held = _drive_to_running(session, run_id, Stage.DIARIZE_EMBED)
+        held = cas_update_run(
+            session,
+            held,
+            status=RunStatus.AWAITING_ADJUDICATION,
+            current_stage=Stage.DIARIZE_EMBED,
+        )
+        session.commit()
+
+    with session_factory() as session:
+        result = cancel_run(session, run_id)
+        session.commit()
+        assert result.status is RunStatus.CANCELLED
+        assert result.current_stage is Stage.DIARIZE_EMBED
+
+
+def test_cancel_failed_run_raises_not_cancellable(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # FAILED is requeueable, not cancellable — a distinct refusal.
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/failed-cancel.wav").id
+        session.commit()
+        _drive_to_failed(session, run_id, Stage.TRANSCRIBE)
+
+    with session_factory() as session:
+        with pytest.raises(RunNotCancellableError) as exc:
+            cancel_run(session, run_id)
+        assert exc.value.status is RunStatus.FAILED
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.FAILED.value  # untouched
+
+
+def test_cancel_completed_run_raises_not_cancellable(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/done-cancel.wav").id
+        session.commit()
+        held = _drive_to_running(session, run_id, STAGE_ORDER[-1])
+        cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
+        session.commit()
+
+    with session_factory() as session:
+        with pytest.raises(RunNotCancellableError) as exc:
+            cancel_run(session, run_id)
+        assert exc.value.status is RunStatus.COMPLETED
+
+
+def test_cancel_already_cancelled_is_idempotent(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A second cancel (double-click / stale tab) is a no-op success, not an
+    # error and not a second revision bump.
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/idem-cancel.wav").id
+        session.commit()
+
+    with session_factory() as session:
+        first = cancel_run(session, run_id)
+        session.commit()
+        first_revision = first.revision
+
+    with session_factory() as session:
+        again = cancel_run(session, run_id)
+        session.commit()
+        assert again.status is RunStatus.CANCELLED
+        assert again.revision == first_revision  # no extra write
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.revision == first_revision
+
+
+def test_cancel_with_stale_expected_revision_rejects(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A stale browser tab acting on a revision the run moved past is rejected
+    # before any write; the matching revision is accepted.
+    with session_factory() as session:
+        run_id = submit_media_item(session, "incoming/stale-cancel.wav").id
+        session.commit()
+        held = _drive_to_running(session, run_id, Stage.PREPARE)
+        live_revision = held.revision
+
+    with session_factory() as session:
+        with pytest.raises(StaleRevisionError):
+            cancel_run(session, run_id, expected_revision=live_revision - 1)
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.status == RunStatus.RUNNING.value  # untouched
+
+    with session_factory() as session:
+        result = cancel_run(session, run_id, expected_revision=live_revision)
+        session.commit()
+        assert result.status is RunStatus.CANCELLED

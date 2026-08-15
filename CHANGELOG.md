@@ -3,10 +3,28 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes between minors).
 
+## [Unreleased]
+
+### Added
+- **Console run cancellation** (#5): a Cancel button on the run detail page for
+  any *live* run (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), backed by a new
+  `POST /runs/{id}/cancel` route and `cancel_run` service — an exact-revision
+  (CAS) mutation mirroring `/requeue`, so a stale tab 409s. Cancellation is
+  **cooperative and pure DB state** (drives the existing `→ CANCELLED`
+  transition, publishes nothing): a `QUEUED` run never starts; a `RUNNING` run's
+  currently executing stage finishes first (not an immediate kill), then no
+  further stages run and the worker stops cleanly at its next CAS — the engine
+  now resolves a cancel-lost advance/complete/failure CAS by stopping only when
+  the run is confirmed `CANCELLED` (a genuine race still raises) and closes the
+  abandoned stage claim `SKIPPED` rather than leaving it "running". Re-cancelling
+  an already-cancelled run is an idempotent success. Cancel leaves media and
+  partial results in place — **delete/archive is a separate, not-yet-built action**.
+
 ## [0.12.0] — 2026-08-15
 
 ### Added
 - **In-console run/throughput dashboard** (#13): a new authenticated
+  `GET /dashboard` page (first in the top nav) renders the same aggregates
   `GET /dashboard` page (first in the top nav) renders the same aggregates
   the Prometheus `/metrics` endpoint and `voxint stats` already expose —
   runs by status, the review backlog (runs awaiting adjudication), per-stage

@@ -384,11 +384,20 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 - **`POST /fetch`** — the browser equivalent of `voxint fetch` (URL ingestion).
 - **`POST /runs/{id}/requeue`** — an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
+- **`POST /runs/{id}/cancel`** — an exact-revision (CAS) cancel of a *live* run
+  (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), from a button on the run
+  detail page. Cancellation is **cooperative and pure DB state**: it drives the
+  run to `CANCELLED` and publishes nothing. A `QUEUED` run cancelled before
+  dispatch never starts; a `RUNNING` run's currently executing stage finishes
+  first (cancel is not an immediate process kill), then no further stages run.
+  Re-cancelling an already-cancelled run is an idempotent success, not an error.
+  Cancelling leaves media and any partial results in place — **delete/archive is
+  a separate action, not yet built** (issue #5, follow-up slice).
 
-The console is deliberately **append-only**: there is no delete, no cancel, and
-no speaker-roster editing from these pages (roster changes happen only through
-adjudication). The pipeline-state surface (`/runs*`) and the adjudication surface
-(`/review*`) stay separate.
+Beyond cancel, the console is still **append-only**: there is no delete/archive
+yet, and no speaker-roster editing from these pages (roster changes happen only
+through adjudication). The pipeline-state surface (`/runs*`) and the adjudication
+surface (`/review*`) stay separate.
 
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at

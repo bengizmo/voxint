@@ -166,6 +166,40 @@ def default_stage_leases() -> dict[Stage, int]:
     return leases
 
 
+def _stop_if_cancelled(
+    session_factory: sessionmaker[Session],
+    run_id: uuid.UUID,
+    claim_id: uuid.UUID,
+) -> RunSnapshot | None:
+    """Resolve a lost post-stage CAS: was the run cancelled out from under us?
+
+    A worker's advance/complete/failure CAS can lose for exactly one benign
+    reason — the operator cancelled the run mid-stage (issue #5) — and for
+    genuine-race reasons that must stay loud (a recovery lease-steal moving
+    RUNNING→FAILED→QUEUED, a stray duplicate worker, a future transition). We
+    only swallow the *confirmed cancellation*: re-read on a fresh session and
+    return the CANCELLED snapshot, else return None so the caller re-raises the
+    ``StaleRevisionError``.
+
+    Cancellation is cooperative — the stage body already ran and its DB effects
+    were rolled back with the failed CAS, so we do not un-run it; we only close
+    the now-abandoned RUNNING claim as SKIPPED so the console does not show a
+    stage "running" forever on a cancelled run.
+    """
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        if run is None or RunStatus(run.status) is not RunStatus.CANCELLED:
+            return None
+        snap = snapshot(run)
+        claim = session.get(StageRun, claim_id)
+        if claim is not None and claim.status == StageStatus.RUNNING.value:
+            claim.status = StageStatus.SKIPPED.value
+            claim.finished_at = datetime.now(tz=UTC)
+            claim.error = "cancelled before commit"
+        session.commit()
+        return snap
+
+
 def execute_run(
     session_factory: sessionmaker[Session],
     run_id: uuid.UUID,
@@ -232,21 +266,43 @@ def execute_run(
             except Exception as exc:
                 session.rollback()
                 _finish_claim(session, claim_id, StageStatus.FAILED, str(exc))
-                failed = cas_update_run(
-                    session, held, status=RunStatus.FAILED, current_stage=stage, error=str(exc)
-                )
-                session.commit()
+                try:
+                    failed = cas_update_run(
+                        session, held, status=RunStatus.FAILED, current_stage=stage, error=str(exc)
+                    )
+                    session.commit()
+                except StaleRevisionError:
+                    # A cancel landed while this stage was failing: the FAILED CAS
+                    # lost. Honour a confirmed cancellation over the failure;
+                    # re-raise for any other stale status (a real race).
+                    session.rollback()
+                    cancelled = _stop_if_cancelled(session_factory, run_id, claim_id)
+                    if cancelled is not None:
+                        return cancelled
+                    raise
                 raise StageFailedError(stage, exc, failed) from exc
             _finish_claim(session, claim_id, StageStatus.COMPLETED)
             upcoming = next_stage(stage)
-            if upcoming is None:
-                held = cas_update_run(
-                    session, held, status=RunStatus.COMPLETED, current_stage=None
-                )
+            try:
+                if upcoming is None:
+                    held = cas_update_run(
+                        session, held, status=RunStatus.COMPLETED, current_stage=None
+                    )
+                    session.commit()
+                    return held
+                cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=upcoming)
                 session.commit()
-                return held
-            cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=upcoming)
-            session.commit()
+            except StaleRevisionError:
+                # The operator cancelled while this stage body ran, so the
+                # post-stage advance/complete CAS lost. Discard this stage's
+                # (rolled-back) effects and stop cleanly IFF the run is now
+                # CANCELLED; any other stale status is a genuine invariant breach
+                # (recovery lease-steal, duplicate worker) and must propagate.
+                session.rollback()
+                cancelled = _stop_if_cancelled(session_factory, run_id, claim_id)
+                if cancelled is not None:
+                    return cancelled
+                raise
 
 
 def recover_interrupted_runs(

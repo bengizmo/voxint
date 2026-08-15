@@ -57,6 +57,7 @@ from voxint.api.auth import require_operator
 from voxint.api.csrf import (
     CSRF_ASSETS_CANCEL,
     CSRF_ASSETS_GENERATE,
+    CSRF_CANCEL,
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_NOTES,
@@ -182,12 +183,14 @@ from voxint.export import (
 )
 from voxint.ingest import (
     MissingStageError,
+    RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
     UrlValidationError,
+    cancel_run,
     requeue_failed_run,
     submit_media_item_if_new,
     submit_upload,
@@ -1434,6 +1437,9 @@ def _register_routes(app: FastAPI) -> None:
                 "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
                 # CSRF token for the requeue form (rendered only when FAILED).
                 "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
+                # CSRF token for the cancel form (rendered only for a live run:
+                # queued / running / awaiting_adjudication — issue #5).
+                "csrf_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_CANCEL),
                 # Acquisition context (issue #36): the write-once snapshot, or
                 # None for uploads / pre-capture URL runs. Scraped metadata and
                 # the operator's own notes render in separate sections.
@@ -1510,6 +1516,41 @@ def _register_routes(app: FastAPI) -> None:
         # recovery sweep rather than failing the request.
         session.commit()
         return _run_redirect(run_id, published=_publish_or_defer(run_id))
+
+    @protected.post("/runs/{run_id}/cancel")
+    def cancel_run_route(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        revision: Annotated[int, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        """Cancel a live run (QUEUED / RUNNING / AWAITING_ADJUDICATION) — issue #5.
+
+        Exact-revision CAS from the form's hidden field, mirroring /requeue: a
+        stale tab holding an older revision 409s rather than cancelling a run
+        that already moved on. Cancellation is pure DB state (the existing
+        ``→ CANCELLED`` transition), so unlike /submit and /requeue there is
+        NOTHING to publish — a worker mid-run observes the cancel at its next
+        stage boundary (the currently executing stage body finishes first), and
+        a QUEUED run simply never starts. Cancelling an already-cancelled run is
+        an idempotent 303, not a 409 (a double-click is success)."""
+        _require_csrf(request, CSRF_CANCEL, csrf_token)
+        try:
+            cancel_run(session, run_id, expected_revision=revision)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (RunNotCancellableError, StaleRevisionError, InvalidTransitionError) as exc:
+            # RunNotCancellableError: a COMPLETED/FAILED run can't be cancelled.
+            # StaleRevisionError: the tab's revision lost the CAS.
+            # InvalidTransitionError: defensive — the cancellable-status guard
+            # already excludes the states the CAS would reject, but the CAS
+            # contract permits raising it.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Pure DB state, no enqueue — commit and return to the run detail (PRG).
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
     @protected.post("/runs/{run_id}/notes")
     def save_operator_notes(

@@ -82,6 +82,25 @@ class MissingStageError(IngestError):
         self.run_id = run_id
 
 
+class RunNotCancellableError(IngestError):
+    """Cancel attempted on a run whose status forbids it (COMPLETED / FAILED).
+
+    Only QUEUED, RUNNING, and AWAITING_ADJUDICATION are cancellable — the same
+    states ``ALLOWED_TRANSITIONS`` permits ``→ CANCELLED`` from. FAILED is not
+    terminal (it is requeueable), it is simply not *cancellable*; COMPLETED is
+    done. An already-CANCELLED run is not an error — :func:`cancel_run` treats a
+    repeat cancel as an idempotent no-op, not this exception.
+    """
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(
+            f"run is {status.value}, only queued/running/awaiting_adjudication "
+            "runs can be cancelled"
+        )
+        self.run_id = run_id
+        self.status = status
+
+
 class UploadValidationError(IngestError):
     """The upload's filename or submission id is unusable (maps to HTTP 422)."""
 
@@ -232,6 +251,55 @@ def requeue_failed_run(
         session,
         held,
         status=RunStatus.QUEUED,
+        current_stage=held.current_stage,
+    )
+
+
+_CANCELLABLE_STATUSES = frozenset(
+    {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_ADJUDICATION}
+)
+
+
+def cancel_run(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    expected_revision: int | None = None,
+) -> RunSnapshot:
+    """CAS-cancel a live run (QUEUED / RUNNING / AWAITING_ADJUDICATION), guarded
+    by exact revision.
+
+    Cancellation is *cooperative* and pure DB state: it drives the existing
+    ``→ CANCELLED`` transition and the caller commits — there is nothing to
+    publish (unlike submit/requeue). A worker mid-run observes the cancel only at
+    its next stage boundary or when its post-stage CAS loses to this one; the
+    currently executing stage body still runs to completion first, so cancel is
+    not an immediate process kill. A QUEUED run cancelled before dispatch simply
+    never starts. The run keeps its ``current_stage`` so the console shows where
+    it stopped (a fresh QUEUED run naturally carries ``None``).
+
+    Idempotent: cancelling an already-CANCELLED run is a no-op that returns the
+    current snapshot (a double-click / stale tab gets success, not a 409). Pass
+    ``expected_revision`` for exact-revision CAS from a form: a mismatch on a
+    still-live run raises :class:`StaleRevisionError` before any write.
+
+    Raises :class:`RunNotFoundError`, :class:`RunNotCancellableError` (COMPLETED /
+    FAILED), or — from the CAS — ``StaleRevisionError`` / ``InvalidTransitionError``.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    held = snapshot(run)
+    if held.status is RunStatus.CANCELLED:
+        return held  # idempotent: already cancelled, nothing to do
+    if held.status not in _CANCELLABLE_STATUSES:
+        raise RunNotCancellableError(run_id, held.status)
+    if expected_revision is not None and held.revision != expected_revision:
+        raise StaleRevisionError(run_id, expected_revision)
+    return cas_update_run(
+        session,
+        held,
+        status=RunStatus.CANCELLED,
         current_stage=held.current_stage,
     )
 

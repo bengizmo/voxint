@@ -48,6 +48,24 @@ up, then requeue.</p>
 {% endif %}
 {% endif %}
 
+{% if run.status in ("queued", "running", "awaiting_adjudication") %}
+<form method="post" action="/runs/{{ run.id }}/cancel" class="cancel">
+  {# Carry the rendered revision so a stale tab's cancel 409s (exact-revision CAS). #}
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
+  <button type="submit">Cancel run</button>
+  <span class="muted">
+    {% if run.status == "running" %}
+      Stops the run. The stage now running (<code>{{ run.current_stage or "—" }}</code>)
+      finishes first — cancel is cooperative, not an immediate kill — then no further
+      stages start. Media and any partial results are left in place (delete is separate).
+    {% else %}
+      Stops the run; no further stages will run. Media is left in place (delete is separate).
+    {% endif %}
+  </span>
+</form>
+{% endif %}
+
 <p>
   {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
   {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}

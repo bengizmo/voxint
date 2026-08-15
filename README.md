@@ -31,7 +31,8 @@ What makes it different is the orchestration "glue" most pipelines skip:
 - **Operable from the browser** — a keyset-paged `/runs` execution-history browser (with a
   per-stage attempt ledger), bounded file upload, and yt-dlp URL ingestion, from the same app.
   Submission is durable-first: a broker outage leaves the run queued for the recovery sweep,
-  never lost. The console is append-only — no delete, no cancel.
+  never lost. A live run can be cancelled (cooperative, exact-revision CAS); delete/archive
+  is not built yet.
 - **Measurement harnesses** — **speaker-attribution** scoring, runnable as CLIs:
   name-accuracy against ground truth (McNemar / bootstrap / Wilson), acoustic
   agreement verdicts, and verdict-level ensemble fusion (worked example under
