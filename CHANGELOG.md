@@ -30,6 +30,17 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   accepted per-label suggestion prefills the Enroll input (editable, never
   auto-submitted). Rerun duplicates group under their decided history
   instead of re-presenting as new.
+- **Additive LLM name pass** (#38): a second producer, `names.llm`, mines
+  name hints from the transcript via the configured enhancement LLM
+  (`voxint enrich names <run_id> --llm`; CLI-only, never in the console
+  request path). Strictly additive — its own supersession lineage, and the
+  offline path never depends on it. Model output obeys the same evidence
+  discipline: a hint survives only when the name is located verbatim in a
+  real segment (in the hinted label's own segments for self-intros, which
+  alone may become cluster-level claims); unlocatable names are dropped.
+  Fixed uncalibrated score 0.5. Gated behind `ENRICHMENT_NAMES_LLM_ENABLED`
+  + `LLM_ENABLED`; an LLM failure aborts rather than recording a false
+  authoritative "found nothing".
 - **Enrichment draft schema** (#37): machine-derived claims about speakers
   and runs now live as reviewable, evidence-backed drafts. Four new tables
   (migration 0010): `enrichment_producer_runs` (one row per completed

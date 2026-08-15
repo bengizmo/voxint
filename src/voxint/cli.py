@@ -626,6 +626,13 @@ def _enrich_names(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    if args.llm and not (settings.enrichment_names_llm_enabled and settings.llm_enabled):
+        print(
+            "error: the LLM name pass requires ENRICHMENT_NAMES_LLM_ENABLED=true"
+            " and LLM_ENABLED=true",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         factory = build_session_factory(engine)
@@ -660,6 +667,24 @@ def _enrich_names(args: argparse.Namespace) -> int:
                         f"{run_id}: outcome={producer_run.outcome}"
                         f" generation={producer_run.generation} candidates={count}"
                     )
+                if args.llm:
+                    # Separate session scope: an LLM failure must not roll
+                    # back the already-successful offline sweep.
+                    from voxint.enrichment.producers.names_llm import (
+                        run_llm_name_producer,
+                    )
+
+                    with session_scope(factory) as session:
+                        llm_run = run_llm_name_producer(session, run_id=run_id, settings=settings)
+                        llm_count = session.execute(
+                            select(func.count())
+                            .select_from(EnrichmentCandidate)
+                            .where(EnrichmentCandidate.producer_run_id == llm_run.id)
+                        ).scalar_one()
+                        print(
+                            f"{run_id}: llm outcome={llm_run.outcome}"
+                            f" generation={llm_run.generation} candidates={llm_count}"
+                        )
             except NameProducerError as exc:
                 failures += 1
                 print(f"{run_id}: error: {exc}", file=sys.stderr)
@@ -771,6 +796,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--all-completed",
         action="store_true",
         help="sweep every completed run (per-run failures reported, exit 1 if any)",
+    )
+    names_p.add_argument(
+        "--llm",
+        action="store_true",
+        help="also run the additive LLM name pass (requires"
+        " ENRICHMENT_NAMES_LLM_ENABLED and LLM_ENABLED; uses the env LLM config)",
     )
     names_p.set_defaults(fn=_enrich_names)
 

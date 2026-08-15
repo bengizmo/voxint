@@ -633,3 +633,10 @@ def test_enrich_names_all_completed_isolates_failures(
 def test_enrich_names_all_completed_empty(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["enrich", "names", "--all-completed"]) == 0
     assert "no completed runs" in capsys.readouterr().out
+
+
+def test_enrich_names_llm_flag_requires_both_settings(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["enrich", "names", str(uuid.uuid4()), "--llm"]) == 2
+    assert "ENRICHMENT_NAMES_LLM_ENABLED" in capsys.readouterr().err
