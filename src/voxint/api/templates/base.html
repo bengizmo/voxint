@@ -83,6 +83,7 @@
 <body>
   {% block nav %}
   <nav class="top">
+    <a href="/dashboard"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
     <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
     <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>

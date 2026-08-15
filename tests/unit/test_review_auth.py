@@ -40,6 +40,7 @@ def test_healthz_is_open(client: TestClient) -> None:
         ("GET", "/review/00000000-0000-0000-0000-000000000000/export.json"),
         ("GET", "/review/00000000-0000-0000-0000-000000000000/export.rttm"),
         ("GET", "/metrics"),
+        ("GET", "/dashboard"),
         ("GET", "/media/00000000-0000-0000-0000-000000000000"),
         ("POST", "/review/00000000-0000-0000-0000-000000000000/release"),
         ("GET", "/static/htmx.min.js"),

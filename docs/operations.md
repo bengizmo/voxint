@@ -327,6 +327,16 @@ companion `voxint_stage_duration_attempts{stage}` (so "no finished attempts" is
 distinguishable from a genuinely 0-second average), `voxint_roster_speakers`, and
 `voxint_runs_created_24h`.
 
+For a human at the console, the **Dashboard** page (`GET /dashboard`, first in the
+top nav) renders the *same* aggregates as a read-only page — runs by status, the
+review backlog, per-stage timing and failures, roster size, and runs created in
+the window. It is authenticated like every non-`/healthz` page and shares the
+`stats_query` data layer with `/metrics` and `voxint stats`, so the three surfaces
+always agree. The page auto-refreshes every 15 seconds (an htmx fragment poll, no
+external assets); a `?since=` query param overrides the default 24h throughput
+window (same span/ISO-8601 syntax as `voxint stats --since`), degrading to 24h if
+malformed.
+
 ### Exporting transcripts
 
 Every run's speaker-attributed transcript exports in five formats, from the CLI
@@ -543,6 +553,7 @@ mutations are gated by their per-run claim token.
 |---|---|
 | `GET /healthz` | Liveness (no DB access — schema readiness is the migrate gate's job) |
 | `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated — scrape with `basic_auth`) |
+| `GET /dashboard` | Operator dashboard — read-only HTML render of the `/metrics` aggregates; optional `?since=` window, 15s htmx auto-refresh |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML) |

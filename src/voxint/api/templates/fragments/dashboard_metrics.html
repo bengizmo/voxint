@@ -1,0 +1,65 @@
+{# Operator dashboard metrics (issue #13). Rendered standalone on the htmx
+   15s poll (HX-Request) and included by dashboard.html for the full page.
+   Pure read-only render over a SystemStats snapshot — no aggregation here;
+   that all lives in stats_query.collect_stats(). #}
+<p class="muted">
+  Snapshot at {{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%SZ") }}.
+  Throughput window since {{ stats.since.strftime("%Y-%m-%d %H:%M:%SZ") }}.
+</p>
+{% if since_invalid %}
+<p class="notice">Unrecognized <code>?since=</code> value — showing the last 24 hours.</p>
+{% endif %}
+
+<dl class="settings">
+  <dt>Review backlog</dt>
+  <dd>{{ review_backlog }} run(s) awaiting adjudication</dd>
+  <dt>Runs created in window</dt>
+  <dd data-metric="runs-created">{{ stats.runs_created_count }}</dd>
+  <dt>Roster size</dt>
+  <dd>{{ stats.roster_size }} enrolled speaker(s)</dd>
+</dl>
+
+<h2>Runs by status</h2>
+<table>
+  <thead><tr><th>Status</th><th>Runs</th></tr></thead>
+  <tbody>
+    {% for status in run_statuses %}
+    <tr>
+      <td><span class="pill {{ status.value }}">{{ status.value }}</span></td>
+      <td>{{ stats.status_counts.get(status.value, 0) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Stage timing</h2>
+{% if stats.stage_durations %}
+<table>
+  <thead><tr><th>Stage</th><th>Avg duration</th><th>Finished attempts</th></tr></thead>
+  <tbody>
+    {% for d in stats.stage_durations %}
+    <tr>
+      <td>{{ d.stage }}</td>
+      <td>{{ "%.2f"|format(d.avg_seconds) }}s</td>
+      <td>{{ d.attempt_count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No finished stage attempts yet.</p>
+{% endif %}
+
+<h2>Stage failures</h2>
+{% if stats.stage_failure_counts %}
+<table>
+  <thead><tr><th>Stage</th><th>Failed attempts</th></tr></thead>
+  <tbody>
+    {% for f in stats.stage_failure_counts %}
+    <tr><td>{{ f.stage }}</td><td>{{ f.attempt_count }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No stage failures recorded.</p>
+{% endif %}

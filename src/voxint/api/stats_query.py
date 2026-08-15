@@ -34,6 +34,13 @@ from voxint.db.models import PipelineRun, RunStatus, Speaker, Stage, StageRun, S
 
 _RELATIVE_SINCE = re.compile(r"^(\d+)([hd])$")
 
+# The default throughput window, shared by every surface that shows "runs created
+# since" so /dashboard, /metrics, and `voxint stats` cannot silently disagree.
+# Two string-encoded siblings encode the same 24h and MUST move with it: the
+# Prometheus metric name ``voxint_runs_created_24h`` (render_prometheus, below)
+# and the CLI ``--since`` default ("24h", cli.py).
+DEFAULT_WINDOW = timedelta(hours=24)
+
 
 @dataclass(frozen=True)
 class StageDurationStat:
