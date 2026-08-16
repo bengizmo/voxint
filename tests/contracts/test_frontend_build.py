@@ -29,6 +29,7 @@ _APP_PY = REPO_ROOT / "src" / "voxint" / "api" / "app.py"
 _CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 _NVMRC = REPO_ROOT / "frontend" / ".nvmrc"
 _PYPROJECT = REPO_ROOT / "pyproject.toml"
+_VITE_CONFIG = REPO_ROOT / "frontend" / "vite.config.ts"
 
 
 # --------------------------------------------------------------------------- #
@@ -66,6 +67,23 @@ def test_no_staticfiles_mount_in_app() -> None:
     )
     assert "import StaticFiles" not in text, msg
     assert not re.search(r"\bStaticFiles\s*\(", text), msg
+
+
+def test_vite_base_matches_asset_route_prefix() -> None:
+    # Assets are served ONLY under the app_asset route prefix, so Vite's `base`
+    # must equal it: otherwise the modulepreload helper and CSS/chunk deps emit
+    # root-absolute /assets/... URLs that 404, silently breaking hydration for
+    # any future island that shares a code-split chunk (issue #48 review). Pin
+    # the two together so they cannot drift.
+    app_text = _APP_PY.read_text()
+    route = re.search(r'@app\.get\("(/static/app/)\{asset_path:path\}"\)', app_text)
+    assert route, "app.py lost the /static/app/{asset_path:path} route"
+    prefix = route.group(1)
+    vite_text = _VITE_CONFIG.read_text()
+    assert re.search(rf'base:\s*"{re.escape(prefix)}"', vite_text), (
+        f"vite.config.ts `base` must equal the asset route prefix {prefix!r} so "
+        "preload/CSS-dependency URLs resolve under the served root"
+    )
 
 
 # --------------------------------------------------------------------------- #
