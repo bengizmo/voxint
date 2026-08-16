@@ -147,8 +147,13 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     # worker restart. A stage retry inside this execute_run reuses this snapshot;
     # the next run_pipeline invocation re-reads the row.
     with factory() as session:
-        prefs = resolve_run_preferences(app_settings.get_app_settings(session), settings)
-    ctx = apply_run_preferences(base_ctx, settings, prefs)
+        row = app_settings.get_app_settings(session)
+        prefs = resolve_run_preferences(row, settings)
+        # Resolve the effective key (a UI-stored row value wins over env) inside the
+        # session, so it reaches the per-run HttpLLMClient the same no-restart way as
+        # base_url/model. Kept off RunPreferences (which has a repr); passed as a str.
+        llm_api_key = app_settings.resolve_effective_llm_api_key(row, settings)
+    ctx = apply_run_preferences(base_ctx, settings, prefs, llm_api_key=llm_api_key)
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings)

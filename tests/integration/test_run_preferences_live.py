@@ -79,8 +79,10 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
         session.commit()
 
     with session_factory() as session:
-        prefs = resolve_run_preferences(store.get_app_settings(session), settings)
-        ctx_a = apply_run_preferences(base_ctx, settings, prefs)
+        row = store.get_app_settings(session)
+        prefs = resolve_run_preferences(row, settings)
+        key = store.resolve_effective_llm_api_key(row, settings)
+        ctx_a = apply_run_preferences(base_ctx, settings, prefs, llm_api_key=key)
         transcribe.run(ctx_a, session, run_id)
         session.commit()
 
@@ -98,8 +100,10 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
         session.commit()
 
     with session_factory() as session:
-        prefs = resolve_run_preferences(store.get_app_settings(session), settings)
-        ctx_b = apply_run_preferences(base_ctx, settings, prefs)
+        row = store.get_app_settings(session)
+        prefs = resolve_run_preferences(row, settings)
+        key = store.resolve_effective_llm_api_key(row, settings)
+        ctx_b = apply_run_preferences(base_ctx, settings, prefs, llm_api_key=key)
         transcribe.run(ctx_b, session, run_id)
         session.commit()
 

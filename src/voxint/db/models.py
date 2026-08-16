@@ -999,13 +999,24 @@ class AppSettings(Base):
     """Singleton (``id = 1``) store for the preferences the first-run wizard writes.
 
     Deliberately split from ``config.Settings`` (env-only, frozen on ``app.state``
-    at process start): infra config and secrets — ``DATABASE_URL``, ``REDIS_URL``,
-    ports, ``LLM_API_KEY`` — stay in the environment and the wizard never rewrites
-    ``.env``. Only non-secret, user-facing preferences live here. Exactly one row
-    exists, pinned by the ``id = 1`` CHECK; the API reads it per request and the
-    worker snapshots it per run (see ``pipeline.stages.context``). ``llm_base_url``
-    / ``llm_model`` are nullable — NULL means "fall back to the env default"; the
-    LLM API key is never stored here.
+    at process start): infra config and infra secrets — ``DATABASE_URL``,
+    ``REDIS_URL``, ports — stay in the environment and the wizard never rewrites
+    ``.env``. Exactly one row exists, pinned by the ``id = 1`` CHECK; the API reads
+    it per request and the worker snapshots it per run (see
+    ``pipeline.stages.context``). ``llm_base_url`` / ``llm_model`` are nullable —
+    NULL means "fall back to the env default".
+
+    ``llm_api_key`` (issue #10) is the one credential stored here so a
+    non-technical operator can configure LLM enhancement entirely from the UI. A
+    non-blank value WINS over env ``LLM_API_KEY``; NULL/blank falls back to it
+    (mirrors ``llm_enabled``, which is taken hard from the row). It is stored
+    **plaintext at rest** — an accepted trade-off for this single-operator,
+    local-first deployment (not a shared multi-tenant store; a SQL dump necessarily
+    contains it). It must never be rendered back to the UI, logged, put in an error
+    message, or exported: resolve it only through
+    ``app_settings.resolve_effective_llm_api_key`` and keep it out of any
+    repr/serialization (this model defines no custom ``__repr__``, so the default
+    shows only the class + primary key).
     """
 
     __tablename__ = "app_settings"
@@ -1019,9 +1030,13 @@ class AppSettings(Base):
     # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     llm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    # NULL -> use the env default (config.Settings); the API key stays env-only.
+    # NULL -> use the env default (config.Settings).
     llm_base_url: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(Text)
+    # In-UI LLM API key (issue #10). NULL/blank -> fall back to env LLM_API_KEY; a
+    # non-blank value wins. Credential, plaintext at rest — never render/log/export;
+    # resolve only via app_settings.resolve_effective_llm_api_key. See class docstring.
+    llm_api_key: Mapped[str | None] = mapped_column(Text)
     # The bundled guided-tutorial run, seeded idempotently by `voxint tutorial seed`.
     tutorial_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id", ondelete="SET NULL")

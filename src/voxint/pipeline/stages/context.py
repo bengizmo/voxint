@@ -20,6 +20,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.app_settings import resolve_effective_llm_endpoint
 from voxint.clients.asr import HttpASRClient
 from voxint.clients.base import ASRClient, DiarizerClient, EmbedderClient, LLMClient
 from voxint.clients.diarize import HttpDiarizerClient
@@ -174,14 +175,14 @@ def resolve_run_preferences(
     """Layer the ``app_settings`` row over env defaults (pure — no I/O, no pack).
 
     A NULL/absent row field falls back to the env default, so with no row at all
-    this reproduces today's env-only behavior exactly. The LLM API key is never
-    stored in the row; it stays env-only (see :func:`apply_run_preferences`).
+    this reproduces today's env-only behavior exactly. This carries only the
+    non-secret preferences; the effective API key is resolved separately (kept out
+    of this dataclass, which has a repr) via
+    :func:`voxint.app_settings.resolve_effective_llm_api_key` and passed into
+    :func:`apply_run_preferences`.
     """
     llm_enabled = row.llm_enabled if row is not None else settings.llm_enabled
-    llm_base_url = (
-        row.llm_base_url if row is not None and row.llm_base_url else settings.llm_base_url
-    )
-    llm_model = row.llm_model if row is not None and row.llm_model else settings.llm_model
+    llm_base_url, llm_model = resolve_effective_llm_endpoint(row, settings)
     # row.vocabulary is NOT NULL in the DB (server default []), but an in-memory
     # row may leave it None — guard so a bare row can't crash a pure resolve.
     vocabulary = _dedup_order_preserving(
@@ -204,16 +205,22 @@ def _augment_enhancement_context(pack_fragment: str, vocabulary: tuple[str, ...]
 
 
 def apply_run_preferences(
-    base: StageContext, settings: Settings, prefs: RunPreferences
+    base: StageContext, settings: Settings, prefs: RunPreferences, *, llm_api_key: str
 ) -> StageContext:
     """Layer ``prefs`` onto the process-cached ``base`` context for one run.
 
     Transport clients (asr/diarizer/embedder/downloader) are kept as-is — only the
     per-run, preference-derived fields are swapped via ``dataclasses.replace``:
     the pack+user vocabulary, the enhancement context that renders it, and the LLM
-    client. Enabling the LLM without an env key is an honest no-op: the run logs a
-    warning and proceeds with ``llm=None`` (enhancement is best-effort, never a
-    blocker), rather than failing.
+    client. Enabling the LLM without an effective key is an honest no-op: the run
+    logs a warning and proceeds with ``llm=None`` (enhancement is best-effort,
+    never a blocker), rather than failing.
+
+    ``llm_api_key`` is the effective key (a UI-stored row value wins over env),
+    resolved by the caller via
+    :func:`voxint.app_settings.resolve_effective_llm_api_key` and passed as a
+    keyword-only ``str`` — deliberately NOT carried on the (repr-bearing, non-secret)
+    :class:`RunPreferences`.
 
     When enabled, the returned ``llm`` is a freshly built ``HttpLLMClient`` that
     OWNS its ``httpx.Client``; the caller (``run_pipeline``) must ``close()`` it
@@ -222,7 +229,7 @@ def apply_run_preferences(
     vocabulary = _dedup_order_preserving((*base.vocabulary, *prefs.vocabulary))
     enhancement_context = _augment_enhancement_context(base.enhancement_context, vocabulary)
     # Fail closed on three independent preconditions before building the client:
-    #  - the API key must be present (it is env-only, never stored on the row);
+    #  - the effective API key must be present (a UI-stored row value or env);
     #  - the run budget must still fit the enhance_match lease (the wizard refuses to
     #    persist llm_enabled=True when it doesn't, but the env budget can change AFTER
     #    a True row is written while env llm_enabled is off, so the startup validator
@@ -231,17 +238,18 @@ def apply_run_preferences(
     # All three are honest no-ops (enhancement is best-effort): warn and proceed with
     # llm=None rather than failing — or, for the URL case, poison-looping — the run.
     budget_ok = llm_budget_fits_stage_lease(settings)
-    # Strip before the presence check so a whitespace-only key reads as absent —
-    # matching the wizard's own check (setup_wizard.validate_llm_enable), so the two
-    # never disagree on whether a key is set.
-    key_present = bool(settings.llm_api_key.strip())
+    # The caller already resolved the effective key (row wins over env) and stripped
+    # it; a whitespace-only key resolves to "" and reads as absent — matching the
+    # wizard's own check (setup_wizard.validate_llm_enable), so the two never
+    # disagree on whether a key is set.
+    key_present = bool(llm_api_key)
     llm: LLMClient | None = None
     if prefs.llm_enabled and key_present and budget_ok:
         try:
             llm = HttpLLMClient(
                 prefs.llm_base_url,
                 prefs.llm_model,
-                settings.llm_api_key,
+                llm_api_key,
                 settings.llm_timeout_seconds,
             )
         except (httpx.InvalidURL, httpx.HTTPError) as exc:
@@ -260,8 +268,9 @@ def apply_run_preferences(
             llm = None
     elif prefs.llm_enabled and not key_present:
         logger.warning(
-            "LLM enhancement is enabled but LLM_API_KEY is unset; "
-            "proceeding with enhancement disabled for this run."
+            "LLM enhancement is enabled but no API key is configured (neither a "
+            "UI-stored key nor env LLM_API_KEY); proceeding with enhancement "
+            "disabled for this run."
         )
     elif prefs.llm_enabled and not budget_ok:
         logger.warning(

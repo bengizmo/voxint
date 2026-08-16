@@ -12,9 +12,55 @@ from datetime import UTC, datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from voxint.config import Settings
 from voxint.db.models import AppSettings, PipelineRun
 
 SINGLETON_ID = 1
+
+
+def resolve_effective_llm_api_key(row: AppSettings | None, settings: Settings) -> str:
+    """Effective LLM API key: a non-blank row value WINS, else env ``LLM_API_KEY``.
+
+    Returns the canonical stripped key (surrounding whitespace trimmed); ``""``
+    means "no key configured anywhere". This is the SINGLE source of the
+    DB-row-wins-over-env precedence (issue #10) — every LLM client construction
+    (transcript enhancement, the enrichment producers, ``voxint doctor``) resolves
+    the key through here, so a UI-stored key reaches them all and none can drift
+    onto an env-only path. The result is a credential: never log, render, or export
+    it (see the :class:`~voxint.db.models.AppSettings` docstring).
+    """
+    stored = (row.llm_api_key or "").strip() if row is not None else ""
+    return stored or settings.llm_api_key.strip()
+
+
+def resolve_effective_llm_endpoint(
+    row: AppSettings | None, settings: Settings
+) -> tuple[str, str]:
+    """Effective ``(base_url, model)``: a non-blank row value wins, else the env
+    default. Non-secret — the shared source for the wizard, the per-run preference
+    snapshot (:func:`voxint.pipeline.stages.context.resolve_run_preferences`), and
+    the enrichment paths, so they can never disagree on the effective endpoint.
+    """
+    base_url = (
+        row.llm_base_url if row is not None and row.llm_base_url else settings.llm_base_url
+    )
+    model = row.llm_model if row is not None and row.llm_model else settings.llm_model
+    return base_url, model
+
+
+def effective_llm_key_source(row: AppSettings | None, settings: Settings) -> str:
+    """Where the effective key comes from, for honest UI copy — never its value.
+
+    ``"stored"`` iff the ROW value is non-blank (so the operator sees that a
+    UI-saved key is in force); else ``"environment"`` when env ``LLM_API_KEY`` is
+    set; else ``"none"``. Mirrors :func:`resolve_effective_llm_api_key`'s precedence
+    so the status shown and the key actually used never disagree.
+    """
+    if row is not None and (row.llm_api_key or "").strip():
+        return "stored"
+    if settings.llm_api_key.strip():
+        return "environment"
+    return "none"
 
 
 def get_app_settings(session: Session) -> AppSettings | None:

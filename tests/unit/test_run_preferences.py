@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+from voxint.app_settings import resolve_effective_llm_api_key
 from voxint.config import Settings
 from voxint.db.models import AppSettings
 from voxint.pipeline.stages.context import (
@@ -107,7 +108,7 @@ def test_apply_unions_pack_and_user_vocab_order_preserving() -> None:
     prefs = resolve_run_preferences(
         AppSettings(id=1, vocabulary=["Shared", "User"]), make_settings()
     )
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="")
     assert ctx.vocabulary == ("Pack", "Shared", "User")
 
 
@@ -116,7 +117,7 @@ def test_apply_renders_vocab_into_enhancement_context() -> None:
     prefs = resolve_run_preferences(
         AppSettings(id=1, vocabulary=["Alpha", "Beta"]), make_settings()
     )
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="")
     assert ctx.enhancement_context.startswith("PACK-FRAGMENT")
     assert "Alpha, Beta" in ctx.enhancement_context
 
@@ -124,14 +125,14 @@ def test_apply_renders_vocab_into_enhancement_context() -> None:
 def test_apply_empty_vocab_leaves_enhancement_context_untouched() -> None:
     base = make_base_ctx(vocabulary=(), enhancement_context="PACK-FRAGMENT")
     prefs = resolve_run_preferences(None, make_settings())
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="")
     assert ctx.enhancement_context == "PACK-FRAGMENT"
 
 
 def test_apply_enables_llm_when_prefs_enabled_and_key_present() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
-    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="sk-test")
     assert ctx.llm is not None
 
 
@@ -139,19 +140,21 @@ def test_apply_disables_llm_without_key_and_warns(caplog: pytest.LogCaptureFixtu
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key=""), prefs)
+        ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="")
     assert ctx.llm is None
-    assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
+    assert any("no API key is configured" in r.message for r in caplog.records)
 
 
 def test_apply_no_row_enabled_without_key_disables_llm() -> None:
     # No app_settings row + env LLM enabled but no key → honest no-op (llm=None),
     # not an unusable client. (The one intentional refinement over the pre-wizard
-    # path, which used to construct an enabled-but-keyless client.)
+    # path, which used to construct an enabled-but-keyless client.) The effective
+    # key the worker would resolve from (no row, empty env) is "".
     base = make_base_ctx()
     settings = make_settings(llm_enabled=True, llm_api_key="")
     prefs = resolve_run_preferences(None, settings)
-    ctx = apply_run_preferences(base, settings, prefs)
+    key = resolve_effective_llm_api_key(None, settings)
+    ctx = apply_run_preferences(base, settings, prefs, llm_api_key=key)
     assert ctx.llm is None
 
 
@@ -173,7 +176,7 @@ def test_apply_disables_llm_when_budget_exceeds_lease(
     )
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, settings, prefs)
+        ctx = apply_run_preferences(base, settings, prefs, llm_api_key="sk-test")
     assert ctx.llm is None
     assert any("lease" in r.message for r in caplog.records)
 
@@ -181,15 +184,19 @@ def test_apply_disables_llm_when_budget_exceeds_lease(
 def test_apply_disables_llm_when_key_is_whitespace(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # A whitespace-only key must read as absent (matching the wizard's stripped
-    # check), so enhancement degrades to llm=None rather than building a client with
-    # an unusable key.
+    # A whitespace-only key must read as absent so enhancement degrades to llm=None
+    # rather than building a client with an unusable key. The stripping now lives in
+    # resolve_effective_llm_api_key (the single precedence source); this exercises the
+    # resolver → apply path end to end so the guarantee cannot silently regress.
     base = make_base_ctx()
-    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
+    settings = make_settings(llm_api_key="   ")
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
+    key = resolve_effective_llm_api_key(AppSettings(id=1, llm_api_key="   "), settings)
+    assert key == ""
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key="   "), prefs)
+        ctx = apply_run_preferences(base, settings, prefs, llm_api_key=key)
     assert ctx.llm is None
-    assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
+    assert any("no API key is configured" in r.message for r in caplog.records)
 
 
 def test_apply_disables_llm_when_client_construction_raises(
@@ -206,7 +213,7 @@ def test_apply_disables_llm_when_client_construction_raises(
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+        ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="sk-test")
     assert ctx.llm is None
     assert any("could not be built" in r.message for r in caplog.records)
 
@@ -214,14 +221,14 @@ def test_apply_disables_llm_when_client_construction_raises(
 def test_apply_disables_llm_when_prefs_disabled() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=False), make_settings())
-    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="sk-test")
     assert ctx.llm is None
 
 
 def test_apply_preserves_transport_clients() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(None, make_settings())
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, llm_api_key="")
     assert ctx.asr is base.asr
     assert ctx.diarizer is base.diarizer
     assert ctx.embedder is base.embedder
