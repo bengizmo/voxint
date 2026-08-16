@@ -23,9 +23,12 @@
    console has. Islands are leaf nodes htmx does not swap. #}
 <div data-island="transcript-player" data-props='{{ island_props|tojson }}'>
   {% for ln in lines %}
-  <p class="preview">
+  {% set idx = palette.get(ln.diarization_label) %}
+  <p class="preview tp-line{% if idx is not none %} spk-{{ idx }}{% endif %}">
     <span class="t">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}]</span>
-    <strong>{{ ln.speaker }}:</strong> {{ ln.text }}
+    {% if ln.diarization_label %}<span class="spk-badge">{{ ln.diarization_label }}</span>{% endif %}
+    {% if ln.speaker != ln.diarization_label %}<strong>{{ ln.speaker }}:</strong>{% endif %}
+    {{ ln.text }}
   </p>
   {% endfor %}
 </div>

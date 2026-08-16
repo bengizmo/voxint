@@ -481,6 +481,28 @@ subsystem and adds no page routing.
   "Preview this speaker" seeks a clean `DiarizationTurn` (longest non-overlap,
   fallback longest) — never the longest transcript segment, which carries only a
   dominant-overlap label and can contain other voices.
+- **Follow-along highlight + per-speaker colors (issues #50/#47).** The
+  `transcript-player` island keeps the active line in view as playback advances:
+  a callback ref on the active `<p>` plus a `scrollIntoView({ block: "nearest" })`
+  (never smooth, and it **never moves DOM focus**). Following is a boolean that
+  starts on; a single passive `window` `scroll` listener flips it off on any
+  manual scroll (wheel/touch/keyboard/scrollbar all emit real scroll events). A
+  short **programmatic-scroll guard** (a `performance.now()` timestamp armed
+  before each auto-scroll) makes the listener ignore the events the auto-scroll
+  itself emits, so following isn't self-cancelled. The lone **"Resume following"**
+  control renders only while paused-from-following, next to the speed control;
+  clicking it re-enables following and re-centers the active line. No always-on
+  checkbox, no status dot. Per-speaker **identity color** is assigned by the pure
+  `api/speaker_colors.py` `speaker_palette()`: a deterministic, order-independent
+  map from the run's **canonical label universe** (`label_states`) to curated
+  palette indices `[0, 8)`. Both the transcript route and `_workbench_context`
+  derive the palette from that same universe, so a label's color agrees across
+  the transcript page, the JS-off fallback, and the workbench label cards. The
+  color is rendered identically on every surface as a `spk-N` class → a CSS
+  left-border accent (light/dark variants in `base.html`), and it is
+  **supplemental only**: a raw-label badge (`.spk-badge`) is the primary,
+  non-color identity cue everywhere (accessibility — never color alone), which
+  also disambiguates the palette's by-design repeat past eight speakers.
 
 ## Worker orchestration (P3)
 

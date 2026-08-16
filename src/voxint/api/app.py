@@ -113,6 +113,7 @@ from voxint.api.setup_wizard import (
     scan_media_folders,
     validate_llm_enable,
 )
+from voxint.api.speaker_colors import speaker_palette
 from voxint.api.stats_query import (
     DEFAULT_WINDOW,
     collect_stats,
@@ -754,6 +755,10 @@ def _workbench_context(
         "request": request,
         "run": run,
         "states": states,
+        # Per-speaker identity color (issue #50): one canonical map keyed on the
+        # raw label, derived from the SAME `states` universe the transcript page
+        # uses, so a label's color never drifts between the two surfaces.
+        "palette": speaker_palette(s.label for s in states),
         "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
         # Island props for the workbench-player (mounted OUTSIDE #labels). It owns
         # the <audio>, the speed control, the visible capability banner, and the
@@ -1758,6 +1763,12 @@ def _register_routes(app: FastAPI) -> None:
         # Fail-closed seek gating (issue #55): the island only offers per-line
         # playback when GET /media would truly serve and the timeline is sound.
         capability = playback_capability(session, run, settings, _get_media_gate(request))
+        # Per-speaker identity color (issue #50): derive the palette from the run's
+        # canonical label universe (`label_states`) — the SAME universe the
+        # workbench card uses — so a label's color agrees across both surfaces and
+        # the JS-off fallback matches the hydrated island. One extra cheap query,
+        # kept explicit so the shared universe is provable at the call site.
+        palette = speaker_palette(st.label for st in label_states(session, run_id))
         island_props = {
             "runId": str(run_id),
             "mediaUrl": f"/media/{run_id}",
@@ -1768,6 +1779,14 @@ def _register_routes(app: FastAPI) -> None:
                     "end": ln.end_seconds,
                     "speaker": ln.speaker,
                     "text": ln.text,
+                    "label": ln.diarization_label,
+                    # None short-circuits (palette is keyed on real labels only);
+                    # keeps mypy happy without changing the value (get(None) → None).
+                    "paletteIndex": (
+                        palette.get(ln.diarization_label)
+                        if ln.diarization_label is not None
+                        else None
+                    ),
                 }
                 for ln in lines
             ],
@@ -1780,6 +1799,7 @@ def _register_routes(app: FastAPI) -> None:
                 "run": run,
                 "lines": lines,
                 "island_props": island_props,
+                "palette": palette,
                 "text": variant,
                 "variants": list(TranscriptText),
                 "active_nav": "runs",

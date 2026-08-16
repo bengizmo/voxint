@@ -71,7 +71,7 @@
 {% endif %}
 
 {% for s in states %}
-<div class="label-card">
+<div class="label-card{% set idx = palette.get(s.label) %}{% if idx is not none %} spk-{{ idx }}{% endif %}">
   <h2>
     {{ s.label }}
     {% if s.resolution.value == "unresolved" %}

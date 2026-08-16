@@ -32,6 +32,7 @@ class TranscriptLine:
     end_seconds: float
     speaker: str
     text: str
+    diarization_label: str | None = None  # raw label (identity key for #50 colors)
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -81,6 +82,7 @@ def attributed_transcript(
                 end_seconds=seg.end_seconds,
                 speaker=display_name(states.get(seg.diarization_label or ""), seg),
                 text=body,
+                diarization_label=seg.diarization_label,
             )
         )
     return lines

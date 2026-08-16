@@ -83,6 +83,20 @@
       cursor: pointer; font-size: .9rem; opacity: .8; }
     .embedding-row { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap;
                      padding: .25rem 0; font-size: .9rem; }
+    /* Per-speaker identity accent (issue #50) — supplemental to the raw-label text. */
+    .tp-line { border-left: 3px solid var(--spk-accent, transparent); padding-left: .5rem; }
+    .label-card { border-left: .35rem solid var(--spk-accent, #8886); }
+    .spk-badge { font-size: .72rem; font-variant-numeric: tabular-nums; opacity: .7;
+                 border: 1px solid #8886; border-radius: .5rem; padding: 0 .35rem;
+                 margin-right: .4rem; white-space: nowrap; }
+    .spk-0{--spk-accent:#0969da} .spk-1{--spk-accent:#bc4c00} .spk-2{--spk-accent:#1a7f37}
+    .spk-3{--spk-accent:#8250df} .spk-4{--spk-accent:#1b7c83} .spk-5{--spk-accent:#bf3989}
+    .spk-6{--spk-accent:#7d4e00} .spk-7{--spk-accent:#cf222e}
+    @media (prefers-color-scheme: dark) {
+      .spk-0{--spk-accent:#58a6ff} .spk-1{--spk-accent:#ec8e2c} .spk-2{--spk-accent:#3fb950}
+      .spk-3{--spk-accent:#bc8cff} .spk-4{--spk-accent:#39c5cf} .spk-5{--spk-accent:#f778ba}
+      .spk-6{--spk-accent:#d29922} .spk-7{--spk-accent:#ff7b72}
+    }
   </style>
 </head>
 <body>

@@ -6,6 +6,7 @@ rendering + error mapping.
 """
 
 import html
+import json
 import re
 import uuid
 from collections.abc import Iterable
@@ -620,14 +621,100 @@ def test_transcript_attribution_and_export_agree(
     assert s0_name in body  # GROUNDED_COSINE
     assert "(excluded) S1" in body  # HUMAN_EXCLUDE
     assert "Unknown (S2)" in body  # HUMAN_UNKNOWN
-    assert "S3:" in body  # UNRESOLVED → bare label
-    assert "GHOST:" in body  # segment label with no turn → state None
-    assert "(no speaker)" in body  # NULL diarization label
+    # UNRESOLVED and no-turn labels attribute to the bare label; the #50 markup
+    # shows it once, via the raw-label badge, and suppresses the duplicate
+    # "<strong>label:</strong>" (speaker == raw label).
+    assert '<span class="spk-badge">S3</span>' in body  # UNRESOLVED → bare label
+    assert '<span class="spk-badge">GHOST</span>' in body  # no turn → state None
+    assert "(no speaker)" in body  # NULL diarization label (no badge, keeps strong)
 
     # Shared presenter: export.txt attributes every label identically.
     export = client.get(f"/review/{run_id}/export.txt").text
     for speaker in (s0_name, "(excluded) S1", "Unknown (S2)", "(no speaker)"):
         assert speaker in export
+
+
+def _island_props(body: str) -> dict[str, Any]:
+    """Parse the transcript-player island's server-rendered `data-props` JSON.
+
+    The template writes ``data-props='{{ island_props|tojson }}'``; Jinja's
+    ``tojson`` escapes ``<>&'`` to \\uXXXX, so no literal single quote appears
+    inside the attribute value and a greedy-to-first-quote match is safe.
+    """
+    match = re.search(r"data-props='([^']*)'", body)
+    assert match is not None, "island mount node missing"
+    return json.loads(html.unescape(match.group(1)))
+
+
+def test_transcript_island_props_carry_palette_and_label(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Issue #50: island segments carry the raw `label` + a `paletteIndex` so the
+    # hydrated island colors lines identically to the JS-off fallback.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            segments=[
+                ("S0", "s0 raw", "s0 enh"),
+                ("S1", "s1 raw", "s1 enh"),
+            ],
+        )
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    props = _island_props(body)
+    segments = props["segments"]
+    assert [s["label"] for s in segments] == ["S0", "S1"]
+    # Sorted-positional assignment over the canonical universe {S0, S1}.
+    assert [s["paletteIndex"] for s in segments] == [0, 1]
+
+
+def test_transcript_fallback_lines_carry_color_class_and_badge(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Issue #50: the JS-off fallback markup shows the same color class + raw-label
+    # badge as the hydrated island (progressive-enhancement parity).
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            segments=[
+                ("S0", "s0 raw", "s0 enh"),
+                ("S1", "s1 raw", "s1 enh"),
+            ],
+        )
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    assert "spk-0" in body
+    assert "spk-1" in body
+    # Raw-label badge: the shared non-color identity cue.
+    assert '<span class="spk-badge">S0</span>' in body
+    assert '<span class="spk-badge">S1</span>' in body
+
+
+def test_transcript_same_label_same_color_class(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Issue #50: every line of the SAME diarization label gets the SAME spk-N
+    # class — color is per-identity, deterministic, not per-line.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            segments=[
+                ("S0", "first s0", "first s0"),
+                ("S1", "a s1", "a s1"),
+                ("S0", "second s0", "second s0"),
+            ],
+        )
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    # Pull the spk-N class off each fallback <p class="preview tp-line ...">.
+    classes = re.findall(r'class="preview tp-line spk-(\d+)"', body)
+    assert len(classes) == 3
+    # Two S0 lines (indices 0 and 2) share a class; the S1 line differs.
+    assert classes[0] == classes[2]
+    assert classes[0] != classes[1]
 
 
 def test_transcript_unknown_text_is_422(

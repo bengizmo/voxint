@@ -4,6 +4,7 @@ Real Postgres (migrated), real templates, real ffprobe on a real WAV.
 """
 
 import io
+import re
 import uuid
 import wave
 from pathlib import Path
@@ -464,3 +465,44 @@ def test_metrics_endpoint_renders_prometheus(
     assert 'voxint_runs{status="failed"} 0' in body  # zero-filled, never absent
     assert 'voxint_roster_speakers 1' in body
     assert body.endswith("\n")
+
+
+def _label_card_colors(body: str) -> dict[str, int]:
+    """Map each label to its `.label-card` palette index in the workbench HTML."""
+    pairs = re.findall(
+        r'class="label-card(?: spk-(\d+))?">\s*<h2>\s*(\w+)', body
+    )
+    return {label: int(idx) for idx, label in pairs if idx}
+
+
+def _transcript_line_colors(body: str) -> dict[str, int]:
+    """Map each label to its transcript fallback-line palette index."""
+    pairs = re.findall(
+        r'class="preview tp-line spk-(\d+)">\s*<span class="t">[^<]*</span>\s*'
+        r'<span class="spk-badge">(\w+)</span>',
+        body,
+    )
+    return {label: int(idx) for idx, label in pairs}
+
+
+def test_workbench_and_transcript_agree_on_speaker_color(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #50: color is derived from ONE canonical per-run label universe, so a
+    # label's `.label-card` accent on the workbench matches its transcript line's
+    # accent for the same run. This is the cross-surface agreement invariant.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+
+    workbench = client.get(f"/review/{run_id}", params={"token": token}).text
+    transcript = client.get(
+        f"/runs/{run_id}/transcript", params={"text": "raw"}
+    ).text
+
+    card_colors = _label_card_colors(workbench)
+    line_colors = _transcript_line_colors(transcript)
+    # Both surfaces resolved S0 and S1 to a color...
+    assert set(card_colors) == {"S0", "S1"} == set(line_colors)
+    # ...and they agree label-for-label (no drift between independent renders).
+    assert card_colors == line_colors

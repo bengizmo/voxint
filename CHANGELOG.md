@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Follow-along highlight + per-speaker colors** (#50, #47): the transcript
+  player now keeps the currently-playing line in view as playback advances
+  (scroll-into-view, no smooth animation, no focus stealing). Following starts
+  on and stops the moment the operator scrolls by any means (wheel, touch,
+  keyboard, scrollbar); a single **"Resume following"** control — shown only
+  while paused-from-following — turns it back on and re-centers the active line.
+  A programmatic-scroll guard keeps the auto-scroll from being misread as a
+  manual take-over. Each speaker also gets a **deterministic identity color**,
+  assigned from one canonical per-run label universe so the transcript page, the
+  JS-off fallback, and the workbench label cards all agree for the same label.
+  Color is **supplemental only**: a raw-label badge is the primary, non-color
+  identity cue on every surface (never color alone), and the curated,
+  contrast-verified 8-color palette repeats past eight speakers by design, with
+  the badge disambiguating repeats. The palette lives in CSS with light/dark
+  variants.
 - **Per-turn audio playback + honest seek gating** (#49, #55): the review
   console can now play just one transcript line, or preview a single speaker,
   from both the transcript page and the workbench. On transcript.html the
