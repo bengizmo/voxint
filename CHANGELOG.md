@@ -20,7 +20,27 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   an already-cancelled run is an idempotent success. Cancel leaves media and
   partial results in place — **delete/archive is a separate, not-yet-built action**.
 
+### Changed
+- **`LLM_TIMEOUT_SECONDS` default raised 90 s → 300 s**: entity-mention
+  extraction on a local ~35B model routinely needs 180–300 s per call, so the
+  old default made run assets fail on exactly the self-hosted local-model
+  deployments Voxint targets. Cloud endpoints are unaffected on healthy
+  connections (they answer in seconds; connection establishment keeps its own
+  short cap). New `docs/operations.md` section covers the trade-off (slower
+  hung-endpoint detection), proxy-side ceilings the client timeout cannot
+  override (LiteLLM's 180 s backend default → HTTP 408), and sizing
+  `RESEARCH_DEADLINE_SECONDS` for slow local models.
+
 ### Fixed
+- **Research jobs run under their snapshotted LLM timeout**: the worker's
+  LLM client was built from live settings while the cancel path's
+  stale-RUNNING bound used the job's enqueue-time snapshot, so a settings
+  change between enqueue and execution could force-cancel a still-live
+  request. Both sides now read the snapshot through one helper (falling back
+  to the shared default for pre-0.11 snapshots — the hard-coded `90.0`
+  fallbacks in both job modules are gone). The stale bound also now allows
+  **two** post-deadline LLM calls (the forced conclude plus its single repair
+  attempt) instead of one, matching what the research loop legitimately does.
 - **Research-job finalization guards** (#40 follow-up): `research_jobs`
   now carries the same terminal-state protections `run_asset_jobs` shipped
   with in 0.12.0. The success stamp refuses a job with a cancel pending (a

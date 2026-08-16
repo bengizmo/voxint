@@ -14,7 +14,7 @@ forever); its failure semantics reflect that:
 
 | Bound | Setting | Default |
 |---|---|---|
-| Per-attempt timeout | `LLM_TIMEOUT_SECONDS` | 90 s |
+| Per-attempt timeout | `LLM_TIMEOUT_SECONDS` | 300 s |
 | Attempts per batch | `LLM_ATTEMPTS_PER_BATCH` | 2 |
 | Batch size | `LLM_BATCH_MAX_SEGMENTS` / `LLM_BATCH_MAX_CHARS` | 32 / 12 000 |
 | Per-run wall-clock budget | `LLM_RUN_BUDGET_SECONDS` | 4 h |

@@ -23,7 +23,7 @@ from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import ResearchJob, ResearchJobStatus
 from voxint.enrichment.producers.web_researcher import (
     WebResearcherError,
@@ -157,8 +157,24 @@ def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
 
 
 # Grace a provably-dead RUNNING job gets past its deadline before the operator
-# may force-cancel it: one in-flight LLM call is the only legitimate overrun.
+# may force-cancel it. The deadline is checked between rounds, and the forced
+# conclude gets its own single repair attempt (research.agent._round_reply),
+# so two post-deadline LLM calls are legitimate — the stale bound allows both.
+# A round already in flight when the deadline trips can stretch further still;
+# a misfire on such a job resolves safely (the finalize CAS turns its late
+# outcome into CANCELLED — the state the operator asked for anyway).
 STALE_RUNNING_GRACE_SECONDS = 60.0
+
+
+def _snapshot_llm_timeout(budget: dict[str, Any]) -> float:
+    """The per-attempt LLM timeout frozen onto the job at enqueue.
+
+    Both the stale-RUNNING bound and the worker's client construction read it
+    through here, so cancellation always reasons about the timeout the job
+    actually runs under — never live settings changed since enqueue. The
+    fallback covers pre-0.11 snapshots written before the key existed."""
+    raw = budget.get("llm_timeout_seconds")
+    return float(raw) if isinstance(raw, (int, float)) else DEFAULT_LLM_TIMEOUT_SECONDS
 
 
 def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
@@ -167,9 +183,10 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     One guarded UPDATE sets the flag and resolves QUEUED outright (its delivery
     will fail the claim and no-op); a RUNNING loop observes the flag between
     rounds. A RUNNING job that provably outlived its own wall-clock budget
-    (deadline + one LLM timeout + grace) has no live loop left to observe
-    anything — cancel it outright so a worker crash cannot block the speaker
-    forever. The caller commits."""
+    (deadline + two LLM timeouts + grace — the forced conclude plus its single
+    repair attempt) has no live loop left to observe anything — cancel it
+    outright so a worker crash cannot block the speaker forever. The caller
+    commits."""
     flagged = cast(
         CursorResult[Any],
         session.execute(
@@ -203,10 +220,9 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     ).one()
     if status == ResearchJobStatus.RUNNING.value and started_at is not None:
         deadline = budget.get("deadline_seconds")
-        llm_timeout = budget.get("llm_timeout_seconds")
         bound = (
             float(deadline if isinstance(deadline, (int, float)) else 300.0)
-            + float(llm_timeout if isinstance(llm_timeout, (int, float)) else 90.0)
+            + 2 * _snapshot_llm_timeout(budget)
             + STALE_RUNNING_GRACE_SECONDS
         )
         # DB clock on BOTH sides: started_at was stamped with now() at claim,
@@ -320,11 +336,15 @@ def execute_job(
         owned_client: HttpLLMClient | None = None
         client: ChatJsonClient
         if llm is None:
+            # The snapshotted timeout, not the live one: request_cancel's
+            # stale-RUNNING bound is computed from the snapshot, so the client
+            # must run under the same value or a settings change between
+            # enqueue and execution could force-cancel a still-live request.
             owned_client = HttpLLMClient(
                 settings.llm_base_url,
                 settings.llm_model,
                 settings.llm_api_key,
-                settings.llm_timeout_seconds,
+                _snapshot_llm_timeout(job.budget),
             )
             client = owned_client
         else:

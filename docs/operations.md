@@ -558,6 +558,40 @@ persistent random value
 random per-process secret is used, which invalidates open forms on restart and
 mismatches across multiple workers.
 
+### LLM endpoint timeouts — local models and proxies
+
+Everything LLM-backed (transcript enhancement, the name pass, run assets,
+web research) shares one per-attempt timeout, `LLM_TIMEOUT_SECONDS`
+(default 300 s). The default is sized for **local models**: on maintainer
+hardware, entity-mention extraction with a ~35B model routinely takes
+180–300 s per call, and shorter timeouts made the default configuration fail
+for exactly the self-hosted deployments this project targets. Cloud
+endpoints answer in seconds and never wait out the timeout on a healthy
+connection (connection establishment has its own short cap, so an
+unreachable endpoint still fails fast). What the generous default does cost:
+an endpoint that accepts connections but hangs mid-response is detected
+slowly — for transcript enhancement the worst case before the circuit
+breaker stops calling is `LLM_CONSECUTIVE_FAILURE_LIMIT ×
+LLM_ATTEMPTS_PER_BATCH × LLM_TIMEOUT_SECONDS` (30 minutes at the defaults).
+If you only use a fast cloud endpoint, lowering `LLM_TIMEOUT_SECONDS` tightens
+that.
+
+Two ceilings the client timeout **cannot** override:
+
+- **A proxy in front of your endpoint.** LiteLLM's backend request timeout
+  defaults to **180 s** and returns HTTP 408 when a call exceeds it,
+  regardless of what Voxint is configured to wait. If long local-model calls
+  fail with 408 despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own
+  limit (`request_timeout` in LiteLLM config). The effective limit is always
+  the *lower* of the client timeout and every proxy/backend ceiling between
+  Voxint and the model.
+- **The web-research deadline.** `RESEARCH_DEADLINE_SECONDS` (default 300 s)
+  is checked between model calls, never mid-call — a single slow local-model
+  call can consume most of it, leaving the researcher one round before it is
+  forced to conclude. With a local model in the 180–300 s-per-call range,
+  raise the deadline to several multiples of your typical call time if you
+  want multi-round research.
+
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your

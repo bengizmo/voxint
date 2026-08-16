@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import RunAssetJob, RunAssetJobStatus, RunAssetKind
 from voxint.enrichment.producers.run_assets_llm import (
     CONFIG_SCHEMA_VERSION,
@@ -220,7 +220,7 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     if status == RunAssetJobStatus.RUNNING.value and started_at is not None:
         timeout = config.get("llm_timeout_seconds")
         bound = (
-            float(timeout if isinstance(timeout, (int, float)) else 90.0)
+            float(timeout if isinstance(timeout, (int, float)) else DEFAULT_LLM_TIMEOUT_SECONDS)
             + STALE_RUNNING_GRACE_SECONDS
         )
         # DB clock on BOTH sides: started_at was stamped with now() at claim,

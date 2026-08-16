@@ -33,6 +33,16 @@ ACQUIRE_CLEANUP_MARGIN_SECONDS = 300.0
 # stage mid-persist and a second worker re-executes it (docs/timeouts-and-leases.md).
 GPU_CALL_PERSISTENCE_MARGIN_SECONDS = 600.0
 
+# Per-attempt LLM timeout default, shared with the enrichment job modules'
+# legacy-snapshot fallbacks (research_jobs / asset_jobs) so a job snapshot
+# missing the key can never drift from the runtime default. 300 s reflects
+# measured need: entity-mention extraction on a local ~35B model routinely
+# takes 180-300 s per call, and 90 s made the default configuration fail for
+# exactly the self-hosted deployments this project targets. Cloud endpoints
+# answer in seconds regardless; connection establishment stays on its own
+# short cap, so unreachable endpoints still fail fast.
+DEFAULT_LLM_TIMEOUT_SECONDS = 300.0
+
 # The CPU tier's scaling factor over the GPU-tier timing defaults. CPU
 # inference for these models is roughly 5-20x slower than GPU depending on
 # stage and cores; 4x on top of the already-generous GPU defaults (which carry
@@ -180,7 +190,7 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str = ""
-    llm_timeout_seconds: PositiveSeconds = 90.0  # per attempt (read/write)
+    llm_timeout_seconds: PositiveSeconds = DEFAULT_LLM_TIMEOUT_SECONDS  # per attempt (read/write)
     llm_attempts_per_batch: int = Field(default=2, ge=1)
     llm_batch_max_segments: int = Field(default=32, ge=1)
     llm_batch_max_chars: int = Field(default=12000, ge=1)

@@ -507,6 +507,89 @@ def test_stale_cutoff_uses_db_clock_not_app_clock(
     assert job_row.cancel_requested is True
 
 
+def test_stale_bound_allows_the_forced_conclude_repair_call(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Regression for the widened stale bound: past deadline + ONE llm timeout
+    the loop may still legitimately be alive (the forced conclude gets its own
+    single repair attempt), so cancel must only set the cooperative flag."""
+    from datetime import UTC, datetime, timedelta
+
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()  # deadline 300 s, llm timeout 300 s
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    with session_factory() as session:
+        assert claim_job(session, job_id) is not None
+    # Past the old one-timeout bound (300 + 300 + 60 = 660) but inside the
+    # honest two-timeout bound (300 + 600 + 60 = 960).
+    with session_factory() as session:
+        row = session.get(ResearchJob, job_id)
+        assert row is not None
+        row.created_at = datetime.now(tz=UTC) - timedelta(seconds=800)
+        row.started_at = datetime.now(tz=UTC) - timedelta(seconds=700)
+        session.commit()
+    with session_factory() as session:
+        assert request_cancel(session, job_id) is True
+        session.commit()
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.RUNNING.value  # flag only
+    assert job_row.cancel_requested is True
+
+
+def test_worker_client_uses_the_snapshotted_llm_timeout(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """request_cancel's stale bound reasons from the enqueue-time snapshot, so
+    the worker's own client must run under the same timeout — never live
+    settings changed since enqueue."""
+    import voxint.enrichment.research_jobs as research_jobs_module
+    from voxint.clients.llm import LLMError
+
+    recorded: list[float] = []
+
+    class _RecordingClient:
+        def __init__(self, base_url: str, model: str, api_key: str, timeout: float) -> None:
+            recorded.append(timeout)
+
+        def chat_json(self, messages: object) -> dict[str, object]:
+            raise LLMError("connect: injected transport failure")
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(research_jobs_module, "HttpLLMClient", _RecordingClient)
+    speaker_id = seed_speaker(session_factory)
+    approved = research_settings(llm_timeout_seconds=123.0)
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=approved)
+        job_id = job.id
+        session.commit()
+    execute_job(
+        session_factory,
+        job_id,
+        settings=research_settings(llm_timeout_seconds=456.0),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    assert recorded == [123.0]
+    assert get_job(session_factory, job_id).status == ResearchJobStatus.FAILED.value
+
+
+def test_snapshot_llm_timeout_falls_back_to_the_shared_default() -> None:
+    """A pre-0.11 snapshot without the key gets the SAME default the runtime
+    uses — the old hard-coded 90.0 could drift from the settings default."""
+    from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS
+    from voxint.enrichment.research_jobs import _snapshot_llm_timeout
+
+    assert _snapshot_llm_timeout({}) == DEFAULT_LLM_TIMEOUT_SECONDS
+    assert _snapshot_llm_timeout({"llm_timeout_seconds": 42}) == 42.0
+    assert _snapshot_llm_timeout({"llm_timeout_seconds": "bad"}) == DEFAULT_LLM_TIMEOUT_SECONDS
+
+
 class _ForceCancelThenGarbage:
     """Force-cancels the job (backdate → stale-RUNNING cancel) during the LLM
     call, then feeds garbage so the worker reaches its FAILED verdict against
