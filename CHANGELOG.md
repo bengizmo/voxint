@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-16
+
 ### Added
 - **Console run cancellation** (#5): a Cancel button on the run detail page for
   any *live* run (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), backed by a new
@@ -799,7 +801,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/bengizmo/voxint/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/bengizmo/voxint/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/bengizmo/voxint/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/bengizmo/voxint/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bengizmo/voxint/compare/v0.8.0...v0.9.0
