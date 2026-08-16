@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 ## [Unreleased]
 
 ### Added
+- **In-console run/throughput dashboard** (#13): a new authenticated
+  `GET /dashboard` page (first in the top nav) renders the same aggregates
+  the Prometheus `/metrics` endpoint and `voxint stats` already expose —
+  runs by status, the review backlog (runs awaiting adjudication), per-stage
+  average timing and failure counts, roster size, and runs created in the
+  window — as a read-only HTML page for a human at the console. It reuses
+  `stats_query.collect_stats` verbatim (no new aggregation), so all three
+  surfaces agree. An `?since=` query param overrides the default 24 h
+  throughput window (same span/ISO-8601 syntax as `voxint stats --since`),
+  degrading to 24 h if malformed rather than erroring; the page auto-refreshes
+  every 15 s via an htmx fragment poll with no external assets.
 - **Run-level enrichment assets** (#41): on-demand LLM-generated **summary**,
   **topics**, and **entity mentions** per run — three independently
   versioned, independently failing whole-document assets, distinct from the

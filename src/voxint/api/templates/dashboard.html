@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Voxint — dashboard{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+<p class="muted">
+  Run health and throughput at a glance — the same figures as
+  <code>GET /metrics</code> and <code>voxint stats</code>, refreshed automatically.
+</p>
+{# The htmx poll re-requests /dashboard every 15s; the route answers the
+   HX-Request with just the fragment below, swapped into this container so the
+   page chrome and nav are untouched. The active ?since= is baked into the poll
+   URL so a custom window survives the refresh (htmx does not inherit the page's
+   query string). innerHTML swaps the contents, so this polling container — and
+   its hx-get — persists unchanged across polls. #}
+<div id="dashboard-metrics"
+     hx-get="/dashboard{% if since_param %}?since={{ since_param | urlencode }}{% endif %}"
+     hx-trigger="every 15s" hx-swap="innerHTML">
+  {% include "fragments/dashboard_metrics.html" %}
+</div>
+{% endblock %}
