@@ -452,6 +452,35 @@ subsystem and adds no page routing.
   via `readProps()` and call voxint's own routes through the shared
   `api-client.ts` `apiFetch`, whose `ApiError` mirrors FastAPI's `{detail}`
   shape — the seam #54/#55 consume for capability-aware responses.
+- **Per-turn playback + fail-closed seek gating (issues #49/#55).** Two islands
+  add "play this turn"/"preview this speaker" seeking. `transcript-player`
+  (transcript.html) is fully in-React: per-line ▶ buttons and click-to-seek call
+  the shared `lib/playback.ts` `playTurn`, which seeks + plays + stops at the
+  segment end via a rate-aware guard (a one-shot `timeupdate` check plus a
+  `setTimeout` fallback, so a coarse timeupdate can't overshoot into the next
+  voice) and holds exactly one cancellable active turn. `workbench-player`
+  (run.html) is the harder case: the per-turn buttons are **server-rendered
+  inside `#labels`**, which every adjudication ruling replaces via
+  `hx-swap="innerHTML"`. So the island mounts **outside `#labels`** (wrapping the
+  `<audio>`, which survives swaps) and drives those buttons with **document-level
+  event delegation**: one delegated `click` listener scoped to the current
+  `#labels`, plus an `htmx:afterSwap` listener filtered to `#labels` swaps that
+  re-runs an "enable pass". Buttons render `disabled` + `type="button"`
+  server-side (honest JS-off default, never submitting a form); the island
+  removes `disabled` only when seeking is safe. Both listeners are installed in a
+  single StrictMode-safe effect with symmetric cleanup.
+- **The fail-closed capability contract (issue #55).** `api/playback.py`'s
+  `playback_capability()` is the seek predicate: `seek_enabled` is true only when
+  the media is actually servable, the duration is finite and positive, every
+  transcript interval is well-formed, and no interval runs past `duration +
+  0.05s` (a fixed tolerance, absorbing float noise without scaling on long
+  files). It accumulates **every** applicable reason with plain-language messages
+  the islands show in a visible banner — never a bare tooltip. Media servability
+  reuses `resolve_servable_media()`, the **single seam** `GET /media` itself
+  calls, so capability can never advertise seeking while `/media` would 404/410.
+  "Preview this speaker" seeks a clean `DiarizationTurn` (longest non-overlap,
+  fallback longest) — never the longest transcript segment, which carries only a
+  dominant-overlap label and can contain other voices.
 
 ## Worker orchestration (P3)
 

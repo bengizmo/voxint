@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Per-turn audio playback + honest seek gating** (#49, #55): the review
+  console can now play just one transcript line, or preview a single speaker,
+  from both the transcript page and the workbench. On transcript.html the
+  `transcript-player` island grows per-line ▶ buttons and click-to-seek; on
+  run.html a new `workbench-player` island owns the `<audio>` and drives
+  server-rendered per-segment / "preview this speaker" buttons via
+  document-level event delegation that survives every htmx swap of the decision
+  cards. "Preview this speaker" seeks a clean diarization turn (longest
+  non-overlap, fallback longest), never the longest transcript segment (which
+  can contain other voices). A shared playback rate control (0.5×–2×) persists
+  in `localStorage`. Seeking is **fail-closed**: a new backend capability
+  predicate offers it only when the media is genuinely servable (reusing the
+  exact `GET /media` servability seam, so it can never diverge), the duration is
+  finite and positive, and every transcript timestamp is well-formed and inside
+  the recording (within a fixed 0.05s tail tolerance). When any check fails the
+  buttons stay disabled and a **visible banner** lists every reason in plain
+  language — no false affordance, and manual scrubbing still works with JS off.
 - **Frontend island foundation** (#48): prebuilt Vite/React/Tailwind bundles
   served through the auth-aware `/static/app` route (never a `StaticFiles`
   mount — the operator auth invariant stays absolute), a read-only audio-synced

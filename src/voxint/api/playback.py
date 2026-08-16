@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, BinaryIO
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.db.models import PipelineRun, TranscriptSegment
+from voxint.db.models import DiarizationTurn, PipelineRun, TranscriptSegment
 from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.media.serving import MediaGate, MediaNotServableError
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
@@ -176,6 +176,42 @@ def _transcript_intervals(session: Session, run_id: uuid.UUID) -> list[tuple[flo
         )
     ).all()
     return [(row[0], row[1]) for row in rows]
+
+
+def _turn_rank(t: DiarizationTurn) -> tuple[bool, float, float]:
+    # Prefer non-overlap, then longer, then earlier start (deterministic ties).
+    return (not t.overlap, t.end_seconds - t.start_seconds, -t.start_seconds)
+
+
+def representative_turns(
+    session: Session, run_id: uuid.UUID
+) -> dict[str, tuple[float, float]]:
+    """Per-label ``(start, end)`` of the turn best representing that speaker.
+
+    "Preview this speaker" must land on a CLEAN sample of the voice, so the
+    representative is the LONGEST diarization turn with ``overlap == False``. When
+    every turn for a label overlaps another speaker, fall back to the longest turn
+    outright (better a slightly-overlapped preview than none). A label with no
+    turns is absent from the result, so the template renders no preview button.
+
+    This deliberately uses ``DiarizationTurn`` — never the longest
+    ``TranscriptSegment`` — because a transcript segment carries only its
+    dominant-overlap label and can contain other voices, which is exactly the
+    wrong-voice harm #55 guards against.
+    """
+    turns = (
+        session.execute(
+            select(DiarizationTurn).where(DiarizationTurn.pipeline_run_id == run_id)
+        )
+        .scalars()
+        .all()
+    )
+    best: dict[str, DiarizationTurn] = {}
+    for turn in turns:
+        current = best.get(turn.label)
+        if current is None or _turn_rank(turn) > _turn_rank(current):
+            best[turn.label] = turn
+    return {label: (t.start_seconds, t.end_seconds) for label, t in best.items()}
 
 
 def playback_capability(

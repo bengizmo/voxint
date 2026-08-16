@@ -85,6 +85,7 @@ from voxint.api.health_probe import probe_services
 from voxint.api.playback import (
     MediaResolutionError,
     playback_capability,
+    representative_turns,
     resolve_servable_media,
 )
 from voxint.api.runs_query import (
@@ -731,6 +732,11 @@ def _workbench_context(
     # of the roster and must not attract new decisions.
     speakers = active_speakers(session)
     name_hints_run, name_hints_labels = _name_suggestions(session, run.id)
+    # Per-turn playback (issue #49) + fail-closed seek gating (issue #55). The
+    # workbench-player island (mounted OUTSIDE #labels) reads `capability` to
+    # enable/disable the server-rendered, htmx-swapped seek buttons; the buttons
+    # themselves carry the representative-turn timings for "preview this speaker".
+    capability = playback_capability(session, run, settings, _get_media_gate(request))
     return {
         "name_hints_run": name_hints_run,
         "name_hints_labels": name_hints_labels,
@@ -749,6 +755,17 @@ def _workbench_context(
         "run": run,
         "states": states,
         "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
+        # Island props for the workbench-player (mounted OUTSIDE #labels). It owns
+        # the <audio>, the speed control, the visible capability banner, and the
+        # document-delegated enabling of the server-rendered seek buttons.
+        "workbench_props": {
+            "runId": str(run.id),
+            "mediaUrl": f"/media/{run.id}",
+            "capability": capability.to_props(),
+        },
+        # Per-label representative turn (start, end) for the "preview this speaker"
+        # button — longest clean (non-overlap) DiarizationTurn, fallback longest.
+        "representative_turns": representative_turns(session, run.id),
         "speakers": speakers,
         "token": token,
         "resolution": Resolution,

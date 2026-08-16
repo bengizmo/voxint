@@ -27,6 +27,7 @@ from voxint.api.playback import (
     MediaUnservable,
     PlaybackCapability,
     playback_capability,
+    representative_turns,
     resolve_servable_media,
 )
 from voxint.media.serving import MediaNotServableError
@@ -316,3 +317,93 @@ def test_transcript_intervals_maps_rows() -> None:
         (0.0, 1.0),
         (1.0, 2.5),
     ]
+
+
+# --------------------------------------------------------------------------- #
+# representative_turns — clean per-label sample for "preview this speaker".
+# --------------------------------------------------------------------------- #
+def _turn(
+    label: str, start: float, end: float, *, overlap: bool = False
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        label=label, start_seconds=start, end_seconds=end, overlap=overlap
+    )
+
+
+class _Scalars:
+    def __init__(self, rows: list[SimpleNamespace]) -> None:
+        self._rows = rows
+
+    def all(self) -> list[SimpleNamespace]:
+        return self._rows
+
+
+class _TurnResult:
+    def __init__(self, rows: list[SimpleNamespace]) -> None:
+        self._rows = rows
+
+    def scalars(self) -> _Scalars:
+        return _Scalars(self._rows)
+
+
+class _TurnSession:
+    def __init__(self, rows: list[SimpleNamespace]) -> None:
+        self._rows = rows
+
+    def execute(self, _stmt: object) -> _TurnResult:
+        return _TurnResult(self._rows)
+
+
+def test_representative_prefers_longest_non_overlap() -> None:
+    session = _TurnSession(
+        [
+            _turn("SPEAKER_00", 0.0, 10.0, overlap=True),  # longest but overlaps
+            _turn("SPEAKER_00", 2.0, 8.0, overlap=False),  # 6s, clean → wins
+            _turn("SPEAKER_00", 3.0, 5.0, overlap=False),  # 2s, clean
+        ]
+    )
+    assert representative_turns(session, uuid.uuid4()) == {  # type: ignore[arg-type]
+        "SPEAKER_00": (2.0, 8.0),
+    }
+
+
+def test_representative_falls_back_to_longest_when_all_overlap() -> None:
+    session = _TurnSession(
+        [
+            _turn("SPEAKER_01", 0.0, 3.0, overlap=True),
+            _turn("SPEAKER_01", 5.0, 12.0, overlap=True),  # 7s, longest → wins
+        ]
+    )
+    assert representative_turns(session, uuid.uuid4()) == {  # type: ignore[arg-type]
+        "SPEAKER_01": (5.0, 12.0),
+    }
+
+
+def test_representative_groups_multiple_labels() -> None:
+    session = _TurnSession(
+        [
+            _turn("SPEAKER_00", 0.0, 4.0),
+            _turn("SPEAKER_01", 4.0, 9.0),
+        ]
+    )
+    assert representative_turns(session, uuid.uuid4()) == {  # type: ignore[arg-type]
+        "SPEAKER_00": (0.0, 4.0),
+        "SPEAKER_01": (4.0, 9.0),
+    }
+
+
+def test_representative_empty_when_no_turns() -> None:
+    assert representative_turns(_TurnSession([]), uuid.uuid4()) == {}  # type: ignore[arg-type]
+
+
+def test_representative_tie_breaks_on_earlier_start() -> None:
+    # Two clean 4s turns for one label: the earlier-starting one represents.
+    session = _TurnSession(
+        [
+            _turn("SPEAKER_00", 10.0, 14.0),
+            _turn("SPEAKER_00", 2.0, 6.0),
+        ]
+    )
+    assert representative_turns(session, uuid.uuid4()) == {  # type: ignore[arg-type]
+        "SPEAKER_00": (2.0, 6.0),
+    }

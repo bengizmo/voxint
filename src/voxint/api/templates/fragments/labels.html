@@ -96,6 +96,20 @@
       Heard name (unverified): “{{ s.llm_hint_name }}”.
     {% endif %}
   </p>
+  {# "Preview this speaker" (issue #49): seeks a CLEAN diarization turn for this
+     label (longest non-overlap, fallback longest), NOT the longest transcript
+     segment — a transcript segment may contain other voices. Rendered disabled;
+     the workbench-player island enables it iff seeking is safe (issue #55).
+     type="button" so it never submits an adjudication form. #}
+  {% set rep = representative_turns.get(s.label) %}
+  {% if rep %}
+  <p>
+    <button type="button" class="seek-turn" data-voxint-seek
+            data-seek-start="{{ rep[0] }}" data-seek-end="{{ rep[1] }}" disabled>
+      ▶ preview this speaker
+    </button>
+  </p>
+  {% endif %}
   {% if names_enabled and name_hints_labels.get(s.label) %}
   <ul class="name-hints-label">
     {% for hint in name_hints_labels[s.label] %}
@@ -110,6 +124,13 @@
   {% endif %}
   {% for seg in previews.get(s.label, []) %}
   <div class="preview">
+    {# Play just this ASR line's span (issue #49). Server-rendered disabled;
+       the island enables it when seeking is safe (issue #55). type="button". #}
+    <button type="button" class="seek-turn" data-voxint-seek
+            data-seek-start="{{ seg.start_seconds }}" data-seek-end="{{ seg.end_seconds }}"
+            disabled aria-label="Play segment at {{ '%.1f'|format(seg.start_seconds) }} seconds">
+      ▶
+    </button>
     <span class="t">{{ "%.1f"|format(seg.start_seconds) }}s</span>
     {{ seg.enhanced_text or seg.raw_text }}
   </div>

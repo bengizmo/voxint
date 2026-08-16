@@ -13,7 +13,6 @@
   <input type="hidden" name="token" value="{{ token }}">
   <button type="submit">Release claim</button>
 </form>
-<audio controls preload="metadata" src="/media/{{ run.id }}"></audio>
 {% else %}
 <p class="muted">
   Not claimed by this tab — decisions are disabled.
@@ -24,6 +23,16 @@
   <button type="submit">Claim for review</button>
 </form>
 {% endif %}
+
+{# Workbench-player island (issues #49 + #55). Mounted OUTSIDE #labels so it
+   survives every htmx innerHTML swap of the decision cards. It owns the <audio>
+   (React ref), the speed control, the visible capability banner, and — via a
+   document-level delegated click listener + an htmx:afterSwap re-enable pass —
+   drives the server-rendered `data-voxint-seek` buttons inside #labels. The
+   server fallback is the bare <audio controls>, so JS-off still plays. #}
+<div data-island="workbench-player" data-props='{{ workbench_props|tojson }}'>
+  <audio controls preload="metadata" src="{{ workbench_props.mediaUrl }}"></audio>
+</div>
 
 <div id="labels">
   {% include "fragments/labels.html" %}
