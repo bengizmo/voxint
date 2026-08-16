@@ -1,0 +1,65 @@
+{# Merge confirmation (issue #54) — the exact, SERVER-computed effect of the
+   proposed merge, shown before anything is written. Swapped into #merge-confirm
+   by the preview POST; the Confirm form applies it and swaps the whole #labels
+   list. `expected_json` carries each label's current effective-ruling id so the
+   apply route can reject a stale confirm (409) instead of silently overriding a
+   decision the operator never saw. #}
+<div class="merge-confirm-body">
+  <h3>
+    Treat {{ preview.labels|length }} labels as the same speaker in this recording
+  </h3>
+  <p>
+    {% if target_speaker %}
+      → assign all to existing speaker <strong>{{ target_speaker.display_name }}</strong>.
+    {% elif target_name %}
+      → enroll a new speaker <strong>“{{ target_name }}”</strong> and assign all to it.
+    {% endif %}
+  </p>
+  {% if preview.distinct_roster_speakers %}
+  <p class="muted">
+    These labels currently map to two different roster identities. This only
+    changes attribution <em>in this recording</em> — it does <strong>not</strong>
+    merge those identities on the roster. If they are the same person everywhere,
+    merge them on the <a href="/speakers">Speakers</a> page.
+  </p>
+  {% endif %}
+  <ul class="merge-impact">
+    {% for impact in preview.labels %}
+    <li class="{% set idx = palette.get(impact.label) %}{% if idx is not none %}spk-{{ idx }}{% endif %}">
+      <strong>{{ impact.label }}</strong>
+      — {{ impact.turn_count }} turns, {{ "%.0f"|format(impact.total_seconds) }}s,
+      {{ impact.segment_count }} transcript segment{{ "" if impact.segment_count == 1 else "s" }}
+      {% if impact.current_speaker_name %}
+        <span class="muted">(currently: {{ impact.current_speaker_name }})</span>
+      {% elif impact.resolution.value == "human_exclude" %}
+        <span class="muted">(currently: excluded)</span>
+      {% elif impact.resolution.value == "human_unknown" %}
+        <span class="muted">(currently: unknown)</span>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  <p class="muted">
+    Affects {{ preview.total_turns }} diarization turns and
+    {{ preview.total_segments }} transcript segments in this recording.
+    Reversible — you can re-rule any label afterwards.
+  </p>
+  <form class="inline" method="post" action="/review/{{ run.id }}/merge"
+        hx-post="/review/{{ run.id }}/merge"
+        hx-target="#labels" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="nonce" value="{{ nonce() }}">
+    {% for impact in preview.labels %}
+    <input type="hidden" name="labels" value="{{ impact.label }}">
+    {% endfor %}
+    {% if target_speaker %}
+    <input type="hidden" name="speaker_id" value="{{ target_speaker.id }}">
+    {% elif target_name %}
+    <input type="hidden" name="display_name" value="{{ target_name }}">
+    {% endif %}
+    <input type="hidden" name="expected" value="{{ expected_json }}">
+    <button type="submit">Confirm merge</button>
+    <button type="button" class="secondary"
+            onclick="this.closest('#merge-confirm').innerHTML=''">Cancel</button>
+  </form>
+</div>

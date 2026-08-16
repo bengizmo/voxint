@@ -70,6 +70,51 @@
 </div>
 {% endif %}
 
+{# Inline speaker merge (issue #54): the over-split fix, in the review context.
+   Tick the labels that are one person in THIS recording, choose who they are,
+   preview the exact server-computed change, then confirm. Run-local: it records
+   an assign ruling per label; it never merges roster identities (that stays on
+   /speakers). The whole panel lives INSIDE #labels (plain htmx forms, no React
+   root to leak), so every ruling swap re-renders it fresh. #}
+{% if token and states|length >= 2 %}
+<div class="merge-panel">
+  <h2>Same speaker across labels?</h2>
+  <p class="muted">
+    Diarization sometimes splits one person across labels. Tick the labels that
+    are the same speaker in this recording, choose who they are, then preview the
+    exact change before applying.
+  </p>
+  <form method="post" action="/review/{{ run.id }}/merge/preview"
+        hx-post="/review/{{ run.id }}/merge/preview"
+        hx-target="#merge-confirm" hx-swap="innerHTML">
+    <input type="hidden" name="token" value="{{ token }}">
+    <fieldset class="merge-labels">
+      <legend>Same speaker:</legend>
+      {% for s in states %}
+      <label class="{% set idx = palette.get(s.label) %}{% if idx is not none %}spk-{{ idx }}{% endif %}">
+        <input type="checkbox" name="labels" value="{{ s.label }}">
+        {{ s.label }}
+        <span class="muted">({{ s.turn_count }} turns{% if s.speaker_name %}, {{ s.speaker_name }}{% endif %})</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <label>Who are they?
+      <select name="target" required>
+        <option value="" disabled selected>— choose survivor —</option>
+        <option value="new">➕ enroll a new speaker…</option>
+        {% for sp in speakers %}
+        <option value="{{ sp.id }}">{{ sp.display_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <input type="text" name="new_name" placeholder="new speaker name (if enrolling)"
+           maxlength="120">
+    <button type="submit">Preview merge…</button>
+  </form>
+  <div id="merge-confirm" aria-live="polite"></div>
+</div>
+{% endif %}
+
 {% for s in states %}
 <div class="label-card{% set idx = palette.get(s.label) %}{% if idx is not none %} spk-{{ idx }}{% endif %}">
   <h2>

@@ -37,6 +37,12 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from voxint import __version__
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
 from voxint.adjudication.ledger import ConflictingReplayError, record_decision
+from voxint.adjudication.merge import (
+    MergeConflictError,
+    MergeError,
+    apply_merge,
+    preview_merge,
+)
 from voxint.adjudication.resolver import (
     LabelState,
     Resolution,
@@ -2245,6 +2251,141 @@ def _register_routes(app: FastAPI) -> None:
             )
         except ConflictingReplayError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _labels_response(request, session, run, token)
+
+    @protected.post("/review/{run_id}/merge/preview")
+    def merge_preview(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        labels: Annotated[list[str], Form()],
+        target: Annotated[str, Form()],
+        new_name: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Server-computed impact of merging labels — reads only, writes nothing.
+
+        The confirm step the operator sees before applying: the exact turns and
+        segments the merge touches (never an advisory client count), plus the
+        optimistic-concurrency token (each label's current effective ruling id)
+        echoed into the confirm form so :func:`merge_apply` can reject a stale
+        confirm. Claim-gated like every workbench mutation; JS-off never reaches
+        here (the panel enhances progressively — see fragments/labels.html).
+
+        ``target`` is the single unambiguous survivor chooser from the panel: the
+        sentinel ``"new"`` (enroll ``new_name``) or an existing speaker's UUID.
+        The confirm form it renders echoes the resolved speaker_id XOR
+        display_name, so :func:`merge_apply` never has to disambiguate.
+        """
+        try:
+            run = verify_claim(session, run_id, token)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        target_speaker: Speaker | None = None
+        display_name: str | None = None
+        if target == "new":
+            display_name = (new_name or "").strip() or None
+            if display_name is None:
+                raise HTTPException(status_code=400, detail="enter a name for the new speaker")
+        else:
+            try:
+                target_speaker = session.get(Speaker, uuid.UUID(target))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="choose a survivor speaker") from exc
+            if target_speaker is None:
+                raise HTTPException(status_code=400, detail="that speaker no longer exists")
+        try:
+            preview = preview_merge(session, run_id, labels)
+        except MergeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        expected = json.dumps(
+            {
+                impact.label: (
+                    str(impact.expected_decision_id)
+                    if impact.expected_decision_id is not None
+                    else None
+                )
+                for impact in preview.labels
+            }
+        )
+        return templates.TemplateResponse(
+            request,
+            "fragments/merge_confirm.html",
+            {
+                "request": request,
+                "run": run,
+                "token": token,
+                "nonce": lambda: uuid.uuid4().hex,
+                "preview": preview,
+                "target_speaker": target_speaker,
+                "target_name": display_name,
+                "expected_json": expected,
+                "palette": speaker_palette(_run_label_universe(session, run_id)),
+            },
+        )
+
+    @protected.post("/review/{run_id}/merge")
+    def merge_apply(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        nonce: Annotated[str, Form(min_length=8, max_length=64)],
+        labels: Annotated[list[str], Form()],
+        speaker_id: Annotated[uuid.UUID | None, Form()] = None,
+        display_name: Annotated[str | None, Form()] = None,
+        expected: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Rule that several labels are one speaker in this run — atomically.
+
+        Run-local: records one assign ruling per label to a single survivor; it
+        never calls the roster-wide merge_speakers. Under the claim lock it
+        re-verifies the previewed rulings still hold (409 if they drifted) and
+        appends every ruling in one transaction with deterministic child
+        idempotency keys, so a replay returns the original outcome and a partial
+        apply is impossible.
+        """
+        try:
+            run = verify_claim(session, run_id, token, for_update=True)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # An untouched text field posts "" not None; the confirm form omits the
+        # unused target entirely, but normalise defensively so the XOR check sees
+        # a clean None rather than an empty string.
+        display_name = (display_name or "").strip() or None
+        expected_ids: dict[str, uuid.UUID | None] | None = None
+        if expected is not None:
+            try:
+                raw = json.loads(expected)
+                expected_ids = {
+                    str(label): (uuid.UUID(value) if value is not None else None)
+                    for label, value in raw.items()
+                }
+            except (ValueError, AttributeError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=422, detail="malformed expected-state"
+                ) from exc
+        settings: Settings = request.app.state.settings
+        try:
+            apply_merge(
+                session,
+                run_id=run_id,
+                labels=labels,
+                operator=operator,
+                nonce=nonce,
+                gates=gates_from_settings(settings),
+                target_speaker_id=speaker_id,
+                target_name=display_name,
+                expected=expected_ids,
+            )
+        except MergeConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ConflictingReplayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MergeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
     @protected.post("/review/{run_id}/labels/{label}/enroll")

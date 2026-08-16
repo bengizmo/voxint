@@ -6,6 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Inline speaker merge in the workbench** (#54, #47): the most common
+  diarization fix — one person split across labels (`SPEAKER_00` + `SPEAKER_03`)
+  — is now a one-click action where the operator is actually reviewing, instead
+  of a trip to the separate roster page. A **"Same speaker across labels?"**
+  panel lets the operator tick the labels that are one voice, choose who they
+  are (an existing roster speaker or a newly enrolled one), and **preview the
+  exact, server-computed change** (turns and transcript segments affected) before
+  applying. The merge is **run-local**: it records one `assign` ruling per label
+  to a single survivor within this recording and **never** performs a
+  roster-wide identity merge (that stays the explicit `/speakers` action — the
+  preview says so when two labels already map to distinct roster identities, and
+  points there). Applies are **atomic** (all labels move together or none do,
+  under the run's claim lock) with **optimistic-concurrency** safety: if any
+  label's ruling changed since the operator previewed, the confirm is rejected
+  with a 409 rather than silently overriding a decision they never saw, and
+  replaying a confirmed merge returns the original outcome (deterministic child
+  idempotency keys). Every ruling lands in the existing append-only decision
+  history; nothing is destructive and any label can be re-ruled afterwards. Built
+  as progressively-enhanced htmx (no new frontend dependency).
 - **Follow-along highlight + per-speaker colors** (#50, #47): the transcript
   player now keeps the currently-playing line in view as playback advances
   (scroll-into-view, no smooth animation, no focus stealing). Following starts

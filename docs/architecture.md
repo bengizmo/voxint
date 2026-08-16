@@ -395,6 +395,21 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   Raw per-turn vectors stay in `diarization_turns`; the centroid is
   re-derivable. Provenance columns plus a unique constraint on the source
   decision make duplicate enrollment structurally impossible.
+- **Inline speaker merge** (`adjudication/merge.py`, issue #54): the over-split
+  fix — "these labels are one voice in this recording" — as a workbench action
+  instead of a roster-page trip. It is **run-local**: it records one `assign`
+  ruling per label to a single survivor (an existing active speaker, or a newly
+  enrolled one via the same `enroll_new_speaker` path) and **never** calls
+  `roster.merge_speakers`; a later deliberate roster merge still unifies these
+  rulings at read time, so deferring the global act loses nothing. It is a
+  **composite** mutation done atomically under the run's claim lock, with
+  deterministic child idempotency keys (`{nonce}:{labelset-digest}:{label}`) so
+  one operator nonce backs several ledger rows, a replay returns the original
+  outcome, and reusing the nonce for a different label set collides loudly
+  rather than half-applying. `preview_merge` computes the exact impact
+  server-side (advisory client counts are never trusted); the claim token proves
+  ownership, not content-version, so apply re-checks each label's expected
+  effective-ruling id and returns 409 if it drifted since the preview.
 - **Auth**: single-operator HTTP Basic (constant-time compare) on every route
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default
