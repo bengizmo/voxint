@@ -1,18 +1,19 @@
 # Voxint titanet service
 
-Speaker embeddings. Contract: [docs/gpu-contracts.md](../../docs/gpu-contracts.md) —
-`POST /v1/embed`, `GET /healthz`, port **8021**.
+Speaker embeddings. Contract:
+[docs/gpu-contracts.md](../../docs/gpu-contracts.md) (`POST /v1/embed`,
+`GET /healthz`, port **8021**).
 
 ## Model & embedding space
 
 NVIDIA NeMo **TitaNet-Large** (`nvidia/speakerverification_en_titanet_large`),
 192-dim, weights baked into the image (ungated). Embedding space id:
-**`titanet-large-v1`** — the id versions the model *and* the preprocessing
-chain (noise reduction → −16 LUFS → peak 0.95 → L2). Changing either means a
+**`titanet-large-v1`**. The id versions the model *and* the preprocessing chain
+(noise reduction → −16 LUFS → peak 0.95 → L2). Change either one and you get a
 new space id; vectors from different spaces must never be compared.
 
-Windows under 1.0 s skip as `too_short`; windows below the SNR threshold skip
-as `low_snr`. Skipped windows return `embedding: null` with the reason —
+Windows under 1.0 s skip as `too_short`; windows below the SNR threshold skip as
+`low_snr`. Skipped windows return `embedding: null` with the reason, and
 positional alignment with the request is always preserved.
 
 ## Environment

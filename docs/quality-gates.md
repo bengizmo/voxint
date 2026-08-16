@@ -1,16 +1,16 @@
 # Quality gates
 
 How Voxint decides what to trust: which enhancement output is kept, which
-diarized voices earn a speaker proposal, and what "grounded" means. All
-thresholds below are `Settings` fields (see `.env.example`) — the values here
-are the defaults, chosen conservatively for titanet-large embeddings and meant
-to be calibrated against locally adjudicated same-/different-speaker pairs
-before being loosened.
+diarized voices earn a speaker proposal, and what "grounded" means. Every
+threshold below is a `Settings` field (see `.env.example`). The values shown are
+the defaults, chosen conservatively for titanet-large embeddings and meant to be
+calibrated against locally adjudicated same-/different-speaker pairs before you
+loosen them.
 
-## LLM enhancement — best-effort by design
+## LLM enhancement: best-effort by design
 
 Enhancement is optional garnish over an immutable transcript (`raw_text` is
-forever); its failure semantics reflect that:
+forever), and its failure semantics follow from that:
 
 | Bound | Setting | Default |
 |---|---|---|
@@ -20,33 +20,33 @@ forever); its failure semantics reflect that:
 | Per-run wall-clock budget | `LLM_RUN_BUDGET_SECONDS` | 4 h |
 | Circuit breaker | `LLM_CONSECUTIVE_FAILURE_LIMIT` | 3 batches |
 
-- Segments travel in contiguous, ID-keyed batches; a reply must return exactly
-  the requested segment-index set or the whole batch is rejected — partial or
+- Segments travel in contiguous, ID-keyed batches. A reply must return exactly
+  the requested segment-index set or the whole batch is rejected; partial or
   misaligned output is never trusted.
 - A failed batch (transport, HTTP error, malformed reply) retries once, then
   its segments keep `enhanced_text = NULL`. Three consecutive failed batches
-  open the circuit for the rest of the run; the budget bounds total LLM time
+  open the circuit for the rest of the run. The budget bounds total LLM time
   inside the `enhance_match` stage lease.
 - **An unreachable LLM never fails a run.** Speaker matching still executes;
   only matching/persistence invariant violations fail the stage.
 
 ## Turn eligibility (matching input)
 
-A `diarization_turns` row feeds matching only if it carries an embedding
-(skipped windows keep their auditable `too_short` / `low_snr` reason and are
-ignored) and its overlap ratio (`overlap_seconds` / duration) is at most
-`MATCH_MAX_OVERLAP_RATIO` (0.20) — heavily overlapped speech contaminates
-pooled embeddings. Eligible turns are weighted by usable non-overlap seconds,
+A `diarization_turns` row feeds matching only if it carries an embedding and its
+overlap ratio (`overlap_seconds` / duration) is at most
+`MATCH_MAX_OVERLAP_RATIO` (0.20); heavily overlapped speech contaminates pooled
+embeddings. Skipped windows keep their auditable `too_short` / `low_snr` reason
+and are ignored. Eligible turns are weighted by usable non-overlap seconds,
 capped at `MATCH_TURN_WEIGHT_CAP_SECONDS` (10 s) so one long monologue can't
 drown the rest of the evidence.
 
 ## Cosine proposal and grounding gates
 
 Per label: a duration-weighted unit centroid over eligible turns is compared
-against each roster speaker's enrollment centroid (mean of unit vectors —
-never max-over-enrollments), strictly within one `embedding_space`. The top
-speaker is proposed only when **all** proposal gates pass; `grounded` is
-claimed only when the stricter grounding set also passes:
+against each roster speaker's enrollment centroid (mean of unit vectors, never
+max-over-enrollments), strictly within one `embedding_space`. The top speaker is
+proposed only when **all** proposal gates pass; `grounded` is claimed only when
+the stricter grounding set also passes:
 
 | Gate | Proposal | Grounded |
 |---|---|---|
@@ -57,17 +57,17 @@ claimed only when the stricter grounding set also passes:
 | Vote agreement (duration-weighted) | ≥ 0.60 | ≥ 0.67 |
 
 Vote agreement is the fraction of eligible-turn weight whose individually
-nearest roster speaker is the proposed one — a per-turn consistency check that
+nearest roster speaker is the proposed one, a per-turn consistency check that
 catches labels whose centroid only *averages* into a speaker.
 
 An unmatched or ineligible label produces **no row**: absence of evidence is
 not a low-confidence proposal. P4 never creates `speakers` rows for unknown
-voices — that is the adjudication UI's job (P5).
+voices; that is the adjudication UI's job (P5).
 
 > The enrichment draft layer (issue #37) records the complementary fact at a
 > *different* layer: a completed producer invocation that substantiated
 > nothing persists as an explicit `enrichment_producer_runs` row with
-> `outcome = 'none'`. The two rules do not conflict — "no proposal row"
+> `outcome = 'none'`. The two rules do not conflict. "No proposal row"
 > keeps weak evidence out of the matching surface, while "we looked and
 > found nothing" is itself reviewable information about the *search*, not a
 > low-confidence claim. Enrichment candidates never enter matching at all.
@@ -75,45 +75,45 @@ voices — that is the adjudication UI's job (P5).
 ## Confidence is not probability
 
 `speaker_assignments.confidence` stores `(cosine + 1) / 2`, clamped to
-[0, 1] — a *transformed similarity*, not a calibrated probability. Margin and
+[0, 1]: a *transformed similarity*, not a calibrated probability. Margin and
 vote agreement act as separate decision gates rather than being blended into
-an opaque score. `llm_hint` rows store `confidence = NULL`: model-reported
-confidence is not calibrated and is not recorded.
+an opaque score. `llm_hint` rows store `confidence = NULL`, because
+model-reported confidence is not calibrated and is not recorded.
 
 ## Named ≠ grounded
 
 An LLM name hint (`method = 'llm_hint'`, `proposed_name`) is review-side
 evidence only: never a `speaker_id`, never `grounded`, even when the heard
 name matches a roster speaker's `display_name` exactly. Enforcement is
-layered: DB CHECK constraints (grounded ⇒ cosine + concrete speaker;
-method-shape checks keep cosine and hint rows disjoint) plus a single typed
-writer — `voxint.speakers.matching.replace_run_proposals` — through which
+layered. DB CHECK constraints (grounded ⇒ cosine + concrete speaker;
+method-shape checks keep cosine and hint rows disjoint) combine with a single
+typed writer, `voxint.speakers.matching.replace_run_proposals`, through which
 every proposal insert passes. One hint per label: an explicit
-self-introduction ("I'm Jane…") beats being named by someone else; within a
-kind, the earliest heard wins.
+self-introduction ("I'm Jane…") beats being named by someone else, and within
+a kind the earliest heard wins.
 
 ## Enrichment drafts (issue #37): read names stay suggestions
 
-The "named ≠ grounded" rule extends unchanged to the enrichment draft layer:
-a name mined from metadata, a transcript, or the web is stored in
+The "named ≠ grounded" rule extends unchanged to the enrichment draft layer.
+A name mined from metadata, a transcript, or the web is stored in
 `enrichment_candidates` as a *suggestion about* identity with its evidence,
 and even an operator **accepting** it records only a `profile_review_decisions`
-row — it never writes `speakers.display_name`, never creates a proposal, and
+row: it never writes `speakers.display_name`, never creates a proposal, and
 never resolves attribution (integration-tested). Draft `score` /
 `score_components` are producer-local signals like the transformed cosine
-above: not probabilities, and never comparable across producers. Effective
+above, not probabilities, and never comparable across producers. Effective
 draft state is derived at read time (human decision > supersession stamp >
 proposed) by `enrichment/queries.py`, mirroring how attribution is resolved
 below.
 
 The first producer (#38, `names.offline`) applies the rule with one further
 distinction: only a **self-introduction inside a cluster's own segment** can
-target that cluster (`run_label`); every other signal — titles, descriptions,
-channel names, "please welcome X" — stays a run-level hint ("this name is
+target that cluster (`run_label`). Every other signal (titles, descriptions,
+channel names, "please welcome X") stays a run-level hint ("this name is
 probably in the recording"), because knowing a name is present says nothing
 about which voice it belongs to. Accepting a per-label suggestion prefills
-the Enroll form but never submits it; the human act of enrollment (with its
-acoustic eligibility gates) remains the only path from a heard name to a
+the Enroll form but never submits it; the human act of enrollment, with its
+acoustic eligibility gates, remains the only path from a heard name to a
 roster identity.
 
 ## Adjudication precedence (P5)
@@ -121,35 +121,35 @@ roster identity.
 Attribution is resolved at read time, everywhere, by one rule
 (`adjudication/resolver.py`):
 
-1. **Effective human decision** — the newest `adjudication_decisions` row per
+1. **Effective human decision**: the newest `adjudication_decisions` row per
    (run, label), ordered `created_at DESC, id DESC`. Corrections are new
    appends; nothing is edited (the table's trigger forbids it).
-2. **Grounded cosine proposal** — machine identity stands only at grounding
+2. **Grounded cosine proposal**: machine identity stands only at grounding
    strength.
 3. Otherwise the label is **unresolved** and the run sits in the review queue.
 
 `exclude` suppresses speaker attribution, never transcript text. `unknown` is
-a terminal human answer — the label leaves the queue without an identity.
+a terminal human answer: the label leaves the queue without an identity.
 `llm_hint` names are displayed as evidence and never resolve attribution.
 
 Speaker **enrollment** builds its centroid from exactly the matching-side
 eligibility rules and duration-capped weighting (imported from
-`speakers/matching.py`); a label with no eligible embedded turns cannot be
-enrolled — rule it `unknown` or assign it to an existing speaker instead.
+`speakers/matching.py`). A label with no eligible embedded turns cannot be
+enrolled; rule it `unknown` or assign it to an existing speaker instead.
 
 ### Accepted risk: enrollment provenance is code-enforced
 
-`speaker_embeddings.source_*` provenance consistency (decision is an `assign`
-for the same run/label/speaker) is guaranteed by the single writer
+`speaker_embeddings.source_*` provenance consistency (the decision is an
+`assign` for the same run/label/speaker) is guaranteed by the single writer
 (`adjudication/enrollment.py`) plus the unique constraint on the source
-decision id — not by cross-table DB triggers. A constraint trigger would be
-the only way to make it structurally airtight and is deliberately omitted as
-disproportionate for a single-writer path; revisit if a second writer ever
+decision id, not by cross-table DB triggers. A constraint trigger would be
+the only way to make it structurally airtight, and it is deliberately omitted
+as disproportionate for a single-writer path. Revisit if a second writer ever
 appears.
 
 ## Offline measurement
 
-The quality gates above act at pipeline time. The *measurement* layer — name
-accuracy against ground truth, acoustic agreement verdicts, two-voter fusion,
-regression gate metrics — is the offline harness, documented in
+The quality gates above act at pipeline time. The *measurement* layer is the
+offline harness: name accuracy against ground truth, acoustic agreement
+verdicts, two-voter fusion, regression gate metrics. It is documented in
 [harness.md](harness.md) and exposed as `voxint score …` (file-based, DB-free).

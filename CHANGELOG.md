@@ -1,29 +1,29 @@
 # Changelog
 
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes between minors).
+versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 ## [Unreleased]
 
 ### Added
 - **Console run cancellation** (#5): a Cancel button on the run detail page for
   any *live* run (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), backed by a new
-  `POST /runs/{id}/cancel` route and `cancel_run` service — an exact-revision
+  `POST /runs/{id}/cancel` route and `cancel_run` service, an exact-revision
   (CAS) mutation mirroring `/requeue`, so a stale tab 409s. Cancellation is
   **cooperative and pure DB state** (drives the existing `→ CANCELLED`
   transition, publishes nothing): a `QUEUED` run never starts; a `RUNNING` run's
   currently executing stage finishes first (not an immediate kill), then no
-  further stages run and the worker stops cleanly at its next CAS — the engine
+  further stages run and the worker stops cleanly at its next CAS; the engine
   now resolves a cancel-lost advance/complete/failure CAS by stopping only when
   the run is confirmed `CANCELLED` (a genuine race still raises) and closes the
   abandoned stage claim `SKIPPED` rather than leaving it "running". Re-cancelling
   an already-cancelled run is an idempotent success. Cancel leaves media and
-  partial results in place — **delete/archive is a separate action** (below).
+  partial results in place: **delete/archive is a separate action** (below).
 - **Console run archive + derived-media deletion** (#5): finishes the run
   lifecycle beyond append-only. **Soft-archive** hides a terminal run
   (`COMPLETED` / `FAILED` / `CANCELLED`) from `/runs` and the `/review` queue via
   a new nullable `pipeline_runs.archived_at` stamp (migration `0013`) while
-  keeping every row — including the append-only adjudication ledger — intact;
+  keeping every row (including the append-only adjudication ledger) intact;
   it is fully reversible (**Un-archive**). Archive is operator-visibility
   metadata: last-write-wins, orthogonal to `status`, no CAS/revision bump
   (mirrors operator notes), and idempotent. Live runs refuse archive (cancel
@@ -33,7 +33,7 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   audio files** is a separate, destructive, terminal-only action removing only a
   run's own `AudioArtifact`/`AudioChunk` rows and files (post-commit unlink,
   path-confined, idempotent); it **never** touches the shared original
-  `MediaItem.source_path` — deleting the shared source is a future refcount-guarded
+  `MediaItem.source_path`; deleting the shared source is a future refcount-guarded
   action. New routes `POST /runs/{id}/archive`, `/unarchive`, `/media/delete`.
 
 ### Changed
@@ -49,9 +49,9 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   `RESEARCH_DEADLINE_SECONDS` for slow local models.
 
 - **Docs state the project's audience and anti-bloat principle**: README,
-  CLAUDE.md, CONTRIBUTING, and onboarding now say who Voxint is for —
+  CLAUDE.md, CONTRIBUTING, and onboarding now say who Voxint is for:
   individuals and small teams (non-technical researchers, journalists,
-  educators) needing locally hosted audio intelligence — and that new
+  educators) needing locally hosted audio intelligence, and that new
   dependencies, features, and configuration surface must earn their place for
   that audience. Third-party proxy products are no longer named in docs as if
   part of the stack (generic "OpenAI-compatible proxy" phrasing).
@@ -62,7 +62,7 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   stale-RUNNING bound used the job's enqueue-time snapshot, so a settings
   change between enqueue and execution could force-cancel a still-live
   request. Both sides now read the snapshot through one helper (falling back
-  to the shared default for pre-0.11 snapshots — the hard-coded `90.0`
+  to the shared default for pre-0.11 snapshots; the hard-coded `90.0`
   fallbacks in both job modules are gone). The stale bound also now allows
   **two** post-deadline LLM calls (the forced conclude plus its single repair
   attempt) instead of one, matching what the research loop legitimately does.
@@ -73,42 +73,42 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   kept its drafts); finalization runs under the worker's failure umbrella,
   so a DB error while recording the outcome lands as an honest FAILED row
   instead of a forever-RUNNING job; `_finish` is a guarded active→terminal
-  CAS — a force-cancelled row is never overwritten by a late worker verdict,
+  CAS; a force-cancelled row is never overwritten by a late worker verdict,
   and a FAILED verdict racing an operator cancel resolves to CANCELLED. The
   stale-RUNNING force-cancel cutoff now compares DB clock to DB clock
   (`now() - make_interval(...)`), closing the clock-skew window the claim
   path already avoided.
 
-## [0.12.0] — 2026-08-15
+## [0.12.0] - 2026-08-15
 
 ### Added
 - **In-console run/throughput dashboard** (#13): a new authenticated
   `GET /dashboard` page (first in the top nav) renders the same aggregates
-  the Prometheus `/metrics` endpoint and `voxint stats` already expose —
+  the Prometheus `/metrics` endpoint and `voxint stats` already expose:
   runs by status, the review backlog (runs awaiting adjudication), per-stage
   average timing and failure counts, roster size, and runs created in the
-  window — as a read-only HTML page for a human at the console. It reuses
+  window, as a read-only HTML page for a human at the console. It reuses
   `stats_query.collect_stats` verbatim (no new aggregation), so all three
   surfaces agree. An `?since=` query param overrides the default 24 h
   throughput window (same span/ISO-8601 syntax as `voxint stats --since`),
   degrading to 24 h if malformed rather than erroring; the page auto-refreshes
   every 15 s via an htmx fragment poll with no external assets.
 - **Run-level enrichment assets** (#41): on-demand LLM-generated **summary**,
-  **topics**, and **entity mentions** per run — three independently
+  **topics**, and **entity mentions** per run: three independently
   versioned, independently failing whole-document assets, distinct from the
   #37 per-field claim/review model. New `run_enrichment_assets` table
   (migration 0012): success-only, immutable rows (append-only trigger; the
   one permitted mutation is the write-once supersession stamp), keyed
   `(run, kind, generation)` with a monotonic per-kind generation allocated
-  under an advisory lock — regenerate supersedes, never edits, and failed
+  under an advisory lock; regenerate supersedes, never edits, and failed
   attempts consume no generation. Every asset records producer + version,
   the exact model, a schema-versioned config snapshot (including whether the
   input was truncated), and a **source-content hash** over the canonical
   serialization of everything the generator read (transcript with
-  attribution, #36 metadata, operator notes) — staleness is detectable by
+  attribution, #36 metadata, operator notes); staleness is detectable by
   recomputing it, and the console/export flag stale assets explicitly.
   Entity mentions are grounded spans: offsets are never trusted from the
-  model — each quote is located verbatim in its referenced segment
+  model. Each quote is located verbatim in its referenced segment
   (word-boundary, case-insensitive fallback), unlocatable or out-of-run
   spans are dropped with recorded diagnostics, and a reply whose every span
   fails grounding fails the job rather than recording an authoritative
@@ -130,24 +130,24 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   setting `RUN_ASSETS_MAX_INPUT_CHARS` bounds the rendered prompt document
   (head+tail truncation, recorded on the asset).
 
-## [0.11.0] — 2026-08-15
+## [0.11.0] - 2026-08-15
 
 ### Added
 - **Web-research speaker profile enrichment** (#40): the `web_researcher`
-  producer — an operator-initiated, per-speaker research job driving a
+  producer, an operator-initiated, per-speaker research job driving a
   budgeted LLM tool loop over exactly three tools (#39's `web_search` +
   `read_url`, plus a read-only roster lookup) and quarantining findings as
   #37 drafts for field-by-field review. The loop is a strict-JSON action
   protocol over plain `/chat/completions` (new `HttpLLMClient.chat_json`;
   no provider function-calling, no framework): unknown/malformed replies
-  get one repair attempt then the job fails — never a silent "not found".
+  get one repair attempt then the job fails, never a silent "not found".
   Server-side evidence gate: a claim survives only when its source is a
   server-issued id of a page the job actually fetched AND its snippet
   locates verbatim (NFKC+casefold+whitespace-collapsed) in that page's
   kept text; generic values ("the host", "Speaker 2") and non-URL `link`
   values are dropped. Retrieved page text reaches the model only as a
   4k-char untrusted-marked excerpt, and `read_url` accepts only URLs from
-  the job's own search results or operator-stored seed URLs — an injected
+  the job's own search results or operator-stored seed URLs; an injected
   page cannot steer fetches. Durable `research_jobs` rows (migration 0011)
   carry status, live counters, and a cooperative cancel flag; the speaker
   card on `/speakers` gets a research block with a budget preview, 3 s
@@ -155,7 +155,7 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   decision surface now serves bio/affiliation/link; NAME stays on the
   workbench). `found=false` records an authoritative `outcome='none'`
   generation; failures/cancellation record nothing. Per-job idempotency
-  (`web_researcher:speaker:{id}:{job_id}`) — a rerun is a new superseding
+  (`web_researcher:speaker:{id}:{job_id}`): a rerun is a new superseding
   generation, and there are deliberately no automatic retries or recovery
   sweeps. CLI: `voxint research speaker <id> [--note …]` runs one inline.
   **Off by default**: `ENRICHMENT_WEB_RESEARCH_ENABLED=false` requires
@@ -163,19 +163,19 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   re-checked in the worker). New settings: `RESEARCH_MAX_SEARCHES`,
   `RESEARCH_MAX_READS`, `RESEARCH_MAX_ROUNDS`,
   `RESEARCH_MAX_ACTIONS_PER_ROUND`, `RESEARCH_DEADLINE_SECONDS`.
-- **Controlled web retrieval** (#39): a new `voxint.research` package —
+- **Controlled web retrieval** (#39): a new `voxint.research` package:
   `web_search` (pluggable `SearchProvider` protocol, SearxNG built in,
   normalized title/url/snippet results with every result URL pre-filtered
   through the shared egress string gate) and `read_url` (hardened
   single-page fetcher: per-redirect-hop revalidation, DNS answers vetted
   fail-closed, and the connection **pinned** to the vetted address with the
-  canonical hostname kept in `Host` + TLS SNI on a fresh client per attempt
-  — closing the redirect/rebinding residual for this path; identity-encoding
+  canonical hostname kept in `Host` + TLS SNI on a fresh client per attempt,
+  closing the redirect/rebinding residual for this path; identity-encoding
   only, streamed byte cap, MIME allowlist, stdlib-only text extraction with
   invisible-instruction-character stripping). **Off by default**
   (`VOXINT_WEB_RESEARCH=false`) and fully independent of `LLM_ENABLED`.
   Both tools enforce an atomic per-invocation budget (structured
-  `budget_exhausted` outcomes — the contract the future research loop, #40,
+  `budget_exhausted` outcomes, the contract the future research loop, #40,
   builds on; quota charged only after validation + concurrency slot),
   require a bounded `Attribution`, and log one host-only attribution line
   per outbound request; no error detail or log line ever carries a URL,
@@ -201,7 +201,7 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   waiting on a deferred enqueue. Previously a broker outage produced an uncaught
   traceback (and, for `submit`, lost the run id from stdout).
 - The string-level URL gate moved from `ingest.service` into
-  `media.netcheck.parse_http_url` (shared by ingestion and web research —
+  `media.netcheck.parse_http_url` (shared by ingestion and web research,
   one egress policy module to audit); `validate_ingest_url` delegates and
   its error messages are preserved byte-for-byte.
   `assert_host_resolves_public` now wraps a new `resolve_public_addresses`
@@ -218,11 +218,11 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   four deployment flavors to one revision. Documented in
   `docs/operations.md` ("Offline / air-gapped hosts").
 
-## [0.10.0] — 2026-08-15
+## [0.10.0] - 2026-08-15
 
 The enrichment foundation (#36, #37, #38): write-once source-metadata
 capture at acquisition, the reviewable evidence-backed draft schema, and
-the first producers — offline + optional-LLM speaker-name suggestions with
+the first producers: offline + optional-LLM speaker-name suggestions with
 their adjudication-workbench review surface. Plus the macOS arm64 CI lane
 (partial Gate M automation, #34), metal-tier log rotation, and metal parity
 bounds ratcheted from Gate M evidence.
@@ -231,7 +231,7 @@ bounds ratcheted from Gate M evidence.
 - **Offline speaker-name suggestions** (#38): a new `names.offline`
   enrichment producer mines evidence-backed name candidates from stored
   source metadata (title/description/channel/tags) and transcript text
-  (self- and host-introductions) — fully offline, deterministic regex with
+  (self- and host-introductions), fully offline, deterministic regex with
   explicit false-positive guards, no LLM and no network. Cluster-level
   (per-diarization-label) suggestions come **only** from self-introductions
   inside that cluster's own segments; everything else stays a run-level
@@ -247,7 +247,7 @@ bounds ratcheted from Gate M evidence.
   shows a "Name hints" block (run-level) and per-label "Self-introduced
   (unverified)" suggestions, each with its evidence snippet and score.
   Operators can trigger/re-run the sweep (claim-gated, synchronous) and
-  accept or reject each suggestion — accepting records a profile-review
+  accept or reject each suggestion: accepting records a profile-review
   decision only, never a speaker, assignment, or adjudication ruling. An
   accepted per-label suggestion prefills the Enroll input (editable, never
   auto-submitted). Rerun duplicates group under their decided history
@@ -255,7 +255,7 @@ bounds ratcheted from Gate M evidence.
 - **Additive LLM name pass** (#38): a second producer, `names.llm`, mines
   name hints from the transcript via the configured enhancement LLM
   (`voxint enrich names <run_id> --llm`; CLI-only, never in the console
-  request path). Strictly additive — its own supersession lineage, and the
+  request path). Strictly additive: its own supersession lineage, and the
   offline path never depends on it. Model output obeys the same evidence
   discipline: a hint survives only when the name is located verbatim in a
   real segment (in the hinted label's own segments for self-intros, which
@@ -266,26 +266,26 @@ bounds ratcheted from Gate M evidence.
 - **Enrichment draft schema** (#37): machine-derived claims about speakers
   and runs now live as reviewable, evidence-backed drafts. Four new tables
   (migration 0010): `enrichment_producer_runs` (one row per completed
-  producer invocation — scope, covered fields, monotonic generation, and an
+  producer invocation: scope, covered fields, monotonic generation, and an
   explicit `outcome='none'` when a producer looked and found nothing),
   immutable `enrichment_candidates` (claim field/value, producer-local score
   with visible components, write-once supersession stamp), normalized
   `enrichment_candidate_evidence` (one claim can cite a metadata field,
   transcript segments, and several URLs together), and the append-only
-  `profile_review_decisions` human trail — deliberately separate from the
+  `profile_review_decisions` human trail, deliberately separate from the
   attribution ledger. Review state is derived at read time (decision >
   superseded > proposed), never stored. Single sanctioned writers in
   `voxint.enrichment` (atomic per-scope finalization under an advisory lock;
   terminal accept/reject with idempotent replay). Invariant unchanged: drafts
-  are suggestions *about* identity — accepting a name claim never touches
+  are suggestions *about* identity: accepting a name claim never touches
   `speakers.display_name`, machine proposals, or attribution resolution.
   Schema + writer layer only; the producers (#38, #40) and their console
   surface come separately.
 - **Source media metadata capture** (#36, schema slice): new write-once
   `media_source_metadata` table (1:1 with `media_items`) holding normalized
-  extractor context — title, uploader/channel (+URLs), description, upload
+  extractor context: title, uploader/channel (+URLs), description, upload
   date, source-claimed duration, tags, canonical URL, extractor
-  name/version — plus a bounded, allowlisted, schema-versioned `raw` JSONB
+  name/version, plus a bounded, allowlisted, schema-versioned `raw` JSONB
   subset and the acquisition timestamp. Metadata is context, not identity:
   a MediaItem is per-acquisition, so a snapshot can never rewrite the
   context a past adjudication was made against. New nullable
@@ -293,9 +293,9 @@ bounds ratcheted from Gate M evidence.
   scraped metadata. Migration 0009 (additive, clean downgrade).
 - **Metadata capture at acquisition** (#36): the yt-dlp invocation now also
   writes a clean info-JSON (`--write-info-json --clean-info-json
-  --no-write-playlist-metafiles`, typed `infojson:` output — same invocation,
+  --no-write-playlist-metafiles`, typed `infojson:` output, same invocation,
   no extra network exposure); ACQUIRE sanitizes it through a strict allowlist
-  (secret-bearing keys — `formats`, `http_headers`, `cookies`, signed URLs —
+  (secret-bearing keys: `formats`, `http_headers`, `cookies`, signed URLs
   are never copied), publishes a hash-addressed replay sidecar before the
   media file, and inserts the write-once snapshot row. Best-effort: bad
   metadata logs a warning, never fails an acquisition.
@@ -307,16 +307,16 @@ bounds ratcheted from Gate M evidence.
   pinned bare-array `/review/{id}/export.json` contract stays frozen.
 - **macOS arm64 CI lane** (`.github/workflows/metal-lane.yml`, issue #34):
   nightly + manual-dispatch partial Gate M automation on `macos-15` runners
-  (real MPS) — launcher unit tests on real macOS, then the whisper/pyannote/
+  (real MPS): launcher unit tests on real macOS, then the whisper/pyannote/
   titanet parity modules from the launcher's own sha-verified per-service
   venvs, with provenance-keyed weight caches, an MPS tensor-op probe, and a
   junit guard that fails the lane if an expected module green-boards
   fully-skipped. Maintainer Gate M (per-chip verdict refreshes) is
-  unchanged — this catches regressions between refreshes.
+  unchanged; this catches regressions between refreshes.
 - **Metal-tier log rotation** (metal review follow-up): `voxint-metal.sh up`
   now installs a daily launchd job (`com.voxint.metal.logrotate`) that
   copy-truncates any service log over 50 MB to a timestamped archive,
-  keeping the newest 5 — launchd's `StandardOutPath` never rotates and
+  keeping the newest 5; launchd's `StandardOutPath` never rotates and
   `KeepAlive` keeps services up for months. `VOXINT_METAL_LOG_MAX_MB` /
   `VOXINT_METAL_LOG_ARCHIVES` override; new `rotate-logs` subcommand runs a
   pass by hand; `logs -f` now follows with `tail -F`.
@@ -329,7 +329,7 @@ bounds ratcheted from Gate M evidence.
   (metal review follow-up).
 - **Contract test binding `compose.metal.yaml` ports to the metal launcher's
   `service_port()`**: the overlay's `host.docker.internal:<port>` URLs and
-  the native services' bind ports were each pinned to their own literals —
+  the native services' bind ports were each pinned to their own literals;
   a port moved in only one place would have kept both tests green while the
   worker called a dead port (metal review follow-up).
 
@@ -344,7 +344,7 @@ bounds ratcheted from Gate M evidence.
   GPU-class budgets), no committed metal reference oracle (re-affirmed).
   See docs/gpu-contracts.md metal verdict table.
 
-## [0.9.0] — 2026-08-14
+## [0.9.0] - 2026-08-14
 
 The Apple Silicon "metal" compute tier (#1): native macOS model services
 under launchd with diarization on the Apple GPU via torch-MPS, measured
@@ -355,17 +355,17 @@ plus the tier-independent device-control contracts (`DIARIZER_DEVICE`,
 ### Added
 - **Apple Silicon "metal" compute tier**: the core stack stays in Docker
   (`compose.metal.yaml` rewires api/worker to `host.docker.internal`) while
-  the three model services run natively on macOS — set up, sha-verified,
+  the three model services run natively on macOS, set up, sha-verified,
   and supervised under launchd by the new `scripts/metal/voxint-metal.sh`
-  (`setup / up / down / status / logs / doctor / run --foreground`) — so
+  (`setup / up / down / status / logs / doctor / run --foreground`), so
   diarization runs on the Apple GPU via torch-MPS (~5× native-CPU
   diarization measured on an M1 Pro, identical outputs; transcription stays
   on host CPU in v1 and remains the bottleneck). The installer grew an `[M]`
-  option (default on Apple Silicon) that starts the core and hands off
-  honestly. New device-control contracts, both tier-independent:
+  option (default on Apple Silicon) that starts the core and hands off.
+  New device-control contracts, both tier-independent:
   `DIARIZER_DEVICE=auto|cuda|mps|cpu` (a forced device must pass the sanity
   probe or the service refuses to start) and `TITANET_ORT_PROVIDERS`
-  (requested ONNX EPs must be verifiably active — no silent fallback
+  (requested ONNX EPs must be verifiably active, no silent fallback
   anywhere). Metal parity lanes gate against the committed CUDA references
   (no metal oracle by design): `tests/parity/test_pyannote_metal.py`,
   `test_whisper_metal.py`, `VOXINT_PARITY_ORT_PROVIDERS` threading for the
@@ -376,7 +376,7 @@ plus the tier-independent device-control contracts (`DIARIZER_DEVICE`,
 - **Metal tier review hardening** (pre-landing multi-model review): the
   installer's metal handoff no longer claims model services "were started";
   whisper's runtime load is pinned to the same HF revision setup downloads
-  (`WHISPER_REVISION`, launcher-set — unset keeps image behavior), the local
+  (`WHISPER_REVISION`, launcher-set; unset keeps image behavior), the local
   manifest records that revision and excludes HF cache bookkeeping, and a
   stale/corrupt cache is cleared before re-download instead of being
   re-blessed; `voxint-metal.sh up` preflights venvs/weights/config and waits
@@ -389,13 +389,13 @@ plus the tier-independent device-control contracts (`DIARIZER_DEVICE`,
   fail closed on empty diarizations, pin the whisper snapshot, and shed
   ambient `TITANET_ORT_PROVIDERS` / `PYANNOTE_*` env.
 - **Metal launcher `.env` reading**: `voxint-metal.sh` read `MEDIA_ROOT`
-  verbatim from `.env`, but the installer writes it single-quoted — the
+  verbatim from `.env`, but the installer writes it single-quoted; the
   launcher hard-failed on every installer-generated file ("does not resolve
   to an existing directory"). Values are now normalized exactly like the
   installer reads them back (strip CR, blanks, and one matched pair of
   quotes), matching what Compose interpolation passes to the containers.
 
-## [0.8.0] — 2026-08-14
+## [0.8.0] - 2026-08-14
 
 Runs search (#8) plus CLI/observability ergonomics (#25, #32): the runs
 browser gains transcript full-text search and facets, and the CLI grows
@@ -405,17 +405,17 @@ endpoint. Also carries the cross-platform / dev-experience hardening bundle
 
 ### Added
 - **Search on the runs browser** (`/runs`, #8): transcript full-text search
-  (`q=`, Postgres `websearch_to_tsquery` syntax — quotes, `-word`, `OR`) with
+  (`q=`, Postgres `websearch_to_tsquery` syntax: quotes, `-word`, `OR`) with
   a highlighted first-hit snippet per run, a speaker facet (runs whose
-  read-time attribution — human ruling or grounded cosine, merge tombstones
-  canonicalized — is the selected speaker; archived speakers stay listed,
+  read-time attribution (human ruling or grounded cosine, merge tombstones
+  canonicalized) is the selected speaker; archived speakers stay listed,
   marked), a source-path substring facet, and UTC date-range bounds. All
   facets AND-compose with the existing status/review filters and keyset
   pagination. Backed by two GIN expression indexes (migration 0008) over
-  `raw_text` AND `enhanced_text` separately — enhancement never makes the raw
+  `raw_text` AND `enhanced_text` separately; enhancement never makes the raw
   rendering of a term unfindable, and vice versa. Dictionary is `english`
   (stemming recall); a stopword-only query matches nothing by design. Results
-  stay newest-first — no relevance ranking pre-1.0 — and the search document
+  stay newest-first (no relevance ranking pre-1.0) and the search document
   is one segment (terms split across segments of a run don't AND-match).
 - **Structured & subtitle transcript exports.** The review console now offers
   SubRip (`.srt`), WebVTT (`.vtt`), JSON, and diarization RTTM (`.rttm`)
@@ -424,32 +424,32 @@ endpoint. Also carries the cross-platform / dev-experience hardening bundle
   enhanced`, default enhanced; RTTM carries raw diarization labels). SRT/VTT/
   JSON/TXT share one set of pure formatters (`voxint.export`) with the CLI, so a
   downloaded file and a piped export are byte-identical.
-- **`voxint export <run_id> --format srt|vtt|json|rttm|txt`** — headless
+- **`voxint export <run_id> --format srt|vtt|json|rttm|txt`**: headless
   transcript export to stdout or `-o PATH` (refuses to overwrite without
   `--force`); `--text raw|enhanced` selects the transcript variant.
-- **`voxint list`** — a CLI run browser (newest first) mirroring the `/runs`
+- **`voxint list`**: a CLI run browser (newest first) mirroring the `/runs`
   query, with `--status`, `--limit` (1–500, default `runs_page_size`), and
   `--json`.
-- **`voxint doctor`** — read-only preflight diagnostics: Postgres, Redis, and
+- **`voxint doctor`**: read-only preflight diagnostics. Postgres, Redis, and
   each model service's `/healthz` (reporting the compute `device`) are hard
   checks (exit 1 if any is down); the Hugging Face token and LLM endpoint are
   advisory (reported, never fail the exit). Credentials are never printed.
-- **`voxint stats`** — an aggregate, read-only system summary: run counts by
+- **`voxint stats`**: an aggregate, read-only system summary. Run counts by
   status, failed stage attempts by stage, average per-stage duration (over
   finished attempts), roster size, and runs created in a window (`--since`,
   accepting `<n>h`/`<n>d`/ISO-8601, default 24h). `--json` emits a stable object.
-- **`GET /metrics`** — a Prometheus text-exposition endpoint (format 0.0.4)
+- **`GET /metrics`**: a Prometheus text-exposition endpoint (format 0.0.4)
   built on the same query module, on the authenticated router (scrape it with
   `basic_auth`, keeping the "everything but `/healthz` authenticates" invariant).
   Every `RunStatus`/`Stage` series is zero-filled so a series never disappears
   between scrapes; the one windowed gauge bakes its window into its name
   (`voxint_runs_created_24h`).
-- **`voxint watch <run_id>`** — follow a run until it stops advancing, with a
+- **`voxint watch <run_id>`**: follow a run until it stops advancing, with a
   live progress line on stderr. Exit codes: `0` completed, `1` failed/cancelled,
-  `2` missing run, `3` awaiting adjudication (paused — needs a human ruling),
+  `2` missing run, `3` awaiting adjudication (paused, needs a human ruling),
   `124` timeout. `--interval` (default 2s) and `--timeout` (default 3600s) tune
   the poll.
-- **`voxint submit --wait`** — enqueue, then follow the new run to a stop state
+- **`voxint submit --wait`**: enqueue, then follow the new run to a stop state
   with the same poll loop and exit codes (the run id stays alone on stdout;
   progress goes to stderr).
 
@@ -460,7 +460,7 @@ endpoint. Also carries the cross-platform / dev-experience hardening bundle
   (not `ESRCH`); the raw `PermissionError` escaped the teardown and replaced the
   intended redacted `AcquisitionError`. Both teardown signals now suppress
   `PermissionError` alongside `ProcessLookupError`. (Linux returns `ESRCH`, so
-  this was macOS/BSD-only; validated by a new monkeypatched unit test — a real
+  this was macOS/BSD-only; validated by a new monkeypatched unit test; a real
   Mac run is the true confirmation.)
 - **Installer could offer the busy port as its own "alternate" (#27).** On
   macOS/BSD a listener with a full accept-backlog refuses further connects, so
@@ -475,14 +475,14 @@ endpoint. Also carries the cross-platform / dev-experience hardening bundle
   default-credentials test is now hermetic (`_env_file=None`, so an on-disk
   `.env` can't override the code default), and the two librosa-dependent mel
   contract tests `importorskip("librosa")` (it ships only in the `parity`
-  extra) — they still run in the parity lane, and no assertions were weakened.
+  extra); they still run in the parity lane, and no assertions were weakened.
 - **Documented the CPU-tier host-RAM floor (#29).** The CPU tier holds the
   models in RAM (~6 GiB idle; whisper alone ~4.8 GiB) and needs **≥ 8 GB**
-  available to the container host — on Docker Desktop the VM's memory limit, not
-  the physical machine — or services are OOM-killed with an opaque exit. Noted
+  available to the container host (on Docker Desktop the VM's memory limit, not
+  the physical machine) or services are OOM-killed with an opaque exit. Noted
   in `docs/operations.md`, `docs/onboarding.md`, and the installer's tier prompt.
 
-## [0.7.0] — 2026-08-14
+## [0.7.0] - 2026-08-14
 
 Speaker roster management (#7): the roster is no longer write-only.
 
@@ -490,7 +490,7 @@ Speaker roster management (#7): the roster is no longer write-only.
 - **Speaker roster page** (`/speakers`, #7): view every enrolled speaker with
   its enrollment provenance, machine-proposal count, and a deterministic
   voiceprint strip derived from its own centroid. Curation actions: rename,
-  merge duplicates, archive/restore, and remove a bad enrollment embedding —
+  merge duplicates, archive/restore, and remove a bad enrollment embedding,
   all without ever rewriting the append-only decision ledger. Merges keep the
   source speaker as a tombstone (`merged_into_id`, migration 0007) and readers
   canonicalize at read time, so historical rulings render under the merge
@@ -498,7 +498,7 @@ Speaker roster management (#7): the roster is no longer write-only.
 
 ### Changed
 - Speaker matching, the workbench assign dropdown, and the decide route now
-  consider **active** speakers only — merged and archived speakers stop
+  consider **active** speakers only; merged and archived speakers stop
   attracting proposals and decisions (archiving also removes the speaker's
   machine proposals; restore does not resurrect them).
 
@@ -507,15 +507,15 @@ Speaker roster management (#7): the roster is no longer write-only.
   operator) instead of the current display name, so renaming a speaker can no
   longer make a replayed enrollment POST falsely conflict.
 
-## [0.6.0] — 2026-08-14
+## [0.6.0] - 2026-08-14
 
 Token-free onboarding: the diarization weights are vendored (#24). No
-numerical changes — vendored-vs-HF diarization verified byte-identical.
+numerical changes; vendored-vs-HF diarization verified byte-identical.
 
 ### Changed
 - **No Hugging Face account or token needed** (#24): the
   `speaker-diarization-3.1` pipeline weights are now vendored into the
-  pyannote images — sha256-pinned from the standing `pyannote-models-v1`
+  pyannote images, sha256-pinned from the standing `pyannote-models-v1`
   asset release (`services/pyannote/models/provenance.json`; segmentation-3.0
   MIT, WeSpeaker embedding CC-BY-4.0, redistributed with attribution) and
   loaded offline by default. Vendored-vs-HF parity verified byte-identical on
@@ -529,7 +529,7 @@ numerical changes — vendored-vs-HF diarization verified byte-identical.
 
 ### Fixed
 - **CUDA pyannote image**: `setuptools` pinned `>=70,<81` with a build-time
-  `pkg_resources` canary — the unpinned upgrade would have shipped an image
+  `pkg_resources` canary; the unpinned upgrade would have shipped an image
   that crashes on boot at the next rebuild (setuptools 81 removed
   `pkg_resources`, which pyannote.database imports; the CPU flavor already
   carried the pin).
@@ -538,9 +538,9 @@ numerical changes — vendored-vs-HF diarization verified byte-identical.
   `VOXINT_VENDORED_PIPELINE` that does not exist now fails fast instead of
   silently degrading to a gated network fetch.
 
-## [0.5.1] — 2026-08-14
+## [0.5.1] - 2026-08-14
 
-Robustness patch for burst-load resilience (#23). No inference or contract
+Burst-load resilience patch (#23). No inference or contract
 changes.
 
 ### Fixed
@@ -549,14 +549,14 @@ changes.
   `"no"`): a transient model-service crash self-heals instead of staying
   down until a human runs `up -d` (#23).
 - **Connection failures to a model service now say what they mean**: when
-  the service DNS name stops resolving or the connection is refused —
-  inside the compose network this almost always means the container is
-  down — the worker's ledger error names the service host and says the
+  the service DNS name stops resolving or the connection is refused (inside
+  the compose network this almost always means the container is
+  down), the worker's ledger error names the service host and says the
   service is likely down or restarting (pointing compose deployments at
   `docker compose ps`), instead of surfacing a raw resolver error that
   reads as a network problem (#23).
 
-## [0.5.0] — 2026-08-14
+## [0.5.0] - 2026-08-14
 
 AMD-GPU acceleration for ASR (#4). The ROCm tier is a hybrid: whisper runs on
 the AMD GPU, pyannote/titanet stay on CPU. No numerical changes to existing
@@ -564,7 +564,7 @@ flavors.
 
 ### Added
 - **whisper `-rocm` image** (`services/whisper/Dockerfile.rocm`, amd64):
-  same faster-whisper 1.2.1 / CTranslate2 engine and code path as CUDA —
+  same faster-whisper 1.2.1 / CTranslate2 engine and code path as CUDA:
   the CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned;
   not on PyPI) on ubuntu:24.04 with the minimal measured ROCm 7.0.2
   runtime-library set. Torch-free (the 1.2.x Silero VAD is
@@ -574,7 +574,7 @@ flavors.
   driver.
 - **`compose.rocm.yaml` overlay**: whisper on the GPU (`/dev/kfd` +
   `/dev/dri` passthrough + the owning host gid via `VOXINT_RENDER_GID`;
-  no `video` group, no `seccomp:unconfined` — both verified unnecessary on
+  no `video` group, no `seccomp:unconfined`; both verified unnecessary on
   real hardware), pyannote/titanet on the `-cpu` images,
   `COMPUTE_TIER=rocm` timing profile. Pin-parity contract test now covers it.
 - **Installer AMD tier**: `[A]` in the compute-tier prompt (suggested when
@@ -586,11 +586,11 @@ flavors.
   masquerades as CUDA and the `-rocm` image carries no torch, so
   `resolve_device_name` now also detects the loaded HIP runtime
   (`libamdhip64` in `/proc/self/maps`) and reports `device: "rocm"`.
-- **`release.yml` `publish-whisper-rocm` lane** — build-only in CI (GitHub
+- **`release.yml` `publish-whisper-rocm` lane**: build-only in CI (GitHub
   has no AMD-GPU runners); the real-GPU inference gate is a maintainer step
   on AMD hardware before tagging (Gate R, `docs/release-process.md`).
 - Docs: `docs/operations.md` ROCm-tier section (incl. why pyannote/titanet
-  stay CPU — MIOpen convolutions fail on current AMD consumer GPUs in both
+  stay CPU: MIOpen convolutions fail on current AMD consumer GPUs in both
   shipping torch-ROCm wheel lines), README AMD callout,
   `docs/gpu-contracts.md` device-reporting note, whisper README image matrix.
 
@@ -598,10 +598,10 @@ flavors.
 - `cleanup_memory` in the whisper service tolerates a torch-free image
   (guarded import; CT2 manages its own device memory).
 
-## [0.4.1] — 2026-08-14
+## [0.4.1] - 2026-08-14
 
 Onboarding patch: closes the v0.4.0 first-run traps (#17–#22). No model
-service, pipeline, or numerical changes — images rebuild, numerics untouched.
+service, pipeline, or numerical changes; images rebuild, numerics untouched.
 
 ### Added
 - **Installer compute-tier selection** (GPU / CPU / none-for-now; suggests GPU
@@ -610,7 +610,7 @@ service, pipeline, or numerical changes — images rebuild, numerics untouched.
   every installer Compose invocation goes through it, so the pull/up/status
   commands can never disagree about the active overlay (#18).
 - **Installer Hugging Face token prompt** (hidden input, both pyannote gate
-  URLs explained) with an advisory two-stage check — token validity, then
+  URLs explained) with an advisory two-stage check: token validity, then
   access to each gated repo (terms accepted). Warnings only, never blocks;
   the token reaches curl via stdin config, never argv. Skipping the token
   records the tier but starts the core stack only (both compute overlays
@@ -618,7 +618,7 @@ service, pipeline, or numerical changes — images rebuild, numerics untouched.
   out the three steps to finish (#17).
 - **Setup wizard SERVICES step**: a Hugging Face token presence row (never
   the value) and guidance covering both compute tiers, not just GPU (#17, #18).
-- **Run page**: static guidance when a run failed at a model stage — start a
+- **Run page**: static guidance when a run failed at a model stage: start a
   compute tier, wait for it, requeue (#18).
 - **`docs/interpreting-diarization.md`**: segment labels are a
   dominant-overlap projection and can under-report speakers (the turn ledger
@@ -633,13 +633,13 @@ service, pipeline, or numerical changes — images rebuild, numerics untouched.
 ### Fixed
 - **Installer port-collision prompts were invisible**: after the first
   detected collision, a stray `exec … 2>/dev/null` in `port_in_use`
-  permanently redirected the whole script's stderr to /dev/null — every
+  permanently redirected the whole script's stderr to /dev/null; every
   later prompt and message vanished (#21).
 - Installer re-runs that switch tier (or defer on a removed token) no longer
   strand the previous overlay's model containers
   (`docker compose up --remove-orphans`).
 - Kept-`.env` reads now match Compose dotenv semantics (trailing CR,
-  surrounding blanks, matched single/double quotes) — a hand-edited
+  surrounding blanks, matched single/double quotes); a hand-edited
   `HF_TOKEN=""` no longer defeats the skip-token deferral or produces a
   false "token rejected" warning.
 - `.env` backups are forced to mode 0600 (`cp -p` had preserved a loose
@@ -654,15 +654,15 @@ service, pipeline, or numerical changes — images rebuild, numerics untouched.
   quickstart ("No NVIDIA GPU? Start here too"), and the CPU section is a
   linkable heading (#20).
 - README and `voxint score --help` now state exactly what the harness
-  scores: speaker attribution (name accuracy / agreement / ensemble) — ASR
+  scores: speaker attribution (name accuracy / agreement / ensemble); ASR
   accuracy / WER is out of scope (#19).
 - The installer handoff is honest about readiness: only the API is
   health-checked; model services are reported as *started* with the ps
   command to check them, not "enabled".
 
-## [0.4.0] — 2026-08-13
+## [0.4.0] - 2026-08-13
 
-CPU tier: run Voxint's full pipeline with **no NVIDIA GPU** — on plain
+CPU tier: run Voxint's full pipeline with **no NVIDIA GPU**, on plain
 servers, AMD boxes, and Apple Silicon (Docker Desktop). Closes the
 container-path ask of #1 (Apple Silicon) and #4 (AMD); accelerated ROCm and
 native-Metal tiers are tracked separately.
@@ -681,12 +681,12 @@ native-Metal tiers are tracked separately.
 - **titanet ONNX Runtime engine in the shipped `-cpu` image**
   (`EMBED_ENGINE=onnx`, torch- and NeMo-free): same embedding space id
   (`titanet-large-v1`), kept on the measured three-level parity gate
-  (mel / vector / decision) against the CUDA engine — verdict recorded in
+  (mel / vector / decision) against the CUDA engine; verdict recorded in
   `docs/gpu-contracts.md`. The build verifies the model artifact's sha256
   against the committed export provenance; the ~100 MB `.onnx` ships via the
   standing `titanet-onnx-v1` model-asset release, never git.
 - **pyannote device cascade** (`cuda → mps → cpu`) with a real-tensor-op
-  startup probe that checks device output against a CPU reference — a backend
+  startup probe that checks device output against a CPU reference: a backend
   that computes silently-wrong results (the historical MPS failure mode) is
   rejected, not trusted. MPS is inert in containers; the branch serves the
   future Apple host-process path.
@@ -706,7 +706,7 @@ native-Metal tiers are tracked separately.
   `-cpu` flavor runs the same faster-whisper/CTranslate2 int8 engine with
   CPU-appropriate defaults (`BATCH_SIZE=4`).
 
-## [0.3.0] — 2026-08-13
+## [0.3.0] - 2026-08-13
 
 Non-technical onboarding: get from a fresh clone to a first successful,
 adjudicated run without editing config by hand.
@@ -718,7 +718,7 @@ adjudicated run without editing config by hand.
   host-port collisions and offers a free alternate, and renders `.env` from
   `.env.example` (never overwriting an existing one without a timestamped
   backup). Preflights Docker + the Compose plugin (≥ 2.24), pulls the pinned
-  images, starts the stack, and polls the API container's healthcheck — then
+  images, starts the stack, and polls the API container's healthcheck, then
   prints the console URL and states plainly that the core stack is the control
   plane only (audio processing needs the GPU overlay). Bash 3.2+, macOS/Linux,
   no runtime dependency beyond Docker. (#2)
@@ -727,7 +727,7 @@ adjudicated run without editing config by hand.
   an optional bounded scan that previews and batch-registers existing media),
   define a domain vocabulary that feeds both the Whisper `initial_prompt` and
   the LLM enhancement context, toggle optional LLM transcript enhancement, and
-  check GPU service health honestly — core-only when the GPU overlay is absent,
+  check GPU service health: core-only when the GPU overlay is absent,
   with no silent fallback. Preferences apply per run with no worker restart. An
   onboarding gate holds the console at the wizard until setup is finished, then
   releases the full app. Backed by an `app_settings` singleton (alembic
@@ -739,7 +739,7 @@ adjudicated run without editing config by hand.
   **Settings** page re-runs the wizard and starts, replays (non-destructively),
   or completes the tutorial. (#3)
 
-## [0.2.0] — 2026-08-12
+## [0.2.0] - 2026-08-12
 
 ### Added
 - **Browser console** served from the same FastAPI app: a keyset-paged `/runs`
@@ -750,8 +750,8 @@ adjudicated run without editing config by hand.
   `UPLOAD_MAX_BYTES` (default 5 GiB); each upload lands under a server-issued,
   uuid-namespaced immutable path, with idempotent form replay.
 - **URL ingestion** via yt-dlp: `voxint fetch <url>` and `POST /fetch` register a
-  `MediaItem.source_url` and enqueue a run. A new **ACQUIRE** stage —
-  `STAGE_ORDER[0]`, a no-op for local/uploaded media — downloads it on the worker
+  `MediaItem.source_url` and enqueue a run. A new **ACQUIRE** stage
+  (`STAGE_ORDER[0]`, a no-op for local/uploaded media) downloads it on the worker
   (alembic revision 0005 adds `source_url` and the `acquire` stage). Toggle with
   `YTDLP_ENABLED` (default on).
 - **CAS requeue route** (`POST /runs/{id}/requeue`): the browser equivalent of
@@ -776,7 +776,7 @@ adjudicated run without editing config by hand.
   Celery task is published, so a broker outage leaves the run `QUEUED` (never
   `FAILED`) for the recovery sweep instead of failing the request.
 
-## [0.1.0] — 2026-08-12
+## [0.1.0] - 2026-08-12
 
 First public release.
 
@@ -791,7 +791,7 @@ First public release.
 - pgvector cosine speaker matching with a strict *named ≠ grounded* invariant;
   machine proposals kept separate from human rulings (append-only ledger).
 - Scoring harness `voxint score` (name-accuracy, acoustic agreement, ensemble
-  fusion) — DB-free, installable standalone from PyPI; synthetic walkthrough
+  fusion): DB-free, installable standalone from PyPI; synthetic walkthrough
   under `examples/`.
 - Three GPU model services with frozen v1 HTTP contracts
   (`/v1/transcribe`, `/v1/diarize`, `/v1/embed`).

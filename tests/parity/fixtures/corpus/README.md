@@ -1,18 +1,18 @@
 # Parity golden corpus
 
 Redistributable audio inputs for the backend-parity gates
-(docs/gpu-contracts.md, "Equivalence policy") and the standing NVIDIA
-regression gate. **The committed artifacts are the source of truth** —
-immutable, SHA-256-bound (`provenance.json`), and paired with the reference
-outputs under `../references/` via those checksums.
+(docs/gpu-contracts.md, "Equivalence policy") and the standing NVIDIA regression
+gate. The committed artifacts are the source of truth: immutable, SHA-256-bound
+(`provenance.json`), and paired with the reference outputs under `../references/`
+via those checksums.
 
-Regeneration (`python tools/generate_parity_corpus.py`, run by a human from
-the repo root) is deterministic only per espeak-ng/ffmpeg installation: a
-different espeak voice-data or ffmpeg version produces different audio, the
-checksums change, and every committed reference is invalidated. Never
-hand-edit any corpus file, and never regenerate the corpus without
-immediately re-running `tools/generate_parity_references.py` on CUDA hardware
-and committing corpus + references together.
+Regeneration (`python tools/generate_parity_corpus.py`, run by a human from the
+repo root) is deterministic only per espeak-ng/ffmpeg installation. A different
+espeak voice-data or ffmpeg version produces different audio, the checksums
+change, and every committed reference is invalidated. Never hand-edit any corpus
+file, and never regenerate the corpus without immediately re-running
+`tools/generate_parity_references.py` on CUDA hardware and committing corpus +
+references together.
 
 | File | Role |
 |------|------|
@@ -25,8 +25,8 @@ and committing corpus + references together.
 | `provenance.json` | Tool versions, noise seed, per-voice synthesis args, WAV SHA-256s. |
 
 Reference *outputs* live in `../references/` and are produced by
-`tools/generate_parity_references.py` against running CUDA services on
-maintainer NVIDIA hardware.
+`tools/generate_parity_references.py` against running CUDA services on maintainer
+NVIDIA hardware.
 
 ## License and provenance
 
@@ -36,8 +36,7 @@ works of the Voxint project and are dedicated to the public domain under
 copyrighted source audio and no real-person voice or personal data; all voices
 are synthetic and all content is fictional.
 
-The audio was **synthesized with espeak-ng** (GPLv3). That is a factual
-statement of provenance: Voxint invokes the system `espeak-ng` binary at
-generation time and does not vendor, modify, or redistribute espeak-ng or its
-data. espeak-ng's license governs espeak-ng; it does not attach to these
-authored texts or WAVs.
+The audio was synthesized with espeak-ng (GPLv3). That is a factual statement of
+provenance: Voxint invokes the system `espeak-ng` binary at generation time and
+does not vendor, modify, or redistribute espeak-ng or its data. espeak-ng's
+license governs espeak-ng; it does not attach to these authored texts or WAVs.
