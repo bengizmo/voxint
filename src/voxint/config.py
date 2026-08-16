@@ -238,16 +238,20 @@ class Settings(BaseSettings):
     # reclaimed run stays re-processable from source. OFF by default — no bytes
     # are ever reclaimed until an operator opts in.
     media_retention_enabled: bool = False
-    # Age (since a run was last modified — reaching a terminal state, or an
-    # operator note edit; adjudication/enrichment do NOT touch it) after which a
-    # terminal run's normalized-audio intermediate becomes eligible for
-    # reclamation. Only consulted when media_retention_enabled. Floor 1 h; the
-    # 30-day default is a conservative starting point, tune via env.
+    # Age (since a run was last modified — reaching a terminal state, an
+    # operator note edit, OR a review claim/release, all of which bump
+    # updated_at; enrichment and adjudication decisions write to separate tables
+    # and do NOT) after which a terminal run's normalized-audio intermediate
+    # becomes eligible for reclamation. Keying on updated_at is intentionally
+    # conservative: a run under active review keeps its clock reset, so the
+    # intermediate is only ever reclaimed too LATE, never too early. Only
+    # consulted when media_retention_enabled. Floor 1 h; the 30-day default is a
+    # conservative starting point, tune via env.
     # NOTE: deliberately NOT tier-scaled (absent from TIER_SCALED_TIMING_FIELDS)
     # — retention is wall-clock policy, not a compute-tier timing budget.
     media_retention_seconds: int = Field(default=2592000, ge=3600)  # 30 d
     # How often the GC sweep runs (only registered on beat when retention is on).
-    gc_sweep_seconds: int = 3600
+    gc_sweep_seconds: int = Field(default=3600, ge=60)
     # Rows reclaimed per sweep, oldest-first — bounds one sweep's work and the
     # per-sweep IO burst. A backlog drains at gc_batch_limit per gc_sweep_seconds.
     gc_batch_limit: int = Field(default=500, ge=1)

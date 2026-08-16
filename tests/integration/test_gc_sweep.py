@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.media.reclaim import (
+    MediaRootUnavailableError,
     configured_tutorial_run_id,
     reclaim_expired_intermediates,
     run_intermediate_reclaimed_at,
@@ -28,7 +29,9 @@ WAV_BYTES = b"RIFFmock-normalized-wav-payload"
 
 @pytest.fixture()
 def media_root(tmp_path: Path) -> Path:
-    return tmp_path / "media"
+    root = tmp_path / "media"
+    root.mkdir()  # a present, mounted root (the sweep aborts on a missing one)
+    return root
 
 
 def _seed_run(
@@ -178,14 +181,64 @@ def test_idempotent_second_sweep(session: Session, media_root: Path) -> None:
 
 def test_missing_file_tolerated(session: Session, media_root: Path) -> None:
     # Orphan case (prepare's delete-without-unlink, or an interrupted reclaim):
-    # the row is stamped, bytes 0, no error.
+    # a genuinely-absent leaf under a PRESENT media_root — the row is stamped,
+    # bytes 0, no error.
     rid = _seed_run(session)
     _seed_artifact(session, media_root, rid, write_file=False)
+    assert media_root.is_dir()  # guard: this is a missing-leaf, not a missing-root, test
     summary = _sweep(session, media_root)
     assert summary.missing == 1
     assert summary.reclaimed == 0
     assert summary.bytes == 0
     assert run_intermediate_reclaimed_at(session, rid) is not None
+
+
+def test_missing_media_root_aborts_without_stamping(
+    session: Session, tmp_path: Path
+) -> None:
+    # An unmounted/absent root must NOT be read as "every file is gone" and
+    # mass-stamp live rows — the sweep aborts loudly instead (review finding).
+    absent_root = tmp_path / "not-mounted"
+    rid = _seed_run(session)
+    session.execute(
+        text(
+            "INSERT INTO audio_artifacts (id, pipeline_run_id, kind, path)"
+            " VALUES (:id, :rid, 'preprocessed_audio', :p)"
+        ),
+        {"id": uuid.uuid4(), "rid": rid, "p": f"artifacts/{rid}/normalized.wav"},
+    )
+    session.commit()
+    with pytest.raises(MediaRootUnavailableError):
+        _sweep(session, absent_root)
+    session.rollback()
+    assert run_intermediate_reclaimed_at(session, rid) is None  # nothing stamped
+
+
+def test_path_with_dotdot_is_rejected(session: Session, media_root: Path) -> None:
+    # A malformed row whose path normalizes onto a sibling tree must fail closed
+    # (the source-alias vector) — never unlink, never stamp.
+    outside = media_root.parent / "incoming" / "source.wav"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(b"source media - keep me")
+    rid = _seed_run(session)
+    _seed_artifact(
+        session, media_root, rid, rel="artifacts/x/../../incoming/source.wav", write_file=False
+    )
+    summary = _sweep(session, media_root)
+    assert summary.failed == 1
+    assert outside.exists() and outside.read_bytes() == b"source media - keep me"
+    assert run_intermediate_reclaimed_at(session, rid) is None
+
+
+def test_multiple_preprocessed_rows_all_reclaimed(session: Session, media_root: Path) -> None:
+    # Defensive: if a run somehow carries >1 preprocessed_audio row, every
+    # eligible file is reclaimed in the sweep (no silently-skipped sibling).
+    rid = _seed_run(session)
+    a = _seed_artifact(session, media_root, rid, rel=f"artifacts/{rid}/normalized.wav")
+    b = _seed_artifact(session, media_root, rid, rel=f"artifacts/{rid}/normalized-2.wav")
+    summary = _sweep(session, media_root)
+    assert summary.reclaimed == 2
+    assert not a.exists() and not b.exists()
 
 
 def test_source_alias_is_protected(session: Session, media_root: Path) -> None:
@@ -239,8 +292,11 @@ def test_symlink_is_not_followed_or_unlinked(
 
 
 def test_path_escaping_media_root_fails_closed(session: Session, media_root: Path) -> None:
+    # Under the artifacts/ prefix but escaping via .. — fail closed, never stamp.
     rid = _seed_run(session)
-    _seed_artifact(session, media_root, rid, rel="../escape/normalized.wav", write_file=False)
+    _seed_artifact(
+        session, media_root, rid, rel="artifacts/../../escape/normalized.wav", write_file=False
+    )
     summary = _sweep(session, media_root)
     assert summary.failed == 1
     assert run_intermediate_reclaimed_at(session, rid) is None
@@ -298,6 +354,30 @@ def test_for_update_skip_locked_claims_rows(
         contended = _select_eligible(b, cutoff=CUTOFF, batch_limit=10, tutorial_run_id=None)
         assert contended == []  # b skips the locked row
         a.rollback()
+
+
+def test_commit_failure_after_unlink_restamps_bytes_zero(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Crash-window semantics: if commit fails after the files were unlinked, the
+    # stamps roll back but the files are gone. The next sweep re-selects the row
+    # and converges to a benign bytes-0 "missing" stamp (never an error, never a
+    # lost file that should have lived).
+    with session_factory() as seed:
+        rid = _seed_run(seed)
+        wav = _seed_artifact(seed, media_root, rid)
+
+    with session_factory() as crashing:
+        crashing.commit = lambda: (_ for _ in ()).throw(RuntimeError("disk full"))  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="disk full"):
+            _sweep(crashing, media_root)
+    assert not wav.exists()  # the unlink already happened
+
+    with session_factory() as retry:
+        summary = _sweep(retry, media_root)
+        assert summary.missing == 1
+        assert summary.bytes == 0
+        assert run_intermediate_reclaimed_at(retry, rid) is not None
 
 
 def test_configured_tutorial_run_id_reads_singleton(session: Session) -> None:

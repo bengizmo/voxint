@@ -73,19 +73,36 @@ class _UnsafePathError(Exception):
     """The stored artifact path escapes the media root or is not a plain file."""
 
 
-def _confined_leaf(media_root: Path, rel: str) -> Path:
-    """Resolve ``media_root / rel`` to a confined, no-follow leaf path.
+class MediaRootUnavailableError(Exception):
+    """``media_root`` is not a mounted directory — abort rather than mass-stamp.
 
-    Confines by resolving the PARENT (so a symlinked intermediate directory that
-    escapes the root is caught) and then keeping the un-followed leaf name, so a
-    symlink AT the artifact location is detectable by the caller's ``lstat``.
-    Raises :class:`_UnsafePathError` if the parent escapes the root.
+    An unmounted/absent root would make every leaf ``lstat`` raise
+    ``FileNotFoundError``, which the per-row path would otherwise misread as
+    "file already gone" and stamp the whole batch reclaimed with 0 bytes while
+    the real files sit on the unmounted volume. Fail the sweep loudly instead;
+    the next beat tick retries once the volume is back.
     """
+
+
+def _confined_parent_and_name(media_root: Path, rel: str) -> tuple[Path, str]:
+    """Confine ``media_root / rel`` to ``(resolved_parent_dir, leaf_name)``.
+
+    Rejects (fail closed) any absolute path or one containing a ``..`` segment —
+    the alias vector by which a malformed row like
+    ``artifacts/run/../../incoming/source.wav`` could otherwise normalize onto a
+    retained source file. The parent is resolved (catching a symlinked
+    intermediate directory that escapes the root) but the leaf name is kept
+    un-followed so the caller's no-follow ``lstat``/``unlink`` can detect a
+    symlink AT the artifact location.
+    """
+    rel_path = Path(rel)
+    if rel_path.is_absolute() or ".." in rel_path.parts or rel_path.name in ("", ".", ".."):
+        raise _UnsafePathError(f"{rel!r} is not a plain relative artifact path")
     root = media_root.resolve()
-    parent = (media_root / rel).parent.resolve()
+    parent = (media_root / rel_path).parent.resolve()
     if not parent.is_relative_to(root):
         raise _UnsafePathError(f"{rel!r} escapes media root {root}")
-    return parent / Path(rel).name
+    return parent, rel_path.name
 
 
 def _reclaim_one(session: Session, artifact: AudioArtifact, media_root: Path) -> tuple[str, int]:
@@ -95,37 +112,56 @@ def _reclaim_one(session: Session, artifact: AudioArtifact, media_root: Path) ->
     real bytes), ``"missing"`` (file already gone, bytes 0), or ``"failed"`` (an
     unsafe path or an OS error other than not-found — the row is left
     UNRECLAIMED so the next sweep retries it).
+
+    Deletion goes through a directory file descriptor opened ``O_NOFOLLOW`` and
+    then ``lstat``/``unlink`` by leaf name relative to it, so a parent-directory
+    symlink swap between the check and the unlink cannot redirect the delete
+    outside ``media_root`` (TOCTOU). ``media_root`` itself is verified present
+    once per batch by the caller, so a missing parent here means the file is
+    genuinely gone.
     """
     try:
-        leaf = _confined_leaf(media_root, artifact.path)
-        lst = os.lstat(leaf)  # never follows a leaf symlink
-    except FileNotFoundError:
-        _stamp(artifact, 0)
-        return "missing", 0
-    except (_UnsafePathError, OSError) as exc:
+        parent, name = _confined_parent_and_name(media_root, artifact.path)
+    except _UnsafePathError as exc:
         logger.warning("gc: leaving artifact %s unreclaimed: %s", artifact.id, exc)
         return "failed", 0
 
-    if stat_module.S_ISLNK(lst.st_mode) or not stat_module.S_ISREG(lst.st_mode):
-        logger.warning(
-            "gc: artifact %s path %r is not a regular file — leaving unreclaimed",
-            artifact.id,
-            artifact.path,
-        )
-        return "failed", 0
-
-    size = lst.st_size
     try:
-        os.unlink(leaf)
+        dir_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except FileNotFoundError:
+        # Parent dir gone under a present media_root ⇒ the file is gone too.
         _stamp(artifact, 0)
         return "missing", 0
     except OSError as exc:
-        logger.warning("gc: unlink failed for artifact %s: %s", artifact.id, exc)
+        logger.warning("gc: cannot open artifact %s parent dir: %s", artifact.id, exc)
         return "failed", 0
 
-    _stamp(artifact, size)
-    return "reclaimed", size
+    try:
+        try:
+            lst = os.lstat(name, dir_fd=dir_fd)  # never follows the leaf
+        except FileNotFoundError:
+            _stamp(artifact, 0)
+            return "missing", 0
+        if stat_module.S_ISLNK(lst.st_mode) or not stat_module.S_ISREG(lst.st_mode):
+            logger.warning(
+                "gc: artifact %s path %r is not a regular file — leaving unreclaimed",
+                artifact.id,
+                artifact.path,
+            )
+            return "failed", 0
+        size = lst.st_size
+        try:
+            os.unlink(name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            _stamp(artifact, 0)
+            return "missing", 0
+        except OSError as exc:
+            logger.warning("gc: unlink failed for artifact %s: %s", artifact.id, exc)
+            return "failed", 0
+        _stamp(artifact, size)
+        return "reclaimed", size
+    finally:
+        os.close(dir_fd)
 
 
 def _stamp(artifact: AudioArtifact, size: int) -> None:
@@ -142,9 +178,15 @@ def _select_eligible(
 ) -> list[AudioArtifact]:
     """Claim up to ``batch_limit`` reclaimable artifacts, oldest run first.
 
-    Eligible = an unreclaimed ``preprocessed_audio`` row whose run is terminal
-    and untouched since ``cutoff``, that is neither the tutorial run nor aliased
-    by any ``media_items.source_path`` (defensive source-retention guard).
+    Eligible = an unreclaimed ``preprocessed_audio`` row under the ``artifacts/``
+    subtree (never a source path — prepare writes ``artifacts/{run_id}/…``)
+    whose run is terminal (``completed``/``cancelled`` — FAILED is deliberately
+    excluded: a requeued FAILED run resumes at its failed stage and still needs
+    the intermediate) and untouched since ``cutoff``, that is neither the
+    tutorial run nor aliased by any ``media_items.source_path``. The
+    ``artifacts/`` prefix plus the ``..``-rejecting confinement in
+    :func:`_confined_parent_and_name` make it structurally impossible to reclaim
+    a retained source file even via a malformed row.
     """
     source_alias = exists().where(MediaItem.source_path == AudioArtifact.path)
     stmt = (
@@ -152,6 +194,7 @@ def _select_eligible(
         .join(PipelineRun, PipelineRun.id == AudioArtifact.pipeline_run_id)
         .where(
             AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
+            AudioArtifact.path.like("artifacts/%"),
             AudioArtifact.reclaimed_at.is_(None),
             PipelineRun.status.in_(_TERMINAL_STATUSES),
             PipelineRun.updated_at < cutoff,
@@ -180,7 +223,16 @@ def reclaim_expired_intermediates(
     so the ``FOR UPDATE`` claim is held across every unlink (see module docs).
     Per-row failures are isolated — one unsafe path or IO error never aborts the
     batch; that row is simply left unreclaimed for the next sweep.
+
+    Aborts with :class:`MediaRootUnavailableError` if ``media_root`` is not a
+    mounted directory, so a transient unmount can never mass-stamp live files as
+    reclaimed (a per-row ``lstat`` cannot tell an absent leaf from an absent
+    volume — the mount check can).
     """
+    if not media_root.is_dir():
+        raise MediaRootUnavailableError(
+            f"gc: media_root {media_root} is not a directory — aborting sweep"
+        )
     artifacts = _select_eligible(
         session, cutoff=cutoff, batch_limit=batch_limit, tutorial_run_id=tutorial_run_id
     )

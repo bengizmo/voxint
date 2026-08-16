@@ -359,6 +359,13 @@ def test_gc_batch_limit_must_be_positive() -> None:
         Settings(_env_file=None, gc_batch_limit=0)
 
 
+def test_gc_sweep_seconds_has_floor() -> None:
+    # A zero/negative beat interval would make celery-beat tight-loop the sweep.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, gc_sweep_seconds=0)
+    assert Settings(_env_file=None, gc_sweep_seconds=60).gc_sweep_seconds == 60
+
+
 def test_media_retention_seconds_not_tier_scaled() -> None:
     # Retention is wall-clock policy, not a compute-tier timing budget — a cpu
     # tier must NOT quietly quadruple the operator's retention window.
