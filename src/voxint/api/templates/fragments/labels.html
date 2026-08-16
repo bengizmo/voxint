@@ -178,6 +178,40 @@
     </button>
     <span class="t">{{ "%.1f"|format(seg.start_seconds) }}s</span>
     {{ seg.enhanced_text or seg.raw_text }}
+    {# Two-scope relabel (issue #54 Phase B): the per-label controls above assign
+       ALL of a label; this assigns just THIS segment. An override shows its
+       speaker + a reset (inherit) that returns the segment to its label live. #}
+    {% if token %}
+    {% set ov = segment_overrides.get(seg.id) %}
+    {% if ov %}
+    <span class="seg-override muted">→ {{ ov.speaker_name }} (this segment)</span>
+    <form class="inline" method="post"
+          action="/review/{{ run.id }}/segments/{{ seg.id }}/relabel"
+          hx-post="/review/{{ run.id }}/segments/{{ seg.id }}/relabel"
+          hx-target="#labels" hx-swap="innerHTML">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="nonce" value="{{ nonce() }}">
+      <input type="hidden" name="action" value="inherit">
+      <button type="submit">reset to label</button>
+    </form>
+    {% else %}
+    <form class="inline seg-relabel" method="post"
+          action="/review/{{ run.id }}/segments/{{ seg.id }}/relabel"
+          hx-post="/review/{{ run.id }}/segments/{{ seg.id }}/relabel"
+          hx-target="#labels" hx-swap="innerHTML">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="nonce" value="{{ nonce() }}">
+      <input type="hidden" name="action" value="assign">
+      <select name="speaker_id" required aria-label="Reassign just this segment">
+        <option value="" disabled selected>— just this segment —</option>
+        {% for sp in speakers %}
+        <option value="{{ sp.id }}">{{ sp.display_name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit">reassign segment</button>
+    </form>
+    {% endif %}
+    {% endif %}
   </div>
   {% endfor %}
 

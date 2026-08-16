@@ -78,6 +78,9 @@ def _assigned_run_ids(session: Session, speaker_id: uuid.UUID) -> list[uuid.UUID
         .where(
             AdjudicationDecision.decision == Decision.ASSIGN.value,
             AdjudicationDecision.speaker_id.in_(aliases),
+            # LABEL scope only (issue #54 Phase B): a per-segment override is not
+            # a whole-label attribution and must not seed run-level research.
+            AdjudicationDecision.transcript_segment_id.is_(None),
         )
         .order_by(AdjudicationDecision.created_at.desc())
     ).all()
@@ -106,6 +109,7 @@ def _candidate_names(
             ).where(
                 AdjudicationDecision.decision == Decision.ASSIGN.value,
                 AdjudicationDecision.speaker_id.in_(aliases),
+                AdjudicationDecision.transcript_segment_id.is_(None),
             )
         ).all()
     )

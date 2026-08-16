@@ -31,6 +31,7 @@ def _payload_matches(
     decision: Decision,
     speaker_id: uuid.UUID | None,
     operator: str,
+    transcript_segment_id: uuid.UUID | None,
 ) -> bool:
     return (
         row.pipeline_run_id == pipeline_run_id
@@ -38,6 +39,7 @@ def _payload_matches(
         and row.decision == decision.value
         and row.speaker_id == speaker_id
         and row.operator == operator
+        and row.transcript_segment_id == transcript_segment_id
     )
 
 
@@ -50,8 +52,15 @@ def record_decision(
     operator: str,
     idempotency_key: str,
     speaker_id: uuid.UUID | None = None,
+    transcript_segment_id: uuid.UUID | None = None,
 ) -> AdjudicationDecision:
-    """Append a ruling; replaying an identical request returns the existing row."""
+    """Append a ruling; replaying an identical request returns the existing row.
+
+    ``transcript_segment_id`` NULL is the historical label scope (rules the whole
+    ``(run, label)``); non-NULL scopes the ruling to one segment (issue #54
+    Phase B). It is part of the replay identity, so the same key replayed with a
+    different scope is a conflict, not a silent adopt.
+    """
     existing = session.execute(
         select(AdjudicationDecision).where(
             AdjudicationDecision.idempotency_key == idempotency_key
@@ -65,6 +74,7 @@ def record_decision(
             speaker_id=speaker_id,
             operator=operator,
             idempotency_key=idempotency_key,
+            transcript_segment_id=transcript_segment_id,
         )
         try:
             # Savepoint, not a bare flush: callers compose this into larger
@@ -88,7 +98,13 @@ def record_decision(
         else:
             return row
     if _payload_matches(
-        existing, pipeline_run_id, diarization_label, decision, speaker_id, operator
+        existing,
+        pipeline_run_id,
+        diarization_label,
+        decision,
+        speaker_id,
+        operator,
+        transcript_segment_id,
     ):
         return existing
     raise ConflictingReplayError(idempotency_key)

@@ -48,6 +48,7 @@ from voxint.adjudication.resolver import (
     Resolution,
     adjudication_queue,
     label_states,
+    segment_states,
 )
 from voxint.adjudication.slots import (
     ClaimMismatchError,
@@ -791,6 +792,9 @@ def _workbench_context(
         # two surfaces.
         "palette": speaker_palette(_run_label_universe(session, run.id)),
         "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
+        # Per-segment overrides (issue #54 Phase B): keyed by segment id, so a
+        # preview segment can show its this-segment attribution + a reset control.
+        "segment_overrides": segment_states(session, run.id),
         # Island props for the workbench-player (mounted OUTSIDE #labels). It owns
         # the <audio>, the speed control, the visible capability banner, and the
         # document-delegated enabling of the server-rendered seek buttons.
@@ -2384,6 +2388,80 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except MergeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _labels_response(request, session, run, token)
+
+    @protected.post("/review/{run_id}/segments/{segment_id}/relabel")
+    def relabel_segment(
+        run_id: uuid.UUID,
+        segment_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        nonce: Annotated[str, Form(min_length=8, max_length=64)],
+        action: Annotated[str, Form()],
+        speaker_id: Annotated[uuid.UUID | None, Form()] = None,
+    ) -> Response:
+        """Two-scope relabel, THIS-SEGMENT scope (issue #54 Phase B).
+
+        Overrides one transcript segment's attribution without touching the rest
+        of its label. ``action`` is ``assign`` (a speaker just for this segment)
+        or ``inherit`` (append-only reset: the segment follows its label's
+        resolution again). The diarization label is derived from the segment row
+        server-side, never trusted from the client. Claim-gated and idempotent
+        like every workbench ruling; a later whole-label ruling leaves the
+        override intact, and inherit tracks the label live rather than freezing.
+        """
+        try:
+            run = verify_claim(session, run_id, token, for_update=True)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            decision = Decision(action)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=f"unknown action {action!r}") from exc
+        if decision not in (Decision.ASSIGN, Decision.INHERIT):
+            raise HTTPException(
+                status_code=422, detail="segment scope allows only assign or inherit"
+            )
+        if (decision is Decision.ASSIGN) != (speaker_id is not None):
+            raise HTTPException(
+                status_code=422, detail="assign requires speaker_id; inherit forbids it"
+            )
+        segment = session.get(TranscriptSegment, segment_id)
+        if segment is None or segment.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+        if segment.diarization_label is None:
+            raise HTTPException(
+                status_code=400, detail="segment has no diarization label to override"
+            )
+        if speaker_id is not None:
+            speaker = session.execute(
+                select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
+            ).scalar_one_or_none()
+            if speaker is None:
+                raise HTTPException(status_code=422, detail=f"no speaker {speaker_id}")
+            if not roster_is_active(speaker):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"speaker {speaker.display_name!r} is no longer an active"
+                        " roster identity — refresh and pick another"
+                    ),
+                )
+        try:
+            record_decision(
+                session,
+                pipeline_run_id=run_id,
+                diarization_label=segment.diarization_label,
+                decision=decision,
+                operator=operator,
+                idempotency_key=nonce,
+                speaker_id=speaker_id,
+                transcript_segment_id=segment_id,
+            )
+        except ConflictingReplayError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
     @protected.post("/review/{run_id}/labels/{label}/enroll")

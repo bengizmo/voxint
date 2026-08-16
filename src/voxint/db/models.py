@@ -137,6 +137,10 @@ class Decision(enum.StrEnum):
     ASSIGN = "assign"
     EXCLUDE = "exclude"
     UNKNOWN = "unknown"
+    # Segment-scope only (issue #54 Phase B): "this one segment inherits its
+    # label's resolution" — the append-only reset that clears a per-segment
+    # override without freezing a copied identity. Never used at label scope.
+    INHERIT = "inherit"
 
 
 class EnrichmentTargetKind(enum.StrEnum):
@@ -630,6 +634,18 @@ class AdjudicationDecision(Base):
             "(decision = 'assign') = (speaker_id IS NOT NULL)",
             name="adjudication_decisions_assign_speaker_check",
         ),
+        # INHERIT is a segment-scope reset only; it is meaningless at label scope
+        # (issue #54 Phase B). A NULL transcript_segment_id is label scope.
+        CheckConstraint(
+            "decision != 'inherit' OR transcript_segment_id IS NOT NULL",
+            name="adjudication_decisions_inherit_segment_check",
+        ),
+        # Batch-load the per-run segment overlay in one indexed pass.
+        Index(
+            "ix_adjudication_decisions_run_segment",
+            "pipeline_run_id",
+            "transcript_segment_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -637,6 +653,13 @@ class AdjudicationDecision(Base):
     diarization_label: Mapped[str] = mapped_column(Text)
     decision: Mapped[str] = mapped_column(Text)
     speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
+    # NULL = label scope (the historical grain: rules the whole (run, label)).
+    # Non-NULL = segment scope: this ruling overrides just that one transcript
+    # segment. The writer derives diarization_label from the segment row, so the
+    # two always agree (issue #54 Phase B).
+    transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("transcript_segments.id"), nullable=True
+    )
     operator: Mapped[str] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

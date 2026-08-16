@@ -25,6 +25,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   idempotency keys). Every ruling lands in the existing append-only decision
   history; nothing is destructive and any label can be re-ruled afterwards. Built
   as progressively-enhanced htmx (no new frontend dependency).
+- **Two-scope relabel — "this segment only"** (#54, #47): assigning a speaker in
+  the workbench now offers both scopes. The existing per-label controls rule
+  **all** of a label; a new per-segment control (on each previewed line)
+  reassigns **just that one transcript segment** without touching the rest of its
+  label, with a one-click **"reset to label"** that returns the segment to its
+  label's resolution. Segment overrides live in the same immutable decision
+  ledger (a nullable `transcript_segment_id`, not a parallel store) and are
+  resolved at read time with a strict precedence — a segment override beats its
+  label's ruling beats the machine proposal — so a later whole-label ruling never
+  clobbers an explicit segment correction, and a reset **tracks the label live**
+  rather than freezing a copy. The HTML transcript and every text export share
+  the one resolver, so they can never disagree. Known v1 limitation (documented):
+  the run **search** facet and the review queue stay label-scoped — a speaker
+  present only via a segment override does not surface there.
 - **Follow-along highlight + per-speaker colors** (#50, #47): the transcript
   player now keeps the currently-playing line in view as playback advances
   (scroll-into-view, no smooth animation, no focus stealing). Following starts

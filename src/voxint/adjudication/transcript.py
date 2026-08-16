@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import LabelState, Resolution, label_states
+from voxint.adjudication.resolver import (
+    LabelState,
+    Resolution,
+    SegmentOverride,
+    label_states,
+    segment_states,
+)
 from voxint.db.models import TranscriptSegment
 
 
@@ -63,11 +69,29 @@ def display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
     return label
 
 
+def segment_speaker(override: SegmentOverride, seg: TranscriptSegment) -> str:
+    """The speaker string for a segment carrying an active per-segment override.
+
+    Segment scope only assigns (inherit is filtered out upstream), so an override
+    always names a speaker; fall back to the raw label only if the assigned
+    speaker somehow has no name.
+    """
+    return override.speaker_name or seg.diarization_label or "(no speaker)"
+
+
 def attributed_transcript(
     session: Session, run_id: uuid.UUID, *, text: TranscriptText
 ) -> list[TranscriptLine]:
-    """Every segment of a run in order, each attributed through the resolver."""
+    """Every segment of a run in order, each attributed through the resolver.
+
+    A per-segment override (issue #54 Phase B) wins for its own segment; every
+    other segment falls through to its label's resolution — so a segment that
+    inherits (or was never overridden) tracks later label rulings live, never a
+    frozen copy. Both the HTML transcript page and the text export share this
+    one function, so they can never disagree.
+    """
     states = {s.label: s for s in label_states(session, run_id)}
+    overrides = segment_states(session, run_id)
     segments = session.execute(
         select(TranscriptSegment)
         .where(TranscriptSegment.pipeline_run_id == run_id)
@@ -76,11 +100,16 @@ def attributed_transcript(
     lines: list[TranscriptLine] = []
     for seg in segments:
         body = seg.raw_text if text is TranscriptText.RAW else (seg.enhanced_text or seg.raw_text)
+        override = overrides.get(seg.id)
+        if override is not None:
+            speaker = segment_speaker(override, seg)
+        else:
+            speaker = display_name(states.get(seg.diarization_label or ""), seg)
         lines.append(
             TranscriptLine(
                 start_seconds=seg.start_seconds,
                 end_seconds=seg.end_seconds,
-                speaker=display_name(states.get(seg.diarization_label or ""), seg),
+                speaker=speaker,
                 text=body,
                 diarization_label=seg.diarization_label,
             )

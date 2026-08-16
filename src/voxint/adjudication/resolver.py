@@ -73,6 +73,9 @@ def _label_unresolved(
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
             AdjudicationDecision.diarization_label == label,
+            # LABEL scope only: a segment-scope override (issue #54 Phase B) rules
+            # one segment, not the label, so it must NOT mark the label resolved.
+            AdjudicationDecision.transcript_segment_id.is_(None),
         )
         .correlate(PipelineRun, DiarizationTurn)
         .exists()
@@ -150,11 +153,19 @@ def speaker_attributed_exists(
             AdjudicationDecision.diarization_label == DiarizationTurn.label,
             AdjudicationDecision.decision == Decision.ASSIGN.value,
             AdjudicationDecision.speaker_id.in_(ids),
+            # LABEL scope only (issue #54 Phase B): speaker search stays a
+            # label-grain fact. Segment-scope overrides are deliberately not
+            # surfaced here (documented v1 limitation); both this row and the
+            # `newer` tie-break below must exclude them, or a segment INHERIT
+            # could appear to "supersede" a label assign in the SQL mirror while
+            # the Python resolver disagrees.
+            AdjudicationDecision.transcript_segment_id.is_(None),
             ~(
                 select(1)
                 .where(
                     newer.pipeline_run_id == run_id,
                     newer.diarization_label == DiarizationTurn.label,
+                    newer.transcript_segment_id.is_(None),
                     or_(
                         newer.created_at > AdjudicationDecision.created_at,
                         and_(
@@ -179,6 +190,7 @@ def speaker_attributed_exists(
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
             AdjudicationDecision.diarization_label == DiarizationTurn.label,
+            AdjudicationDecision.transcript_segment_id.is_(None),
         )
         .correlate(PipelineRun, DiarizationTurn)
         .exists()
@@ -246,10 +258,19 @@ class LabelState:
 def effective_decisions(
     session: Session, run_id: uuid.UUID
 ) -> dict[str, AdjudicationDecision]:
-    """Newest ledger row per label (created_at DESC, id DESC tie-break)."""
+    """Newest LABEL-scope ledger row per label (created_at DESC, id DESC).
+
+    Segment-scope rows (issue #54 Phase B) are excluded here — GROUND ZERO: this
+    feeds ``label_states``, and a newer segment override would otherwise poison a
+    whole label's resolution. Segment overrides resolve separately, in
+    :func:`segment_states`.
+    """
     rows = session.execute(
         select(AdjudicationDecision)
-        .where(AdjudicationDecision.pipeline_run_id == run_id)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.transcript_segment_id.is_(None),
+        )
         .order_by(
             AdjudicationDecision.diarization_label,
             AdjudicationDecision.created_at.desc(),
@@ -260,6 +281,84 @@ def effective_decisions(
     for row in rows:
         effective.setdefault(row.diarization_label, row)
     return effective
+
+
+@dataclass(frozen=True)
+class SegmentOverride:
+    """An active per-segment attribution override (issue #54 Phase B).
+
+    Segment scope carries only ``assign`` (a per-segment speaker) and ``inherit``
+    (reset to the label's resolution). Only an *active* override — one whose
+    newest segment-scope row is an ``assign`` — becomes a ``SegmentOverride``; a
+    newest ``inherit`` (or no row) means the segment simply follows its label, so
+    it has no entry here. ``speaker_id`` is canonicalized through merge
+    tombstones exactly as ``label_states`` does.
+    """
+
+    speaker_id: uuid.UUID
+    speaker_name: str | None
+    decision: AdjudicationDecision
+
+
+def segment_states(
+    session: Session, run_id: uuid.UUID
+) -> dict[uuid.UUID, SegmentOverride]:
+    """Active per-segment overrides for a run, keyed by ``transcript_segment_id``.
+
+    One indexed batch load (no N+1). Newest segment-scope row wins per segment;
+    an ``inherit`` newest means no active override (the segment follows its
+    label), so it is omitted. Speaker ids canonicalize through the same merge map
+    the label resolver uses, so the two scopes can never disagree on identity.
+    """
+    rows = session.execute(
+        select(AdjudicationDecision)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            AdjudicationDecision.transcript_segment_id.is_not(None),
+        )
+        .order_by(
+            AdjudicationDecision.transcript_segment_id,
+            AdjudicationDecision.created_at.desc(),
+            AdjudicationDecision.id.desc(),
+        )
+    ).scalars()
+    newest: dict[uuid.UUID, AdjudicationDecision] = {}
+    for row in rows:
+        assert row.transcript_segment_id is not None
+        newest.setdefault(row.transcript_segment_id, row)
+
+    tombstones = merge_map(session)
+    active: dict[uuid.UUID, AdjudicationDecision] = {
+        seg_id: row
+        for seg_id, row in newest.items()
+        if row.decision == Decision.ASSIGN.value and row.speaker_id is not None
+    }
+    speaker_ids = {
+        canonicalize(row.speaker_id, tombstones)
+        for row in active.values()
+        if row.speaker_id is not None
+    }
+    speaker_ids.discard(None)
+    names: dict[uuid.UUID, str] = (
+        {
+            sid: name
+            for sid, name in session.execute(
+                select(Speaker.id, Speaker.display_name).where(Speaker.id.in_(speaker_ids))
+            ).tuples()
+        }
+        if speaker_ids
+        else {}
+    )
+    result: dict[uuid.UUID, SegmentOverride] = {}
+    for seg_id, row in active.items():
+        assert row.speaker_id is not None  # active rows are assigns; narrows for mypy
+        canonical = canonicalize(row.speaker_id, tombstones)
+        result[seg_id] = SegmentOverride(
+            speaker_id=canonical,
+            speaker_name=names.get(canonical),
+            decision=row,
+        )
+    return result
 
 
 def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:

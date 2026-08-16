@@ -410,6 +410,25 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   server-side (advisory client counts are never trusted); the claim token proves
   ownership, not content-version, so apply re-checks each label's expected
   effective-ruling id and returns 409 if it drifted since the preview.
+- **Two-scope relabel** (issue #54 Phase B): a ruling can target ONE transcript
+  segment instead of the whole `(run, label)`. Storage stays the one immutable
+  ledger — a nullable `adjudication_decisions.transcript_segment_id` (NULL = the
+  historical label scope), not a second table — with a new segment-only
+  `inherit` decision as the append-only reset (the ledger is insert-only, so
+  "undo this override" is a new row, never an UPDATE). The writer derives the
+  segment's label server-side; a CHECK keeps `inherit` segment-only.
+  **Every label-scope query filters `transcript_segment_id IS NULL`** so a
+  segment override never leaks into label resolution — `effective_decisions`
+  (the source `label_states` reads), the `_label_unresolved` /
+  `speaker_attributed_exists` SQL mirrors, and the web-research seeds. Read-time
+  precedence is scope-local: **newest within a scope, then segment beats label
+  beats grounded machine**, never comparing timestamps across scopes.
+  `segment_states` resolves the active per-segment overrides (newest `assign`
+  per segment; a newest `inherit` means none — the segment follows its label
+  live, never a frozen copy) and canonicalizes speaker ids through the same
+  merge tombstones as the label path; `attributed_transcript` overlays it, so the
+  HTML page and every export agree. Deliberate v1 limit: speaker search and the
+  queue stay label-scoped (a segment-only speaker does not surface there).
 - **Auth**: single-operator HTTP Basic (constant-time compare) on every route
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default
