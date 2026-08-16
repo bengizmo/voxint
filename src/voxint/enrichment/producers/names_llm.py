@@ -33,6 +33,11 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.app_settings import (
+    get_app_settings,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_endpoint,
+)
 from voxint.clients.base import EnhancementRequestSegment, LLMClient, SpeakerNameHint
 from voxint.clients.llm import HttpLLMClient, LLMError
 from voxint.config import Settings
@@ -164,6 +169,16 @@ def run_llm_name_producer(
             "the LLM name pass is disabled — set ENRICHMENT_NAMES_LLM_ENABLED=true"
             " and LLM_ENABLED=true"
         )
+    # Resolve the effective endpoint + key from the app_settings row (issue #10): a
+    # UI-stored base_url/model/key win over env. The endpoint goes into exec_settings
+    # so the replay signature, the client, and the evidence provenance all reflect the
+    # model that actually ran; the key is resolved separately and never persisted.
+    row = get_app_settings(session)
+    effective_base_url, effective_model = resolve_effective_llm_endpoint(row, settings)
+    exec_settings = settings.model_copy(
+        update={"llm_base_url": effective_base_url, "llm_model": effective_model}
+    )
+    effective_key = resolve_effective_llm_api_key(row, settings)
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise NameProducerError(f"pipeline run {run_id} not found")
@@ -175,7 +190,7 @@ def run_llm_name_producer(
         ).scalars()
     )
 
-    signature = _input_signature(run_id=run_id, settings=settings, segments=segments)
+    signature = _input_signature(run_id=run_id, settings=exec_settings, segments=segments)
     idempotency_key = f"{LLM_PRODUCER_NAME}:{run_id}:{signature}"
     existing = session.execute(
         select(EnrichmentProducerRun).where(
@@ -192,10 +207,10 @@ def run_llm_name_producer(
     if segments:
         owned = client is None
         llm: LLMClient = client or HttpLLMClient(
-            settings.llm_base_url,
-            settings.llm_model,
-            settings.llm_api_key,
-            settings.llm_timeout_seconds,
+            exec_settings.llm_base_url,
+            exec_settings.llm_model,
+            effective_key,
+            exec_settings.llm_timeout_seconds,
         )
         try:
             for batch in _batches(
@@ -230,7 +245,7 @@ def run_llm_name_producer(
             detail={
                 "pattern_id": "llm_extraction",
                 "kind": hint.kind,
-                "model": settings.llm_model,
+                "model": exec_settings.llm_model,
             },
             detail_schema_version=LLM_DETAIL_SCHEMA_VERSION,
         )
@@ -260,10 +275,10 @@ def run_llm_name_producer(
 
     config = {
         "producer_version": LLM_PRODUCER_VERSION,
-        "model": settings.llm_model,
-        "base_url": settings.llm_base_url,
-        "batch_max_segments": settings.llm_batch_max_segments,
-        "batch_max_chars": settings.llm_batch_max_chars,
+        "model": exec_settings.llm_model,
+        "base_url": exec_settings.llm_base_url,
+        "batch_max_segments": exec_settings.llm_batch_max_segments,
+        "batch_max_chars": exec_settings.llm_batch_max_chars,
         "input_signature": signature,
     }
     try:

@@ -22,6 +22,11 @@ from typing import Any, cast
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.app_settings import (
+    get_app_settings,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_endpoint,
+)
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import ResearchJob, ResearchJobStatus
@@ -342,14 +347,21 @@ def execute_job(
         owned_client: HttpLLMClient | None = None
         client: ChatJsonClient
         if llm is None:
+            # Endpoint + key resolved LIVE from the row (issue #10): research reads
+            # base_url/model live (not from the budget snapshot), and the effective
+            # key (UI-stored value wins over env) is never snapshotted, so a key or
+            # endpoint changed after enqueue takes effect with no restart.
+            row = get_app_settings(session)
+            live_base_url, live_model = resolve_effective_llm_endpoint(row, settings)
+            effective_key = resolve_effective_llm_api_key(row, settings)
             # The snapshotted timeout, not the live one: request_cancel's
             # stale-RUNNING bound is computed from the snapshot, so the client
             # must run under the same value or a settings change between
             # enqueue and execution could force-cancel a still-live request.
             owned_client = HttpLLMClient(
-                settings.llm_base_url,
-                settings.llm_model,
-                settings.llm_api_key,
+                live_base_url,
+                live_model,
+                effective_key,
                 _snapshot_llm_timeout(job.budget),
             )
             client = owned_client

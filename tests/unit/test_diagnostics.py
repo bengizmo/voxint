@@ -166,38 +166,44 @@ def test_check_hf_token_non_dict_200_body_does_not_crash() -> None:
 
 def test_check_llm_none_when_disabled() -> None:
     client = _http(lambda r: httpx.Response(200))
-    assert check_llm(_settings(llm_enabled=False), client=client) is None
+    assert (
+        check_llm(
+            enabled=False, base_url="http://localhost:8000/v1", api_key="", client=client
+        )
+        is None
+    )
 
 
 def test_check_llm_reachable_on_any_http_answer() -> None:
-    settings = _settings(llm_enabled=True, llm_api_key="sk-x")
     client = _http(lambda r: httpx.Response(404))  # host answered ⇒ reachable
-    result = check_llm(settings, client=client)
+    result = check_llm(
+        enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=client
+    )
     assert result is not None
     assert result.ok is True and result.hard is False
     assert "reachable" in result.detail
 
 
 def test_check_llm_transport_error_is_advisory_failure() -> None:
-    settings = _settings(llm_enabled=True)
-
     def handler(_r: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route")
 
-    result = check_llm(settings, client=_http(handler))
+    result = check_llm(
+        enabled=True, base_url="http://localhost:8000/v1", api_key="", client=_http(handler)
+    )
     assert result is not None
     assert result.ok is False and result.hard is False
 
 
 def test_check_llm_invalid_url_does_not_crash() -> None:
-    # httpx.InvalidURL is not an httpx.HTTPError; a malformed llm_base_url must
+    # httpx.InvalidURL is not an httpx.HTTPError; a malformed base_url must
     # resolve to an advisory failure, not abort the whole doctor run.
-    settings = _settings(llm_enabled=True, llm_base_url="http://[::1")  # unparseable
-
     def handler(_r: httpx.Request) -> httpx.Response:
         raise AssertionError("request should not be attempted on an invalid url")
 
-    result = check_llm(settings, client=_http(handler))
+    result = check_llm(
+        enabled=True, base_url="http://[::1", api_key="", client=_http(handler)
+    )
     assert result is not None
     assert result.ok is False and result.hard is False and result.detail == "invalid url"
 

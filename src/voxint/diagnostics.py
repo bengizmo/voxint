@@ -23,8 +23,15 @@ from dataclasses import dataclass
 
 import httpx
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 
 from voxint.api.health_probe import probe_services
+from voxint.app_settings import (
+    get_app_settings,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_endpoint,
+)
 from voxint.config import Settings
 
 HF_WHOAMI_URL = "https://huggingface.co/api/whoami-v2"
@@ -120,17 +127,22 @@ def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
     return CheckResult("hugging face token", False, False, f"HTTP {resp.status_code}")
 
 
-def check_llm(settings: Settings, *, client: httpx.Client) -> CheckResult | None:
+def check_llm(
+    *, enabled: bool, base_url: str, api_key: str, client: httpx.Client
+) -> CheckResult | None:
     """Advisory: reachability of the LLM endpoint, only when enhancement is on.
 
-    Returns ``None`` when ``llm_enabled`` is off — an unconfigured, unused LLM is
-    not a fault. Any HTTP answer (even 401/404) proves the host is reachable; only
-    a transport failure is a miss. The base URL is never printed.
+    Takes the EFFECTIVE LLM configuration (issue #10): ``enabled`` is the row's
+    enablement over env, and ``base_url``/``api_key`` are row-wins-over-env resolved
+    by :func:`run_diagnostics` — so ``doctor`` reflects a UI-stored key/endpoint, not
+    just env. Returns ``None`` when enhancement is off — an unconfigured, unused LLM
+    is not a fault. Any HTTP answer (even 401/404) proves the host is reachable; only
+    a transport failure is a miss. The base URL and key are never printed.
     """
-    if not settings.llm_enabled:
+    if not enabled:
         return None
-    url = settings.llm_base_url.rstrip("/") + "/models"
-    headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         resp = client.get(url, headers=headers)
     except httpx.InvalidURL:
@@ -159,7 +171,23 @@ def run_diagnostics(
     results = [check_database(engine), check_redis(settings.redis_url, client=redis_client)]
     results.extend(check_models(settings, client=http_client))
     results.append(check_hf_token(token, client=http_client))
-    llm = check_llm(settings, client=http_client)
+    # Resolve the effective LLM config from the app_settings row (issue #10) in a
+    # short read-only session on the caller's engine: a UI-stored key/endpoint and
+    # the row's enablement win over env, so doctor reports what a run would actually
+    # use. Attributes are read INSIDE the session (a detached row can't lazy-load).
+    # If the row can't be read — the DB is down (which check_database already
+    # reports) or unmigrated — fall back to env rather than crash this advisory
+    # check; that is robustness for a diagnostic, not a fallback masking a fault.
+    llm_enabled = settings.llm_enabled
+    base_url, api_key = settings.llm_base_url, settings.llm_api_key.strip()
+    with contextlib.suppress(SQLAlchemyError), Session(engine) as session:
+        row = get_app_settings(session)
+        llm_enabled = row.llm_enabled if row is not None else settings.llm_enabled
+        base_url, _model = resolve_effective_llm_endpoint(row, settings)
+        api_key = resolve_effective_llm_api_key(row, settings)
+    llm = check_llm(
+        enabled=llm_enabled, base_url=base_url, api_key=api_key, client=http_client
+    )
     if llm is not None:
         results.append(llm)
     return results

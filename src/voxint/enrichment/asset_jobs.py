@@ -24,6 +24,11 @@ from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.app_settings import (
+    get_app_settings,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_endpoint,
+)
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import RunAssetJob, RunAssetJobStatus, RunAssetKind
@@ -124,7 +129,14 @@ def create_jobs(
         load_source(session, pipeline_run_id)  # validates run + transcript exist
     except RunAssetError as exc:
         raise RunAssetJobError(str(exc)) from exc
-    snapshot = job_config_snapshot(settings)
+    # Snapshot the ROW-resolved endpoint (issue #10): the operator's UI base_url /
+    # model are the enqueue contract, so an env change between enqueue and execution
+    # can't silently redirect the call (the #40 snapshot-executes doctrine). The API
+    # KEY is never snapshotted — it is resolved live at execution from the row.
+    base_url, model = resolve_effective_llm_endpoint(get_app_settings(session), settings)
+    snapshot = job_config_snapshot(
+        settings.model_copy(update={"llm_base_url": base_url, "llm_model": model})
+    )
     created: list[RunAssetJob] = []
     already_active: list[RunAssetKind] = []
     for kind in kinds:
@@ -310,10 +322,14 @@ def execute_job(
         owned_client: HttpLLMClient | None = None
         client: ChatJsonLLM
         if llm is None:
+            # Resolve the effective key LIVE from the row (issue #10): a UI-stored
+            # key wins over env and is never snapshotted into job.config, so a key
+            # rotated after enqueue takes effect on execution with no restart.
+            effective_key = resolve_effective_llm_api_key(get_app_settings(session), settings)
             owned_client = HttpLLMClient(
                 exec_settings.llm_base_url,
                 exec_settings.llm_model,
-                settings.llm_api_key,
+                effective_key,
                 exec_settings.llm_timeout_seconds,
             )
             client = owned_client
