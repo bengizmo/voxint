@@ -52,12 +52,20 @@ def _patch(
     *,
     resolve: object = _servable,
     intervals: list[tuple[float, float]] | None = None,
+    turns: dict[str, tuple[float, float]] | None = None,
 ) -> None:
     monkeypatch.setattr(playback, "resolve_servable_media", resolve)
     monkeypatch.setattr(
         playback,
         "_transcript_intervals",
         lambda _session, _run_id: list(intervals if intervals is not None else []),
+    )
+    # The predicate also validates the per-label "preview this speaker" turn
+    # intervals; default to none so unrelated cases stay transcript-only.
+    monkeypatch.setattr(
+        playback,
+        "representative_turns",
+        lambda _session, _run_id: dict(turns if turns is not None else {}),
     )
 
 
@@ -177,6 +185,50 @@ def test_tolerance_boundary_just_past_is_out_of_bounds(
     cap = playback_capability(None, _run(duration), _SETTINGS, None)  # type: ignore[arg-type]
     assert cap.seek_enabled is False
     assert {r.code for r in cap.reasons} == {"timeline_out_of_bounds"}
+
+
+# --------------------------------------------------------------------------- #
+# Diarization-turn intervals power the "preview this speaker" buttons and are
+# gated by the SAME capability — a turn past the tail must fail closed even when
+# every transcript segment is clean (issue #55 plan-drift guard).
+# --------------------------------------------------------------------------- #
+def test_turn_out_of_bounds_disables_seek_despite_clean_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    duration = 100.0
+    # Transcript segments all in-bounds; one representative turn overruns the tail.
+    _patch(
+        monkeypatch,
+        intervals=[(0.0, 50.0), (50.0, 99.0)],
+        turns={"SPEAKER_00": (0.0, duration + 0.051)},
+    )
+    cap = playback_capability(None, _run(duration), _SETTINGS, None)  # type: ignore[arg-type]
+    assert cap.seek_enabled is False
+    assert "timeline_out_of_bounds" in {r.code for r in cap.reasons}
+
+
+def test_turn_malformed_disables_seek_despite_clean_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch(
+        monkeypatch,
+        intervals=[(0.0, 5.0)],
+        turns={"SPEAKER_00": (8.0, 3.0)},  # inverted turn interval
+    )
+    cap = playback_capability(None, _run(100.0), _SETTINGS, None)  # type: ignore[arg-type]
+    assert cap.seek_enabled is False
+    assert "timeline_malformed" in {r.code for r in cap.reasons}
+
+
+def test_valid_turns_keep_seek_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch(
+        monkeypatch,
+        intervals=[(0.0, 9.0)],
+        turns={"SPEAKER_00": (1.0, 4.0), "SPEAKER_01": (4.0, 9.9)},
+    )
+    cap = playback_capability(None, _run(10.0), _SETTINGS, None)  # type: ignore[arg-type]
+    assert cap.seek_enabled is True
+    assert cap.reasons == []
 
 
 # --------------------------------------------------------------------------- #

@@ -36,7 +36,12 @@ export function WorkbenchPlayer({ runId, mediaUrl, capability }: WorkbenchPlayer
     const disabledReason = capability.reasons[0]?.message ?? "Playback is unavailable.";
 
     // Enable pass: reconcile every server-rendered seek button in #labels with
-    // the capability. Run on mount and after each relevant swap.
+    // the capability. Run on mount and after each relevant swap. NOTE: this uses
+    // the capability captured at page load. If the media were reclaimed mid-
+    // session (rare on a single-operator local box), a post-swap enable pass
+    // would re-enable buttons against stale state — clicking one then no-ops (the
+    // <audio> 410s and play() rejects), so the failure is a dead button, never a
+    // wrong-voice seek. Re-fetching capability per swap isn't worth the ceremony.
     const enablePass = (): void => {
       const labels = document.getElementById("labels");
       if (!labels) return;

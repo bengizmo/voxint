@@ -246,20 +246,28 @@ def playback_capability(
     else:
         media_duration = duration
 
-    # 3. The transcript timeline must be well-formed and inside the recording.
-    intervals = _transcript_intervals(session, run.id)
-    if not intervals:
+    # 3. Every SEEKABLE interval must be well-formed and inside the recording.
+    #    Two interval kinds are seeked under this ONE capability: per-line
+    #    transcript segments (transcript.html + the workbench previews) and the
+    #    per-label "preview this speaker" diarization turn (workbench). A turn can
+    #    run past the canonical duration even when every transcript segment is
+    #    clean — the DB constrains turn ordering, not ``end <= duration`` — so BOTH
+    #    sets are validated here, or a preview button could seek past the tail and
+    #    land on the wrong voice (issue #55).
+    transcript_intervals = _transcript_intervals(session, run.id)
+    if not transcript_intervals:
         reasons.append(_reason("no_segments"))
-    else:
+    seekable = transcript_intervals + list(representative_turns(session, run.id).values())
+    if seekable:
         malformed = any(
             not (math.isfinite(start) and math.isfinite(end) and end > start >= 0)
-            for start, end in intervals
+            for start, end in seekable
         )
         if malformed:
             reasons.append(_reason("timeline_malformed"))
         # Out-of-bounds is only meaningful against a valid duration; compute the
         # last end over finite values so a NaN interval can't poison max().
-        finite_ends = [end for _start, end in intervals if math.isfinite(end)]
+        finite_ends = [end for _start, end in seekable if math.isfinite(end)]
         if (
             media_duration is not None
             and finite_ends

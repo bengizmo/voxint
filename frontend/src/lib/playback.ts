@@ -29,17 +29,17 @@ export const RATE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
 interface ActiveTurn {
   audio: HTMLAudioElement;
   onTimeUpdate: () => void;
-  timer: ReturnType<typeof setTimeout>;
+  rafId: number | null;
 }
 
 // Module-level: exactly one guard may be live across the whole page at a time.
 let active: ActiveTurn | null = null;
 
-// Tear down the current turn's guard (listener + timer). Idempotent.
+// Tear down the current turn's guard (listener + rAF). Idempotent.
 export function cancelActiveTurn(): void {
   if (active === null) return;
   active.audio.removeEventListener("timeupdate", active.onTimeUpdate);
-  clearTimeout(active.timer);
+  if (active.rafId !== null) cancelAnimationFrame(active.rafId);
   active = null;
 }
 
@@ -48,10 +48,13 @@ export function cancelActiveTurn(): void {
  *
  * No-op on a malformed interval (non-finite, or end <= start) — a fail-closed
  * stance mirroring the backend capability contract: never seek somewhere we
- * cannot bound. Stopping at `end` combines a one-shot `timeupdate` check with a
- * wall-clock `setTimeout` fallback scaled by the current playbackRate, because a
- * coarse timeupdate cadence alone can overshoot past `end` into the next
- * speaker's audio before it fires.
+ * cannot bound. The stop boundary is checked against `currentTime` (NOT a
+ * pre-computed wall-clock timer, which would overshoot when the speed is raised
+ * mid-turn or stop early when it is lowered / the stream buffers): a
+ * `requestAnimationFrame` loop gives ~frame-precise stopping in the foreground,
+ * and the `timeupdate` listener is the safety net when rAF is throttled (e.g. a
+ * backgrounded tab). Both are cancelled together so a fast series of clicks can
+ * never leave two guards racing.
  */
 export function playTurn(audio: HTMLAudioElement, start: number, end: number): void {
   if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
@@ -61,7 +64,7 @@ export function playTurn(audio: HTMLAudioElement, start: number, end: number): v
 
   const stop = (): void => {
     // Only act if THIS turn is still the active one (a newer turn may have
-    // superseded it between the event firing and this callback running).
+    // superseded it between the check firing and this callback running).
     if (active === null || active.audio !== audio) return;
     cancelActiveTurn();
     audio.pause();
@@ -71,19 +74,24 @@ export function playTurn(audio: HTMLAudioElement, start: number, end: number): v
     if (audio.currentTime >= end) stop();
   };
 
-  const rate = audio.playbackRate > 0 ? audio.playbackRate : 1;
-  // A little slack (50ms) past the computed span so the fallback only fires when
-  // timeupdate genuinely failed to, not in a photo-finish with it.
-  const fallbackMs = ((end - start) / rate) * 1000 + 50;
-  const timer = setTimeout(stop, fallbackMs);
+  const tick = (): void => {
+    if (active === null || active.audio !== audio) return;
+    if (audio.currentTime >= end) {
+      stop();
+      return;
+    }
+    active.rafId = requestAnimationFrame(tick);
+  };
 
-  active = { audio, onTimeUpdate, timer };
+  active = { audio, onTimeUpdate, rafId: null };
   audio.addEventListener("timeupdate", onTimeUpdate);
+  active.rafId = requestAnimationFrame(tick);
 
   audio.currentTime = start;
   const played = audio.play();
   // play() rejects if the browser blocks autoplay or the element is torn down
   // mid-call; swallow it so an unhandled rejection never surfaces to the user.
+  // The guard is cancelled by the next playTurn / cancelActiveTurn regardless.
   if (played && typeof played.catch === "function") {
     played.catch(() => {
       /* playback blocked or interrupted; the guard still cleans up */
