@@ -102,11 +102,14 @@ def test_notify_enabled_requires_url() -> None:
 
 def test_notify_enabled_rejects_non_public_url() -> None:
     # Reuses the URL-ingestion string gate: localhost / private / credentialed
-    # endpoints are refused, and the error never echoes the URL.
+    # endpoints are refused, and the error never echoes the URL. The non-public
+    # literal is an RFC 5737 TEST-NET-1 address (192.0.2.0/24) rather than an
+    # RFC1918 one: it is still non-global (so the gate rejects it), but keeps
+    # internal-IP shapes out of this public repo (see .gitleaks.toml).
     for bad in (
         "http://localhost/hook",
         "http://127.0.0.1/hook",
-        "http://10.0.0.5/hook",
+        "http://192.0.2.5/hook",
         "https://user:pass@example.com/hook",
         "ftp://example.com/hook",
     ):

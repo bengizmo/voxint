@@ -48,6 +48,12 @@ regexes = [
 # nickname — no address or credential). Scrubbed from the worktree in the v0.4.0
 # release commit; the historical commit is allowlisted because published history
 # is never rewritten.
+# 33c4dc2a: #12 notify tests used an RFC1918 literal (10.0.0.5) as a fixture for
+# the "reject non-public webhook URL" case — a fake example IP, not internal
+# infrastructure. Scrubbed to an RFC 5737 TEST-NET address in the v0.14.0 release
+# commit; the historical commit is allowlisted because published history is never
+# rewritten.
 commits = [
     "29ce5b5a3c0b2a65c5442c467ca5b8c1b177bcfc",
+    "33c4dc2a01934f9a534b3658c5c71e3e861a73e5",
 ]
