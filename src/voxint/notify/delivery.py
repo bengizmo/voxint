@@ -41,10 +41,10 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-from sqlalchemy import and_, or_, select
+from sqlalchemy import CursorResult, and_, delete, or_, select
 
 from voxint.db.models import (
     NotifiableEvent,
@@ -174,6 +174,45 @@ def deliver_due(
     return DeliverySummary(
         claimed=len(claimed), delivered=delivered, suppressed=suppressed, retried=retried, dead=dead
     )
+
+
+def purge_expired_deliveries(
+    factory: sessionmaker[Session], settings: Settings, *, now: datetime | None = None
+) -> int:
+    """Delete settled delivery rows older than the retention horizon; return the
+    count removed.
+
+    Reaps only ``delivered`` and ``suppressed`` rows (fully resolved and no longer
+    actionable) past ``notify_retention_seconds`` — ``dead`` rows are kept until an
+    operator acts on them, and ``pending``/``in_flight`` are still live. Bounded by
+    ``notify_batch_limit`` per call (oldest first) so a large backlog drains over
+    several sweeps rather than in one unbounded DELETE. Age is measured from
+    ``created_at`` (both terminal statuses have one; ``suppressed`` never gets a
+    ``delivered_at``)."""
+    now = now or datetime.now(tz=UTC)
+    cutoff = now - timedelta(seconds=settings.notify_retention_seconds)
+    victims = (
+        select(NotificationDelivery.id)
+        .where(
+            NotificationDelivery.status.in_(
+                (NotificationStatus.DELIVERED.value, NotificationStatus.SUPPRESSED.value)
+            ),
+            NotificationDelivery.created_at < cutoff,
+        )
+        .order_by(NotificationDelivery.created_at.asc())
+        .limit(settings.notify_batch_limit)
+    )
+    with factory() as session:
+        result = cast(
+            "CursorResult[Any]",
+            session.execute(
+                delete(NotificationDelivery).where(
+                    NotificationDelivery.id.in_(victims.scalar_subquery())
+                )
+            ),
+        )
+        session.commit()
+        return int(result.rowcount or 0)
 
 
 def _claim_due(

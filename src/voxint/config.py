@@ -301,6 +301,11 @@ class Settings(BaseSettings):
     # webhook cadence is not coupled to pipeline-stage retry cadence).
     notify_backoff_base_seconds: float = Field(default=10.0, gt=0)
     notify_backoff_max_seconds: float = Field(default=600.0, gt=0)
+    # Age (seconds) after which a settled delivery row (delivered/suppressed) is
+    # purged by the sweep, bounding table growth. dead rows are kept until an
+    # operator acts on them; only the fully-resolved, no-longer-actionable rows
+    # are reaped. Floor 3600 (1 h).
+    notify_retention_seconds: int = Field(default=604800, ge=3600)
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With

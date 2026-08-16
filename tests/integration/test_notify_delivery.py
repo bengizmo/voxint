@@ -11,7 +11,7 @@ separate phase; here rows are seeded directly.
 
 import socket
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -21,7 +21,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.config import Settings
 from voxint.db.models import NotifiableEvent, NotificationDelivery, NotificationStatus
 from voxint.notify import build_payload
-from voxint.notify.delivery import deliver_due, serialize_payload, sign
+from voxint.notify.delivery import (
+    deliver_due,
+    purge_expired_deliveries,
+    serialize_payload,
+    sign,
+)
 
 _SECRET = "a-sufficiently-long-secret"
 _URL = "https://hooks.example.com/voxint"
@@ -104,6 +109,7 @@ def _seed_delivery(
     next_attempt_at: datetime | None = None,
     lease_expires_at: datetime | None = None,
     attempts: int = 0,
+    created_at: datetime | None = None,
 ) -> uuid.UUID:
     did = uuid.uuid4()
     payload = build_payload(
@@ -122,7 +128,13 @@ def _seed_delivery(
         attempts=attempts,
         next_attempt_at=next_attempt_at or (datetime.now(tz=UTC) - timedelta(seconds=1)),
         lease_expires_at=lease_expires_at,
+        # The delivered-shape check constraint requires delivered_at iff DELIVERED.
+        delivered_at=(created_at or datetime.now(tz=UTC))
+        if status is NotificationStatus.DELIVERED
+        else None,
     )
+    if created_at is not None:
+        row.created_at = created_at
     session.add(row)
     return did
 
@@ -489,3 +501,61 @@ def test_secret_and_url_never_in_last_error(session_factory: sessionmaker[Sessio
         last_error = _row(session, did).last_error or ""
         assert _SECRET not in last_error
         assert "/voxint" not in last_error  # the URL path is redacted away
+
+
+def test_purge_reaps_only_old_settled_rows(session_factory: sessionmaker[Session]) -> None:
+    now = datetime.now(tz=UTC)
+    old = now - timedelta(days=30)
+    with session_factory() as session:
+        rid = _seed_run(session, status="completed")
+        old_delivered = _seed_delivery(
+            session, rid, transition_revision=1, status=NotificationStatus.DELIVERED, created_at=old
+        )
+        old_suppressed = _seed_delivery(
+            session, rid, transition_revision=2, status=NotificationStatus.SUPPRESSED, created_at=old
+        )
+        old_dead = _seed_delivery(
+            session, rid, transition_revision=3, status=NotificationStatus.DEAD, created_at=old
+        )
+        fresh_delivered = _seed_delivery(
+            session, rid, transition_revision=4, status=NotificationStatus.DELIVERED, created_at=now
+        )
+        old_pending = _seed_delivery(
+            session, rid, transition_revision=5, status=NotificationStatus.PENDING, created_at=old
+        )
+        session.commit()
+
+    purged = purge_expired_deliveries(
+        session_factory, _settings(notify_retention_seconds=3600), now=now
+    )
+    assert purged == 2  # only the old delivered + suppressed rows
+    with session_factory() as session:
+        surviving = {
+            r.id for r in session.execute(select(NotificationDelivery)).scalars().all()
+        }
+    assert old_delivered not in surviving
+    assert old_suppressed not in surviving
+    assert old_dead in surviving  # kept until an operator acts
+    assert fresh_delivered in surviving  # within retention
+    assert old_pending in surviving  # still live, never a purge target
+
+
+def test_purge_bounded_by_batch_limit(session_factory: sessionmaker[Session]) -> None:
+    now = datetime.now(tz=UTC)
+    old = now - timedelta(days=30)
+    with session_factory() as session:
+        rid = _seed_run(session, status="completed")
+        for i in range(5):
+            _seed_delivery(
+                session,
+                rid,
+                transition_revision=i + 1,
+                status=NotificationStatus.DELIVERED,
+                created_at=old,
+            )
+        session.commit()
+
+    purged = purge_expired_deliveries(
+        session_factory, _settings(notify_retention_seconds=3600, notify_batch_limit=2), now=now
+    )
+    assert purged == 2  # one bounded batch; the rest drain on later sweeps

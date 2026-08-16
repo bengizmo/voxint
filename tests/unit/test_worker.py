@@ -3,7 +3,7 @@ from voxint.config import Settings
 from voxint.db.models import Stage
 from voxint.pipeline.engine import StageFailedError
 from voxint.worker.app import app, build_beat_schedule
-from voxint.worker.tasks import backoff_seconds, gc_sweep, retryable_cause
+from voxint.worker.tasks import backoff_seconds, gc_sweep, notify_sweep, retryable_cause
 
 
 def test_worker_reliability_settings() -> None:
@@ -41,6 +41,42 @@ def test_gc_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore
         "missing": 0,
         "failed": 0,
         "bytes": 0,
+    }
+
+
+def test_notify_sweep_beat_entry_is_opt_in() -> None:
+    # OFF by default: no notify-sweep entry unless the operator enables webhooks.
+    assert "notify-sweep" not in build_beat_schedule(Settings(_env_file=None))
+    enabled = build_beat_schedule(
+        Settings(
+            _env_file=None,
+            notify_enabled=True,
+            notify_webhook_url="https://hooks.example.com/x",
+            notify_webhook_secret="a-sufficiently-long-secret",
+            notify_sweep_seconds=42,
+        )
+    )
+    assert enabled["notify-sweep"] == {"task": "voxint.notify_sweep", "schedule": 42}
+    assert "recovery-sweep" in enabled  # the recovery sweep is unconditional
+
+
+def test_notify_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The task re-checks the gate itself: disabled → all-zero summary, no runtime.
+    import voxint.worker.tasks as tasks_mod
+
+    monkeypatch.setattr(tasks_mod, "get_settings", lambda: Settings(_env_file=None))
+
+    def _boom() -> None:  # pragma: no cover - must not be called
+        raise AssertionError("_runtime() must not run when notify is disabled")
+
+    monkeypatch.setattr(tasks_mod, "_runtime", _boom)
+    assert notify_sweep() == {
+        "claimed": 0,
+        "delivered": 0,
+        "suppressed": 0,
+        "retried": 0,
+        "dead": 0,
+        "purged": 0,
     }
 
 

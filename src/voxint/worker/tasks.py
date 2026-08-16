@@ -38,7 +38,7 @@ from voxint.media.reclaim import (
     configured_tutorial_run_id,
     reclaim_expired_intermediates,
 )
-from voxint.notify.delivery import DeliverySummary, deliver_due
+from voxint.notify.delivery import DeliverySummary, deliver_due, purge_expired_deliveries
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
@@ -266,11 +266,13 @@ def notify_sweep() -> dict[str, int]:
     settings = get_settings()
     empty = DeliverySummary()
     if not settings.notify_enabled:
-        return empty.as_dict()
+        return {**empty.as_dict(), "purged": 0}
     factory, _ = _runtime()
     summary = deliver_due(factory, settings)
-    logger.info("notify_sweep %s", summary.as_dict())
-    return summary.as_dict()
+    purged = purge_expired_deliveries(factory, settings)
+    result = {**summary.as_dict(), "purged": purged}
+    logger.info("notify_sweep %s", result)
+    return result
 
 
 @app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

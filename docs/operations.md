@@ -721,6 +721,76 @@ stamps `reclaimed_at` as an audit record. Archived runs remain eligible for the
 sweep — archiving only hides a run from the console, it does not exempt its
 intermediate from reclamation.
 
+## Run notifications / webhooks (issue #12; off by default)
+
+Voxint can POST a **signed webhook** to an endpoint you control when a run
+reaches a **notifiable transition** — `completed` or `failed`. It is opt-in and
+off by default; nothing is emitted or delivered until you enable it, and
+enabling later never back-fills runs that finished while it was off.
+
+**How it is delivered (at-least-once).** The notification is recorded as an
+outbox row **in the same database transaction as the run's state change**, so
+delivery intent is atomic with the transition — a run never "completes" without
+its notification queued, and a rolled-back transition takes its notification with
+it. A beat-scheduled sweep then delivers each row **outside any transaction**, so
+a slow or down receiver never blocks the pipeline. Because delivery is retried
+until it succeeds, your receiver **can see the same delivery more than once** —
+**deduplicate on the `delivery_id`** in the body (equivalently the
+`X-Voxint-Delivery` header). A `failed` notification whose run is requeued before
+delivery is *suppressed* (you are not paged about a failure the system already
+recovered from); the short `NOTIFY_FAILED_INITIAL_DELAY_SECONDS` hold gives that
+requeue time to settle.
+
+**Egress posture.** The endpoint must be a public http/https URL (a
+private/loopback/link-local target is refused, same as URL ingestion). Every
+attempt re-resolves the host and connects to the vetted address (closing DNS
+rebinding), redirects are **not** followed, and an ambient `HTTP(S)_PROXY` is
+ignored. No URL, secret, or payload is ever written to a log or a stored error.
+
+```dotenv
+# .env — enable and tune (defaults shown)
+NOTIFY_ENABLED=true
+NOTIFY_WEBHOOK_URL=https://your-host.example.com/voxint-hook
+NOTIFY_WEBHOOK_SECRET=<a random string, >= 16 chars>   # keep secret
+NOTIFY_SWEEP_SECONDS=30            # how often delivery runs
+NOTIFY_MAX_ATTEMPTS=8             # then the row is marked "dead"
+NOTIFY_RETENTION_SECONDS=604800   # purge delivered/suppressed rows after 7 d
+```
+
+**The request.** A `POST` with a compact JSON body and these headers:
+
+| Header | Meaning |
+| --- | --- |
+| `X-Voxint-Delivery` | The `delivery_id` — your idempotency key. |
+| `X-Voxint-Timestamp` | Unix seconds when the POST was signed. |
+| `X-Voxint-Signature` | `sha256=<hex>` — HMAC-SHA256 of `timestamp + "." + body`. |
+
+The body is `{"schema_version", "event", "run_id", "transition_revision",
+"occurred_at", "delivery_id"}`. It deliberately **omits the run's error text**
+(it can carry sensitive detail); look up the run by `run_id` for detail.
+
+**Verifying a delivery (receiver side).** Recompute the signature over the
+**raw request bytes** — parse-and-re-serialize would change them and the check
+would fail — compare in constant time, and reject a stale timestamp:
+
+```python
+import hashlib, hmac, time
+
+def verify(raw_body: bytes, headers: dict[str, str], secret: str, *, skew: int = 300) -> bool:
+    ts = headers["X-Voxint-Timestamp"]
+    if abs(time.time() - int(ts)) > skew:      # replay window
+        return False
+    want = hmac.new(secret.encode(), f"{ts}.".encode() + raw_body, hashlib.sha256).hexdigest()
+    got = headers["X-Voxint-Signature"].removeprefix("sha256=")
+    return hmac.compare_digest(want, got)      # then dedupe on X-Voxint-Delivery
+```
+
+Return any `2xx` to acknowledge; anything else (or a timeout) is retried with
+capped exponential backoff until `NOTIFY_MAX_ATTEMPTS`, after which the row is
+left `dead` for inspection (never auto-deleted). The sweep is safe to run
+concurrently and purges old `delivered`/`suppressed` rows after
+`NOTIFY_RETENTION_SECONDS` to bound table growth.
+
 ## Backup
 
 State worth backing up: the Postgres volume (`pgdata`, holding runs,

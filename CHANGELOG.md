@@ -6,6 +6,34 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Run notifications / webhooks** (#12): an opt-in, signed webhook POST when a
+  run reaches a **notifiable transition** (`completed` / `failed`), delivered
+  **at-least-once** via a transactional outbox so pipeline correctness is never
+  held hostage to remote latency or failure. The notification is recorded (new
+  `notification_deliveries` table, migration 0015) **in the same transaction as
+  the run's state change** — atomic intent, no commit-to-broker loss window, and
+  a rolled-back transition takes its row with it. A beat-scheduled sweep
+  (`voxint.notify_sweep`) then claims due rows under a lease (`FOR UPDATE ...
+  SKIP LOCKED`, safe under overlapping sweeps; a crashed sweep's lease is
+  reclaimed) and POSTs each **outside any DB transaction**: deterministic JSON
+  body, `X-Voxint-Signature` = HMAC-SHA256 over `timestamp + "." + body`, with
+  `X-Voxint-Delivery` (the receiver's dedup key) and `X-Voxint-Timestamp`
+  headers. Egress is hardened like URL ingestion — the endpoint must be a
+  **public** http/https URL, the host is re-resolved and address-pinned every
+  attempt (DNS-rebind safe), redirects are refused, and `HTTP(S)_PROXY` is
+  ignored; no URL, secret, or payload is ever logged or stored in an error. A
+  `failed` arrival whose run was requeued before delivery is **suppressed**
+  (after a short settle delay) rather than sent as stale news; non-2xx/timeout
+  retries with capped exponential backoff + jitter, then `dead` after
+  `NOTIFY_MAX_ATTEMPTS`. The payload is minimal (`schema_version`, `event`,
+  `run_id`, `transition_revision`, `occurred_at`, `delivery_id`) and **omits the
+  run's error text** (leak-safe). Settled (`delivered`/`suppressed`) rows are
+  purged after `NOTIFY_RETENTION_SECONDS`; `dead` rows are kept for inspection.
+  **Off by default** (`NOTIFY_ENABLED=false`) — enabling requires a public
+  `NOTIFY_WEBHOOK_URL` and a `NOTIFY_WEBHOOK_SECRET` (≥ 16 chars), and never
+  back-fills runs that finished while it was off. Setup, the at-least-once
+  contract, and a receiver signature-verification snippet are in
+  [docs/operations.md](docs/operations.md).
 - **Media retention / garbage collection** (#15): an opt-in, beat-scheduled GC
   sweep (`voxint.gc_sweep`) that reclaims the large normalized-audio
   intermediate (`artifacts/{run_id}/normalized.wav`) for **old terminal runs** —
