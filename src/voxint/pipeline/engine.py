@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from voxint.config import get_settings
+from voxint.config import Settings, get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.media.redaction import cap_length
 from voxint.pipeline.transitions import (
@@ -207,6 +207,7 @@ def execute_run(
     *,
     worker_id: str | None = None,
     lease_seconds: int | Mapping[Stage, int] | None = None,
+    settings: "Settings | None" = None,
 ) -> RunSnapshot:
     """Advance a QUEUED (or requeued) run through all stages to COMPLETED.
 
@@ -276,7 +277,12 @@ def execute_run(
                 _finish_claim(session, claim_id, StageStatus.FAILED, str(exc))
                 try:
                     failed = cas_update_run(
-                        session, held, status=RunStatus.FAILED, current_stage=stage, error=str(exc)
+                        session,
+                        held,
+                        status=RunStatus.FAILED,
+                        current_stage=stage,
+                        error=str(exc),
+                        settings=settings,
                     )
                     session.commit()
                 except StaleRevisionError:
@@ -294,7 +300,11 @@ def execute_run(
             try:
                 if upcoming is None:
                     held = cas_update_run(
-                        session, held, status=RunStatus.COMPLETED, current_stage=None
+                        session,
+                        held,
+                        status=RunStatus.COMPLETED,
+                        current_stage=None,
+                        settings=settings,
                     )
                     session.commit()
                     return held
@@ -314,7 +324,7 @@ def execute_run(
 
 
 def recover_interrupted_runs(
-    session: Session, *, max_attempts: int | None = None
+    session: Session, *, max_attempts: int | None = None, settings: "Settings | None" = None
 ) -> list[uuid.UUID]:
     """Requeue RUNNING runs whose stage claim lease has expired (or never existed).
 
@@ -347,13 +357,17 @@ def recover_interrupted_runs(
                 session, claim.id, StageStatus.FAILED, f"{INTERRUPTED_PREFIX} lease expired"
             )
         try:
-            # RUNNING -> FAILED -> QUEUED keeps the transition map honest.
+            # RUNNING -> FAILED -> QUEUED keeps the transition map honest. Pass
+            # settings so the parked-FAILED case (budget exhausted, no requeue
+            # below) emits; the immediately-requeued case emits too but the
+            # delivery sweep suppresses it once the run has advanced to QUEUED.
             held = cas_update_run(
                 session,
                 held,
                 status=RunStatus.FAILED,
                 current_stage=held.current_stage,
                 error=f"{INTERRUPTED_PREFIX} worker died mid-stage",
+                settings=settings,
             )
             if max_attempts is not None and claim is not None and claim.attempt >= max_attempts:
                 continue  # budget exhausted — parked FAILED for the failure lane

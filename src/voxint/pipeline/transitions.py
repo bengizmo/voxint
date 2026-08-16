@@ -14,13 +14,16 @@ backwards, complete mid-pipeline, or requeue at an unrelated stage.
 
 import uuid
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import CursorResult, update
 from sqlalchemy.orm import Session
 
 from voxint.db.models import STAGE_ORDER, PipelineRun, RunStatus, Stage
 from voxint.media.redaction import cap_length
+
+if TYPE_CHECKING:
+    from voxint.config import Settings
 
 ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.QUEUED: frozenset({RunStatus.RUNNING, RunStatus.CANCELLED}),
@@ -130,8 +133,17 @@ def cas_update_run(
     status: RunStatus,
     current_stage: Stage | None,
     error: str | None = None,
+    settings: "Settings | None" = None,
 ) -> RunSnapshot:
-    """Apply a validated transition iff the run is still at ``held.revision``."""
+    """Apply a validated transition iff the run is still at ``held.revision``.
+
+    When ``settings`` is supplied (the worker paths), a notifiable transition
+    also records a webhook outbox row in THIS transaction, so delivery intent is
+    atomic with the state change (issue #12). Callers with no settings context
+    (tests, ingest, CLI requeue) pass nothing and never emit — those transitions
+    are non-notifiable anyway. Emission is a persistence-only insert; no network
+    or broker work happens here.
+    """
     validate_transition(held, status, current_stage)
     result = cast(
         CursorResult[Any],
@@ -150,6 +162,19 @@ def cas_update_run(
     )
     if result.rowcount != 1:
         raise StaleRevisionError(held.id, held.revision)
+    new_revision = held.revision + 1
+    if settings is not None:
+        # Local import keeps the transition primitive free of a module-level
+        # dependency on the notify subsystem (and any import cycle through it).
+        from voxint.notify import record_transition
+
+        record_transition(
+            session,
+            run_id=held.id,
+            status=status,
+            transition_revision=new_revision,
+            settings=settings,
+        )
     return RunSnapshot(
-        id=held.id, status=status, current_stage=current_stage, revision=held.revision + 1
+        id=held.id, status=status, current_stage=current_stage, revision=new_revision
     )

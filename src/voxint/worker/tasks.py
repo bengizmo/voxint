@@ -150,7 +150,7 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     ctx = apply_run_preferences(base_ctx, settings, prefs)
     stage_fns = build_stage_fns(ctx)
     try:
-        final = execute_run(factory, run_id, stage_fns)
+        final = execute_run(factory, run_id, stage_fns, settings=settings)
     except StageFailedError as exc:
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
@@ -192,7 +192,9 @@ def recovery_sweep() -> dict[str, int]:
     settings = get_settings()
     factory, _ = _runtime()
     with factory() as session:
-        recovered = recover_interrupted_runs(session, max_attempts=settings.stage_max_attempts)
+        recovered = recover_interrupted_runs(
+            session, max_attempts=settings.stage_max_attempts, settings=settings
+        )
         session.commit()
     # Backstop for cooperative cancellation (issue #5): if a worker died between
     # a cancel commit and its own claim cleanup, the stage claim is orphaned
