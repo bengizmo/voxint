@@ -364,22 +364,22 @@ def execute_job(
             if owned_client is not None:
                 owned_client.close()
 
-        # A cancel that raced the loop's final round wins: check the flag
-        # before persisting anything (the loop's between-round checks cannot
-        # see a flag set after its last read).
-        if should_cancel():
-            _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
-            return
-
         # Atomic finalization: the producer run and the job stamp commit
         # together, and only while the row is still RUNNING with no cancel
-        # pending — a cancel that lands between the check above and this stamp
+        # pending — a cancel that lands between the check below and this stamp
         # must win (the drafts roll back with the missed stamp), and so must a
         # force-cancel (a force-cancelled job must not be stamped SUCCEEDED nor
-        # keep its drafts). The whole block sits under the same failure
-        # umbrella as the loop: a DB error here must land as an honest FAILED
-        # row, never a forever-RUNNING job (there is no recovery sweep).
+        # keep its drafts). The whole block — the final cancel read included —
+        # sits under the same failure umbrella as the loop: a DB error here
+        # must land as an honest FAILED row, never a forever-RUNNING job
+        # (there is no recovery sweep).
         try:
+            # A cancel that raced the loop's final round wins: check the flag
+            # before persisting anything (the loop's between-round checks
+            # cannot see a flag set after its last read).
+            if should_cancel():
+                _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
+                return
             producer_run = record_research_outcome(
                 session,
                 job_id=job_id,

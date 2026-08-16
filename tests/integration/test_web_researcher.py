@@ -434,6 +434,79 @@ def test_finalization_db_error_lands_failed_not_forever_running(
     assert producer_runs(session_factory) == []
 
 
+def test_cancel_racing_the_outcome_write_loses_the_stamp_and_rolls_back(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A cancel committed AFTER the pre-persist check but before the success
+    stamp: the guarded CAS must lose the race, roll the drafts back, and
+    resolve the job CANCELLED."""
+    import voxint.enrichment.research_jobs as research_jobs_module
+
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    real_record = research_jobs_module.record_research_outcome
+
+    def record_then_cancel(session: Session, **kwargs: object) -> object:
+        run = real_record(session, **kwargs)  # type: ignore[arg-type]
+        with session_factory() as other:
+            assert request_cancel(other, job_id) is True
+            other.commit()
+        return run
+
+    monkeypatch.setattr(research_jobs_module, "record_research_outcome", record_then_cancel)
+    execute_job(
+        session_factory,
+        job_id,
+        settings=settings,
+        llm=FakeLLM([ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK)]),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.CANCELLED.value
+    assert job_row.producer_run_id is None
+    assert producer_runs(session_factory) == []
+    with session_factory() as session:
+        assert candidates_for_speaker(session, speaker_id) == []
+
+
+def test_stale_cutoff_uses_db_clock_not_app_clock(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a skewed app clock must not force-cancel a fresh RUNNING
+    job — the cutoff compares DB clock to DB clock."""
+    from datetime import UTC, datetime, timedelta, tzinfo
+
+    import voxint.enrichment.research_jobs as research_jobs_module
+
+    class _FutureDatetime:
+        @staticmethod
+        def now(tz: tzinfo | None = None) -> datetime:
+            return datetime.now(tz=tz) + timedelta(hours=10)
+
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    with session_factory() as session:
+        assert claim_job(session, job_id) is not None
+    monkeypatch.setattr(research_jobs_module, "datetime", _FutureDatetime)
+    monkeypatch.setattr(research_jobs_module, "UTC", UTC, raising=False)
+    with session_factory() as session:
+        assert request_cancel(session, job_id) is True
+        session.commit()
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.RUNNING.value  # flag only
+    assert job_row.cancel_requested is True
+
+
 class _ForceCancelThenGarbage:
     """Force-cancels the job (backdate → stale-RUNNING cancel) during the LLM
     call, then feeds garbage so the worker reaches its FAILED verdict against

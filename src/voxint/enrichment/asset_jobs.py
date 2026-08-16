@@ -351,25 +351,25 @@ def execute_job(
             if owned_client is not None:
                 owned_client.close()
 
-        # A cancel that raced the LLM call wins: check the flag before
-        # persisting anything (the single-call analogue of #40's between-round
-        # checks).
-        if bool(
-            session.execute(
-                select(RunAssetJob.cancel_requested).where(RunAssetJob.id == job_id)
-            ).scalar_one()
-        ):
-            _finish(session, job_id, status=RunAssetJobStatus.CANCELLED)
-            return
-
         # Atomic finalization: the asset row and the job stamp commit
         # together, and only while the row is still RUNNING with no cancel
-        # pending — a cancel that lands between the check above and this stamp
+        # pending — a cancel that lands between the check below and this stamp
         # must win (the asset rolls back with the missed stamp), and so must a
-        # force-cancel. The whole block sits under the same failure umbrella
-        # as generation: a DB error here must land as an honest FAILED row,
-        # never a forever-RUNNING job (there is no recovery sweep to save it).
+        # force-cancel. The whole block — the final cancel read included —
+        # sits under the same failure umbrella as generation: a DB error here
+        # must land as an honest FAILED row, never a forever-RUNNING job
+        # (there is no recovery sweep to save it).
         try:
+            # A cancel that raced the LLM call wins: check the flag before
+            # persisting anything (the single-call analogue of #40's
+            # between-round checks).
+            if bool(
+                session.execute(
+                    select(RunAssetJob.cancel_requested).where(RunAssetJob.id == job_id)
+                ).scalar_one()
+            ):
+                _finish(session, job_id, status=RunAssetJobStatus.CANCELLED)
+                return
             asset = record_asset(
                 session,
                 source=source,
