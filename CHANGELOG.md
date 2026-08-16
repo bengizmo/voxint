@@ -22,8 +22,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   serialization (`to_mapping`/`from_mapping`); a corrupt snapshot degrades to the
   default pack with a warning rather than wedging the run. Legacy runs
   (pre-migration, `NULL` snapshot) reproduce the prior global-pack behavior.
-  _(Operator UI for the folder→pack map and additional prompt-fragment consumers
-  land in a follow-up.)_
+  _(Operator UI for the folder→pack map lands in a follow-up.)_
+- **Domain packs shape more of the pipeline** (#11): two additional
+  `prompt_fragments` keys are now consumed from the run's frozen pack, each with
+  a single documented consumer (fragments are never concatenated). A
+  `summary_context` fragment is appended to the run-asset LLM producer's system
+  prompt, so the summary/topics/entity-mention analysis gets domain framing; a
+  `name_attribution_context` fragment is added as a second labeled block on the
+  transcript-enhancement call that harvests speaker-name hints (e.g. anchoring a
+  recurring host). Both are fenced as advisory so a pack can guide but never
+  override the strict reply schemas, and an absent fragment leaves the prompt
+  byte-for-byte unchanged.
 
 ## [0.14.0] - 2026-08-16
 

@@ -106,5 +106,9 @@ class EnhancementBatchResult:
 
 class LLMClient(Protocol):
     def enhance_segments(
-        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+        self,
+        segments: tuple[EnhancementRequestSegment, ...],
+        context: str,
+        *,
+        name_attribution_context: str = "",
     ) -> EnhancementBatchResult: ...
