@@ -25,7 +25,7 @@ Audio is never committed for either dataset; TED transcripts are never committed
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Any, Final
 
 # Bump when the selection algorithm or its seed changes — recorded in the
 # manifest so a reshuffle is a visible, deliberate event, not silent drift.
@@ -54,7 +54,14 @@ def boundary_gate_eligible(ts_granularity: str) -> bool:
 
 
 # --- TED-LIUM 3 -----------------------------------------------------------
-TEDLIUM3: Final = {
+# TED is windowed exactly like AMI (a fixed content-independent 240 s slice at
+# 120 s), NOT scored as full talks: 15 full talks (~11 min each) would force
+# ~2.75 h of CPU transcription per bakeoff pass on every engine, whereas the
+# windowed corpus is ~1 h and still content-independent (pre-registration-safe).
+# Only talks long enough to hold the window (>= slice_offset_s + slice_window_s)
+# are admitted; STM segments are clipped to the window and any segment crossing an
+# edge becomes an ``ignore`` region (partial audio must never carry full text).
+TEDLIUM3: Final[dict[str, Any]] = {
     "dataset": "tedlium3",
     "license_spdx": "CC-BY-NC-ND-3.0",
     "ts_granularity": "segment",
@@ -66,6 +73,9 @@ TEDLIUM3: Final = {
         "https://huggingface.co/datasets/kfajdsl/tedlium/resolve/"
         "b3c6724dbeafb7b48425b3bf44c40ccf0b201b54/{path}"
     ),
+    # Same fixed-window policy as AMI (see AMI["slice_offset_s"]).
+    "slice_offset_s": 120.0,
+    "slice_window_s": 240.0,
     "archives": {
         "TEDLIUM_release3/legacy/dev.tar.gz": {
             "size_bytes": 174796847,
@@ -79,7 +89,7 @@ TEDLIUM3: Final = {
 }
 
 # --- AMI IHM --------------------------------------------------------------
-AMI: Final = {
+AMI: Final[dict[str, Any]] = {
     "dataset": "ami_ihm",
     "license_spdx": "CC-BY-4.0",
     "ts_granularity": "word",
@@ -106,4 +116,14 @@ AMI: Final = {
     # extracted within the window at generate time.
     "slice_offset_s": 120.0,
     "slice_window_s": 240.0,
+    # Eligibility floor: the sorted-first mapped agent for a meeting must have at
+    # least this many timed lexical words WHOLLY inside the window, else the
+    # meeting is skipped (continue down the seeded rank — never switch agents to
+    # chase transcript density, which would break pre-registration). Guards
+    # against a fixed window landing on a near-silent channel.
+    "min_window_words": 50,
 }
+
+# Convenience alias for the AMI eligibility floor (kept as a module constant so
+# the acquisition tool and contract tests share one source of truth).
+AMI_MIN_WINDOW_WORDS: Final = AMI["min_window_words"]

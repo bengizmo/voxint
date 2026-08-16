@@ -28,6 +28,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the UI stops enrichment jobs (and auto-generated run assets) with no restart, and
   the recorded web-research provenance names the endpoint that actually served the
   request.
+- **Whisper Metal bakeoff corpus** (#33, Slice 1): `tools/prepare_bakeoff_corpus.py`
+  now implements `generate` (fetch/synthesize every stratum, write a candidate
+  `manifest.json`) and `prepare` (re-fetch + verify every file, fail closed) for
+  the pre-registered whisper-engine bakeoff. Corpus = 15 AMI IHM word-gold
+  windows (CC-BY-4.0, committed gold) + 15 TED-LIUM 3 windows (CC-BY-NC-ND-3.0,
+  transcript hash only) + 15 synthetic CC0 fixtures (silence / hallucination-bait
+  / short-clean, committed audio). All windows are a fixed content-independent
+  240 s @ 120 s slice; selection is a seeded hash-rank (pre-registration-safe);
+  AMI fetches only the window via HTTP Range. Prepared audio is byte-canonical
+  16 kHz mono s16le with a committed per-file `sha256`; a manifest-schema contract
+  test (`tests/contracts/test_bakeoff_manifest.py`) binds the committed gold and
+  synthetic audio to the manifest and enforces the licensing doctrine (no TED
+  transcript/audio committed). No new Python deps (stdlib + `soundfile`/`numpy`);
+  synthetic regeneration uses `espeak-ng` + `ffmpeg` (versions pinned in the
+  manifest provenance).
 
 ## [0.14.0] - 2026-08-16
 
