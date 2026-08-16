@@ -22,7 +22,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   serialization (`to_mapping`/`from_mapping`); a corrupt snapshot degrades to the
   default pack with a warning rather than wedging the run. Legacy runs
   (pre-migration, `NULL` snapshot) reproduce the prior global-pack behavior.
-  _(Operator UI for the folder→pack map lands in a follow-up.)_
+  _(The default pack, `DOMAIN_PACK_PATH`, is the operator-facing control in this
+  release; the in-console UI to edit the per-folder map ships with the
+  review-console overhaul, #63.)_
 - **Domain packs shape more of the pipeline** (#11): two additional
   `prompt_fragments` keys are now consumed from the run's frozen pack, each with
   a single documented consumer (fragments are never concatenated). A
