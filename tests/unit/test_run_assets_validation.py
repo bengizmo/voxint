@@ -24,6 +24,7 @@ from voxint.enrichment.run_assets import (
     RunAssetError,
     RunAssetSource,
     SegmentSource,
+    sanitize_speaker,
     source_content_hash,
     validate_payload,
 )
@@ -90,10 +91,67 @@ class TestSourceContentHash:
         )
         assert raw != attributed
 
+    def test_no_speaker_segment_hash_is_pinned(self) -> None:
+        # A null diarization label serializes as "(no speaker)" (not JSON null,
+        # the pre-change form) — a deliberate one-time rehash. Pin the value so
+        # the shift is intentional, not accidental serialization drift.
+        source = RunAssetSource(
+            pipeline_run_id=RUN_ID,
+            segments=(SegmentSource(0, "(no speaker)", "Hello there."),),
+            metadata=None,
+            operator_notes=None,
+        )
+        assert (
+            source_content_hash(source)
+            == "55ec0f47620cd1f3d43cfda42ec8b3cae26a4f998641feb35d444de627da3141"
+        )
+
+    def test_full_source_hashed_even_when_prompt_truncates(self) -> None:
+        # The hash covers the FULL source; the prompt is head/tail truncated.
+        # A rename of a middle segment that the truncated prompt omits must
+        # still flip the hash — conservative invalidation is intentional, so a
+        # regeneration (which reads the full source) is never based on stale
+        # attribution.
+        def make(mid_speaker: str) -> RunAssetSource:
+            return RunAssetSource(
+                pipeline_run_id=RUN_ID,
+                segments=tuple(
+                    SegmentSource(i, mid_speaker if i == 25 else f"S{i}", "word " * 40)
+                    for i in range(50)
+                ),
+                metadata=None,
+                operator_notes=None,
+            )
+
+        before = make("S25")
+        after = make("Renamed")
+        document, truncated = render_source(before, max_chars=2_000)
+        assert truncated
+        assert "[25]" not in document  # the renamed segment is in the dropped middle
+        assert source_content_hash(before) != source_content_hash(after)
+
     def test_is_lowercase_hex_sha256(self) -> None:
         value = source_content_hash(make_source())
         assert len(value) == 64
         assert set(value) <= set("0123456789abcdef")
+
+
+class TestSanitizeSpeaker:
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("SPEAKER_00", "SPEAKER_00"),  # raw label unchanged (legacy hash safe)
+            ("Dr. Smith: Cardiology", "Dr. Smith Cardiology"),  # ':' flattened
+            ("Boss [3]", "Boss (3)"),  # brackets flattened
+            ("a\nb\tc", "a b c"),  # line-break whitespace collapsed
+            ("a\x85b\xa0c", "a b c"),  # NEL / NBSP are whitespace
+            ("a\x00\x1bb", "ab"),  # NUL / ESC dropped
+            ("a\u202eb\u200bc", "abc"),  # bidi override + zero-width dropped
+            ("::", ""),  # all-delimiter name collapses to empty (caller falls back)
+        ],
+    )
+    def test_flattens_delimiters_and_drops_controls(self, raw: str, expected: str) -> None:
+        assert sanitize_speaker(raw) == expected
 
 
 class TestValidatePayload:

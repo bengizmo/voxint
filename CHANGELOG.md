@@ -37,9 +37,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   they regenerate. An unadjudicated run's hash is unchanged, so nothing
   regenerates for free (`SOURCE_SCHEMA_VERSION` stays 1); the `run_assets.llm`
   producer/prompt versions bump to 2 for honest provenance. Operator-set
-  speaker names are whitespace-sanitized before entering the prompt, and the
-  entity-mention instruction now tells the model the speaker prefix is not part
-  of the transcript text.
+  speaker names are sanitized before entering the prompt (the `: [ ]`
+  delimiters are flattened and control/format characters dropped so a name
+  cannot forge a line or a field), and the entity-mention instruction now tells
+  the model the speaker prefix is not part of the transcript text.
 
 ## [0.13.0] — 2026-08-16
 
