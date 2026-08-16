@@ -9,6 +9,9 @@ contains traversal, and sets honest cache headers.
 
 import json
 import re
+import shutil
+import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -182,14 +185,47 @@ def test_node_version_pins_agree() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 6. The wheel packages the built asset tree (force-include is present).
+# 6. The wheel packages the static/app asset tree, so the prebuilt island
+#    bundles the Dockerfile writes there ship in the installed layout.
 # --------------------------------------------------------------------------- #
-def test_pyproject_force_includes_asset_tree() -> None:
+def test_wheel_packages_include_the_asset_tree() -> None:
+    # `packages = ["src/voxint"]` ships everything under the package. static/app
+    # is inside it and must not be excluded (a force-include would double-add and
+    # break the non-editable wheel — see pyproject comment).
     text = _PYPROJECT.read_text()
-    assert "[tool.hatch.build.targets.wheel.force-include]" in text
-    assert re.search(
-        r'"src/voxint/api/static/app"\s*=\s*"voxint/api/static/app"', text
-    ), "wheel force-include for the frontend asset tree is missing"
+    assert re.search(r'packages\s*=\s*\[\s*"src/voxint"\s*\]', text), (
+        "wheel target must package src/voxint (which contains static/app)"
+    )
+    assert "[tool.hatch.build.targets.wheel.force-include]" not in text, (
+        "no force-include table: static/app is inside the packaged tree, so "
+        "force-including it double-adds every file and aborts the non-editable "
+        "wheel build (the word may still appear in an explanatory comment)"
+    )
+
+
+def test_built_wheel_contains_static_app_tree(tmp_path: Path) -> None:
+    # Thorough end-to-end proof: build the wheel and assert the static/app tree
+    # ships. In a source checkout only .gitkeep lives there; the Dockerfile
+    # overlays the hashed bundles the same way, so their inclusion rides on this
+    # exact mechanism.
+    uv = shutil.which("uv")
+    if uv is None:
+        pytest.skip("uv not on PATH")
+    out = tmp_path / "wheel"
+    result = subprocess.run(
+        [uv, "build", "--wheel", "--out-dir", str(out)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"uv build failed:\n{result.stderr}"
+    wheels = list(out.glob("*.whl"))
+    assert len(wheels) == 1, f"expected one wheel, got {wheels}"
+    with zipfile.ZipFile(wheels[0]) as zf:
+        names = zf.namelist()
+    assert any(n.startswith("voxint/api/static/app/") for n in names), (
+        "built wheel does not ship the voxint/api/static/app tree"
+    )
 
 
 # --------------------------------------------------------------------------- #
