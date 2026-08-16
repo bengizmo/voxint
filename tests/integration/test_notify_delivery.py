@@ -22,6 +22,8 @@ from voxint.config import Settings
 from voxint.db.models import NotifiableEvent, NotificationDelivery, NotificationStatus
 from voxint.notify import build_payload
 from voxint.notify.delivery import (
+    _Claimed,
+    _finish,
     deliver_due,
     purge_expired_deliveries,
     serialize_payload,
@@ -182,6 +184,7 @@ def test_signature_and_headers_over_exact_bytes(session_factory: sessionmaker[Se
         session_factory,
         _settings(),
         now=now,
+        clock=lambda: now,  # pin the per-attempt signing clock for a deterministic ts
         client_factory=_capturing_factory(_ok, captured),
         resolver=_public_resolver,
     )
@@ -512,7 +515,11 @@ def test_purge_reaps_only_old_settled_rows(session_factory: sessionmaker[Session
             session, rid, transition_revision=1, status=NotificationStatus.DELIVERED, created_at=old
         )
         old_suppressed = _seed_delivery(
-            session, rid, transition_revision=2, status=NotificationStatus.SUPPRESSED, created_at=old
+            session,
+            rid,
+            transition_revision=2,
+            status=NotificationStatus.SUPPRESSED,
+            created_at=old,
         )
         old_dead = _seed_delivery(
             session, rid, transition_revision=3, status=NotificationStatus.DEAD, created_at=old
@@ -538,6 +545,121 @@ def test_purge_reaps_only_old_settled_rows(session_factory: sessionmaker[Session
     assert old_dead in surviving  # kept until an operator acts
     assert fresh_delivered in surviving  # within retention
     assert old_pending in surviving  # still live, never a purge target
+
+
+def test_finish_is_lease_guarded_against_stale_sweeper(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # An in_flight row leased to sweep B; sweep A (crashed-slow, lease L_old) must
+    # not clobber it. _finish CASes on (in_flight AND lease == our lease).
+    lease_b = datetime.now(tz=UTC) + timedelta(seconds=60)
+    lease_a_stale = lease_b - timedelta(seconds=120)
+    with session_factory() as session:
+        rid = _seed_run(session, status="completed")
+        did = _seed_delivery(
+            session,
+            rid,
+            status=NotificationStatus.IN_FLIGHT,
+            lease_expires_at=lease_b,
+        )
+        session.commit()
+
+    def _claimed(lease: datetime) -> _Claimed:
+        return _Claimed(
+            id=did,
+            run_id=rid,
+            event=NotifiableEvent.COMPLETED.value,
+            transition_revision=1,
+            payload={},
+            attempts=0,
+            lease_until=lease,
+        )
+
+    # Stale owner: write does not land, row untouched.
+    landed = _finish(
+        session_factory,
+        _claimed(lease_a_stale),
+        status=NotificationStatus.PENDING.value,
+        lease_expires_at=None,
+    )
+    assert landed is False
+    with session_factory() as session:
+        assert _row(session, did).status == NotificationStatus.IN_FLIGHT.value
+
+    # Current owner (lease matches): write lands.
+    landed = _finish(
+        session_factory,
+        _claimed(lease_b),
+        status=NotificationStatus.DELIVERED.value,
+        delivered_at=datetime.now(tz=UTC),
+        attempts=1,
+        lease_expires_at=None,
+        last_error=None,
+    )
+    assert landed is True
+    with session_factory() as session:
+        assert _row(session, did).status == NotificationStatus.DELIVERED.value
+
+
+def test_multi_address_failover(session_factory: sessionmaker[Session]) -> None:
+    # First vetted address connect-fails; the second succeeds. The row delivers
+    # and the successful POST is pinned to the working address.
+    dead_ip, good_ip = "93.184.216.34", "93.184.216.35"
+
+    def resolver(host: str, *_a: object, **_k: object) -> list[tuple[object, ...]]:
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", (dead_ip, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", (good_ip, 0)),
+        ]
+
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == dead_ip:
+            raise httpx.ConnectError("connection refused")
+        return httpx.Response(200)
+
+    with session_factory() as session:
+        rid = _seed_run(session, status="completed")
+        did = _seed_delivery(session, rid)
+        session.commit()
+
+    summary = deliver_due(
+        session_factory,
+        _settings(),
+        now=datetime.now(tz=UTC),
+        client_factory=_capturing_factory(handler, captured),
+        resolver=resolver,
+    )
+    assert summary.delivered == 1
+    assert [r.url.host for r in captured] == [dead_ip, good_ip]  # tried dead, then good
+    with session_factory() as session:
+        assert _row(session, did).status == NotificationStatus.DELIVERED.value
+
+
+def test_signature_timestamp_is_fresh_per_row(session_factory: sessionmaker[Session]) -> None:
+    # Two rows in one sweep must be signed with per-attempt timestamps, not a
+    # single batch-start time (a slow batch would otherwise sign tail rows stale).
+    with session_factory() as session:
+        for i in range(2):
+            rid = _seed_run(session, status="completed")
+            _seed_delivery(session, rid, transition_revision=i + 1)
+        session.commit()
+
+    t1 = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC)  # row 1 attempt
+    t2 = datetime(2026, 1, 1, 0, 5, 0, tzinfo=UTC)  # row 2 attempt (5 min later)
+    ticks = iter([t1, t2])  # claim uses the explicit `now=`, so clock only signs
+    captured: list[httpx.Request] = []
+    deliver_due(
+        session_factory,
+        _settings(),
+        now=datetime.now(tz=UTC),  # real, so both seeded rows are due
+        clock=lambda: next(ticks),
+        client_factory=_capturing_factory(_ok, captured),
+        resolver=_public_resolver,
+    )
+    stamps = sorted(int(r.headers["X-Voxint-Timestamp"]) for r in captured)
+    assert stamps == [int(t1.timestamp()), int(t2.timestamp())]
 
 
 def test_purge_bounded_by_batch_limit(session_factory: sessionmaker[Session]) -> None:

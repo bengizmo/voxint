@@ -44,7 +44,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
 import httpx
-from sqlalchemy import CursorResult, and_, delete, or_, select
+from sqlalchemy import CursorResult, and_, delete, or_, select, update
 
 from voxint.db.models import (
     NotifiableEvent,
@@ -69,6 +69,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _USER_AGENT = "voxint-webhook/1"
+
+# Cap on vetted addresses tried per POST. resolve_public_addresses can return
+# several A/AAAA records; without a bound, a host with many blackholed addresses
+# would let one attempt's wall-time (each up to notify_timeout_seconds + connect)
+# run arbitrarily past notify_lease_seconds. Bounding it keeps a claim's lease a
+# meaningful ownership window (the lease-guarded record writes make an over-run
+# safe regardless, but this keeps duplicate deliveries rare rather than routine).
+_MAX_POST_ADDRESSES = 3
 
 # A fresh client per network attempt (pool isolation — a shared keepalive pool
 # could reuse a connection pinned for one hostname to serve another that pins to
@@ -114,6 +122,10 @@ class _Claimed:
     transition_revision: int
     payload: dict[str, Any]
     attempts: int
+    # The lease this sweep wrote at claim time. Every outcome write CASes on it
+    # (status still in_flight AND lease unchanged), so a sweep whose lease lapsed
+    # and was reclaimed by another sweep can never clobber the new owner's result.
+    lease_until: datetime
 
 
 @dataclass(frozen=True)
@@ -144,6 +156,7 @@ def deliver_due(
     settings: Settings,
     *,
     now: datetime | None = None,
+    clock: Callable[[], datetime] | None = None,
     client_factory: ClientFactory | None = None,
     resolver: Resolver = socket.getaddrinfo,
 ) -> DeliverySummary:
@@ -151,8 +164,16 @@ def deliver_due(
 
     Returns a per-sweep tally. Claiming is a single short transaction; each
     claimed row is then delivered and recorded independently outside any tx, so a
-    slow or failing receiver never blocks the database or the other rows."""
-    now = now or datetime.now(tz=UTC)
+    slow or failing receiver never blocks the database or the other rows.
+
+    ``now`` fixes the claim instant (due-predicate + lease). ``clock`` supplies a
+    FRESH timestamp per row at delivery time — the signature timestamp and the
+    retry/delivered anchors must reflect when a row is actually sent, not
+    batch-start, or a tail row of a slow batch would be signed with a stale
+    timestamp a receiver's replay window rejects. Both default to wall-clock;
+    tests inject them for determinism."""
+    tick = clock or (lambda: datetime.now(tz=UTC))
+    now = now or tick()
     make_client = client_factory or _default_client_factory
     claimed = _claim_due(factory, settings, now)
     if not claimed:
@@ -160,9 +181,20 @@ def deliver_due(
 
     delivered = suppressed = retried = dead = 0
     for row in claimed:
-        outcome = _deliver_one(
-            factory, settings, row, now=now, make_client=make_client, resolver=resolver
-        )
+        try:
+            outcome = _deliver_one(
+                factory, settings, row, clock=tick, make_client=make_client, resolver=resolver
+            )
+        except Exception:
+            # A per-row bug (never a receiver's HTTP behavior — _post catches
+            # httpx errors) must not abandon the rest of the batch. The row stays
+            # in_flight and its lease reclaim redelivers it. Log without echoing
+            # any URL/secret (the traceback frames carry neither).
+            logger.exception(
+                "notify_delivery id=%s run=%s crashed; left for reclaim", row.id, row.run_id
+            )
+            retried += 1
+            continue
         if outcome == "delivered":
             delivered += 1
         elif outcome == "suppressed":
@@ -252,6 +284,7 @@ def _claim_due(
                     transition_revision=row.transition_revision,
                     payload=dict(row.payload),
                     attempts=row.attempts,
+                    lease_until=lease_until,
                 )
             )
         session.commit()
@@ -263,40 +296,66 @@ def _deliver_one(
     settings: Settings,
     row: _Claimed,
     *,
-    now: datetime,
+    clock: Callable[[], datetime],
     make_client: ClientFactory,
     resolver: Resolver,
 ) -> str:
     """Deliver one claimed row outside any tx; record its outcome. Returns one of
-    ``delivered`` / ``suppressed`` / ``retried`` / ``dead``."""
+    ``delivered`` / ``suppressed`` / ``retried`` / ``dead``.
+
+    Every outcome write is lease-guarded (:func:`_finish`): if this sweep's lease
+    lapsed and another sweep reclaimed the row, the write no-ops rather than
+    clobbering the new owner's result — logged as ``ownership_lost``."""
+    attempt_now = clock()
     if row.event == NotifiableEvent.FAILED.value and _run_advanced_past(factory, row):
-        _record_suppressed(factory, row.id)
+        _finish(factory, row, status=NotificationStatus.SUPPRESSED.value, lease_expires_at=None)
         logger.info(
             "notify_delivery id=%s run=%s event=failed outcome=suppressed", row.id, row.run_id
         )
         return "suppressed"
 
-    result = _post(settings, row, now=now, make_client=make_client, resolver=resolver)
+    result = _post(settings, row, now=attempt_now, make_client=make_client, resolver=resolver)
     if result.ok:
-        _record_delivered(factory, row.id, now=now, attempts=row.attempts + 1)
+        owned = _finish(
+            factory,
+            row,
+            status=NotificationStatus.DELIVERED.value,
+            delivered_at=attempt_now,
+            attempts=row.attempts + 1,
+            lease_expires_at=None,
+            last_error=None,
+        )
         logger.info(
-            "notify_delivery id=%s run=%s event=%s outcome=delivered",
-            row.id, row.run_id, row.event,
+            "notify_delivery id=%s run=%s event=%s outcome=delivered%s",
+            row.id, row.run_id, row.event, "" if owned else " (ownership_lost)",
         )
         return "delivered"
 
     attempts = row.attempts + 1
     if attempts >= settings.notify_max_attempts:
-        _record_dead(factory, row.id, attempts=attempts, last_error=result.detail)
+        _finish(
+            factory,
+            row,
+            status=NotificationStatus.DEAD.value,
+            attempts=attempts,
+            lease_expires_at=None,
+            last_error=result.detail,
+        )
         logger.warning(
             "notify_delivery id=%s run=%s event=%s outcome=dead attempts=%d",
             row.id, row.run_id, row.event, attempts,
         )
         return "dead"
 
-    next_at = now + timedelta(seconds=_backoff_with_jitter(attempts, settings))
-    _record_retry(
-        factory, row.id, attempts=attempts, next_attempt_at=next_at, last_error=result.detail
+    next_at = attempt_now + timedelta(seconds=_backoff_with_jitter(attempts, settings))
+    _finish(
+        factory,
+        row,
+        status=NotificationStatus.PENDING.value,
+        attempts=attempts,
+        next_attempt_at=next_at,
+        lease_expires_at=None,
+        last_error=result.detail,
     )
     logger.info(
         "notify_delivery id=%s run=%s event=%s outcome=retry attempts=%d",
@@ -370,14 +429,16 @@ def _post(
         return refusal(f"host {host!r} refused: {exc}")
 
     per_attempt = settings.notify_timeout_seconds
+    # connect is set explicitly (not left to the positional default) so a future
+    # all-keyword refactor cannot silently uncap it. Capped at 10s like read/write.
     timeout = httpx.Timeout(
-        min(10.0, per_attempt), read=per_attempt, write=per_attempt, pool=per_attempt
+        connect=min(10.0, per_attempt), read=per_attempt, write=per_attempt, pool=per_attempt
     )
     request_headers = {**headers, "Host": authority}
     extensions: dict[str, str] = {"sni_hostname": host} if gate.scheme == "https" else {}
 
     last_transport = "no vetted address attempted"
-    for address in vetted:
+    for address in vetted[:_MAX_POST_ADDRESSES]:
         pinned = origin.copy_with(host=address)
         try:
             with make_client(timeout) as client:
@@ -398,60 +459,29 @@ def _post(
     return refusal(f"host {host!r}: {last_transport}")
 
 
-def _record_delivered(
-    factory: sessionmaker[Session], row_id: uuid.UUID, *, now: datetime, attempts: int
-) -> None:
+def _finish(factory: sessionmaker[Session], claimed: _Claimed, **values: Any) -> bool:
+    """Write a claimed row's terminal/retry outcome in one short tx, guarded by
+    the lease this sweep holds. Returns True if the write landed (this sweep still
+    owned the row), False if the lease had lapsed and another sweep reclaimed it.
+
+    The CAS predicate (``status='in_flight' AND lease_expires_at = <our lease>``)
+    is what makes at-least-once delivery safe under lease takeover: a stale
+    sweeper that delivered slowly cannot move a row another sweep already
+    delivered back to ``pending`` (which would also trip the delivered-shape CHECK
+    into an IntegrityError and abort the batch) — its write simply matches no
+    row."""
     with factory() as session:
-        row = session.get(NotificationDelivery, row_id)
-        if row is None:
-            return
-        row.status = NotificationStatus.DELIVERED.value
-        row.delivered_at = now
-        row.attempts = attempts
-        row.lease_expires_at = None
-        row.last_error = None
+        result = cast(
+            "CursorResult[Any]",
+            session.execute(
+                update(NotificationDelivery)
+                .where(
+                    NotificationDelivery.id == claimed.id,
+                    NotificationDelivery.status == NotificationStatus.IN_FLIGHT.value,
+                    NotificationDelivery.lease_expires_at == claimed.lease_until,
+                )
+                .values(**values)
+            ),
+        )
         session.commit()
-
-
-def _record_suppressed(factory: sessionmaker[Session], row_id: uuid.UUID) -> None:
-    with factory() as session:
-        row = session.get(NotificationDelivery, row_id)
-        if row is None:
-            return
-        row.status = NotificationStatus.SUPPRESSED.value
-        row.lease_expires_at = None
-        session.commit()
-
-
-def _record_dead(
-    factory: sessionmaker[Session], row_id: uuid.UUID, *, attempts: int, last_error: str
-) -> None:
-    with factory() as session:
-        row = session.get(NotificationDelivery, row_id)
-        if row is None:
-            return
-        row.status = NotificationStatus.DEAD.value
-        row.attempts = attempts
-        row.lease_expires_at = None
-        row.last_error = last_error
-        session.commit()
-
-
-def _record_retry(
-    factory: sessionmaker[Session],
-    row_id: uuid.UUID,
-    *,
-    attempts: int,
-    next_attempt_at: datetime,
-    last_error: str,
-) -> None:
-    with factory() as session:
-        row = session.get(NotificationDelivery, row_id)
-        if row is None:
-            return
-        row.status = NotificationStatus.PENDING.value
-        row.attempts = attempts
-        row.next_attempt_at = next_attempt_at
-        row.lease_expires_at = None
-        row.last_error = last_error
-        session.commit()
+        return (result.rowcount or 0) == 1

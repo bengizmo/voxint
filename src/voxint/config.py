@@ -276,9 +276,10 @@ class Settings(BaseSettings):
     # public http/https URL (parse_http_url) only when notify_enabled — the same
     # egress posture as URL ingestion. A signed POST is sent here per arrival.
     notify_webhook_url: str = ""
-    # Keys the HMAC-SHA256 signature (X-Voxint-Signature = hex(hmac(secret,
-    # timestamp + "." + body))). Treated as a secret everywhere: redacted from
-    # errors/logs. Required, and >= 16 chars, when notify_enabled.
+    # Keys the HMAC-SHA256 signature. Wire format: X-Voxint-Signature =
+    # "sha256=" + hex(hmac(secret, timestamp + "." + body)). Treated as a secret
+    # everywhere: redacted from errors/logs. Required, and >= 16 chars, when
+    # notify_enabled.
     notify_webhook_secret: str = ""
     # How often the delivery sweep runs (only registered on beat when enabled).
     notify_sweep_seconds: int = Field(default=30, ge=5)
@@ -645,6 +646,14 @@ class Settings(BaseSettings):
             raise ValueError(
                 "notify_webhook_secret is required and must be at least 16 "
                 "characters when notify_enabled"
+            )
+        # The claim lease must outlast one delivery attempt, or a sweep would keep
+        # reclaiming rows whose first POST is still in flight — duplicate sends.
+        # (Lease-guarded outcome writes keep that SAFE, just wasteful, so this is
+        # a sanity floor rather than an exact worst-case bound.)
+        if self.notify_lease_seconds < self.notify_timeout_seconds:
+            raise ValueError(
+                "notify_lease_seconds must be >= notify_timeout_seconds"
             )
         return self
 
