@@ -68,6 +68,16 @@ parity = [
     "pyloudnorm==0.1.0",
     # librosa 0.10.1 imports pkg_resources, which setuptools removed in 81.
     "setuptools>=70,<81",
+    # Whisper Metal ASR bakeoff (issue #33): the frozen WER/CER stack.
+    # jiwer is the edit-distance implementation only; the text normalizer is
+    # the sha-pinned vendored Whisper EnglishTextNormalizer
+    # (tests/parity/bakeoff/), which imports more-itertools (number path) and
+    # regex (imported by its basic.py). Exact-pinned so the frozen denominator
+    # cannot move under a resolver bump; uv.lock binds the transitives
+    # (click, rapidfuzz). Mirror any bump in the vendored provenance.json.
+    "jiwer==4.0.0",
+    "more-itertools==11.1.0",
+    "regex==2026.7.19",
 ]
 
 [project.scripts]
@@ -89,6 +99,13 @@ packages = ["src/voxint"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# Verbatim, sha-pinned upstream code (openai/whisper normalizers): its integrity
+# check is the digest in the sibling provenance.json, not lint. Keeping it
+# byte-identical is what makes the vendored hashes meaningful. force-exclude so
+# the dir is skipped even when its files are passed explicitly (pre-commit,
+# ad-hoc `ruff check <path>`), not only during a directory scan.
+extend-exclude = ["tests/parity/bakeoff/_vendor/openai_whisper_normalizers"]
+force-exclude = true
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
