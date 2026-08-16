@@ -518,6 +518,75 @@ ratcheted the bounds from the Gate M numbers above (see "Ratcheted to"
 column); loosening any bound afterwards is a numerics decision, not a test
 fix.
 
+### Whisper Metal ASR engine (issue #33) — pre-registered bakeoff gate
+
+Metal tier v1 runs whisper on **CPU** (row above); a Metal-accelerated ASR
+engine is the single biggest end-to-end speedup left (runs are
+transcribe-bound). This is the gate a candidate engine must pass **before** the
+launcher default flips — designed and recorded here BEFORE any candidate output
+is measured, per the numerics doctrine. **mlx-whisper** is the leading candidate
+(it ports openai-whisper's `avg_logprob` semantics — the contracted confidence
+field). whisper.cpp and CTranslate2-MPS are named candidates too, but the first
+landing measures **mlx only**; the other two carry a *documented-ineligible /
+deferred* row (CT2-MPS is an open source-build-only upstream PR,
+OpenNMT/CTranslate2#2077, where MPS-int8 can be slower than CPU-int8). Closing
+#33 requires a measured-or-ineligible row for every named candidate.
+
+**Seam contract.** Engine is selected by `WHISPER_ENGINE`
+(`ct2-legacy` | `ct2` | `mlx`), resolved through a **fail-closed** registry —
+an unknown or unavailable value refuses to start, never silently falls back to
+CPU. A shared, engine-agnostic front layer owns audio decode → 16 kHz mono PCM,
+the voxint-owned Silero **VADPlan** (speech intervals + pad/merge + decode
+windows + source-time offsets), window→file timestamp remapping, the
+`exp(avg_logprob)` confidence transform, and repetition soft-tagging; engines
+only decode identical pre-cut windows. `/healthz` identity gains `model_sha`,
+`vad_params`, and `decode_config_hash`, and device selection is verified
+fail-closed so a requested Metal engine cannot silently execute on CPU.
+
+**Two denominators, named honestly.** `ct2-legacy` is the untouched shipped path
+(`BatchedInferencePipeline` + its internal VAD); `ct2` is the same engine on the
+lifted voxint VAD. Because lifting VAD is a numerics-touching change to the
+shipped engine, the frozen v1 baseline is captured from **unmodified**
+`transcription.py` first, and candidate drift is reported as **two attributed
+deltas**: `legacy → ct2` (segmentation contribution) and `ct2 → candidate` (pure
+decode drift). All WER/CER use one **frozen, versioned normalizer** (vendored
+Whisper `EnglishTextNormalizer` + provenance) applied identically to hypothesis,
+gold, and baseline; raw and normalized both reported. Unit of analysis = file
+(paired bootstrap CI). Decode config is pinned per engine; `language=en` is
+pinned for the gate (auto-detect is a separate subset).
+
+Pre-registered bounds (ratcheting any afterwards is a numerics decision):
+
+| Gate | Bound |
+|---|---|
+| CT2 self-parity (`legacy` vs `ct2`, `vad_filter` true & false) | normalized WER-diff ≤ 0.5 pp; segmentation delta reported |
+| Contract — disagreement vs frozen CT2 baseline | normalized WER-diff ≤ 2.0 pp pooled; p95 per-file ≤ 5 pp; token agreement ≥ 97 % |
+| Guardrail — accuracy vs gold | candidate normalized WER ≤ CT2 normalized WER + 1.0 pp (per-stratum and pooled) |
+| Segment boundary drift (text-aligned, matched non-empty only) | p95 ≤ 0.5 s **and** p99/max ≤ 1.5 s; unmatched-segment rate ≤ 2 %; word-timestamp drift reported |
+| Zero-insertion (true non-speech fixtures) | absolute 0 chars; where CT2 already emits, ≤ baseline + 0 (no growth) |
+| Confidence conformance | per-file Spearman ρ(candidate, CT2) median ≥ 0.90 **and** top-level confidence MAE ≤ 0.05 **and** logprob coverage within ±5 % |
+| Performance (the point of Metal) | warm long-form RTF ≥ 1.5× over CT2-CPU on the maintainer box; peak unified memory ≤ ceiling (one engine resident); cold-start recorded |
+| Determinism | two warm runs identical or within a stated stdev |
+
+A confidence miss is an explicit amendment to the Confidence contract above,
+never a silent recalibration. The winner is chosen by pass/fail quality first,
+then ship-eligibility, then warm long-form RTF, with memory / cold-start as
+tie-breakers.
+
+**Corpus** (`tests/parity/fixtures/bakeoff/`, pre-registered strata in a
+committed `manifest.json`; audio never in git — fetched + checksum-verified by
+`tools/prepare_bakeoff_corpus.py`): **AMI IHM** (CC BY 4.0 — gold + committed CT2
+baseline transcripts, ~15 multi-minute slices) + **TED-LIUM 3** (CC BY-NC-ND —
+metrics-only, transcripts fetched-not-committed, ~15 talks) + the existing
+synthetic espeak-ng fixtures for controlled silence, 30 s-window seam, and
+hallucination-bait. File selection is a deterministic script (not hand-picked),
+and boundary drift is scored only on files with word/tight-segment gold.
+
+**No default flip** until this gate passes; the verdict lands **here** (a metal
+verdict row + report under `docs/reports/`) in a separate change from the flip,
+which ships as a MINOR release with `WHISPER_ENGINE=ct2`/`ct2-legacy` as the
+rollback path and a diarization canary on a diarized AMI slice beforehand.
+
 ## Contract tests
 
 `tests/contracts/` validates — CPU-only, no model deps — that:
