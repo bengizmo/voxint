@@ -45,6 +45,33 @@ jobs:
           VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
         run: uv run pytest tests --cov
 
+  frontend:
+    # Independent of lint-test (no `needs:`): a frontend break blocks merge on
+    # its own signal without coupling to the Postgres service container. The
+    # no-CDN offline guarantee rides inside `npm run build` (checks the exact
+    # dist/ bytes the image COPYs). Make this a required check on main.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build          # tsc --noEmit + vite build + check-no-cdn-urls
+      - name: Audit (high/critical)
+        run: npm audit --omit=dev --audit-level=high
+
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
