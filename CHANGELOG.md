@@ -43,6 +43,31 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   transcript/audio committed). No new Python deps (stdlib + `soundfile`/`numpy`);
   synthetic regeneration uses `espeak-ng` + `ffmpeg` (versions pinned in the
   manifest provenance).
+- **Whisper Metal bakeoff — frozen CT2-CPU baseline** (#33, Slice 1):
+  `tools/generate_bakeoff_baseline.py` captures the load-bearing numerics oracle
+  every Metal candidate is measured against, from the **unmodified** shipped
+  `transcription.py` decode path (fails closed if it has uncommitted changes).
+  For each corpus window it records both decode variants the frozen engine
+  exposes — `vad_true` (production `BatchedInferencePipeline`) and `vad_false`
+  (raw `model.transcribe`) — with per-segment/word text, timestamps, and
+  `exp(avg_logprob)` confidence, over two warm passes that must agree
+  (determinism gate). AMI (CC-BY-4.0) + synthetic (CC0) baselines are committed
+  to `tests/parity/fixtures/references/ct2-cpu-metal/transcribe.json`; TED-LIUM 3
+  (CC-BY-NC-ND) stays metrics-only (per-variant hypothesis hash, never text). The
+  committed oracle pins the full runtime identity (CT2/faster-whisper/ORT/PyAV/
+  ffmpeg versions, model revision, host, code SHA) — deterministic run-to-run on
+  one runtime, not asserted byte-identical across machines. A contract test
+  (`tests/contracts/test_bakeoff_baseline.py`) binds each committed entry to its
+  manifest `sha256` and enforces the no-TED-leakage doctrine.
+
+### Fixed
+- **Metal launcher whisper batch size** (#33): the native launcher
+  (`scripts/metal/voxint-metal.sh`) now sets `BATCH_SIZE=4`, mirroring the CPU
+  image (`Dockerfile.cpu`) it reproduces, instead of silently inheriting the
+  GPU/ROCm app default of 16. `batch_size` feeds the `vad_filter=True` batched
+  pipeline and is numerics-affecting, so the CT2-CPU tier had been running at a
+  batch size no shipped CPU deployment uses; the frozen #33 baseline oracle is
+  captured at 4. Pinned by `tests/unit/test_metal_launcher.py`.
 
 ## [0.14.0] - 2026-08-16
 
