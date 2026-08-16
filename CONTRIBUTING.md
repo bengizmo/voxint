@@ -27,12 +27,19 @@ independently (currently Python 3.10, dictated by the CUDA base images).
 
 ## Ground rules
 
+- Voxint serves individuals and small teams — non-technical researchers,
+  journalists, and educators — running locally hosted audio intelligence on
+  their own hardware. Avoid bloat: every new dependency, feature, or
+  configuration knob must earn its place for that audience; when in doubt,
+  leave it out.
 - Type hints are mandatory; `mypy` runs in strict mode.
 - New code needs unit tests (CI enforces 85% coverage).
 - No hardcoded endpoints, paths, or credentials — everything enters via `voxint.config.Settings`.
 - Secrets never land in the repo; CI runs gitleaks with repo-specific rules (`.gitleaks.toml`).
-- Model weights are never vendored — they download at build/run time under the user's own
-  credentials (see NOTICE).
+- Model weights are never committed to git — they are vendored into the service
+  images at build time from sha256-pinned standing release assets, with
+  provenance files recording upstream revisions and license attribution
+  (see NOTICE and the provenance JSONs referenced there).
 
 ## License
 

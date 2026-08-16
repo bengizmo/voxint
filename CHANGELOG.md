@@ -44,8 +44,17 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   connections (they answer in seconds; connection establishment keeps its own
   short cap). New `docs/operations.md` section covers the trade-off (slower
   hung-endpoint detection), proxy-side ceilings the client timeout cannot
-  override (LiteLLM's 180 s backend default → HTTP 408), and sizing
+  override (an OpenAI-compatible proxy observed 408ing at its own 180 s
+  ceiling), and sizing
   `RESEARCH_DEADLINE_SECONDS` for slow local models.
+
+- **Docs state the project's audience and anti-bloat principle**: README,
+  CLAUDE.md, CONTRIBUTING, and onboarding now say who Voxint is for —
+  individuals and small teams (non-technical researchers, journalists,
+  educators) needing locally hosted audio intelligence — and that new
+  dependencies, features, and configuration surface must earn their place for
+  that audience. Third-party proxy products are no longer named in docs as if
+  part of the stack (generic "OpenAI-compatible proxy" phrasing).
 
 ### Fixed
 - **Research jobs run under their snapshotted LLM timeout**: the worker's

@@ -3,6 +3,10 @@
 **From sound to intelligence: end-to-end transcription, diarization, and speaker identity with
 human-grade quality gates.**
 
+Built for individuals and small teams — researchers, journalists, educators — who need
+audio intelligence that runs entirely on their own hardware: no cloud account, no
+per-minute fees, no recordings leaving the room.
+
 Voxint turns any audio or video file into an enhanced, speaker-attributed transcript:
 
 ```

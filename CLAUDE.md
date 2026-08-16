@@ -7,9 +7,17 @@
 **Voxint** is a self-hosted, open-source audio-intelligence pipeline: media in →
 transcription (faster-whisper) → speaker diarization (pyannote) → speaker
 embedding/identification (TitaNet) → a single-operator review console for
-adjudicating results. Apache-2.0, single-operator deployments by design —
-enterprise-scale security and scalability are explicitly not primary concerns;
-correctness, numerics stability, and non-technical onboarding are.
+adjudicating results. Apache-2.0.
+
+**Who it is for — let this guide every design decision.** Voxint serves
+individuals and small teams who need **locally hosted** audio intelligence:
+non-technical researchers, journalists, and educators working with recordings
+that should not leave their own hardware. Single-operator deployments by
+design — enterprise-scale security and scalability are explicitly not primary
+concerns; correctness, numerics stability, and non-technical onboarding are.
+**No unnecessary bloat**: every new dependency, feature, configuration knob,
+or piece of operational ceremony must earn its place for this audience — when
+in doubt, leave it out.
 
 Public repo: `github.com/bengizmo/voxint` (releases are cut there — `release.yml`
 only runs on GitHub). Development also pushes to a private origin: **always push

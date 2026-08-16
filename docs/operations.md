@@ -600,13 +600,14 @@ Two ceilings the client timeout **cannot** override:
 
 - **A proxy in front of your endpoint.** Proxies impose their own request
   ceilings and return HTTP 408 when a call exceeds them, regardless of what
-  Voxint is configured to wait. On the maintainer's LiteLLM deployment that
-  ceiling was **180 s**; LiteLLM's default varies by version and
+  Voxint is configured to wait. On the maintainer's deployment, an
+  OpenAI-compatible proxy 408'd at its own **180 s** ceiling despite a
+  higher client timeout; defaults vary by product, version, and
   configuration, so check yours. If long local-model calls fail with 408
-  despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own limit
-  (`request_timeout` in LiteLLM config). The effective limit is always the
-  *lower* of the client timeout and every proxy/backend ceiling between
-  Voxint and the model.
+  despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own
+  request-timeout setting. The effective limit is always the *lower* of the
+  client timeout and every proxy/backend ceiling between Voxint and the
+  model.
 - **The web-research deadline.** `RESEARCH_DEADLINE_SECONDS` (default 300 s)
   is checked between research rounds, never mid-round — a round's model call
   (and, on a malformed reply, its one repair call) always finishes first. A
