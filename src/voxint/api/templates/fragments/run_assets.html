@@ -71,8 +71,10 @@ starting point, not a verified record.</p>
   <ul>
     {% for mention in entry.asset.payload.mentions %}
     <li>{{ mention.surface }}{% if mention.kind %} <span class="muted">({{ mention.kind }})</span>{% endif %}
-      <span class="muted">— segment{{ "s" if mention.occurrences|length != 1 }}
-      {% for occ in mention.occurrences %}{{ occ.segment_index }}{% if not loop.last %}, {% endif %}{% endfor %}</span>
+      {# The grounding evidence itself — the verbatim transcript span each
+         occurrence was located at, so the operator can audit the mention. #}
+      <span class="muted">—
+      {% for occ in mention.occurrences %}segment {{ occ.segment_index }}: “{{ occ.quote }}”{% if not loop.last %}; {% endif %}{% endfor %}</span>
     </li>
     {% endfor %}
   </ul>

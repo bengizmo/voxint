@@ -203,6 +203,24 @@ def test_migration_0012_roundtrip_and_checks(alembic_cfg: Config, engine: Engine
                 f" WHERE id = '{ASSET_ID}'"
             )
         )
+    # The stamp target must be a NEWER generation of the SAME (run, kind):
+    # self, another kind, and an older generation are all rejected even
+    # though each is a valid FK.
+    _insert_asset(
+        engine,
+        id=f"'{bad}21'",
+        asset_kind="'topics'",
+        payload='\'{"topics": [{"label": "x"}]}\'::jsonb',
+        idempotency_key="'k21'",
+    )
+    for target in (f"{bad}20", f"{bad}21", f"{ASSET_ID}"):
+        with engine.connect() as conn, pytest.raises(DBAPIError, match="newer generation"):
+            conn.execute(
+                text(
+                    f"UPDATE run_enrichment_assets SET superseded_by_asset_id = '{target}'"
+                    f" WHERE id = '{bad}20'"
+                )
+            )
 
     # -- job CHECKs + one-active index ------------------------------------------
     _insert_job(engine)

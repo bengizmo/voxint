@@ -121,6 +121,7 @@ from voxint.db.models import (
     ResearchJob,
     ResearchJobStatus,
     RunAssetJob,
+    RunAssetJobStatus,
     RunAssetKind,
     RunStatus,
     Speaker,
@@ -832,6 +833,12 @@ def _research_response(
 
 
 _RUN_ASSET_KINDS = tuple(kind.value for kind in RunAssetKind)
+# Asset jobs have their own enum — do not borrow the research tuple just
+# because the string values coincide today.
+_ASSET_ACTIVE_STATUSES = (
+    RunAssetJobStatus.QUEUED.value,
+    RunAssetJobStatus.RUNNING.value,
+)
 _ASSET_KIND_TITLES = {
     "summary": "Summary",
     "topics": "Topics",
@@ -857,7 +864,7 @@ def _run_assets_state(
     for kind in _RUN_ASSET_KINDS:
         asset = assets.get(kind)
         job = jobs.get(kind)
-        active = job is not None and job.status in _ACTIVE_JOB_STATUSES
+        active = job is not None and job.status in _ASSET_ACTIVE_STATUSES
         any_active = any_active or active
         kinds.append(
             {
@@ -2303,9 +2310,16 @@ def _register_routes(app: FastAPI) -> None:
             return _run_assets_response(request, session, run_id, error=str(exc))
         job_ids = [job.id for job in created]
         session.commit()
-        for job_id in job_ids:
-            _publish_run_asset_job(job_id)
-        return _run_assets_response(request, session, run_id)
+        deferred = sum(1 for job_id in job_ids if not _publish_run_asset_job(job_id))
+        # Honest UX: a broker outage leaves real QUEUED rows with no recovery
+        # sweep — say so instead of rendering a silently-stuck spinner.
+        notice = (
+            "worker broker unavailable — the queued job(s) will not start;"
+            " cancel and retry once the worker is back"
+            if deferred
+            else None
+        )
+        return _run_assets_response(request, session, run_id, error=notice)
 
     @protected.post("/runs/{run_id}/assets/{job_id}/cancel")
     def run_assets_cancel(

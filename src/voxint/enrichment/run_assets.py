@@ -15,8 +15,9 @@ validated up front and fail-closed. The writer mirrors ``drafts.py``:
   returns the existing row, a different payload is an error.
 
 The module also owns the **source snapshot**: :func:`load_source` reads
-exactly what the generators are allowed to see (ordered transcript with
-attribution, the #36 metadata snapshot, operator notes), and
+exactly what the generators are allowed to see (the ordered transcript with
+its raw diarization labels — resolved speaker names are a deliberate v1 cut —
+plus the #36 metadata snapshot and operator notes), and
 :func:`source_content_hash` canonicalizes it into the sha256 staleness
 detector stored on every asset. Content only — model/prompt versions are
 recorded separately, so a prompt upgrade never masquerades as a source
@@ -26,6 +27,7 @@ change.
 import hashlib
 import json
 import math
+import unicodedata
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -63,6 +65,40 @@ ENTITY_KINDS = ("person", "organization", "product")
 
 class RunAssetError(Exception):
     """A generator submitted something the asset layer refuses to persist."""
+
+
+def normalize_span_text(text: str) -> str:
+    """NFKC + casefold + whitespace-collapse — the matching normalization
+    shared by the producer's grounding and the writer's re-validation."""
+    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
+
+
+def quote_matches_surface(surface: str, quote: str) -> bool:
+    """A grounded quote must be an occurrence OF the surface, not merely any
+    real substring of the transcript — otherwise a model could hang an
+    invented entity name on a genuinely-located "the". Containment either way
+    (normalized): the quote may be a partial form of the surface ("Acme" for
+    "Acme Corp") or carry surrounding words, but the two must overlap."""
+    normalized_surface = normalize_span_text(surface)
+    normalized_quote = normalize_span_text(quote)
+    return (
+        bool(normalized_surface)
+        and bool(normalized_quote)
+        and (normalized_surface in normalized_quote or normalized_quote in normalized_surface)
+    )
+
+
+def span_boundaries_ok(segment: str, start: int, end: int) -> bool:
+    """Alphanumeric edges of a span must sit on non-alphanumeric boundaries —
+    "Ann" must not anchor inside "Joanne", "1" not inside "2019". Shared rule:
+    the producer's locate enforces it and the writer re-checks it, so the two
+    can never diverge."""
+    quote = segment[start:end]
+    if not quote:
+        return False
+    if quote[0].isalnum() and start > 0 and segment[start - 1].isalnum():
+        return False
+    return not (quote[-1].isalnum() and end < len(segment) and segment[end].isalnum())
 
 
 @dataclass(frozen=True)
@@ -300,6 +336,16 @@ def _validate_mentions_payload(payload: Mapping[str, Any], segment_text: Mapping
                 # evidence — the producer's locate step should have dropped it.
                 raise RunAssetError(
                     f"occurrence quote does not match segment {index} text at [{start}, {end})"
+                )
+            if not span_boundaries_ok(segment, start, end):
+                raise RunAssetError(
+                    f"occurrence span [{start}, {end}) in segment {index} anchors"
+                    " inside a longer word"
+                )
+            if not quote_matches_surface(surface, quote):
+                raise RunAssetError(
+                    "occurrence quote is unrelated to the mention surface —"
+                    " a grounded span must be an occurrence of the entity"
                 )
 
 

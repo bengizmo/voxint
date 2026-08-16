@@ -1,7 +1,7 @@
 """LLM generators for run-level assets (#41): summary, topics, entity mentions.
 
 Each generator is one strict-JSON ``chat_json`` call over the run's source
-snapshot (transcript with attribution + #36 metadata + operator notes),
+snapshot (diarization-labeled transcript + #36 metadata + operator notes),
 followed by fail-closed parsing. There is deliberately no tool loop here —
 unlike #40's web researcher, the model sees everything it may use in the one
 prompt, so a single request with one shot at valid output is the whole
@@ -30,9 +30,11 @@ from voxint.enrichment.run_assets import (
     MAX_OCCURRENCES_PER_MENTION,
     MAX_SUMMARY_CHARS,
     MAX_SURFACE_CHARS,
+    MAX_TOPIC_DESCRIPTION_CHARS,
     MAX_TOPIC_LABEL_CHARS,
     MAX_TOPICS,
     RunAssetSource,
+    quote_matches_surface,
 )
 
 PRODUCER_NAME = "run_assets.llm"
@@ -73,6 +75,8 @@ def render_source(source: RunAssetSource, *, max_chars: int) -> tuple[str, bool]
     if len(document) <= max_chars:
         return document, False
     keep = max_chars - len(_TRUNCATION_MARKER)
+    if keep <= 0:  # settings floor prevents this; guard against future drift
+        return document[:max_chars], True
     head = keep * 2 // 3
     tail = keep - head
     return document[:head] + _TRUNCATION_MARKER + document[-tail:], True
@@ -160,7 +164,7 @@ def _parse_topics(body: Mapping[str, Any]) -> dict[str, Any]:
         if not (isinstance(description, str) and description.strip()):
             description = None
         else:
-            description = " ".join(description.split())[:500]
+            description = " ".join(description.split())[:MAX_TOPIC_DESCRIPTION_CHARS]
         confidence = item.get("confidence")
         if (
             isinstance(confidence, bool)
@@ -189,22 +193,23 @@ def _parse_topics(body: Mapping[str, Any]) -> dict[str, Any]:
     return {"topics": topics}
 
 
-# A letter for boundary purposes — same class as names_llm._locate, so a
-# quote can never anchor inside a longer word.
-_LETTER = r"[^\W\d_]"
+# An alphanumeric for boundary purposes (regex \w minus underscore) — a quote
+# can anchor inside neither a longer word NOR a longer number ("1" in "2019").
+# Mirrors run_assets.span_boundaries_ok, which the writer re-checks.
+_ALNUM = r"[^\W_]"
 
 
 def _locate_quote(quote: str, text: str) -> tuple[int, int] | None:
     """Offsets of ``quote`` in ``text`` — exact first, then case-insensitive.
 
-    Both passes require non-letter boundaries when the quote itself starts or
-    ends with a letter. First match wins (deterministic); offsets always index
-    the ORIGINAL text, so the recorded span reproduces the transcript verbatim
-    modulo case only in the fallback — which is why the recorded quote is
-    re-sliced from the text, never taken from the model.
+    Both passes require non-alphanumeric boundaries when the quote itself
+    starts or ends with an alphanumeric. First match wins (deterministic);
+    offsets always index the ORIGINAL text, so the recorded span reproduces
+    the transcript verbatim modulo case only in the fallback — which is why
+    the recorded quote is re-sliced from the text, never taken from the model.
     """
-    prefix = rf"(?<!{_LETTER})" if quote and quote[0].isalpha() else ""
-    suffix = rf"(?!{_LETTER})" if quote and quote[-1].isalpha() else ""
+    prefix = rf"(?<!{_ALNUM})" if quote and quote[0].isalnum() else ""
+    suffix = rf"(?!{_ALNUM})" if quote and quote[-1].isalnum() else ""
     for flags in (0, re.IGNORECASE):
         match = re.search(prefix + re.escape(quote) + suffix, text, flags | re.UNICODE)
         if match is not None:
@@ -231,8 +236,12 @@ def _parse_mentions(body: Mapping[str, Any], source: RunAssetSource) -> dict[str
         if kind not in ENTITY_KINDS:
             kind = None
         raw_occurrences = item.get("occurrences")
-        if not isinstance(raw_occurrences, list):
-            raise RunAssetProducerError("mention entry has no occurrences array")
+        if not isinstance(raw_occurrences, list) or not raw_occurrences:
+            # A mention asserted without a single occurrence is a protocol
+            # violation, not a droppable span — silently omitting it would
+            # let a reply full of such mentions become an authoritative
+            # "no entities" asset with zero diagnostics.
+            raise RunAssetProducerError("mention entry has no occurrences")
         occurrences: list[dict[str, Any]] = []
         for occurrence in raw_occurrences:
             if not isinstance(occurrence, Mapping):
@@ -245,8 +254,11 @@ def _parse_mentions(body: Mapping[str, Any], source: RunAssetSource) -> dict[str
                 or not isinstance(quote, str)
                 or not quote.strip()
             ):
+                # Type-level message only — the occurrence body is model
+                # output and must not ride into persisted error text.
                 raise RunAssetProducerError(
-                    f"occurrence entry has wrong types: {occurrence!r:.200}"
+                    "occurrence entry has wrong types (segment_index must be"
+                    " an integer, quote a non-empty string)"
                 )
             text = segment_text.get(index)
             if text is None:
@@ -254,6 +266,11 @@ def _parse_mentions(body: Mapping[str, Any], source: RunAssetSource) -> dict[str
                 continue
             located = _locate_quote(quote.strip(), text)
             if located is None:
+                dropped_unlocatable += 1
+                continue
+            if not quote_matches_surface(surface, text[located[0] : located[1]]):
+                # A genuinely-located quote that is unrelated to the surface
+                # ("Mallory" hung on "the") is not grounding for this entity.
                 dropped_unlocatable += 1
                 continue
             start, end = located
@@ -273,9 +290,9 @@ def _parse_mentions(body: Mapping[str, Any], source: RunAssetSource) -> dict[str
             mentions.append({"surface": surface, "kind": kind, "occurrences": occurrences})
         if len(mentions) == MAX_MENTIONS:
             break
-    if raw and not mentions and (dropped_unlocatable or dropped_out_of_run):
-        # Every span the model offered failed grounding — that is a failed
-        # generation, not an authoritative "no entities" (the #40 lesson).
+    if raw and not mentions:
+        # The model offered mentions and none survived grounding — that is a
+        # failed generation, not an authoritative "no entities" (#40 lesson).
         raise RunAssetProducerError(
             f"no mention survived grounding ({dropped_unlocatable} unlocatable,"
             f" {dropped_out_of_run} out of run)"

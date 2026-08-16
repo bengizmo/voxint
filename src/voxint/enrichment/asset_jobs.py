@@ -17,7 +17,7 @@ one-active-per-(run, kind) slot recovered.
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from sqlalchemy import CursorResult, case, func, select, update
@@ -89,7 +89,9 @@ def _settings_from_snapshot(settings: Settings, config: dict[str, object]) -> Se
     update_fields = {
         field: config[key]
         for key, field in _CONFIG_FIELDS.items()
-        if isinstance(config.get(key), (int, float, str))
+        # bool is an int subclass — a corrupted snapshot must not smuggle
+        # True into a numeric budget field.
+        if isinstance(config.get(key), (int, float, str)) and not isinstance(config.get(key), bool)
     }
     return settings.model_copy(update=update_fields) if update_fields else settings
 
@@ -136,7 +138,12 @@ def create_jobs(
             with session.begin_nested():
                 session.add(job)
                 session.flush()
-        except IntegrityError:
+        except IntegrityError as exc:
+            # Only the one-active partial unique index means "skip this kind";
+            # any other integrity failure is a real bug and must surface.
+            constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+            if constraint != "run_asset_jobs_one_active_per_run_kind":
+                raise
             already_active.append(kind)
             continue
         created.append(job)
@@ -216,13 +223,15 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
             float(timeout if isinstance(timeout, (int, float)) else 90.0)
             + STALE_RUNNING_GRACE_SECONDS
         )
-        cutoff = datetime.now(tz=UTC) - timedelta(seconds=bound)
+        # DB clock on BOTH sides: started_at was stamped with now() at claim,
+        # so an app-clock cutoff would reintroduce exactly the skew the claim
+        # path avoided (make_interval's 7th positional argument is seconds).
         session.execute(
             update(RunAssetJob)
             .where(
                 RunAssetJob.id == job_id,
                 RunAssetJob.status == RunAssetJobStatus.RUNNING.value,
-                RunAssetJob.started_at < cutoff,
+                RunAssetJob.started_at < func.now() - func.make_interval(0, 0, 0, 0, 0, 0, bound),
             )
             .values(
                 status=RunAssetJobStatus.CANCELLED.value,
@@ -239,13 +248,28 @@ def _finish(
     status: RunAssetJobStatus,
     error: str | None = None,
 ) -> None:
+    """Guarded active→terminal CAS — a terminal row is never mutated again
+    (a force-cancel that already resolved the job must not be overwritten by
+    a late worker failure), and a FAILED verdict racing an operator cancel
+    resolves to CANCELLED: the operator asked for exactly that outcome."""
+    resolved: Any = status.value
+    if status is RunAssetJobStatus.FAILED:
+        resolved = case(
+            (RunAssetJob.cancel_requested.is_(True), RunAssetJobStatus.CANCELLED.value),
+            else_=status.value,
+        )
     session.execute(
         update(RunAssetJob)
-        .where(RunAssetJob.id == job_id)
+        .where(
+            RunAssetJob.id == job_id,
+            RunAssetJob.status.in_(
+                (RunAssetJobStatus.QUEUED.value, RunAssetJobStatus.RUNNING.value)
+            ),
+        )
         .values(
-            status=status.value,
+            status=resolved,
             error=error[:MAX_ERROR_CHARS] if error else None,
-            finished_at=datetime.now(tz=UTC),
+            finished_at=func.now(),
         )
     )
     session.commit()
@@ -339,8 +363,12 @@ def execute_job(
             return
 
         # Atomic finalization: the asset row and the job stamp commit
-        # together, and only while the row is still RUNNING — a force-cancelled
-        # job must not be stamped SUCCEEDED (nor keep its asset).
+        # together, and only while the row is still RUNNING with no cancel
+        # pending — a cancel that lands between the check above and this stamp
+        # must win (the asset rolls back with the missed stamp), and so must a
+        # force-cancel. The whole block sits under the same failure umbrella
+        # as generation: a DB error here must land as an honest FAILED row,
+        # never a forever-RUNNING job (there is no recovery sweep to save it).
         try:
             asset = record_asset(
                 session,
@@ -359,30 +387,42 @@ def execute_job(
                 config=config_snapshot(exec_settings, truncated=truncated),
                 config_schema_version=CONFIG_SCHEMA_VERSION,
             )
+            session.flush()
+            stamped = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(RunAssetJob)
+                    .where(
+                        RunAssetJob.id == job_id,
+                        RunAssetJob.status == RunAssetJobStatus.RUNNING.value,
+                        RunAssetJob.cancel_requested.is_(False),
+                    )
+                    .values(
+                        status=RunAssetJobStatus.SUCCEEDED.value,
+                        asset_id=asset.id,
+                        finished_at=func.now(),
+                    )
+                ),
+            )
+            if stamped.rowcount != 1:
+                # Cancel won the race; the asset insert rolls back with us and
+                # the cooperative flag (if the row is still RUNNING) resolves.
+                session.rollback()
+                _finish(session, job_id, status=RunAssetJobStatus.CANCELLED)
+                return
+            session.commit()
         except RunAssetError as exc:
             session.rollback()
             _finish(session, job_id, status=RunAssetJobStatus.FAILED, error=str(exc))
-            return
-        session.flush()
-        stamped = cast(
-            CursorResult[Any],
-            session.execute(
-                update(RunAssetJob)
-                .where(
-                    RunAssetJob.id == job_id,
-                    RunAssetJob.status == RunAssetJobStatus.RUNNING.value,
-                )
-                .values(
-                    status=RunAssetJobStatus.SUCCEEDED.value,
-                    asset_id=asset.id,
-                    finished_at=datetime.now(tz=UTC),
-                )
-            ),
-        )
-        if stamped.rowcount != 1:
+        except Exception as exc:
+            logger.exception("run-asset job %s failed during finalization", job_id)
             session.rollback()
-            return
-        session.commit()
+            _finish(
+                session,
+                job_id,
+                status=RunAssetJobStatus.FAILED,
+                error=f"unexpected error ({type(exc).__name__}) — see worker logs",
+            )
 
 
 def active_or_last_jobs(session: Session, pipeline_run_id: uuid.UUID) -> dict[str, RunAssetJob]:

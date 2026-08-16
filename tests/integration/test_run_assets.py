@@ -420,3 +420,186 @@ class TestAutogenerateHook:
             make_settings(enrichment_run_assets_autogenerate=True),
         )
         assert delays == []
+
+
+class TestCancelHardening:
+    """Review-driven lifecycle cases: stale force-cancel, terminal CAS,
+    snapshot-executes, and force-cancel racing the executor."""
+
+    def _claimed_job(self, session_factory: sessionmaker[Session], run_id: uuid.UUID) -> uuid.UUID:
+        with session_factory() as session:
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=make_settings(),
+            )
+            session.commit()
+            job_id = created[0].id
+        with session_factory() as session:
+            assert claim_job(session, job_id) is not None
+        return job_id
+
+    def test_stale_running_job_is_force_cancelled(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from sqlalchemy import text as sql_text
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+        job_id = self._claimed_job(session_factory, run_id)
+        with session_factory() as session:
+            # Backdate BOTH stamps (started_at >= created_at CHECK) past the
+            # llm_timeout + grace bound.
+            session.execute(
+                sql_text(
+                    "UPDATE run_asset_jobs SET"
+                    " created_at = now() - interval '1 hour',"
+                    " started_at = now() - interval '1 hour'"
+                    " WHERE id = :id"
+                ),
+                {"id": str(job_id)},
+            )
+            session.commit()
+        with session_factory() as session:
+            assert request_cancel(session, job_id) is True
+            session.commit()
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.CANCELLED.value
+            assert job.finished_at is not None
+
+    def test_fresh_running_job_is_not_force_cancelled(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+        job_id = self._claimed_job(session_factory, run_id)
+        with session_factory() as session:
+            assert request_cancel(session, job_id) is True
+            session.commit()
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.RUNNING.value  # live executor owns it
+            assert job.cancel_requested is True
+
+    def test_cancel_on_terminal_job_returns_false(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=make_settings(),
+            )
+            session.commit()
+            job_id = created[0].id
+        execute_job(session_factory, job_id, settings=make_settings(), llm=FakeLLM([SUMMARY_BODY]))
+        with session_factory() as session:
+            assert session.get(RunAssetJob, job_id).status == RunAssetJobStatus.SUCCEEDED.value
+            assert request_cancel(session, job_id) is False
+
+    def test_finish_never_overwrites_terminal_and_resolves_cancel(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from voxint.enrichment.asset_jobs import _finish
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+        # A late FAILED verdict must not overwrite an already-CANCELLED row.
+        job_id = self._claimed_job(session_factory, run_id)
+        with session_factory() as session:
+            from sqlalchemy import text as sql_text
+
+            session.execute(
+                sql_text(
+                    "UPDATE run_asset_jobs SET status = 'cancelled',"
+                    " cancel_requested = true, finished_at = now() WHERE id = :id"
+                ),
+                {"id": str(job_id)},
+            )
+            session.commit()
+        with session_factory() as session:
+            _finish(session, job_id, status=RunAssetJobStatus.FAILED, error="late failure")
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.CANCELLED.value
+            assert job.error is None
+        # A FAILED verdict on a RUNNING row with the cancel flag set resolves
+        # to CANCELLED — the operator asked for exactly that outcome.
+        second = self._claimed_job(session_factory, run_id)
+        with session_factory() as session:
+            request_cancel(session, second)
+            session.commit()
+        with session_factory() as session:
+            _finish(session, second, status=RunAssetJobStatus.FAILED, error="llm broke")
+        with session_factory() as session:
+            job = session.get(RunAssetJob, second)
+            assert job.status == RunAssetJobStatus.CANCELLED.value
+
+    def test_force_cancelled_job_never_records_an_asset(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+
+        class ForceCancellingLLM:
+            def chat_json(self, messages: object) -> dict[str, object]:
+                # Simulate a force-cancel resolving the row mid-call.
+                from sqlalchemy import text as sql_text
+
+                with session_factory() as inner:
+                    inner.execute(
+                        sql_text(
+                            "UPDATE run_asset_jobs SET status = 'cancelled',"
+                            " cancel_requested = true, finished_at = now()"
+                            " WHERE pipeline_run_id = :rid"
+                        ),
+                        {"rid": str(run_id)},
+                    )
+                    inner.commit()
+                return dict(SUMMARY_BODY)
+
+        with session_factory() as session:
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=make_settings(),
+            )
+            session.commit()
+            job_id = created[0].id
+        execute_job(session_factory, job_id, settings=make_settings(), llm=ForceCancellingLLM())
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.CANCELLED.value
+            assert job.asset_id is None
+            assert latest_assets(session, run_id) == {}
+
+    def test_snapshot_executes_not_live_settings(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=make_settings(llm_model="model-a"),
+            )
+            session.commit()
+            job_id = created[0].id
+        # Settings changed between enqueue and execution — the snapshot wins.
+        execute_job(
+            session_factory,
+            job_id,
+            settings=make_settings(llm_model="model-b"),
+            llm=FakeLLM([SUMMARY_BODY]),
+        )
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            asset = session.get(RunEnrichmentAsset, job.asset_id)
+            assert asset.model == "model-a"
+            assert asset.config["model"] == "model-a"

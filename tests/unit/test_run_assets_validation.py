@@ -346,9 +346,7 @@ class TestValidatorEdges:
             **occurrence_overrides,
         }
         return {
-            "mentions": [
-                {"surface": "Acme Corp", "kind": None, "occurrences": [occurrence]}
-            ],
+            "mentions": [{"surface": "Acme Corp", "kind": None, "occurrences": [occurrence]}],
             "diagnostics": {"dropped_unlocatable": 0, "dropped_out_of_run": 0},
         }
 
@@ -378,9 +376,7 @@ class TestValidatorEdges:
             ({"start_char": 33, "end_char": 33}, "outside segment"),
         ],
     )
-    def test_occurrence_rejections(
-        self, mutation: dict[str, object], message: str
-    ) -> None:
+    def test_occurrence_rejections(self, mutation: dict[str, object], message: str) -> None:
         with pytest.raises(RunAssetError, match=message):
             validate_payload(
                 RunAssetKind.ENTITY_MENTIONS, self._mentions(**mutation), source=make_source()
@@ -399,9 +395,7 @@ class TestValidatorEdges:
             validate_payload(
                 RunAssetKind.ENTITY_MENTIONS,
                 {
-                    "mentions": [
-                        {"surface": "x", "kind": "planet", "occurrences": []}
-                    ],
+                    "mentions": [{"surface": "x", "kind": "planet", "occurrences": []}],
                     "diagnostics": diagnostics,
                 },
                 source=source,
@@ -478,3 +472,85 @@ class TestRecordValidation:
         now = datetime.now(tz=UTC)
         with pytest.raises(RunAssetError, match="precedes"):
             self._record(started_at=now, completed_at=now - timedelta(seconds=1))
+
+
+class TestGroundingHardening:
+    """Review-driven cases: surface↔quote relation, alnum boundaries, and
+    protocol violations that must fail rather than vanish."""
+
+    def test_quote_matches_surface_containment(self) -> None:
+        from voxint.enrichment.run_assets import quote_matches_surface
+
+        assert quote_matches_surface("Acme Corp", "acme corp")
+        assert quote_matches_surface("Acme Corp", "Acme")  # partial form
+        assert quote_matches_surface("Acme", "at Acme Corp")  # surrounding words
+        assert not quote_matches_surface("Mallory", "the")
+        assert not quote_matches_surface("Mallory", "Acme Corp")
+
+    def test_locate_quote_digit_boundaries(self) -> None:
+        text = "in 2019 we saw 1 case"
+        # "1" must not anchor inside "2019".
+        assert _locate_quote("1", text) == (15, 16)
+        assert _locate_quote("201", text) is None
+
+    def test_unrelated_quote_is_dropped_and_all_dropped_fails(self) -> None:
+        # A genuinely-locatable quote hung on an invented entity must not
+        # ground it — and when nothing survives, the generation fails.
+        with pytest.raises(RunAssetProducerError, match="survived grounding"):
+            _parse_mentions(
+                {
+                    "mentions": [
+                        {
+                            "surface": "Mallory",
+                            "occurrences": [{"segment_index": 0, "quote": "Acme Corp"}],
+                        }
+                    ]
+                },
+                make_source(),
+            )
+
+    def test_empty_occurrences_is_protocol_violation(self) -> None:
+        with pytest.raises(RunAssetProducerError, match="no occurrences"):
+            _parse_mentions(
+                {"mentions": [{"surface": "Mallory", "occurrences": []}]},
+                make_source(),
+            )
+
+    def test_writer_rejects_mid_word_span(self) -> None:
+        # Slice equality holds ("Joa" == segment[12:15]) but the span anchors
+        # inside "Joanne" — the writer re-applies the boundary rule.
+        payload = {
+            "mentions": [
+                {
+                    "surface": "Joa",
+                    "kind": None,
+                    "occurrences": [
+                        {"segment_index": 0, "quote": "Joa", "start_char": 12, "end_char": 15}
+                    ],
+                }
+            ],
+            "diagnostics": {"dropped_unlocatable": 0, "dropped_out_of_run": 0},
+        }
+        with pytest.raises(RunAssetError, match="anchors inside"):
+            validate_payload(RunAssetKind.ENTITY_MENTIONS, payload, source=make_source())
+
+    def test_writer_rejects_unrelated_surface(self) -> None:
+        payload = {
+            "mentions": [
+                {
+                    "surface": "Mallory",
+                    "kind": None,
+                    "occurrences": [
+                        {
+                            "segment_index": 0,
+                            "quote": "Acme Corp",
+                            "start_char": 24,
+                            "end_char": 33,
+                        }
+                    ],
+                }
+            ],
+            "diagnostics": {"dropped_unlocatable": 0, "dropped_out_of_run": 0},
+        }
+        with pytest.raises(RunAssetError, match="unrelated"):
+            validate_payload(RunAssetKind.ENTITY_MENTIONS, payload, source=make_source())

@@ -1094,8 +1094,9 @@ class RunEnrichmentAsset(Base):
     independence between the three kinds is exactly this per-kind keying.
 
     ``source_content_hash`` is the staleness detector: a sha256 over the
-    canonical serialization of everything the generator read (transcript,
-    attribution, source metadata, operator notes) — content only, never
+    canonical serialization of everything the generator read (the transcript
+    with its raw diarization labels, source metadata, operator notes —
+    resolved speaker names are a deliberate v1 cut) — content only, never
     model/prompt versions, so a prompt upgrade cannot masquerade as a source
     change. Stale = recomputed current hash differs. It is deliberately NOT
     the idempotency key: an operator regenerate on unchanged input is an

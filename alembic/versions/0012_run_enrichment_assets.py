@@ -206,6 +206,23 @@ def upgrade() -> None:
             THEN
                 RAISE EXCEPTION 'run_enrichment_assets supersession is write-once';
             END IF;
+            IF OLD.superseded_by_asset_id IS NULL
+               AND NEW.superseded_by_asset_id IS NOT NULL
+            THEN
+                -- The stamp must point at a NEWER generation of the SAME
+                -- (run, kind): a valid-FK stamp to itself, another kind, or
+                -- another run would silently hide the current asset with a
+                -- lineage immutable rows can never repair.
+                PERFORM 1 FROM run_enrichment_assets t
+                 WHERE t.id = NEW.superseded_by_asset_id
+                   AND t.pipeline_run_id = OLD.pipeline_run_id
+                   AND t.asset_kind = OLD.asset_kind
+                   AND t.generation > OLD.generation;
+                IF NOT FOUND THEN
+                    RAISE EXCEPTION
+                        'run_enrichment_assets supersession must point to a newer generation of the same run and kind';
+                END IF;
+            END IF;
             RETURN NEW;
         END $$
     """)

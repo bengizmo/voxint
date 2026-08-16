@@ -218,3 +218,37 @@ class TestExport:
             session.commit()
         body = client.get(f"/runs/{run_id}/export.json").json()
         assert body["enrichment_assets"]["summary"]["stale"] is True
+
+
+class TestConsoleHardening:
+    def test_polling_only_while_active(
+        self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from voxint.api.csrf import CSRF_ASSETS_CANCEL, mint_csrf_token
+
+        monkeypatch.setattr("voxint.api.app._publish_run_asset_job", lambda _job_id: True)
+        client = _build_client(session_factory)
+        with session_factory() as session:
+            run_id = seed_run(session)
+        fragment = client.get(f"/runs/{run_id}/assets")
+        assert 'hx-trigger="every 3s"' not in fragment.text  # nothing active
+        resp = _generate(client, run_id, kind="summary")
+        assert 'hx-trigger="every 3s"' in resp.text  # queued job → poll
+        with session_factory() as session:
+            job_id = session.execute(select(RunAssetJob)).scalar_one().id
+        resp = client.post(
+            f"/runs/{run_id}/assets/{job_id}/cancel",
+            data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_ASSETS_CANCEL)},
+        )
+        assert 'hx-trigger="every 3s"' not in resp.text  # terminal → poll stops
+
+    def test_broker_outage_is_reported_inline(
+        self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("voxint.api.app._publish_run_asset_job", lambda _job_id: False)
+        client = _build_client(session_factory)
+        with session_factory() as session:
+            run_id = seed_run(session)
+        resp = _generate(client, run_id)
+        assert resp.status_code == 200
+        assert "broker unavailable" in resp.text
