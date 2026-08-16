@@ -663,6 +663,30 @@ def _label_previews(
     return previews
 
 
+def _run_label_universe(session: Session, run_id: uuid.UUID) -> set[str]:
+    """Every diarization label present in a run, from BOTH its diarization turns
+    and its transcript segments.
+
+    A transcript segment may carry a label with no turn (the supported degenerate
+    case the resolver's turn-derived ``label_states`` does not enumerate), and a
+    turn's label may have no segment; the union covers both. This is the ONE
+    canonical universe the per-speaker palette (#50) is built from, so the
+    transcript page, its JS-off fallback, and the workbench cards color a given
+    label identically. Two cheap indexed ``DISTINCT`` queries — deliberately not
+    ``label_states`` (which resolves turn stats, proposals, decisions, and merges)."""
+    turn_labels = session.execute(
+        select(DiarizationTurn.label)
+        .where(DiarizationTurn.pipeline_run_id == run_id)
+        .distinct()
+    ).scalars()
+    segment_labels = session.execute(
+        select(TranscriptSegment.diarization_label)
+        .where(TranscriptSegment.pipeline_run_id == run_id)
+        .distinct()
+    ).scalars()
+    return {*turn_labels, *(label for label in segment_labels if label is not None)}
+
+
 # Rendering precedence inside one (target, value) suggestion group: a human
 # decision is history and outranks a fresh proposed duplicate from a rerun
 # (decided candidates are terminal and never superseded), which outranks
@@ -756,9 +780,10 @@ def _workbench_context(
         "run": run,
         "states": states,
         # Per-speaker identity color (issue #50): one canonical map keyed on the
-        # raw label, derived from the SAME `states` universe the transcript page
-        # uses, so a label's color never drifts between the two surfaces.
-        "palette": speaker_palette(s.label for s in states),
+        # raw label, derived from the SAME run-label universe the transcript page
+        # uses (turns and segments), so a label's color never drifts between the
+        # two surfaces.
+        "palette": speaker_palette(_run_label_universe(session, run.id)),
         "previews": _label_previews(session, run.id, states, settings.review_preview_segments),
         # Island props for the workbench-player (mounted OUTSIDE #labels). It owns
         # the <audio>, the speed control, the visible capability banner, and the
@@ -1764,11 +1789,12 @@ def _register_routes(app: FastAPI) -> None:
         # playback when GET /media would truly serve and the timeline is sound.
         capability = playback_capability(session, run, settings, _get_media_gate(request))
         # Per-speaker identity color (issue #50): derive the palette from the run's
-        # canonical label universe (`label_states`) — the SAME universe the
+        # canonical label universe (turns and segments) — the SAME universe the
         # workbench card uses — so a label's color agrees across both surfaces and
-        # the JS-off fallback matches the hydrated island. One extra cheap query,
-        # kept explicit so the shared universe is provable at the call site.
-        palette = speaker_palette(st.label for st in label_states(session, run_id))
+        # the JS-off fallback matches the hydrated island. The union also colors a
+        # transcript-only label (a segment whose label has no turn). Two cheap
+        # DISTINCT queries, kept explicit so the shared universe is provable here.
+        palette = speaker_palette(_run_label_universe(session, run_id))
         island_props = {
             "runId": str(run_id),
             "mediaUrl": f"/media/{run_id}",

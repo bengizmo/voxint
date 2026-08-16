@@ -627,6 +627,14 @@ def test_transcript_attribution_and_export_agree(
     assert '<span class="spk-badge">S3</span>' in body  # UNRESOLVED → bare label
     assert '<span class="spk-badge">GHOST</span>' in body  # no turn → state None
     assert "(no speaker)" in body  # NULL diarization label (no badge, keeps strong)
+    # #50: a transcript-only label (GHOST — a segment whose label has no turn) is
+    # still colored, because the palette universe is turns and segments. Its line
+    # carries a spk-N class, not the uncolored fallback.
+    assert re.search(
+        r'class="preview tp-line spk-\d+">\s*<span class="t">[^<]*</span>\s*'
+        r'<span class="spk-badge">GHOST</span>',
+        body,
+    ), "transcript-only label GHOST must still receive a color class"
 
     # Shared presenter: export.txt attributes every label identically.
     export = client.get(f"/review/{run_id}/export.txt").text

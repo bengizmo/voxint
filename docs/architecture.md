@@ -494,10 +494,13 @@ subsystem and adds no page routing.
   clicking it re-enables following and re-centers the active line. No always-on
   checkbox, no status dot. Per-speaker **identity color** is assigned by the pure
   `api/speaker_colors.py` `speaker_palette()`: a deterministic, order-independent
-  map from the run's **canonical label universe** (`label_states`) to curated
-  palette indices `[0, 8)`. Both the transcript route and `_workbench_context`
-  derive the palette from that same universe, so a label's color agrees across
-  the transcript page, the JS-off fallback, and the workbench label cards. The
+  map from the run's **canonical label universe** to curated palette indices
+  `[0, 8)`. That universe (`_run_label_universe`) is the union of the run's
+  diarization-turn and transcript-segment labels — so even a transcript-only
+  label (a segment whose label has no turn) gets a color. Both the transcript
+  route and `_workbench_context` derive the palette from that same universe, so a
+  label's color agrees across the transcript page, the JS-off fallback, and the
+  workbench label cards. The
   color is rendered identically on every surface as a `spk-N` class → a CSS
   left-border accent (light/dark variants in `base.html`), and it is
   **supplemental only**: a raw-label badge (`.spk-badge`) is the primary,

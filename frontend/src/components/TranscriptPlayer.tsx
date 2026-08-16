@@ -34,11 +34,26 @@ function formatTime(seconds: number): string {
   return seconds.toFixed(2);
 }
 
-// While a programmatic scrollIntoView is settling, real scroll events it emits
-// must NOT be read as the operator taking manual control. This window (ms) is
-// generous enough to cover the synchronous (non-smooth) scroll's follow-up
-// events without swallowing a genuine user scroll a moment later.
+// A programmatic scrollIntoView emits `scroll` events that must NOT be read as
+// the operator taking over. `wheel`/`touchmove`/keyboard scrolling are detected
+// by their OWN events (which a programmatic scroll never emits), so they stop
+// following immediately and unambiguously. The `scroll` listener is only the
+// catch-all for scrollbar drag and momentum, and it alone needs this short guard
+// window (ms) — armed ONLY when an auto-scroll actually moves the page — so a
+// self-emitted scroll event isn't misread. Time is never the sole discriminator.
 const SCROLL_GUARD_MS = 200;
+
+// Keyboard keys that scroll the document. Space is deliberately excluded: it is
+// also play/pause on a focused media element, and a genuine Space-scroll still
+// produces a `scroll` event the catch-all listener picks up.
+const SCROLL_KEYS = new Set([
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  "ArrowUp",
+  "ArrowDown",
+]);
 
 // Audio-synced transcript with per-line playback (issue #49) and follow-along
 // highlight + per-speaker colors (issue #50). Native <audio> plus the segment
@@ -65,11 +80,15 @@ export function TranscriptPlayer({
   const scrollGuardUntil = useRef<number>(0);
 
   // Scroll the active line into view WITHOUT moving DOM focus (accessibility)
-  // and WITHOUT smooth scrolling. Arm the guard first so the scroll events this
-  // triggers are not misread as a manual scroll that would stop following.
+  // and WITHOUT smooth scrolling. If the line is already fully visible we do
+  // nothing AND do not arm the guard — otherwise the guard would needlessly
+  // ignore a real operator scroll during a window in which we never moved.
   const scrollActiveIntoView = useCallback(() => {
     const el = activeLineRef.current;
     if (!el) return;
+    const r = el.getBoundingClientRect();
+    const fullyVisible = r.top >= 0 && r.bottom <= window.innerHeight;
+    if (fullyVisible) return;
     scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
     el.scrollIntoView({ block: "nearest" });
   }, []);
@@ -94,16 +113,31 @@ export function TranscriptPlayer({
     };
   }, [segments]);
 
-  // Any real scroll (wheel, touch, keyboard, scrollbar) that is NOT one we just
-  // triggered means the operator took over — stop following. Passive listener;
-  // symmetric teardown keeps it StrictMode-safe.
+  // The operator taking over stops following. `wheel`/`touchmove`/scroll-key
+  // presses are unambiguous manual intent — a programmatic scrollIntoView never
+  // emits them — so they stop immediately, no guard needed. The `scroll`
+  // listener is the catch-all (scrollbar drag, momentum) and is the only one
+  // that must ignore the events our own auto-scroll emits, via the short guard.
+  // All passive; symmetric teardown keeps it StrictMode-safe.
   useEffect(() => {
+    const stop = () => {
+      setFollowing(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(event.key)) setFollowing(false);
+    };
     const onScroll = () => {
       if (performance.now() < scrollGuardUntil.current) return;
       setFollowing(false);
     };
+    window.addEventListener("wheel", stop, { passive: true });
+    window.addEventListener("touchmove", stop, { passive: true });
+    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      window.removeEventListener("wheel", stop);
+      window.removeEventListener("touchmove", stop);
+      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("scroll", onScroll);
     };
   }, []);
