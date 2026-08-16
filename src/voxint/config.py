@@ -265,6 +265,37 @@ class Settings(BaseSettings):
     # Rows reclaimed per sweep, oldest-first — bounds one sweep's work and the
     # per-sweep IO burst. A backlog drains at gc_batch_limit per gc_sweep_seconds.
     gc_batch_limit: int = Field(default=500, ge=1)
+
+    # Run notifications / webhooks (issue #12). A single signed webhook POST on
+    # notifiable transitions (awaiting_adjudication / completed / failed),
+    # delivered at-least-once via a transactional outbox + beat sweep. OFF by
+    # default — nothing is emitted or delivered until an operator opts in, and
+    # enabling later never back-fills runs that finished while it was off.
+    notify_enabled: bool = False
+    # Admin-configured outbound endpoint. Validated as an absolute, credential-free
+    # public http/https URL (parse_http_url) only when notify_enabled — the same
+    # egress posture as URL ingestion. A signed POST is sent here per arrival.
+    notify_webhook_url: str = ""
+    # Keys the HMAC-SHA256 signature (X-Voxint-Signature = hex(hmac(secret,
+    # timestamp + "." + body))). Treated as a secret everywhere: redacted from
+    # errors/logs. Required, and >= 16 chars, when notify_enabled.
+    notify_webhook_secret: str = ""
+    # How often the delivery sweep runs (only registered on beat when enabled).
+    notify_sweep_seconds: int = Field(default=30, ge=5)
+    # Attempts before a delivery row is marked dead (capped exponential backoff
+    # with jitter between attempts).
+    notify_max_attempts: int = Field(default=8, ge=1)
+    # Rows claimed per sweep, oldest-first — bounds one sweep's work.
+    notify_batch_limit: int = Field(default=50, ge=1)
+    # How long a claimed (in_flight) row is leased to a sweep before another may
+    # reclaim it — must exceed one POST's worst-case wall-time (timeout below).
+    notify_lease_seconds: int = Field(default=60, gt=0)
+    # Per-POST connect+read timeout. Kept well under the lease.
+    notify_timeout_seconds: float = Field(default=10.0, gt=0)
+    # Initial hold on a FAILED arrival before its first delivery attempt, so a
+    # synchronous requeue (recovery/retry) can settle and the row be suppressed
+    # rather than sent as a misleading "failed". Applies to FAILED only.
+    notify_failed_initial_delay_seconds: int = Field(default=15, ge=0)
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With
@@ -577,6 +608,33 @@ class Settings(BaseSettings):
         if self.csrf_secret and len(self.csrf_secret) < 16:
             raise ValueError(
                 "csrf_secret must be empty (auto per-process) or at least 16 characters"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _notify_config_complete_when_enabled(self) -> "Settings":
+        # Enabling webhooks without a usable endpoint would silently drop every
+        # notification (or, worse, accumulate undeliverable outbox rows), so fail
+        # fast at startup instead. The URL is validated by the same string-level
+        # gate as URL ingestion (absolute, credential-free, public http/https);
+        # parse_http_url's errors never echo the URL, and the secret is never
+        # named in any message — neither is a value we may leak. Only enforced
+        # when enabled, keeping the zero-config default path free of ceremony.
+        if not self.notify_enabled:
+            return self
+        from voxint.media.netcheck import UrlPolicyError, parse_http_url
+
+        if not self.notify_webhook_url:
+            raise ValueError("notify_webhook_url is required when notify_enabled")
+        try:
+            parse_http_url(self.notify_webhook_url)
+        except UrlPolicyError as exc:
+            # exc carries no URL, only the policy reason — safe to surface.
+            raise ValueError(f"notify_webhook_url is not permitted: {exc}") from exc
+        if len(self.notify_webhook_secret) < 16:
+            raise ValueError(
+                "notify_webhook_secret is required and must be at least 16 "
+                "characters when notify_enabled"
             )
         return self
 

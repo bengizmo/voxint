@@ -74,6 +74,84 @@ def test_csrf_secret_too_short_is_rejected() -> None:
         Settings(_env_file=None, csrf_secret="short")
 
 
+def test_notify_defaults_off_and_present() -> None:
+    # Off by default with no endpoint — the zero-config path never notifies.
+    s = Settings(_env_file=None)
+    assert s.notify_enabled is False
+    assert s.notify_webhook_url == ""
+    assert s.notify_webhook_secret == ""
+    assert s.notify_max_attempts == 8
+    assert s.notify_lease_seconds == 60
+
+
+def test_notify_disabled_ignores_incomplete_config() -> None:
+    # A stray URL/secret while disabled is not an error — no ceremony on the
+    # default path, and enabling later is what triggers the completeness gate.
+    s = Settings(_env_file=None, notify_webhook_url="not-a-url", notify_webhook_secret="x")
+    assert s.notify_enabled is False
+
+
+def test_notify_enabled_requires_url() -> None:
+    with pytest.raises(ValidationError, match="notify_webhook_url is required"):
+        Settings(
+            _env_file=None,
+            notify_enabled=True,
+            notify_webhook_secret="a-sufficiently-long-secret",
+        )
+
+
+def test_notify_enabled_rejects_non_public_url() -> None:
+    # Reuses the URL-ingestion string gate: localhost / private / credentialed
+    # endpoints are refused, and the error never echoes the URL.
+    for bad in (
+        "http://localhost/hook",
+        "http://127.0.0.1/hook",
+        "http://10.0.0.5/hook",
+        "https://user:pass@example.com/hook",
+        "ftp://example.com/hook",
+    ):
+        with pytest.raises(ValidationError, match="notify_webhook_url is not permitted"):
+            Settings(
+                _env_file=None,
+                notify_enabled=True,
+                notify_webhook_url=bad,
+                notify_webhook_secret="a-sufficiently-long-secret",
+            )
+
+
+def test_notify_enabled_requires_strong_secret() -> None:
+    with pytest.raises(ValidationError, match="notify_webhook_secret is required"):
+        Settings(
+            _env_file=None,
+            notify_enabled=True,
+            notify_webhook_url="https://example.com/hook",
+            notify_webhook_secret="short",
+        )
+
+
+def test_notify_enabled_valid_config_passes() -> None:
+    s = Settings(
+        _env_file=None,
+        notify_enabled=True,
+        notify_webhook_url="https://hooks.example.com/voxint",
+        notify_webhook_secret="a-sufficiently-long-secret",
+    )
+    assert s.notify_enabled is True
+    assert s.notify_webhook_url == "https://hooks.example.com/voxint"
+
+
+def test_notify_secret_never_leaks_in_sanitized_error(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # get_settings() sanitizes to SettingsError; the secret value must never
+    # appear in the message even when it is the reason for the failure.
+    monkeypatch.setenv("NOTIFY_ENABLED", "true")
+    monkeypatch.setenv("NOTIFY_WEBHOOK_URL", "https://example.com/hook")
+    monkeypatch.setenv("NOTIFY_WEBHOOK_SECRET", "sup3rs3cr3t")  # 11 chars -> too short
+    with pytest.raises(SettingsError) as excinfo:
+        get_settings()
+    assert "sup3rs3cr3t" not in str(excinfo.value)
+    assert "notify_webhook_secret" in str(excinfo.value)
+
+
 def test_acquire_timeout_must_fit_lease() -> None:
     # timeout + cleanup margin must stay strictly below the lease, or a stale
     # ACQUIRE attempt could overrun into a live one.

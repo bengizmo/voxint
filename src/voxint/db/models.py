@@ -61,6 +61,31 @@ class RunStatus(enum.StrEnum):
     CANCELLED = "cancelled"
 
 
+class NotifiableEvent(enum.StrEnum):
+    """Run transitions that emit a webhook (issue #12).
+
+    A subset of ``RunStatus``: the outcomes an operator wants pushed. CANCELLED
+    is deliberately excluded — the operator initiated it, so it is not news.
+    Only ``COMPLETED`` is truly terminal; ``AWAITING_ADJUDICATION`` and
+    ``FAILED`` are revisitable (requeue / recovery), so each arrival is keyed by
+    the run's ``transition_revision`` rather than by event alone.
+    """
+
+    AWAITING_ADJUDICATION = "awaiting_adjudication"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class NotificationStatus(enum.StrEnum):
+    """Lifecycle of one ``notification_deliveries`` outbox row (issue #12)."""
+
+    PENDING = "pending"  # awaiting first delivery attempt (or a retry)
+    IN_FLIGHT = "in_flight"  # claimed by a sweep with a lease; POST in progress
+    DELIVERED = "delivered"  # receiver returned 2xx
+    DEAD = "dead"  # gave up after notify_max_attempts
+    SUPPRESSED = "suppressed"  # a FAILED arrival the run moved past before delivery
+
+
 class Stage(enum.StrEnum):
     # ACQUIRE is the universal first stage: a no-op success for local/uploaded
     # media (source_url IS NULL), a yt-dlp download for URL runs. Enum order
@@ -1283,3 +1308,76 @@ class RunAssetJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class NotificationDelivery(Base):
+    """Transactional outbox for run webhooks (issue #12).
+
+    One row per notifiable transition arrival, inserted in the SAME transaction
+    as the run's ``cas_update_run`` so delivery intent is atomic with the state
+    change (at-least-once, no commit-to-broker loss window). A separate beat
+    sweep claims due rows under a lease, POSTs a signed payload outside any DB
+    transaction, and records the outcome. The row is never the source of truth
+    for run state — only for whether the operator was told.
+
+    Keyed by ``(pipeline_run_id, transition_revision)``: only ``COMPLETED`` is
+    truly terminal, so a requeued run that fails again is a *distinct* arrival
+    with its own ``id`` (the receiver's dedup key). Delivery retries reuse the
+    same row/id.
+    """
+
+    __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        CheckConstraint(
+            f"event IN ({_enum_values(NotifiableEvent)})",
+            name="notification_deliveries_event_check",
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(NotificationStatus)})",
+            name="notification_deliveries_status_check",
+        ),
+        CheckConstraint("attempts >= 0", name="notification_deliveries_attempts_nonneg_check"),
+        # delivered_at is set iff the row reached DELIVERED — no half-delivered rows.
+        CheckConstraint(
+            "(status = 'delivered') = (delivered_at IS NOT NULL)",
+            name="notification_deliveries_delivered_shape_check",
+        ),
+        # One outbox row per distinct transition arrival (the occurrence key).
+        UniqueConstraint(
+            "pipeline_run_id",
+            "transition_revision",
+            name="uq_notification_deliveries_run_revision",
+        ),
+        # Sweep predicate: due rows (pending or a lapsed in-flight lease) oldest first.
+        Index(
+            "ix_notification_deliveries_due",
+            "next_attempt_at",
+            postgresql_where=text("status IN ('pending', 'in_flight')"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    # RunStatus revision the run held at this transition — the arrival identity.
+    transition_revision: Mapped[int] = mapped_column(Integer)
+    event: Mapped[str] = mapped_column(Text)
+    # Frozen at emission: the exact object serialized (deterministically) and signed
+    # per attempt. Versioned via a schema_version field inside it.
+    payload: Mapped[dict[str, Any]] = mapped_column()
+    status: Mapped[str] = mapped_column(Text, default=NotificationStatus.PENDING.value)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    # When this row next becomes eligible for a delivery attempt (FAILED rows get
+    # a short initial delay so a synchronous requeue settles before we notify).
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Set when claimed IN_FLIGHT; a sweep may reclaim the row once this passes.
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Bounded + redacted transport error (never the URL, secret, or payload).
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
