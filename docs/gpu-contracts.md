@@ -456,6 +456,51 @@ generalizing the ONNX verdict-table pattern above. Reference data for such
 reports comes from `tools/generate_parity_references.py --tier metal
 --out-dir <scratch>` (refuses the committed reference dir).
 
+#### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
+
+Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
+metal whisper launcher to **`BATCH_SIZE=4`** (mirroring `Dockerfile.cpu`; commit
+`ece6656`) — a numerics-affecting change to the metal whisper lane that must be
+re-measured before a tag. Measured on maintainer Apple Silicon hardware (Apple
+M1 Pro, 16 GB, macOS 26.5.2 build 25F84), working tree `main` @ `dca6c06`, torch
+2.5.0 / pyannote.audio 3.1.1 / faster-whisper 1.2.1 / CT2 4.8.1 / onnxruntime
+1.28.0. Numbers are from the three committed parity modules run against their
+matching arm64 metal venvs (short committed fixtures), all green.
+
+| Gate | Ratcheted bound (slice 9) | Measured (2026-08-16) |
+|---|---|---|
+| pyannote speaker count (mps = cpu = cuda ref) | equal | equal (3 = 3 = 3) |
+| pyannote turn boundary drift vs cuda ref | ≤ 0.10 s | turns identical to ref (0.000 s) |
+| pyannote mapping agreement (mps vs cpu / vs ref) | ≥ 0.995 / ≥ 0.97 | 1.000000 / 1.000000 |
+| pyannote MPS repeat agreement | ≥ 0.999 | 1.000000 (bitwise-identical) |
+| pyannote threshold sweep (0.50 / 0.60) | counts agree per device pair | agree |
+| whisper transcript similarity vs cuda ref | ≥ 0.96 | 0.9953 (vad_true) |
+| whisper segment count / confidence drift | ± 1 / ≤ 0.05 | 0 (2 = 2) / 0.0014 |
+| titanet vector-level window cosine vs ref (92 windows) | ≥ 0.9995 | min 0.999997 / p50 0.999999 / max 1.000000 |
+| titanet decision top-1 changes / margin drift | 0 crossings | 0 changes; margin drift p50 4.31e-05 / max 3.52e-04 |
+| titanet mel-level max abs diff | existing gate | max 2.156e-04 |
+| titanet same-window repeat determinism | bit-stable | max abs diff 0.000e+00 |
+
+**On `batch_size=4` (the change this refresh gates).** The metal whisper service
+ships `BATCH_SIZE=4`; the CUDA reference oracle (GPU `Dockerfile`, `BATCH_SIZE=16`)
+and the in-process parity lane (`WhisperTranscriber` ctor default 16) both run at
+16, a same-batch comparison. Measured directly on the Gate M short fixture,
+`batch_size=4` and `batch_size=16` produce **identical** margins (both 0.9953
+similarity / 2 = 2 segments / 0.0014 confidence drift): the fixture resolves to
+≤ 2 VAD speech segments, so BatchedInferencePipeline packs them the same way at
+either batch size — batching is a numerical no-op here and the launcher flip does
+not move the gate. A fixture with > 4 VAD segments would be needed to exercise a
+genuine batch-boundary difference; the committed short fixture does not, so this
+lane confirms the flip is safe without proving batch-size invariance in general.
+
+All slice-9 ratchets from the 2026-08-14 verdict below still hold with margin
+(whisper 0.9953 vs the 0.96 floor; titanet min cosine 0.999997 vs the 0.9995
+floor; every pyannote agreement exact). No bound is loosened. The
+`WHISPER_ENGINE` compatibility seam (#33 Slice 2a) and its `ct2-legacy` replay
+lane (`tests/parity/test_whisper_ct2_legacy_replay.py`) are **not** on `main` at
+`dca6c06`, so they are not part of this run; the next Gate M after 2a merges
+should add that lane.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-14)
 
 Measured on maintainer Apple Silicon hardware (Apple M1 Pro, 16 GB, macOS
