@@ -97,6 +97,7 @@ from voxint.api.setup_wizard import (
     SetupValidationError,
     WizardStep,
     next_step,
+    normalize_llm_api_key,
     normalize_llm_base_url,
     normalize_llm_model,
     normalize_media_folders,
@@ -114,11 +115,14 @@ from voxint.api.stats_query import (
 from voxint.app_settings import (
     clear_tutorial_completion,
     complete_onboarding,
+    effective_llm_key_source,
     get_app_settings,
     get_or_create,
     is_onboarded,
     mark_tutorial_complete,
     ready_tutorial_run_id,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_endpoint,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -705,6 +709,7 @@ def _setup_context(
     row = get_app_settings(session)
     media_folders = list(row.media_folders) if row and row.media_folders else []
     vocabulary = list(row.vocabulary) if row and row.vocabulary else []
+    _llm_base_url, _llm_model = resolve_effective_llm_endpoint(row, settings)
     context: dict[str, Any] = {
         "request": request,
         "step": step,
@@ -718,12 +723,14 @@ def _setup_context(
         "media_folders_text": "\n".join(media_folders),
         "vocabulary": vocabulary,
         "vocabulary_text": "\n".join(vocabulary),
-        # LLM step: the row's enablement over env, its (non-secret) overrides, and
-        # whether the env carries a key / a lease-fitting budget — never the key.
+        # LLM step: the row's enablement over env, its (non-secret) effective
+        # endpoint, and whether an EFFECTIVE key (UI-stored row value winning over
+        # env) is present and where it comes from — never the key value itself.
         "llm_enabled": bool(row.llm_enabled) if row is not None else settings.llm_enabled,
-        "llm_base_url": (row.llm_base_url if row and row.llm_base_url else settings.llm_base_url),
-        "llm_model": (row.llm_model if row and row.llm_model else settings.llm_model),
-        "llm_key_present": bool(settings.llm_api_key.strip()),
+        "llm_base_url": _llm_base_url,
+        "llm_model": _llm_model,
+        "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
+        "llm_key_source": effective_llm_key_source(row, settings),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
         # The finish step launches the tutorial iff it has been seeded; otherwise
         # it prints the `voxint tutorial seed` note and does a plain /review finish.
@@ -733,6 +740,73 @@ def _setup_context(
     }
     context.update(overrides)
     return context
+
+
+def _persist_llm_settings(
+    session: Session,
+    settings: Settings,
+    *,
+    enabled: bool,
+    raw_base_url: str,
+    raw_model: str,
+    raw_key: str,
+    remove_key: bool,
+) -> str | None:
+    """Apply the LLM settings from a form submission as ONE deliberate mutation.
+
+    Shared by ``POST /setup/llm`` and ``POST /settings/llm``. API sessions commit on
+    every successful response (including error re-renders), so this computes a
+    *candidate* state, validates it, then performs a single mutation whose outcome is
+    fully defined for every path:
+
+    * **Pure format errors** (malformed URL/model, or the contradictory
+      remove+replacement combination) raise :class:`SetupValidationError` *before*
+      ``get_or_create`` — nothing is created or mutated, a prior valid config stays
+      intact. The caller re-renders with the fixed message.
+    * **Validation failure** (enable requested but no effective key / budget doesn't
+      fit) still persists the valid non-secret overrides and the valid candidate key
+      (a good key the operator typed is not thrown away) but forces
+      ``llm_enabled=False`` and returns the fixed message.
+    * **Success** persists candidate key + overrides + the requested ``llm_enabled``
+      and returns ``None``.
+
+    The candidate key is: NULL when ``remove_key`` (revert to env), the new value on a
+    non-blank submission, else the existing row value (blank password = no change —
+    it is never prefilled). The key is a credential: it is never rendered, and the
+    returned message is a fixed string that never interpolates it.
+    """
+    base_url = normalize_llm_base_url(raw_base_url)
+    model = normalize_llm_model(raw_model)
+    new_key = normalize_llm_api_key(raw_key)
+    if remove_key and new_key is not None:
+        # Contradictory: the operator both typed a replacement and asked to remove.
+        # Reject as a format error so neither intent is silently applied.
+        raise SetupValidationError(
+            "Choose either a new LLM API key or “remove saved key”, not both."
+        )
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    if remove_key:
+        candidate_key: str | None = None
+    elif new_key is not None:
+        candidate_key = new_key
+    else:
+        candidate_key = row.llm_api_key
+    # Effective key from the CANDIDATE (row-wins-over-env), matching how a run/job
+    # will resolve it post-save, so the enable guard reflects the saved state.
+    effective_key = (candidate_key or "").strip() or settings.llm_api_key.strip()
+    error: str | None = None
+    if enabled:
+        try:
+            validate_llm_enable(effective_key, settings)
+        except SetupValidationError as exc:
+            error = str(exc)
+    # Single deliberate mutation. On a validation failure we fail closed
+    # (llm_enabled=False) but still keep the valid overrides + candidate key.
+    row.llm_base_url = base_url
+    row.llm_model = model
+    row.llm_api_key = candidate_key
+    row.llm_enabled = enabled and error is None
+    return error
 
 
 def _tutorial_banner(
@@ -1191,12 +1265,16 @@ def _register_routes(app: FastAPI) -> None:
         enabled: Annotated[bool, Form()] = False,
         llm_base_url: Annotated[str, Form()] = "",
         llm_model: Annotated[str, Form()] = "",
+        llm_api_key: Annotated[str, Form()] = "",
+        remove_llm_api_key: Annotated[bool, Form()] = False,
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
         _require_csrf(request, CSRF_SETUP, csrf_token)
         settings: Settings = request.app.state.settings
 
         def _rerender(error: str) -> Response:
+            # The key field is a password, never prefilled — so the submitted key is
+            # never echoed. Only the non-secret overrides survive the re-render.
             return templates.TemplateResponse(
                 request,
                 "setup.html",
@@ -1211,29 +1289,24 @@ def _register_routes(app: FastAPI) -> None:
                 ),
             )
 
-        # Format-validate the (optional) overrides first; a malformed value is a
-        # form error that changes nothing (a prior valid config stays intact).
+        # Candidate-state → validate → ONE mutation (see _persist_llm_settings). A
+        # pure format error raises and changes nothing; a validation failure persists
+        # the valid overrides + candidate key, forces llm_enabled=False, and returns
+        # the message to re-render — both re-render the LLM step, fail closed.
         try:
-            base_url = normalize_llm_base_url(llm_base_url)
-            model = normalize_llm_model(llm_model)
+            error = _persist_llm_settings(
+                session,
+                settings,
+                enabled=enabled,
+                raw_base_url=llm_base_url,
+                raw_model=llm_model,
+                raw_key=llm_api_key,
+                remove_key=remove_llm_api_key,
+            )
         except SetupValidationError as exc:
             return _rerender(str(exc))
-        # Enabling has two hard guards (env key present + budget fits the lease). On
-        # failure we FAIL CLOSED: persist llm_enabled=False (plus the parsed
-        # overrides) and show why, so an un-enablable LLM can never be left on.
-        if enabled:
-            try:
-                validate_llm_enable(settings)
-            except SetupValidationError as exc:
-                row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-                row.llm_enabled = False
-                row.llm_base_url = base_url
-                row.llm_model = model
-                return _rerender(str(exc))
-        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-        row.llm_enabled = enabled
-        row.llm_base_url = base_url
-        row.llm_model = model
+        if error is not None:
+            return _rerender(error)
         return _setup_redirect(WizardStep.SERVICES)
 
     @app.post("/setup/finish", include_in_schema=False)
@@ -2231,31 +2304,93 @@ def _register_routes(app: FastAPI) -> None:
     # CSRF_SETTINGS and 409 when no tutorial run is available, so a stray token can
     # never "complete" or "replay" an unseeded tutorial.
 
-    @protected.get("/settings")
-    def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
+    def _settings_context(
+        request: Request, session: Session, **overrides: Any
+    ) -> dict[str, Any]:
+        """Shared context for the settings page (GET render + POST re-render).
+
+        Carries the effective LLM state (issue #10) — enablement over env, the
+        effective endpoint, and whether an effective key is present and where it
+        comes from — never the key value. ``overrides`` lets a POST re-render carry
+        an ``error`` and the operator's submitted (non-secret) endpoint inputs.
+        """
+        settings: Settings = request.app.state.settings
         tutorial_run = ready_tutorial_run_id(session)
         row = get_app_settings(session)
+        llm_base_url, llm_model = resolve_effective_llm_endpoint(row, settings)
+        context: dict[str, Any] = {
+            "request": request,
+            "tutorial_available": tutorial_run is not None,
+            "tutorial_run_id": tutorial_run,
+            "tutorial_completed_at": row.tutorial_completed_at if row else None,
+            "llm_enabled": bool(row.llm_enabled) if row is not None else settings.llm_enabled,
+            "llm_base_url": llm_base_url,
+            "llm_model": llm_model,
+            "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
+            "llm_key_source": effective_llm_key_source(row, settings),
+            "llm_budget_ok": llm_budget_fits_stage_lease(settings),
+            # Completion celebration after POST /settings/tutorial/complete —
+            # shown ONLY when the tutorial is genuinely completed, so a spoofed
+            # or bookmarked ?tutorial=done on an unseeded/incomplete tutorial
+            # does not falsely claim completion.
+            "tutorial_done": (
+                request.query_params.get("tutorial") == "done"
+                and row is not None
+                and row.tutorial_completed_at is not None
+            ),
+            "csrf_settings": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS),
+            "active_nav": "settings",
+            "llm_error": None,
+        }
+        context.update(overrides)
+        return context
+
+    @protected.get("/settings")
+    def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         return templates.TemplateResponse(
-            request,
-            "settings.html",
-            {
-                "request": request,
-                "tutorial_available": tutorial_run is not None,
-                "tutorial_run_id": tutorial_run,
-                "tutorial_completed_at": row.tutorial_completed_at if row else None,
-                # Completion celebration after POST /settings/tutorial/complete —
-                # shown ONLY when the tutorial is genuinely completed, so a spoofed
-                # or bookmarked ?tutorial=done on an unseeded/incomplete tutorial
-                # does not falsely claim completion.
-                "tutorial_done": (
-                    request.query_params.get("tutorial") == "done"
-                    and row is not None
-                    and row.tutorial_completed_at is not None
-                ),
-                "csrf_settings": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS),
-                "active_nav": "settings",
-            },
+            request, "settings.html", _settings_context(request, session)
         )
+
+    @protected.post("/settings/llm")
+    def settings_llm(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        enabled: Annotated[bool, Form()] = False,
+        llm_base_url: Annotated[str, Form()] = "",
+        llm_model: Annotated[str, Form()] = "",
+        llm_api_key: Annotated[str, Form()] = "",
+        remove_llm_api_key: Annotated[bool, Form()] = False,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+
+        def _rerender(error: str) -> Response:
+            # Password field, never prefilled: the submitted key is never echoed.
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, llm_error=error),
+            )
+
+        # Same candidate → validate → ONE mutation contract as /setup/llm.
+        try:
+            error = _persist_llm_settings(
+                session,
+                settings,
+                enabled=enabled,
+                raw_base_url=llm_base_url,
+                raw_model=llm_model,
+                raw_key=llm_api_key,
+                remove_key=remove_llm_api_key,
+            )
+        except SetupValidationError as exc:
+            return _rerender(str(exc))
+        if error is not None:
+            return _rerender(error)
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
 
     @protected.post("/settings/tutorial/complete")
     def tutorial_complete(

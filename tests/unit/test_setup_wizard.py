@@ -177,17 +177,21 @@ def test_normalize_llm_model_rejects_overlong() -> None:
 
 
 def test_validate_llm_enable_ok_with_key_and_fitting_budget() -> None:
-    validate_llm_enable(_settings(llm_api_key="sk-test"))  # does not raise
+    # The effective key is passed in (row-wins-over-env resolved by the caller); the
+    # env key on settings is irrelevant to the presence check now.
+    validate_llm_enable("sk-effective", _settings(llm_api_key=""))  # does not raise
 
 
 def test_validate_llm_enable_rejects_missing_key() -> None:
-    with pytest.raises(SetupValidationError, match="LLM_API_KEY"):
-        validate_llm_enable(_settings(llm_api_key="   "))
+    # Empty effective key (no row, no env) → refuse to enable.
+    with pytest.raises(SetupValidationError, match="No LLM API key"):
+        validate_llm_enable("", _settings(llm_api_key=""))
 
 
 def test_validate_llm_enable_rejects_budget_over_lease() -> None:
     # llm_enabled stays False so the env-time validator doesn't fire on construction;
-    # the wizard guard is what must catch the over-lease budget at enable time.
+    # the wizard guard is what must catch the over-lease budget at enable time. A
+    # present effective key gets past the presence check so the budget guard fires.
     settings = _settings(
         llm_api_key="sk-test",
         llm_enabled=False,
@@ -195,4 +199,4 @@ def test_validate_llm_enable_rejects_budget_over_lease() -> None:
         stage_lease_seconds=21600,
     )
     with pytest.raises(SetupValidationError, match="lease"):
-        validate_llm_enable(settings)
+        validate_llm_enable("sk-effective", settings)

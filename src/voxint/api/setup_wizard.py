@@ -14,7 +14,9 @@ Security posture (single-operator home host, but a public OSS tool):
     prunes the trees Voxint owns (``incoming``/``artifacts``) and every symlink, and
     is bounded on both entries inspected and candidates surfaced so a deep or wide
     tree can neither hang the step nor auto-queue an unbounded number of runs;
-  * the LLM API key is env-only and never touched here.
+  * the LLM API key may be UI-stored (issue #10): this module only shape-normalizes
+    it (:func:`normalize_llm_api_key`) and presence-checks the *effective* key
+    (:func:`validate_llm_enable`) — never renders, logs, or echoes its value.
 """
 
 import os
@@ -40,6 +42,7 @@ MAX_VOCABULARY_TERMS = 500
 MAX_VOCABULARY_TERM_CHARS = 120
 MAX_LLM_URL_CHARS = 2048
 MAX_LLM_MODEL_CHARS = 200
+MAX_LLM_KEY_CHARS = 512
 
 # Top-level trees under MEDIA_ROOT that Voxint writes itself — uploaded/acquired
 # sources (incoming) and normalized audio (artifacts). Never scanned, even when the
@@ -217,20 +220,51 @@ def normalize_llm_model(raw: str) -> str | None:
     return value
 
 
-def validate_llm_enable(settings: Settings) -> None:
-    """Guard the two preconditions for turning LLM enhancement on from the wizard.
+def normalize_llm_api_key(raw: str) -> str | None:
+    """Normalize the optional LLM API key field. Blank ⇒ ``None`` = **no change**.
+
+    The password field submits blank on almost every save (it is never prefilled,
+    so re-saving the LLM step without re-typing the key must LEAVE THE STORED KEY
+    UNTOUCHED — not wipe it). So blank returns ``None`` as a *no-change sentinel*,
+    distinct from an explicit removal (the separate ``remove_llm_api_key`` checkbox,
+    handled by the route). A non-blank value is stripped of surrounding whitespace,
+    then rejected if it still contains any whitespace or control character (a real
+    API key has neither — this catches paste accidents before the key reaches an
+    ``Authorization`` header) or exceeds :data:`MAX_LLM_KEY_CHARS`. The message is a
+    fixed string and NEVER interpolates the submitted value (it is a credential).
+    """
+    value = raw.strip()
+    if not value:
+        return None
+    if len(value) > MAX_LLM_KEY_CHARS:
+        raise SetupValidationError(f"LLM API key exceeds {MAX_LLM_KEY_CHARS} characters")
+    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise SetupValidationError(
+            "LLM API key must not contain whitespace or control characters"
+        )
+    return value
+
+
+def validate_llm_enable(effective_api_key: str, settings: Settings) -> None:
+    """Guard the two preconditions for turning LLM enhancement on.
 
     Raises :class:`SetupValidationError` (the route persists ``llm_enabled=False``
-    and shows the message — fail closed) when the env has no API key, or when the
-    configured run budget plus worst-case overrun would not fit the enhance_match
-    stage lease (the same invariant the env-time validator enforces, shared via
-    :func:`voxint.config.llm_budget_fits_stage_lease`). The API key is env-only, so
-    the wizard can surface *whether* one is set but never reads or stores its value.
+    and shows the message — fail closed) when no effective API key is configured, or
+    when the configured run budget plus worst-case overrun would not fit the
+    enhance_match stage lease (the same invariant the env-time validator enforces,
+    shared via :func:`voxint.config.llm_budget_fits_stage_lease`).
+
+    ``effective_api_key`` is the *post-save* effective key — the submitted-or-stored
+    row value winning over env — resolved by the caller via
+    :func:`voxint.app_settings.resolve_effective_llm_api_key` (already stripped, so
+    ``""`` means "no key anywhere"). It is passed in rather than read from
+    ``settings`` because the key may now be UI-stored on the ``app_settings`` row,
+    not env-only; the value is used only for a presence check and is never rendered.
     """
-    if not settings.llm_api_key.strip():
+    if not effective_api_key:
         raise SetupValidationError(
-            "Set LLM_API_KEY in the environment (then restart the worker) before "
-            "enabling LLM enhancement — the key is never stored here."
+            "No LLM API key is configured. Enter one here (or set LLM_API_KEY in the "
+            "environment) before enabling LLM enhancement."
         )
     if not llm_budget_fits_stage_lease(settings):
         raise SetupValidationError(
