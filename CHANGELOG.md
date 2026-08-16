@@ -105,21 +105,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.12.0] - 2026-08-15
 
 ### Added
-- **Media retention / garbage collection** (#15): an opt-in, beat-scheduled GC
-  sweep (`voxint.gc_sweep`) that reclaims the large normalized-audio
-  intermediate (`artifacts/{run_id}/normalized.wav`) for **old terminal runs** —
-  unlinking the file and stamping the `audio_artifacts` row (new
-  `reclaimed_at`/`reclaimed_bytes`, migration 0013; the row is kept as an audit
-  record). File reclamation only: the **source media**, transcript, diarization,
-  and the immutable adjudication ledger are always kept, so a reclaimed run
-  stays re-processable from its source. Eligibility is `completed`/`cancelled`
-  runs untouched for `MEDIA_RETENTION_SECONDS`; the tutorial run and any file
-  also registered as a source are excluded; missing files are tolerated. Rows
-  are claimed oldest-first with `FOR UPDATE ... SKIP LOCKED` (safe under
-  overlapping sweeps), one bounded `GC_BATCH_LIMIT` batch per run. **Off by
-  default** (`MEDIA_RETENTION_ENABLED=false`) — nothing is reclaimed until an
-  operator opts in. The console shows a "Media reclaimed on `<date>`" notice
-  instead of the audio link, and `GET /media/{run_id}` returns `410 Gone`.
 - **In-console run/throughput dashboard** (#13): a new authenticated
   `GET /dashboard` page (first in the top nav) renders the same aggregates
   the Prometheus `/metrics` endpoint and `voxint stats` already expose:
