@@ -18,7 +18,23 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   the run is confirmed `CANCELLED` (a genuine race still raises) and closes the
   abandoned stage claim `SKIPPED` rather than leaving it "running". Re-cancelling
   an already-cancelled run is an idempotent success. Cancel leaves media and
-  partial results in place — **delete/archive is a separate, not-yet-built action**.
+  partial results in place — **delete/archive is a separate action** (below).
+- **Console run archive + derived-media deletion** (#5): finishes the run
+  lifecycle beyond append-only. **Soft-archive** hides a terminal run
+  (`COMPLETED` / `FAILED` / `CANCELLED`) from `/runs` and the `/review` queue via
+  a new nullable `pipeline_runs.archived_at` stamp (migration `0013`) while
+  keeping every row — including the append-only adjudication ledger — intact;
+  it is fully reversible (**Un-archive**). Archive is operator-visibility
+  metadata: last-write-wins, orthogonal to `status`, no CAS/revision bump
+  (mirrors operator notes), and idempotent. Live runs refuse archive (cancel
+  first); an archived run refuses requeue/claim so a stale tab can't drive a
+  hidden run live. `/runs` hides archived by default with a `?archived=1` view,
+  and dashboard/`/metrics`/`voxint stats` exclude archived runs. **Delete derived
+  audio files** is a separate, destructive, terminal-only action removing only a
+  run's own `AudioArtifact`/`AudioChunk` rows and files (post-commit unlink,
+  path-confined, idempotent); it **never** touches the shared original
+  `MediaItem.source_path` — deleting the shared source is a future refcount-guarded
+  action. New routes `POST /runs/{id}/archive`, `/unarchive`, `/media/delete`.
 
 ### Changed
 - **`LLM_TIMEOUT_SECONDS` default raised 90 s → 300 s**: entity-mention

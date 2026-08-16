@@ -1,8 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Voxint — runs{% endblock %}
 {% block body %}
-<h1>Runs</h1>
-<p class="muted">Execution history, newest first. Review state applies to completed runs.</p>
+<h1>Runs{% if show_archived %} <span class="muted">· archived</span>{% endif %}</h1>
+<p class="muted">
+  {% if show_archived %}
+    Archived runs — hidden from the default listing and the review queue.
+    <a href="{{ archived_toggle_url }}">← back to active runs</a>
+  {% else %}
+    Execution history, newest first. Review state applies to completed runs.
+    <a href="{{ archived_toggle_url }}">View archived runs</a>
+  {% endif %}
+</p>
 
 <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
   <input type="hidden" name="submission_id" value="{{ submission_id }}">
@@ -29,6 +37,8 @@
 {% endif %}
 
 <form method="get" action="/runs" class="filters">
+  {# Preserve the archived view across a filter submit (issue #5). #}
+  {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
   <label>Status
     <select name="status">
       <option value="">all</option>
@@ -84,7 +94,8 @@
     {% for it in page.items %}
     <tr>
       <td><a href="/runs/{{ it.run_id }}"><code>{{ it.run_id.hex[:8] }}</code></a></td>
-      <td><span class="pill {{ it.status }}">{{ it.status }}</span></td>
+      <td><span class="pill {{ it.status }}">{{ it.status }}</span>
+        {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}</td>
       <td>
         {% if it.status == "completed" %}
           {% if it.label_count == 0 %}<span class="pill muted">no speakers</span>

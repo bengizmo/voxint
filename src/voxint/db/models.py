@@ -285,6 +285,12 @@ class PipelineRun(Base):
     # Editable, last-write-wins, deliberately outside the CAS revision: notes
     # are operator prose, not pipeline state.
     operator_notes: Mapped[str | None] = mapped_column(Text)
+    # Soft-archive stamp (issue #5): non-NULL hides the run from /runs and the
+    # /review queue while keeping every row (incl. the append-only ledger)
+    # intact. Reversible (un-archive → NULL). Operator-visibility metadata,
+    # deliberately outside the CAS revision and orthogonal to status — like
+    # operator_notes, last-write-wins, not pipeline state.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

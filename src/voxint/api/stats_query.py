@@ -111,9 +111,15 @@ def parse_since(raw: str, *, now: datetime) -> datetime:
 
 
 def run_status_counts(session: Session) -> dict[str, int]:
-    """Count runs grouped by status (all time). Empty statuses are absent here."""
+    """Count runs grouped by status (all time). Empty statuses are absent here.
+
+    Soft-archived runs (issue #5) are excluded so the dashboard, /metrics, and
+    ``voxint stats`` all report *active* run counts consistently.
+    """
     rows = session.execute(
-        sa_select(PipelineRun.status, func.count()).group_by(PipelineRun.status)
+        sa_select(PipelineRun.status, func.count())
+        .where(PipelineRun.archived_at.is_(None))
+        .group_by(PipelineRun.status)
     ).all()
     return {status: count for status, count in rows}
 
@@ -171,9 +177,11 @@ def roster_size(session: Session) -> int:
 
 
 def runs_created_since(session: Session, *, since: datetime) -> int:
-    """Count runs created at or after ``since`` (inclusive)."""
+    """Count runs created at or after ``since`` (inclusive), excluding archived."""
     return session.execute(
-        sa_select(func.count()).select_from(PipelineRun).where(PipelineRun.created_at >= since)
+        sa_select(func.count())
+        .select_from(PipelineRun)
+        .where(PipelineRun.created_at >= since, PipelineRun.archived_at.is_(None))
     ).scalar_one()
 
 

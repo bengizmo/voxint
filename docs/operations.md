@@ -392,12 +392,32 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   first (cancel is not an immediate process kill), then no further stages run.
   Re-cancelling an already-cancelled run is an idempotent success, not an error.
   Cancelling leaves media and any partial results in place — **delete/archive is
-  a separate action, not yet built** (issue #5, follow-up slice).
+  a separate action** (below).
+- **`POST /runs/{id}/archive`** and **`POST /runs/{id}/unarchive`** — soft-archive
+  a *terminal* run (`COMPLETED` / `FAILED` / `CANCELLED`), from the run detail
+  page. Archiving stamps `pipeline_runs.archived_at` and **hides** the run from
+  `/runs` and the `/review` queue while keeping **every row intact** (including
+  the append-only adjudication ledger) — it is reversible via un-archive. Archive
+  is operator-visibility metadata: last-write-wins, orthogonal to `status`, no
+  CAS/revision bump (like operator notes), and idempotent. A *live* run refuses
+  archive (`409` — cancel it first), and an **archived run refuses requeue/claim**
+  so a stale tab can't drive a hidden run back to live. `/runs` hides archived by
+  default; `?archived=1` shows the archived-only view. Dashboard, `/metrics`, and
+  `voxint stats` exclude archived runs from their counts.
+- **`POST /runs/{id}/media/delete`** — **destructive**, terminal-only. Deletes
+  only *this run's* derived audio (its `AudioArtifact` + `AudioChunk` rows and
+  files) to reclaim disk; files are unlinked **after** the DB delete commits,
+  path-confined under `MEDIA_ROOT`, and the operation is idempotent (an
+  already-gone file is not an error). It **never** touches the original
+  `MediaItem.source_path` — that file is shared by every run of the media item,
+  so removing it is a separate, refcount-guarded action (a future slice). The
+  evidence ledger (adjudication / transcript / diarization rows) is untouched.
 
-Beyond cancel, the console is still **append-only**: there is no delete/archive
-yet, and no speaker-roster editing from these pages (roster changes happen only
-through adjudication). The pipeline-state surface (`/runs*`) and the adjudication
-surface (`/review*`) stay separate.
+Beyond these, the console stays **append-only** for evidence: archive hides but
+never deletes rows, media-delete only removes re-derivable audio files (never the
+ledger), and there is no speaker-roster editing from these pages (roster changes
+happen only through adjudication). The pipeline-state surface (`/runs*`) and the
+adjudication surface (`/review*`) stay separate.
 
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at

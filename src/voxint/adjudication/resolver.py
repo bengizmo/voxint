@@ -375,7 +375,11 @@ def adjudication_queue(session: Session) -> list[QueueEntry]:
     now = datetime.now(tz=UTC)
     runs = session.execute(
         select(PipelineRun)
-        .where(PipelineRun.status == RunStatus.COMPLETED.value)
+        .where(
+            PipelineRun.status == RunStatus.COMPLETED.value,
+            # Soft-archived runs (issue #5) are hidden from the review queue.
+            PipelineRun.archived_at.is_(None),
+        )
         .order_by(PipelineRun.created_at)
     ).scalars()
     entries: list[QueueEntry] = []
