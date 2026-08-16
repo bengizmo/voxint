@@ -432,6 +432,14 @@ gate AGAINST them:
   same knife edges).
 - `tests/parity/test_whisper_metal.py`: native CT2 transcript vs
   `references/cuda/transcribe.json` (similarity / segments / confidence).
+- `tests/parity/test_whisper_ct2_legacy_replay.py` (#33 Slice 2a): the
+  `ct2-legacy` engine, driven in-process at the pinned oracle `batch_size=4`,
+  must replay the frozen CT2-CPU baseline
+  (`references/ct2-cpu-metal/transcribe.json`) with **zero drift** on every
+  committed entry × both decode paths — the anchor proof that the
+  `WHISPER_ENGINE` seam refactor moved the shipped path mechanically. The AMI
+  windows need the prepared work-dir corpus; the committed synthetic clips run
+  anywhere on Apple Silicon.
 - `tests/parity/test_titanet_onnx.py`: the FULL 3-level gate re-run on
   arm64; `VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider` re-runs it
   under the CoreML EP, plus a same-window repeat-determinism probe.

@@ -302,6 +302,11 @@ service_env() {
     whisper)
       # v1 metal runs CT2 on CPU (int8, like the CPU image); the Metal ASR
       # engine is a tracked follow-up behind a pre-registered gate.
+      # Pin the engine to the byte-faithful shipped path. The WHISPER_ENGINE
+      # registry (services/whisper/app/backends) is fail-closed, so naming it
+      # explicitly here keeps the metal tier on ct2-legacy even as new engines
+      # (ct2 shared-VAD, mlx) are added behind the seam (#33).
+      printf 'WHISPER_ENGINE=ct2-legacy\n'
       printf 'DEVICE=cpu\n'
       printf 'WHISPER_MODEL=large-v2\n'
       printf 'COMPUTE_TYPE=int8\n'

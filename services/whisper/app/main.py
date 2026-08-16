@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
+from app.backends import create_transcriber
 from app.errors import (
     file_not_found,
     inference_failed,
@@ -30,7 +31,7 @@ from app.schemas import (
     TranscribeResponse,
     Word,
 )
-from app.transcription import DecodeError, WhisperTranscriber
+from app.transcription import DecodeError
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -42,7 +43,9 @@ SERVICE_VERSION = "1.0.0"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "/data/media"))
 MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
 
-transcriber = WhisperTranscriber(
+# Fail-closed engine selection via WHISPER_ENGINE (default ct2-legacy); an
+# unknown engine raises here at import rather than degrading silently.
+transcriber = create_transcriber(
     model_name=os.getenv("WHISPER_MODEL", "large-v2"),
     device=os.getenv("DEVICE", "cuda"),
     compute_type=os.getenv("COMPUTE_TYPE", "int8"),

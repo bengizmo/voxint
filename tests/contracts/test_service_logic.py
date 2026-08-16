@@ -14,6 +14,8 @@ import pytest
 from tests.contracts.conftest import load_service_module
 
 detector = load_service_module("whisper", "transcription")
+whisper_backends = load_service_module("whisper", "backends")
+whisper_ct2_legacy = load_service_module("whisper", "backends.ct2_legacy")
 postprocess = load_service_module("pyannote", "postprocess")
 diarizer = load_service_module("pyannote", "diarizer")
 embedding = load_service_module("titanet", "embedding")
@@ -614,6 +616,76 @@ class TestEngineFactory:
             embedder = embedding.create_embedder()
         assert embedder.engine == "onnxruntime"
         assert embedder.runtime == "onnxruntime"
+
+
+class TestWhisperEngineRegistry:
+    """WHISPER_ENGINE selects the backend, lazy-imports it, and fails closed on
+    unknown values — mirrors titanet's EMBED_ENGINE factory (#33 Slice 2a)."""
+
+    def _make(self, **_kw: object) -> object:
+        from tests.contracts.conftest import service_package
+
+        with service_package("whisper"):
+            return whisper_backends.create_transcriber(
+                model_name="large-v2", device="cpu", compute_type="int8", batch_size=4
+            )
+
+    def test_default_is_ct2_legacy(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("WHISPER_ENGINE", raising=False)
+        transcriber = self._make()
+        # Identity unchanged from the pre-seam shipped path (healthz contract).
+        assert transcriber._backend.kind == "legacy_file"  # type: ignore[attr-defined]
+        assert transcriber.engine == "faster-whisper"  # type: ignore[attr-defined]
+        assert transcriber.runtime == "ctranslate2"  # type: ignore[attr-defined]
+        assert transcriber.model_name == "large-v2"  # type: ignore[attr-defined]
+
+    def test_ct2_legacy_selected_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("WHISPER_ENGINE", "ct2-legacy")
+        transcriber = self._make()
+        assert transcriber._backend.kind == "legacy_file"  # type: ignore[attr-defined]
+
+    def test_unknown_engine_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A truly unknown engine raises rather than silently running on CPU.
+        monkeypatch.setenv("WHISPER_ENGINE", "mlx")
+        from tests.contracts.conftest import service_package
+
+        with service_package("whisper"), pytest.raises(ValueError, match="mlx"):
+            whisper_backends.create_transcriber(
+                model_name="large-v2", device="cpu", compute_type="int8", batch_size=4
+            )
+
+    def test_ct2_shared_reserved_for_2b_fails_closed_at_load(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # ct2 (shared-VAD) is a known engine kind but its decode lands in Slice
+        # 2b; selecting it resolves the shared_windows backend, which fails
+        # closed at load — never a silent fallback to the legacy path.
+        monkeypatch.setenv("WHISPER_ENGINE", "ct2")
+        transcriber = self._make()
+        assert transcriber._backend.kind == "shared_windows"  # type: ignore[attr-defined]
+        with pytest.raises(NotImplementedError, match="2b"):
+            transcriber.load_model()  # type: ignore[attr-defined]
+
+
+class TestCt2DeviceVerify:
+    """ct2-legacy fails closed on a device CTranslate2 cannot run — the whisper
+    analogue of pyannote's probe_device (#33 Slice 2a)."""
+
+    def test_shipped_devices_pass(self) -> None:
+        # No-op assertion for the shipped cpu/cuda strings (no model load).
+        whisper_ct2_legacy.Ct2LegacyBackend(device="cpu").verify_device()
+        whisper_ct2_legacy.Ct2LegacyBackend(device="cuda").verify_device()
+
+    def test_unsupported_device_fails_closed(self) -> None:
+        with pytest.raises(RuntimeError, match="mps"):
+            whisper_ct2_legacy.Ct2LegacyBackend(device="mps").verify_device()
+
+    def test_verify_uses_requested_device_not_relabelled(self) -> None:
+        # verify_device must read the raw requested device, so a cuda->rocm
+        # relabel at load can never mask an originally-unsupported request.
+        backend = whisper_ct2_legacy.Ct2LegacyBackend(device="cuda")
+        backend.device = "rocm"  # simulate post-load relabelling
+        backend.verify_device()  # still passes: requested device was cuda
 
 
 def _fake_ort(available: list[str], session_providers: list[str]) -> SimpleNamespace:

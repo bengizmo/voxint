@@ -15,12 +15,13 @@ weight tagged spans.
 import logging
 import os
 import re
-import threading
-import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import numpy as np
+from app.backends import TranscribeOptions
+
+if TYPE_CHECKING:
+    from app.backends import LegacyFileBackend, SharedWindowsBackend
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,20 @@ class TranscriptionOutput:
 
 
 class WhisperTranscriber:
-    """faster-whisper wrapper: model load, single-flight inference, annotation."""
+    """Engine-agnostic facade over a ``WHISPER_ENGINE`` backend.
+
+    ``main.py`` builds one via ``app.backends.create_transcriber`` (which reads
+    ``WHISPER_ENGINE``); constructing it directly (no ``backend=``) yields the
+    byte-faithful ``ct2-legacy`` engine regardless of env, which is what the
+    in-process parity harness wants. The public surface — the ``transcribe``
+    signature, the ``/healthz`` identity attributes, and the module-singleton +
+    lifespan lifecycle — is unchanged from the pre-seam single-class
+    implementation, so callers and ``/healthz`` are byte-compatible.
+
+    Dispatch is by the backend's ``kind`` descriptor: ``legacy_file`` returns a
+    fully-assembled ``TranscriptionOutput`` (passed straight through);
+    ``shared_windows`` (Slice 2b) will assemble in the shared front layer here.
+    """
 
     def __init__(
         self,
@@ -232,63 +246,56 @@ class WhisperTranscriber:
         device: str = "cuda",
         compute_type: str = "int8",
         batch_size: int = 16,
+        *,
+        backend: Any = None,
     ):
-        self.model_name = model_name
-        self.device = device
-        self.compute_type = compute_type
-        self.batch_size = batch_size
+        if backend is None:
+            # Default engine is the shipped, byte-faithful legacy path,
+            # env-independent by design (the factory is the env-driven seam).
+            from app.backends.ct2_legacy import Ct2LegacyBackend
 
-        self.model: Any = None
-        self.pipeline: Any = None
-        # The model is not thread-safe; inference is single-flight by design.
-        self.model_lock = threading.Lock()
-        self.is_initialized = False
+            backend = Ct2LegacyBackend(
+                model_name=model_name,
+                device=device,
+                compute_type=compute_type,
+                batch_size=batch_size,
+            )
+        self._backend: LegacyFileBackend | SharedWindowsBackend = backend
 
-        # /healthz identity fields (see docs/gpu-contracts.md): the inference
-        # engine and the compute runtime it runs on. Versions are resolved at
-        # load time so healthz never imports engine packages itself.
-        self.engine = "faster-whisper"
-        self.engine_version: str | None = None
-        self.runtime: str | None = "ctranslate2"
-        self.runtime_version: str | None = None
+    # --- /healthz identity + config, delegated to the selected backend ---
+    @property
+    def model_name(self) -> str:
+        return self._backend.model_name
+
+    @property
+    def device(self) -> str:
+        return self._backend.device
+
+    @property
+    def is_initialized(self) -> bool:
+        return self._backend.is_initialized
+
+    @property
+    def engine(self) -> str:
+        return self._backend.engine
+
+    @property
+    def engine_version(self) -> str | None:
+        return self._backend.engine_version
+
+    @property
+    def runtime(self) -> str | None:
+        return self._backend.runtime
+
+    @property
+    def runtime_version(self) -> str | None:
+        return self._backend.runtime_version
 
     def load_model(self) -> None:
-        """Load the Whisper model and wrap it in BatchedInferencePipeline."""
-        import ctranslate2
-        import faster_whisper
-        from faster_whisper import BatchedInferencePipeline, WhisperModel
+        self._backend.load_model()
 
-        self.engine_version = faster_whisper.__version__
-        self.runtime_version = ctranslate2.__version__
-
-        with self.model_lock:
-            if self.model is not None:
-                return
-            logger.info("Loading Whisper model %s (%s)...", self.model_name, self.compute_type)
-            start = time.time()
-            # The image bakes the model under WHISPER_DOWNLOAD_ROOT at build
-            # time; without passing it, faster-whisper would look in the HF hub
-            # cache and re-download at runtime.
-            download_root = os.getenv("WHISPER_DOWNLOAD_ROOT") or None
-            # WHISPER_REVISION pins the exact HF snapshot at load time (the
-            # metal launcher sets it to the revision it pre-downloaded);
-            # unset keeps the images' existing latest-in-cache behavior.
-            revision = os.getenv("WHISPER_REVISION") or None
-            self.model = WhisperModel(
-                self.model_name,
-                device=self.device,
-                compute_type=self.compute_type,
-                cpu_threads=4,
-                num_workers=1,
-                download_root=download_root,
-                revision=revision,
-            )
-            self.pipeline = BatchedInferencePipeline(model=self.model)
-            # CT2 got the raw device string above; only the reported name is
-            # rewritten to the honest label.
-            self.device = resolve_device_name(self.device)
-            self.is_initialized = True
-            logger.info("Model loaded in %.2fs", time.time() - start)
+    def cleanup_memory(self) -> None:
+        self._backend.cleanup_memory()
 
     def transcribe(
         self,
@@ -297,132 +304,15 @@ class WhisperTranscriber:
         initial_prompt: str | None = None,
         vad_filter: bool = True,
     ) -> TranscriptionOutput:
-        """Transcribe an audio file.
-
-        With ``vad_filter`` (default) the BatchedInferencePipeline runs Silero
-        VAD segmentation + batched encoding. Without it, the raw model is used
-        directly — for audio where VAD misclassifies speech as silence (noisy
-        rooms, low-volume recordings).
-        """
-        # Probe the container up front: faster-whisper decodes via PyAV deep
-        # inside inference, where a decode failure is indistinguishable from an
-        # inference failure. The contract wants undecodable input → 400.
-        import av
-
-        try:
-            with av.open(audio_path) as container:
-                if not container.streams.audio:
-                    raise DecodeError("No audio stream in file")
-        except DecodeError:
-            raise
-        except Exception as exc:
-            raise DecodeError(f"Could not decode audio: {exc}") from exc
-
-        transcribe_kwargs: dict[str, Any] = {}
-        if initial_prompt:
-            transcribe_kwargs["initial_prompt"] = initial_prompt
-
-        anti_hallucination = {
-            "condition_on_previous_text": False,
-            "temperature": 0.0,
-            "compression_ratio_threshold": 2.4,
-            "no_speech_threshold": 0.6,
-            "hallucination_silence_threshold": 2.0,
-            "log_prob_threshold": -1.0,
-        }
-
-        with self.model_lock:
-            if vad_filter:
-                segments_iter, info = self.pipeline.transcribe(
-                    audio_path,
-                    language=language,
-                    batch_size=self.batch_size,
-                    word_timestamps=True,
-                    **transcribe_kwargs,
-                    **anti_hallucination,
-                )
-            else:
-                logger.info("VAD disabled — raw model transcribe (no Silero filtering)")
-                segments_iter, info = self.model.transcribe(
-                    audio_path,
-                    language=language,
-                    word_timestamps=True,
-                    **transcribe_kwargs,
-                    **anti_hallucination,
-                )
-            # Consume the generator inside the lock (model is not thread-safe).
-            segments = list(segments_iter)
-
-        transcript_parts: list[str] = []
-        words: list[dict[str, Any]] = []
-        seg_annotations: list[dict[str, Any]] = []
-        suspect_count = 0
-        total_confidence = 0.0
-        confidence_count = 0
-
-        for segment in segments:
-            transcript_parts.append(segment.text)
-
-            seg_conf: float | None = None
-            if getattr(segment, "avg_logprob", None) is not None:
-                seg_conf = float(min(1.0, max(0.0, np.exp(segment.avg_logprob))))
-                total_confidence += seg_conf
-                confidence_count += 1
-
-            if getattr(segment, "words", None):
-                for word in segment.words:
-                    words.append(
-                        {
-                            "start_seconds": word.start,
-                            "end_seconds": word.end,
-                            "word": word.word,
-                            "confidence": getattr(word, "probability", 0.8),
-                        }
-                    )
-
-            record, flagged = build_segment_annotation(
-                start_seconds=float(getattr(segment, "start", 0.0) or 0.0),
-                end_seconds=float(getattr(segment, "end", 0.0) or 0.0),
-                text=segment.text,
-                confidence=seg_conf,
-            )
-            if flagged:
-                suspect_count += 1
-            seg_annotations.append(record)
-
-        overall_confidence = (
-            (total_confidence / confidence_count) if confidence_count > 0 else 0.8
+        """Transcribe an audio file, dispatching to the selected backend."""
+        options = TranscribeOptions(
+            language=language, initial_prompt=initial_prompt, vad_filter=vad_filter
         )
-        transcript = " ".join(transcript_parts).strip()
-
-        if suspect_count:
-            logger.warning(
-                "Hallucination soft-tag: %d/%d segments flagged",
-                suspect_count,
-                len(seg_annotations),
+        # Discriminated on the backend's Literal ``kind`` descriptor.
+        if self._backend.kind == "legacy_file":
+            return self._backend.transcribe_file(audio_path, options)
+        if self._backend.kind == "shared_windows":
+            raise NotImplementedError(
+                "shared_windows front-layer assembly lands in Slice 2b"
             )
-
-        return TranscriptionOutput(
-            transcript=transcript,
-            language=info.language,
-            confidence=overall_confidence,
-            duration_seconds=info.duration,
-            words=words,
-            segments=seg_annotations,
-            suspect_segment_count=suspect_count,
-        )
-
-    def cleanup_memory(self) -> None:
-        # Keyed on runtime capability, not the reported device label (which
-        # honestly says "rocm" on torch-HIP while the allocator API is still
-        # torch.cuda).
-        if not self.is_initialized:
-            return
-        try:
-            import torch
-        except ImportError:
-            # The -rocm image is torch-free; CT2 manages its own device memory.
-            return
-
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        raise ValueError(f"Unknown backend kind {self._backend.kind!r}")

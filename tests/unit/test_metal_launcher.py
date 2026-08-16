@@ -119,6 +119,9 @@ def test_unknown_service_is_an_error(tmp_path: Path) -> None:
 def test_whisper_env_is_cpu_int8_with_pinned_cache(tmp_path: Path) -> None:
     env = env_lines(run_lib(tmp_path, "service_env whisper /media/root"))
     assert env["MEDIA_ROOT"] == "/media/root"
+    # Pin the fail-closed WHISPER_ENGINE registry to the byte-faithful shipped
+    # path; the metal tier must stay on ct2-legacy as new engines land (#33).
+    assert env["WHISPER_ENGINE"] == "ct2-legacy"
     assert env["DEVICE"] == "cpu"  # v1: CT2 on CPU, Metal ASR is a follow-up
     assert env["WHISPER_MODEL"] == "large-v2"
     assert env["COMPUTE_TYPE"] == "int8"

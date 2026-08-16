@@ -99,6 +99,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   one runtime, not asserted byte-identical across machines. A contract test
   (`tests/contracts/test_bakeoff_baseline.py`) binds each committed entry to its
   manifest `sha256` and enforces the no-TED-leakage doctrine.
+- **Whisper `WHISPER_ENGINE` compatibility seam** (#33, Slice 2a): the whisper
+  service now selects its decode engine through a fail-closed registry
+  (`services/whisper/app/backends/`, mirroring titanet's `EMBED_ENGINE`
+  factory) instead of a single hard-wired class. `WhisperTranscriber` becomes an
+  engine-agnostic facade that dispatches by a typed backend descriptor
+  (`legacy_file` vs `shared_windows`); the default engine `ct2-legacy` is a
+  **byte-faithful mechanical move** of the shipped whole-file CT2 path (decode
+  branches + result assembly), so the frozen #33 CT2-CPU baseline replays with
+  zero drift — proven by a new Apple-Silicon-only maintainer gate
+  (`tests/parity/test_whisper_ct2_legacy_replay.py`, plain SKIP elsewhere). An
+  unknown `WHISPER_ENGINE` raises rather than silently degrading to CPU, and a
+  new CT2 `verify_device()` hook fails closed on a device CTranslate2 cannot run
+  (the whisper analogue of pyannote's `probe_device`; a no-op for the shipped
+  cpu/cuda/rocm paths). The metal launcher pins `WHISPER_ENGINE=ct2-legacy`.
+  `/healthz` identity, the public `transcribe` signature, and every existing
+  test are unchanged. This is the structural half of Slice 2; the shared-VAD
+  `ct2` backend and its self-parity gate (Slice 2b) fail closed until they land.
 
 ### Fixed
 - **Metal launcher whisper batch size** (#33): the native launcher
