@@ -72,7 +72,7 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity — nothing here feeds attribution; a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) and the operator's free-text `operator_notes` (revision 0009 — human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
-| `audio_artifacts` | derived files (preprocessed audio, chunks, exports) |
+| `audio_artifacts` | derived files (preprocessed audio, chunks, exports); `reclaimed_at`/`reclaimed_bytes` record GC reclamation of the preprocessed-audio intermediate (issue #15) — the row survives as an audit stamp after its file is unlinked |
 | `audio_chunks` | chunk boundaries for long-file processing |
 | `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag; two GIN expression indexes (`english` tsvectors over each text variant separately, revision 0008) back the `/runs` transcript search — both variants stay searchable, enhancement never shadows raw |
 | `diarization_turns` | run-scoped observation ledger: one row per turn — interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
@@ -430,6 +430,16 @@ requeues runs whose stage lease expired and re-enqueues QUEUED runs whose
 task evaporated with the broker (`QUEUED_RUN_STALE_SECONDS` grace so pending
 retry countdowns aren't stepped on). Duplicate enqueues are safe by design —
 claims and CAS arbitrate.
+
+A second, **opt-in** beat task (`voxint.gc_sweep`, issue #15) reclaims the
+large normalized-audio intermediate for old terminal runs when
+`MEDIA_RETENTION_ENABLED` — it unlinks `artifacts/{run_id}/normalized.wav` and
+stamps the `audio_artifacts` row (`reclaimed_at`/`reclaimed_bytes`; the row is
+kept as an audit record). File reclamation only: source media, transcript,
+diarization, and the decision ledger are never touched, so a reclaimed run
+stays re-processable from source. Rows are claimed oldest-first with `FOR
+UPDATE ... SKIP LOCKED`, so overlapping sweeps neither double-count nor clobber
+a byte measurement. See operations.md for tuning.
 
 Timeout ordering that must hold: HTTP client timeout
 (`GPU_HTTP_TIMEOUT_SECONDS`) **<** stage lease (`STAGE_LEASE_SECONDS`; two

@@ -423,6 +423,32 @@ def test_media_rejects_non_audio_artifact(
     assert client.get(f"/media/{run_id}").status_code == 404
 
 
+def test_reclaimed_media_returns_410_and_shows_notice(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # After GC reclaims the intermediate (issue #15): the row survives with a
+    # reclaimed_at stamp but the file is gone. /media answers 410 Gone, and run
+    # detail shows a "Media reclaimed" notice instead of a dead audio link.
+    import datetime as _dt
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        artifact = session.execute(select(AudioArtifact)).scalars().one()
+        (media_root / artifact.path).unlink()
+        artifact.reclaimed_at = _dt.datetime.now(tz=_dt.UTC)
+        artifact.reclaimed_bytes = 4096
+        session.commit()
+
+    assert client.get(f"/media/{run_id}").status_code == 410
+    assert client.head(f"/media/{run_id}").status_code == 410
+
+    body = client.get(f"/runs/{run_id}").text
+    assert "Media reclaimed" in body
+    assert f"/media/{run_id}" not in body  # no dead audio link
+    # The transcript link still stands — decisions and transcript are kept.
+    assert f"/runs/{run_id}/transcript" in body
+
+
 def test_metrics_endpoint_renders_prometheus(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

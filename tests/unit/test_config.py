@@ -320,3 +320,51 @@ def test_web_search_base_url_bad_port_and_decorations_fail_at_startup() -> None:
     ]:
         with pytest.raises(ValidationError, match="web_search_base_url"):
             Settings(_env_file=None, voxint_web_research=True, web_search_base_url=bad)
+
+
+# --- Media retention / GC (issue #15) ---
+
+
+def test_media_retention_defaults_off() -> None:
+    s = Settings(_env_file=None)
+    assert s.media_retention_enabled is False
+    assert s.media_retention_seconds == 2592000  # 30 d
+    assert s.gc_sweep_seconds == 3600
+    assert s.gc_batch_limit == 500
+
+
+def test_media_retention_env_overrides(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    monkeypatch.setenv("MEDIA_RETENTION_ENABLED", "true")
+    monkeypatch.setenv("MEDIA_RETENTION_SECONDS", "86400")
+    monkeypatch.setenv("GC_SWEEP_SECONDS", "600")
+    monkeypatch.setenv("GC_BATCH_LIMIT", "50")
+    s = Settings(_env_file=None)
+    assert s.media_retention_enabled is True
+    assert s.media_retention_seconds == 86400
+    assert s.gc_sweep_seconds == 600
+    assert s.gc_batch_limit == 50
+
+
+def test_media_retention_seconds_floor() -> None:
+    # A sub-hour retention window is rejected — too aggressive to be a config
+    # typo we should silently honor.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, media_retention_seconds=3599)
+    # The floor itself is accepted.
+    assert Settings(_env_file=None, media_retention_seconds=3600).media_retention_seconds == 3600
+
+
+def test_gc_batch_limit_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, gc_batch_limit=0)
+
+
+def test_media_retention_seconds_not_tier_scaled() -> None:
+    # Retention is wall-clock policy, not a compute-tier timing budget — a cpu
+    # tier must NOT quietly quadruple the operator's retention window.
+    from voxint.config import TIER_SCALED_TIMING_FIELDS
+
+    assert "media_retention_seconds" not in TIER_SCALED_TIMING_FIELDS
+    assert (
+        Settings(_env_file=None, compute_tier="cpu").media_retention_seconds == 2592000
+    )
