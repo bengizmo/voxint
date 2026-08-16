@@ -25,7 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import RunAssetJob, RunAssetJobStatus, RunAssetKind
 from voxint.enrichment.producers.run_assets_llm import (
     CONFIG_SCHEMA_VERSION,
@@ -220,7 +220,7 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     if status == RunAssetJobStatus.RUNNING.value and started_at is not None:
         timeout = config.get("llm_timeout_seconds")
         bound = (
-            float(timeout if isinstance(timeout, (int, float)) else 90.0)
+            float(timeout if isinstance(timeout, (int, float)) else DEFAULT_LLM_TIMEOUT_SECONDS)
             + STALE_RUNNING_GRACE_SECONDS
         )
         # DB clock on BOTH sides: started_at was stamped with now() at claim,
@@ -351,25 +351,25 @@ def execute_job(
             if owned_client is not None:
                 owned_client.close()
 
-        # A cancel that raced the LLM call wins: check the flag before
-        # persisting anything (the single-call analogue of #40's between-round
-        # checks).
-        if bool(
-            session.execute(
-                select(RunAssetJob.cancel_requested).where(RunAssetJob.id == job_id)
-            ).scalar_one()
-        ):
-            _finish(session, job_id, status=RunAssetJobStatus.CANCELLED)
-            return
-
         # Atomic finalization: the asset row and the job stamp commit
         # together, and only while the row is still RUNNING with no cancel
-        # pending — a cancel that lands between the check above and this stamp
+        # pending — a cancel that lands between the check below and this stamp
         # must win (the asset rolls back with the missed stamp), and so must a
-        # force-cancel. The whole block sits under the same failure umbrella
-        # as generation: a DB error here must land as an honest FAILED row,
-        # never a forever-RUNNING job (there is no recovery sweep to save it).
+        # force-cancel. The whole block — the final cancel read included —
+        # sits under the same failure umbrella as generation: a DB error here
+        # must land as an honest FAILED row, never a forever-RUNNING job
+        # (there is no recovery sweep to save it).
         try:
+            # A cancel that raced the LLM call wins: check the flag before
+            # persisting anything (the single-call analogue of #40's
+            # between-round checks).
+            if bool(
+                session.execute(
+                    select(RunAssetJob.cancel_requested).where(RunAssetJob.id == job_id)
+                ).scalar_one()
+            ):
+                _finish(session, job_id, status=RunAssetJobStatus.CANCELLED)
+                return
             asset = record_asset(
                 session,
                 source=source,

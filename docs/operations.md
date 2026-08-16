@@ -384,11 +384,40 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 - **`POST /fetch`** — the browser equivalent of `voxint fetch` (URL ingestion).
 - **`POST /runs/{id}/requeue`** — an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
+- **`POST /runs/{id}/cancel`** — an exact-revision (CAS) cancel of a *live* run
+  (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), from a button on the run
+  detail page. Cancellation is **cooperative and pure DB state**: it drives the
+  run to `CANCELLED` and publishes nothing. A `QUEUED` run cancelled before
+  dispatch never starts; a `RUNNING` run's currently executing stage finishes
+  first (cancel is not an immediate process kill), then no further stages run.
+  Re-cancelling an already-cancelled run is an idempotent success, not an error.
+  Cancelling leaves media and any partial results in place — **delete/archive is
+  a separate action** (below).
+- **`POST /runs/{id}/archive`** and **`POST /runs/{id}/unarchive`** — soft-archive
+  a *terminal* run (`COMPLETED` / `FAILED` / `CANCELLED`), from the run detail
+  page. Archiving stamps `pipeline_runs.archived_at` and **hides** the run from
+  `/runs` and the `/review` queue while keeping **every row intact** (including
+  the append-only adjudication ledger) — it is reversible via un-archive. Archive
+  is operator-visibility metadata: last-write-wins, orthogonal to `status`, no
+  CAS/revision bump (like operator notes), and idempotent. A *live* run refuses
+  archive (`409` — cancel it first), and an **archived run refuses requeue/claim**
+  so a stale tab can't drive a hidden run back to live. `/runs` hides archived by
+  default; `?archived=1` shows the archived-only view. Dashboard, `/metrics`, and
+  `voxint stats` exclude archived runs from their counts.
+- **`POST /runs/{id}/media/delete`** — **destructive**, terminal-only. Deletes
+  only *this run's* derived audio (its `AudioArtifact` + `AudioChunk` rows and
+  files) to reclaim disk; files are unlinked **after** the DB delete commits,
+  path-confined under `MEDIA_ROOT`, and the operation is idempotent (an
+  already-gone file is not an error). It **never** touches the original
+  `MediaItem.source_path` — that file is shared by every run of the media item,
+  so removing it is a separate, refcount-guarded action (a future slice). The
+  evidence ledger (adjudication / transcript / diarization rows) is untouched.
 
-The console is deliberately **append-only**: there is no delete, no cancel, and
-no speaker-roster editing from these pages (roster changes happen only through
-adjudication). The pipeline-state surface (`/runs*`) and the adjudication surface
-(`/review*`) stay separate.
+Beyond these, the console stays **append-only** for evidence: archive hides but
+never deletes rows, media-delete only removes re-derivable audio files (never the
+ledger), and there is no speaker-roster editing from these pages (roster changes
+happen only through adjudication). The pipeline-state surface (`/runs*`) and the
+adjudication surface (`/review*`) stay separate.
 
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
@@ -548,6 +577,44 @@ persistent random value
 (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) — otherwise a
 random per-process secret is used, which invalidates open forms on restart and
 mismatches across multiple workers.
+
+### LLM endpoint timeouts — local models and proxies
+
+Everything LLM-backed (transcript enhancement, the name pass, run assets,
+web research) shares one per-attempt timeout, `LLM_TIMEOUT_SECONDS`
+(default 300 s). The default is sized for **local models**: on maintainer
+hardware, entity-mention extraction with a ~35B model routinely takes
+180–300 s per call, and shorter timeouts made the default configuration fail
+for exactly the self-hosted deployments this project targets. Cloud
+endpoints answer in seconds and never wait out the timeout on a healthy
+connection (connection establishment has its own short cap, so an
+unreachable endpoint still fails fast). What the generous default does cost:
+an endpoint that accepts connections but hangs mid-response is detected
+slowly — for transcript enhancement the worst case before the circuit
+breaker stops calling is `LLM_CONSECUTIVE_FAILURE_LIMIT ×
+LLM_ATTEMPTS_PER_BATCH × LLM_TIMEOUT_SECONDS` (30 minutes at the defaults).
+If you only use a fast cloud endpoint, lowering `LLM_TIMEOUT_SECONDS` tightens
+that.
+
+Two ceilings the client timeout **cannot** override:
+
+- **A proxy in front of your endpoint.** Proxies impose their own request
+  ceilings and return HTTP 408 when a call exceeds them, regardless of what
+  Voxint is configured to wait. On the maintainer's deployment, an
+  OpenAI-compatible proxy 408'd at its own **180 s** ceiling despite a
+  higher client timeout; defaults vary by product, version, and
+  configuration, so check yours. If long local-model calls fail with 408
+  despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own
+  request-timeout setting. The effective limit is always the *lower* of the
+  client timeout and every proxy/backend ceiling between Voxint and the
+  model.
+- **The web-research deadline.** `RESEARCH_DEADLINE_SECONDS` (default 300 s)
+  is checked between research rounds, never mid-round — a round's model call
+  (and, on a malformed reply, its one repair call) always finishes first. A
+  single slow local-model call can consume most of the deadline, leaving the
+  researcher one round before it is forced to conclude. With a local model
+  in the 180–300 s-per-call range, raise the deadline to several multiples
+  of your typical call time if you want multi-round research.
 
 ## Adjudication workflow
 

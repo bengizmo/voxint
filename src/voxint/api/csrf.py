@@ -39,6 +39,9 @@ _NONCE_BYTES = 16
 CSRF_SUBMIT = "submit"
 CSRF_FETCH = "fetch"
 CSRF_REQUEUE = "requeue"
+# Run cancellation (issue #5). Its own action — a distinct pipeline-state
+# mutation on the run detail page, never interchangeable with requeue/notes.
+CSRF_CANCEL = "cancel"
 CSRF_CLAIM = "claim"
 # The first-run setup wizard (issue #3). One action for the whole flow: its
 # POST steps land in slice 4, and a token minted on one wizard step being valid
@@ -74,6 +77,12 @@ CSRF_PROFILE_DECISION = "profile-decision"
 # cancelling one are independent mutations with different blast radii.
 CSRF_ASSETS_GENERATE = "assets-generate"
 CSRF_ASSETS_CANCEL = "assets-cancel"
+# Run soft-archive + derived-media deletion (issue #5, slice 2). Per-action
+# tokens — hiding a run (reversible), un-hiding it, and irreversibly deleting its
+# derived audio files have very different blast radii and must never share a token.
+CSRF_RUN_ARCHIVE = "run-archive"
+CSRF_RUN_UNARCHIVE = "run-unarchive"
+CSRF_RUN_MEDIA_DELETE = "run-media-delete"
 
 
 def _sign(secret: str, action: str, nonce: str) -> str:

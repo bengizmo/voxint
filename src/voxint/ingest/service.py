@@ -19,10 +19,13 @@ The two ``cas_update_run`` errors (:class:`StaleRevisionError`,
 
 import contextlib
 import hashlib
+import logging
 import os
 import re
 import tempfile
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -30,7 +33,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from voxint.db.models import MediaItem, PipelineRun, RunStatus
+from voxint.db.models import (
+    AudioArtifact,
+    AudioChunk,
+    MediaItem,
+    PipelineRun,
+    RunStatus,
+)
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
@@ -39,6 +48,8 @@ from voxint.pipeline.transitions import (
     cas_update_run,
     snapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 # Copy the upload in bounded chunks so a huge body never lands in one buffer;
 # the authoritative size cap is checked against the running total, not read().
@@ -80,6 +91,61 @@ class MissingStageError(IngestError):
     def __init__(self, run_id: uuid.UUID) -> None:
         super().__init__(f"run {run_id} is FAILED with no current_stage; refusing to guess")
         self.run_id = run_id
+
+
+class RunNotCancellableError(IngestError):
+    """Cancel attempted on a run whose status forbids it (COMPLETED / FAILED).
+
+    Only QUEUED, RUNNING, and AWAITING_ADJUDICATION are cancellable — the same
+    states ``ALLOWED_TRANSITIONS`` permits ``→ CANCELLED`` from. FAILED is not
+    terminal (it is requeueable), it is simply not *cancellable*; COMPLETED is
+    done. An already-CANCELLED run is not an error — :func:`cancel_run` treats a
+    repeat cancel as an idempotent no-op, not this exception.
+    """
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(
+            f"run is {status.value}, only queued/running/awaiting_adjudication "
+            "runs can be cancelled"
+        )
+        self.run_id = run_id
+        self.status = status
+
+
+class RunNotArchivableError(IngestError):
+    """Archive attempted on a run whose status forbids it (issue #5).
+
+    Only terminal runs — COMPLETED, FAILED, CANCELLED — may be soft-archived: a
+    QUEUED/RUNNING/AWAITING_ADJUDICATION run is still live, so archiving (hiding)
+    it is ambiguous; the operator must cancel it first. Un-archiving is always
+    allowed and never raises this. An already-archived run is not an error either
+    — :func:`archive_run` treats a repeat archive as an idempotent no-op.
+    """
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(
+            f"run is {status.value}, only completed/failed/cancelled runs can be "
+            "archived; cancel a live run first"
+        )
+        self.run_id = run_id
+        self.status = status
+
+
+class RunMediaNotDeletableError(IngestError):
+    """Derived-media deletion attempted on a non-terminal run (issue #5).
+
+    Deleting a run's derived audio files is destructive; it is refused while the
+    run is live (QUEUED/RUNNING/AWAITING_ADJUDICATION) so files are never
+    unlinked out from under a worker mid-pipeline. Same terminal set as archive.
+    """
+
+    def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
+        super().__init__(
+            f"run is {status.value}, derived media can only be deleted for a "
+            "completed/failed/cancelled run"
+        )
+        self.run_id = run_id
+        self.status = status
 
 
 class UploadValidationError(IngestError):
@@ -233,6 +299,234 @@ def requeue_failed_run(
         held,
         status=RunStatus.QUEUED,
         current_stage=held.current_stage,
+    )
+
+
+_CANCELLABLE_STATUSES = frozenset(
+    {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_ADJUDICATION}
+)
+
+
+def cancel_run(
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    expected_revision: int | None = None,
+) -> RunSnapshot:
+    """CAS-cancel a live run (QUEUED / RUNNING / AWAITING_ADJUDICATION), guarded
+    by exact revision.
+
+    Cancellation is *cooperative* and pure DB state: it drives the existing
+    ``→ CANCELLED`` transition and the caller commits — there is nothing to
+    publish (unlike submit/requeue). A worker mid-run observes the cancel only at
+    its next stage boundary or when its post-stage CAS loses to this one; the
+    currently executing stage body still runs to completion first, so cancel is
+    not an immediate process kill. A QUEUED run cancelled before dispatch simply
+    never starts. The run keeps its ``current_stage`` so the console shows where
+    it stopped (a fresh QUEUED run naturally carries ``None``).
+
+    Idempotent: cancelling an already-CANCELLED run is a no-op that returns the
+    current snapshot (a double-click / stale tab gets success, not a 409). Pass
+    ``expected_revision`` for exact-revision CAS from a form: a mismatch on a
+    still-live run raises :class:`StaleRevisionError` before any write.
+
+    Raises :class:`RunNotFoundError`, :class:`RunNotCancellableError` (COMPLETED /
+    FAILED), or — from the CAS — ``StaleRevisionError`` / ``InvalidTransitionError``.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    held = snapshot(run)
+    if held.status is RunStatus.CANCELLED:
+        return held  # idempotent: already cancelled, nothing to do
+    if held.status not in _CANCELLABLE_STATUSES:
+        raise RunNotCancellableError(run_id, held.status)
+    if expected_revision is not None and held.revision != expected_revision:
+        raise StaleRevisionError(run_id, expected_revision)
+    try:
+        return cas_update_run(
+            session,
+            held,
+            status=RunStatus.CANCELLED,
+            current_stage=held.current_stage,
+        )
+    except StaleRevisionError:
+        # A CONCURRENT cancel won the CAS between our read and write (two racing
+        # POSTs that both passed the revision guard on the same live revision).
+        # Re-read: if the run is now CANCELLED, this is still an idempotent
+        # success — a genuine double-click must not leave one operator with a
+        # spurious 409. Any other stale outcome (the run advanced under us) is a
+        # real stale-view conflict and re-raises. This is the concurrent twin of
+        # the already-CANCELLED short-circuit above.
+        session.expire(run)
+        fresh = snapshot(run)
+        if fresh.status is RunStatus.CANCELLED:
+            return fresh
+        raise
+
+
+# Terminal statuses eligible for archive and derived-media deletion. FAILED is
+# included: it is not cancellable, but it *is* a settled outcome an operator may
+# want to hide or clear (it stays requeueable only until archived — see the
+# archived-run guard on requeue).
+_ARCHIVABLE_STATUSES = frozenset(
+    {RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.CANCELLED}
+)
+
+
+def archive_run(session: Session, run_id: uuid.UUID) -> PipelineRun:
+    """Soft-archive a terminal run: hide it from ``/runs`` and the review queue
+    while keeping every row (incl. the append-only ledger) intact.
+
+    Archive is operator-visibility metadata — a single ``archived_at`` stamp,
+    deliberately OUTSIDE the CAS revision and orthogonal to ``status`` (mirrors
+    :func:`save_operator_notes`' last-write-wins handling). No revision bump, so a
+    stale tab never 409s on it. **Idempotent**: archiving an already-archived run
+    returns it unchanged. Only terminal runs (COMPLETED / FAILED / CANCELLED) may
+    be archived — a live run raises :class:`RunNotArchivableError` (cancel first).
+
+    DB-only: the caller owns the commit. Raises :class:`RunNotFoundError`.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    if run.archived_at is not None:
+        return run  # idempotent: already archived, nothing to do
+    status = RunStatus(run.status)
+    if status not in _ARCHIVABLE_STATUSES:
+        raise RunNotArchivableError(run_id, status)
+    run.archived_at = datetime.now(UTC)
+    return run
+
+
+def unarchive_run(session: Session, run_id: uuid.UUID) -> PipelineRun:
+    """Reverse :func:`archive_run` — clear ``archived_at`` so the run reappears.
+
+    Always allowed (reversibility is the whole point of soft-archive) and
+    **idempotent**: un-archiving a run that is not archived is a no-op success.
+    Last-write-wins, no revision bump, DB-only. Raises :class:`RunNotFoundError`.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    run.archived_at = None  # idempotent even when already NULL
+    return run
+
+
+@dataclass(frozen=True)
+class MediaDeletePlan:
+    """Outcome of the DB half of :func:`delete_run_derived_media`.
+
+    ``paths`` are the confined absolute filesystem paths the CALLER must unlink
+    *after committing* (commit-before-side-effect: a rolled-back transaction must
+    never leave the DB pointing at a file already deleted). Pass them to
+    :func:`unlink_media_paths` once the session has committed.
+    """
+
+    rows_deleted: int
+    paths: tuple[Path, ...]
+
+
+@dataclass(frozen=True)
+class MediaUnlinkResult:
+    """Result of the post-commit unlink pass. All counts are non-fatal — a
+    partial filesystem failure never fails the operator's action."""
+
+    files_deleted: int
+    files_missing: int
+    files_failed: int
+
+
+def _confined_media_path(root: Path, rel_path: str) -> Path | None:
+    """Resolve ``rel_path`` under ``root`` and return it only if it stays inside.
+
+    Defense in depth: the stored ``AudioArtifact``/``AudioChunk`` paths are
+    relative and trusted, but a malformed or absolute value must never let a
+    delete escape ``MEDIA_ROOT``. ``resolve()`` also collapses any ``..`` and
+    follows symlinks, so a link pointing outside the root is skipped, not
+    followed. Returns ``None`` (skip) for anything that escapes.
+    """
+    candidate = (root / rel_path).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        logger.warning("skipping media path outside MEDIA_ROOT: %r", rel_path)
+        return None
+    return candidate
+
+
+def delete_run_derived_media(
+    session: Session, run_id: uuid.UUID, *, media_root: Path
+) -> MediaDeletePlan:
+    """Delete a run's DERIVED audio (``AudioArtifact`` + ``AudioChunk``) rows and
+    return their files for the caller to unlink after commit.
+
+    Scope is deliberately narrow (issue #5, v1): only this run's own derived
+    audio — the preprocessed 16 kHz wav and the per-chunk files. It **never**
+    touches ``MediaItem``/``source_path`` (the original source is a single file
+    shared by every run of that media item; deleting it would orphan a sibling
+    run — that is a separate, refcount-guarded v2 action) and never touches the
+    evidence ledger (adjudication / transcript / diarization rows stay intact).
+
+    DB-only, mirroring the module's commit-before-side-effect contract: it
+    deletes the rows in the session and returns the confined absolute paths in a
+    :class:`MediaDeletePlan`; the caller commits, then calls
+    :func:`unlink_media_paths`. Terminal-only — a live run raises
+    :class:`RunMediaNotDeletableError`. Raises :class:`RunNotFoundError`.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        raise RunNotFoundError(run_id)
+    status = RunStatus(run.status)
+    if status not in _ARCHIVABLE_STATUSES:
+        raise RunMediaNotDeletableError(run_id, status)
+
+    root = media_root.resolve()
+    rows: list[AudioArtifact | AudioChunk] = [
+        *session.execute(
+            select(AudioArtifact).where(AudioArtifact.pipeline_run_id == run_id)
+        )
+        .scalars()
+        .all(),
+        *session.execute(
+            select(AudioChunk).where(AudioChunk.pipeline_run_id == run_id)
+        )
+        .scalars()
+        .all(),
+    ]
+    seen: set[Path] = set()
+    paths: list[Path] = []
+    for row in rows:
+        confined = _confined_media_path(root, row.path)
+        if confined is not None and confined not in seen:
+            seen.add(confined)
+            paths.append(confined)
+        session.delete(row)
+    return MediaDeletePlan(rows_deleted=len(rows), paths=tuple(paths))
+
+
+def unlink_media_paths(paths: tuple[Path, ...]) -> MediaUnlinkResult:
+    """Best-effort unlink of derived-media files AFTER the DB delete committed.
+
+    Idempotent and non-fatal: an already-missing file is counted, not raised (a
+    retry after a partial crash is clean); any other filesystem error is logged
+    and counted as ``files_failed`` so the operator's action still succeeds — the
+    DB row is already gone, and the orphaned file can be swept later. Never
+    unlinks a directory (only file paths are stored); a directory or other
+    ``OSError`` lands in ``files_failed``.
+    """
+    deleted = missing = failed = 0
+    for path in paths:
+        try:
+            path.unlink()
+            deleted += 1
+        except FileNotFoundError:
+            missing += 1
+        except OSError as exc:
+            failed += 1
+            logger.warning("failed to unlink derived-media file %s: %s", path, exc)
+    return MediaUnlinkResult(
+        files_deleted=deleted, files_missing=missing, files_failed=failed
     )
 
 

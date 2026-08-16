@@ -5,6 +5,84 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-08-16
+
+### Added
+- **Console run cancellation** (#5): a Cancel button on the run detail page for
+  any *live* run (`QUEUED` / `RUNNING` / `AWAITING_ADJUDICATION`), backed by a new
+  `POST /runs/{id}/cancel` route and `cancel_run` service — an exact-revision
+  (CAS) mutation mirroring `/requeue`, so a stale tab 409s. Cancellation is
+  **cooperative and pure DB state** (drives the existing `→ CANCELLED`
+  transition, publishes nothing): a `QUEUED` run never starts; a `RUNNING` run's
+  currently executing stage finishes first (not an immediate kill), then no
+  further stages run and the worker stops cleanly at its next CAS — the engine
+  now resolves a cancel-lost advance/complete/failure CAS by stopping only when
+  the run is confirmed `CANCELLED` (a genuine race still raises) and closes the
+  abandoned stage claim `SKIPPED` rather than leaving it "running". Re-cancelling
+  an already-cancelled run is an idempotent success. Cancel leaves media and
+  partial results in place — **delete/archive is a separate action** (below).
+- **Console run archive + derived-media deletion** (#5): finishes the run
+  lifecycle beyond append-only. **Soft-archive** hides a terminal run
+  (`COMPLETED` / `FAILED` / `CANCELLED`) from `/runs` and the `/review` queue via
+  a new nullable `pipeline_runs.archived_at` stamp (migration `0013`) while
+  keeping every row — including the append-only adjudication ledger — intact;
+  it is fully reversible (**Un-archive**). Archive is operator-visibility
+  metadata: last-write-wins, orthogonal to `status`, no CAS/revision bump
+  (mirrors operator notes), and idempotent. Live runs refuse archive (cancel
+  first); an archived run refuses requeue/claim so a stale tab can't drive a
+  hidden run live. `/runs` hides archived by default with a `?archived=1` view,
+  and dashboard/`/metrics`/`voxint stats` exclude archived runs. **Delete derived
+  audio files** is a separate, destructive, terminal-only action removing only a
+  run's own `AudioArtifact`/`AudioChunk` rows and files (post-commit unlink,
+  path-confined, idempotent); it **never** touches the shared original
+  `MediaItem.source_path` — deleting the shared source is a future refcount-guarded
+  action. New routes `POST /runs/{id}/archive`, `/unarchive`, `/media/delete`.
+
+### Changed
+- **`LLM_TIMEOUT_SECONDS` default raised 90 s → 300 s**: entity-mention
+  extraction on a local ~35B model routinely needs 180–300 s per call, so the
+  old default made run assets fail on exactly the self-hosted local-model
+  deployments Voxint targets. Cloud endpoints are unaffected on healthy
+  connections (they answer in seconds; connection establishment keeps its own
+  short cap). New `docs/operations.md` section covers the trade-off (slower
+  hung-endpoint detection), proxy-side ceilings the client timeout cannot
+  override (an OpenAI-compatible proxy observed 408ing at its own 180 s
+  ceiling), and sizing
+  `RESEARCH_DEADLINE_SECONDS` for slow local models.
+
+- **Docs state the project's audience and anti-bloat principle**: README,
+  CLAUDE.md, CONTRIBUTING, and onboarding now say who Voxint is for —
+  individuals and small teams (non-technical researchers, journalists,
+  educators) needing locally hosted audio intelligence — and that new
+  dependencies, features, and configuration surface must earn their place for
+  that audience. Third-party proxy products are no longer named in docs as if
+  part of the stack (generic "OpenAI-compatible proxy" phrasing).
+
+### Fixed
+- **Research jobs run under their snapshotted LLM timeout**: the worker's
+  LLM client was built from live settings while the cancel path's
+  stale-RUNNING bound used the job's enqueue-time snapshot, so a settings
+  change between enqueue and execution could force-cancel a still-live
+  request. Both sides now read the snapshot through one helper (falling back
+  to the shared default for pre-0.11 snapshots — the hard-coded `90.0`
+  fallbacks in both job modules are gone). The stale bound also now allows
+  **two** post-deadline LLM calls (the forced conclude plus its single repair
+  attempt) instead of one, matching what the research loop legitimately does.
+- **Research-job finalization guards** (#40 follow-up): `research_jobs`
+  now carries the same terminal-state protections `run_asset_jobs` shipped
+  with in 0.12.0. The success stamp refuses a job with a cancel pending (a
+  cancel landing during the final LLM call previously stamped SUCCEEDED and
+  kept its drafts); finalization runs under the worker's failure umbrella,
+  so a DB error while recording the outcome lands as an honest FAILED row
+  instead of a forever-RUNNING job; `_finish` is a guarded active→terminal
+  CAS — a force-cancelled row is never overwritten by a late worker verdict,
+  and a FAILED verdict racing an operator cancel resolves to CANCELLED. The
+  stale-RUNNING force-cancel cutoff now compares DB clock to DB clock
+  (`now() - make_interval(...)`), closing the clock-skew window the claim
+  path already avoided.
+
+## [0.12.0] — 2026-08-15
+
 ### Added
 - **Media retention / garbage collection** (#15): an opt-in, beat-scheduled GC
   sweep (`voxint.gc_sweep`) that reclaims the large normalized-audio
@@ -738,7 +816,9 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/bengizmo/voxint/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/bengizmo/voxint/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/bengizmo/voxint/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/bengizmo/voxint/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bengizmo/voxint/compare/v0.8.0...v0.9.0

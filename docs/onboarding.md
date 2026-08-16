@@ -10,9 +10,11 @@ Day-2 operations (migrations, recovery, backup, endpoint reference) live in
 
 ## Why it exists
 
-The manual path — copy `.env.example`, edit it, `docker compose up -d`, learn the
-review workflow by reading — works, but it front-loads every decision before you
-have seen the tool run once. The onboarding path defers what it can: the
+Voxint's intended operators are non-technical — researchers, journalists,
+educators — so the first-run path must not assume fluency with env files or
+compose overlays. The manual path — copy `.env.example`, edit it,
+`docker compose up -d`, learn the review workflow by reading — works, but it
+front-loads every decision before you have seen the tool run once. The onboarding path defers what it can: the
 installer asks for the things it genuinely cannot invent — an admin password, a
 media folder, and which compute tier should run the model services — and
 everything else is set from inside the running console, against a sample you

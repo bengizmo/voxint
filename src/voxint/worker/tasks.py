@@ -41,6 +41,7 @@ from voxint.media.reclaim import (
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
+    close_cancelled_run_claims,
     execute_run,
     recover_interrupted_runs,
 )
@@ -193,6 +194,13 @@ def recovery_sweep() -> dict[str, int]:
     with factory() as session:
         recovered = recover_interrupted_runs(session, max_attempts=settings.stage_max_attempts)
         session.commit()
+    # Backstop for cooperative cancellation (issue #5): if a worker died between
+    # a cancel commit and its own claim cleanup, the stage claim is orphaned
+    # RUNNING on a CANCELLED (terminal) run that recover_interrupted_runs never
+    # scans. Close those claims SKIPPED; never requeue a cancelled run.
+    with factory() as session:
+        cancelled_claims = close_cancelled_run_claims(session)
+        session.commit()
     cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.queued_run_stale_seconds)
     with factory() as session:
         stale_queued = (
@@ -207,7 +215,11 @@ def recovery_sweep() -> dict[str, int]:
         )
     for rid in {*recovered, *stale_queued}:
         run_pipeline.delay(str(rid))
-    return {"recovered": len(recovered), "stale_queued": len(stale_queued)}
+    return {
+        "recovered": len(recovered),
+        "stale_queued": len(stale_queued),
+        "cancelled_claims_closed": len(cancelled_claims),
+    }
 
 
 @app.task(name="voxint.gc_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]

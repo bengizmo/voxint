@@ -208,3 +208,26 @@ def _created_count(body: str) -> int:
     match = re.search(r'data-metric="runs-created"[^>]*>\s*(\d+)', body)
     assert match is not None, "runs-created metric hook missing from dashboard render"
     return int(match.group(1))
+
+
+def test_stats_exclude_archived_runs(session_factory: sessionmaker[Session]) -> None:
+    """Archived runs (issue #5) drop out of the status counts and the created
+    window so the dashboard / metrics / CLI all report *active* runs."""
+    from voxint.api.stats_query import run_status_counts, runs_created_since
+
+    now = datetime.now(UTC)
+    with session_factory() as session:
+        active = make_run(session, status=RunStatus.COMPLETED)
+        archived = make_run(session, status=RunStatus.COMPLETED)
+        run = session.get(PipelineRun, archived)
+        assert run is not None
+        run.archived_at = now
+        session.commit()
+
+    with session_factory() as session:
+        counts = run_status_counts(session)
+        # Only the active completed run is counted, not the archived one.
+        assert counts.get(RunStatus.COMPLETED.value, 0) == 1
+        assert runs_created_since(session, since=now - timedelta(hours=1)) == 1
+        # Sanity: the active run really exists (guards against an over-broad filter).
+        assert session.get(PipelineRun, active) is not None

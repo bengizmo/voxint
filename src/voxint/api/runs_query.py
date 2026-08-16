@@ -168,6 +168,10 @@ class RunListItem:
     # Source title from the acquisition metadata snapshot (issue #36); None for
     # uploads and pre-#36 URL runs — the template falls back to source_path.
     title: str | None = None
+    # Soft-archived (issue #5): True when this run carries an archived_at stamp.
+    # Only ever True in the explicit archived view (?archived=1) — the default
+    # listing excludes archived runs — but the flag lets the template pill them.
+    archived: bool = False
 
 
 @dataclass(frozen=True)
@@ -202,6 +206,7 @@ def runs_url(
     status: RunStatus | None = None,
     review: ReviewFilter | None = None,
     filters: SearchFilters | None = None,
+    archived: bool = False,
     cursor: Cursor | None = None,
 ) -> str:
     """Build a ``/runs`` URL preserving the active filters (+ optional cursor)."""
@@ -210,6 +215,8 @@ def runs_url(
         params.append(("status", status.value))
     if review is not None:
         params.append(("review", review.value))
+    if archived:
+        params.append(("archived", "1"))
     if filters is not None:
         if filters.q is not None:
             params.append(("q", filters.q))
@@ -318,8 +325,14 @@ def list_runs(
     cursor: Cursor | None,
     page_size: int,
     filters: SearchFilters | None = None,
+    archived: bool = False,
 ) -> RunsPage:
-    """One bounded, newest-first keyset page of runs matching the filters."""
+    """One bounded, newest-first keyset page of runs matching the filters.
+
+    ``archived`` selects the soft-archive view (issue #5): ``False`` (default)
+    hides archived runs entirely; ``True`` shows ONLY archived runs. Applied as a
+    plain predicate before the keyset clause so pagination walks the chosen set.
+    """
     claim_live = and_(
         PipelineRun.review_claim_expires_at.isnot(None),
         PipelineRun.review_claim_expires_at > func.now(),
@@ -330,6 +343,7 @@ def list_runs(
             PipelineRun.status,
             PipelineRun.created_at,
             PipelineRun.review_claimed_by,
+            PipelineRun.archived_at,
             MediaItem.source_path,
             MediaSourceMetadata.title.label("source_title"),
             unresolved_label_count(PipelineRun.id).label("unresolved_count"),
@@ -344,6 +358,13 @@ def list_runs(
         .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
         .limit(page_size + 1)
     )
+
+    # Soft-archive (issue #5): default hides archived runs; ?archived=1 shows
+    # only them. Orthogonal to status/review, applied before the keyset clause.
+    if archived:
+        stmt = stmt.where(PipelineRun.archived_at.is_not(None))
+    else:
+        stmt = stmt.where(PipelineRun.archived_at.is_(None))
 
     if status is not None:
         stmt = stmt.where(PipelineRun.status == status.value)
@@ -431,6 +452,7 @@ def list_runs(
             claimed_by=row.review_claimed_by if row.claim_live else None,
             snippet=snippets.get(row.id),
             title=row.source_title,
+            archived=row.archived_at is not None,
         )
         for row in rows
     ]

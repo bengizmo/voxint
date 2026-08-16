@@ -16,14 +16,14 @@ non-deterministic web loop is worse than a visible stall.
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.llm import HttpLLMClient
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import ResearchJob, ResearchJobStatus
 from voxint.enrichment.producers.web_researcher import (
     WebResearcherError,
@@ -156,9 +156,31 @@ def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
     return session.get(ResearchJob, job_id)
 
 
-# Grace a provably-dead RUNNING job gets past its deadline before the operator
-# may force-cancel it: one in-flight LLM call is the only legitimate overrun.
+# Grace a presumed-dead RUNNING job gets past its deadline before the operator
+# may force-cancel it. The deadline is checked between rounds, and the forced
+# conclude gets its own single repair attempt (research.agent._round_reply),
+# so two post-deadline LLM calls are routine — the stale bound allows both.
+# The bound is a heuristic, not a proof of death: a round already in flight
+# when the deadline trips can stretch the tail to four timeout-length calls
+# (its own repair plus the forced conclude's pair). A misfire on such a job
+# resolves safely — the cooperative flag this same UPDATE sets stops the live
+# loop at its next round boundary, and the finalize CAS turns any late
+# outcome into CANCELLED, the state the operator asked for anyway. Widening
+# the bound to cover that worst case would instead make every genuinely
+# crashed worker block the speaker four timeouts long — the wrong trade for
+# an operator-initiated path whose misfires are benign.
 STALE_RUNNING_GRACE_SECONDS = 60.0
+
+
+def _snapshot_llm_timeout(budget: dict[str, Any]) -> float:
+    """The per-attempt LLM timeout frozen onto the job at enqueue.
+
+    Both the stale-RUNNING bound and the worker's client construction read it
+    through here, so cancellation always reasons about the timeout the job
+    actually runs under — never live settings changed since enqueue. The
+    fallback covers pre-0.11 snapshots written before the key existed."""
+    raw = budget.get("llm_timeout_seconds")
+    return float(raw) if isinstance(raw, (int, float)) else DEFAULT_LLM_TIMEOUT_SECONDS
 
 
 def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
@@ -166,10 +188,11 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
 
     One guarded UPDATE sets the flag and resolves QUEUED outright (its delivery
     will fail the claim and no-op); a RUNNING loop observes the flag between
-    rounds. A RUNNING job that provably outlived its own wall-clock budget
-    (deadline + one LLM timeout + grace) has no live loop left to observe
-    anything — cancel it outright so a worker crash cannot block the speaker
-    forever. The caller commits."""
+    rounds. A RUNNING job that outlived its expected wall-clock budget
+    (deadline + two LLM timeouts + grace — the forced conclude plus its single
+    repair attempt; see STALE_RUNNING_GRACE_SECONDS for why this heuristic is
+    deliberately not worst-case) is presumed crashed — cancel it outright so
+    a dead worker cannot block the speaker forever. The caller commits."""
     flagged = cast(
         CursorResult[Any],
         session.execute(
@@ -203,19 +226,20 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     ).one()
     if status == ResearchJobStatus.RUNNING.value and started_at is not None:
         deadline = budget.get("deadline_seconds")
-        llm_timeout = budget.get("llm_timeout_seconds")
         bound = (
             float(deadline if isinstance(deadline, (int, float)) else 300.0)
-            + float(llm_timeout if isinstance(llm_timeout, (int, float)) else 90.0)
+            + 2 * _snapshot_llm_timeout(budget)
             + STALE_RUNNING_GRACE_SECONDS
         )
-        cutoff = datetime.now(tz=UTC) - timedelta(seconds=bound)
+        # DB clock on BOTH sides: started_at was stamped with now() at claim,
+        # so an app-clock cutoff would reintroduce exactly the skew the claim
+        # path avoided (make_interval's 7th positional argument is seconds).
         session.execute(
             update(ResearchJob)
             .where(
                 ResearchJob.id == job_id,
                 ResearchJob.status == ResearchJobStatus.RUNNING.value,
-                ResearchJob.started_at < cutoff,
+                ResearchJob.started_at < func.now() - func.make_interval(0, 0, 0, 0, 0, 0, bound),
             )
             .values(
                 status=ResearchJobStatus.CANCELLED.value,
@@ -232,13 +256,28 @@ def _finish(
     status: ResearchJobStatus,
     error: str | None = None,
 ) -> None:
+    """Guarded active→terminal CAS — a terminal row is never mutated again
+    (a force-cancel that already resolved the job must not be overwritten by
+    a late worker failure), and a FAILED verdict racing an operator cancel
+    resolves to CANCELLED: the operator asked for exactly that outcome."""
+    resolved: Any = status.value
+    if status is ResearchJobStatus.FAILED:
+        resolved = case(
+            (ResearchJob.cancel_requested.is_(True), ResearchJobStatus.CANCELLED.value),
+            else_=status.value,
+        )
     session.execute(
         update(ResearchJob)
-        .where(ResearchJob.id == job_id)
+        .where(
+            ResearchJob.id == job_id,
+            ResearchJob.status.in_(
+                (ResearchJobStatus.QUEUED.value, ResearchJobStatus.RUNNING.value)
+            ),
+        )
         .values(
-            status=status.value,
+            status=resolved,
             error=error[:MAX_ERROR_CHARS] if error else None,
-            finished_at=datetime.now(tz=UTC),
+            finished_at=func.now(),
         )
     )
     session.commit()
@@ -303,11 +342,15 @@ def execute_job(
         owned_client: HttpLLMClient | None = None
         client: ChatJsonClient
         if llm is None:
+            # The snapshotted timeout, not the live one: request_cancel's
+            # stale-RUNNING bound is computed from the snapshot, so the client
+            # must run under the same value or a settings change between
+            # enqueue and execution could force-cancel a still-live request.
             owned_client = HttpLLMClient(
                 settings.llm_base_url,
                 settings.llm_model,
                 settings.llm_api_key,
-                settings.llm_timeout_seconds,
+                _snapshot_llm_timeout(job.budget),
             )
             client = owned_client
         else:
@@ -348,36 +391,65 @@ def execute_job(
                 owned_client.close()
 
         # Atomic finalization: the producer run and the job stamp commit
-        # together, and only while the row is still RUNNING — a force-cancelled
-        # job must not be stamped SUCCEEDED (nor keep its drafts).
-        producer_run = record_research_outcome(
-            session,
-            job_id=job_id,
-            speaker_id=speaker.id,
-            settings=exec_settings,
-            conclusion=conclusion,
-            started_at=started_at,
-        )
-        session.flush()
-        stamped = cast(
-            CursorResult[Any],
-            session.execute(
-                update(ResearchJob)
-                .where(
-                    ResearchJob.id == job_id,
-                    ResearchJob.status == ResearchJobStatus.RUNNING.value,
-                )
-                .values(
-                    status=ResearchJobStatus.SUCCEEDED.value,
-                    producer_run_id=producer_run.id,
-                    searches_used=conclusion.searches_used,
-                    reads_used=conclusion.reads_used,
-                    rounds_used=conclusion.rounds_used,
-                    finished_at=datetime.now(tz=UTC),
-                )
-            ),
-        )
-        if stamped.rowcount != 1:
+        # together, and only while the row is still RUNNING with no cancel
+        # pending — a cancel that lands between the check below and this stamp
+        # must win (the drafts roll back with the missed stamp), and so must a
+        # force-cancel (a force-cancelled job must not be stamped SUCCEEDED nor
+        # keep its drafts). The whole block — the final cancel read included —
+        # sits under the same failure umbrella as the loop: a DB error here
+        # must land as an honest FAILED row, never a forever-RUNNING job
+        # (there is no recovery sweep).
+        try:
+            # A cancel that raced the loop's final round wins: check the flag
+            # before persisting anything (the loop's between-round checks
+            # cannot see a flag set after its last read).
+            if should_cancel():
+                _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
+                return
+            producer_run = record_research_outcome(
+                session,
+                job_id=job_id,
+                speaker_id=speaker.id,
+                settings=exec_settings,
+                conclusion=conclusion,
+                started_at=started_at,
+            )
+            session.flush()
+            stamped = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(ResearchJob)
+                    .where(
+                        ResearchJob.id == job_id,
+                        ResearchJob.status == ResearchJobStatus.RUNNING.value,
+                        ResearchJob.cancel_requested.is_(False),
+                    )
+                    .values(
+                        status=ResearchJobStatus.SUCCEEDED.value,
+                        producer_run_id=producer_run.id,
+                        searches_used=conclusion.searches_used,
+                        reads_used=conclusion.reads_used,
+                        rounds_used=conclusion.rounds_used,
+                        finished_at=func.now(),
+                    )
+                ),
+            )
+            if stamped.rowcount != 1:
+                # Cancel won the race; the drafts roll back with us and the
+                # cooperative flag (if the row is still RUNNING) resolves.
+                session.rollback()
+                _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
+                return
+            session.commit()
+        except WebResearcherError as exc:
             session.rollback()
-            return
-        session.commit()
+            _finish(session, job_id, status=ResearchJobStatus.FAILED, error=str(exc))
+        except Exception as exc:
+            logger.exception("research job %s failed during finalization", job_id)
+            session.rollback()
+            _finish(
+                session,
+                job_id,
+                status=ResearchJobStatus.FAILED,
+                error=f"unexpected error ({type(exc).__name__}) — see worker logs",
+            )
