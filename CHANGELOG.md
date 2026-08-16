@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-08-16
+
 ### Added
 - **Run notifications / webhooks** (#12): an opt-in, signed webhook POST when a
   run reaches a **notifiable transition** (`completed` / `failed`), delivered
@@ -866,7 +868,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/bengizmo/voxint/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/bengizmo/voxint/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/bengizmo/voxint/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/bengizmo/voxint/compare/v0.10.0...v0.11.0
