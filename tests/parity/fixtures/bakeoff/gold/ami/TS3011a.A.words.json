@@ -1,0 +1,2970 @@
+{
+  "kind": "ami-nxt-words",
+  "words": [
+    {
+      "end_us": 90000,
+      "start_us": 40000,
+      "text": "a"
+    },
+    {
+      "end_us": 270000,
+      "start_us": 90000,
+      "text": "new"
+    },
+    {
+      "end_us": 1660000,
+      "start_us": 270000,
+      "text": "product"
+    },
+    {
+      "end_us": 1660000,
+      "start_us": 1660000,
+      "text": "."
+    },
+    {
+      "end_us": 2640000,
+      "start_us": 1660000,
+      "text": "Um"
+    },
+    {
+      "end_us": 2880000,
+      "start_us": 2640000,
+      "text": "I'm"
+    },
+    {
+      "end_us": 3130000,
+      "start_us": 2880000,
+      "text": "sure"
+    },
+    {
+      "end_us": 3520000,
+      "start_us": 3130000,
+      "text": "you've"
+    },
+    {
+      "end_us": 3700000,
+      "start_us": 3520000,
+      "text": "had"
+    },
+    {
+      "end_us": 3740000,
+      "start_us": 3700000,
+      "text": "a"
+    },
+    {
+      "end_us": 4040000,
+      "start_us": 3740000,
+      "text": "mail"
+    },
+    {
+      "end_us": 4360000,
+      "start_us": 4040000,
+      "text": "from"
+    },
+    {
+      "end_us": 4570000,
+      "start_us": 4360000,
+      "text": "our"
+    },
+    {
+      "end_us": 4900000,
+      "start_us": 4570000,
+      "text": "account"
+    },
+    {
+      "end_us": 5280000,
+      "start_us": 4900000,
+      "text": "manager"
+    },
+    {
+      "end_us": 5590000,
+      "start_us": 5280000,
+      "text": "about"
+    },
+    {
+      "end_us": 6450000,
+      "start_us": 5590000,
+      "text": "it"
+    },
+    {
+      "end_us": 6450000,
+      "start_us": 6450000,
+      "text": "."
+    },
+    {
+      "end_us": 8070000,
+      "start_us": 6450000,
+      "text": "Um"
+    },
+    {
+      "end_us": 8410000,
+      "start_us": 8070000,
+      "text": "and"
+    },
+    {
+      "end_us": 8750000,
+      "start_us": 8410000,
+      "text": "um"
+    },
+    {
+      "end_us": 8900000,
+      "start_us": 8750000,
+      "text": "this"
+    },
+    {
+      "end_us": 9000000,
+      "start_us": 8900000,
+      "text": "is"
+    },
+    {
+      "end_us": 9080000,
+      "start_us": 9000000,
+      "text": "the"
+    },
+    {
+      "end_us": 9390000,
+      "start_us": 9080000,
+      "text": "first"
+    },
+    {
+      "end_us": 9640000,
+      "start_us": 9390000,
+      "text": "meeting"
+    },
+    {
+      "end_us": 10010000,
+      "start_us": 9640000,
+      "text": "to"
+    },
+    {
+      "end_us": 10300000,
+      "start_us": 10010000,
+      "text": "to"
+    },
+    {
+      "end_us": 10740000,
+      "start_us": 10300000,
+      "text": "generate"
+    },
+    {
+      "end_us": 11170000,
+      "start_us": 10740000,
+      "text": "some"
+    },
+    {
+      "end_us": 11640000,
+      "start_us": 11170000,
+      "text": "uh"
+    },
+    {
+      "end_us": 11710000,
+      "start_us": 11640000,
+      "text": "uh"
+    },
+    {
+      "end_us": 12030000,
+      "start_us": 11710000,
+      "text": "some"
+    },
+    {
+      "end_us": 12370000,
+      "start_us": 12030000,
+      "text": "ideas"
+    },
+    {
+      "end_us": 12660000,
+      "start_us": 12370000,
+      "text": "about"
+    },
+    {
+      "end_us": 13630000,
+      "start_us": 12660000,
+      "text": "it"
+    },
+    {
+      "end_us": 13630000,
+      "start_us": 13630000,
+      "text": "."
+    },
+    {
+      "end_us": 15030000,
+      "start_us": 13630000,
+      "text": "Um"
+    },
+    {
+      "end_us": 15220000,
+      "start_us": 15030000,
+      "text": "you"
+    },
+    {
+      "end_us": 15430000,
+      "start_us": 15220000,
+      "text": "are"
+    },
+    {
+      "end_us": 15760000,
+      "start_us": 15430000,
+      "text": "here"
+    },
+    {
+      "end_us": 15880000,
+      "start_us": 15760000,
+      "text": "in"
+    },
+    {
+      "end_us": 15940000,
+      "start_us": 15880000,
+      "text": "a"
+    },
+    {
+      "end_us": 16450000,
+      "start_us": 15940000,
+      "text": "specific"
+    },
+    {
+      "end_us": 16990000,
+      "start_us": 16450000,
+      "text": "role"
+    },
+    {
+      "end_us": 16990000,
+      "start_us": 16990000,
+      "text": "."
+    },
+    {
+      "end_us": 17710000,
+      "start_us": 16990000,
+      "text": "Uh"
+    },
+    {
+      "end_us": 18260000,
+      "start_us": 17710000,
+      "text": "Ruud"
+    },
+    {
+      "end_us": 18470000,
+      "start_us": 18260000,
+      "text": "is"
+    },
+    {
+      "end_us": 18770000,
+      "start_us": 18470000,
+      "text": "here"
+    },
+    {
+      "end_us": 18940000,
+      "start_us": 18770000,
+      "text": "as"
+    },
+    {
+      "end_us": 19030000,
+      "start_us": 18940000,
+      "text": "the"
+    },
+    {
+      "end_us": 19390000,
+      "start_us": 19030000,
+      "text": "Marketing"
+    },
+    {
+      "end_us": 20690000,
+      "start_us": 19390000,
+      "text": "Expert"
+    },
+    {
+      "end_us": 20690000,
+      "start_us": 20690000,
+      "text": ","
+    },
+    {
+      "end_us": 20950000,
+      "start_us": 20690000,
+      "text": "Roo"
+    },
+    {
+      "end_us": 21100000,
+      "start_us": 20950000,
+      "text": "is"
+    },
+    {
+      "end_us": 21420000,
+      "start_us": 21100000,
+      "text": "here"
+    },
+    {
+      "end_us": 21640000,
+      "start_us": 21420000,
+      "text": "as"
+    },
+    {
+      "end_us": 22060000,
+      "start_us": 21640000,
+      "text": "the"
+    },
+    {
+      "end_us": 22370000,
+      "start_us": 22060000,
+      "text": "User"
+    },
+    {
+      "end_us": 22740000,
+      "start_us": 22370000,
+      "text": "Interface"
+    },
+    {
+      "end_us": 23290000,
+      "start_us": 22740000,
+      "text": "Designer"
+    },
+    {
+      "end_us": 23700000,
+      "start_us": 23290000,
+      "text": "and"
+    },
+    {
+      "end_us": 24330000,
+      "start_us": 23700000,
+      "text": "Sebastian"
+    },
+    {
+      "end_us": 24530000,
+      "start_us": 24330000,
+      "text": "is"
+    },
+    {
+      "end_us": 25420000,
+      "start_us": 24530000,
+      "text": "here"
+    },
+    {
+      "end_us": 25630000,
+      "start_us": 25420000,
+      "text": "uh"
+    },
+    {
+      "end_us": 25810000,
+      "start_us": 25630000,
+      "text": "in"
+    },
+    {
+      "end_us": 25930000,
+      "start_us": 25810000,
+      "text": "the"
+    },
+    {
+      "end_us": 26340000,
+      "start_us": 25930000,
+      "text": "role"
+    },
+    {
+      "end_us": 26660000,
+      "start_us": 26340000,
+      "text": "of"
+    },
+    {
+      "end_us": 27300000,
+      "start_us": 26660000,
+      "text": "Industrial"
+    },
+    {
+      "end_us": 28290000,
+      "start_us": 27300000,
+      "text": "Designer"
+    },
+    {
+      "end_us": 28290000,
+      "start_us": 28290000,
+      "text": "."
+    },
+    {
+      "end_us": 28400000,
+      "start_us": 28290000,
+      "text": "Is"
+    },
+    {
+      "end_us": 28550000,
+      "start_us": 28400000,
+      "text": "that"
+    },
+    {
+      "end_us": 29780000,
+      "start_us": 28550000,
+      "text": "correct"
+    },
+    {
+      "end_us": 29780000,
+      "start_us": 29780000,
+      "text": "?"
+    },
+    {
+      "end_us": 30900000,
+      "start_us": 29780000,
+      "text": "Okay"
+    },
+    {
+      "end_us": 30900000,
+      "start_us": 30900000,
+      "text": "."
+    },
+    {
+      "end_us": 32820000,
+      "start_us": 30900000,
+      "text": "Um"
+    },
+    {
+      "end_us": 32960000,
+      "start_us": 32820000,
+      "text": "we're"
+    },
+    {
+      "end_us": 33210000,
+      "start_us": 32960000,
+      "text": "going"
+    },
+    {
+      "end_us": 33350000,
+      "start_us": 33210000,
+      "text": "to"
+    },
+    {
+      "end_us": 33740000,
+      "start_us": 33350000,
+      "text": "do"
+    },
+    {
+      "end_us": 34650000,
+      "start_us": 33740000,
+      "text": "um"
+    },
+    {
+      "end_us": 34980000,
+      "start_us": 34650000,
+      "text": "uh"
+    },
+    {
+      "end_us": 35150000,
+      "start_us": 34980000,
+      "text": "uh"
+    },
+    {
+      "end_us": 35200000,
+      "start_us": 35150000,
+      "text": "a"
+    },
+    {
+      "end_us": 35410000,
+      "start_us": 35200000,
+      "text": "little"
+    },
+    {
+      "end_us": 35680000,
+      "start_us": 35410000,
+      "text": "tool"
+    },
+    {
+      "end_us": 36410000,
+      "start_us": 35680000,
+      "text": "training"
+    },
+    {
+      "end_us": 36780000,
+      "start_us": 36410000,
+      "text": "uh"
+    },
+    {
+      "end_us": 37030000,
+      "start_us": 36780000,
+      "text": "for"
+    },
+    {
+      "end_us": 37120000,
+      "start_us": 37030000,
+      "text": "the"
+    },
+    {
+      "end_us": 37450000,
+      "start_us": 37120000,
+      "text": "tools"
+    },
+    {
+      "end_us": 37600000,
+      "start_us": 37450000,
+      "text": "we"
+    },
+    {
+      "end_us": 37730000,
+      "start_us": 37600000,
+      "text": "are"
+    },
+    {
+      "end_us": 37940000,
+      "start_us": 37730000,
+      "text": "going"
+    },
+    {
+      "end_us": 38080000,
+      "start_us": 37940000,
+      "text": "to"
+    },
+    {
+      "end_us": 38620000,
+      "start_us": 38080000,
+      "text": "use"
+    },
+    {
+      "end_us": 38740000,
+      "start_us": 38620000,
+      "text": "uh"
+    },
+    {
+      "end_us": 39910000,
+      "start_us": 38740000,
+      "text": "during"
+    },
+    {
+      "end_us": 40200000,
+      "start_us": 39910000,
+      "text": "uh"
+    },
+    {
+      "end_us": 40730000,
+      "start_us": 40200000,
+      "text": "the"
+    },
+    {
+      "end_us": 41180000,
+      "start_us": 40730000,
+      "text": "meetings"
+    },
+    {
+      "end_us": 41370000,
+      "start_us": 41180000,
+      "text": "we"
+    },
+    {
+      "end_us": 41470000,
+      "start_us": 41370000,
+      "text": "are"
+    },
+    {
+      "end_us": 41690000,
+      "start_us": 41470000,
+      "text": "going"
+    },
+    {
+      "end_us": 41840000,
+      "start_us": 41690000,
+      "text": "to"
+    },
+    {
+      "end_us": 42010000,
+      "start_us": 41840000,
+      "text": "have"
+    },
+    {
+      "end_us": 43320000,
+      "start_us": 42010000,
+      "text": "here"
+    },
+    {
+      "end_us": 43320000,
+      "start_us": 43320000,
+      "text": "."
+    },
+    {
+      "end_us": 44370000,
+      "start_us": 43320000,
+      "text": "Um"
+    },
+    {
+      "end_us": 44550000,
+      "start_us": 44370000,
+      "text": "then"
+    },
+    {
+      "end_us": 44630000,
+      "start_us": 44550000,
+      "text": "I"
+    },
+    {
+      "end_us": 44830000,
+      "start_us": 44630000,
+      "text": "will"
+    },
+    {
+      "end_us": 45050000,
+      "start_us": 44830000,
+      "text": "tell"
+    },
+    {
+      "end_us": 45210000,
+      "start_us": 45050000,
+      "text": "you"
+    },
+    {
+      "end_us": 45380000,
+      "start_us": 45210000,
+      "text": "a"
+    },
+    {
+      "end_us": 45570000,
+      "start_us": 45380000,
+      "text": "little"
+    },
+    {
+      "end_us": 45720000,
+      "start_us": 45570000,
+      "text": "bit"
+    },
+    {
+      "end_us": 46240000,
+      "start_us": 45720000,
+      "text": "about"
+    },
+    {
+      "end_us": 46570000,
+      "start_us": 46240000,
+      "text": "my"
+    },
+    {
+      "end_us": 47040000,
+      "start_us": 46570000,
+      "text": "idea"
+    },
+    {
+      "end_us": 47230000,
+      "start_us": 47040000,
+      "text": "of"
+    },
+    {
+      "end_us": 47330000,
+      "start_us": 47230000,
+      "text": "the"
+    },
+    {
+      "end_us": 47750000,
+      "start_us": 47330000,
+      "text": "project"
+    },
+    {
+      "end_us": 48710000,
+      "start_us": 47750000,
+      "text": "plan"
+    },
+    {
+      "end_us": 48710000,
+      "start_us": 48710000,
+      "text": ","
+    },
+    {
+      "end_us": 48970000,
+      "start_us": 48710000,
+      "text": "uh"
+    },
+    {
+      "end_us": 49230000,
+      "start_us": 48970000,
+      "text": "and"
+    },
+    {
+      "end_us": 49400000,
+      "start_us": 49230000,
+      "text": "we"
+    },
+    {
+      "end_us": 49630000,
+      "start_us": 49400000,
+      "text": "will"
+    },
+    {
+      "end_us": 49780000,
+      "start_us": 49630000,
+      "text": "have"
+    },
+    {
+      "end_us": 49820000,
+      "start_us": 49780000,
+      "text": "a"
+    },
+    {
+      "end_us": 50860000,
+      "start_us": 49820000,
+      "text": "discussion"
+    },
+    {
+      "end_us": 50860000,
+      "start_us": 50860000,
+      "text": "."
+    },
+    {
+      "end_us": 51220000,
+      "start_us": 50860000,
+      "text": "Uh"
+    },
+    {
+      "end_us": 51550000,
+      "start_us": 51220000,
+      "text": "this"
+    },
+    {
+      "end_us": 52490000,
+      "start_us": 51550000,
+      "text": "meeting"
+    },
+    {
+      "end_us": 52870000,
+      "start_us": 52490000,
+      "text": "should"
+    },
+    {
+      "end_us": 53110000,
+      "start_us": 52870000,
+      "text": "take"
+    },
+    {
+      "end_us": 53280000,
+      "start_us": 53110000,
+      "text": "no"
+    },
+    {
+      "end_us": 53500000,
+      "start_us": 53280000,
+      "text": "more"
+    },
+    {
+      "end_us": 53630000,
+      "start_us": 53500000,
+      "text": "than"
+    },
+    {
+      "end_us": 53900000,
+      "start_us": 53630000,
+      "text": "twenty"
+    },
+    {
+      "end_us": 54160000,
+      "start_us": 53900000,
+      "text": "five"
+    },
+    {
+      "end_us": 54850000,
+      "start_us": 54160000,
+      "text": "minutes"
+    },
+    {
+      "end_us": 54850000,
+      "start_us": 54850000,
+      "text": ","
+    },
+    {
+      "end_us": 55570000,
+      "start_us": 54850000,
+      "text": "so"
+    },
+    {
+      "end_us": 55640000,
+      "start_us": 55570000,
+      "text": "we"
+    },
+    {
+      "end_us": 55880000,
+      "start_us": 55640000,
+      "text": "should"
+    },
+    {
+      "end_us": 56070000,
+      "start_us": 55880000,
+      "text": "keep"
+    },
+    {
+      "end_us": 56220000,
+      "start_us": 56070000,
+      "text": "that"
+    },
+    {
+      "end_us": 56290000,
+      "start_us": 56220000,
+      "text": "in"
+    },
+    {
+      "end_us": 56640000,
+      "start_us": 56290000,
+      "text": "mind"
+    },
+    {
+      "end_us": 56640000,
+      "start_us": 56640000,
+      "text": "."
+    },
+    {
+      "end_us": 62940000,
+      "start_us": 62710000,
+      "text": "There"
+    },
+    {
+      "end_us": 63580000,
+      "start_us": 62940000,
+      "text": "is"
+    },
+    {
+      "end_us": 63580000,
+      "start_us": 63580000,
+      "text": "?"
+    },
+    {
+      "end_us": 63810000,
+      "start_us": 63580000,
+      "text": "Yeah"
+    },
+    {
+      "end_us": 63810000,
+      "start_us": 63810000,
+      "text": ","
+    },
+    {
+      "end_us": 63960000,
+      "start_us": 63810000,
+      "text": "there"
+    },
+    {
+      "end_us": 64190000,
+      "start_us": 63960000,
+      "text": "is"
+    },
+    {
+      "end_us": 64190000,
+      "start_us": 64190000,
+      "text": "."
+    },
+    {
+      "end_us": 66410000,
+      "start_us": 66280000,
+      "text": "No"
+    },
+    {
+      "end_us": 67360000,
+      "start_us": 66410000,
+      "text": "problem"
+    },
+    {
+      "end_us": 67360000,
+      "start_us": 67360000,
+      "text": "."
+    },
+    {
+      "end_us": 67910000,
+      "start_us": 67360000,
+      "text": "Um"
+    },
+    {
+      "end_us": 68260000,
+      "start_us": 67910000,
+      "text": "okay"
+    },
+    {
+      "end_us": 68260000,
+      "start_us": 68260000,
+      "text": ","
+    },
+    {
+      "end_us": 68510000,
+      "start_us": 68260000,
+      "text": "this"
+    },
+    {
+      "end_us": 68650000,
+      "start_us": 68510000,
+      "text": "new"
+    },
+    {
+      "end_us": 69100000,
+      "start_us": 68650000,
+      "text": "product"
+    },
+    {
+      "end_us": 69240000,
+      "start_us": 69100000,
+      "text": "we"
+    },
+    {
+      "end_us": 69420000,
+      "start_us": 69240000,
+      "text": "are"
+    },
+    {
+      "end_us": 69570000,
+      "start_us": 69420000,
+      "text": "are"
+    },
+    {
+      "end_us": 69860000,
+      "start_us": 69570000,
+      "text": "g"
+    },
+    {
+      "end_us": 70160000,
+      "start_us": 69860000,
+      "text": "are"
+    },
+    {
+      "end_us": 70400000,
+      "start_us": 70160000,
+      "text": "going"
+    },
+    {
+      "end_us": 70510000,
+      "start_us": 70400000,
+      "text": "to"
+    },
+    {
+      "end_us": 71040000,
+      "start_us": 70510000,
+      "text": "develop"
+    },
+    {
+      "end_us": 71040000,
+      "start_us": 71040000,
+      "text": ","
+    },
+    {
+      "end_us": 72160000,
+      "start_us": 71040000,
+      "text": "um"
+    },
+    {
+      "end_us": 73530000,
+      "start_us": 73350000,
+      "text": "it's"
+    },
+    {
+      "end_us": 73570000,
+      "start_us": 73530000,
+      "text": "a"
+    },
+    {
+      "end_us": 73940000,
+      "start_us": 73570000,
+      "text": "remote"
+    },
+    {
+      "end_us": 74580000,
+      "start_us": 73940000,
+      "text": "control"
+    },
+    {
+      "end_us": 74580000,
+      "start_us": 74580000,
+      "text": ","
+    },
+    {
+      "end_us": 74630000,
+      "start_us": 74580000,
+      "text": "a"
+    },
+    {
+      "end_us": 75310000,
+      "start_us": 74630000,
+      "text": "television"
+    },
+    {
+      "end_us": 75690000,
+      "start_us": 75310000,
+      "text": "remote"
+    },
+    {
+      "end_us": 76600000,
+      "start_us": 75690000,
+      "text": "control"
+    },
+    {
+      "end_us": 76600000,
+      "start_us": 76600000,
+      "text": "."
+    },
+    {
+      "end_us": 77480000,
+      "start_us": 76600000,
+      "text": "Um"
+    },
+    {
+      "end_us": 77780000,
+      "start_us": 77480000,
+      "text": "and"
+    },
+    {
+      "end_us": 78050000,
+      "start_us": 77780000,
+      "text": "first"
+    },
+    {
+      "end_us": 78140000,
+      "start_us": 78050000,
+      "text": "of"
+    },
+    {
+      "end_us": 78210000,
+      "start_us": 78140000,
+      "text": "all"
+    },
+    {
+      "end_us": 78300000,
+      "start_us": 78210000,
+      "text": "it"
+    },
+    {
+      "end_us": 78500000,
+      "start_us": 78300000,
+      "text": "should"
+    },
+    {
+      "end_us": 78620000,
+      "start_us": 78500000,
+      "text": "be"
+    },
+    {
+      "end_us": 79340000,
+      "start_us": 78620000,
+      "text": "original"
+    },
+    {
+      "end_us": 79340000,
+      "start_us": 79340000,
+      "text": ","
+    },
+    {
+      "end_us": 79460000,
+      "start_us": 79340000,
+      "text": "it"
+    },
+    {
+      "end_us": 79650000,
+      "start_us": 79460000,
+      "text": "should"
+    },
+    {
+      "end_us": 79740000,
+      "start_us": 79650000,
+      "text": "be"
+    },
+    {
+      "end_us": 80300000,
+      "start_us": 79740000,
+      "text": "trendy"
+    },
+    {
+      "end_us": 80500000,
+      "start_us": 80300000,
+      "text": "and"
+    },
+    {
+      "end_us": 81600000,
+      "start_us": 80500000,
+      "text": "user-friendly"
+    },
+    {
+      "end_us": 81600000,
+      "start_us": 81600000,
+      "text": "."
+    },
+    {
+      "end_us": 81870000,
+      "start_us": 81600000,
+      "text": "Those"
+    },
+    {
+      "end_us": 82410000,
+      "start_us": 81870000,
+      "text": "are"
+    },
+    {
+      "end_us": 82740000,
+      "start_us": 82410000,
+      "text": "kind"
+    },
+    {
+      "end_us": 82880000,
+      "start_us": 82740000,
+      "text": "of"
+    },
+    {
+      "end_us": 83620000,
+      "start_us": 82880000,
+      "text": "easy"
+    },
+    {
+      "end_us": 84290000,
+      "start_us": 83620000,
+      "text": "um"
+    },
+    {
+      "end_us": 85090000,
+      "start_us": 84290000,
+      "text": "uh"
+    },
+    {
+      "end_us": 86050000,
+      "start_us": 85090000,
+      "text": "uh"
+    },
+    {
+      "end_us": 87380000,
+      "start_us": 86050000,
+      "text": "goals"
+    },
+    {
+      "end_us": 87380000,
+      "start_us": 87380000,
+      "text": ","
+    },
+    {
+      "end_us": 87890000,
+      "start_us": 87380000,
+      "text": "um"
+    },
+    {
+      "end_us": 88120000,
+      "start_us": 87890000,
+      "text": "and"
+    },
+    {
+      "end_us": 88270000,
+      "start_us": 88120000,
+      "text": "I'm"
+    },
+    {
+      "end_us": 88520000,
+      "start_us": 88270000,
+      "text": "sure"
+    },
+    {
+      "end_us": 88660000,
+      "start_us": 88520000,
+      "text": "we"
+    },
+    {
+      "end_us": 88920000,
+      "start_us": 88660000,
+      "text": "can"
+    },
+    {
+      "end_us": 89250000,
+      "start_us": 88920000,
+      "text": "find"
+    },
+    {
+      "end_us": 89560000,
+      "start_us": 89250000,
+      "text": "more"
+    },
+    {
+      "end_us": 89980000,
+      "start_us": 89560000,
+      "text": "goals"
+    },
+    {
+      "end_us": 90230000,
+      "start_us": 89980000,
+      "text": "for"
+    },
+    {
+      "end_us": 90470000,
+      "start_us": 90230000,
+      "text": "the"
+    },
+    {
+      "end_us": 90640000,
+      "start_us": 90470000,
+      "text": "for"
+    },
+    {
+      "end_us": 90710000,
+      "start_us": 90640000,
+      "text": "the"
+    },
+    {
+      "end_us": 91100000,
+      "start_us": 90710000,
+      "text": "product"
+    },
+    {
+      "end_us": 91220000,
+      "start_us": 91100000,
+      "text": "we"
+    },
+    {
+      "end_us": 91290000,
+      "start_us": 91220000,
+      "text": "are"
+    },
+    {
+      "end_us": 91470000,
+      "start_us": 91290000,
+      "text": "going"
+    },
+    {
+      "end_us": 91600000,
+      "start_us": 91470000,
+      "text": "to"
+    },
+    {
+      "end_us": 93000000,
+      "start_us": 91600000,
+      "text": "develop"
+    },
+    {
+      "end_us": 93000000,
+      "start_us": 93000000,
+      "text": "."
+    },
+    {
+      "end_us": 94160000,
+      "start_us": 93000000,
+      "text": "Um"
+    },
+    {
+      "end_us": 94320000,
+      "start_us": 94160000,
+      "text": "we"
+    },
+    {
+      "end_us": 94690000,
+      "start_us": 94320000,
+      "text": "will"
+    },
+    {
+      "end_us": 95390000,
+      "start_us": 94690000,
+      "text": "discuss"
+    },
+    {
+      "end_us": 95770000,
+      "start_us": 95390000,
+      "text": "uh"
+    },
+    {
+      "end_us": 96250000,
+      "start_us": 95770000,
+      "text": "later"
+    },
+    {
+      "end_us": 96530000,
+      "start_us": 96250000,
+      "text": "on"
+    },
+    {
+      "end_us": 96970000,
+      "start_us": 96530000,
+      "text": "more"
+    },
+    {
+      "end_us": 97310000,
+      "start_us": 96970000,
+      "text": "ideas"
+    },
+    {
+      "end_us": 98010000,
+      "start_us": 97310000,
+      "text": "about"
+    },
+    {
+      "end_us": 98160000,
+      "start_us": 98010000,
+      "text": "uh"
+    },
+    {
+      "end_us": 98360000,
+      "start_us": 98160000,
+      "text": "how"
+    },
+    {
+      "end_us": 98570000,
+      "start_us": 98360000,
+      "text": "the"
+    },
+    {
+      "end_us": 98990000,
+      "start_us": 98570000,
+      "text": "remote"
+    },
+    {
+      "end_us": 99390000,
+      "start_us": 98990000,
+      "text": "should"
+    },
+    {
+      "end_us": 99740000,
+      "start_us": 99390000,
+      "text": "look"
+    },
+    {
+      "end_us": 99950000,
+      "start_us": 99740000,
+      "text": "and"
+    },
+    {
+      "end_us": 100160000,
+      "start_us": 99950000,
+      "text": "how"
+    },
+    {
+      "end_us": 100230000,
+      "start_us": 100160000,
+      "text": "it"
+    },
+    {
+      "end_us": 100390000,
+      "start_us": 100230000,
+      "text": "sh"
+    },
+    {
+      "end_us": 100540000,
+      "start_us": 100390000,
+      "text": "it"
+    },
+    {
+      "end_us": 100690000,
+      "start_us": 100540000,
+      "text": "should"
+    },
+    {
+      "end_us": 101280000,
+      "start_us": 100690000,
+      "text": "function"
+    },
+    {
+      "end_us": 102160000,
+      "start_us": 101280000,
+      "text": "and"
+    },
+    {
+      "end_us": 102310000,
+      "start_us": 102160000,
+      "text": "all"
+    },
+    {
+      "end_us": 102510000,
+      "start_us": 102310000,
+      "text": "those"
+    },
+    {
+      "end_us": 102700000,
+      "start_us": 102510000,
+      "text": "kind"
+    },
+    {
+      "end_us": 102770000,
+      "start_us": 102700000,
+      "text": "of"
+    },
+    {
+      "end_us": 103390000,
+      "start_us": 102770000,
+      "text": "things"
+    },
+    {
+      "end_us": 103390000,
+      "start_us": 103390000,
+      "text": "."
+    },
+    {
+      "end_us": 103500000,
+      "start_us": 103390000,
+      "text": "The"
+    },
+    {
+      "end_us": 104280000,
+      "start_us": 103500000,
+      "text": "market"
+    },
+    {
+      "end_us": 104280000,
+      "start_us": 104280000,
+      "text": ","
+    },
+    {
+      "end_us": 104390000,
+      "start_us": 104280000,
+      "text": "we"
+    },
+    {
+      "end_us": 104560000,
+      "start_us": 104390000,
+      "text": "should"
+    },
+    {
+      "end_us": 104690000,
+      "start_us": 104560000,
+      "text": "have"
+    },
+    {
+      "end_us": 104720000,
+      "start_us": 104690000,
+      "text": "a"
+    },
+    {
+      "end_us": 104890000,
+      "start_us": 104720000,
+      "text": "look"
+    },
+    {
+      "end_us": 105000000,
+      "start_us": 104890000,
+      "text": "at"
+    },
+    {
+      "end_us": 105080000,
+      "start_us": 105000000,
+      "text": "the"
+    },
+    {
+      "end_us": 106600000,
+      "start_us": 105080000,
+      "text": "market"
+    },
+    {
+      "end_us": 106600000,
+      "start_us": 106600000,
+      "text": "."
+    },
+    {
+      "end_us": 108460000,
+      "start_us": 106600000,
+      "text": "Um"
+    },
+    {
+      "end_us": 108710000,
+      "start_us": 108460000,
+      "text": "we"
+    },
+    {
+      "end_us": 108870000,
+      "start_us": 108710000,
+      "text": "are"
+    },
+    {
+      "end_us": 109180000,
+      "start_us": 108870000,
+      "text": "going"
+    },
+    {
+      "end_us": 109310000,
+      "start_us": 109180000,
+      "text": "to"
+    },
+    {
+      "end_us": 109650000,
+      "start_us": 109310000,
+      "text": "use"
+    },
+    {
+      "end_us": 109860000,
+      "start_us": 109650000,
+      "text": "a"
+    },
+    {
+      "end_us": 109940000,
+      "start_us": 109860000,
+      "text": "a"
+    },
+    {
+      "end_us": 110190000,
+      "start_us": 109940000,
+      "text": "pred"
+    },
+    {
+      "end_us": 110480000,
+      "start_us": 110190000,
+      "text": "a"
+    },
+    {
+      "end_us": 111100000,
+      "start_us": 110480000,
+      "text": "project"
+    },
+    {
+      "end_us": 111830000,
+      "start_us": 111100000,
+      "text": "method"
+    },
+    {
+      "end_us": 112190000,
+      "start_us": 111830000,
+      "text": "uh"
+    },
+    {
+      "end_us": 112730000,
+      "start_us": 112190000,
+      "text": "during"
+    },
+    {
+      "end_us": 112850000,
+      "start_us": 112730000,
+      "text": "uh"
+    },
+    {
+      "end_us": 113070000,
+      "start_us": 112850000,
+      "text": "this"
+    },
+    {
+      "end_us": 114140000,
+      "start_us": 113070000,
+      "text": "development"
+    },
+    {
+      "end_us": 114140000,
+      "start_us": 114140000,
+      "text": ","
+    },
+    {
+      "end_us": 114700000,
+      "start_us": 114140000,
+      "text": "um"
+    },
+    {
+      "end_us": 114930000,
+      "start_us": 114700000,
+      "text": "which"
+    },
+    {
+      "end_us": 115600000,
+      "start_us": 114930000,
+      "text": "consists"
+    },
+    {
+      "end_us": 115720000,
+      "start_us": 115600000,
+      "text": "of"
+    },
+    {
+      "end_us": 116220000,
+      "start_us": 115720000,
+      "text": "three"
+    },
+    {
+      "end_us": 117160000,
+      "start_us": 116220000,
+      "text": "different"
+    },
+    {
+      "end_us": 117520000,
+      "start_us": 117160000,
+      "text": "design"
+    },
+    {
+      "end_us": 118320000,
+      "start_us": 117520000,
+      "text": "stages"
+    },
+    {
+      "end_us": 118320000,
+      "start_us": 118320000,
+      "text": "."
+    },
+    {
+      "end_us": 119150000,
+      "start_us": 118760000,
+      "text": "Uh"
+    },
+    {
+      "end_us": 119270000,
+      "start_us": 119150000,
+      "text": "the"
+    },
+    {
+      "end_us": 119720000,
+      "start_us": 119270000,
+      "text": "functional"
+    },
+    {
+      "end_us": 120880000,
+      "start_us": 119720000,
+      "text": "design"
+    },
+    {
+      "end_us": 120880000,
+      "start_us": 120880000,
+      "text": ","
+    },
+    {
+      "end_us": 121020000,
+      "start_us": 120880000,
+      "text": "the"
+    },
+    {
+      "end_us": 121640000,
+      "start_us": 121020000,
+      "text": "conceptual"
+    },
+    {
+      "end_us": 122020000,
+      "start_us": 121640000,
+      "text": "design"
+    },
+    {
+      "end_us": 122130000,
+      "start_us": 122020000,
+      "text": "and"
+    },
+    {
+      "end_us": 122200000,
+      "start_us": 122130000,
+      "text": "the"
+    },
+    {
+      "end_us": 122670000,
+      "start_us": 122200000,
+      "text": "detailed"
+    },
+    {
+      "end_us": 123690000,
+      "start_us": 122670000,
+      "text": "design"
+    },
+    {
+      "end_us": 123690000,
+      "start_us": 123690000,
+      "text": ","
+    },
+    {
+      "end_us": 124780000,
+      "start_us": 123690000,
+      "text": "um"
+    },
+    {
+      "end_us": 125090000,
+      "start_us": 124780000,
+      "text": "all"
+    },
+    {
+      "end_us": 125280000,
+      "start_us": 125090000,
+      "text": "of"
+    },
+    {
+      "end_us": 125900000,
+      "start_us": 125280000,
+      "text": "these"
+    },
+    {
+      "end_us": 126800000,
+      "start_us": 125900000,
+      "text": "stages"
+    },
+    {
+      "end_us": 128090000,
+      "start_us": 126800000,
+      "text": "um"
+    },
+    {
+      "end_us": 128530000,
+      "start_us": 128090000,
+      "text": "um"
+    },
+    {
+      "end_us": 128790000,
+      "start_us": 128530000,
+      "text": "mean"
+    },
+    {
+      "end_us": 128950000,
+      "start_us": 128790000,
+      "text": "that"
+    },
+    {
+      "end_us": 130020000,
+      "start_us": 128950000,
+      "text": "we"
+    },
+    {
+      "end_us": 130430000,
+      "start_us": 130020000,
+      "text": "do"
+    },
+    {
+      "end_us": 130740000,
+      "start_us": 130430000,
+      "text": "some"
+    },
+    {
+      "end_us": 131290000,
+      "start_us": 130740000,
+      "text": "individual"
+    },
+    {
+      "end_us": 131780000,
+      "start_us": 131290000,
+      "text": "work"
+    },
+    {
+      "end_us": 131780000,
+      "start_us": 131780000,
+      "text": ","
+    },
+    {
+      "end_us": 132730000,
+      "start_us": 131780000,
+      "text": "prepare"
+    },
+    {
+      "end_us": 132730000,
+      "start_us": 132730000,
+      "text": ","
+    },
+    {
+      "end_us": 132960000,
+      "start_us": 132730000,
+      "text": "and"
+    },
+    {
+      "end_us": 133330000,
+      "start_us": 132960000,
+      "text": "then"
+    },
+    {
+      "end_us": 133600000,
+      "start_us": 133330000,
+      "text": "uh"
+    },
+    {
+      "end_us": 134290000,
+      "start_us": 133600000,
+      "text": "meet"
+    },
+    {
+      "end_us": 134630000,
+      "start_us": 134290000,
+      "text": "to"
+    },
+    {
+      "end_us": 135280000,
+      "start_us": 134630000,
+      "text": "discuss"
+    },
+    {
+      "end_us": 135660000,
+      "start_us": 135280000,
+      "text": "our"
+    },
+    {
+      "end_us": 136090000,
+      "start_us": 135660000,
+      "text": "uh"
+    },
+    {
+      "end_us": 137880000,
+      "start_us": 136090000,
+      "text": "uh"
+    },
+    {
+      "end_us": 138490000,
+      "start_us": 137880000,
+      "text": "the"
+    },
+    {
+      "end_us": 140440000,
+      "start_us": 138490000,
+      "text": "the"
+    },
+    {
+      "end_us": 140570000,
+      "start_us": 140440000,
+      "text": "the"
+    },
+    {
+      "end_us": 141400000,
+      "start_us": 140570000,
+      "text": "progressions"
+    },
+    {
+      "end_us": 141400000,
+      "start_us": 141400000,
+      "text": ","
+    },
+    {
+      "end_us": 142540000,
+      "start_us": 141400000,
+      "text": "yes"
+    },
+    {
+      "end_us": 142540000,
+      "start_us": 142540000,
+      "text": "."
+    },
+    {
+      "end_us": 143110000,
+      "start_us": 142540000,
+      "text": "Um"
+    },
+    {
+      "end_us": 143200000,
+      "start_us": 143110000,
+      "text": "the"
+    },
+    {
+      "end_us": 143560000,
+      "start_us": 143200000,
+      "text": "first"
+    },
+    {
+      "end_us": 143990000,
+      "start_us": 143560000,
+      "text": "stage"
+    },
+    {
+      "end_us": 143990000,
+      "start_us": 143990000,
+      "text": ","
+    },
+    {
+      "end_us": 144080000,
+      "start_us": 143990000,
+      "text": "the"
+    },
+    {
+      "end_us": 144530000,
+      "start_us": 144080000,
+      "text": "functional"
+    },
+    {
+      "end_us": 145520000,
+      "start_us": 144530000,
+      "text": "design"
+    },
+    {
+      "end_us": 146560000,
+      "start_us": 145520000,
+      "text": "um"
+    },
+    {
+      "end_us": 146760000,
+      "start_us": 146560000,
+      "text": "we"
+    },
+    {
+      "end_us": 146950000,
+      "start_us": 146760000,
+      "text": "are"
+    },
+    {
+      "end_us": 147250000,
+      "start_us": 146950000,
+      "text": "going"
+    },
+    {
+      "end_us": 147500000,
+      "start_us": 147250000,
+      "text": "to"
+    },
+    {
+      "end_us": 147950000,
+      "start_us": 147500000,
+      "text": "search"
+    },
+    {
+      "end_us": 148330000,
+      "start_us": 147950000,
+      "text": "for"
+    },
+    {
+      "end_us": 148530000,
+      "start_us": 148330000,
+      "text": "the"
+    },
+    {
+      "end_us": 148860000,
+      "start_us": 148530000,
+      "text": "user"
+    },
+    {
+      "end_us": 150180000,
+      "start_us": 148860000,
+      "text": "requirements"
+    },
+    {
+      "end_us": 150180000,
+      "start_us": 150180000,
+      "text": ","
+    },
+    {
+      "end_us": 150440000,
+      "start_us": 150180000,
+      "text": "and"
+    },
+    {
+      "end_us": 150580000,
+      "start_us": 150440000,
+      "text": "we"
+    },
+    {
+      "end_us": 151090000,
+      "start_us": 150580000,
+      "text": "will"
+    },
+    {
+      "end_us": 151590000,
+      "start_us": 151090000,
+      "text": "um"
+    },
+    {
+      "end_us": 151900000,
+      "start_us": 151590000,
+      "text": "make"
+    },
+    {
+      "end_us": 152770000,
+      "start_us": 151900000,
+      "text": "a"
+    },
+    {
+      "end_us": 153690000,
+      "start_us": 152770000,
+      "text": "specific"
+    },
+    {
+      "end_us": 153850000,
+      "start_us": 153690000,
+      "text": "uh"
+    },
+    {
+      "end_us": 155380000,
+      "start_us": 153850000,
+      "text": "specification"
+    },
+    {
+      "end_us": 155520000,
+      "start_us": 155380000,
+      "text": "of"
+    },
+    {
+      "end_us": 156490000,
+      "start_us": 155520000,
+      "text": "that"
+    },
+    {
+      "end_us": 156490000,
+      "start_us": 156490000,
+      "text": "."
+    },
+    {
+      "end_us": 158370000,
+      "start_us": 156490000,
+      "text": "Um"
+    },
+    {
+      "end_us": 158440000,
+      "start_us": 158370000,
+      "text": "the"
+    },
+    {
+      "end_us": 158750000,
+      "start_us": 158440000,
+      "text": "second"
+    },
+    {
+      "end_us": 158880000,
+      "start_us": 158750000,
+      "text": "is"
+    },
+    {
+      "end_us": 158950000,
+      "start_us": 158880000,
+      "text": "the"
+    },
+    {
+      "end_us": 159400000,
+      "start_us": 158950000,
+      "text": "technical"
+    },
+    {
+      "end_us": 159830000,
+      "start_us": 159400000,
+      "text": "functional"
+    },
+    {
+      "end_us": 161070000,
+      "start_us": 159830000,
+      "text": "design"
+    },
+    {
+      "end_us": 161070000,
+      "start_us": 161070000,
+      "text": ","
+    },
+    {
+      "end_us": 162330000,
+      "start_us": 161070000,
+      "text": "um"
+    },
+    {
+      "end_us": 162510000,
+      "start_us": 162330000,
+      "text": "what"
+    },
+    {
+      "end_us": 163170000,
+      "start_us": 162510000,
+      "text": "effect"
+    },
+    {
+      "end_us": 163710000,
+      "start_us": 163170000,
+      "text": "should"
+    },
+    {
+      "end_us": 164270000,
+      "start_us": 163710000,
+      "text": "the"
+    },
+    {
+      "end_us": 164730000,
+      "start_us": 164270000,
+      "text": "remote"
+    },
+    {
+      "end_us": 165220000,
+      "start_us": 164730000,
+      "text": "have"
+    },
+    {
+      "end_us": 165220000,
+      "start_us": 165220000,
+      "text": "?"
+    },
+    {
+      "end_us": 165440000,
+      "start_us": 165220000,
+      "text": "Well"
+    },
+    {
+      "end_us": 165540000,
+      "start_us": 165440000,
+      "text": "in"
+    },
+    {
+      "end_us": 165750000,
+      "start_us": 165540000,
+      "text": "this"
+    },
+    {
+      "end_us": 167090000,
+      "start_us": 165750000,
+      "text": "case"
+    },
+    {
+      "end_us": 167640000,
+      "start_us": 167090000,
+      "text": "control"
+    },
+    {
+      "end_us": 167870000,
+      "start_us": 167640000,
+      "text": "t"
+    },
+    {
+      "end_us": 168120000,
+      "start_us": 167870000,
+      "text": "the"
+    },
+    {
+      "end_us": 168260000,
+      "start_us": 168120000,
+      "text": "the"
+    },
+    {
+      "end_us": 168830000,
+      "start_us": 168260000,
+      "text": "television"
+    },
+    {
+      "end_us": 168920000,
+      "start_us": 168830000,
+      "text": "I"
+    },
+    {
+      "end_us": 169490000,
+      "start_us": 168920000,
+      "text": "think"
+    },
+    {
+      "end_us": 169490000,
+      "start_us": 169490000,
+      "text": "."
+    },
+    {
+      "end_us": 170760000,
+      "start_us": 169970000,
+      "text": "Um"
+    },
+    {
+      "end_us": 171250000,
+      "start_us": 170760000,
+      "text": "and"
+    },
+    {
+      "end_us": 171690000,
+      "start_us": 171250000,
+      "text": "the"
+    },
+    {
+      "end_us": 172010000,
+      "start_us": 171690000,
+      "text": "last"
+    },
+    {
+      "end_us": 172170000,
+      "start_us": 172010000,
+      "text": "one"
+    },
+    {
+      "end_us": 172300000,
+      "start_us": 172170000,
+      "text": "is"
+    },
+    {
+      "end_us": 172410000,
+      "start_us": 172300000,
+      "text": "the"
+    },
+    {
+      "end_us": 172850000,
+      "start_us": 172410000,
+      "text": "working"
+    },
+    {
+      "end_us": 173390000,
+      "start_us": 172850000,
+      "text": "design"
+    },
+    {
+      "end_us": 173390000,
+      "start_us": 173390000,
+      "text": "."
+    },
+    {
+      "end_us": 173690000,
+      "start_us": 173390000,
+      "text": "How"
+    },
+    {
+      "end_us": 174310000,
+      "start_us": 173690000,
+      "text": "exactly"
+    },
+    {
+      "end_us": 174510000,
+      "start_us": 174310000,
+      "text": "does"
+    },
+    {
+      "end_us": 174640000,
+      "start_us": 174510000,
+      "text": "it"
+    },
+    {
+      "end_us": 175100000,
+      "start_us": 174640000,
+      "text": "work"
+    },
+    {
+      "end_us": 175270000,
+      "start_us": 175100000,
+      "text": "in"
+    },
+    {
+      "end_us": 175350000,
+      "start_us": 175270000,
+      "text": "the"
+    },
+    {
+      "end_us": 175780000,
+      "start_us": 175350000,
+      "text": "technical"
+    },
+    {
+      "end_us": 177730000,
+      "start_us": 175780000,
+      "text": "sense"
+    },
+    {
+      "end_us": 177730000,
+      "start_us": 177730000,
+      "text": "."
+    },
+    {
+      "end_us": 178680000,
+      "start_us": 177730000,
+      "text": "Um"
+    },
+    {
+      "end_us": 178850000,
+      "start_us": 178680000,
+      "text": "the"
+    },
+    {
+      "end_us": 179100000,
+      "start_us": 178850000,
+      "text": "other"
+    },
+    {
+      "end_us": 179710000,
+      "start_us": 179100000,
+      "text": "design"
+    },
+    {
+      "end_us": 180430000,
+      "start_us": 179710000,
+      "text": "stages"
+    },
+    {
+      "end_us": 180430000,
+      "start_us": 180430000,
+      "text": ","
+    },
+    {
+      "end_us": 180570000,
+      "start_us": 180430000,
+      "text": "uh"
+    },
+    {
+      "end_us": 180740000,
+      "start_us": 180570000,
+      "text": "we"
+    },
+    {
+      "end_us": 180900000,
+      "start_us": 180740000,
+      "text": "will"
+    },
+    {
+      "end_us": 181270000,
+      "start_us": 180900000,
+      "text": "discuss"
+    },
+    {
+      "end_us": 181510000,
+      "start_us": 181270000,
+      "text": "that"
+    },
+    {
+      "end_us": 182440000,
+      "start_us": 181510000,
+      "text": "later"
+    },
+    {
+      "end_us": 182440000,
+      "start_us": 182440000,
+      "text": "."
+    },
+    {
+      "end_us": 182800000,
+      "start_us": 182440000,
+      "text": "So"
+    },
+    {
+      "end_us": 182950000,
+      "start_us": 182800000,
+      "text": "we'll"
+    },
+    {
+      "end_us": 183170000,
+      "start_us": 182950000,
+      "text": "kop"
+    },
+    {
+      "end_us": 183410000,
+      "start_us": 183170000,
+      "text": "it"
+    },
+    {
+      "end_us": 183630000,
+      "start_us": 183410000,
+      "text": "keep"
+    },
+    {
+      "end_us": 183830000,
+      "start_us": 183630000,
+      "text": "it"
+    },
+    {
+      "end_us": 184070000,
+      "start_us": 183830000,
+      "text": "with"
+    },
+    {
+      "end_us": 184140000,
+      "start_us": 184070000,
+      "text": "the"
+    },
+    {
+      "end_us": 184480000,
+      "start_us": 184140000,
+      "text": "functional"
+    },
+    {
+      "end_us": 185890000,
+      "start_us": 184480000,
+      "text": "design"
+    },
+    {
+      "end_us": 185890000,
+      "start_us": 185890000,
+      "text": "."
+    },
+    {
+      "end_us": 186700000,
+      "start_us": 185890000,
+      "text": "Okay"
+    },
+    {
+      "end_us": 186700000,
+      "start_us": 186700000,
+      "text": ","
+    },
+    {
+      "end_us": 187510000,
+      "start_us": 186700000,
+      "text": "um"
+    },
+    {
+      "end_us": 187890000,
+      "start_us": 187510000,
+      "text": "before"
+    },
+    {
+      "end_us": 188110000,
+      "start_us": 187890000,
+      "text": "we"
+    },
+    {
+      "end_us": 188360000,
+      "start_us": 188110000,
+      "text": "think"
+    },
+    {
+      "end_us": 188570000,
+      "start_us": 188360000,
+      "text": "about"
+    },
+    {
+      "end_us": 188930000,
+      "start_us": 188570000,
+      "text": "remote"
+    },
+    {
+      "end_us": 189250000,
+      "start_us": 188930000,
+      "text": "control"
+    },
+    {
+      "end_us": 189360000,
+      "start_us": 189250000,
+      "text": "we"
+    },
+    {
+      "end_us": 189710000,
+      "start_us": 189360000,
+      "text": "will"
+    },
+    {
+      "end_us": 190210000,
+      "start_us": 189710000,
+      "text": "um"
+    },
+    {
+      "end_us": 190480000,
+      "start_us": 190210000,
+      "text": "work"
+    },
+    {
+      "end_us": 190720000,
+      "start_us": 190480000,
+      "text": "with"
+    },
+    {
+      "end_us": 190920000,
+      "start_us": 190720000,
+      "text": "some"
+    },
+    {
+      "end_us": 191040000,
+      "start_us": 190920000,
+      "text": "of"
+    },
+    {
+      "end_us": 191140000,
+      "start_us": 191040000,
+      "text": "the"
+    },
+    {
+      "end_us": 191540000,
+      "start_us": 191140000,
+      "text": "tools"
+    },
+    {
+      "end_us": 191680000,
+      "start_us": 191540000,
+      "text": "we"
+    },
+    {
+      "end_us": 191930000,
+      "start_us": 191680000,
+      "text": "have"
+    },
+    {
+      "end_us": 192240000,
+      "start_us": 191930000,
+      "text": "uh"
+    },
+    {
+      "end_us": 193070000,
+      "start_us": 192240000,
+      "text": "here"
+    },
+    {
+      "end_us": 193070000,
+      "start_us": 193070000,
+      "text": "."
+    },
+    {
+      "end_us": 194250000,
+      "start_us": 193070000,
+      "text": "Um"
+    },
+    {
+      "end_us": 194400000,
+      "start_us": 194250000,
+      "text": "as"
+    },
+    {
+      "end_us": 194540000,
+      "start_us": 194400000,
+      "text": "you"
+    },
+    {
+      "end_us": 194760000,
+      "start_us": 194540000,
+      "text": "see"
+    },
+    {
+      "end_us": 195030000,
+      "start_us": 194760000,
+      "text": "now"
+    },
+    {
+      "end_us": 195130000,
+      "start_us": 195030000,
+      "text": "I"
+    },
+    {
+      "end_us": 195630000,
+      "start_us": 195130000,
+      "text": "can"
+    },
+    {
+      "end_us": 195910000,
+      "start_us": 195630000,
+      "text": "give"
+    },
+    {
+      "end_us": 195960000,
+      "start_us": 195910000,
+      "text": "a"
+    },
+    {
+      "end_us": 197880000,
+      "start_us": 195960000,
+      "text": "presentation"
+    },
+    {
+      "end_us": 197880000,
+      "start_us": 197880000,
+      "text": "."
+    },
+    {
+      "end_us": 198950000,
+      "start_us": 197880000,
+      "text": "Um"
+    },
+    {
+      "end_us": 199150000,
+      "start_us": 198950000,
+      "text": "it's"
+    },
+    {
+      "end_us": 199400000,
+      "start_us": 199150000,
+      "text": "also"
+    },
+    {
+      "end_us": 199840000,
+      "start_us": 199400000,
+      "text": "possible"
+    },
+    {
+      "end_us": 199970000,
+      "start_us": 199840000,
+      "text": "to"
+    },
+    {
+      "end_us": 200470000,
+      "start_us": 199970000,
+      "text": "use"
+    },
+    {
+      "end_us": 200700000,
+      "start_us": 200470000,
+      "text": "this"
+    },
+    {
+      "end_us": 200900000,
+      "start_us": 200700000,
+      "text": "one"
+    },
+    {
+      "end_us": 201050000,
+      "start_us": 200900000,
+      "text": "as"
+    },
+    {
+      "end_us": 201610000,
+      "start_us": 201050000,
+      "text": "well"
+    },
+    {
+      "end_us": 201610000,
+      "start_us": 201610000,
+      "text": "."
+    },
+    {
+      "end_us": 201770000,
+      "start_us": 201610000,
+      "text": "You"
+    },
+    {
+      "end_us": 202200000,
+      "start_us": 201770000,
+      "text": "can"
+    },
+    {
+      "end_us": 202640000,
+      "start_us": 202200000,
+      "text": "uh"
+    },
+    {
+      "end_us": 202840000,
+      "start_us": 202640000,
+      "text": "uh"
+    },
+    {
+      "end_us": 203250000,
+      "start_us": 202840000,
+      "text": "display"
+    },
+    {
+      "end_us": 203520000,
+      "start_us": 203250000,
+      "text": "pr"
+    },
+    {
+      "end_us": 203820000,
+      "start_us": 203520000,
+      "text": "uh"
+    },
+    {
+      "end_us": 204020000,
+      "start_us": 203820000,
+      "text": "two"
+    },
+    {
+      "end_us": 204770000,
+      "start_us": 204020000,
+      "text": "presentations"
+    },
+    {
+      "end_us": 204890000,
+      "start_us": 204770000,
+      "text": "if"
+    },
+    {
+      "end_us": 205020000,
+      "start_us": 204890000,
+      "text": "you"
+    },
+    {
+      "end_us": 205230000,
+      "start_us": 205020000,
+      "text": "want"
+    },
+    {
+      "end_us": 206210000,
+      "start_us": 205230000,
+      "text": "to"
+    },
+    {
+      "end_us": 206210000,
+      "start_us": 206210000,
+      "text": "."
+    },
+    {
+      "end_us": 207210000,
+      "start_us": 206210000,
+      "text": "Um"
+    },
+    {
+      "end_us": 209560000,
+      "start_us": 208700000,
+      "text": "to"
+    },
+    {
+      "end_us": 210550000,
+      "start_us": 209560000,
+      "text": "um"
+    },
+    {
+      "end_us": 211520000,
+      "start_us": 210550000,
+      "text": "presentate"
+    },
+    {
+      "end_us": 211520000,
+      "start_us": 211520000,
+      "text": ","
+    },
+    {
+      "end_us": 211870000,
+      "start_us": 211520000,
+      "text": "to"
+    },
+    {
+      "end_us": 212320000,
+      "start_us": 211870000,
+      "text": "show"
+    },
+    {
+      "end_us": 212700000,
+      "start_us": 212320000,
+      "text": "us"
+    },
+    {
+      "end_us": 212940000,
+      "start_us": 212700000,
+      "text": "uh"
+    },
+    {
+      "end_us": 213010000,
+      "start_us": 212940000,
+      "text": "a"
+    },
+    {
+      "end_us": 213790000,
+      "start_us": 213010000,
+      "text": "file"
+    },
+    {
+      "end_us": 214120000,
+      "start_us": 213790000,
+      "text": "you'll"
+    },
+    {
+      "end_us": 214370000,
+      "start_us": 214120000,
+      "text": "need"
+    },
+    {
+      "end_us": 214880000,
+      "start_us": 214370000,
+      "text": "to"
+    },
+    {
+      "end_us": 214980000,
+      "start_us": 214880000,
+      "text": "uh"
+    },
+    {
+      "end_us": 215340000,
+      "start_us": 214980000,
+      "text": "place"
+    },
+    {
+      "end_us": 215460000,
+      "start_us": 215340000,
+      "text": "it"
+    },
+    {
+      "end_us": 215600000,
+      "start_us": 215460000,
+      "text": "in"
+    },
+    {
+      "end_us": 215760000,
+      "start_us": 215600000,
+      "text": "your"
+    },
+    {
+      "end_us": 216330000,
+      "start_us": 215760000,
+      "text": "project"
+    },
+    {
+      "end_us": 216850000,
+      "start_us": 216330000,
+      "text": "documents"
+    },
+    {
+      "end_us": 217970000,
+      "start_us": 216850000,
+      "text": "folder"
+    },
+    {
+      "end_us": 217970000,
+      "start_us": 217970000,
+      "text": ","
+    },
+    {
+      "end_us": 218170000,
+      "start_us": 217970000,
+      "text": "which"
+    },
+    {
+      "end_us": 218360000,
+      "start_us": 218170000,
+      "text": "is"
+    },
+    {
+      "end_us": 218480000,
+      "start_us": 218360000,
+      "text": "on"
+    },
+    {
+      "end_us": 218630000,
+      "start_us": 218480000,
+      "text": "your"
+    },
+    {
+      "end_us": 219270000,
+      "start_us": 218630000,
+      "text": "desktop"
+    },
+    {
+      "end_us": 219270000,
+      "start_us": 219270000,
+      "text": ","
+    },
+    {
+      "end_us": 219380000,
+      "start_us": 219270000,
+      "text": "at"
+    },
+    {
+      "end_us": 219600000,
+      "start_us": 219380000,
+      "text": "least"
+    },
+    {
+      "end_us": 219700000,
+      "start_us": 219600000,
+      "text": "it"
+    },
+    {
+      "end_us": 219910000,
+      "start_us": 219700000,
+      "text": "should"
+    },
+    {
+      "end_us": 220910000,
+      "start_us": 219910000,
+      "text": "be"
+    },
+    {
+      "end_us": 220910000,
+      "start_us": 220910000,
+      "text": "."
+    },
+    {
+      "end_us": 221750000,
+      "start_us": 220910000,
+      "text": "Um"
+    },
+    {
+      "end_us": 221980000,
+      "start_us": 221750000,
+      "text": "then"
+    },
+    {
+      "end_us": 222110000,
+      "start_us": 221980000,
+      "text": "we"
+    },
+    {
+      "end_us": 222310000,
+      "start_us": 222110000,
+      "text": "have"
+    },
+    {
+      "end_us": 222480000,
+      "start_us": 222310000,
+      "text": "this"
+    },
+    {
+      "end_us": 223010000,
+      "start_us": 222480000,
+      "text": "electronic"
+    },
+    {
+      "end_us": 223660000,
+      "start_us": 223010000,
+      "text": "white-board"
+    },
+    {
+      "end_us": 225340000,
+      "start_us": 223660000,
+      "text": "system"
+    },
+    {
+      "end_us": 225340000,
+      "start_us": 225340000,
+      "text": "."
+    },
+    {
+      "end_us": 226460000,
+      "start_us": 225340000,
+      "text": "Um"
+    },
+    {
+      "end_us": 228860000,
+      "start_us": 228660000,
+      "text": "yeah"
+    },
+    {
+      "end_us": 228860000,
+      "start_us": 228860000,
+      "text": ","
+    },
+    {
+      "end_us": 228890000,
+      "start_us": 228860000,
+      "text": "I"
+    },
+    {
+      "end_us": 229050000,
+      "start_us": 228890000,
+      "text": "will"
+    },
+    {
+      "end_us": 229300000,
+      "start_us": 229050000,
+      "text": "show"
+    },
+    {
+      "end_us": 229530000,
+      "start_us": 229300000,
+      "text": "that"
+    },
+    {
+      "end_us": 230220000,
+      "start_us": 229530000,
+      "text": "now"
+    },
+    {
+      "end_us": 230220000,
+      "start_us": 230220000,
+      "text": "."
+    },
+    {
+      "end_us": 231020000,
+      "start_us": 230220000,
+      "text": "Um"
+    },
+    {
+      "end_us": 232680000,
+      "start_us": 232530000,
+      "text": "you"
+    },
+    {
+      "end_us": 232890000,
+      "start_us": 232680000,
+      "text": "can"
+    },
+    {
+      "end_us": 233710000,
+      "start_us": 232890000,
+      "text": "draw"
+    },
+    {
+      "end_us": 233890000,
+      "start_us": 233710000,
+      "text": "on"
+    },
+    {
+      "end_us": 233980000,
+      "start_us": 233890000,
+      "text": "the"
+    },
+    {
+      "end_us": 234280000,
+      "start_us": 233980000,
+      "text": "board"
+    },
+    {
+      "end_us": 234590000,
+      "start_us": 234280000,
+      "text": "using"
+    },
+    {
+      "end_us": 234800000,
+      "start_us": 234590000,
+      "text": "this"
+    },
+    {
+      "end_us": 235910000,
+      "start_us": 234800000,
+      "text": "pen"
+    },
+    {
+      "end_us": 235910000,
+      "start_us": 235910000,
+      "text": "."
+    },
+    {
+      "end_us": 236100000,
+      "start_us": 235910000,
+      "text": "There"
+    },
+    {
+      "end_us": 236210000,
+      "start_us": 236100000,
+      "text": "are"
+    },
+    {
+      "end_us": 236600000,
+      "start_us": 236210000,
+      "text": "little"
+    },
+    {
+      "end_us": 237340000,
+      "start_us": 236600000,
+      "text": "um"
+    },
+    {
+      "end_us": 238090000,
+      "start_us": 237340000,
+      "text": "uh"
+    },
+    {
+      "end_us": 238790000,
+      "start_us": 238090000,
+      "text": "sensors"
+    },
+    {
+      "end_us": 238790000,
+      "start_us": 238790000,
+      "text": ","
+    },
+    {
+      "end_us": 239900000,
+      "start_us": 238790000,
+      "text": "so"
+    }
+  ]
+}

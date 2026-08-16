@@ -1,0 +1,883 @@
+{
+  "files": [
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 1,
+        "kind": "ami_range",
+        "meeting": "EN2002c",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/EN2002c.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "93e3e968ee2324e03b7af188d1a5e92395f3cddf56cfdc8a11703303186ff7d9",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "2697240e0fc4882a003982a3ec3bf4a22aa651a499fcfd1caa4fbff5df910d7d",
+      "ts_granularity": "word",
+      "upstream_id": "EN2002c.Headset-1"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "IS1004d",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/IS1004d.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "07fd2835bfc42fb030bd5ebadb773d7d4514e573094c5f5058e4798cc4c1ce35",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "ac2b16bb41d9f2d811518b6f90cec1f82be0879e359d0acb5120da97b3adcae1",
+      "ts_granularity": "word",
+      "upstream_id": "IS1004d.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2016d",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2016d.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "55c37eec051bf1222d0bec80109d64b34d03282eede60ceb969e55aa7a02fa49",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "fdc0624e42b13d8db8d5e857bb957aceac31252e6af18a82f456e9e1ca0e183f",
+      "ts_granularity": "word",
+      "upstream_id": "ES2016d.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2009a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2009a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "6836c78680c8c1911561b7787abe7435dfc803d72c14a1ccc94dd051fb575a97",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "0af3b4d650317a11f5ad21afb514a4032e7e97fa1684b3f440f1892fba85ed18",
+      "ts_granularity": "word",
+      "upstream_id": "ES2009a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2014b",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2014b.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "46017cca1c48de97ab98f07a5ca8f1af9dcdc5fa1e9495d277c635e3383031d3",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "a8440f9976bd75bbc0fd5e89c6abc22337b8553a4e6a306fedd61ba0ac038248",
+      "ts_granularity": "word",
+      "upstream_id": "ES2014b.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "TS3011a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/TS3011a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "ff67a0df18e617b24ff903e9a447252369c69fd4f937e3d2ae574ea4ccfe1cb2",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "f7b94afed763c7e3c79aca580a7ef9b1f12e4f27d4e65f3958195cf6cfc50c6e",
+      "ts_granularity": "word",
+      "upstream_id": "TS3011a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2011a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2011a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "df4297166a653f4b78d65535b5a29c7831560101a4e7f7307bee95b4759fb912",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "ba7da967ab6dcf009cff11786b1cf8d4fa506f94f9bc7f427895449e9d11bc29",
+      "ts_granularity": "word",
+      "upstream_id": "ES2011a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "IS1007a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/IS1007a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "0ce0ec5f9a9be798aacc8b9507aa1650fd52497bc5f54721a186da2119cf21ec",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "9aaff23b46893bf87e8da6da22074113765eaeeef28443f851902c0840768ac3",
+      "ts_granularity": "word",
+      "upstream_id": "IS1007a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2002a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2002a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "b9de9ee4a70c3f40a6d270bdf2799dc8614f9c284085aaf21dcd7fda81df3795",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "44dbebb1b4a8ec486f2777a0c404581af7d2d8fc91604dadafd734ca213821d3",
+      "ts_granularity": "word",
+      "upstream_id": "ES2002a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "TS3004b",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/TS3004b.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "a8589d17a3aa8eef0137f0b6e2156540e13c9265c91cec4c8305da149c94cef9",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "e0c39de4c22f472faf0fc4fed8e64494ac47c6908ef3b0b4057ad58b38ad32c4",
+      "ts_granularity": "word",
+      "upstream_id": "TS3004b.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "TS3012c",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/TS3012c.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "b9cb389a21b8d3647bfb8d1caa0d60aeabb9cc1b1ccc926dc5e734843fc970e8",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "781ab36b2a863cf1c267ef199f1cedbefd615717ba8b3e80ae8ef93b55431ef5",
+      "ts_granularity": "word",
+      "upstream_id": "TS3012c.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2010b",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2010b.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "274f243c2fbde0ab8dc867e657398bbecdf7119602f1371be8ad25bbbe6d0b1f",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "d85f4fc59e4c4804048b985b3ba642895341b5a03be676bdc939eb85f4e6f991",
+      "ts_granularity": "word",
+      "upstream_id": "ES2010b.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "IS1009d",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/IS1009d.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "614b2b510a38449555697c8629528b3f1115e1baac9a816e55ad2cd4e93db0b2",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "4828d7553e9736a0ef99483333f50f504267c6a042c2a0ca249706cada8d480b",
+      "ts_granularity": "word",
+      "upstream_id": "IS1009d.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "IS1008a",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/IS1008a.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "bf6487266bff466cd7eee421db586ab35b81375f5c9c02f7b9034f54ee0fc818",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "aee9e7c21e09f7a75acc61781717f422b18362fc40150845f23cde8de6d9a0c8",
+      "ts_granularity": "word",
+      "upstream_id": "IS1008a.Headset-0"
+    },
+    {
+      "acquire": {
+        "agent": "A",
+        "channel": 0,
+        "kind": "ami_range",
+        "meeting": "ES2005d",
+        "offset_s": 120.0,
+        "window_s": 240.0
+      },
+      "dataset": "ami_ihm",
+      "duration_s": 240.0,
+      "gold_file": "gold/ami/ES2005d.A.words.json",
+      "license_spdx": "CC-BY-4.0",
+      "sha256": "ed0975fcf2c32000c7e75cd944ca186dd09fcb359bc40da2fa051467f2c376c9",
+      "strata": [
+        "ami_ihm"
+      ],
+      "transcript_sha256": "fa1cd4cfd0a93537a8bec5ca95170e53c7ad33237f48bcde1cf85f49aca458ec",
+      "ts_granularity": "word",
+      "upstream_id": "ES2005d.Headset-0"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/RobertGupta_2010U.sph",
+        "stm": "test/RobertGupta_2010U.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "823869059e5c839d038f686a068138032982eb612fdeeee00937fd79327a555a",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "3d7b36a45670fbf3793118c79b3474cac109013461198a99b33b717eb695d7a5",
+      "ts_granularity": "segment",
+      "upstream_id": "RobertGupta_2010U"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/DavidMerrill_2009.sph",
+        "stm": "dev/DavidMerrill_2009.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "977e45d42236b83b6959b65c015827f8a7839e4ef57f96ac52cde3b501afb1e3",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "2b65a7e6be0bc1c896f5ecf55b36dff45d043e3d93c2eb28bf235718743ba09c",
+      "ts_granularity": "segment",
+      "upstream_id": "DavidMerrill_2009"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/MichaelSpecter_2010.sph",
+        "stm": "test/MichaelSpecter_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "d4760c74df82032cb0237bbad468a6ba3b57aa1e446c89bb6041750a2034f68c",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "902c5cc19e334beb181d74de5377019a97622ccf745ff17798b55c64401e1912",
+      "ts_granularity": "segment",
+      "upstream_id": "MichaelSpecter_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/TomWujec_2010U.sph",
+        "stm": "test/TomWujec_2010U.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "93819f87858ea1172369ecc31885a2f2decc6b764384a2486a85c83114a63604",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "42d5f47c1421ae7f9320ea90321f7df48b939ba1d2a8da7a5efc86526ef8ac25",
+      "ts_granularity": "segment",
+      "upstream_id": "TomWujec_2010U"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/DanielKahneman_2010.sph",
+        "stm": "test/DanielKahneman_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "76949522d34ee41253f5c4c0210882e324f065d5405788ef81dc2199d65bf2e3",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "3b5100b69c78b7c77756b6bb7e2c1de8440fc81a6489a20e40017362c35199ef",
+      "ts_granularity": "segment",
+      "upstream_id": "DanielKahneman_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/BlaiseAguerayArcas_2007.sph",
+        "stm": "dev/BlaiseAguerayArcas_2007.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "c449ca3e75835438d54fb25412715779a46e6e091ed64a973585615fc2872acc",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "db2b469c04342d8381b35c07468ad4d473d93f1b46f122d641e2992942d63c2d",
+      "ts_granularity": "segment",
+      "upstream_id": "BlaiseAguerayArcas_2007"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/ElizabethGilbert_2009.sph",
+        "stm": "dev/ElizabethGilbert_2009.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "0c68ac56678864471032e2c0f74322d3dce48a9a9c7fed47b0c87141c3da9a04",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "f0a999c4afad68690c13d8efe32a6d57a4b7decf08cb4adc92d703159813ddfc",
+      "ts_granularity": "segment",
+      "upstream_id": "ElizabethGilbert_2009"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/CraigVenter_2008.sph",
+        "stm": "dev/CraigVenter_2008.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "b681df71491e914d5005c55dc65bfbd76ffd19728bf9d1453b84ae0f0dc98b70",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "b680cb68d6af1e9580dce5ddc4474288664b53c9112aba70106efee095af6f05",
+      "ts_granularity": "segment",
+      "upstream_id": "CraigVenter_2008"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/JamesCameron_2010.sph",
+        "stm": "test/JamesCameron_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "1f3d4481d22f4ee2f9c4972934b08dbc1ee3b413ea1a9025d3b8770949810783",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "081ebf29e3d55be4c0636e763c80ae0d2b38efcb9596095c2e07f53b5ebf7b60",
+      "ts_granularity": "segment",
+      "upstream_id": "JamesCameron_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/BillGates_2010.sph",
+        "stm": "test/BillGates_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "25d0850168a658b75c8163441b180f1afcaf5fe7198ad1506dd417eda875cd73",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "a071bb1738808e48f36ef69b514beb0dd7f95a9a7858396d5558c90860256078",
+      "ts_granularity": "segment",
+      "upstream_id": "BillGates_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/DanBarber_2010.sph",
+        "stm": "test/DanBarber_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "6f4d0416dfc4299cecf8b977fc2b5a329e66f4d9362c86527e961c1104a18f61",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "3ecbfdf32bc62a560db29c75c87550b7b4ae30f0393b1167ff6791f00bef4182",
+      "ts_granularity": "segment",
+      "upstream_id": "DanBarber_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/test.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "test/JaneMcGonigal_2010.sph",
+        "stm": "test/JaneMcGonigal_2010.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "dc5d8c9e7d92315ebd9c30347d526d69de6fa2957a60427f4216d530c1ad9528",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "939fd0c2902a3b9fbc3def4bb114f0561654cf9f80febe3819f0f09a55a1d5f3",
+      "ts_granularity": "segment",
+      "upstream_id": "JaneMcGonigal_2010"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/WadeDavis_2003.sph",
+        "stm": "dev/WadeDavis_2003.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "69765cb0f4ce6efd23661fba320e3d718bfc2779c3c767e344ce85b26c87c3b2",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "e5c0284858bc3af936146a568f9aad4e6678b7ad62708579e39fb852a78ec06a",
+      "ts_granularity": "segment",
+      "upstream_id": "WadeDavis_2003"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/AlGore_2009.sph",
+        "stm": "dev/AlGore_2009.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "bc33154d250640803a052e92db640e5f81152f982e7378b0b889f5f8a0f89aab",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "a5b21ef2aa06c8429289d23210fab4e6b87e9d6c739da7570c208e6d6f4159f8",
+      "ts_granularity": "segment",
+      "upstream_id": "AlGore_2009"
+    },
+    {
+      "acquire": {
+        "archive": "TEDLIUM_release3/legacy/dev.tar.gz",
+        "kind": "ted_window",
+        "offset_s": 120.0,
+        "sph": "dev/BarrySchwartz_2005G.sph",
+        "stm": "dev/BarrySchwartz_2005G.stm",
+        "window_s": 240.0
+      },
+      "dataset": "tedlium3",
+      "duration_s": 240.0,
+      "license_spdx": "CC-BY-NC-ND-3.0",
+      "sha256": "0d3ab1805d70d615bb6a4e22ec0ba7fecb9b8c72c71815cf31d375b6e08e31ad",
+      "strata": [
+        "tedlium3"
+      ],
+      "transcript_sha256": "427422f6dcd591cae2d3702126ef64881e0e810bfe77b4914e5389f120190d7f",
+      "ts_granularity": "segment",
+      "upstream_id": "BarrySchwartz_2005G"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/silence_00.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 5.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "262d1f34f300560a4c82ba8127ddea9e1d72946f187fdbd3e8f70ee096077aec",
+      "strata": [
+        "synthetic_silence"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "silence_00"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/silence_01.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 10.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "ee7bea4232762775f8fce9b3e27e4d3948c8ac6a45a87ca769f703d6eed0b448",
+      "strata": [
+        "synthetic_silence"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "silence_01"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/silence_02.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 8.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "c6648d85def2e68aa7521e72e8a3026b981976a7cb3f362784d0b8dce8e2052e",
+      "strata": [
+        "synthetic_silence"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "silence_02"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/silence_03.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 3.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "b82dd23a7925eb76a87f09928ea2c5634a3a9f0cafadeaaebb5a67d09b90d041",
+      "strata": [
+        "synthetic_silence"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "silence_03"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/silence_04.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 15.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "605eed90f978eda1bf77a1296a9b403eba3a288731f8051d321f72aca3d381eb",
+      "strata": [
+        "synthetic_silence"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "silence_04"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/bait_00_applause.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 8.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "145458f7bb0d8542d2fe36af36bec482f0547a4de179fbf7e7890a893b096bfa",
+      "strata": [
+        "synthetic_bait"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "bait_00_applause"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/bait_01_breath.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 6.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "0e64ae1097578bedbcb8e4bfece2665f64498c69ba14f16161a2b4edfc997dde",
+      "strata": [
+        "synthetic_bait"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "bait_01_breath"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/bait_02_tone.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 7.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "a8998cd1c84f5de9aeded67640a94accc3bfc8d28d57e00b0410a45192d23ae5",
+      "strata": [
+        "synthetic_bait"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "bait_02_tone"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/bait_03_clicks.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 5.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "f7440c365c96e63652f5c6cff508c5fe8b937df0974666fc8d2122372726944c",
+      "strata": [
+        "synthetic_bait"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "bait_03_clicks"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/bait_04_pink.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 10.0,
+      "license_spdx": "CC0-1.0",
+      "sha256": "7017b27c13355da100dfaeabc7f1ca95cd378df2b8aad41b213a179a9b5dde73",
+      "strata": [
+        "synthetic_bait"
+      ],
+      "transcript_sha256": null,
+      "ts_granularity": "none",
+      "upstream_id": "bait_04_pink"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/short_clean_00.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 4.049,
+      "license_spdx": "CC0-1.0",
+      "sha256": "7a2320c0da1ae1e92a77ee9b6111c75270019ee82b31da20650ad6cd6f45d54b",
+      "strata": [
+        "synthetic_short_clean"
+      ],
+      "text": "The lighthouse keeper recorded the tide at dawn and again at dusk.",
+      "transcript_sha256": "53e889e4f603b9d1d16e1126845bec961a83990e71abeb99d065c4b287b2ef55",
+      "ts_granularity": "none",
+      "upstream_id": "short_clean_00"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/short_clean_01.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 3.532,
+      "license_spdx": "CC0-1.0",
+      "sha256": "e9eb066a29dc4ce076e0024232d6638cd45e664af7fada915473bb66db5155e7",
+      "strata": [
+        "synthetic_short_clean"
+      ],
+      "text": "Seven copper kettles hung above the wide kitchen hearth.",
+      "transcript_sha256": "acae959ea5dc4020b362063977c36ef84c2bb8391d76e193e1fc4c789c22036e",
+      "ts_granularity": "none",
+      "upstream_id": "short_clean_01"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/short_clean_02.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 4.117,
+      "license_spdx": "CC0-1.0",
+      "sha256": "ba59e79f1015042f4ebc142df9fe22e02b7fb13d1badde0604ff49a27a6e8691",
+      "strata": [
+        "synthetic_short_clean"
+      ],
+      "text": "A quiet river wound between the orchard and the old stone wall.",
+      "transcript_sha256": "aefa360d202d7cbe48b65094f69c53a5c9b6f35f9f468f79aa147a955d3d45fe",
+      "ts_granularity": "none",
+      "upstream_id": "short_clean_02"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/short_clean_03.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 4.303,
+      "license_spdx": "CC0-1.0",
+      "sha256": "c201f6c174a704f90dd4d0229859a5b5fb411cf4d136e6c35553a2db11726679",
+      "strata": [
+        "synthetic_short_clean"
+      ],
+      "text": "The cartographer folded the map and traced the northern road twice.",
+      "transcript_sha256": "d99594704ba1a3c76381d5b4c0402f375f19b285d53502e16fc6f58ca31e452b",
+      "ts_granularity": "none",
+      "upstream_id": "short_clean_03"
+    },
+    {
+      "acquire": {
+        "kind": "committed",
+        "path": "synthetic/short_clean_04.wav"
+      },
+      "dataset": "synthetic",
+      "duration_s": 3.884,
+      "license_spdx": "CC0-1.0",
+      "sha256": "e30853a1a8bf13c4975c7ea5cdef4791431ff62e1a5a6287581285cad51ca96a",
+      "strata": [
+        "synthetic_short_clean"
+      ],
+      "text": "Bright lanterns swung along the pier as the last ferry departed.",
+      "transcript_sha256": "59f2c7d6808a6c05353768e9464c41b08b5f240cf98295b5b24432a8ebf5935c",
+      "ts_granularity": "none",
+      "upstream_id": "short_clean_04"
+    }
+  ],
+  "note": "CANDIDATE manifest \u2014 review before committing (generate mode)",
+  "provenance": {
+    "espeak_ng": "eSpeak NG text-to-speech: 1.52.0  Data at: /opt/homebrew/Cellar/espeak-ng/1.52.0/share/espeak-ng-data",
+    "ffmpeg": "ffmpeg version 9.0.1 Copyright (c) 2000-2026 the FFmpeg developers",
+    "numpy": "2.5.2",
+    "python": "3.12.13"
+  },
+  "schema_version": 1,
+  "selection": {
+    "seed": "voxint-whisper-bakeoff-33",
+    "version": "bakeoff-select-v1"
+  },
+  "strata_targets": {
+    "ami_ihm": 15,
+    "synthetic_bait": 5,
+    "synthetic_short_clean": 5,
+    "synthetic_silence": 5,
+    "tedlium3": 15
+  }
+}

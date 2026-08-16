@@ -29,6 +29,10 @@ htmlcov/
 # Except the bundled guided-tutorial sample (package data, must ship in the wheel).
 !src/voxint/tutorial/assets/*.wav
 !tests/parity/fixtures/corpus/*.wav
+# Except the synthetic (CC0) whisper-bakeoff fixtures — silence/bait/short-clean
+# audio IS committed (like the parity corpus); AMI/TED audio never is (the global
+# *.wav rule keeps it out even if it lands in the tree).
+!tests/parity/fixtures/bakeoff/synthetic/*.wav
 # ONNX export artifacts (regenerated via tools/export_titanet_onnx.py; sha256 in
 # tests/parity/fixtures/onnx/provenance.json).
 services/titanet/models/

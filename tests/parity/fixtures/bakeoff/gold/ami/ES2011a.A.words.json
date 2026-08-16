@@ -1,0 +1,830 @@
+{
+  "kind": "ami-nxt-words",
+  "words": [
+    {
+      "end_us": 660000,
+      "start_us": 400000,
+      "text": "that"
+    },
+    {
+      "end_us": 900000,
+      "start_us": 660000,
+      "text": "is"
+    },
+    {
+      "end_us": 1470000,
+      "start_us": 900000,
+      "text": "original"
+    },
+    {
+      "end_us": 1470000,
+      "start_us": 1470000,
+      "text": ","
+    },
+    {
+      "end_us": 2250000,
+      "start_us": 1470000,
+      "text": "trendy"
+    },
+    {
+      "end_us": 2780000,
+      "start_us": 2250000,
+      "text": "and"
+    },
+    {
+      "end_us": 3270000,
+      "start_us": 2780000,
+      "text": "user"
+    },
+    {
+      "end_us": 4270000,
+      "start_us": 3270000,
+      "text": "friendly"
+    },
+    {
+      "end_us": 4270000,
+      "start_us": 4270000,
+      "text": "."
+    },
+    {
+      "end_us": 4790000,
+      "start_us": 4270000,
+      "text": "And"
+    },
+    {
+      "end_us": 4980000,
+      "start_us": 4790000,
+      "text": "to"
+    },
+    {
+      "end_us": 5140000,
+      "start_us": 4980000,
+      "text": "do"
+    },
+    {
+      "end_us": 5920000,
+      "start_us": 5140000,
+      "text": "this"
+    },
+    {
+      "end_us": 5920000,
+      "start_us": 5920000,
+      "text": ","
+    },
+    {
+      "end_us": 6120000,
+      "start_us": 5920000,
+      "text": "we"
+    },
+    {
+      "end_us": 6380000,
+      "start_us": 6120000,
+      "text": "have"
+    },
+    {
+      "end_us": 9200000,
+      "start_us": 6380000,
+      "text": "to"
+    },
+    {
+      "end_us": 9800000,
+      "start_us": 9200000,
+      "text": "um"
+    },
+    {
+      "end_us": 9960000,
+      "start_us": 9800000,
+      "text": "there's"
+    },
+    {
+      "end_us": 10240000,
+      "start_us": 9960000,
+      "text": "certain"
+    },
+    {
+      "end_us": 10520000,
+      "start_us": 10240000,
+      "text": "things"
+    },
+    {
+      "end_us": 10610000,
+      "start_us": 10520000,
+      "text": "we"
+    },
+    {
+      "end_us": 10790000,
+      "start_us": 10610000,
+      "text": "have"
+    },
+    {
+      "end_us": 11190000,
+      "start_us": 10790000,
+      "text": "to"
+    },
+    {
+      "end_us": 11770000,
+      "start_us": 11190000,
+      "text": "consider"
+    },
+    {
+      "end_us": 12300000,
+      "start_us": 11770000,
+      "text": "about"
+    },
+    {
+      "end_us": 12850000,
+      "start_us": 12300000,
+      "text": "functional"
+    },
+    {
+      "end_us": 13430000,
+      "start_us": 12850000,
+      "text": "aspects"
+    },
+    {
+      "end_us": 13720000,
+      "start_us": 13430000,
+      "text": "and"
+    },
+    {
+      "end_us": 14240000,
+      "start_us": 13720000,
+      "text": "conceptual"
+    },
+    {
+      "end_us": 14640000,
+      "start_us": 14240000,
+      "text": "design"
+    },
+    {
+      "end_us": 14720000,
+      "start_us": 14640000,
+      "text": "of"
+    },
+    {
+      "end_us": 14880000,
+      "start_us": 14720000,
+      "text": "the"
+    },
+    {
+      "end_us": 15790000,
+      "start_us": 14880000,
+      "text": "thing"
+    },
+    {
+      "end_us": 15790000,
+      "start_us": 15790000,
+      "text": "."
+    },
+    {
+      "end_us": 17290000,
+      "start_us": 15790000,
+      "text": "So"
+    },
+    {
+      "end_us": 17290000,
+      "start_us": 17290000,
+      "text": "."
+    },
+    {
+      "end_us": 17940000,
+      "start_us": 17290000,
+      "text": "We'll"
+    },
+    {
+      "end_us": 18140000,
+      "start_us": 17940000,
+      "text": "get"
+    },
+    {
+      "end_us": 18290000,
+      "start_us": 18140000,
+      "text": "to"
+    },
+    {
+      "end_us": 19550000,
+      "start_us": 18290000,
+      "text": "that"
+    },
+    {
+      "end_us": 19550000,
+      "start_us": 19550000,
+      "text": "."
+    },
+    {
+      "end_us": 19850000,
+      "start_us": 19550000,
+      "text": "Oh"
+    },
+    {
+      "end_us": 20010000,
+      "start_us": 19850000,
+      "text": "there"
+    },
+    {
+      "end_us": 20070000,
+      "start_us": 20010000,
+      "text": "it"
+    },
+    {
+      "end_us": 20410000,
+      "start_us": 20070000,
+      "text": "is"
+    },
+    {
+      "end_us": 20410000,
+      "start_us": 20410000,
+      "text": "."
+    },
+    {
+      "end_us": 21190000,
+      "start_us": 20410000,
+      "text": "Right"
+    },
+    {
+      "end_us": 21190000,
+      "start_us": 21190000,
+      "text": "."
+    },
+    {
+      "end_us": 21760000,
+      "start_us": 21190000,
+      "text": "Functional"
+    },
+    {
+      "end_us": 22190000,
+      "start_us": 21760000,
+      "text": "design"
+    },
+    {
+      "end_us": 22190000,
+      "start_us": 22190000,
+      "text": ","
+    },
+    {
+      "end_us": 22740000,
+      "start_us": 22190000,
+      "text": "conceptual"
+    },
+    {
+      "end_us": 23220000,
+      "start_us": 22740000,
+      "text": "design"
+    },
+    {
+      "end_us": 23390000,
+      "start_us": 23220000,
+      "text": "and"
+    },
+    {
+      "end_us": 23790000,
+      "start_us": 23390000,
+      "text": "detailed"
+    },
+    {
+      "end_us": 24350000,
+      "start_us": 23790000,
+      "text": "design"
+    },
+    {
+      "end_us": 24350000,
+      "start_us": 24350000,
+      "text": "."
+    },
+    {
+      "end_us": 25300000,
+      "start_us": 24350000,
+      "text": "So"
+    },
+    {
+      "end_us": 25640000,
+      "start_us": 25300000,
+      "text": "throughout"
+    },
+    {
+      "end_us": 25820000,
+      "start_us": 25640000,
+      "text": "our"
+    },
+    {
+      "end_us": 26200000,
+      "start_us": 25820000,
+      "text": "next"
+    },
+    {
+      "end_us": 26520000,
+      "start_us": 26200000,
+      "text": "couple"
+    },
+    {
+      "end_us": 26660000,
+      "start_us": 26520000,
+      "text": "of"
+    },
+    {
+      "end_us": 27210000,
+      "start_us": 26660000,
+      "text": "meetings"
+    },
+    {
+      "end_us": 27570000,
+      "start_us": 27210000,
+      "text": "we'll"
+    },
+    {
+      "end_us": 27790000,
+      "start_us": 27570000,
+      "text": "we'll"
+    },
+    {
+      "end_us": 27900000,
+      "start_us": 27790000,
+      "text": "be"
+    },
+    {
+      "end_us": 28370000,
+      "start_us": 27900000,
+      "text": "covering"
+    },
+    {
+      "end_us": 28590000,
+      "start_us": 28370000,
+      "text": "these"
+    },
+    {
+      "end_us": 30870000,
+      "start_us": 28590000,
+      "text": "things"
+    },
+    {
+      "end_us": 30870000,
+      "start_us": 30870000,
+      "text": "."
+    },
+    {
+      "end_us": 32020000,
+      "start_us": 30870000,
+      "text": "Um"
+    },
+    {
+      "end_us": 32340000,
+      "start_us": 32020000,
+      "text": "so"
+    },
+    {
+      "end_us": 32470000,
+      "start_us": 32340000,
+      "text": "we're"
+    },
+    {
+      "end_us": 32670000,
+      "start_us": 32470000,
+      "text": "gonna"
+    },
+    {
+      "end_us": 32950000,
+      "start_us": 32670000,
+      "text": "try"
+    },
+    {
+      "end_us": 33090000,
+      "start_us": 32950000,
+      "text": "out"
+    },
+    {
+      "end_us": 33220000,
+      "start_us": 33090000,
+      "text": "our"
+    },
+    {
+      "end_us": 33520000,
+      "start_us": 33220000,
+      "text": "white"
+    },
+    {
+      "end_us": 34360000,
+      "start_us": 33520000,
+      "text": "board"
+    },
+    {
+      "end_us": 34360000,
+      "start_us": 34360000,
+      "text": "."
+    },
+    {
+      "end_us": 37810000,
+      "start_us": 37030000,
+      "text": "If"
+    },
+    {
+      "end_us": 38020000,
+      "start_us": 37810000,
+      "text": "we'll"
+    },
+    {
+      "end_us": 38500000,
+      "start_us": 38020000,
+      "text": "all"
+    },
+    {
+      "end_us": 38940000,
+      "start_us": 38500000,
+      "text": "draw"
+    },
+    {
+      "end_us": 39400000,
+      "start_us": 38940000,
+      "text": "our"
+    },
+    {
+      "end_us": 39820000,
+      "start_us": 39400000,
+      "text": "favourite"
+    },
+    {
+      "end_us": 41550000,
+      "start_us": 39820000,
+      "text": "animal"
+    },
+    {
+      "end_us": 41550000,
+      "start_us": 41550000,
+      "text": ","
+    },
+    {
+      "end_us": 41690000,
+      "start_us": 41550000,
+      "text": "to"
+    },
+    {
+      "end_us": 41890000,
+      "start_us": 41690000,
+      "text": "sum"
+    },
+    {
+      "end_us": 42040000,
+      "start_us": 41890000,
+      "text": "up"
+    },
+    {
+      "end_us": 42140000,
+      "start_us": 42040000,
+      "text": "the"
+    },
+    {
+      "end_us": 43020000,
+      "start_us": 42140000,
+      "text": "characteristics"
+    },
+    {
+      "end_us": 43200000,
+      "start_us": 43020000,
+      "text": "of"
+    },
+    {
+      "end_us": 43390000,
+      "start_us": 43200000,
+      "text": "that"
+    },
+    {
+      "end_us": 44100000,
+      "start_us": 43390000,
+      "text": "animal"
+    },
+    {
+      "end_us": 44100000,
+      "start_us": 44100000,
+      "text": "."
+    },
+    {
+      "end_us": 47280000,
+      "start_us": 46850000,
+      "text": "Okay"
+    },
+    {
+      "end_us": 47280000,
+      "start_us": 47280000,
+      "text": "."
+    },
+    {
+      "end_us": 54020000,
+      "start_us": 53160000,
+      "text": "Yeah"
+    },
+    {
+      "end_us": 54020000,
+      "start_us": 54020000,
+      "text": "."
+    },
+    {
+      "end_us": 54840000,
+      "start_us": 54020000,
+      "text": "Both"
+    },
+    {
+      "end_us": 54840000,
+      "start_us": 54840000,
+      "text": "."
+    },
+    {
+      "end_us": 56700000,
+      "start_us": 54840000,
+      "text": "Yeah"
+    },
+    {
+      "end_us": 56700000,
+      "start_us": 56700000,
+      "text": "."
+    },
+    {
+      "end_us": 60840000,
+      "start_us": 60640000,
+      "text": "Any"
+    },
+    {
+      "end_us": 62690000,
+      "start_us": 60840000,
+      "text": "volunteers"
+    },
+    {
+      "end_us": 62690000,
+      "start_us": 62690000,
+      "text": "?"
+    },
+    {
+      "end_us": 62820000,
+      "start_us": 62690000,
+      "text": "Does"
+    },
+    {
+      "end_us": 63080000,
+      "start_us": 62820000,
+      "text": "anyone"
+    },
+    {
+      "end_us": 63190000,
+      "start_us": 63080000,
+      "text": "know"
+    },
+    {
+      "end_us": 63320000,
+      "start_us": 63190000,
+      "text": "what"
+    },
+    {
+      "end_us": 63400000,
+      "start_us": 63320000,
+      "text": "they"
+    },
+    {
+      "end_us": 63650000,
+      "start_us": 63400000,
+      "text": "wanna"
+    },
+    {
+      "end_us": 64960000,
+      "start_us": 63650000,
+      "text": "draw"
+    },
+    {
+      "end_us": 64960000,
+      "start_us": 64960000,
+      "text": "?"
+    },
+    {
+      "end_us": 75530000,
+      "start_us": 74510000,
+      "text": "I"
+    },
+    {
+      "end_us": 75780000,
+      "start_us": 75530000,
+      "text": "don't"
+    },
+    {
+      "end_us": 75950000,
+      "start_us": 75780000,
+      "text": "think"
+    },
+    {
+      "end_us": 76540000,
+      "start_us": 75950000,
+      "text": "so"
+    },
+    {
+      "end_us": 76540000,
+      "start_us": 76540000,
+      "text": "."
+    },
+    {
+      "end_us": 145760000,
+      "start_us": 145480000,
+      "text": "A"
+    },
+    {
+      "end_us": 149330000,
+      "start_us": 145760000,
+      "text": "dolphin"
+    },
+    {
+      "end_us": 149330000,
+      "start_us": 149330000,
+      "text": "."
+    },
+    {
+      "end_us": 149370000,
+      "start_us": 149330000,
+      "text": "'S"
+    },
+    {
+      "end_us": 149490000,
+      "start_us": 149370000,
+      "text": "like"
+    },
+    {
+      "end_us": 149800000,
+      "start_us": 149490000,
+      "text": "playing"
+    },
+    {
+      "end_us": 150510000,
+      "start_us": 149800000,
+      "text": "Pictionary"
+    },
+    {
+      "end_us": 150510000,
+      "start_us": 150510000,
+      "text": "."
+    },
+    {
+      "end_us": 161150000,
+      "start_us": 160980000,
+      "text": "So"
+    },
+    {
+      "end_us": 161310000,
+      "start_us": 161150000,
+      "text": "what"
+    },
+    {
+      "end_us": 162260000,
+      "start_us": 161310000,
+      "text": "characteristics"
+    },
+    {
+      "end_us": 162330000,
+      "start_us": 162260000,
+      "text": "do"
+    },
+    {
+      "end_us": 162440000,
+      "start_us": 162330000,
+      "text": "you"
+    },
+    {
+      "end_us": 162640000,
+      "start_us": 162440000,
+      "text": "like"
+    },
+    {
+      "end_us": 162860000,
+      "start_us": 162640000,
+      "text": "about"
+    },
+    {
+      "end_us": 163000000,
+      "start_us": 162860000,
+      "text": "your"
+    },
+    {
+      "end_us": 166210000,
+      "start_us": 163000000,
+      "text": "animal"
+    },
+    {
+      "end_us": 166210000,
+      "start_us": 166210000,
+      "text": "?"
+    },
+    {
+      "end_us": 178630000,
+      "start_us": 178530000,
+      "text": "They're"
+    },
+    {
+      "end_us": 179250000,
+      "start_us": 178630000,
+      "text": "graceful"
+    },
+    {
+      "end_us": 179250000,
+      "start_us": 179250000,
+      "text": "."
+    },
+    {
+      "end_us": 185480000,
+      "start_us": 182850000,
+      "text": "Sleek"
+    },
+    {
+      "end_us": 185480000,
+      "start_us": 185480000,
+      "text": "."
+    },
+    {
+      "end_us": 189270000,
+      "start_us": 189220000,
+      "text": "I"
+    },
+    {
+      "end_us": 189500000,
+      "start_us": 189270000,
+      "text": "don't"
+    },
+    {
+      "end_us": 189620000,
+      "start_us": 189500000,
+      "text": "know"
+    },
+    {
+      "end_us": 189770000,
+      "start_us": 189620000,
+      "text": "how"
+    },
+    {
+      "end_us": 190410000,
+      "start_us": 189770000,
+      "text": "intelligent"
+    },
+    {
+      "end_us": 190570000,
+      "start_us": 190410000,
+      "text": "that"
+    },
+    {
+      "end_us": 190780000,
+      "start_us": 190570000,
+      "text": "one"
+    },
+    {
+      "end_us": 193880000,
+      "start_us": 190780000,
+      "text": "looks"
+    },
+    {
+      "end_us": 193880000,
+      "start_us": 193880000,
+      "text": "."
+    },
+    {
+      "end_us": 219120000,
+      "start_us": 218960000,
+      "text": "Yes"
+    },
+    {
+      "end_us": 219120000,
+      "start_us": 219120000,
+      "text": "."
+    },
+    {
+      "end_us": 222370000,
+      "start_us": 219120000,
+      "text": "Does"
+    },
+    {
+      "end_us": 222680000,
+      "start_us": 222370000,
+      "text": "anybody"
+    },
+    {
+      "end_us": 222980000,
+      "start_us": 222680000,
+      "text": "else"
+    },
+    {
+      "end_us": 224010000,
+      "start_us": 222980000,
+      "text": "wanna"
+    },
+    {
+      "end_us": 224220000,
+      "start_us": 224010000,
+      "text": "draw"
+    },
+    {
+      "end_us": 224450000,
+      "start_us": 224220000,
+      "text": "their"
+    },
+    {
+      "end_us": 225400000,
+      "start_us": 224450000,
+      "text": "animal"
+    },
+    {
+      "end_us": 225400000,
+      "start_us": 225400000,
+      "text": "?"
+    }
+  ]
+}
