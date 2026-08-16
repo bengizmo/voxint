@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from voxint.app_settings import (
     get_app_settings,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
 from voxint.clients.base import EnhancementRequestSegment, LLMClient, SpeakerNameHint
@@ -164,16 +165,21 @@ def run_llm_name_producer(
     ``client`` to inject a preconfigured client (tests); otherwise one is
     built from settings and closed here. The caller commits.
     """
-    if not (settings.enrichment_names_llm_enabled and settings.llm_enabled):
+    # Resolve the effective endpoint + key from the app_settings row (issue #10): a
+    # UI-stored base_url/model/key win over env, and so does enablement — a UI toggle
+    # applies with no restart, matching enhancement and the other producers. The
+    # endpoint goes into exec_settings so the replay signature, the client, and the
+    # evidence provenance all reflect the model that actually ran; the key is resolved
+    # separately and never persisted.
+    row = get_app_settings(session)
+    if not (
+        settings.enrichment_names_llm_enabled
+        and resolve_effective_llm_enabled(row, settings)
+    ):
         raise NameProducerError(
             "the LLM name pass is disabled — set ENRICHMENT_NAMES_LLM_ENABLED=true"
-            " and LLM_ENABLED=true"
+            " and enable LLM (env LLM_ENABLED or the in-UI toggle)"
         )
-    # Resolve the effective endpoint + key from the app_settings row (issue #10): a
-    # UI-stored base_url/model/key win over env. The endpoint goes into exec_settings
-    # so the replay signature, the client, and the evidence provenance all reflect the
-    # model that actually ran; the key is resolved separately and never persisted.
-    row = get_app_settings(session)
     effective_base_url, effective_model = resolve_effective_llm_endpoint(row, settings)
     exec_settings = settings.model_copy(
         update={"llm_base_url": effective_base_url, "llm_model": effective_model}

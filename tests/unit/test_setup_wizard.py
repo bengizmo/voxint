@@ -199,6 +199,14 @@ def test_normalize_llm_api_key_rejects_inner_whitespace_or_control(bad: str) -> 
         normalize_llm_api_key(bad)
 
 
+@pytest.mark.parametrize("bad", ["sk-héllo", "sk-café", "sk-日本", "sk-\U0001f600"])
+def test_normalize_llm_api_key_rejects_non_ascii(bad: str) -> None:
+    # A non-ASCII key would crash httpx's latin-1 Authorization-header encoding at
+    # run/doctor time; reject it at save so enablement fails closed with a message.
+    with pytest.raises(SetupValidationError, match="printable ASCII"):
+        normalize_llm_api_key(bad)
+
+
 def test_normalize_llm_api_key_rejects_overlong() -> None:
     with pytest.raises(SetupValidationError, match=str(MAX_LLM_KEY_CHARS)):
         normalize_llm_api_key("s" * (MAX_LLM_KEY_CHARS + 1))

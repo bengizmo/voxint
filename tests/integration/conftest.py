@@ -20,7 +20,9 @@ from voxint.db.models import Base
 TEST_DB_URL = os.environ.get("VOXINT_TEST_DATABASE_URL")
 
 
-def seed_onboarded(session_factory: sessionmaker[Session]) -> None:
+def seed_onboarded(
+    session_factory: sessionmaker[Session], *, llm_enabled: bool = False
+) -> None:
     """Mark the app onboarded so the first-run gate lets protected routes through.
 
     The onboarding gate (issue #3) 303s every non-exempt route to ``/setup`` until
@@ -28,9 +30,15 @@ def seed_onboarded(session_factory: sessionmaker[Session]) -> None:
     must start onboarded. Called explicitly by the API client fixtures/builders —
     deliberately NOT a global autouse fixture, because the ``app_settings``
     repository and migration tests assert on the absent-row ("not onboarded") state.
+
+    ``llm_enabled`` seeds the row's LLM enablement. The enrichment gates resolve
+    enablement row-over-env (issue #10), so a test that means to exercise an LLM
+    path must onboard with ``llm_enabled=True`` — an onboarded row with the default
+    ``False`` now correctly closes those gates even when env ``LLM_ENABLED`` is set.
     """
     with session_factory() as session:
-        complete_onboarding(session, llm_enabled_default=False)
+        row = complete_onboarding(session, llm_enabled_default=llm_enabled)
+        row.llm_enabled = llm_enabled
         session.commit()
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

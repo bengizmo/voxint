@@ -228,19 +228,24 @@ def normalize_llm_api_key(raw: str) -> str | None:
     UNTOUCHED — not wipe it). So blank returns ``None`` as a *no-change sentinel*,
     distinct from an explicit removal (the separate ``remove_llm_api_key`` checkbox,
     handled by the route). A non-blank value is stripped of surrounding whitespace,
-    then rejected if it still contains any whitespace or control character (a real
-    API key has neither — this catches paste accidents before the key reaches an
-    ``Authorization`` header) or exceeds :data:`MAX_LLM_KEY_CHARS`. The message is a
-    fixed string and NEVER interpolates the submitted value (it is a credential).
+    then rejected if it still contains any whitespace, control character, or non-ASCII
+    character (a real API key has none — this catches paste accidents before the key
+    reaches an ``Authorization`` header, whose latin-1 encoding would otherwise crash
+    the outbound request at run/doctor time instead of failing closed here) or exceeds
+    :data:`MAX_LLM_KEY_CHARS`. The message is a fixed string and NEVER interpolates the
+    submitted value (it is a credential).
     """
     value = raw.strip()
     if not value:
         return None
     if len(value) > MAX_LLM_KEY_CHARS:
         raise SetupValidationError(f"LLM API key exceeds {MAX_LLM_KEY_CHARS} characters")
-    if any(ch.isspace() or ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+    # Printable ASCII only (0x21-0x7E): rejects whitespace, control chars, and any
+    # non-ASCII code point that httpx cannot encode into the Authorization header.
+    if any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in value):
         raise SetupValidationError(
-            "LLM API key must not contain whitespace or control characters"
+            "LLM API key must contain only printable ASCII characters"
+            " (no whitespace or control characters)"
         )
     return value
 

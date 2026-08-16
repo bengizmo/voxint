@@ -924,7 +924,7 @@ def _research_state(
         "speaker": speaker,
         "job": job,
         "job_active": job is not None and job.status in _ACTIVE_JOB_STATUSES,
-        "gates_open": research_gates_open(settings),
+        "gates_open": research_gates_open(settings, get_app_settings(session)),
         "budget": budget_snapshot(settings),
         "proposed": [v for v in views if v.state is CandidateState.PROPOSED],
         "decided_count": sum(
@@ -1012,7 +1012,7 @@ def _run_assets_state(
         "run_id": run_id,
         "kinds": kinds,
         "any_active": any_active,
-        "gates_open": run_asset_gates_open(settings),
+        "gates_open": run_asset_gates_open(settings, get_app_settings(session)),
         "source_problem": source_problem,
         "error": error,
     }
@@ -1275,6 +1275,10 @@ def _register_routes(app: FastAPI) -> None:
         def _rerender(error: str) -> Response:
             # The key field is a password, never prefilled — so the submitted key is
             # never echoed. Only the non-secret overrides survive the re-render.
+            # `llm_enabled` is NOT overridden: _setup_context reads the persisted row,
+            # so a validation failure that fail-closes shows the checkbox OFF — the
+            # honest state — rather than echoing the submitted intent as if it stuck
+            # (matching /settings/llm).
             return templates.TemplateResponse(
                 request,
                 "setup.html",
@@ -1283,7 +1287,6 @@ def _register_routes(app: FastAPI) -> None:
                     session,
                     WizardStep.LLM,
                     error=error,
-                    llm_enabled=enabled,
                     llm_base_url=llm_base_url or settings.llm_base_url,
                     llm_model=llm_model or settings.llm_model,
                 ),

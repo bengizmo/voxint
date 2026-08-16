@@ -23,6 +23,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   message, or exported. Enabling still fails closed (an unusable key or an
   over-lease budget refuses to enable and shows why); a blank key field leaves the
   saved key untouched, and an explicit "Remove saved key" checkbox reverts to env.
+  LLM **enablement** is resolved the same row-over-env way system-wide — including
+  the enrichment producers, not just transcript enhancement — so turning LLM off in
+  the UI stops enrichment jobs (and auto-generated run assets) with no restart, and
+  the recorded web-research provenance names the endpoint that actually served the
+  request.
 
 ## [0.14.0] - 2026-08-16
 

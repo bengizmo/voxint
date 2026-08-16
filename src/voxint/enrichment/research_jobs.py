@@ -25,11 +25,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.app_settings import (
     get_app_settings,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
-from voxint.db.models import ResearchJob, ResearchJobStatus
+from voxint.db.models import AppSettings, ResearchJob, ResearchJobStatus
 from voxint.enrichment.producers.web_researcher import (
     WebResearcherError,
     build_seed,
@@ -57,13 +58,17 @@ class ResearchJobError(Exception):
     """A job cannot be created or started — gates off, bad target, unknown id."""
 
 
-def research_gates_open(settings: Settings) -> bool:
+def research_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """All three capability gates, together — checked at job creation AND again
-    in the worker, so queued work cannot outlive a capability shutdown."""
+    in the worker, so queued work cannot outlive a capability shutdown.
+
+    LLM enablement is the effective (row-over-env) value so a UI toggle applies with
+    no restart (issue #10); the caller passes the ``app_settings`` row it holds.
+    """
     return (
         settings.enrichment_web_research_enabled
         and settings.voxint_web_research
-        and settings.llm_enabled
+        and resolve_effective_llm_enabled(row, settings)
     )
 
 
@@ -112,10 +117,11 @@ def create_job(
     pipeline_run_id: uuid.UUID | None = None,
 ) -> ResearchJob:
     """Validate and insert a QUEUED job (the caller commits, then publishes)."""
-    if not research_gates_open(settings):
+    if not research_gates_open(settings, get_app_settings(session)):
         raise ResearchJobError(
             "web research is disabled — it needs ENRICHMENT_WEB_RESEARCH_ENABLED,"
-            " VOXINT_WEB_RESEARCH, and LLM_ENABLED all true"
+            " VOXINT_WEB_RESEARCH, and LLM enablement (env LLM_ENABLED or the in-UI"
+            " toggle)"
         )
     try:
         speaker = load_research_speaker(session, speaker_id)
@@ -306,7 +312,7 @@ def execute_job(
         job = claim_job(session, job_id)
         if job is None:
             return
-        if not research_gates_open(settings):
+        if not research_gates_open(settings, get_app_settings(session)):
             _finish(
                 session,
                 job_id,
@@ -354,6 +360,13 @@ def execute_job(
             row = get_app_settings(session)
             live_base_url, live_model = resolve_effective_llm_endpoint(row, settings)
             effective_key = resolve_effective_llm_api_key(row, settings)
+            # Fold the live endpoint into exec_settings so the recorded producer-run
+            # provenance (record_research_outcome below) names the model/base_url that
+            # ACTUALLY served the request, not the env snapshot — matching names_llm.
+            # Budgets stay snapshotted; only the (non-secret) endpoint is made live.
+            exec_settings = exec_settings.model_copy(
+                update={"llm_base_url": live_base_url, "llm_model": live_model}
+            )
             # The snapshotted timeout, not the live one: request_cancel's
             # stale-RUNNING bound is computed from the snapshot, so the client
             # must run under the same value or a settings change between

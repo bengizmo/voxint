@@ -27,11 +27,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.app_settings import (
     get_app_settings,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
-from voxint.db.models import RunAssetJob, RunAssetJobStatus, RunAssetKind
+from voxint.db.models import AppSettings, RunAssetJob, RunAssetJobStatus, RunAssetKind
 from voxint.enrichment.producers.run_assets_llm import (
     CONFIG_SCHEMA_VERSION,
     PAYLOAD_SCHEMA_VERSION,
@@ -68,10 +69,18 @@ class RunAssetJobError(Exception):
     """A job cannot be created or started — gates off, bad target, unknown id."""
 
 
-def run_asset_gates_open(settings: Settings) -> bool:
+def run_asset_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """Checked at job creation AND again in the worker, so queued work cannot
-    outlive a capability shutdown."""
-    return settings.enrichment_run_assets_enabled and settings.llm_enabled
+    outlive a capability shutdown.
+
+    LLM enablement is the effective (row-over-env) value — a UI toggle applies with
+    no restart, matching transcript enhancement and ``voxint doctor`` (issue #10).
+    Callers pass the ``app_settings`` row they already hold via
+    :func:`~voxint.app_settings.get_app_settings`.
+    """
+    return settings.enrichment_run_assets_enabled and resolve_effective_llm_enabled(
+        row, settings
+    )
 
 
 # snapshot key → the Settings field the executor actually reads. The worker
@@ -116,10 +125,10 @@ def create_jobs(
     index itself: each insert runs in a savepoint and an IntegrityError maps
     to the skip (check-then-insert would race).
     """
-    if not run_asset_gates_open(settings):
+    if not run_asset_gates_open(settings, get_app_settings(session)):
         raise RunAssetJobError(
             "run assets are disabled — they need ENRICHMENT_RUN_ASSETS_ENABLED"
-            " and LLM_ENABLED both true"
+            " and LLM enablement (env LLM_ENABLED or the in-UI toggle)"
         )
     if not kinds:
         raise RunAssetJobError("no asset kinds requested")
@@ -301,7 +310,7 @@ def execute_job(
         job = claim_job(session, job_id)
         if job is None:
             return
-        if not run_asset_gates_open(settings):
+        if not run_asset_gates_open(settings, get_app_settings(session)):
             _finish(
                 session,
                 job_id,

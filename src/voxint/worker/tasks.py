@@ -298,13 +298,17 @@ def _autogenerate_run_assets(
     """Opt-in post-finalize step: enqueue asset jobs for kinds that are
     missing or stale. Best-effort by contract — a completed run is COMPLETED
     whatever happens here, so every failure is logged and swallowed."""
-    if not (
-        settings.enrichment_run_assets_autogenerate
-        and asset_jobs.run_asset_gates_open(settings)
-    ):
+    if not settings.enrichment_run_assets_autogenerate:
         return
     try:
         with factory() as session:
+            # Effective (row-over-env) enablement, so a UI disable actually stops
+            # auto-generation — never enqueue LLM work after the operator turned it
+            # off (issue #10). create_jobs re-checks the same gate.
+            if not asset_jobs.run_asset_gates_open(
+                settings, app_settings.get_app_settings(session)
+            ):
+                return
             needed = asset_jobs.kinds_needing_generation(session, run_id)
             if not needed:
                 return

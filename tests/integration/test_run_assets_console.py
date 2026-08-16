@@ -43,7 +43,7 @@ def _build_client(session_factory: sessionmaker[Session], *, gates_open: bool = 
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
-    seed_onboarded(session_factory)
+    seed_onboarded(session_factory, llm_enabled=gates_open)
     return client
 
 

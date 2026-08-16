@@ -48,6 +48,23 @@ def resolve_effective_llm_endpoint(
     return base_url, model
 
 
+def resolve_effective_llm_enabled(row: AppSettings | None, settings: Settings) -> bool:
+    """Effective LLM enablement: the ROW value wins, else env ``LLM_ENABLED``.
+
+    The SINGLE source of the DB-row-wins-over-env precedence for enablement, mirroring
+    :func:`resolve_effective_llm_api_key` for the key. Every capability gate that turns
+    LLM work on or off — transcript enhancement
+    (:func:`voxint.pipeline.stages.context.resolve_run_preferences`), the enrichment
+    producers (run-assets / web-research / LLM names), and ``voxint doctor`` — resolves
+    enablement through here, so a UI toggle applies system-wide with no restart: an
+    operator who enables LLM only in the UI (env ``LLM_ENABLED=false``) gets enrichment
+    jobs too, and one who disables it in the UI (env ``LLM_ENABLED=true``) stops them.
+    """
+    if row is not None:
+        return bool(row.llm_enabled)
+    return settings.llm_enabled
+
+
 def effective_llm_key_source(row: AppSettings | None, settings: Settings) -> str:
     """Where the effective key comes from, for honest UI copy — never its value.
 

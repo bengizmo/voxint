@@ -9,6 +9,7 @@ precedence + canonical-stripping contract the rest of the feature relies on.
 from voxint.app_settings import (
     effective_llm_key_source,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
 from voxint.config import Settings
@@ -20,12 +21,14 @@ def _settings(
     llm_api_key: str = "",
     llm_base_url: str = "https://env.example/v1",
     llm_model: str = "env-model",
+    llm_enabled: bool = False,
 ) -> Settings:
     return Settings(
         _env_file=None,
         llm_api_key=llm_api_key,
         llm_base_url=llm_base_url,
         llm_model=llm_model,
+        llm_enabled=llm_enabled,
     )
 
 
@@ -82,6 +85,26 @@ def test_endpoint_null_row_fields_fall_back_per_field() -> None:
     base, model = resolve_effective_llm_endpoint(row, _settings())
     assert base == "https://row.example/v1"
     assert model == "env-model"  # NULL model falls back independently
+
+
+# ---------------------------------------------- resolve_effective_llm_enabled
+
+
+def test_enabled_none_row_uses_env() -> None:
+    assert resolve_effective_llm_enabled(None, _settings(llm_enabled=True)) is True
+    assert resolve_effective_llm_enabled(None, _settings(llm_enabled=False)) is False
+
+
+def test_enabled_row_disable_wins_over_env_enable() -> None:
+    # A UI disable must stop LLM work even when env LLM_ENABLED=true (issue #10).
+    row = AppSettings(id=1, llm_enabled=False)
+    assert resolve_effective_llm_enabled(row, _settings(llm_enabled=True)) is False
+
+
+def test_enabled_row_enable_wins_over_env_disable() -> None:
+    # A UI enable must turn LLM work on even when env LLM_ENABLED=false.
+    row = AppSettings(id=1, llm_enabled=True)
+    assert resolve_effective_llm_enabled(row, _settings(llm_enabled=False)) is True
 
 
 # ------------------------------------------------- effective_llm_key_source
