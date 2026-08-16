@@ -90,11 +90,12 @@ def test_every_entry_is_sha_bound_to_the_manifest(baseline: dict, by_key: dict) 
         assert key in by_key, f"baseline entry {key} not in manifest"
         m = by_key[key]
         assert entry["audio_sha256"] == m["sha256"], key
-        if entry["dataset"] == "ami_ihm":
-            # AMI ships committed word-gold; the baseline binds to its hash.
-            assert entry["gold_transcript_sha256"] == m["transcript_sha256"], key
-        else:
-            assert entry["gold_transcript_sha256"] is None, key
+        # The baseline binds to committed gold text wherever the manifest has it:
+        # AMI (CC-BY word-gold) and synthetic `short_clean` (CC0 known text) carry
+        # a transcript_sha256; synthetic silence/bait (no speech) carry None. The
+        # baseline must mirror the manifest exactly — gold-bound when gold exists,
+        # None otherwise. (TED is never committed here; see test_no_ted_leakage.)
+        assert entry["gold_transcript_sha256"] == m.get("transcript_sha256"), key
 
 
 def test_both_vad_variants_recorded_with_required_fields(baseline: dict) -> None:
