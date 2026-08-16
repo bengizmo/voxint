@@ -348,6 +348,187 @@ def test_execution_honors_the_budget_snapshot_not_live_settings(
         assert run.config["max_rounds"] == 2
 
 
+class _CancelOnLastReply:
+    """Sets the job's cancel flag while serving the final scripted reply —
+    modeling a cancel that lands during the conclude LLM call, after the
+    loop's last between-round check."""
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session],
+        job_id: uuid.UUID,
+        replies: list[dict[str, object]],
+    ) -> None:
+        self._inner = FakeLLM(replies)
+        self._session_factory = session_factory
+        self._job_id = job_id
+        self._calls_left = len(replies)
+
+    def chat_json(self, messages: object) -> dict[str, object]:
+        self._calls_left -= 1
+        if self._calls_left == 0:
+            with self._session_factory() as session:
+                assert request_cancel(session, self._job_id) is True
+                session.commit()
+        return self._inner.chat_json(messages)  # type: ignore[arg-type]
+
+
+def test_cancel_racing_the_conclude_call_wins_and_keeps_no_drafts(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A cancel set during the final LLM call is invisible to the loop's
+    between-round checks; the pre-persist check must catch it — the job ends
+    CANCELLED and neither the producer run nor the drafts survive."""
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    execute_job(
+        session_factory,
+        job_id,
+        settings=settings,
+        llm=_CancelOnLastReply(
+            session_factory, job_id, [ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK)]
+        ),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.CANCELLED.value
+    assert producer_runs(session_factory) == []
+    with session_factory() as session:
+        assert candidates_for_speaker(session, speaker_id) == []
+
+
+def test_finalization_db_error_lands_failed_not_forever_running(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DB error while recording the outcome must land as an honest FAILED
+    row (closed-vocabulary error), never a forever-RUNNING job."""
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr("voxint.enrichment.research_jobs.record_research_outcome", boom)
+    execute_job(
+        session_factory,
+        job_id,
+        settings=settings,
+        llm=FakeLLM([ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK)]),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.FAILED.value
+    assert job_row.error == "unexpected error (RuntimeError) — see worker logs"
+    assert producer_runs(session_factory) == []
+
+
+class _ForceCancelThenGarbage:
+    """Force-cancels the job (backdate → stale-RUNNING cancel) during the LLM
+    call, then feeds garbage so the worker reaches its FAILED verdict against
+    an already-terminal row."""
+
+    def __init__(self, session_factory: sessionmaker[Session], job_id: uuid.UUID) -> None:
+        self._session_factory = session_factory
+        self._job_id = job_id
+        self._cancelled = False
+
+    def chat_json(self, messages: object) -> dict[str, object]:
+        from datetime import UTC, datetime, timedelta
+
+        if not self._cancelled:
+            self._cancelled = True
+            with self._session_factory() as session:
+                row = session.get(ResearchJob, self._job_id)
+                assert row is not None
+                row.created_at = datetime.now(tz=UTC) - timedelta(hours=3)
+                row.started_at = datetime.now(tz=UTC) - timedelta(hours=2)
+                session.commit()
+            with self._session_factory() as session:
+                assert request_cancel(session, self._job_id) is True
+                session.commit()
+        return {"garbage": 1}
+
+
+def test_late_worker_failure_does_not_clobber_terminal_cancelled(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A force-cancel resolved the row mid-run; the worker's late FAILED
+    verdict must not overwrite the terminal state."""
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    execute_job(
+        session_factory,
+        job_id,
+        settings=settings,
+        llm=_ForceCancelThenGarbage(session_factory, job_id),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.CANCELLED.value
+    assert job_row.error is None  # the late FAILED text never landed
+
+
+class _FlagThenGarbage:
+    """Sets the cooperative cancel flag on the first LLM call, then feeds
+    garbage — the protocol failure and the pending cancel race inside one
+    round, with no between-round check to arbitrate."""
+
+    def __init__(self, session_factory: sessionmaker[Session], job_id: uuid.UUID) -> None:
+        self._session_factory = session_factory
+        self._job_id = job_id
+        self._flagged = False
+
+    def chat_json(self, messages: object) -> dict[str, object]:
+        if not self._flagged:
+            self._flagged = True
+            with self._session_factory() as session:
+                assert request_cancel(session, self._job_id) is True
+                session.commit()
+        return {"garbage": 1}
+
+
+def test_failed_verdict_racing_operator_cancel_resolves_cancelled(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The operator asked for CANCELLED; a worker failure arriving with the
+    flag already set must resolve to that, not FAILED."""
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings()
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    execute_job(
+        session_factory,
+        job_id,
+        settings=settings,
+        llm=_FlagThenGarbage(session_factory, job_id),
+        search_provider=FakeProvider([SEARCH_RESULT]),
+        read_client_factory=page_factory(PAGE_TEXT, []),
+        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+    )
+    job_row = get_job(session_factory, job_id)
+    assert job_row.status == ResearchJobStatus.CANCELLED.value
+
+
 # ------------------------------------------------------------- console routes
 
 

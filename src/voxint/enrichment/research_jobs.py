@@ -16,7 +16,7 @@ non-deterministic web loop is worse than a visible stall.
 
 import logging
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, case, func, select, update
@@ -209,13 +209,15 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
             + float(llm_timeout if isinstance(llm_timeout, (int, float)) else 90.0)
             + STALE_RUNNING_GRACE_SECONDS
         )
-        cutoff = datetime.now(tz=UTC) - timedelta(seconds=bound)
+        # DB clock on BOTH sides: started_at was stamped with now() at claim,
+        # so an app-clock cutoff would reintroduce exactly the skew the claim
+        # path avoided (make_interval's 7th positional argument is seconds).
         session.execute(
             update(ResearchJob)
             .where(
                 ResearchJob.id == job_id,
                 ResearchJob.status == ResearchJobStatus.RUNNING.value,
-                ResearchJob.started_at < cutoff,
+                ResearchJob.started_at < func.now() - func.make_interval(0, 0, 0, 0, 0, 0, bound),
             )
             .values(
                 status=ResearchJobStatus.CANCELLED.value,
@@ -232,13 +234,28 @@ def _finish(
     status: ResearchJobStatus,
     error: str | None = None,
 ) -> None:
+    """Guarded active→terminal CAS — a terminal row is never mutated again
+    (a force-cancel that already resolved the job must not be overwritten by
+    a late worker failure), and a FAILED verdict racing an operator cancel
+    resolves to CANCELLED: the operator asked for exactly that outcome."""
+    resolved: Any = status.value
+    if status is ResearchJobStatus.FAILED:
+        resolved = case(
+            (ResearchJob.cancel_requested.is_(True), ResearchJobStatus.CANCELLED.value),
+            else_=status.value,
+        )
     session.execute(
         update(ResearchJob)
-        .where(ResearchJob.id == job_id)
+        .where(
+            ResearchJob.id == job_id,
+            ResearchJob.status.in_(
+                (ResearchJobStatus.QUEUED.value, ResearchJobStatus.RUNNING.value)
+            ),
+        )
         .values(
-            status=status.value,
+            status=resolved,
             error=error[:MAX_ERROR_CHARS] if error else None,
-            finished_at=datetime.now(tz=UTC),
+            finished_at=func.now(),
         )
     )
     session.commit()
@@ -347,37 +364,66 @@ def execute_job(
             if owned_client is not None:
                 owned_client.close()
 
-        # Atomic finalization: the producer run and the job stamp commit
-        # together, and only while the row is still RUNNING — a force-cancelled
-        # job must not be stamped SUCCEEDED (nor keep its drafts).
-        producer_run = record_research_outcome(
-            session,
-            job_id=job_id,
-            speaker_id=speaker.id,
-            settings=exec_settings,
-            conclusion=conclusion,
-            started_at=started_at,
-        )
-        session.flush()
-        stamped = cast(
-            CursorResult[Any],
-            session.execute(
-                update(ResearchJob)
-                .where(
-                    ResearchJob.id == job_id,
-                    ResearchJob.status == ResearchJobStatus.RUNNING.value,
-                )
-                .values(
-                    status=ResearchJobStatus.SUCCEEDED.value,
-                    producer_run_id=producer_run.id,
-                    searches_used=conclusion.searches_used,
-                    reads_used=conclusion.reads_used,
-                    rounds_used=conclusion.rounds_used,
-                    finished_at=datetime.now(tz=UTC),
-                )
-            ),
-        )
-        if stamped.rowcount != 1:
-            session.rollback()
+        # A cancel that raced the loop's final round wins: check the flag
+        # before persisting anything (the loop's between-round checks cannot
+        # see a flag set after its last read).
+        if should_cancel():
+            _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
             return
-        session.commit()
+
+        # Atomic finalization: the producer run and the job stamp commit
+        # together, and only while the row is still RUNNING with no cancel
+        # pending — a cancel that lands between the check above and this stamp
+        # must win (the drafts roll back with the missed stamp), and so must a
+        # force-cancel (a force-cancelled job must not be stamped SUCCEEDED nor
+        # keep its drafts). The whole block sits under the same failure
+        # umbrella as the loop: a DB error here must land as an honest FAILED
+        # row, never a forever-RUNNING job (there is no recovery sweep).
+        try:
+            producer_run = record_research_outcome(
+                session,
+                job_id=job_id,
+                speaker_id=speaker.id,
+                settings=exec_settings,
+                conclusion=conclusion,
+                started_at=started_at,
+            )
+            session.flush()
+            stamped = cast(
+                CursorResult[Any],
+                session.execute(
+                    update(ResearchJob)
+                    .where(
+                        ResearchJob.id == job_id,
+                        ResearchJob.status == ResearchJobStatus.RUNNING.value,
+                        ResearchJob.cancel_requested.is_(False),
+                    )
+                    .values(
+                        status=ResearchJobStatus.SUCCEEDED.value,
+                        producer_run_id=producer_run.id,
+                        searches_used=conclusion.searches_used,
+                        reads_used=conclusion.reads_used,
+                        rounds_used=conclusion.rounds_used,
+                        finished_at=func.now(),
+                    )
+                ),
+            )
+            if stamped.rowcount != 1:
+                # Cancel won the race; the drafts roll back with us and the
+                # cooperative flag (if the row is still RUNNING) resolves.
+                session.rollback()
+                _finish(session, job_id, status=ResearchJobStatus.CANCELLED)
+                return
+            session.commit()
+        except WebResearcherError as exc:
+            session.rollback()
+            _finish(session, job_id, status=ResearchJobStatus.FAILED, error=str(exc))
+        except Exception as exc:
+            logger.exception("research job %s failed during finalization", job_id)
+            session.rollback()
+            _finish(
+                session,
+                job_id,
+                status=ResearchJobStatus.FAILED,
+                error=f"unexpected error ({type(exc).__name__}) — see worker logs",
+            )

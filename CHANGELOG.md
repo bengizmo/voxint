@@ -20,11 +20,24 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   an already-cancelled run is an idempotent success. Cancel leaves media and
   partial results in place — **delete/archive is a separate, not-yet-built action**.
 
+### Fixed
+- **Research-job finalization guards** (#40 follow-up): `research_jobs`
+  now carries the same terminal-state protections `run_asset_jobs` shipped
+  with in 0.12.0. The success stamp refuses a job with a cancel pending (a
+  cancel landing during the final LLM call previously stamped SUCCEEDED and
+  kept its drafts); finalization runs under the worker's failure umbrella,
+  so a DB error while recording the outcome lands as an honest FAILED row
+  instead of a forever-RUNNING job; `_finish` is a guarded active→terminal
+  CAS — a force-cancelled row is never overwritten by a late worker verdict,
+  and a FAILED verdict racing an operator cancel resolves to CANCELLED. The
+  stale-RUNNING force-cancel cutoff now compares DB clock to DB clock
+  (`now() - make_interval(...)`), closing the clock-skew window the claim
+  path already avoided.
+
 ## [0.12.0] — 2026-08-15
 
 ### Added
 - **In-console run/throughput dashboard** (#13): a new authenticated
-  `GET /dashboard` page (first in the top nav) renders the same aggregates
   `GET /dashboard` page (first in the top nav) renders the same aggregates
   the Prometheus `/metrics` endpoint and `voxint stats` already expose —
   runs by status, the review backlog (runs awaiting adjudication), per-stage
