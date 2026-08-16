@@ -28,6 +28,7 @@ from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings, llm_budget_fits_stage_lease
 from voxint.db.models import AppSettings, ArtifactKind, AudioArtifact, Stage
 from voxint.domain_packs.base import DomainPack, load_default
+from voxint.domain_packs.registry import default_domain_pack
 from voxint.media.netcheck import Resolver
 from voxint.media.ytdlp import Downloader, build_ytdlp_downloader
 from voxint.pipeline.engine import StageFn
@@ -81,6 +82,10 @@ class StageContext:
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     llm_policy: LLMPolicy = LLMPolicy()
+    # The run's resolved domain pack (issue #11). On the process-cached base this is
+    # the DEFAULT pack; apply_run_preferences swaps in the run's frozen snapshot so a
+    # stage can read any fragment via ctx.domain_pack.prompt_fragments.get(key, "").
+    domain_pack: DomainPack = field(default_factory=load_default)
     # Domain-pack prompt fragment appended to the enhancement system prompt.
     enhancement_context: str = ""
     # Effective ASR/enhancement vocabulary for the run (domain pack + user words).
@@ -100,11 +105,10 @@ def build_stage_context(settings: Settings) -> StageContext:
     preserved across runs.
     """
     timeout = settings.gpu_http_timeout_seconds
-    pack = (
-        DomainPack.load(settings.domain_pack_path)
-        if settings.domain_pack_path is not None
-        else load_default()
-    )
+    # The base carries the DEFAULT pack; apply_run_preferences overrides it with the
+    # run's frozen snapshot per run (issue #11), so a legacy (NULL-snapshot) run and
+    # tests that skip apply_run_preferences still see a valid pack.
+    pack = default_domain_pack(settings)
     return StageContext(
         asr=HttpASRClient(settings.asr_url, settings.media_root, timeout),
         diarizer=HttpDiarizerClient(settings.diarizer_url, settings.media_root, timeout),
@@ -135,6 +139,7 @@ def build_stage_context(settings: Settings) -> StageContext:
             run_budget_seconds=settings.llm_run_budget_seconds,
             consecutive_failure_limit=settings.llm_consecutive_failure_limit,
         ),
+        domain_pack=pack,
         enhancement_context=pack.prompt_fragments.get("enhancement_context", ""),
         vocabulary=pack.vocabulary,
         matching_gates=gates_from_settings(settings),
@@ -204,23 +209,28 @@ def _augment_enhancement_context(pack_fragment: str, vocabulary: tuple[str, ...]
 
 
 def apply_run_preferences(
-    base: StageContext, settings: Settings, prefs: RunPreferences
+    base: StageContext, settings: Settings, prefs: RunPreferences, pack: DomainPack
 ) -> StageContext:
-    """Layer ``prefs`` onto the process-cached ``base`` context for one run.
+    """Layer ``prefs`` and the run's ``pack`` onto the cached ``base`` for one run.
 
     Transport clients (asr/diarizer/embedder/downloader) are kept as-is — only the
-    per-run, preference-derived fields are swapped via ``dataclasses.replace``:
-    the pack+user vocabulary, the enhancement context that renders it, and the LLM
-    client. Enabling the LLM without an env key is an honest no-op: the run logs a
-    warning and proceeds with ``llm=None`` (enhancement is best-effort, never a
-    blocker), rather than failing.
+    per-run fields are swapped via ``dataclasses.replace``: the run's domain pack
+    (issue #11), the pack+user vocabulary, the enhancement context that renders it,
+    and the LLM client. ``pack`` is the run's frozen snapshot (or the default for a
+    legacy run), so vocabulary and every prompt fragment come from THAT pack, not
+    the process-cached base — two queued runs with different packs get different
+    contexts in the same worker with no restart. Enabling the LLM without an env
+    key is an honest no-op: the run logs a warning and proceeds with ``llm=None``
+    (enhancement is best-effort, never a blocker), rather than failing.
 
     When enabled, the returned ``llm`` is a freshly built ``HttpLLMClient`` that
     OWNS its ``httpx.Client``; the caller (``run_pipeline``) must ``close()`` it
     after the run so a long-lived worker does not leak a connection pool per run.
     """
-    vocabulary = _dedup_order_preserving((*base.vocabulary, *prefs.vocabulary))
-    enhancement_context = _augment_enhancement_context(base.enhancement_context, vocabulary)
+    vocabulary = _dedup_order_preserving((*pack.vocabulary, *prefs.vocabulary))
+    enhancement_context = _augment_enhancement_context(
+        pack.prompt_fragments.get("enhancement_context", ""), vocabulary
+    )
     # Fail closed on three independent preconditions before building the client:
     #  - the API key must be present (it is env-only, never stored on the row);
     #  - the run budget must still fit the enhance_match lease (the wizard refuses to
@@ -272,7 +282,11 @@ def apply_run_preferences(
             "stage_lease_seconds."
         )
     return dataclasses.replace(
-        base, llm=llm, enhancement_context=enhancement_context, vocabulary=vocabulary
+        base,
+        llm=llm,
+        domain_pack=pack,
+        enhancement_context=enhancement_context,
+        vocabulary=vocabulary,
     )
 
 

@@ -19,6 +19,7 @@ from voxint.db.models import (
     StageStatus,
     TranscriptSegment,
 )
+from voxint.domain_packs.base import load_default
 from voxint.pipeline.engine import submit
 
 
@@ -201,7 +202,7 @@ def test_status_shows_run_and_ledger(
         media = MediaItem(source_path="incoming/s.wav")
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     assert main(["status", str(run_id)]) == 0
     out = capsys.readouterr().out
@@ -218,7 +219,7 @@ def test_requeue_only_failed_runs(
         media = MediaItem(source_path="incoming/r.wav")
         session.add(media)
         session.flush()
-        run = submit(session, media.id)
+        run = submit(session, media.id, domain_pack=load_default().to_mapping())
         run_id = run.id
         session.commit()
 
@@ -265,7 +266,7 @@ def test_requeue_failed_without_stage_refuses_to_guess(
         media = MediaItem(source_path="incoming/corrupt.wav")
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     with session_factory() as session:  # fabricate the impossible FAILED-with-no-stage state
         run = session.get(PipelineRun, run_id)
@@ -297,7 +298,7 @@ def test_requeue_degrades_cleanly_on_broker_outage(
         media = MediaItem(source_path="incoming/rq.wav")
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     with session_factory() as session:
         run = session.get(PipelineRun, run_id)

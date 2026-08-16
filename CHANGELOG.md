@@ -5,6 +5,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Per-run / per-folder domain pack selection** (#11, backend): a run now
+  freezes the resolved domain pack it was submitted with as a JSON snapshot on
+  the run (`pipeline_runs.domain_pack`, migration 0016), stamped write-once at
+  submit. Packs are selected **per watched folder** via a
+  `{media_folder → pack_name}` map on `app_settings` (`folder_domain_packs`) —
+  point a *podcast* folder and an *interview* folder at different packs — with an
+  optional explicit override at submit; an unmapped folder uses the default pack
+  (`DOMAIN_PACK_PATH`, else the bundled `generic`). Multiple named packs can live
+  under a new `DOMAIN_PACKS_DIR` (one child folder per pack, resolved by manifest
+  `name`). The **pipeline worker and the offline name producer both read the
+  run's frozen snapshot**, not the live global env, so late enrichment can never
+  diverge from what transcription used and a manifest edited on disk afterward
+  never changes a past run's result. `DomainPack` gained strict, round-trippable
+  serialization (`to_mapping`/`from_mapping`); a corrupt snapshot degrades to the
+  default pack with a warning rather than wedging the run. Legacy runs
+  (pre-migration, `NULL` snapshot) reproduce the prior global-pack behavior.
+  _(Operator UI for the folder→pack map and additional prompt-fragment consumers
+  land in a follow-up.)_
+
 ## [0.14.0] - 2026-08-16
 
 ### Added

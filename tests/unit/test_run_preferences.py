@@ -16,6 +16,7 @@ import pytest
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint.config import Settings
 from voxint.db.models import AppSettings
+from voxint.domain_packs.base import DomainPack
 from voxint.pipeline.stages.context import (
     StageContext,
     apply_run_preferences,
@@ -43,12 +44,22 @@ def make_settings(
 def make_base_ctx(
     *, vocabulary: tuple[str, ...] = (), enhancement_context: str = ""
 ) -> StageContext:
+    # apply_run_preferences derives vocab + enhancement_context from the run's PACK
+    # (issue #11), so the base pack carries the same fields the assertions expect.
+    pack = DomainPack(
+        name="test",
+        vocabulary=vocabulary,
+        prompt_fragments=(
+            {"enhancement_context": enhancement_context} if enhancement_context else {}
+        ),
+    )
     return StageContext(
         asr=FakeASR(),
         diarizer=FakeDiarizer(),
         embedder=FakeEmbedder(),
         llm=FakeLLM(),
         media_root=Path("/data/media"),
+        domain_pack=pack,
         enhancement_context=enhancement_context,
         vocabulary=vocabulary,
     )
@@ -107,7 +118,7 @@ def test_apply_unions_pack_and_user_vocab_order_preserving() -> None:
     prefs = resolve_run_preferences(
         AppSettings(id=1, vocabulary=["Shared", "User"]), make_settings()
     )
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack)
     assert ctx.vocabulary == ("Pack", "Shared", "User")
 
 
@@ -116,7 +127,7 @@ def test_apply_renders_vocab_into_enhancement_context() -> None:
     prefs = resolve_run_preferences(
         AppSettings(id=1, vocabulary=["Alpha", "Beta"]), make_settings()
     )
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack)
     assert ctx.enhancement_context.startswith("PACK-FRAGMENT")
     assert "Alpha, Beta" in ctx.enhancement_context
 
@@ -124,14 +135,14 @@ def test_apply_renders_vocab_into_enhancement_context() -> None:
 def test_apply_empty_vocab_leaves_enhancement_context_untouched() -> None:
     base = make_base_ctx(vocabulary=(), enhancement_context="PACK-FRAGMENT")
     prefs = resolve_run_preferences(None, make_settings())
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack)
     assert ctx.enhancement_context == "PACK-FRAGMENT"
 
 
 def test_apply_enables_llm_when_prefs_enabled_and_key_present() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
-    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs, base.domain_pack)
     assert ctx.llm is not None
 
 
@@ -139,7 +150,7 @@ def test_apply_disables_llm_without_key_and_warns(caplog: pytest.LogCaptureFixtu
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key=""), prefs)
+        ctx = apply_run_preferences(base, make_settings(llm_api_key=""), prefs, base.domain_pack)
     assert ctx.llm is None
     assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
 
@@ -151,7 +162,7 @@ def test_apply_no_row_enabled_without_key_disables_llm() -> None:
     base = make_base_ctx()
     settings = make_settings(llm_enabled=True, llm_api_key="")
     prefs = resolve_run_preferences(None, settings)
-    ctx = apply_run_preferences(base, settings, prefs)
+    ctx = apply_run_preferences(base, settings, prefs, base.domain_pack)
     assert ctx.llm is None
 
 
@@ -173,7 +184,7 @@ def test_apply_disables_llm_when_budget_exceeds_lease(
     )
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, settings, prefs)
+        ctx = apply_run_preferences(base, settings, prefs, base.domain_pack)
     assert ctx.llm is None
     assert any("lease" in r.message for r in caplog.records)
 
@@ -187,7 +198,7 @@ def test_apply_disables_llm_when_key_is_whitespace(
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key="   "), prefs)
+        ctx = apply_run_preferences(base, make_settings(llm_api_key="   "), prefs, base.domain_pack)
     assert ctx.llm is None
     assert any("LLM_API_KEY is unset" in r.message for r in caplog.records)
 
@@ -206,7 +217,9 @@ def test_apply_disables_llm_when_client_construction_raises(
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
     with caplog.at_level(logging.WARNING):
-        ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+        ctx = apply_run_preferences(
+            base, make_settings(llm_api_key="sk-test"), prefs, base.domain_pack
+        )
     assert ctx.llm is None
     assert any("could not be built" in r.message for r in caplog.records)
 
@@ -214,14 +227,14 @@ def test_apply_disables_llm_when_client_construction_raises(
 def test_apply_disables_llm_when_prefs_disabled() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=False), make_settings())
-    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs)
+    ctx = apply_run_preferences(base, make_settings(llm_api_key="sk-test"), prefs, base.domain_pack)
     assert ctx.llm is None
 
 
 def test_apply_preserves_transport_clients() -> None:
     base = make_base_ctx()
     prefs = resolve_run_preferences(None, make_settings())
-    ctx = apply_run_preferences(base, make_settings(), prefs)
+    ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack)
     assert ctx.asr is base.asr
     assert ctx.diarizer is base.diarizer
     assert ctx.embedder is base.embedder

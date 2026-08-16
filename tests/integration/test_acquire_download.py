@@ -26,6 +26,7 @@ from voxint.db.models import (
     StageRun,
     StageStatus,
 )
+from voxint.domain_packs.base import load_default
 from voxint.ingest.service import requeue_failed_run
 from voxint.media.netcheck import Resolver
 from voxint.media.redaction import MAX_STORED_ERROR_CHARS
@@ -112,7 +113,7 @@ def _make_url_run(
         session.add(media)
         session.flush()
         media_id = media.id
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     return run_id, media_id, sp
 

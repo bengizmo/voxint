@@ -31,6 +31,7 @@ from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings, get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.db.session import build_engine, build_session_factory
+from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment import asset_jobs
 from voxint.enrichment.research_jobs import execute_job
 from voxint.media.reclaim import (
@@ -148,7 +149,11 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     # the next run_pipeline invocation re-reads the row.
     with factory() as session:
         prefs = resolve_run_preferences(app_settings.get_app_settings(session), settings)
-    ctx = apply_run_preferences(base_ctx, settings, prefs)
+        # The run's frozen domain-pack snapshot (issue #11); NULL for a legacy run.
+        run_row = session.get(PipelineRun, run_id)
+        pack_snapshot = run_row.domain_pack if run_row is not None else None
+    pack = domain_pack_from_snapshot(pack_snapshot, settings)
+    ctx = apply_run_preferences(base_ctx, settings, prefs, pack)
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings)

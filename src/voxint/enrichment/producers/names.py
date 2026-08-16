@@ -43,7 +43,7 @@ from voxint.db.models import (
     PipelineRun,
     TranscriptSegment,
 )
-from voxint.domain_packs.base import DomainPack, load_default
+from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment.drafts import (
     MAX_EVIDENCE_ROWS,
     CandidateDraft,
@@ -76,12 +76,6 @@ DETAIL_SCHEMA_VERSION = 1
 
 class NameProducerError(Exception):
     """The producer could not complete an authoritative scan."""
-
-
-def _load_domain_pack(settings: Settings) -> DomainPack:
-    if settings.domain_pack_path is not None:
-        return DomainPack.load(settings.domain_pack_path)
-    return load_default()
 
 
 def _input_signature(
@@ -220,7 +214,11 @@ def run_offline_name_producer(
         ).scalars()
     )
 
-    pack = _load_domain_pack(settings)
+    # Read the pack the run was TRANSCRIBED with (its frozen #11 snapshot), not the
+    # mutable global env — so late enrichment can never diverge from transcription,
+    # and the idempotency signature (which hashes name_seeds) stays stable even if
+    # the pack on disk or DOMAIN_PACK_PATH later changes.
+    pack = domain_pack_from_snapshot(run.domain_pack, settings)
     signature = _input_signature(
         run_id=run_id, name_seeds=pack.name_seeds, metadata=metadata, segments=segments
     )
