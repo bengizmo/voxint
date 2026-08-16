@@ -411,6 +411,11 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `MediaItem.source_path`: that file is shared by every run of the media item,
   so removing it is a separate, refcount-guarded action (a future slice). The
   evidence ledger (adjudication / transcript / diarization rows) is untouched.
+  This is the **manual** counterpart to the scheduled media-retention GC (issue
+  #15, below): the manual action deletes the rows and files on demand, while the
+  GC sweep keeps the `AudioArtifact` row and stamps `reclaimed_at` for audit —
+  use whichever fits, they compose (deleting a run already GC-reclaimed just
+  finds its file already gone).
 
 Beyond these, the console stays **append-only** for evidence: archive hides but
 never deletes rows, media-delete only removes re-derivable audio files (never the
@@ -669,6 +674,52 @@ mutations are gated by their per-run claim token.
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings: re-run the wizard, start/replay/complete the tutorial |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
+
+## Media retention / garbage collection (issue #15; off by default)
+
+Storage grows with every run: the pipeline writes a normalized 16 kHz WAV
+intermediate (`artifacts/{run_id}/normalized.wav`) that transcription and
+diarization read, and nothing reclaims it. When enabled, a beat-scheduled GC
+sweep reclaims that intermediate for **old terminal runs** — it unlinks the WAV
+and stamps the `audio_artifacts` row (`reclaimed_at`, `reclaimed_bytes`) as an
+audit record; the row itself is never deleted.
+
+**What is reclaimed:** only the normalized-audio intermediate of runs that are
+`completed` or `cancelled` and untouched for `MEDIA_RETENTION_SECONDS`.
+
+**What is always kept:** the **source media** (so a reclaimed run stays
+re-processable — re-submit it to regenerate the intermediate and downstream
+results), the transcript, diarization turns, speaker assignments, and the
+immutable adjudication decision ledger. Runs mid-pipeline, `failed`/requeue-able
+runs, the guided-tutorial run, and any file that is also registered as a run's
+source are all excluded.
+
+**It is off by default** — no bytes are reclaimed until you opt in. In the
+console, a run whose intermediate was reclaimed shows a "Media reclaimed on
+`<date>`" notice instead of the audio link, and `GET /media/{run_id}` returns
+`410 Gone`.
+
+```dotenv
+# .env — enable and tune (defaults shown)
+MEDIA_RETENTION_ENABLED=true      # off unless set
+MEDIA_RETENTION_SECONDS=2592000   # 30 d; floor 3600 (1 h)
+GC_SWEEP_SECONDS=3600             # how often the sweep runs
+GC_BATCH_LIMIT=500                # rows per sweep, oldest-first
+```
+
+A backlog drains at `GC_BATCH_LIMIT` rows per `GC_SWEEP_SECONDS` (the sweep
+processes one bounded, oldest-first batch per run and is safe to run
+concurrently — rows are claimed with `FOR UPDATE ... SKIP LOCKED`). To reclaim a
+large accumulated backlog faster, raise `GC_BATCH_LIMIT` or lower
+`GC_SWEEP_SECONDS` until it catches up.
+
+To reclaim a single run's derived audio **immediately** (rather than waiting for
+the sweep), use the manual **Delete derived audio files** action on the run
+detail page (`POST /runs/{id}/media/delete`, issue #5, above). The manual action
+deletes the rows and files outright; the scheduled sweep keeps the row and
+stamps `reclaimed_at` as an audit record. Archived runs remain eligible for the
+sweep — archiving only hides a run from the console, it does not exempt its
+intermediate from reclamation.
 
 ## Backup
 

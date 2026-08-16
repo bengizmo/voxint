@@ -338,6 +338,24 @@ class AudioArtifact(Base):
         CheckConstraint(
             f"kind IN ({_enum_values(ArtifactKind)})", name="audio_artifacts_kind_check"
         ),
+        # Reclamation (issue #15) stamps both columns together or neither — no
+        # half-reclaimed rows to reason about (mirrors the review-claim shape).
+        CheckConstraint(
+            "(reclaimed_at IS NULL) = (reclaimed_bytes IS NULL)",
+            name="audio_artifacts_reclaimed_shape_check",
+        ),
+        CheckConstraint(
+            "reclaimed_bytes IS NULL OR reclaimed_bytes >= 0",
+            name="audio_artifacts_reclaimed_bytes_nonneg_check",
+        ),
+        # Sweep predicate: unreclaimed preprocessed-audio rows for a given run.
+        Index(
+            "ix_audio_artifacts_reclaimable",
+            "pipeline_run_id",
+            postgresql_where=text(
+                "kind = 'preprocessed_audio' AND reclaimed_at IS NULL"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -346,6 +364,11 @@ class AudioArtifact(Base):
     path: Mapped[str] = mapped_column(Text)
     meta: Mapped[dict[str, Any] | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # GC reclamation audit (issue #15): NULL until the sweep unlinks the file on
+    # disk, then the UTC stamp + bytes measured at reclaim time (0 if the file
+    # was already absent). The row itself is never deleted.
+    reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reclaimed_bytes: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class AudioChunk(Base):

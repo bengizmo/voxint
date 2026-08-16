@@ -33,6 +33,11 @@ from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatu
 from voxint.db.session import build_engine, build_session_factory
 from voxint.enrichment import asset_jobs
 from voxint.enrichment.research_jobs import execute_job
+from voxint.media.reclaim import (
+    ReclaimSummary,
+    configured_tutorial_run_id,
+    reclaim_expired_intermediates,
+)
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
@@ -215,6 +220,34 @@ def recovery_sweep() -> dict[str, int]:
         "stale_queued": len(stale_queued),
         "cancelled_claims_closed": len(cancelled_claims),
     }
+
+
+@app.task(name="voxint.gc_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
+def gc_sweep() -> dict[str, int]:
+    """Reclaim expired normalized-audio intermediates for old terminal runs.
+
+    File reclamation only (issue #15): unlink the WAV, stamp the artifact row,
+    keep everything else. OFF unless ``media_retention_enabled`` — the gate is
+    re-checked here (not just at beat registration) so a stale schedule entry
+    can never act. Safe under overlapping sweeps (FOR UPDATE SKIP LOCKED).
+    """
+    settings = get_settings()
+    empty = ReclaimSummary()
+    if not settings.media_retention_enabled:
+        return empty.as_dict()
+    factory, _ = _runtime()
+    cutoff = datetime.now(tz=UTC) - timedelta(seconds=settings.media_retention_seconds)
+    with factory() as session:
+        tutorial_run_id = configured_tutorial_run_id(session)
+        summary = reclaim_expired_intermediates(
+            session,
+            media_root=settings.media_root,
+            cutoff=cutoff,
+            batch_limit=settings.gc_batch_limit,
+            tutorial_run_id=tutorial_run_id,
+        )
+    logger.info("gc_sweep %s", summary.as_dict())
+    return summary.as_dict()
 
 
 @app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

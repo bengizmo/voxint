@@ -1,8 +1,9 @@
 from voxint.clients.errors import ProtocolError, ServiceError
+from voxint.config import Settings
 from voxint.db.models import Stage
 from voxint.pipeline.engine import StageFailedError
-from voxint.worker.app import app
-from voxint.worker.tasks import backoff_seconds, retryable_cause
+from voxint.worker.app import app, build_beat_schedule
+from voxint.worker.tasks import backoff_seconds, gc_sweep, retryable_cause
 
 
 def test_worker_reliability_settings() -> None:
@@ -11,6 +12,36 @@ def test_worker_reliability_settings() -> None:
     assert "voxint.worker.tasks" in app.conf.include
     assert app.conf.broker_transport_options["visibility_timeout"] >= 21600
     assert "recovery-sweep" in app.conf.beat_schedule
+
+
+def test_gc_sweep_beat_entry_is_opt_in() -> None:
+    # OFF by default: no gc-sweep entry unless the operator enables retention.
+    assert "gc-sweep" not in build_beat_schedule(Settings(_env_file=None))
+    enabled = build_beat_schedule(
+        Settings(_env_file=None, media_retention_enabled=True, gc_sweep_seconds=1234)
+    )
+    assert enabled["gc-sweep"] == {"task": "voxint.gc_sweep", "schedule": 1234}
+    assert "recovery-sweep" in enabled  # the recovery sweep is unconditional
+
+
+def test_gc_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The task re-checks the gate itself: disabled → it returns an all-zero
+    # summary and never touches the DB runtime (a stale beat entry can't act).
+    import voxint.worker.tasks as tasks_mod
+
+    monkeypatch.setattr(tasks_mod, "get_settings", lambda: Settings(_env_file=None))
+
+    def _boom() -> None:  # pragma: no cover - must not be called
+        raise AssertionError("_runtime() must not run when retention is disabled")
+
+    monkeypatch.setattr(tasks_mod, "_runtime", _boom)
+    assert gc_sweep() == {
+        "selected": 0,
+        "reclaimed": 0,
+        "missing": 0,
+        "failed": 0,
+        "bytes": 0,
+    }
 
 
 def wrap(cause: Exception) -> StageFailedError:

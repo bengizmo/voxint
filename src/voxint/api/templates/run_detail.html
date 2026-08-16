@@ -85,7 +85,10 @@ up, then requeue.</p>
   {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
   {% if run.status == "completed" %}<a href="/review/{{ run.id }}">Review</a>{% endif %}
   <a href="/runs/{{ run.id }}/export.json">Export (JSON)</a>
-  {% if not audio_available and not transcript_available %}
+  {% if media_reclaimed_at %}
+    <span class="muted">Media reclaimed on {{ media_reclaimed_at.strftime("%Y-%m-%d") }}
+      (transcript and decisions kept; re-run from source to restore audio).</span>
+  {% elif not audio_available and not transcript_available %}
     <span class="muted">No audio or transcript yet.</span>
   {% endif %}
 </p>

@@ -206,6 +206,7 @@ from voxint.ingest import (
     unarchive_run,
     unlink_media_paths,
 )
+from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
     MediaGate,
@@ -1475,6 +1476,12 @@ def _register_routes(app: FastAPI) -> None:
             audio_available = True
         except StageDataError:
             audio_available = False
+        # GC (issue #15) may have reclaimed the normalized-audio intermediate.
+        # The DB row survives, so normalized_audio_path still resolves — but the
+        # file is gone. Suppress the dead audio link and show a reclaimed notice.
+        media_reclaimed_at = run_intermediate_reclaimed_at(session, run_id)
+        if media_reclaimed_at is not None:
+            audio_available = False
         transcript_available = bool(
             session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
         )
@@ -1491,6 +1498,7 @@ def _register_routes(app: FastAPI) -> None:
                 # renders as a neutral placeholder.
                 "provenance": provenance_host(run.media_item.source_url),
                 "audio_available": audio_available,
+                "media_reclaimed_at": media_reclaimed_at,
                 "transcript_available": transcript_available,
                 # Read as a bare boolean (never echoed): a submit/requeue whose
                 # enqueue was deferred by a broker outage redirects here with it.
@@ -2610,6 +2618,10 @@ def _register_routes(app: FastAPI) -> None:
     ) -> Response:
         settings: Settings = request.app.state.settings
         _run_or_404(session, run_id)
+        # Reclaimed intermediates (issue #15): the row survives but the file is
+        # gone — answer 410 Gone, an honest, distinguishable status.
+        if run_intermediate_reclaimed_at(session, run_id) is not None:
+            raise HTTPException(status_code=410, detail="media reclaimed")
         try:
             path = normalized_audio_path(session, run_id, settings.media_root)
         except StageDataError as exc:

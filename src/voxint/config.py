@@ -239,6 +239,32 @@ class Settings(BaseSettings):
     # A QUEUED run untouched this long has no live task on the broker
     # (covers pending retry countdowns; keep it above retry_backoff_max_seconds).
     queued_run_stale_seconds: int = 3600
+
+    # Media retention / garbage collection (issue #15). File reclamation only:
+    # the GC sweep unlinks the large normalized-audio intermediate
+    # (artifacts/{run_id}/normalized.wav) for OLD TERMINAL runs and stamps the
+    # audio_artifacts row (reclaimed_at/reclaimed_bytes). Source media, the
+    # transcript, diarization, and the adjudication ledger are ALWAYS kept, so a
+    # reclaimed run stays re-processable from source. OFF by default — no bytes
+    # are ever reclaimed until an operator opts in.
+    media_retention_enabled: bool = False
+    # Age (since a run was last modified — reaching a terminal state, an
+    # operator note edit, OR a review claim/release, all of which bump
+    # updated_at; enrichment and adjudication decisions write to separate tables
+    # and do NOT) after which a terminal run's normalized-audio intermediate
+    # becomes eligible for reclamation. Keying on updated_at is intentionally
+    # conservative: a run under active review keeps its clock reset, so the
+    # intermediate is only ever reclaimed too LATE, never too early. Only
+    # consulted when media_retention_enabled. Floor 1 h; the 30-day default is a
+    # conservative starting point, tune via env.
+    # NOTE: deliberately NOT tier-scaled (absent from TIER_SCALED_TIMING_FIELDS)
+    # — retention is wall-clock policy, not a compute-tier timing budget.
+    media_retention_seconds: int = Field(default=2592000, ge=3600)  # 30 d
+    # How often the GC sweep runs (only registered on beat when retention is on).
+    gc_sweep_seconds: int = Field(default=3600, ge=60)
+    # Rows reclaimed per sweep, oldest-first — bounds one sweep's work and the
+    # per-sweep IO burst. A backlog drains at gc_batch_limit per gc_sweep_seconds.
+    gc_batch_limit: int = Field(default=500, ge=1)
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With
