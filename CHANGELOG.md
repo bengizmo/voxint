@@ -3,7 +3,7 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes between minors).
 
-## [Unreleased]
+## [0.12.0] — 2026-08-15
 
 ### Added
 - **In-console run/throughput dashboard** (#13): a new authenticated
