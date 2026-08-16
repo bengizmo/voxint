@@ -8,7 +8,7 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ### Added
 - **Per-run / per-folder domain pack selection** (#11, backend): a run now
   freezes the resolved domain pack it was submitted with as a JSON snapshot on
-  the run (`pipeline_runs.domain_pack`, migration 0016), stamped write-once at
+  the run (`pipeline_runs.domain_pack`, migration 0017), stamped write-once at
   submit. Packs are selected **per watched folder** via a
   `{media_folder → pack_name}` map on `app_settings` (`folder_domain_packs`) —
   point a *podcast* folder and an *interview* folder at different packs — with an
@@ -33,6 +33,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   recurring host). Both are fenced as advisory so a pack can guide but never
   override the strict reply schemas, and an absent fragment leaves the prompt
   byte-for-byte unchanged.
+- **In-UI LLM API key** (#10): the optional LLM API key can now be set, replaced,
+  and removed from the setup wizard and the Settings page — no more hand-editing
+  `.env` and restarting the worker just to enable enhancement. The key is stored on
+  the singleton `app_settings` row (migration 0016); precedence mirrors the other
+  LLM settings: a value saved in the UI **wins**, and env `LLM_API_KEY` is the
+  seed/fallback. A single resolver threads the effective key through **every** LLM
+  client — transcript enhancement, the enrichment producers (names / web-research /
+  run-assets), and `voxint doctor` — so a saved key is truly system-wide, and a
+  changed key takes effect on the next run/job with no restart. The endpoint
+  (`base_url`/`model`) a UI action enqueues is snapshotted per job while the key is
+  resolved **live** at execution (never written into a job row). The key is a
+  credential: **plaintext at rest** in Postgres — an accepted trade-off for this
+  single-operator, local-first deployment (a SQL dump necessarily contains it) —
+  and it is never prefilled, rendered back, logged, put in an error/validation
+  message, or exported. Enabling still fails closed (an unusable key or an
+  over-lease budget refuses to enable and shows why); a blank key field leaves the
+  saved key untouched, and an explicit "Remove saved key" checkbox reverts to env.
+  LLM **enablement** is resolved the same row-over-env way system-wide — including
+  the enrichment producers, not just transcript enhancement — so turning LLM off in
+  the UI stops enrichment jobs (and auto-generated run assets) with no restart, and
+  the recorded web-research provenance names the endpoint that actually served the
+  request.
 
 ## [0.14.0] - 2026-08-16
 

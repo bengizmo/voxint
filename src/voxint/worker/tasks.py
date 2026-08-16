@@ -148,12 +148,17 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     # worker restart. A stage retry inside this execute_run reuses this snapshot;
     # the next run_pipeline invocation re-reads the row.
     with factory() as session:
-        prefs = resolve_run_preferences(app_settings.get_app_settings(session), settings)
+        row = app_settings.get_app_settings(session)
+        prefs = resolve_run_preferences(row, settings)
+        # Resolve the effective key (a UI-stored row value wins over env) inside the
+        # session, so it reaches the per-run HttpLLMClient the same no-restart way as
+        # base_url/model. Kept off RunPreferences (which has a repr); passed as a str.
+        llm_api_key = app_settings.resolve_effective_llm_api_key(row, settings)
         # The run's frozen domain-pack snapshot (issue #11); NULL for a legacy run.
         run_row = session.get(PipelineRun, run_id)
         pack_snapshot = run_row.domain_pack if run_row is not None else None
     pack = domain_pack_from_snapshot(pack_snapshot, settings)
-    ctx = apply_run_preferences(base_ctx, settings, prefs, pack)
+    ctx = apply_run_preferences(base_ctx, settings, prefs, pack, llm_api_key=llm_api_key)
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings)
@@ -298,13 +303,17 @@ def _autogenerate_run_assets(
     """Opt-in post-finalize step: enqueue asset jobs for kinds that are
     missing or stale. Best-effort by contract — a completed run is COMPLETED
     whatever happens here, so every failure is logged and swallowed."""
-    if not (
-        settings.enrichment_run_assets_autogenerate
-        and asset_jobs.run_asset_gates_open(settings)
-    ):
+    if not settings.enrichment_run_assets_autogenerate:
         return
     try:
         with factory() as session:
+            # Effective (row-over-env) enablement, so a UI disable actually stops
+            # auto-generation — never enqueue LLM work after the operator turned it
+            # off (issue #10). create_jobs re-checks the same gate.
+            if not asset_jobs.run_asset_gates_open(
+                settings, app_settings.get_app_settings(session)
+            ):
+                return
             needed = asset_jobs.kinds_needing_generation(session, run_id)
             if not needed:
                 return

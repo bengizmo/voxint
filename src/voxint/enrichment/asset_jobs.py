@@ -24,9 +24,21 @@ from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.app_settings import (
+    get_app_settings,
+    resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
+    resolve_effective_llm_endpoint,
+)
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
-from voxint.db.models import PipelineRun, RunAssetJob, RunAssetJobStatus, RunAssetKind
+from voxint.db.models import (
+    AppSettings,
+    PipelineRun,
+    RunAssetJob,
+    RunAssetJobStatus,
+    RunAssetKind,
+)
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment.producers.run_assets_llm import (
     CONFIG_SCHEMA_VERSION,
@@ -64,10 +76,18 @@ class RunAssetJobError(Exception):
     """A job cannot be created or started — gates off, bad target, unknown id."""
 
 
-def run_asset_gates_open(settings: Settings) -> bool:
+def run_asset_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """Checked at job creation AND again in the worker, so queued work cannot
-    outlive a capability shutdown."""
-    return settings.enrichment_run_assets_enabled and settings.llm_enabled
+    outlive a capability shutdown.
+
+    LLM enablement is the effective (row-over-env) value — a UI toggle applies with
+    no restart, matching transcript enhancement and ``voxint doctor`` (issue #10).
+    Callers pass the ``app_settings`` row they already hold via
+    :func:`~voxint.app_settings.get_app_settings`.
+    """
+    return settings.enrichment_run_assets_enabled and resolve_effective_llm_enabled(
+        row, settings
+    )
 
 
 # snapshot key → the Settings field the executor actually reads. The worker
@@ -112,10 +132,10 @@ def create_jobs(
     index itself: each insert runs in a savepoint and an IntegrityError maps
     to the skip (check-then-insert would race).
     """
-    if not run_asset_gates_open(settings):
+    if not run_asset_gates_open(settings, get_app_settings(session)):
         raise RunAssetJobError(
             "run assets are disabled — they need ENRICHMENT_RUN_ASSETS_ENABLED"
-            " and LLM_ENABLED both true"
+            " and LLM enablement (env LLM_ENABLED or the in-UI toggle)"
         )
     if not kinds:
         raise RunAssetJobError("no asset kinds requested")
@@ -125,7 +145,14 @@ def create_jobs(
         load_source(session, pipeline_run_id)  # validates run + transcript exist
     except RunAssetError as exc:
         raise RunAssetJobError(str(exc)) from exc
-    snapshot = job_config_snapshot(settings)
+    # Snapshot the ROW-resolved endpoint (issue #10): the operator's UI base_url /
+    # model are the enqueue contract, so an env change between enqueue and execution
+    # can't silently redirect the call (the #40 snapshot-executes doctrine). The API
+    # KEY is never snapshotted — it is resolved live at execution from the row.
+    base_url, model = resolve_effective_llm_endpoint(get_app_settings(session), settings)
+    snapshot = job_config_snapshot(
+        settings.model_copy(update={"llm_base_url": base_url, "llm_model": model})
+    )
     created: list[RunAssetJob] = []
     already_active: list[RunAssetKind] = []
     for kind in kinds:
@@ -290,7 +317,7 @@ def execute_job(
         job = claim_job(session, job_id)
         if job is None:
             return
-        if not run_asset_gates_open(settings):
+        if not run_asset_gates_open(settings, get_app_settings(session)):
             _finish(
                 session,
                 job_id,
@@ -323,10 +350,14 @@ def execute_job(
         owned_client: HttpLLMClient | None = None
         client: ChatJsonLLM
         if llm is None:
+            # Resolve the effective key LIVE from the row (issue #10): a UI-stored
+            # key wins over env and is never snapshotted into job.config, so a key
+            # rotated after enqueue takes effect on execution with no restart.
+            effective_key = resolve_effective_llm_api_key(get_app_settings(session), settings)
             owned_client = HttpLLMClient(
                 exec_settings.llm_base_url,
                 exec_settings.llm_model,
-                settings.llm_api_key,
+                effective_key,
                 exec_settings.llm_timeout_seconds,
             )
             client = owned_client

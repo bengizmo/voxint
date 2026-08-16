@@ -78,18 +78,26 @@ The wizard is six steps, each optional and revisitable:
 | Welcome | `/setup` | Orientation; no input. |
 | Media folders | `/setup/media` | Register folders under `MEDIA_ROOT` (one relative path per line). An optional **bounded scan** (`/setup/scan`) previews audio/video not yet known to Voxint and batch-registers it for transcription. |
 | Vocabulary | `/setup/vocabulary` | Names, jargon, acronyms, preferred spellings, one per line. Fed to both the Whisper `initial_prompt` and the LLM name-attribution context, so unusual terms transcribe and attribute correctly. |
-| LLM enhancement | `/setup/llm` | Toggle optional transcript enhancement and set an OpenAI-compatible endpoint/model. Best-effort by design: a slow or failing model never blocks a run, and enhancement is skipped. |
+| LLM enhancement | `/setup/llm` | Toggle optional transcript enhancement and set an OpenAI-compatible endpoint/model **and API key**. Best-effort by design: a slow or failing model never blocks a run, and enhancement is skipped. |
 | Model services | `/setup/services` | Live reachability check of the ASR / diarizer / embedder model services (GPU or CPU tier). Advisory only; you can finish regardless. A run submitted while a needed service is down retries with backoff and eventually **fails**; requeue it from the run's page once services are up. |
 | Finish | `/setup/finish` | Commits onboarding, releases the gate, and (if the tutorial is seeded) launches the guided tutorial. |
 
 Two behaviors worth knowing:
 
 - **Preferences apply per run, with no worker restart.** Vocabulary and LLM
-  settings are snapshotted at the start of each pipeline run, so a change takes
-  effect on your *next* submission. You never bounce the worker to reconfigure.
-- **Credentials stay in the environment.** The wizard never stores an
-  `LLM_API_KEY`; it only reports whether one is set. Set it in `.env` and restart
-  the worker before enabling enhancement.
+  settings (endpoint, model, **and API key**) are snapshotted at the start of each
+  pipeline run — and resolved live for enrichment jobs and `voxint doctor` — so a
+  change takes effect on your *next* submission. You never bounce the worker to
+  reconfigure.
+- **The LLM API key can be set in the UI.** Enter it on the LLM step (or later on
+  the Settings page); a saved key **wins** over env `LLM_API_KEY`, which remains the
+  seed/fallback. It applies system-wide — enhancement, the enrichment producers,
+  and `voxint doctor`. Leaving the key field blank keeps the saved key untouched
+  (it is never shown again after saving); a **"Remove saved key"** checkbox reverts
+  to the environment. The key is stored in Voxint's database in plaintext — fine for
+  a single-operator local deployment, but note a database dump/backup contains it —
+  and is never displayed, logged, or exported. You can still keep it env-only if you
+  prefer: set `LLM_API_KEY` in `.env` and leave the UI field blank.
 
 ## 3. Guided tutorial
 
@@ -131,6 +139,11 @@ nav) is the durable entry point for both flows:
 
 - **Re-run the setup wizard** (`/setup`). It never resets existing preferences
   unless you change them.
+- **Manage LLM enhancement** (`POST /settings/llm`). Enable/disable enhancement and
+  set the endpoint, model, and **API key** — the same controls as the wizard's LLM
+  step, available any time after onboarding. A saved key wins over env
+  `LLM_API_KEY`; leave the key field blank to keep the saved one, or tick **"Remove
+  saved key"** to revert to the environment. The form carries its own CSRF token.
 - **Start, replay, or complete the tutorial.** Replay
   (`POST /settings/tutorial/replay`) is **non-destructive**: it walks the sample
   again but preserves your previous rulings on the tutorial run. Completion
@@ -157,7 +170,8 @@ nav) is the durable entry point for both flows:
 - **`voxint tutorial seed` reports an existing run.** It is idempotent by design;
   the bundled sample is seeded once and reused. Use **Replay** from Settings to go
   through it again.
-- **Enhancement won't enable.** Either no `LLM_API_KEY` is set in the environment,
-  or the configured LLM run budget doesn't fit the transcription stage lease. The
-  LLM step reports which, and both are environment/config changes, not wizard
-  state.
+- **Enhancement won't enable.** Either no API key is configured (neither a
+  UI-saved key nor env `LLM_API_KEY`), or the configured LLM run budget doesn't fit
+  the transcription stage lease. The LLM step (and the Settings LLM section) reports
+  which; enter a key in the form to fix the first, and adjust
+  `LLM_RUN_BUDGET_SECONDS`/`STAGE_LEASE_SECONDS` for the second.

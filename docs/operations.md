@@ -517,6 +517,13 @@ VOXINT_WEB_RESEARCH=true      # + WEB_SEARCH_BASE_URL, as above
 LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
 ```
 
+> The LLM endpoint, model, and API key can also be set in the UI (setup wizard /
+> Settings, issue #10) — a UI-saved value wins over these env vars, and the key is
+> resolved live per job. The **`LLM_ENABLED` gate above is env-only for enrichment**:
+> the UI enhancement toggle governs per-run transcript enhancement, not the
+> enrichment producers, so web research and run assets still require
+> `LLM_ENABLED=true` in the environment.
+
 Operate it from the speaker's card on `/speakers`: the "Web research" block
 shows the exact budget a job will run under (`RESEARCH_MAX_SEARCHES=3`,
 `RESEARCH_MAX_READS=5`, `RESEARCH_MAX_ROUNDS=5`,

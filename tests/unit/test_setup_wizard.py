@@ -10,12 +10,14 @@ from pathlib import Path
 import pytest
 
 from voxint.api.setup_wizard import (
+    MAX_LLM_KEY_CHARS,
     MAX_MEDIA_FOLDERS,
     MAX_VOCABULARY_TERM_CHARS,
     MAX_VOCABULARY_TERMS,
     SetupValidationError,
     WizardStep,
     next_step,
+    normalize_llm_api_key,
     normalize_llm_base_url,
     normalize_llm_model,
     normalize_media_folders,
@@ -173,21 +175,78 @@ def test_normalize_llm_model_rejects_overlong() -> None:
         normalize_llm_model("m" * 5000)
 
 
+# ------------------------------------------------------------ llm api key field
+
+
+def test_normalize_llm_api_key_blank_is_none() -> None:
+    # Blank = no-change sentinel (the password field is never prefilled, so an empty
+    # submission must leave the stored key untouched — distinct from removal).
+    assert normalize_llm_api_key("") is None
+    assert normalize_llm_api_key("   ") is None
+
+
+def test_normalize_llm_api_key_strips_surrounding_whitespace() -> None:
+    assert normalize_llm_api_key("  sk-test-123  ") == "sk-test-123"
+
+
+def test_normalize_llm_api_key_passthrough() -> None:
+    assert normalize_llm_api_key("sk-abc_DEF-123") == "sk-abc_DEF-123"
+
+
+@pytest.mark.parametrize("bad", ["sk test", "sk\tabc", "sk\nabc", "sk\x00abc", "sk\x7fabc"])
+def test_normalize_llm_api_key_rejects_inner_whitespace_or_control(bad: str) -> None:
+    with pytest.raises(SetupValidationError, match="whitespace or control"):
+        normalize_llm_api_key(bad)
+
+
+@pytest.mark.parametrize("bad", ["sk-héllo", "sk-café", "sk-日本", "sk-\U0001f600"])
+def test_normalize_llm_api_key_rejects_non_ascii(bad: str) -> None:
+    # A non-ASCII key would crash httpx's latin-1 Authorization-header encoding at
+    # run/doctor time; reject it at save so enablement fails closed with a message.
+    with pytest.raises(SetupValidationError, match="printable ASCII"):
+        normalize_llm_api_key(bad)
+
+
+def test_normalize_llm_api_key_rejects_overlong() -> None:
+    with pytest.raises(SetupValidationError, match=str(MAX_LLM_KEY_CHARS)):
+        normalize_llm_api_key("s" * (MAX_LLM_KEY_CHARS + 1))
+
+
+def test_normalize_llm_api_key_at_cap_passes() -> None:
+    key = "s" * MAX_LLM_KEY_CHARS
+    assert normalize_llm_api_key(key) == key
+
+
+def test_normalize_llm_api_key_message_never_echoes_value() -> None:
+    # A validation message must never carry the submitted secret.
+    secret = "sk-super-secret-value with a space"
+    try:
+        normalize_llm_api_key(secret)
+    except SetupValidationError as exc:
+        assert "sk-super-secret" not in str(exc)
+    else:  # pragma: no cover - the value has a space, so it must raise
+        raise AssertionError("expected rejection")
+
+
 # ------------------------------------------------------------- llm enable guard
 
 
 def test_validate_llm_enable_ok_with_key_and_fitting_budget() -> None:
-    validate_llm_enable(_settings(llm_api_key="sk-test"))  # does not raise
+    # The effective key is passed in (row-wins-over-env resolved by the caller); the
+    # env key on settings is irrelevant to the presence check now.
+    validate_llm_enable("sk-effective", _settings(llm_api_key=""))  # does not raise
 
 
 def test_validate_llm_enable_rejects_missing_key() -> None:
-    with pytest.raises(SetupValidationError, match="LLM_API_KEY"):
-        validate_llm_enable(_settings(llm_api_key="   "))
+    # Empty effective key (no row, no env) → refuse to enable.
+    with pytest.raises(SetupValidationError, match="No LLM API key"):
+        validate_llm_enable("", _settings(llm_api_key=""))
 
 
 def test_validate_llm_enable_rejects_budget_over_lease() -> None:
     # llm_enabled stays False so the env-time validator doesn't fire on construction;
-    # the wizard guard is what must catch the over-lease budget at enable time.
+    # the wizard guard is what must catch the over-lease budget at enable time. A
+    # present effective key gets past the presence check so the budget guard fires.
     settings = _settings(
         llm_api_key="sk-test",
         llm_enabled=False,
@@ -195,4 +254,4 @@ def test_validate_llm_enable_rejects_budget_over_lease() -> None:
         stage_lease_seconds=21600,
     )
     with pytest.raises(SetupValidationError, match="lease"):
-        validate_llm_enable(settings)
+        validate_llm_enable("sk-effective", settings)

@@ -694,7 +694,9 @@ def _build_client(session_factory: sessionmaker[Session], **overrides: object) -
     )
     client = TestClient(create_app(settings=settings, session_factory=session_factory))
     client.auth = CREDS
-    seed_onboarded(session_factory)
+    # Gates resolve enablement row-over-env (issue #10): seed the onboarded row to
+    # match this client's effective env enablement so the gate reflects test intent.
+    seed_onboarded(session_factory, llm_enabled=settings.llm_enabled)
     return client
 
 

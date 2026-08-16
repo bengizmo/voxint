@@ -46,12 +46,9 @@ NOW = datetime.now(tz=UTC)
 
 
 def make_settings(**overrides: object) -> Settings:
-    return Settings(
-        _env_file=None,
-        llm_enabled=True,
-        enrichment_run_assets_enabled=True,
-        **overrides,  # type: ignore[arg-type]
-    )
+    base: dict[str, object] = {"llm_enabled": True, "enrichment_run_assets_enabled": True}
+    base.update(overrides)
+    return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
 def seed_run(session: Session, *, text: str = "Hello, I am Joanne from Acme Corp.") -> uuid.UUID:
@@ -211,6 +208,40 @@ class TestJobs:
                     pipeline_run_id=uuid.uuid4(),
                     kinds=(RunAssetKind.SUMMARY,),
                     settings=make_settings(),
+                )
+
+    def test_create_jobs_honors_row_llm_disable_over_env(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # The enrichment gate resolves enablement row-over-env (issue #10). The env
+        # feature flag (enrichment_run_assets_enabled) itself requires env
+        # llm_enabled=true, so the reachable, security-relevant divergence is a UI
+        # DISABLE: env has LLM on, the operator turns it off in the UI, and no
+        # further enrichment jobs may be enqueued — no restart, no leaked calls.
+        from voxint.app_settings import get_or_create
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            # Baseline: row enabled (matching env) -> gate open.
+            row = get_or_create(session, llm_enabled_default=True)
+            row.llm_enabled = True
+            session.flush()
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=make_settings(llm_enabled=True),
+            )
+            assert len(created) == 1
+            # UI disable (row False) now closes the gate despite env LLM on.
+            row.llm_enabled = False
+            session.flush()
+            with pytest.raises(RunAssetJobError, match="disabled"):
+                create_jobs(
+                    session,
+                    pipeline_run_id=run_id,
+                    kinds=(RunAssetKind.TOPICS,),
+                    settings=make_settings(llm_enabled=True),
                 )
 
     def test_create_jobs_skips_active_kind(self, session_factory: sessionmaker[Session]) -> None:
