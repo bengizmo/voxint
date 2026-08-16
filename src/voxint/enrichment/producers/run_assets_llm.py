@@ -38,8 +38,13 @@ from voxint.enrichment.run_assets import (
 )
 
 PRODUCER_NAME = "run_assets.llm"
-PRODUCER_VERSION = "1"
-PROMPT_VERSION = 1
+# v2: transcript lines now carry the attributed speaker name (resolved through
+# the shared display_name) instead of the raw diarization label, and the
+# entity-mention instruction warns not to treat a speaker prefix as a mention.
+# Both are provenance-only — recorded on new assets, never folded into
+# source_content_hash — so bumping them does not force regeneration.
+PRODUCER_VERSION = "2"
+PROMPT_VERSION = 2
 CONFIG_SCHEMA_VERSION = 1
 PAYLOAD_SCHEMA_VERSION = 1
 
@@ -69,8 +74,10 @@ def render_source(source: RunAssetSource, *, max_chars: int) -> tuple[str, bool]
         lines.append(source.operator_notes)
     lines.append("Transcript:")
     for segment in source.segments:
-        label = segment.diarization_label or "UNKNOWN"
-        lines.append(f"[{segment.segment_index}] {label}: {segment.text}")
+        # ``speaker`` is the attributed name (resolved + sanitized in
+        # load_source); render it verbatim so the prompt and the staleness hash
+        # describe the identical string.
+        lines.append(f"[{segment.segment_index}] {segment.speaker}: {segment.text}")
     document = "\n".join(lines)
     if len(document) <= max_chars:
         return document, False
@@ -105,9 +112,12 @@ _INSTRUCTIONS: dict[str, str] = {
     ),
     RunAssetKind.ENTITY_MENTIONS.value: (
         "List people, organizations, and products explicitly mentioned in the"
-        f" transcript (at most {MAX_MENTIONS}). For each, give the surface"
-        " form and every place it occurs: the segment index (the number in"
-        " brackets) and the EXACT verbatim quote of the mention as it appears"
+        f" transcript (at most {MAX_MENTIONS}). The speaker name before the"
+        " colon on each line labels who is talking — it is NOT part of the"
+        " transcript text, so do not report a speaker as a mention unless the"
+        " name also appears inside a segment's own text. For each, give the"
+        " surface form and every place it occurs: the segment index (the number"
+        " in brackets) and the EXACT verbatim quote of the mention as it appears"
         " in that segment's text (at most"
         f" {MAX_OCCURRENCES_PER_MENTION} occurrences per entity). Reply"
         ' exactly as: {"mentions": [{"surface": "...", "kind": "person" |'

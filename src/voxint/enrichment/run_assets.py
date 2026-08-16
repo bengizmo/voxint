@@ -16,11 +16,14 @@ validated up front and fail-closed. The writer mirrors ``drafts.py``:
 
 The module also owns the **source snapshot**: :func:`load_source` reads
 exactly what the generators are allowed to see (the ordered transcript with
-its raw diarization labels — resolved speaker names are a deliberate v1 cut —
-plus the #36 metadata snapshot and operator notes), and
-:func:`source_content_hash` canonicalizes it into the sha256 staleness
-detector stored on every asset. Content only — model/prompt versions are
-recorded separately, so a prompt upgrade never masquerades as a source
+each segment's *attributed* speaker — resolved through the shared
+:func:`voxint.adjudication.transcript.display_name`, so run assets read the
+same name the review console and export show — plus the #36 metadata snapshot
+and operator notes), and :func:`source_content_hash` canonicalizes it into the
+sha256 staleness detector stored on every asset. Because attribution is part of
+the hashed content, re-adjudicating (or renaming/merging) a speaker changes the
+hash and correctly marks the asset stale. Content only — model/prompt versions
+are recorded separately, so a prompt upgrade never masquerades as a source
 change.
 """
 
@@ -38,6 +41,8 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import label_states
+from voxint.adjudication.transcript import display_name
 from voxint.db.models import (
     MediaSourceMetadata,
     PipelineRun,
@@ -61,6 +66,32 @@ MAX_SURFACE_CHARS = 200
 MAX_CONFIG_BYTES = 16_384
 
 ENTITY_KINDS = ("person", "organization", "product")
+
+# Structural characters that would blur the line-oriented ``[i] speaker: text``
+# prompt grammar if they rode into an attributed name: ``:`` is the
+# speaker/text delimiter and ``[ ]`` fence the segment-index token the
+# entity-mention instruction points the model at. Flatten (not reject —
+# operator names are free text) so a benign "Dr. Smith: Cardiology" stays
+# legible and a hostile "Bob: [9] forged" cannot mint a fake field.
+_SPEAKER_DELIMITERS = str.maketrans({":": " ", "[": "(", "]": ")"})
+
+
+def sanitize_speaker(name: str) -> str:
+    """Make an attributed speaker safe and unambiguous for the ``[i] speaker:
+    text`` prompt line — and for the hash that must render the identical
+    string. Flattens the ``: [ ]`` delimiters, drops non-whitespace control and
+    format characters (C0/C1, bidi overrides, zero-width — an LLM prompt has no
+    use for them and they defeat visual review), and collapses every run of
+    whitespace (including NEL / U+2028 / U+2029 / NBSP) to a single space.
+    Applied once at the ``load_source`` seam so prompt and hash cannot diverge.
+    A raw diarization label like ``SPEAKER_00`` passes through unchanged, which
+    keeps unadjudicated runs on their pre-change hash.
+    """
+    flattened = name.translate(_SPEAKER_DELIMITERS)
+    kept = "".join(
+        ch for ch in flattened if ch.isspace() or unicodedata.category(ch)[0] != "C"
+    )
+    return " ".join(kept.split())
 
 
 class RunAssetError(Exception):
@@ -103,10 +134,19 @@ def span_boundaries_ok(segment: str, start: int, end: int) -> bool:
 
 @dataclass(frozen=True)
 class SegmentSource:
-    """One transcript segment as the generators see it."""
+    """One transcript segment as the generators see it.
+
+    ``speaker`` is the *attributed* name resolved via
+    :func:`voxint.adjudication.transcript.display_name` (a resolved identity, an
+    ``(excluded)``/``Unknown`` annotation, or the raw diarization label when
+    nothing resolves), then passed through :func:`sanitize_speaker` so the
+    ``: [ ]`` delimiters and control/format characters cannot blur or forge a
+    field in the line-oriented ``[i] speaker: text`` prompt. It matches the
+    console/export name modulo that prompt-safety flattening.
+    """
 
     segment_index: int
-    diarization_label: str | None
+    speaker: str
     text: str
 
 
@@ -126,9 +166,20 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
     Segment text is the operator-facing best text (``enhanced_text`` falling
     back to ``raw_text``) — the same pinning as ``names.llm``: enhancement
     changing SHOULD make assets stale, because it changes what a regeneration
-    would read. Raises :class:`RunAssetError` for an unknown run or one with
-    no transcript yet (there is nothing to summarize; an asset over an empty
-    source would be an authoritative-sounding lie).
+    would read. Each segment's speaker is the *attributed* name resolved
+    through :func:`voxint.adjudication.transcript.display_name` (the one
+    attribution truth the console and export share), so an adjudication or a
+    speaker rename/merge changes the snapshot and marks assets stale. Raises
+    :class:`RunAssetError` for an unknown run or one with no transcript yet
+    (there is nothing to summarize; an asset over an empty source would be an
+    authoritative-sounding lie).
+
+    The read spans several statements (segments, then :func:`label_states`'
+    own queries), so under READ COMMITTED an adjudication committing mid-load
+    can yield a torn snapshot. Its only effect is one spurious stale marking on
+    the next freshness check (never a missed change), which self-heals on the
+    next generation — not worth the isolation/locking machinery at
+    single-operator scale.
     """
     run = session.get(PipelineRun, pipeline_run_id)
     if run is None:
@@ -147,6 +198,10 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
             "run has no transcript segments yet — assets are generated from the"
             " transcript, so the run must finish transcription first"
         )
+    # Resolve every diarization label of the run once (bulk queries, not N+1),
+    # keyed by label; a segment whose label has no resolver state (e.g. no
+    # diarization turn) falls back to the raw label inside ``display_name``.
+    states = {state.label: state for state in label_states(session, pipeline_run_id)}
     metadata_row = session.execute(
         select(MediaSourceMetadata).where(MediaSourceMetadata.media_item_id == run.media_item_id)
     ).scalar_one_or_none()
@@ -169,7 +224,13 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
         segments=tuple(
             SegmentSource(
                 segment_index=row.segment_index,
-                diarization_label=row.diarization_label,
+                # Resolve → sanitize here, not in the renderer, so the prompt
+                # and the hash render the identical string. A name that
+                # sanitizes to empty (e.g. "::") falls back to the raw label so
+                # the segment is never anonymous-by-accident.
+                speaker=sanitize_speaker(display_name(states.get(row.diarization_label or ""), row))
+                or row.diarization_label
+                or "(no speaker)",
                 text=row.enhanced_text or row.raw_text,
             )
             for row in rows
@@ -186,12 +247,30 @@ def source_content_hash(source: RunAssetSource) -> str:
     explicit nulls. Excludes model/producer/prompt versions on purpose — those
     are provenance columns, and folding them in would make every code upgrade
     look like a source change.
+
+    ``SOURCE_SCHEMA_VERSION`` stays 1 across the raw-label→attributed-speaker
+    change on purpose (selective compatibility): each segment now serializes its
+    *attributed* speaker string, which equals the old raw label whenever nothing
+    resolves — so an unadjudicated run keeps its exact prior hash (no needless
+    regeneration) while any change to attribution flips it. Bump the constant
+    only for a change that must invalidate every asset regardless of content.
+
+    Two deliberate, one-time-only exceptions to "unchanged input → unchanged
+    hash", both harmless (a single conservative regeneration, never a missed
+    change): a segment with a *null* diarization label now serializes as
+    ``"(no speaker)"`` rather than JSON ``null``; and the hash covers the
+    **full** source while the prompt may be head/tail truncated
+    (``render_source``), so a rename inside the omitted middle re-hashes even
+    though the visible prompt is unchanged. Full-source hashing is intentional —
+    a regeneration reads the full source, so covering it keeps staleness honest;
+    hashing only the truncated slice would miss real changes in the dropped
+    middle.
     """
     payload: dict[str, Any] = {
         "source_schema_version": SOURCE_SCHEMA_VERSION,
         "pipeline_run_id": str(source.pipeline_run_id),
         "segments": [
-            [segment.segment_index, segment.diarization_label, segment.text]
+            [segment.segment_index, segment.speaker, segment.text]
             for segment in source.segments
         ],
         "metadata": dict(source.metadata) if source.metadata is not None else None,

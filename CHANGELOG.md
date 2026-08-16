@@ -54,6 +54,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   action: the sweep keeps the row and stamps `reclaimed_at` (audit), while the
   manual action deletes the `AudioArtifact`/`AudioChunk` rows and files outright.
 
+### Changed
+- **Run enrichment assets read attributed speaker names** (#41 follow-up):
+  the summary / topics / entity-mention generators now see each transcript
+  segment's *adjudicated* speaker — resolved through the same `display_name`
+  the review console and export use — instead of the raw `SPEAKER_00`
+  diarization label. Generated summaries name real speakers, and because the
+  attributed name is part of the hashed source snapshot, re-adjudicating (or
+  renaming/merging) a speaker now correctly marks the run's assets **stale** so
+  they regenerate. An unadjudicated run's hash is unchanged, so nothing
+  regenerates for free (`SOURCE_SCHEMA_VERSION` stays 1); the `run_assets.llm`
+  producer/prompt versions bump to 2 for honest provenance. Operator-set
+  speaker names are sanitized before entering the prompt (the `: [ ]`
+  delimiters are flattened and control/format characters dropped so a name
+  cannot forge a line or a field), and the entity-mention instruction now tells
+  the model the speaker prefix is not part of the transcript text.
+
 ## [0.13.0] — 2026-08-16
 
 ### Added
