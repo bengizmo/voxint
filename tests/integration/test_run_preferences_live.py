@@ -134,7 +134,11 @@ def test_run_pipeline_reapplies_settings_each_invocation(
     captured: list[StageContext] = []
 
     def fake_execute_run(
-        factory: object, run_id: uuid.UUID, stage_fns: dict[Stage, object]
+        factory: object,
+        run_id: uuid.UUID,
+        stage_fns: dict[Stage, object],
+        *,
+        settings: object = None,
     ) -> object:
         # partial(transcribe.run, ctx) — arg 0 is the applied StageContext.
         captured.append(stage_fns[Stage.TRANSCRIBE].args[0])  # type: ignore[attr-defined]
@@ -177,7 +181,9 @@ def test_run_pipeline_closes_per_run_llm_client(
     monkeypatch.setattr(
         worker_tasks,
         "execute_run",
-        lambda factory, run_id, stage_fns: SimpleNamespace(status=RunStatus.COMPLETED),
+        lambda factory, run_id, stage_fns, *, settings=None: SimpleNamespace(
+            status=RunStatus.COMPLETED
+        ),
     )
     # Env supplies the (never-stored) API key so the enabled row actually builds a client.
     monkeypatch.setattr(
