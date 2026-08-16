@@ -109,6 +109,8 @@ up, then requeue.</p>
   <button type="submit">Save notes</button>
 </form>
 
+{% include "fragments/run_assets.html" %}
+
 <h2>Stage ledger</h2>
 {% if not stage_runs %}
 <p class="muted">No stage attempts recorded yet.</p>

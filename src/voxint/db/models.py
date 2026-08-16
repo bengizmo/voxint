@@ -1063,3 +1063,194 @@ class ResearchJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RunAssetKind(enum.StrEnum):
+    SUMMARY = "summary"
+    TOPICS = "topics"
+    ENTITY_MENTIONS = "entity_mentions"
+
+
+class RunAssetJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RunEnrichmentAsset(Base):
+    """One **successful** run-level asset generation (issue #41).
+
+    A whole machine-generated document about a run — a summary, a topic list,
+    or entity mentions — not a reviewable per-field claim (#37 handles those).
+    Rows are inserted only on success by the single sanctioned writer
+    (``enrichment/run_assets.py``); failed attempts live on ``run_asset_jobs``
+    and never consume a generation. Content is immutable: the only permitted
+    mutation is stamping ``superseded_by_asset_id`` once when a newer
+    generation of the *same kind* lands (trigger-enforced, like
+    ``enrichment_candidates``). ``generation`` is monotonic per
+    (pipeline_run_id, asset_kind), allocated under an advisory lock —
+    independence between the three kinds is exactly this per-kind keying.
+
+    ``source_content_hash`` is the staleness detector: a sha256 over the
+    canonical serialization of everything the generator read (the transcript
+    with its raw diarization labels, source metadata, operator notes —
+    resolved speaker names are a deliberate v1 cut) — content only, never
+    model/prompt versions, so a prompt upgrade cannot masquerade as a source
+    change. Stale = recomputed current hash differs. It is deliberately NOT
+    the idempotency key: an operator regenerate on unchanged input is an
+    intentional new generation, never silently suppressed (the #40 lesson);
+    dedup applies only to duplicate delivery of the same job.
+    """
+
+    __tablename__ = "run_enrichment_assets"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "asset_kind",
+            "generation",
+            name="run_enrichment_assets_generation_key",
+        ),
+        UniqueConstraint("idempotency_key", name="run_enrichment_assets_idempotency_key"),
+        CheckConstraint(
+            f"asset_kind IN ({_enum_values(RunAssetKind)})",
+            name="run_enrichment_assets_kind_check",
+        ),
+        CheckConstraint("generation >= 1", name="run_enrichment_assets_generation_check"),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object'",
+            name="run_enrichment_assets_payload_object_check",
+        ),
+        CheckConstraint(
+            "payload_schema_version >= 1",
+            name="run_enrichment_assets_payload_version_check",
+        ),
+        CheckConstraint(
+            "length(trim(producer)) > 0",
+            name="run_enrichment_assets_producer_nonempty_check",
+        ),
+        CheckConstraint(
+            "length(trim(producer_version)) > 0",
+            name="run_enrichment_assets_producer_version_nonempty_check",
+        ),
+        CheckConstraint(
+            "length(trim(model)) > 0",
+            name="run_enrichment_assets_model_nonempty_check",
+        ),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'",
+            name="run_enrichment_assets_source_hash_check",
+        ),
+        CheckConstraint(
+            "(config IS NULL) = (config_schema_version IS NULL)",
+            name="run_enrichment_assets_config_pair_check",
+        ),
+        CheckConstraint(
+            "config IS NULL OR jsonb_typeof(config) = 'object'",
+            name="run_enrichment_assets_config_object_check",
+        ),
+        CheckConstraint(
+            "config_schema_version IS NULL OR config_schema_version >= 1",
+            name="run_enrichment_assets_config_version_check",
+        ),
+        CheckConstraint(
+            "completed_at >= started_at",
+            name="run_enrichment_assets_completed_after_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id"), index=True
+    )
+    asset_kind: Mapped[str] = mapped_column(Text)
+    generation: Mapped[int] = mapped_column(Integer)
+    payload: Mapped[dict[str, Any]] = mapped_column()
+    payload_schema_version: Mapped[int] = mapped_column(Integer)
+    producer: Mapped[str] = mapped_column(Text)
+    producer_version: Mapped[str] = mapped_column(Text)
+    # The exact model identifier the generation ran with (provenance, shown
+    # alongside the payload; a regeneration under a new model is visible here
+    # even when the source hash is unchanged).
+    model: Mapped[str] = mapped_column(Text)
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    config: Mapped[dict[str, Any] | None] = mapped_column()
+    config_schema_version: Mapped[int | None] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(Text)
+    superseded_by_asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("run_enrichment_assets.id")
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RunAssetJob(Base):
+    """One generation attempt for one (run, asset kind) — issue #41.
+
+    Mutable orchestration state only, exactly like ``research_jobs``: the
+    asset *result* is an immutable ``run_enrichment_assets`` row linked via
+    ``asset_id`` when the attempt succeeded. One job = one durable execution;
+    a rerun is a NEW job (the job id anchors the asset's idempotency key).
+    ``status`` moves queued → running (guarded claim UPDATE, duplicate Celery
+    delivery no-ops) → succeeded | failed | cancelled. A failed or cancelled
+    job records NO asset and consumes NO generation, so one kind failing can
+    never block or retire the other kinds' assets — the issue's failure
+    isolation is structural. The partial unique index allows one active job
+    per (run, kind); cancel is deadline-aware (one LLM call + grace) so a
+    crashed RUNNING row cannot hold that slot forever.
+    """
+
+    __tablename__ = "run_asset_jobs"
+    __table_args__ = (
+        # DB-enforced "one active job per (run, kind)": the console's friendly
+        # pre-check is check-then-insert and can race; this index cannot.
+        Index(
+            "run_asset_jobs_one_active_per_run_kind",
+            "pipeline_run_id",
+            "asset_kind",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        CheckConstraint(
+            f"asset_kind IN ({_enum_values(RunAssetKind)})",
+            name="run_asset_jobs_kind_check",
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(RunAssetJobStatus)})",
+            name="run_asset_jobs_status_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(config) = 'object'",
+            name="run_asset_jobs_config_object_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="run_asset_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="run_asset_jobs_finished_requires_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id"), index=True
+    )
+    asset_kind: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=RunAssetJobStatus.QUEUED.value)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Snapshot of the execution settings this job was started under (model,
+    # endpoint, input bound) — the worker reconstructs from this, so a
+    # settings change between enqueue and execution never silently applies.
+    config: Mapped[dict[str, Any]] = mapped_column()
+    # Bounded, redacted failure summary (closed vocabulary + safe detail only).
+    error: Mapped[str | None] = mapped_column(Text)
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("run_enrichment_assets.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

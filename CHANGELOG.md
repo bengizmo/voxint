@@ -17,6 +17,46 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
   throughput window (same span/ISO-8601 syntax as `voxint stats --since`),
   degrading to 24 h if malformed rather than erroring; the page auto-refreshes
   every 15 s via an htmx fragment poll with no external assets.
+- **Run-level enrichment assets** (#41): on-demand LLM-generated **summary**,
+  **topics**, and **entity mentions** per run — three independently
+  versioned, independently failing whole-document assets, distinct from the
+  #37 per-field claim/review model. New `run_enrichment_assets` table
+  (migration 0012): success-only, immutable rows (append-only trigger; the
+  one permitted mutation is the write-once supersession stamp), keyed
+  `(run, kind, generation)` with a monotonic per-kind generation allocated
+  under an advisory lock — regenerate supersedes, never edits, and failed
+  attempts consume no generation. Every asset records producer + version,
+  the exact model, a schema-versioned config snapshot (including whether the
+  input was truncated), and a **source-content hash** over the canonical
+  serialization of everything the generator read (transcript with
+  attribution, #36 metadata, operator notes) — staleness is detectable by
+  recomputing it, and the console/export flag stale assets explicitly.
+  Entity mentions are grounded spans: offsets are never trusted from the
+  model — each quote is located verbatim in its referenced segment
+  (word-boundary, case-insensitive fallback), unlocatable or out-of-run
+  spans are dropped with recorded diagnostics, and a reply whose every span
+  fails grounding fails the job rather than recording an authoritative
+  empty. Topic entries reserve null `vocabulary`/`term_id` fields for the
+  future domain-pack vocabularies (#11) without a schema change. Durable
+  `run_asset_jobs` rows carry queued→running→terminal status per kind (one
+  active job per (run, kind), DB-enforced by a partial unique index) with
+  deadline-aware cancel; one Celery task per asset, no automatic retries.
+  Run detail page gets a "Run assets" block (generate all / per-kind
+  regenerate, 3 s polling while active, stale badges, machine-generated
+  labeling); the `/runs/{id}/export.json` envelope gains an additive
+  `enrichment_assets` key (schema_version stays 1). CLI:
+  `voxint enrich assets <run_id> [--kind …]` runs inline without a broker.
+  **Off by default**: `ENRICHMENT_RUN_ASSETS_ENABLED=false` requires
+  `LLM_ENABLED` (validated at startup, re-checked in the worker). Optional
+  post-finalize step `ENRICHMENT_RUN_ASSETS_AUTOGENERATE` enqueues the
+  three kinds when a run completes, skipping kinds whose current asset
+  already matches the source; best-effort, never fails the run. New
+  setting `RUN_ASSETS_MAX_INPUT_CHARS` bounds the rendered prompt document
+  (head+tail truncation, recorded on the asset).
+
+## [0.11.0] — 2026-08-15
+
+### Added
 - **Web-research speaker profile enrichment** (#40): the `web_researcher`
   producer — an operator-initiated, per-speaker research job driving a
   budgeted LLM tool loop over exactly three tools (#39's `web_search` +
@@ -683,7 +723,8 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/bengizmo/voxint/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/bengizmo/voxint/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/bengizmo/voxint/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/bengizmo/voxint/compare/v0.7.0...v0.8.0

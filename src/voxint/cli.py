@@ -455,6 +455,56 @@ def _research_speaker(args: argparse.Namespace) -> int:
     return 0
 
 
+def _enrich_assets(args: argparse.Namespace) -> int:
+    """Generate run-level assets inline (issue #41).
+
+    The same code path the worker runs — durable job rows, one strict-JSON
+    LLM call per kind, immutable asset rows — executed synchronously so
+    headless operation and integration tests need no broker. Kinds run
+    independently: one failing is reported and the rest still run (exit 1 if
+    any failed)."""
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.models import RunAssetJob, RunAssetKind
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.enrichment.asset_jobs import RunAssetJobError, create_jobs, execute_job
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+    kinds = tuple(
+        RunAssetKind(value)
+        for value in (args.kind or ["summary", "topics", "entity_mentions"])
+    )
+    factory = build_session_factory(build_engine(settings.database_url))
+    with factory() as session:
+        try:
+            created, already_active = create_jobs(
+                session, pipeline_run_id=args.run_id, kinds=kinds, settings=settings
+            )
+            session.commit()
+            job_ids = [(job.id, job.asset_kind) for job in created]
+        except RunAssetJobError as exc:
+            print(f"error: {exc}")
+            return 2
+    for kind in already_active:
+        print(f"{kind.value}: skipped — a job is already active for this run")
+    failures = 0
+    for job_id, kind_value in job_ids:
+        print(f"job {job_id}: generating {kind_value} ...")
+        execute_job(factory, job_id, settings=settings)
+        with factory() as session:
+            finished = session.get(RunAssetJob, job_id)
+            assert finished is not None
+            print(f"{kind_value}: {finished.status}")
+            if finished.error:
+                print(f"error: {finished.error}")
+            if finished.status != "succeeded":
+                failures += 1
+    return 1 if failures else 0
+
+
 def _research_search(args: argparse.Namespace) -> int:
     """One provider query via the controlled retrieval capability (issue #39).
 
@@ -1003,6 +1053,19 @@ def build_parser() -> argparse.ArgumentParser:
         " ENRICHMENT_NAMES_LLM_ENABLED and LLM_ENABLED; uses the env LLM config)",
     )
     names_p.set_defaults(fn=_enrich_names)
+    assets_p = enrich_sub.add_parser(
+        "assets",
+        help="generate run-level assets — summary, topics, entity mentions"
+        " (issue #41; requires ENRICHMENT_RUN_ASSETS_ENABLED + LLM_ENABLED)",
+    )
+    assets_p.add_argument("run_id", type=uuid.UUID, help="pipeline run UUID")
+    assets_p.add_argument(
+        "--kind",
+        action="append",
+        choices=["summary", "topics", "entity_mentions"],
+        help="asset kind to generate (repeatable; default: all three)",
+    )
+    assets_p.set_defaults(fn=_enrich_assets)
 
     research_p = sub.add_parser(
         "research",
