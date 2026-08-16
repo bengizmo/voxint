@@ -60,9 +60,39 @@ def upgrade() -> None:
         "adjudication_decisions",
         "decision != 'inherit' OR transcript_segment_id IS NOT NULL",
     )
+    # Segment scope carries only assign or inherit (belt-and-suspenders for the
+    # writer, which the route already enforces).
+    op.create_check_constraint(
+        "adjudication_decisions_segment_decision_check",
+        "adjudication_decisions",
+        "transcript_segment_id IS NULL OR decision IN ('assign', 'inherit')",
+    )
 
 
 def downgrade() -> None:
+    # Dropping the scope column would silently PROMOTE every per-segment override
+    # into a whole-label ruling (and 'inherit' rows can't satisfy the pre-0017
+    # decision CHECK). Refuse rather than corrupt: the operator must remove the
+    # segment-scope rows deliberately first (they are permanent human rulings, so
+    # this migration will not delete them for you).
+    bind = op.get_bind()
+    scoped = bind.execute(
+        sa.text(
+            "SELECT count(*) FROM adjudication_decisions"
+            " WHERE transcript_segment_id IS NOT NULL"
+        )
+    ).scalar_one()
+    if scoped:
+        raise RuntimeError(
+            f"cannot downgrade past 0017: {scoped} per-segment override ruling(s) "
+            "exist. Removing them is a deliberate, destructive act — do it "
+            "explicitly before downgrading."
+        )
+    op.drop_constraint(
+        "adjudication_decisions_segment_decision_check",
+        "adjudication_decisions",
+        type_="check",
+    )
     op.drop_constraint(
         "adjudication_decisions_inherit_segment_check",
         "adjudication_decisions",

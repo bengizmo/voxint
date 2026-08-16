@@ -89,6 +89,10 @@ def enroll_new_speaker(
             existing.pipeline_run_id != run_id
             or existing.diarization_label != diarization_label
             or existing.operator != operator
+            # A segment-scope ruling reusing this key is NOT a label enrollment
+            # replay (issue #54 Phase B) — never adopt it as this enrollment's
+            # outcome.
+            or existing.transcript_segment_id is not None
         ):
             raise ConflictingReplayError(idempotency_key)
         return EnrollmentResult(

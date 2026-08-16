@@ -2220,6 +2220,10 @@ def _register_routes(app: FastAPI) -> None:
             decision = Decision(action)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=f"unknown action {action!r}") from exc
+        # `inherit` is a segment-scope reset only — never a whole-label ruling
+        # (the DB CHECK would otherwise reject it as a raw 500).
+        if decision not in (Decision.ASSIGN, Decision.EXCLUDE, Decision.UNKNOWN):
+            raise HTTPException(status_code=422, detail=f"invalid label action {action!r}")
         if (decision is Decision.ASSIGN) != (speaker_id is not None):
             raise HTTPException(
                 status_code=422, detail="assign requires speaker_id; others forbid it"

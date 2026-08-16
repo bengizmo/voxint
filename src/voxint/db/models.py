@@ -640,6 +640,13 @@ class AdjudicationDecision(Base):
             "decision != 'inherit' OR transcript_segment_id IS NOT NULL",
             name="adjudication_decisions_inherit_segment_check",
         ),
+        # Segment scope carries only assign or inherit; exclude/unknown are
+        # label-scope concepts (the relabel route already enforces this — this is
+        # the persistence-boundary backstop).
+        CheckConstraint(
+            "transcript_segment_id IS NULL OR decision IN ('assign', 'inherit')",
+            name="adjudication_decisions_segment_decision_check",
+        ),
         # Batch-load the per-run segment overlay in one indexed pass.
         Index(
             "ix_adjudication_decisions_run_segment",

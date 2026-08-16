@@ -316,6 +316,74 @@ def test_inherit_is_db_constrained_to_segment_scope(
         session.flush()
 
 
+def test_label_decision_rejects_inherit(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """`inherit` is segment-scope only — the label endpoint refuses it (422, not 500)."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    resp = client.post(
+        f"/review/{run_id}/labels/S0/decision",
+        data={"token": token, "nonce": uuid.uuid4().hex, "action": "inherit"},
+        headers=HX,
+    )
+    assert resp.status_code == 422
+
+
+def test_enrollment_rejects_segment_scoped_key_reuse(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """A nonce spent on a segment override is not a valid label-enrollment replay."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    other = add_speaker(session_factory, "Other Person")
+    segs = segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+    # Spend a nonce on a segment override, then try to reuse it as a label enroll.
+    seg_nonce = uuid.uuid4().hex
+    client.post(
+        f"/review/{run_id}/segments/{segs[1]}/relabel",
+        data={"token": token, "nonce": seg_nonce, "action": "assign", "speaker_id": str(other)},
+        headers=HX,
+    )
+    resp = client.post(
+        f"/review/{run_id}/labels/S1/enroll",
+        data={"token": token, "nonce": seg_nonce, "display_name": "Brand New"},
+        headers=HX,
+    )
+    assert resp.status_code == 409
+    with session_factory() as session:
+        # No speaker was created off the back of the segment row.
+        assert session.execute(
+            select(Speaker).where(Speaker.display_name == "Brand New")
+        ).scalar_one_or_none() is None
+
+
+def test_segment_scope_exclude_is_db_rejected(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from voxint.adjudication.ledger import record_decision
+    from voxint.db.models import Decision
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    segs = segment_ids(session_factory, run_id)
+    with session_factory() as session, pytest.raises(IntegrityError):
+        record_decision(
+            session,
+            pipeline_run_id=run_id,
+            diarization_label="S0",
+            decision=Decision.EXCLUDE,
+            operator="op",
+            idempotency_key=uuid.uuid4().hex,
+            transcript_segment_id=segs[0],  # exclude at segment scope -> CHECK fails
+        )
+        session.flush()
+
+
 def test_workbench_renders_two_scope_controls(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
