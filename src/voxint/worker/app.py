@@ -12,9 +12,10 @@ settings = get_settings()
 def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
     """Beat entries for this configuration.
 
-    The recovery sweep always runs; the media-retention GC sweep (issue #15) is
-    opt-in — only scheduled when the operator has enabled it (the task re-checks
-    the gate as a backstop, so a stale entry can never act).
+    The recovery sweep always runs; the media-retention GC sweep (issue #15) and
+    the run-webhook delivery sweep (issue #12) are opt-in — only scheduled when
+    the operator has enabled each (both tasks re-check their gate as a backstop,
+    so a stale entry can never act).
     """
     schedule: dict[str, dict[str, Any]] = {
         "recovery-sweep": {
@@ -26,6 +27,11 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
         schedule["gc-sweep"] = {
             "task": "voxint.gc_sweep",
             "schedule": settings.gc_sweep_seconds,
+        }
+    if settings.notify_enabled:
+        schedule["notify-sweep"] = {
+            "task": "voxint.notify_sweep",
+            "schedule": settings.notify_sweep_seconds,
         }
     return schedule
 

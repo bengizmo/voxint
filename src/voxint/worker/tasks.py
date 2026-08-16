@@ -38,6 +38,7 @@ from voxint.media.reclaim import (
     configured_tutorial_run_id,
     reclaim_expired_intermediates,
 )
+from voxint.notify.delivery import DeliverySummary, deliver_due
 from voxint.pipeline.engine import (
     INTERRUPTED_PREFIX,
     StageFailedError,
@@ -249,6 +250,26 @@ def gc_sweep() -> dict[str, int]:
             tutorial_run_id=tutorial_run_id,
         )
     logger.info("gc_sweep %s", summary.as_dict())
+    return summary.as_dict()
+
+
+@app.task(name="voxint.notify_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
+def notify_sweep() -> dict[str, int]:
+    """Deliver due run-webhook rows (issue #12).
+
+    Claims a batch of pending/lapsed ``notification_deliveries`` rows and POSTs
+    each as a signed webhook outside any DB transaction. OFF unless
+    ``notify_enabled`` — the gate is re-checked here (not just at beat
+    registration) so a stale schedule entry can never send. Safe under
+    overlapping sweeps (FOR UPDATE SKIP LOCKED + a per-claim lease).
+    """
+    settings = get_settings()
+    empty = DeliverySummary()
+    if not settings.notify_enabled:
+        return empty.as_dict()
+    factory, _ = _runtime()
+    summary = deliver_due(factory, settings)
+    logger.info("notify_sweep %s", summary.as_dict())
     return summary.as_dict()
 
 

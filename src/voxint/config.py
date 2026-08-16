@@ -296,6 +296,11 @@ class Settings(BaseSettings):
     # synchronous requeue (recovery/retry) can settle and the row be suppressed
     # rather than sent as a misleading "failed". Applies to FAILED only.
     notify_failed_initial_delay_seconds: int = Field(default=15, ge=0)
+    # Retry backoff between failed delivery attempts: base * 2^(attempt-1),
+    # capped, plus jitter (mirrors the stage-retry idiom, but a distinct knob so
+    # webhook cadence is not coupled to pipeline-stage retry cadence).
+    notify_backoff_base_seconds: float = Field(default=10.0, gt=0)
+    notify_backoff_max_seconds: float = Field(default=600.0, gt=0)
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With
