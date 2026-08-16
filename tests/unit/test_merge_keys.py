@@ -29,7 +29,8 @@ def test_child_key_is_deterministic_and_per_label() -> None:
     c = _child_key("nonce123", ["S0", "S1"], "S1")  # different label
     assert a == b
     assert a != c
-    assert a.startswith("nonce123:") and a.endswith(":S0")
+    # Namespaced away from the decide/enroll routes' bare nonce.
+    assert a.startswith("merge:nonce123:") and a.endswith(":S0")
 
 
 def test_child_key_binds_to_the_label_set() -> None:
@@ -52,5 +53,6 @@ def test_apply_requires_exactly_one_target() -> None:
                 operator="op",
                 nonce="nonce123",
                 gates=None,  # type: ignore[arg-type]
+                expected={},  # required now; the XOR guard fires before it is read
                 **kwargs,
             )

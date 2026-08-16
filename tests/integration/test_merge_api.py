@@ -268,6 +268,215 @@ def test_merge_shows_distinct_roster_note(
     assert "/speakers" in preview.text  # routes the global act to its reviewed home
 
 
+def test_merge_partial_expected_is_rejected(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """A confirm whose expected-state omits a merged label must not slip through.
+
+    Dropping the drifted label from `expected` was the optimistic-concurrency
+    bypass: only-supplied-entries were checked. The set-equality guard rejects it.
+    """
+    import json
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        known_id = session.execute(select(Speaker.id)).scalars().one()
+
+    token = claim_token(client, run_id)
+    preview = client.post(
+        f"/review/{run_id}/merge/preview",
+        data={"token": token, "labels": ["S0", "S1"], "target": str(known_id)},
+        headers=HX,
+    )
+    fields = hidden_fields(preview.text)
+    # Drift S1, then try to sneak the confirm past by omitting S1 from expected.
+    client.post(
+        f"/review/{run_id}/labels/S1/decision",
+        data={"token": token, "nonce": uuid.uuid4().hex, "action": "exclude"},
+        headers=HX,
+    )
+    exp = json.loads(str(fields["expected"]))
+    del exp["S1"]
+    fields["expected"] = json.dumps(exp)
+    fields["nonce"] = uuid.uuid4().hex
+    resp = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
+    assert resp.status_code == 409
+    with session_factory() as session:
+        rows = session.execute(
+            select(AdjudicationDecision).where(
+                AdjudicationDecision.pipeline_run_id == run_id
+            )
+        ).scalars().all()
+        # Only the S1 exclude — the stale merge wrote nothing.
+        assert len(rows) == 1 and rows[0].decision == "exclude"
+
+
+def test_single_colliding_child_row_does_not_skip_drift_check(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """One pre-existing child row must NOT classify a fresh merge as a replay.
+
+    The replay guard requires ALL child keys to exist; a single matching row
+    (here planted through the bare-nonce decide route at the merge's namespaced
+    child key) leaves the drift check armed, so a stale label is still caught.
+    """
+    import json
+
+    from voxint.adjudication import merge as merge_mod
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        known_id = session.execute(select(Speaker.id)).scalars().one()
+
+    token = claim_token(client, run_id)
+    nonce = "mergenonce1"
+    ck_s0 = merge_mod._child_key(nonce, ["S0", "S1"], "S0")
+    # Plant exactly one of the merge's child rows via the decide route.
+    planted = client.post(
+        f"/review/{run_id}/labels/S0/decision",
+        data={"token": token, "nonce": ck_s0, "action": "assign", "speaker_id": str(known_id)},
+        headers=HX,
+    )
+    assert planted.status_code == 200
+    with session_factory() as session:
+        s0_row_id = session.execute(
+            select(AdjudicationDecision.id).where(
+                AdjudicationDecision.idempotency_key == ck_s0
+            )
+        ).scalars().one()
+    # S1 drifts to exclude AFTER the operator's notional preview (which saw None).
+    client.post(
+        f"/review/{run_id}/labels/S1/decision",
+        data={"token": token, "nonce": uuid.uuid4().hex, "action": "exclude"},
+        headers=HX,
+    )
+    resp = client.post(
+        f"/review/{run_id}/merge",
+        data={
+            "token": token,
+            "nonce": nonce,
+            "labels": ["S0", "S1"],
+            "speaker_id": str(known_id),
+            "expected": json.dumps({"S0": str(s0_row_id), "S1": None}),
+        },
+        headers=HX,
+    )
+    assert resp.status_code == 409  # drift on S1 caught despite S0's child row existing
+    with session_factory() as session:
+        s1_rows = session.execute(
+            select(AdjudicationDecision).where(
+                AdjudicationDecision.pipeline_run_id == run_id,
+                AdjudicationDecision.diarization_label == "S1",
+            )
+        ).scalars().all()
+        # S1 was never reassigned by the merge; only its exclude stands.
+        assert [r.decision for r in s1_rows] == ["exclude"]
+
+
+def test_merge_enroll_new_skips_ineligible_primary(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Enroll-new picks a label with embeddable turns, not merely the largest.
+
+    A high-turn but embedding-less label must not 400 a merge another selected
+    label could enroll from.
+    """
+    from voxint.db.models import DiarizationTurn, TranscriptSegment
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        # S2: MORE turns than S1, but all skipped (no embeddings) -> ineligible.
+        for i in range(5):
+            session.add(
+                DiarizationTurn(
+                    pipeline_run_id=run_id,
+                    turn_index=100 + i,
+                    start_seconds=float(200 + i * 5),
+                    end_seconds=float(200 + i * 5 + 4),
+                    label="S2",
+                    embedding=None,
+                    skip_reason="too_short",
+                )
+            )
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run_id,
+                segment_index=100,
+                start_seconds=200.0,
+                end_seconds=204.0,
+                raw_text="mumble",
+                diarization_label="S2",
+            )
+        )
+        session.commit()
+
+    token = claim_token(client, run_id)
+    preview = client.post(
+        f"/review/{run_id}/merge/preview",
+        data={"token": token, "labels": ["S1", "S2"], "target": "new", "new_name": "Eligible Pick"},
+        headers=HX,
+    )
+    assert preview.status_code == 200
+    fields = hidden_fields(preview.text)
+    fields["nonce"] = uuid.uuid4().hex
+    apply = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
+    assert apply.status_code == 200
+    assert apply.text.count("assigned: Eligible Pick") == 2
+    with session_factory() as session:
+        person = session.execute(
+            select(Speaker).where(Speaker.display_name == "Eligible Pick")
+        ).scalars().one()
+        embeddings = session.execute(select(SpeakerEmbedding)).scalars().all()
+        # Exactly one centroid, minted from S1 (the eligible label), not S2.
+        assert len(embeddings) == 1
+        assert embeddings[0].speaker_id == person.id
+        assert embeddings[0].source_diarization_label == "S1"
+
+
+def test_merge_enroll_new_all_ineligible_is_400(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    from voxint.db.models import DiarizationTurn, TranscriptSegment
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        for j, label in enumerate(["X0", "X1"]):
+            session.add(
+                DiarizationTurn(
+                    pipeline_run_id=run_id,
+                    turn_index=200 + j,
+                    start_seconds=float(300 + j * 5),
+                    end_seconds=float(300 + j * 5 + 4),
+                    label=label,
+                    embedding=None,
+                    skip_reason="too_short",
+                )
+            )
+            session.add(
+                TranscriptSegment(
+                    pipeline_run_id=run_id,
+                    segment_index=200 + j,
+                    start_seconds=float(300 + j * 5),
+                    end_seconds=float(300 + j * 5 + 4),
+                    raw_text="mm",
+                    diarization_label=label,
+                )
+            )
+        session.commit()
+
+    token = claim_token(client, run_id)
+    preview = client.post(
+        f"/review/{run_id}/merge/preview",
+        data={"token": token, "labels": ["X0", "X1"], "target": "new", "new_name": "Nope"},
+        headers=HX,
+    )
+    fields = hidden_fields(preview.text)
+    fields["nonce"] = uuid.uuid4().hex
+    resp = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
+    assert resp.status_code == 400
+    assert "embedded turns" in resp.text
+
+
 def test_merge_apply_rejects_archived_survivor(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

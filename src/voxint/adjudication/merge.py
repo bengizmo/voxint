@@ -48,7 +48,7 @@ from voxint.db.models import (
     Speaker,
     TranscriptSegment,
 )
-from voxint.speakers.matching import MatchingGates
+from voxint.speakers.matching import MatchingGates, eligible_label_vectors
 from voxint.speakers.roster import is_active
 
 
@@ -107,18 +107,22 @@ class MergeResult:
 
 
 def _labels_digest(labels: list[str]) -> str:
-    """Stable 8-hex digest of the label SET (order-independent).
+    """Stable 64-bit-hex digest of the label SET (order-independent).
 
-    Folded into each child idempotency key so replaying the nonce with a
-    *different* label set collides on a mismatched payload (loud
-    ``ConflictingReplayError`` -> 409) instead of half-applying under reused keys.
+    Folded into each child idempotency key so the key set for a merge of one
+    label set is disjoint from the key set for any other label set under the same
+    nonce — different merges never share a child row. 64 bits keeps a chance
+    collision between two distinct sets negligible.
     """
     joined = "\x00".join(sorted(set(labels)))
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:8]
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:16]
 
 
 def _child_key(nonce: str, labels: list[str], label: str) -> str:
-    return f"{nonce}:{_labels_digest(labels)}:{label}"
+    # ``merge:`` namespaces these keys away from the bare nonce the single-label
+    # decide/enroll routes use, so a merge child row can never be mistaken for a
+    # decide row (or vice versa) in the replay probe.
+    return f"merge:{nonce}:{_labels_digest(labels)}:{label}"
 
 
 def _validate_labels(states: dict[str, LabelState], labels: list[str]) -> list[str]:
@@ -211,14 +215,16 @@ def apply_merge(
     gates: MatchingGates,
     target_speaker_id: uuid.UUID | None = None,
     target_name: str | None = None,
-    expected: dict[str, uuid.UUID | None] | None = None,
+    expected: dict[str, uuid.UUID | None],
 ) -> MergeResult:
     """Rule that ``labels`` are one speaker in this run, atomically.
 
     Exactly one of ``target_speaker_id`` (assign to an existing active roster
     identity) or ``target_name`` (enroll a new speaker from the labels) must be
-    given. The caller owns the transaction and MUST already hold the run's claim
-    lock; everything here commits or rolls back as one.
+    given. ``expected`` is the per-label effective-ruling snapshot the operator
+    saw at preview — its keys MUST be exactly the merged label set. The caller
+    owns the transaction and MUST already hold the run's claim lock; everything
+    here commits or rolls back as one.
     """
     if (target_speaker_id is None) == (target_name is None):
         raise MergeError("choose exactly one target: an existing speaker or a new name")
@@ -226,27 +232,36 @@ def apply_merge(
     states = {s.label: s for s in label_states(session, run_id)}
     clean = _validate_labels(states, labels)
 
+    # The expected-state snapshot must describe EXACTLY the labels being merged —
+    # not a subset (which would let a drifted label slip through unchecked) and
+    # not a superset (stale form). Anything else means the confirm no longer
+    # matches its preview.
+    if set(expected) != set(clean):
+        raise MergeConflictError(
+            "the confirm no longer matches its preview — refresh and re-preview"
+        )
+
     # Optimistic concurrency, replay-aware ordering. The claim token proves
     # ownership, not that the ledger is unchanged since the preview — so on a
     # FRESH apply we verify the previewed rulings still hold. But a genuine
     # replay (double-click, network retry) arrives after this operation already
     # rewrote these labels to its OWN rulings, so the previewed expected-state no
-    # longer matches; enforcing it then would 409 a legitimate retry. Detect the
-    # replay via our deterministic child keys and skip the check — record_decision
-    # then returns the original rows and the outcome is unchanged.
-    is_replay = (
-        session.execute(
-            select(func.count())
-            .select_from(AdjudicationDecision)
-            .where(
-                AdjudicationDecision.idempotency_key.in_(
-                    [_child_key(nonce, clean, label) for label in clean]
-                )
+    # longer matches; enforcing it then would 409 a legitimate retry. A replay is
+    # ONLY when EVERY child ruling of this exact (nonce, label set) already
+    # exists; a partial or single-row match (e.g. one pre-existing row) is NOT a
+    # replay and must still be drift-checked, so a stale label can never slip
+    # through on the back of one colliding row.
+    existing_children = session.execute(
+        select(func.count())
+        .select_from(AdjudicationDecision)
+        .where(
+            AdjudicationDecision.idempotency_key.in_(
+                [_child_key(nonce, clean, label) for label in clean]
             )
-        ).scalar_one()
-        > 0
-    )
-    if expected is not None and not is_replay:
+        )
+    ).scalar_one()
+    is_replay = existing_children == len(clean)
+    if not is_replay:
         _check_expected(session, run_id, expected)
 
     created_speaker = False
@@ -268,11 +283,19 @@ def apply_merge(
             )
         assign_labels = clean
     else:
-        # Enroll a new speaker from the label with the most turns (the strongest
-        # centroid source), then assign the rest to it. enroll_new_speaker mints
-        # the centroid + the first assign ruling; the remaining labels are plain
-        # assigns to that new id.
-        primary = max(clean, key=lambda label: states[label].turn_count)
+        # Enroll a new speaker from a label that actually has embedded turns to
+        # build a centroid from, preferring the one with the most turns. Choosing
+        # blindly by turn count could pick a label with NO eligible turns and 400
+        # a merge another selected label could have enrolled. If none is eligible
+        # the whole merge is refused cleanly (before any speaker is created).
+        eligible = eligible_label_vectors(session, run_id, gates)
+        enrollable = [label for label in clean if label in eligible]
+        if not enrollable:
+            raise MergeError(
+                "none of the selected labels have embedded turns to enroll a new "
+                "speaker from — assign them to an existing speaker instead"
+            )
+        primary = max(enrollable, key=lambda label: states[label].turn_count)
         try:
             enrolled = enroll_new_speaker(
                 session,

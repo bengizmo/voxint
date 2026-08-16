@@ -2334,9 +2334,9 @@ def _register_routes(app: FastAPI) -> None:
         token: Annotated[uuid.UUID, Form()],
         nonce: Annotated[str, Form(min_length=8, max_length=64)],
         labels: Annotated[list[str], Form()],
+        expected: Annotated[str, Form()],
         speaker_id: Annotated[uuid.UUID | None, Form()] = None,
         display_name: Annotated[str | None, Form()] = None,
-        expected: Annotated[str | None, Form()] = None,
     ) -> Response:
         """Rule that several labels are one speaker in this run — atomically.
 
@@ -2355,18 +2355,16 @@ def _register_routes(app: FastAPI) -> None:
         # unused target entirely, but normalise defensively so the XOR check sees
         # a clean None rather than an empty string.
         display_name = (display_name or "").strip() or None
-        expected_ids: dict[str, uuid.UUID | None] | None = None
-        if expected is not None:
-            try:
-                raw = json.loads(expected)
-                expected_ids = {
-                    str(label): (uuid.UUID(value) if value is not None else None)
-                    for label, value in raw.items()
-                }
-            except (ValueError, AttributeError, TypeError) as exc:
-                raise HTTPException(
-                    status_code=422, detail="malformed expected-state"
-                ) from exc
+        try:
+            raw = json.loads(expected)
+            if not isinstance(raw, dict):
+                raise TypeError("expected-state must be a JSON object")
+            expected_ids: dict[str, uuid.UUID | None] = {
+                str(label): (uuid.UUID(value) if value is not None else None)
+                for label, value in raw.items()
+            }
+        except (ValueError, AttributeError, TypeError) as exc:
+            raise HTTPException(status_code=422, detail="malformed expected-state") from exc
         settings: Settings = request.app.state.settings
         try:
             apply_merge(
