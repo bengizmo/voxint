@@ -405,6 +405,54 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   cached per path/size/mtime). Single-range HTTP semantics: 206/416,
   open-ended and suffix forms; multipart ranges are ignored per RFC.
 
+## Frontend islands (issue #48)
+
+Jinja owns every page; interactive regions are React **islands** mounted into
+server-rendered markup. This extends the review console — it is not a new
+subsystem and adds no page routing.
+
+- **Vite, not Astro (settled decision).** Plain Vite v6 multi-entry + React 19
+  + Tailwind v3, `vite build` only. Astro's value is its own page/SSR
+  rendering, content collections, and `.astro` format — all unused here, since
+  Jinja renders every page and mounting into a foreign template engine still
+  means hand-writing `createRoot(el).render(...)` against `data-*` points. Vite's
+  multi-entry + `manifest.json` output is the first-class workflow for compiling
+  independent TS/TSX entries into content-hashed bundles that some *other* system
+  embeds; it has no server-runtime concept, so nothing can reach for a Node
+  adapter that would violate "no Node at operator runtime". It also keeps the
+  npm supply-chain surface (every `npm audit` line) smaller. **Trade-off (honest):**
+  if voxint ever wants genuinely server-rendered `.astro` pages we'd migrate then
+  — cheap, because the React components are framework-agnostic beyond their mount
+  call — and we accept hand-writing the ~20-line manifest→`<script>`/`<link>`
+  lookup on the Python side as the price of not carrying an unused meta-framework.
+- **Progressive enhancement is the contract.** The server HTML is the fallback,
+  fully usable with JS disabled or the asset route unbuilt; islands are additive
+  and replace only their region's *visual* role once hydrated. An island that
+  fails to hydrate degrades one region, never the page — the server markup inside
+  its mount div stays visible. The transcript page demonstrates this: a native
+  `<audio>` plus the segment list, active segment highlighted on `timeupdate`,
+  over the same `{% for ln in lines %}` loop the JS-off page renders.
+- **Auth-aware asset route, never a `StaticFiles` mount.** Bundles serve through
+  `GET /static/app/{path}` carrying the operator auth dependency on every byte —
+  a mount would bypass it, and "everything but `/healthz` authenticates" is
+  absolute. The route resolves+contains the untrusted path (traversal/symlink
+  escapes 404 before any filesystem read) and sets `immutable` caching only for
+  Vite-hashed filenames. A contract test pins the absence of any `StaticFiles`
+  import/instantiation.
+- **Build-stage boundary.** The Dockerfile's `node:22-slim` stage builds the
+  bundles and is then discarded; only `dist/` is COPYed into the Python image
+  before `uv sync --no-editable`, so the wheel packages the static tree. No Node
+  binary ships — empirically verifiable via `docker history` /
+  `command -v node` in the runtime image.
+- **Mount convention #49–#59 extend, not reinvent.** `base.html` pulls one
+  shared module (`main.ts`) that scans for `[data-island]` nodes and
+  dynamically imports only the bundles present; a page carries an island by
+  emitting `<div data-island="name" data-props='{...}'>` with a server-rendered
+  fallback inside. Adding an island never edits `base.html`. Islands read props
+  via `readProps()` and call voxint's own routes through the shared
+  `api-client.ts` `apiFetch`, whose `ApiError` mirrors FastAPI's `{detail}`
+  shape — the seam #54/#55 consume for capability-aware responses.
+
 ## Worker orchestration (P3)
 
 One Celery task, `voxint.run_pipeline`, drives a run through all stages via

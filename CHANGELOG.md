@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Frontend island foundation** (#48): prebuilt Vite/React/Tailwind bundles
+  served through the auth-aware `/static/app` route (never a `StaticFiles`
+  mount — the operator auth invariant stays absolute), a read-only audio-synced
+  transcript island that highlights the playing segment over its server-rendered
+  fallback, and the shared `data-island` + dynamic-import mount convention plus
+  `api-client.ts` error seam for #49+. Node exists only in the Dockerfile build
+  stage; no Node ships at runtime. A new CI `frontend` job gates
+  lint/typecheck/build/audit and the offline no-CDN check.
 - **In-UI LLM API key** (#10): the optional LLM API key can now be set, replaced,
   and removed from the setup wizard and the Settings page — no more hand-editing
   `.env` and restarting the worker just to enable enhancement. The key is stored on

@@ -49,6 +49,19 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
 
 ### Release gates wired into the workflow
 
+- **`frontend`** (CI, issue #48) runs `npm ci` → lint → typecheck → `npm run
+  build` (which includes `tsc --noEmit`, `vite build`, and the no-CDN
+  `check-no-cdn-urls.mjs` offline-self-host check over the built `dist/` bytes)
+  → `npm audit --omit=dev --audit-level=high`. It gates merge on the same
+  footing as `ruff`/`mypy`/`pytest` and runs independently (no Postgres
+  coupling). It is a **required status check** on `main`. The Dockerfile runs
+  the identical frontend build stage as part of the single image build, so no
+  standalone release job is needed — building in both CI and the Dockerfile is
+  intentional (CI fails fast without a full Docker build; the Dockerfile stage
+  is what ships). A version bump needs **no** frontend rebuild unless
+  `frontend/` changed. Frontend dependency provenance: capture
+  `npm ls --all --json` (or `npm sbom`) as a release artifact, mirroring the
+  ONNX/pyannote provenance discipline; each new npm dep is justified in its PR.
 - **`parity-gate`** runs the strict titanet ONNX parity harness
   (`VOXINT_PARITY_REQUIRED=1`) natively on both amd64 and arm64 runners, and
   blocks every multi-arch build. The NeMo/CUDA reference side stays a
@@ -153,6 +166,10 @@ model assets) voids it for the gate it feeds.
    `org.opencontainers.image.source` label, but confirm it: fetch each
    manifest with an anonymous GHCR token and expect 200. Optionally
    `docker run --rm ghcr.io/bengizmo/voxint:X.Y.Z python -c "import voxint; print(voxint.__version__)"`.
+   Frontend smoke (issue #48): the review console loads with Tailwind styling
+   and the transcript-player island hydrates over its server-rendered fallback;
+   `docker run --rm ghcr.io/bengizmo/voxint:X.Y.Z sh -c 'command -v node || echo NO-NODE'`
+   prints `NO-NODE`, proving no Node ships in the runtime image.
 6. **PyPI**: `rm -rf dist && uv build && uv publish --token <pypi-token> dist/*`,
    then check `https://pypi.org/pypi/voxint/json` reports the new version.
 7. **GitHub Release**: `gh release create vX.Y.Z --title "Voxint vX.Y.Z" --notes …`
