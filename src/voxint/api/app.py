@@ -84,6 +84,7 @@ from voxint.api.csrf import (
 from voxint.api.health_probe import probe_services
 from voxint.api.playback import (
     MediaResolutionError,
+    playback_capability,
     resolve_servable_media,
 )
 from voxint.api.runs_query import (
@@ -1736,9 +1737,14 @@ def _register_routes(app: FastAPI) -> None:
         # (issue #48) reuses the already-auth-gated, Range-capable GET /media
         # for its <audio src>; no new backend route.
         lines = attributed_transcript(session, run_id, text=variant)
+        settings: Settings = request.app.state.settings
+        # Fail-closed seek gating (issue #55): the island only offers per-line
+        # playback when GET /media would truly serve and the timeline is sound.
+        capability = playback_capability(session, run, settings, _get_media_gate(request))
         island_props = {
             "runId": str(run_id),
             "mediaUrl": f"/media/{run_id}",
+            "capability": capability.to_props(),
             "segments": [
                 {
                     "start": ln.start_seconds,

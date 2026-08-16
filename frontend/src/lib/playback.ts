@@ -10,6 +10,22 @@ export const MIN_RATE = 0.5;
 export const MAX_RATE = 2.0;
 const RATE_KEY = "voxint.playbackRate";
 
+// The JSON shape emitted by the backend `PlaybackCapability.to_props()` (issue
+// #55). Shared by every island that gates seeking on it.
+export interface CapabilityReason {
+  code: string;
+  message: string;
+}
+
+export interface PlaybackCapability {
+  seekEnabled: boolean;
+  mediaDuration: number | null;
+  reasons: CapabilityReason[];
+}
+
+// Discrete speed steps offered by the speed control, within [MIN_RATE, MAX_RATE].
+export const RATE_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+
 interface ActiveTurn {
   audio: HTMLAudioElement;
   onTimeUpdate: () => void;
