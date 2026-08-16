@@ -3,8 +3,8 @@
 Voxint's pipeline distinguishes a **slow healthy run** from a **hung run** with
 a chain of nested time budgets. Slower compute tiers (CPU, and to a lesser
 degree ROCm) stretch inference wall-time by an order of magnitude, so the chain
-is a first-class design surface: get it wrong and a healthy 4-hour CPU
-transcription is indistinguishable from a dead worker — recovery reclaims the
+has to be sized carefully: get it wrong and a healthy 4-hour CPU
+transcription is indistinguishable from a dead worker. Recovery reclaims the
 stage, a second worker re-executes it, and the run pays twice.
 
 ## The inequality chain
@@ -29,7 +29,7 @@ Why each link exists:
   survive the call *and still persist its results* inside its lease. If the
   timeout could reach the lease, a slow-but-successful call would return to a
   stage that no longer owns the run: recovery has reclaimed it, a second worker
-  is executing the same stage, and both race to commit — duplicate execution.
+  is executing the same stage, and both race to commit, which is duplicate execution.
   The 600 s margin covers result persistence + the stage commit.
 - **diarize_embed's dedicated lease.** That stage makes one diarization call
   *plus N sequential embedding batches* under a single lease. The static
@@ -45,7 +45,7 @@ Why each link exists:
   lease held back to back (enforced by `_celery_visibility_covers_all_leases`).
 - **acquire is download-bound, not inference-bound.** Its chain
   (`acquire_timeout_seconds` + kill/hash/publish tail < `acquire_lease_seconds`)
-  is validated separately and is *not* scaled by compute tier — network speed
+  is validated separately and is *not* scaled by compute tier, because network speed
   doesn't change with the inference backend.
 
 All four links are enforced at startup by `Settings` validators
@@ -60,10 +60,10 @@ open a duplicate-execution window in production.
 |------|---------|--------|
 | `gpu` | CUDA services (`compose.gpu.yaml`) | Baseline defaults (4 h call / 6 h lease / 12 h diarize_embed / 48 h visibility) |
 | `rocm` | AMD-accelerated services | GPU-class timing (same defaults) |
-| `metal` | Bare-metal Apple Silicon services (`compose.metal.yaml` + native launcher) | GPU-class timing (same defaults). Measured decision (Gate M, M1 Pro): no metal factor — CPU whisper runs 0.38–0.45× RT and MPS diarization ~0.105× RT, so even a 6 h recording transcribes in ~2.7 h against the 4 h per-call budget (docs/gpu-contracts.md, metal verdict). |
+| `metal` | Bare-metal Apple Silicon services (`compose.metal.yaml` + native launcher) | GPU-class timing (same defaults). Measured decision (Gate M, M1 Pro): no metal factor, because CPU whisper runs 0.38–0.45× RT and MPS diarization ~0.105× RT, so even a 6 h recording transcribes in ~2.7 h against the 4 h per-call budget (docs/gpu-contracts.md, metal verdict). |
 | `cpu` | CPU-only services (`compose.cpu.yaml`) | Baseline × `CPU_TIER_TIMEOUT_FACTOR` (4×): 16 h call / 24 h lease / 48 h diarize_embed / 192 h visibility |
 
-Design decision — **per-tier static profile, not per-request scaling**. The
+Design decision: **per-tier static profile, not per-request scaling**. The
 alternative (scaling each request's timeout by media duration) was rejected:
 clients are process-cached with one static timeout, per-request scaling still
 needs a static lease to fit inside (leases are claimed before media duration is
@@ -75,7 +75,7 @@ Rules:
 - The profile scales only `gpu_http_timeout_seconds`, `stage_lease_seconds`,
   `diarize_embed_lease_seconds`, and `celery_visibility_timeout_seconds`
   (`TIER_SCALED_TIMING_FIELDS`), and only when the field is at its default.
-- **An explicitly-set env value always wins** — the profile never overrides an
+- **An explicitly-set env value always wins**: the profile never overrides an
   operator decision. If your explicit value breaks the chain against the other
   (scaled) values, startup fails with the exact inequality named; set the
   related fields explicitly too.

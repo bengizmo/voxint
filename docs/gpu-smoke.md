@@ -36,7 +36,7 @@ real-time throughput (reference: 60 s clip in ~1.7 s wall on a 3090).
 
 ## pyannote
 
-No token needed — the diarization weights are vendored into the image.
+No token needed. The diarization weights are vendored into the image.
 
 ```bash
 docker run -d --name smoke-pyannote --gpus all -p 127.0.0.1:18024:8024 \
@@ -47,7 +47,7 @@ curl -s -X POST localhost:18024/v1/diarize -H 'Content-Type: application/json' \
 ```
 
 Expect: startup log line `Applied clustering hyperparameters` (confirms the
-pyannote-3.1 stack accepted the overrides — its absence means the pinned
+pyannote-3.1 stack accepted the overrides; its absence means the pinned
 stack drifted), plausible `turns` for your clip, and `overlap_seconds` on
 each turn.
 
@@ -83,4 +83,4 @@ Tear down with `docker rm -f smoke-whisper smoke-pyannote smoke-titanet`.
 If you edit `app/` code while a build is already running, the image silently
 contains the pre-edit files (this bit us on first smoke: a half-applied
 async→sync refactor). When a smoke failure makes no sense against the source
-you're reading, rebuild first — the pip layers are cached, so it's seconds.
+you're reading, rebuild first; the pip layers are cached, so it's seconds.

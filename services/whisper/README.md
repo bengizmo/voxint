@@ -1,17 +1,17 @@
 # Voxint whisper service
 
 faster-whisper ASR with hallucination soft-tagging. Contract:
-[docs/gpu-contracts.md](../../docs/gpu-contracts.md) — `POST /v1/transcribe`,
-`GET /healthz`, port **8022**.
+[docs/gpu-contracts.md](../../docs/gpu-contracts.md) (`POST /v1/transcribe`,
+`GET /healthz`, port **8022**).
 
 ## Model policy
 
 Default **large-v2** at int8, baked into the image at build time. large-v3 and
-large-v3-turbo trade quiet-audio robustness for speed and produce repetition
-hallucinations on real-world recordings; the repetition detector soft-tags
-those (`suspect: true`) rather than dropping text, but large-v2 produces far
-fewer of them. `WHISPER_MODEL` overrides the pin at your own risk (a
-non-baked model downloads at startup and needs network + writable cache).
+large-v3-turbo trade quiet-audio accuracy for speed and produce repetition
+hallucinations on real-world recordings. The repetition detector soft-tags those
+(`suspect: true`) rather than dropping text, but large-v2 produces far fewer of
+them to begin with. `WHISPER_MODEL` overrides the pin at your own risk (a
+non-baked model downloads at startup and needs network plus a writable cache).
 
 ## Environment
 
@@ -38,12 +38,12 @@ overhead.
 (amd64 + arm64) · torch 2.1.1 CPU wheels · same faster-whisper pin.
 
 **ROCm** (`Dockerfile.rocm`, `-rocm` tag): Python 3.12 · amd64 only ·
-CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned — not
-on PyPI) on ubuntu:24.04 with the minimal ROCm 7.0.2 runtime-library set ·
-torch-free (the 1.2.x VAD is onnxruntime-based) · numpy 1.26.4 (cp312).
-Same engine, same code path; `DEVICE` stays `cuda` (CT2's ROCm build uses
-the CUDA-alias API) and `/healthz` honestly reports `device: "rocm"`. Run
-via `compose.rocm.yaml` (device passthrough + host render gid).
+CTranslate2 4.8.1 **ROCm build** (GitHub release wheel, sha256-pinned, not on
+PyPI) on ubuntu:24.04 with the minimal ROCm 7.0.2 runtime-library set ·
+torch-free (the 1.2.x VAD is onnxruntime-based) · numpy 1.26.4 (cp312). Same
+engine, same code path. `DEVICE` stays `cuda` (CT2's ROCm build uses the
+CUDA-alias API) and `/healthz` reports `device: "rocm"`. Run via
+`compose.rocm.yaml` (device passthrough + host render gid).
 
 ```bash
 docker pull ghcr.io/bengizmo/voxint-whisper:0.4.0   # prebuilt release image
