@@ -412,6 +412,11 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `MediaItem.source_path` — that file is shared by every run of the media item,
   so removing it is a separate, refcount-guarded action (a future slice). The
   evidence ledger (adjudication / transcript / diarization rows) is untouched.
+  This is the **manual** counterpart to the scheduled media-retention GC (issue
+  #15, below): the manual action deletes the rows and files on demand, while the
+  GC sweep keeps the `AudioArtifact` row and stamps `reclaimed_at` for audit —
+  use whichever fits, they compose (deleting a run already GC-reclaimed just
+  finds its file already gone).
 
 Beyond these, the console stays **append-only** for evidence: archive hides but
 never deletes rows, media-delete only removes re-derivable audio files (never the
@@ -708,6 +713,14 @@ processes one bounded, oldest-first batch per run and is safe to run
 concurrently — rows are claimed with `FOR UPDATE ... SKIP LOCKED`). To reclaim a
 large accumulated backlog faster, raise `GC_BATCH_LIMIT` or lower
 `GC_SWEEP_SECONDS` until it catches up.
+
+To reclaim a single run's derived audio **immediately** (rather than waiting for
+the sweep), use the manual **Delete derived audio files** action on the run
+detail page (`POST /runs/{id}/media/delete`, issue #5, above). The manual action
+deletes the rows and files outright; the scheduled sweep keeps the row and
+stamps `reclaimed_at` as an audit record. Archived runs remain eligible for the
+sweep — archiving only hides a run from the console, it does not exempt its
+intermediate from reclamation.
 
 ## Backup
 

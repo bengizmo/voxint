@@ -1,4 +1,4 @@
-"""Migration 0013 (audio_artifacts reclamation columns), up/down + parity.
+"""Migration 0014 (audio_artifacts reclamation columns), up/down + parity.
 
 Mirrors the 0012 migration test: real alembic up/down against the shared test
 database (head restored in teardown), every named CHECK exercised with a
@@ -76,13 +76,13 @@ def _insert_artifact(engine: Engine, **overrides: str) -> None:
         conn.commit()
 
 
-def test_migration_0013_roundtrip_and_checks(alembic_cfg: Config, engine: Engine) -> None:
-    command.downgrade(alembic_cfg, "0012")
+def test_migration_0014_roundtrip_and_checks(alembic_cfg: Config, engine: Engine) -> None:
+    command.downgrade(alembic_cfg, "0013")
     cols = {c["name"] for c in inspect(engine).get_columns("audio_artifacts")}
     assert "reclaimed_at" not in cols
     assert "reclaimed_bytes" not in cols
 
-    command.upgrade(alembic_cfg, "0013")
+    command.upgrade(alembic_cfg, "0014")
     cols = {c["name"] for c in inspect(engine).get_columns("audio_artifacts")}
     assert {"reclaimed_at", "reclaimed_bytes"} <= cols
     index_names = {ix["name"] for ix in inspect(engine).get_indexes("audio_artifacts")}
@@ -104,7 +104,7 @@ def test_migration_0013_roundtrip_and_checks(alembic_cfg: Config, engine: Engine
     # A fully-stamped row (both set, bytes >= 0) is accepted.
     _insert_artifact(engine, id=f"'{bad}14'", reclaimed_at="now()", reclaimed_bytes="123")
 
-    command.downgrade(alembic_cfg, "0012")
+    command.downgrade(alembic_cfg, "0013")
     cols = {c["name"] for c in inspect(engine).get_columns("audio_artifacts")}
     assert "reclaimed_at" not in cols
     assert "reclaimed_bytes" not in cols

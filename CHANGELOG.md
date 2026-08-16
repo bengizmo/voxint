@@ -5,6 +5,27 @@ versioning: [SemVer](https://semver.org/) (0.x — expect breaking changes betwe
 
 ## [Unreleased]
 
+### Added
+- **Media retention / garbage collection** (#15): an opt-in, beat-scheduled GC
+  sweep (`voxint.gc_sweep`) that reclaims the large normalized-audio
+  intermediate (`artifacts/{run_id}/normalized.wav`) for **old terminal runs** —
+  unlinking the file and stamping the `audio_artifacts` row (new
+  `reclaimed_at`/`reclaimed_bytes`, migration 0014; the row is kept as an audit
+  record). File reclamation only: the **source media**, transcript, diarization,
+  and the immutable adjudication ledger are always kept, so a reclaimed run
+  stays re-processable from its source. Eligibility is `completed`/`cancelled`
+  runs untouched for `MEDIA_RETENTION_SECONDS` (archived runs included — archive
+  is a visibility flag, orthogonal to reclamation); the tutorial run and any
+  file also registered as a source are excluded; missing files are tolerated.
+  Rows are claimed oldest-first with `FOR UPDATE ... SKIP LOCKED` (safe under
+  overlapping sweeps), one bounded `GC_BATCH_LIMIT` batch per run. **Off by
+  default** (`MEDIA_RETENTION_ENABLED=false`) — nothing is reclaimed until an
+  operator opts in. The console shows a "Media reclaimed on `<date>`" notice
+  instead of the audio link, and `GET /media/{run_id}` returns `410 Gone`. This
+  scheduled sweep is complementary to #5's manual **Delete derived audio files**
+  action: the sweep keeps the row and stamps `reclaimed_at` (audit), while the
+  manual action deletes the `AudioArtifact`/`AudioChunk` rows and files outright.
+
 ## [0.13.0] — 2026-08-16
 
 ### Added

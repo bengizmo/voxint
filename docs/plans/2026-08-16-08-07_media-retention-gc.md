@@ -177,7 +177,7 @@ Three new settings (heavy doc-comments, mirroring the existing sweep block;
   oldest-first; documents the backlog drain rate (`batch_limit` per
   `gc_sweep_seconds`). One batch per sweep (simple; drains over time).
 
-### Migration 0013 — `alembic/versions/0013_audio_artifact_reclamation.py`
+### Migration 0014 — `alembic/versions/0014_audio_artifact_reclamation.py`
 
 - `audio_artifacts.reclaimed_at TIMESTAMPTZ NULL`
 - `audio_artifacts.reclaimed_bytes BIGINT NULL`
@@ -201,7 +201,7 @@ Three new settings (heavy doc-comments, mirroring the existing sweep block;
 | `src/voxint/worker/tasks.py` | +`gc_sweep` task (gated), structured log |
 | `src/voxint/worker/app.py` | conditional `"gc-sweep"` beat entry |
 | `src/voxint/db/models.py` | +`reclaimed_at`, `reclaimed_bytes` on `AudioArtifact` |
-| `alembic/versions/0013_audio_artifact_reclamation.py` | **new** migration |
+| `alembic/versions/0014_audio_artifact_reclamation.py` | **new** migration |
 | `src/voxint/api/app.py` | reclaim-aware `audio_available`; `/media` 410-on-reclaimed |
 | `src/voxint/api/templates/run_detail.html` | "Media reclaimed on `<date>`" notice |
 | `.env.example` | document the 4 new env vars |
@@ -214,7 +214,7 @@ Three new settings (heavy doc-comments, mirroring the existing sweep block;
 
 1. **Config** + `.env.example` + unit tests (`tests/unit/test_config.py`):
    defaults, `ge` floor rejection, env override, enabled-gate boolean parsing.
-2. **Migration 0013** + model columns + `tests/integration/test_migration_0013.py`
+2. **Migration 0014** + model columns + `tests/integration/test_migration_0014.py`
    (upgrade adds columns/checks/index; both CHECKs reject bad rows;
    downgrade removes cleanly; existing rows preserved with NULLs).
 3. **`media/reclaim.py`** core + unit tests with a tmp `media_root` and a
