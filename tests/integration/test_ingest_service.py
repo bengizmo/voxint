@@ -7,11 +7,15 @@ never touch Redis; the caller's lazy publish is out of scope here.
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
+import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.app_settings import get_or_create
+from voxint.config import Settings
 from voxint.db.models import STAGE_ORDER, MediaItem, PipelineRun, RunStatus, Stage
 from voxint.ingest import (
     MissingStageError,
@@ -34,6 +38,12 @@ from voxint.pipeline.transitions import (
     next_stage,
     snapshot,
 )
+
+
+def _write_pack(root: Path, name: str, **fields: object) -> None:
+    pack_dir = root / name
+    pack_dir.mkdir(parents=True)
+    (pack_dir / "manifest.yaml").write_text(yaml.safe_dump({"name": name, **fields}))
 
 
 def _drive_to_failed(session: Session, run_id: uuid.UUID, stage: Stage) -> RunSnapshot:
@@ -88,6 +98,62 @@ def test_submit_media_item_creates_media_and_queued_run(
         assert stored.status == RunStatus.QUEUED.value
         assert stored.current_stage is None  # fresh run resolves to STAGE_ORDER[0]
         assert stored.media_item_id == media.id
+
+
+def test_submit_stamps_default_domain_pack(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # With no per-folder mapping the run freezes the default (bundled generic) pack.
+    with session_factory() as session:
+        run = submit_media_item(session, "incoming/a.wav")
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.domain_pack is not None
+        assert stored.domain_pack["name"] == "generic"
+
+
+def test_submit_stamps_explicit_domain_pack(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    _write_pack(tmp_path, "podcast", vocabulary=["cold open"])
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/a.wav", settings=settings, domain_pack_name="podcast"
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.domain_pack["name"] == "podcast"
+        assert stored.domain_pack["vocabulary"] == ["cold open"]
+
+
+def test_submit_stamps_from_folder_mapping(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    _write_pack(tmp_path, "interview", name_seeds=["Jane Doe"])
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.folder_domain_packs = {"interviews": "interview"}
+        session.commit()
+    with session_factory() as session:
+        mapped = submit_media_item(
+            session, "interviews/ep1.wav", settings=settings
+        )
+        unmapped = submit_media_item(session, "misc/x.wav", settings=settings)
+        session.commit()
+        mapped_id, unmapped_id = mapped.id, unmapped.id
+    with session_factory() as session:
+        assert session.get(PipelineRun, mapped_id).domain_pack["name"] == "interview"
+        assert session.get(PipelineRun, unmapped_id).domain_pack["name"] == "generic"
 
 
 def test_submit_media_item_reuses_media_but_mints_new_run(

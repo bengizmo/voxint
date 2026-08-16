@@ -46,6 +46,35 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `api-client.ts` error seam for #49+. Node exists only in the Dockerfile build
   stage; no Node ships at runtime. A new CI `frontend` job gates
   lint/typecheck/build/audit and the offline no-CDN check.
+- **Per-run / per-folder domain pack selection** (#11, backend): a run now
+  freezes the resolved domain pack it was submitted with as a JSON snapshot on
+  the run (`pipeline_runs.domain_pack`, migration 0017), stamped write-once at
+  submit. Packs are selected **per watched folder** via a
+  `{media_folder → pack_name}` map on `app_settings` (`folder_domain_packs`) —
+  point a *podcast* folder and an *interview* folder at different packs — with an
+  optional explicit override at submit; an unmapped folder uses the default pack
+  (`DOMAIN_PACK_PATH`, else the bundled `generic`). Multiple named packs can live
+  under a new `DOMAIN_PACKS_DIR` (one child folder per pack, resolved by manifest
+  `name`). The **pipeline worker and the offline name producer both read the
+  run's frozen snapshot**, not the live global env, so late enrichment can never
+  diverge from what transcription used and a manifest edited on disk afterward
+  never changes a past run's result. `DomainPack` gained strict, round-trippable
+  serialization (`to_mapping`/`from_mapping`); a corrupt snapshot degrades to the
+  default pack with a warning rather than wedging the run. Legacy runs
+  (pre-migration, `NULL` snapshot) reproduce the prior global-pack behavior.
+  _(The default pack, `DOMAIN_PACK_PATH`, is the operator-facing control in this
+  release; the in-console UI to edit the per-folder map ships with the
+  review-console overhaul, #63.)_
+- **Domain packs shape more of the pipeline** (#11): two additional
+  `prompt_fragments` keys are now consumed from the run's frozen pack, each with
+  a single documented consumer (fragments are never concatenated). A
+  `summary_context` fragment is appended to the run-asset LLM producer's system
+  prompt, so the summary/topics/entity-mention analysis gets domain framing; a
+  `name_attribution_context` fragment is added as a second labeled block on the
+  transcript-enhancement call that harvests speaker-name hints (e.g. anchoring a
+  recurring host). Both are fenced as advisory so a pack can guide but never
+  override the strict reply schemas, and an absent fragment leaves the prompt
+  byte-for-byte unchanged.
 - **In-UI LLM API key** (#10): the optional LLM API key can now be set, replaced,
   and removed from the setup wizard and the Settings page — no more hand-editing
   `.env` and restarting the worker just to enable enhancement. The key is stored on

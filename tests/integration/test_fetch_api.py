@@ -320,13 +320,14 @@ def test_run_detail_local_run_omits_the_source_line(
 ) -> None:
     # A local/uploaded run has no source_url; provenance_host returns None and the
     # detail view must OMIT the "Source" line entirely (never render "Source: None").
+    from voxint.domain_packs.base import load_default
     from voxint.pipeline.engine import submit
 
     with session_factory() as session:
         media = MediaItem(source_path="incoming/local/clip.wav")  # source_url is None
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
 
     detail = client.get(f"/runs/{run_id}").text

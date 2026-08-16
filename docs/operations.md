@@ -288,6 +288,31 @@ poll; each poll opens a fresh session so it observes the worker's commits.
 **`voxint submit --wait`** composes submit + watch: it enqueues, prints the run
 id, then follows the new run with the same loop and exit codes.
 
+### Domain packs (issue #11)
+
+A **domain pack** supplies domain vocabulary, speaker name seeds, and LLM prompt
+fragments (see `docs/domain-packs.md` for the manifest and what each field
+shapes). The bundled `generic` pack is the zero-config default, so this is
+optional. Two env knobs are the shipped operator surface:
+
+```bash
+# One default pack applied to every run:
+DOMAIN_PACK_PATH=/data/voxint/packs/newsroom
+
+# Or a library of named packs (one child folder each, resolved by manifest name):
+DOMAIN_PACKS_DIR=/data/voxint/packs
+```
+
+With `DOMAIN_PACK_PATH` unset, only the bundled `generic` pack is used. Each run
+**freezes** the pack it was submitted with (`pipeline_runs.domain_pack`, migration
+0017), so editing a manifest on disk never changes a past run's transcription or
+enrichment — a manifest change takes effect on the *next* run.
+
+> Per-**folder** assignment (`{media_folder → pack_name}`) and a per-**submission**
+> pack override are implemented in the backend, but the operator UI to manage them
+> ships with the review-console overhaul (issue #63). For 0.15.0 the default pack
+> (`DOMAIN_PACK_PATH`) is the operator-facing control.
+
 ### Metrics & monitoring
 
 **`voxint stats`** prints an aggregate, read-only snapshot: run counts by status,

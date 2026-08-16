@@ -17,7 +17,11 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
     SpeakerEmbedding,
+    TranscriptSegment,
 )
+from voxint.domain_packs.base import DomainPack
+from voxint.pipeline.stages import enhance_match
+from voxint.pipeline.stages.context import StageContext
 from voxint.speakers.matching import (
     CosineProposal,
     MatchingGates,
@@ -177,6 +181,83 @@ def test_heavily_overlapped_turns_are_ineligible(session: Session) -> None:
         )
     session.flush()
     assert match_speakers(session, run_id, GATES) == ()
+
+
+# ------------------------------------------- #11 enhance stage reads the run pack
+
+
+def test_enhance_stage_passes_run_pack_name_attribution_context(session: Session) -> None:
+    """The enhance stage sources ``name_attribution_context`` from the RUN's
+    frozen pack on the context (not a hardcoded default), so two runs with
+    different packs get different attribution guidance in the same worker."""
+    from pathlib import Path
+
+    from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+
+    run_id = make_run(session)
+    for i in range(2):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run_id,
+                segment_index=i,
+                start_seconds=float(i),
+                end_seconds=float(i + 1),
+                raw_text=f"segment {i}",
+                diarization_label="SPEAKER_00",
+            )
+        )
+    session.flush()
+
+    llm = FakeLLM()
+    pack = DomainPack(
+        name="podcast",
+        prompt_fragments={"name_attribution_context": "The host is the most talkative voice."},
+    )
+    ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=llm,
+        media_root=Path("/data/media"),
+        domain_pack=pack,
+    )
+
+    enhance_match.run(ctx, session, run_id)
+
+    assert llm.attribution_contexts == ["The host is the most talkative voice."]
+
+
+def test_enhance_stage_omits_attribution_context_when_pack_declares_none(session: Session) -> None:
+    from pathlib import Path
+
+    from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+
+    run_id = make_run(session)
+    session.add(
+        TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=0,
+            start_seconds=0.0,
+            end_seconds=1.0,
+            raw_text="hello",
+            diarization_label="SPEAKER_00",
+        )
+    )
+    session.flush()
+
+    llm = FakeLLM()
+    ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=llm,
+        media_root=Path("/data/media"),
+        domain_pack=DomainPack(name="generic"),
+    )
+
+    enhance_match.run(ctx, session, run_id)
+
+    assert llm.attribution_contexts == [""]
 
 
 def test_label_spanning_embedding_spaces_is_dropped(session: Session) -> None:

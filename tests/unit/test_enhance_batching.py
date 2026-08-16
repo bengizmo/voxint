@@ -3,6 +3,7 @@ pure objects, no database, no network."""
 
 import uuid
 
+from tests.fakes import FakeLLM
 from voxint.clients.base import (
     EnhancementBatchResult,
     EnhancementRequestSegment,
@@ -89,7 +90,11 @@ class ScriptedLLM:
         self.calls = 0
 
     def enhance_segments(
-        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+        self,
+        segments: tuple[EnhancementRequestSegment, ...],
+        context: str,
+        *,
+        name_attribution_context: str = "",
     ) -> EnhancementBatchResult:
         self.calls += 1
         if self.calls <= self.failures:
@@ -97,6 +102,29 @@ class ScriptedLLM:
         return EnhancementBatchResult(
             enhanced={s.segment_index: s.text.upper() for s in segments}
         )
+
+
+def test_enhance_forwards_name_attribution_context_to_every_batch() -> None:
+    # The #11 pack fragment must reach the client on every batch call, not just
+    # the first — a run's attribution guidance holds for the whole transcript.
+    llm = FakeLLM()
+    policy = LLMPolicy(batch_max_segments=1, batch_max_chars=10_000)
+    _enhance(
+        llm,
+        policy,
+        "astronomy context",
+        [seg(0, "hello"), seg(1, "world")],
+        RUN_ID,
+        name_attribution_context="Anchor the recurring host.",
+    )
+    assert llm.attribution_contexts == ["Anchor the recurring host.", "Anchor the recurring host."]
+    assert llm.contexts == ["astronomy context", "astronomy context"]
+
+
+def test_enhance_defaults_attribution_context_to_empty() -> None:
+    llm = FakeLLM()
+    _enhance(llm, LLMPolicy(), "", [seg(0, "hi")], RUN_ID)
+    assert llm.attribution_contexts == [""]
 
 
 def one_per_batch(**overrides: float | int) -> LLMPolicy:

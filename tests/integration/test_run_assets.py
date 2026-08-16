@@ -161,8 +161,13 @@ class FakeLLM:
     def __init__(self, bodies: Sequence[object]) -> None:
         self._bodies = list(bodies)
         self.calls = 0
+        # System message content per call, so tests can assert the #11
+        # summary_context fragment reaches the prompt.
+        self.systems: list[str] = []
 
     def chat_json(self, messages: object) -> dict[str, object]:
+        assert isinstance(messages, Sequence)
+        self.systems.append(str(messages[0].content))  # type: ignore[attr-defined]
         body = self._bodies[self.calls]
         self.calls += 1
         if isinstance(body, Exception):
@@ -312,6 +317,37 @@ class TestJobs:
             assert asset.payload["mentions"][0]["occurrences"][0]["start_char"] == 24
             assert asset.config["model"] == "gpt-4o-mini"
             assert asset.config["truncated"] is False
+
+    def test_execute_job_injects_run_pack_summary_context(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        """The run's frozen #11 pack ``summary_context`` fragment reaches the
+        producer's system prompt; a run without one leaves it out (#11)."""
+        from voxint.db.models import PipelineRun
+        from voxint.domain_packs.base import DomainPack
+
+        fragment = "This series covers amateur radio astronomy."
+        with session_factory() as session:
+            run_id = seed_run(session)
+            run = session.get(PipelineRun, run_id)
+            run.domain_pack = DomainPack(
+                name="radio", prompt_fragments={"summary_context": fragment}
+            ).to_mapping()
+            session.commit()
+        job_id = self._one_job(session_factory, run_id, RunAssetKind.SUMMARY)
+        llm = FakeLLM([SUMMARY_BODY])
+        execute_job(session_factory, job_id, settings=make_settings(), llm=llm)
+        assert fragment in llm.systems[0]
+        assert "advisory" in llm.systems[0]
+
+        # A legacy run (no snapshot) keeps the bare system prompt.
+        with session_factory() as session:
+            legacy_run = seed_run(session)
+        legacy_job = self._one_job(session_factory, legacy_run, RunAssetKind.SUMMARY)
+        legacy_llm = FakeLLM([SUMMARY_BODY])
+        execute_job(session_factory, legacy_job, settings=make_settings(), llm=legacy_llm)
+        assert fragment not in legacy_llm.systems[0]
+        assert "advisory" not in legacy_llm.systems[0]
 
     def test_failure_isolation_between_kinds(self, session_factory: sessionmaker[Session]) -> None:
         """One kind failing records no asset, consumes no generation, and

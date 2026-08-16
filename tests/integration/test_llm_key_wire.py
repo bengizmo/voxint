@@ -185,7 +185,7 @@ def test_enhance_wire_key_precedence_live() -> None:
                 enhancement_context="",
                 vocabulary=(),
             )
-            ctx = apply_run_preferences(base, settings, prefs, llm_api_key=key)
+            ctx = apply_run_preferences(base, settings, prefs, base.domain_pack, llm_api_key=key)
             assert isinstance(ctx.llm, HttpLLMClient)
             ctx.llm.enhance_segments(
                 (EnhancementRequestSegment(segment_index=0, text="hi", diarization_label="S0"),),

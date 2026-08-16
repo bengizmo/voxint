@@ -24,6 +24,7 @@ import socket
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -65,8 +66,25 @@ def default_worker_id() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-def submit(session: Session, media_item_id: uuid.UUID) -> PipelineRun:
-    run = PipelineRun(media_item_id=media_item_id, status=RunStatus.QUEUED.value)
+def submit(
+    session: Session,
+    media_item_id: uuid.UUID,
+    *,
+    domain_pack: dict[str, Any],
+) -> PipelineRun:
+    """Queue a fresh run, freezing its resolved domain-pack snapshot (issue #11).
+
+    ``domain_pack`` is REQUIRED and keyword-only so a new run-creation path cannot
+    silently ship an unstamped run: every caller must resolve the pack first (see
+    :func:`voxint.domain_packs.registry.resolve_run_domain_pack`). The snapshot is
+    write-once run provenance — the pipeline and enrichment read it, never the
+    live global env.
+    """
+    run = PipelineRun(
+        media_item_id=media_item_id,
+        status=RunStatus.QUEUED.value,
+        domain_pack=domain_pack,
+    )
     session.add(run)
     session.flush()
     return run

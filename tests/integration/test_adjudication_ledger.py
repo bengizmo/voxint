@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.adjudication.ledger import ConflictingReplayError, record_decision
 from voxint.db.models import AdjudicationDecision, Decision, MediaItem, Speaker
+from voxint.domain_packs.base import load_default
 from voxint.pipeline.engine import submit
 
 
@@ -17,7 +18,7 @@ def seed(session: Session) -> tuple[uuid.UUID, uuid.UUID]:
     speaker = Speaker(display_name=f"Speaker {uuid.uuid4()}")
     session.add_all([media, speaker])
     session.flush()
-    run = submit(session, media.id)
+    run = submit(session, media.id, domain_pack=load_default().to_mapping())
     return run.id, speaker.id
 
 

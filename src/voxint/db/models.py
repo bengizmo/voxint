@@ -316,6 +316,15 @@ class PipelineRun(Base):
     # deliberately outside the CAS revision and orthogonal to status — like
     # operator_notes, last-write-wins, not pipeline state.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Frozen domain-pack snapshot for this run (issue #11): the resolved manifest
+    # (name/vocabulary/name_seeds/prompt_fragments) as JSON, stamped write-once at
+    # submit from the per-folder mapping (or the default pack). The pipeline worker
+    # and the enrichment producers both read THIS, not the mutable global env, so a
+    # run — and its late enrichment — always sees the exact pack it was transcribed
+    # with even if the manifest on disk later changes. NULL = a legacy run created
+    # before #11: resolve the current default pack at execution time (see
+    # DomainPack.from_mapping / resolve_run_domain_pack).
+    domain_pack: Mapped[dict[str, Any] | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -1029,6 +1038,17 @@ class AppSettings(Base):
     # User vocabulary (names/jargon/acronyms): augments the selected domain pack,
     # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
+    # Per-folder domain-pack assignment (issue #11): {media_folder -> pack_name},
+    # mapping a watched folder (as stored in media_folders, relative to MEDIA_ROOT)
+    # to a pack resolvable by name. Consulted at submit to freeze each run's pack
+    # snapshot; an unmapped folder falls back to the default pack. Default {} means
+    # every folder uses the default — the pre-#11 behavior.
+    folder_domain_packs: Mapped[dict[str, str]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     llm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # NULL -> use the env default (config.Settings).
     llm_base_url: Mapped[str | None] = mapped_column(Text)

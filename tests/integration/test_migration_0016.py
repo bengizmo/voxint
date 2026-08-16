@@ -101,4 +101,4 @@ def test_single_alembic_head() -> None:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert list(heads) == ["0016"]
+    assert list(heads) == ["0017"]

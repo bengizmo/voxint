@@ -31,6 +31,7 @@ from voxint.db.models import (
     SpeakerEmbedding,
     TranscriptSegment,
 )
+from voxint.domain_packs.base import load_default
 from voxint.media.normalize import TARGET_CHANNELS, TARGET_SAMPLE_RATE, probe_audio
 from voxint.pipeline.engine import execute_run, submit
 from voxint.pipeline.stages import diarize_embed
@@ -83,7 +84,7 @@ def submit_media(
         media = MediaItem(source_path=source_path)
         session.add(media)
         session.flush()
-        run = submit(session, media.id)
+        run = submit(session, media.id, domain_pack=load_default().to_mapping())
         run_id = run.id
         session.commit()
     return run_id

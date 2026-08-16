@@ -307,6 +307,39 @@ class TestRenderSource:
         assert "segment 49" in document  # tail survives
 
 
+class TestBuildMessagesDomainContext:
+    """#11 slice 1: the run's ``summary_context`` fragment shapes the prompt."""
+
+    KINDS = (RunAssetKind.SUMMARY, RunAssetKind.TOPICS, RunAssetKind.ENTITY_MENTIONS)
+
+    def _system(self, kind: RunAssetKind, domain_context: str) -> str:
+        messages, _ = build_messages(
+            kind, make_source(), max_chars=10_000, domain_context=domain_context
+        )
+        return str(messages[0].content)
+
+    def test_empty_fragment_leaves_every_kind_byte_identical(self) -> None:
+        for kind in self.KINDS:
+            assert self._system(kind, "") == self._system(kind, "")
+            # And identical to the no-argument default (the pre-#11 shape).
+            baseline, _ = build_messages(kind, make_source(), max_chars=10_000)
+            assert self._system(kind, "") == str(baseline[0].content)
+
+    def test_fragment_appears_once_in_system_for_all_three_kinds(self) -> None:
+        fragment = "This is a mycology field-recording series."
+        for kind in self.KINDS:
+            system = self._system(kind, fragment)
+            assert system.count(fragment) == 1
+            assert "advisory" in system
+
+    def test_fragment_is_not_placed_in_the_user_message(self) -> None:
+        fragment = "Astrophysics colloquium."
+        messages, _ = build_messages(
+            RunAssetKind.SUMMARY, make_source(), max_chars=10_000, domain_context=fragment
+        )
+        assert fragment not in str(messages[1].content)
+
+
 class TestLocateQuote:
     TEXT = "Hello, I am Joanne from Acme Corp."
 
