@@ -1,0 +1,2470 @@
+{
+  "kind": "ami-nxt-words",
+  "words": [
+    {
+      "end_us": 130000,
+      "start_us": 130000,
+      "text": "."
+    },
+    {
+      "end_us": 1130000,
+      "start_us": 130000,
+      "text": "Um"
+    },
+    {
+      "end_us": 1700000,
+      "start_us": 1130000,
+      "text": "she"
+    },
+    {
+      "end_us": 3200000,
+      "start_us": 1700000,
+      "text": "uh"
+    },
+    {
+      "end_us": 3650000,
+      "start_us": 3200000,
+      "text": "presented"
+    },
+    {
+      "end_us": 3920000,
+      "start_us": 3650000,
+      "text": "also"
+    },
+    {
+      "end_us": 4130000,
+      "start_us": 3920000,
+      "text": "an"
+    },
+    {
+      "end_us": 4770000,
+      "start_us": 4130000,
+      "text": "oversized"
+    },
+    {
+      "end_us": 6140000,
+      "start_us": 4770000,
+      "text": "remote"
+    },
+    {
+      "end_us": 6360000,
+      "start_us": 6140000,
+      "text": "which"
+    },
+    {
+      "end_us": 6840000,
+      "start_us": 6360000,
+      "text": "she"
+    },
+    {
+      "end_us": 7450000,
+      "start_us": 6840000,
+      "text": "guarantees"
+    },
+    {
+      "end_us": 7830000,
+      "start_us": 7450000,
+      "text": "nobody"
+    },
+    {
+      "end_us": 8040000,
+      "start_us": 7830000,
+      "text": "will"
+    },
+    {
+      "end_us": 8230000,
+      "start_us": 8040000,
+      "text": "ever"
+    },
+    {
+      "end_us": 8420000,
+      "start_us": 8230000,
+      "text": "be"
+    },
+    {
+      "end_us": 8650000,
+      "start_us": 8420000,
+      "text": "able"
+    },
+    {
+      "end_us": 8790000,
+      "start_us": 8650000,
+      "text": "to"
+    },
+    {
+      "end_us": 9260000,
+      "start_us": 8790000,
+      "text": "lose"
+    },
+    {
+      "end_us": 9260000,
+      "start_us": 9260000,
+      "text": "."
+    },
+    {
+      "end_us": 10900000,
+      "start_us": 10370000,
+      "text": "Um"
+    },
+    {
+      "end_us": 12700000,
+      "start_us": 12380000,
+      "text": "that's"
+    },
+    {
+      "end_us": 13320000,
+      "start_us": 12700000,
+      "text": "right"
+    },
+    {
+      "end_us": 13320000,
+      "start_us": 13320000,
+      "text": "."
+    },
+    {
+      "end_us": 15330000,
+      "start_us": 14850000,
+      "text": "But"
+    },
+    {
+      "end_us": 16050000,
+      "start_us": 15330000,
+      "text": "uh"
+    },
+    {
+      "end_us": 16220000,
+      "start_us": 16050000,
+      "text": "her"
+    },
+    {
+      "end_us": 16480000,
+      "start_us": 16220000,
+      "text": "very"
+    },
+    {
+      "end_us": 16800000,
+      "start_us": 16480000,
+      "text": "f"
+    },
+    {
+      "end_us": 17390000,
+      "start_us": 16800000,
+      "text": "personal"
+    },
+    {
+      "end_us": 17990000,
+      "start_us": 17390000,
+      "text": "favourite"
+    },
+    {
+      "end_us": 18460000,
+      "start_us": 17990000,
+      "text": "really"
+    },
+    {
+      "end_us": 19150000,
+      "start_us": 18460000,
+      "text": "she"
+    },
+    {
+      "end_us": 19150000,
+      "start_us": 19150000,
+      "text": ","
+    },
+    {
+      "end_us": 19340000,
+      "start_us": 19150000,
+      "text": "she"
+    },
+    {
+      "end_us": 19570000,
+      "start_us": 19340000,
+      "text": "would"
+    },
+    {
+      "end_us": 19810000,
+      "start_us": 19570000,
+      "text": "very"
+    },
+    {
+      "end_us": 20050000,
+      "start_us": 19810000,
+      "text": "much"
+    },
+    {
+      "end_us": 20250000,
+      "start_us": 20050000,
+      "text": "like"
+    },
+    {
+      "end_us": 20330000,
+      "start_us": 20250000,
+      "text": "to"
+    },
+    {
+      "end_us": 20560000,
+      "start_us": 20330000,
+      "text": "see"
+    },
+    {
+      "end_us": 20610000,
+      "start_us": 20560000,
+      "text": "a"
+    },
+    {
+      "end_us": 21020000,
+      "start_us": 20610000,
+      "text": "speech"
+    },
+    {
+      "end_us": 22150000,
+      "start_us": 21020000,
+      "text": "recogniser"
+    },
+    {
+      "end_us": 22730000,
+      "start_us": 22150000,
+      "text": "integrated"
+    },
+    {
+      "end_us": 22830000,
+      "start_us": 22730000,
+      "text": "in"
+    },
+    {
+      "end_us": 23020000,
+      "start_us": 22830000,
+      "text": "this"
+    },
+    {
+      "end_us": 24100000,
+      "start_us": 23020000,
+      "text": "remote"
+    },
+    {
+      "end_us": 24100000,
+      "start_us": 24100000,
+      "text": "."
+    },
+    {
+      "end_us": 24190000,
+      "start_us": 24100000,
+      "text": "The"
+    },
+    {
+      "end_us": 24610000,
+      "start_us": 24190000,
+      "text": "industrial"
+    },
+    {
+      "end_us": 25700000,
+      "start_us": 24610000,
+      "text": "designer"
+    },
+    {
+      "end_us": 26970000,
+      "start_us": 25700000,
+      "text": "um"
+    },
+    {
+      "end_us": 28140000,
+      "start_us": 26970000,
+      "text": "presented"
+    },
+    {
+      "end_us": 29370000,
+      "start_us": 28140000,
+      "text": "her"
+    },
+    {
+      "end_us": 31170000,
+      "start_us": 29370000,
+      "text": "uh"
+    },
+    {
+      "end_us": 31670000,
+      "start_us": 31170000,
+      "text": "thoughts"
+    },
+    {
+      "end_us": 31880000,
+      "start_us": 31670000,
+      "text": "on"
+    },
+    {
+      "end_us": 31990000,
+      "start_us": 31880000,
+      "text": "the"
+    },
+    {
+      "end_us": 33150000,
+      "start_us": 31990000,
+      "text": "issue"
+    },
+    {
+      "end_us": 33150000,
+      "start_us": 33150000,
+      "text": "."
+    },
+    {
+      "end_us": 33800000,
+      "start_us": 33150000,
+      "text": "She"
+    },
+    {
+      "end_us": 33970000,
+      "start_us": 33800000,
+      "text": "would"
+    },
+    {
+      "end_us": 34330000,
+      "start_us": 33970000,
+      "text": "like"
+    },
+    {
+      "end_us": 34370000,
+      "start_us": 34330000,
+      "text": "a"
+    },
+    {
+      "end_us": 34870000,
+      "start_us": 34370000,
+      "text": "special"
+    },
+    {
+      "end_us": 35880000,
+      "start_us": 34870000,
+      "text": "case"
+    },
+    {
+      "end_us": 36130000,
+      "start_us": 35880000,
+      "text": "made"
+    },
+    {
+      "end_us": 36250000,
+      "start_us": 36130000,
+      "text": "out"
+    },
+    {
+      "end_us": 36400000,
+      "start_us": 36250000,
+      "text": "of"
+    },
+    {
+      "end_us": 37130000,
+      "start_us": 36400000,
+      "text": "plastic"
+    },
+    {
+      "end_us": 37270000,
+      "start_us": 37130000,
+      "text": "that"
+    },
+    {
+      "end_us": 37390000,
+      "start_us": 37270000,
+      "text": "is"
+    },
+    {
+      "end_us": 37670000,
+      "start_us": 37390000,
+      "text": "very"
+    },
+    {
+      "end_us": 38690000,
+      "start_us": 37670000,
+      "text": "strong"
+    },
+    {
+      "end_us": 38690000,
+      "start_us": 38690000,
+      "text": ","
+    },
+    {
+      "end_us": 38970000,
+      "start_us": 38690000,
+      "text": "not"
+    },
+    {
+      "end_us": 39340000,
+      "start_us": 38970000,
+      "text": "using"
+    },
+    {
+      "end_us": 39510000,
+      "start_us": 39340000,
+      "text": "any"
+    },
+    {
+      "end_us": 39920000,
+      "start_us": 39510000,
+      "text": "harmful"
+    },
+    {
+      "end_us": 41160000,
+      "start_us": 39920000,
+      "text": "materials"
+    },
+    {
+      "end_us": 41160000,
+      "start_us": 41160000,
+      "text": ","
+    },
+    {
+      "end_us": 41390000,
+      "start_us": 41160000,
+      "text": "should"
+    },
+    {
+      "end_us": 41520000,
+      "start_us": 41390000,
+      "text": "be"
+    },
+    {
+      "end_us": 42970000,
+      "start_us": 41520000,
+      "text": "recyclable"
+    },
+    {
+      "end_us": 43430000,
+      "start_us": 42970000,
+      "text": "and"
+    },
+    {
+      "end_us": 43640000,
+      "start_us": 43430000,
+      "text": "should"
+    },
+    {
+      "end_us": 43740000,
+      "start_us": 43640000,
+      "text": "be"
+    },
+    {
+      "end_us": 44380000,
+      "start_us": 43740000,
+      "text": "colourful"
+    },
+    {
+      "end_us": 44380000,
+      "start_us": 44380000,
+      "text": "."
+    },
+    {
+      "end_us": 45850000,
+      "start_us": 45640000,
+      "text": "Should"
+    },
+    {
+      "end_us": 45980000,
+      "start_us": 45850000,
+      "text": "have"
+    },
+    {
+      "end_us": 46060000,
+      "start_us": 45980000,
+      "text": "an"
+    },
+    {
+      "end_us": 46580000,
+      "start_us": 46060000,
+      "text": "integrated"
+    },
+    {
+      "end_us": 47090000,
+      "start_us": 46580000,
+      "text": "circuit"
+    },
+    {
+      "end_us": 47680000,
+      "start_us": 47090000,
+      "text": "board"
+    },
+    {
+      "end_us": 47920000,
+      "start_us": 47680000,
+      "text": "that's"
+    },
+    {
+      "end_us": 48210000,
+      "start_us": 47920000,
+      "text": "highly"
+    },
+    {
+      "end_us": 49130000,
+      "start_us": 48210000,
+      "text": "sophisticated"
+    },
+    {
+      "end_us": 49410000,
+      "start_us": 49130000,
+      "text": "and"
+    },
+    {
+      "end_us": 49970000,
+      "start_us": 49410000,
+      "text": "temperature"
+    },
+    {
+      "end_us": 51160000,
+      "start_us": 49970000,
+      "text": "resistant"
+    },
+    {
+      "end_us": 51160000,
+      "start_us": 51160000,
+      "text": "."
+    },
+    {
+      "end_us": 53020000,
+      "start_us": 52840000,
+      "text": "She"
+    },
+    {
+      "end_us": 53160000,
+      "start_us": 53020000,
+      "text": "would"
+    },
+    {
+      "end_us": 53350000,
+      "start_us": 53160000,
+      "text": "like"
+    },
+    {
+      "end_us": 53460000,
+      "start_us": 53350000,
+      "text": "to"
+    },
+    {
+      "end_us": 53800000,
+      "start_us": 53460000,
+      "text": "see"
+    },
+    {
+      "end_us": 53920000,
+      "start_us": 53800000,
+      "text": "a"
+    },
+    {
+      "end_us": 55360000,
+      "start_us": 53920000,
+      "text": "timer"
+    },
+    {
+      "end_us": 55670000,
+      "start_us": 55360000,
+      "text": "and"
+    },
+    {
+      "end_us": 55990000,
+      "start_us": 55670000,
+      "text": "or"
+    },
+    {
+      "end_us": 56650000,
+      "start_us": 55990000,
+      "text": "alarm"
+    },
+    {
+      "end_us": 58230000,
+      "start_us": 56650000,
+      "text": "facility"
+    },
+    {
+      "end_us": 60100000,
+      "start_us": 58230000,
+      "text": "integrated"
+    },
+    {
+      "end_us": 60100000,
+      "start_us": 60100000,
+      "text": "."
+    },
+    {
+      "end_us": 60490000,
+      "start_us": 60100000,
+      "text": "Uh"
+    },
+    {
+      "end_us": 61340000,
+      "start_us": 60490000,
+      "text": "technically"
+    },
+    {
+      "end_us": 61540000,
+      "start_us": 61340000,
+      "text": "this"
+    },
+    {
+      "end_us": 61780000,
+      "start_us": 61540000,
+      "text": "thing"
+    },
+    {
+      "end_us": 61910000,
+      "start_us": 61780000,
+      "text": "would"
+    },
+    {
+      "end_us": 62230000,
+      "start_us": 61910000,
+      "text": "also"
+    },
+    {
+      "end_us": 62660000,
+      "start_us": 62230000,
+      "text": "have"
+    },
+    {
+      "end_us": 62770000,
+      "start_us": 62660000,
+      "text": "a"
+    },
+    {
+      "end_us": 63440000,
+      "start_us": 62770000,
+      "text": "resistor"
+    },
+    {
+      "end_us": 63580000,
+      "start_us": 63440000,
+      "text": "and"
+    },
+    {
+      "end_us": 63660000,
+      "start_us": 63580000,
+      "text": "a"
+    },
+    {
+      "end_us": 65620000,
+      "start_us": 63660000,
+      "text": "capacitor"
+    },
+    {
+      "end_us": 65620000,
+      "start_us": 65620000,
+      "text": ","
+    },
+    {
+      "end_us": 66220000,
+      "start_us": 65620000,
+      "text": "diode"
+    },
+    {
+      "end_us": 67420000,
+      "start_us": 66220000,
+      "text": "transistor"
+    },
+    {
+      "end_us": 67420000,
+      "start_us": 67420000,
+      "text": ","
+    },
+    {
+      "end_us": 69250000,
+      "start_us": 67420000,
+      "text": "resonator"
+    },
+    {
+      "end_us": 69250000,
+      "start_us": 69250000,
+      "text": ","
+    },
+    {
+      "end_us": 69540000,
+      "start_us": 69250000,
+      "text": "and"
+    },
+    {
+      "end_us": 69670000,
+      "start_us": 69540000,
+      "text": "if"
+    },
+    {
+      "end_us": 70180000,
+      "start_us": 69670000,
+      "text": "possible"
+    },
+    {
+      "end_us": 70240000,
+      "start_us": 70180000,
+      "text": "a"
+    },
+    {
+      "end_us": 70920000,
+      "start_us": 70240000,
+      "text": "rechargeable"
+    },
+    {
+      "end_us": 71440000,
+      "start_us": 70920000,
+      "text": "battery"
+    },
+    {
+      "end_us": 71440000,
+      "start_us": 71440000,
+      "text": "."
+    },
+    {
+      "end_us": 73370000,
+      "start_us": 72630000,
+      "text": "Uh"
+    },
+    {
+      "end_us": 73590000,
+      "start_us": 73370000,
+      "text": "and"
+    },
+    {
+      "end_us": 73680000,
+      "start_us": 73590000,
+      "text": "of"
+    },
+    {
+      "end_us": 73930000,
+      "start_us": 73680000,
+      "text": "course"
+    },
+    {
+      "end_us": 73990000,
+      "start_us": 73930000,
+      "text": "a"
+    },
+    {
+      "end_us": 74360000,
+      "start_us": 73990000,
+      "text": "circuit"
+    },
+    {
+      "end_us": 74710000,
+      "start_us": 74360000,
+      "text": "board"
+    },
+    {
+      "end_us": 74710000,
+      "start_us": 74710000,
+      "text": "."
+    },
+    {
+      "end_us": 76390000,
+      "start_us": 75990000,
+      "text": "And"
+    },
+    {
+      "end_us": 76540000,
+      "start_us": 76390000,
+      "text": "how"
+    },
+    {
+      "end_us": 76670000,
+      "start_us": 76540000,
+      "text": "it"
+    },
+    {
+      "end_us": 76840000,
+      "start_us": 76670000,
+      "text": "would"
+    },
+    {
+      "end_us": 77390000,
+      "start_us": 76840000,
+      "text": "works"
+    },
+    {
+      "end_us": 77390000,
+      "start_us": 77390000,
+      "text": ","
+    },
+    {
+      "end_us": 77480000,
+      "start_us": 77390000,
+      "text": "you"
+    },
+    {
+      "end_us": 77790000,
+      "start_us": 77480000,
+      "text": "press"
+    },
+    {
+      "end_us": 77860000,
+      "start_us": 77790000,
+      "text": "the"
+    },
+    {
+      "end_us": 78520000,
+      "start_us": 77860000,
+      "text": "button"
+    },
+    {
+      "end_us": 78520000,
+      "start_us": 78520000,
+      "text": ","
+    },
+    {
+      "end_us": 78660000,
+      "start_us": 78520000,
+      "text": "the"
+    },
+    {
+      "end_us": 79530000,
+      "start_us": 78660000,
+      "text": "chip"
+    },
+    {
+      "end_us": 79930000,
+      "start_us": 79530000,
+      "text": "is"
+    },
+    {
+      "end_us": 80730000,
+      "start_us": 79930000,
+      "text": "morse"
+    },
+    {
+      "end_us": 81000000,
+      "start_us": 80730000,
+      "text": "morse"
+    },
+    {
+      "end_us": 81280000,
+      "start_us": 81000000,
+      "text": "code"
+    },
+    {
+      "end_us": 82230000,
+      "start_us": 81280000,
+      "text": "related"
+    },
+    {
+      "end_us": 82830000,
+      "start_us": 82230000,
+      "text": "relays"
+    },
+    {
+      "end_us": 84100000,
+      "start_us": 82830000,
+      "text": "the"
+    },
+    {
+      "end_us": 84280000,
+      "start_us": 84100000,
+      "text": "uh"
+    },
+    {
+      "end_us": 84430000,
+      "start_us": 84280000,
+      "text": "to"
+    },
+    {
+      "end_us": 84750000,
+      "start_us": 84430000,
+      "text": "the"
+    },
+    {
+      "end_us": 85690000,
+      "start_us": 84750000,
+      "text": "generat"
+    },
+    {
+      "end_us": 85830000,
+      "start_us": 85690000,
+      "text": "to"
+    },
+    {
+      "end_us": 86230000,
+      "start_us": 85830000,
+      "text": "the"
+    },
+    {
+      "end_us": 87190000,
+      "start_us": 86230000,
+      "text": "generator"
+    },
+    {
+      "end_us": 89130000,
+      "start_us": 87190000,
+      "text": "amplification"
+    },
+    {
+      "end_us": 90000000,
+      "start_us": 89130000,
+      "text": "and"
+    },
+    {
+      "end_us": 92030000,
+      "start_us": 90000000,
+      "text": "uh"
+    },
+    {
+      "end_us": 92120000,
+      "start_us": 92030000,
+      "text": "the"
+    },
+    {
+      "end_us": 92830000,
+      "start_us": 92120000,
+      "text": "circuit"
+    },
+    {
+      "end_us": 93500000,
+      "start_us": 92830000,
+      "text": "board"
+    },
+    {
+      "end_us": 93700000,
+      "start_us": 93500000,
+      "text": "is"
+    },
+    {
+      "end_us": 94050000,
+      "start_us": 93700000,
+      "text": "very"
+    },
+    {
+      "end_us": 94640000,
+      "start_us": 94050000,
+      "text": "inexpensive"
+    },
+    {
+      "end_us": 94760000,
+      "start_us": 94640000,
+      "text": "to"
+    },
+    {
+      "end_us": 95920000,
+      "start_us": 94760000,
+      "text": "build"
+    },
+    {
+      "end_us": 96170000,
+      "start_us": 95920000,
+      "text": "and"
+    },
+    {
+      "end_us": 96300000,
+      "start_us": 96170000,
+      "text": "so"
+    },
+    {
+      "end_us": 96420000,
+      "start_us": 96300000,
+      "text": "she"
+    },
+    {
+      "end_us": 96690000,
+      "start_us": 96420000,
+      "text": "thinks"
+    },
+    {
+      "end_us": 96820000,
+      "start_us": 96690000,
+      "text": "this"
+    },
+    {
+      "end_us": 96920000,
+      "start_us": 96820000,
+      "text": "is"
+    },
+    {
+      "end_us": 96970000,
+      "start_us": 96920000,
+      "text": "a"
+    },
+    {
+      "end_us": 97220000,
+      "start_us": 96970000,
+      "text": "great"
+    },
+    {
+      "end_us": 98060000,
+      "start_us": 97220000,
+      "text": "feature"
+    },
+    {
+      "end_us": 98460000,
+      "start_us": 98060000,
+      "text": "uh"
+    },
+    {
+      "end_us": 99060000,
+      "start_us": 98460000,
+      "text": "to"
+    },
+    {
+      "end_us": 99290000,
+      "start_us": 99060000,
+      "text": "to"
+    },
+    {
+      "end_us": 99420000,
+      "start_us": 99290000,
+      "text": "to"
+    },
+    {
+      "end_us": 100010000,
+      "start_us": 99420000,
+      "text": "consider"
+    },
+    {
+      "end_us": 100010000,
+      "start_us": 100010000,
+      "text": "."
+    },
+    {
+      "end_us": 102350000,
+      "start_us": 102160000,
+      "text": "She"
+    },
+    {
+      "end_us": 102490000,
+      "start_us": 102350000,
+      "text": "would"
+    },
+    {
+      "end_us": 102940000,
+      "start_us": 102490000,
+      "text": "like"
+    },
+    {
+      "end_us": 103790000,
+      "start_us": 102940000,
+      "text": "uh"
+    },
+    {
+      "end_us": 103990000,
+      "start_us": 103790000,
+      "text": "this"
+    },
+    {
+      "end_us": 104180000,
+      "start_us": 103990000,
+      "text": "whole"
+    },
+    {
+      "end_us": 104460000,
+      "start_us": 104180000,
+      "text": "thing"
+    },
+    {
+      "end_us": 104670000,
+      "start_us": 104460000,
+      "text": "should"
+    },
+    {
+      "end_us": 104790000,
+      "start_us": 104670000,
+      "text": "be"
+    },
+    {
+      "end_us": 105060000,
+      "start_us": 104790000,
+      "text": "push"
+    },
+    {
+      "end_us": 106180000,
+      "start_us": 105060000,
+      "text": "buttons"
+    },
+    {
+      "end_us": 106350000,
+      "start_us": 106180000,
+      "text": "with"
+    },
+    {
+      "end_us": 106400000,
+      "start_us": 106350000,
+      "text": "a"
+    },
+    {
+      "end_us": 106730000,
+      "start_us": 106400000,
+      "text": "simple"
+    },
+    {
+      "end_us": 106960000,
+      "start_us": 106730000,
+      "text": "chip"
+    },
+    {
+      "end_us": 108270000,
+      "start_us": 108040000,
+      "text": "uh"
+    },
+    {
+      "end_us": 109130000,
+      "start_us": 108270000,
+      "text": "scrolling"
+    },
+    {
+      "end_us": 109540000,
+      "start_us": 109130000,
+      "text": "method"
+    },
+    {
+      "end_us": 110140000,
+      "start_us": 109540000,
+      "text": "is"
+    },
+    {
+      "end_us": 110350000,
+      "start_us": 110140000,
+      "text": "more"
+    },
+    {
+      "end_us": 110940000,
+      "start_us": 110350000,
+      "text": "expensive"
+    },
+    {
+      "end_us": 111080000,
+      "start_us": 110940000,
+      "text": "and"
+    },
+    {
+      "end_us": 111450000,
+      "start_us": 111080000,
+      "text": "not"
+    },
+    {
+      "end_us": 111650000,
+      "start_us": 111450000,
+      "text": "that"
+    },
+    {
+      "end_us": 112100000,
+      "start_us": 111650000,
+      "text": "practical"
+    },
+    {
+      "end_us": 112640000,
+      "start_us": 112100000,
+      "text": "anymore"
+    },
+    {
+      "end_us": 112640000,
+      "start_us": 112640000,
+      "text": "."
+    },
+    {
+      "end_us": 114040000,
+      "start_us": 113840000,
+      "text": "Should"
+    },
+    {
+      "end_us": 114200000,
+      "start_us": 114040000,
+      "text": "be"
+    },
+    {
+      "end_us": 114610000,
+      "start_us": 114200000,
+      "text": "battery"
+    },
+    {
+      "end_us": 116430000,
+      "start_us": 114610000,
+      "text": "operated"
+    },
+    {
+      "end_us": 117030000,
+      "start_us": 116430000,
+      "text": "and"
+    },
+    {
+      "end_us": 117240000,
+      "start_us": 117030000,
+      "text": "of"
+    },
+    {
+      "end_us": 117470000,
+      "start_us": 117240000,
+      "text": "course"
+    },
+    {
+      "end_us": 117550000,
+      "start_us": 117470000,
+      "text": "she"
+    },
+    {
+      "end_us": 117660000,
+      "start_us": 117550000,
+      "text": "would"
+    },
+    {
+      "end_us": 117860000,
+      "start_us": 117660000,
+      "text": "have"
+    },
+    {
+      "end_us": 117930000,
+      "start_us": 117860000,
+      "text": "the"
+    },
+    {
+      "end_us": 118320000,
+      "start_us": 117930000,
+      "text": "special"
+    },
+    {
+      "end_us": 118910000,
+      "start_us": 118320000,
+      "text": "cases"
+    },
+    {
+      "end_us": 118910000,
+      "start_us": 118910000,
+      "text": "."
+    },
+    {
+      "end_us": 120460000,
+      "start_us": 120400000,
+      "text": "The"
+    },
+    {
+      "end_us": 121210000,
+      "start_us": 120460000,
+      "text": "marketing"
+    },
+    {
+      "end_us": 122370000,
+      "start_us": 121210000,
+      "text": "expert"
+    },
+    {
+      "end_us": 124040000,
+      "start_us": 122370000,
+      "text": "uh"
+    },
+    {
+      "end_us": 124360000,
+      "start_us": 124040000,
+      "text": "who"
+    },
+    {
+      "end_us": 124640000,
+      "start_us": 124360000,
+      "text": "has"
+    },
+    {
+      "end_us": 124770000,
+      "start_us": 124640000,
+      "text": "to"
+    },
+    {
+      "end_us": 125160000,
+      "start_us": 124770000,
+      "text": "finally"
+    },
+    {
+      "end_us": 125370000,
+      "start_us": 125160000,
+      "text": "come"
+    },
+    {
+      "end_us": 126530000,
+      "start_us": 125370000,
+      "text": "up"
+    },
+    {
+      "end_us": 126860000,
+      "start_us": 126530000,
+      "text": "with"
+    },
+    {
+      "end_us": 127120000,
+      "start_us": 126860000,
+      "text": "to"
+    },
+    {
+      "end_us": 127310000,
+      "start_us": 127120000,
+      "text": "to"
+    },
+    {
+      "end_us": 127420000,
+      "start_us": 127310000,
+      "text": "to"
+    },
+    {
+      "end_us": 127760000,
+      "start_us": 127420000,
+      "text": "market"
+    },
+    {
+      "end_us": 127920000,
+      "start_us": 127760000,
+      "text": "this"
+    },
+    {
+      "end_us": 128970000,
+      "start_us": 127920000,
+      "text": "product"
+    },
+    {
+      "end_us": 129210000,
+      "start_us": 128970000,
+      "text": "has"
+    },
+    {
+      "end_us": 129830000,
+      "start_us": 129210000,
+      "text": "been"
+    },
+    {
+      "end_us": 130180000,
+      "start_us": 129830000,
+      "text": "watching"
+    },
+    {
+      "end_us": 130260000,
+      "start_us": 130180000,
+      "text": "the"
+    },
+    {
+      "end_us": 131460000,
+      "start_us": 130260000,
+      "text": "competition"
+    },
+    {
+      "end_us": 131460000,
+      "start_us": 131460000,
+      "text": ","
+    },
+    {
+      "end_us": 131570000,
+      "start_us": 131460000,
+      "text": "has"
+    },
+    {
+      "end_us": 131750000,
+      "start_us": 131570000,
+      "text": "done"
+    },
+    {
+      "end_us": 131950000,
+      "start_us": 131750000,
+      "text": "some"
+    },
+    {
+      "end_us": 132450000,
+      "start_us": 131950000,
+      "text": "research"
+    },
+    {
+      "end_us": 132560000,
+      "start_us": 132450000,
+      "text": "on"
+    },
+    {
+      "end_us": 132680000,
+      "start_us": 132560000,
+      "text": "the"
+    },
+    {
+      "end_us": 134000000,
+      "start_us": 132680000,
+      "text": "internet"
+    },
+    {
+      "end_us": 134230000,
+      "start_us": 134000000,
+      "text": "and"
+    },
+    {
+      "end_us": 134930000,
+      "start_us": 134230000,
+      "text": "also"
+    },
+    {
+      "end_us": 135710000,
+      "start_us": 134930000,
+      "text": "has"
+    },
+    {
+      "end_us": 136020000,
+      "start_us": 135710000,
+      "text": "used"
+    },
+    {
+      "end_us": 136100000,
+      "start_us": 136020000,
+      "text": "h"
+    },
+    {
+      "end_us": 136310000,
+      "start_us": 136100000,
+      "text": "her"
+    },
+    {
+      "end_us": 136710000,
+      "start_us": 136310000,
+      "text": "personal"
+    },
+    {
+      "end_us": 137730000,
+      "start_us": 136710000,
+      "text": "observations"
+    },
+    {
+      "end_us": 137850000,
+      "start_us": 137730000,
+      "text": "to"
+    },
+    {
+      "end_us": 138130000,
+      "start_us": 137850000,
+      "text": "come"
+    },
+    {
+      "end_us": 139000000,
+      "start_us": 138130000,
+      "text": "up"
+    },
+    {
+      "end_us": 139180000,
+      "start_us": 139000000,
+      "text": "with"
+    },
+    {
+      "end_us": 139260000,
+      "start_us": 139180000,
+      "text": "the"
+    },
+    {
+      "end_us": 140060000,
+      "start_us": 139260000,
+      "text": "fact"
+    },
+    {
+      "end_us": 140650000,
+      "start_us": 140060000,
+      "text": "that"
+    },
+    {
+      "end_us": 140960000,
+      "start_us": 140650000,
+      "text": "such"
+    },
+    {
+      "end_us": 140990000,
+      "start_us": 140960000,
+      "text": "a"
+    },
+    {
+      "end_us": 141430000,
+      "start_us": 140990000,
+      "text": "remote"
+    },
+    {
+      "end_us": 141730000,
+      "start_us": 141430000,
+      "text": "sh"
+    },
+    {
+      "end_us": 141990000,
+      "start_us": 141730000,
+      "text": "should"
+    },
+    {
+      "end_us": 142120000,
+      "start_us": 141990000,
+      "text": "be"
+    },
+    {
+      "end_us": 142730000,
+      "start_us": 142120000,
+      "text": "small"
+    },
+    {
+      "end_us": 142730000,
+      "start_us": 142730000,
+      "text": ","
+    },
+    {
+      "end_us": 144550000,
+      "start_us": 144310000,
+      "text": "easy"
+    },
+    {
+      "end_us": 144670000,
+      "start_us": 144550000,
+      "text": "to"
+    },
+    {
+      "end_us": 145310000,
+      "start_us": 144670000,
+      "text": "use"
+    },
+    {
+      "end_us": 145450000,
+      "start_us": 145310000,
+      "text": "and"
+    },
+    {
+      "end_us": 145530000,
+      "start_us": 145450000,
+      "text": "it"
+    },
+    {
+      "end_us": 145680000,
+      "start_us": 145530000,
+      "text": "should"
+    },
+    {
+      "end_us": 145810000,
+      "start_us": 145680000,
+      "text": "be"
+    },
+    {
+      "end_us": 145960000,
+      "start_us": 145810000,
+      "text": "eye"
+    },
+    {
+      "end_us": 146540000,
+      "start_us": 145960000,
+      "text": "catching"
+    },
+    {
+      "end_us": 146540000,
+      "start_us": 146540000,
+      "text": "."
+    },
+    {
+      "end_us": 150540000,
+      "start_us": 150360000,
+      "text": "From"
+    },
+    {
+      "end_us": 150670000,
+      "start_us": 150540000,
+      "text": "her"
+    },
+    {
+      "end_us": 150900000,
+      "start_us": 150670000,
+      "text": "point"
+    },
+    {
+      "end_us": 150970000,
+      "start_us": 150900000,
+      "text": "of"
+    },
+    {
+      "end_us": 151340000,
+      "start_us": 150970000,
+      "text": "view"
+    },
+    {
+      "end_us": 151480000,
+      "start_us": 151340000,
+      "text": "of"
+    },
+    {
+      "end_us": 152220000,
+      "start_us": 151480000,
+      "text": "course"
+    },
+    {
+      "end_us": 152380000,
+      "start_us": 152220000,
+      "text": "one"
+    },
+    {
+      "end_us": 152510000,
+      "start_us": 152380000,
+      "text": "of"
+    },
+    {
+      "end_us": 152580000,
+      "start_us": 152510000,
+      "text": "the"
+    },
+    {
+      "end_us": 152870000,
+      "start_us": 152580000,
+      "text": "most"
+    },
+    {
+      "end_us": 153430000,
+      "start_us": 152870000,
+      "text": "important"
+    },
+    {
+      "end_us": 153830000,
+      "start_us": 153430000,
+      "text": "facts"
+    },
+    {
+      "end_us": 154050000,
+      "start_us": 153830000,
+      "text": "is"
+    },
+    {
+      "end_us": 154500000,
+      "start_us": 154050000,
+      "text": "that"
+    },
+    {
+      "end_us": 154690000,
+      "start_us": 154500000,
+      "text": "we"
+    },
+    {
+      "end_us": 154860000,
+      "start_us": 154690000,
+      "text": "should"
+    },
+    {
+      "end_us": 155080000,
+      "start_us": 154860000,
+      "text": "get"
+    },
+    {
+      "end_us": 155170000,
+      "start_us": 155080000,
+      "text": "to"
+    },
+    {
+      "end_us": 155670000,
+      "start_us": 155170000,
+      "text": "market"
+    },
+    {
+      "end_us": 156070000,
+      "start_us": 155670000,
+      "text": "before"
+    },
+    {
+      "end_us": 156280000,
+      "start_us": 156070000,
+      "text": "our"
+    },
+    {
+      "end_us": 156900000,
+      "start_us": 156280000,
+      "text": "competition"
+    },
+    {
+      "end_us": 157460000,
+      "start_us": 156900000,
+      "text": "does"
+    },
+    {
+      "end_us": 157460000,
+      "start_us": 157460000,
+      "text": "."
+    },
+    {
+      "end_us": 161020000,
+      "start_us": 160590000,
+      "text": "To"
+    },
+    {
+      "end_us": 161240000,
+      "start_us": 161020000,
+      "text": "do"
+    },
+    {
+      "end_us": 162090000,
+      "start_us": 161240000,
+      "text": "that"
+    },
+    {
+      "end_us": 162580000,
+      "start_us": 162090000,
+      "text": "uh"
+    },
+    {
+      "end_us": 162900000,
+      "start_us": 162580000,
+      "text": "maybe"
+    },
+    {
+      "end_us": 163100000,
+      "start_us": 162900000,
+      "text": "one"
+    },
+    {
+      "end_us": 163180000,
+      "start_us": 163100000,
+      "text": "or"
+    },
+    {
+      "end_us": 163370000,
+      "start_us": 163180000,
+      "text": "two"
+    },
+    {
+      "end_us": 163800000,
+      "start_us": 163370000,
+      "text": "features"
+    },
+    {
+      "end_us": 164060000,
+      "start_us": 163800000,
+      "text": "should"
+    },
+    {
+      "end_us": 164230000,
+      "start_us": 164060000,
+      "text": "be"
+    },
+    {
+      "end_us": 164960000,
+      "start_us": 164230000,
+      "text": "developed"
+    },
+    {
+      "end_us": 165160000,
+      "start_us": 164960000,
+      "text": "on"
+    },
+    {
+      "end_us": 165360000,
+      "start_us": 165160000,
+      "text": "which"
+    },
+    {
+      "end_us": 165590000,
+      "start_us": 165360000,
+      "text": "we"
+    },
+    {
+      "end_us": 166050000,
+      "start_us": 165590000,
+      "text": "could"
+    },
+    {
+      "end_us": 166320000,
+      "start_us": 166050000,
+      "text": "dwell"
+    },
+    {
+      "end_us": 166860000,
+      "start_us": 166320000,
+      "text": "on"
+    },
+    {
+      "end_us": 167040000,
+      "start_us": 166860000,
+      "text": "or"
+    },
+    {
+      "end_us": 167160000,
+      "start_us": 167040000,
+      "text": "in"
+    },
+    {
+      "end_us": 167350000,
+      "start_us": 167160000,
+      "text": "other"
+    },
+    {
+      "end_us": 167870000,
+      "start_us": 167350000,
+      "text": "words"
+    },
+    {
+      "end_us": 168050000,
+      "start_us": 167870000,
+      "text": "on"
+    },
+    {
+      "end_us": 168330000,
+      "start_us": 168050000,
+      "text": "which"
+    },
+    {
+      "end_us": 168530000,
+      "start_us": 168330000,
+      "text": "our"
+    },
+    {
+      "end_us": 169600000,
+      "start_us": 168530000,
+      "text": "campaign"
+    },
+    {
+      "end_us": 169810000,
+      "start_us": 169600000,
+      "text": "could"
+    },
+    {
+      "end_us": 169940000,
+      "start_us": 169810000,
+      "text": "be"
+    },
+    {
+      "end_us": 170240000,
+      "start_us": 169940000,
+      "text": "built"
+    },
+    {
+      "end_us": 170570000,
+      "start_us": 170240000,
+      "text": "on"
+    },
+    {
+      "end_us": 170570000,
+      "start_us": 170570000,
+      "text": "."
+    },
+    {
+      "end_us": 172240000,
+      "start_us": 172130000,
+      "text": "Too"
+    },
+    {
+      "end_us": 172660000,
+      "start_us": 172240000,
+      "text": "many"
+    },
+    {
+      "end_us": 172840000,
+      "start_us": 172660000,
+      "text": "new"
+    },
+    {
+      "end_us": 173290000,
+      "start_us": 172840000,
+      "text": "features"
+    },
+    {
+      "end_us": 173390000,
+      "start_us": 173290000,
+      "text": "or"
+    },
+    {
+      "end_us": 173580000,
+      "start_us": 173390000,
+      "text": "too"
+    },
+    {
+      "end_us": 174390000,
+      "start_us": 173580000,
+      "text": "many"
+    },
+    {
+      "end_us": 174800000,
+      "start_us": 174390000,
+      "text": "points"
+    },
+    {
+      "end_us": 175030000,
+      "start_us": 174800000,
+      "text": "would"
+    },
+    {
+      "end_us": 175250000,
+      "start_us": 175030000,
+      "text": "only"
+    },
+    {
+      "end_us": 175730000,
+      "start_us": 175250000,
+      "text": "confuse"
+    },
+    {
+      "end_us": 176970000,
+      "start_us": 175730000,
+      "text": "matter"
+    },
+    {
+      "end_us": 176970000,
+      "start_us": 176970000,
+      "text": "."
+    },
+    {
+      "end_us": 177090000,
+      "start_us": 176970000,
+      "text": "So"
+    },
+    {
+      "end_us": 177210000,
+      "start_us": 177090000,
+      "text": "we"
+    },
+    {
+      "end_us": 177640000,
+      "start_us": 177210000,
+      "text": "prefer"
+    },
+    {
+      "end_us": 177760000,
+      "start_us": 177640000,
+      "text": "to"
+    },
+    {
+      "end_us": 177930000,
+      "start_us": 177760000,
+      "text": "have"
+    },
+    {
+      "end_us": 178110000,
+      "start_us": 177930000,
+      "text": "one"
+    },
+    {
+      "end_us": 178190000,
+      "start_us": 178110000,
+      "text": "or"
+    },
+    {
+      "end_us": 178390000,
+      "start_us": 178190000,
+      "text": "two"
+    },
+    {
+      "end_us": 178840000,
+      "start_us": 178390000,
+      "text": "features"
+    },
+    {
+      "end_us": 179000000,
+      "start_us": 178840000,
+      "text": "that"
+    },
+    {
+      "end_us": 179160000,
+      "start_us": 179000000,
+      "text": "can"
+    },
+    {
+      "end_us": 179340000,
+      "start_us": 179160000,
+      "text": "be"
+    },
+    {
+      "end_us": 179860000,
+      "start_us": 179340000,
+      "text": "really"
+    },
+    {
+      "end_us": 180840000,
+      "start_us": 179860000,
+      "text": "uh"
+    },
+    {
+      "end_us": 181090000,
+      "start_us": 180840000,
+      "text": "driven"
+    },
+    {
+      "end_us": 181490000,
+      "start_us": 181090000,
+      "text": "home"
+    },
+    {
+      "end_us": 181490000,
+      "start_us": 181490000,
+      "text": "."
+    },
+    {
+      "end_us": 184600000,
+      "start_us": 182880000,
+      "text": "Um"
+    },
+    {
+      "end_us": 184790000,
+      "start_us": 184600000,
+      "text": "it"
+    },
+    {
+      "end_us": 185110000,
+      "start_us": 184790000,
+      "text": "should"
+    },
+    {
+      "end_us": 185430000,
+      "start_us": 185110000,
+      "text": "have"
+    },
+    {
+      "end_us": 185490000,
+      "start_us": 185430000,
+      "text": "a"
+    },
+    {
+      "end_us": 186070000,
+      "start_us": 185490000,
+      "text": "fruit"
+    },
+    {
+      "end_us": 186170000,
+      "start_us": 186070000,
+      "text": "and"
+    },
+    {
+      "end_us": 186600000,
+      "start_us": 186170000,
+      "text": "vegetable"
+    },
+    {
+      "end_us": 187830000,
+      "start_us": 186600000,
+      "text": "design"
+    },
+    {
+      "end_us": 187990000,
+      "start_us": 187830000,
+      "text": "and"
+    },
+    {
+      "end_us": 188130000,
+      "start_us": 187990000,
+      "text": "should"
+    },
+    {
+      "end_us": 188270000,
+      "start_us": 188130000,
+      "text": "have"
+    },
+    {
+      "end_us": 188330000,
+      "start_us": 188270000,
+      "text": "a"
+    },
+    {
+      "end_us": 188670000,
+      "start_us": 188330000,
+      "text": "soft"
+    },
+    {
+      "end_us": 189160000,
+      "start_us": 188670000,
+      "text": "feel"
+    },
+    {
+      "end_us": 189160000,
+      "start_us": 189160000,
+      "text": "."
+    },
+    {
+      "end_us": 189340000,
+      "start_us": 189160000,
+      "text": "She"
+    },
+    {
+      "end_us": 189650000,
+      "start_us": 189340000,
+      "text": "feels"
+    },
+    {
+      "end_us": 189920000,
+      "start_us": 189650000,
+      "text": "that's"
+    },
+    {
+      "end_us": 190160000,
+      "start_us": 189920000,
+      "text": "really"
+    },
+    {
+      "end_us": 190370000,
+      "start_us": 190160000,
+      "text": "what"
+    },
+    {
+      "end_us": 190640000,
+      "start_us": 190370000,
+      "text": "people"
+    },
+    {
+      "end_us": 190900000,
+      "start_us": 190640000,
+      "text": "want"
+    },
+    {
+      "end_us": 191260000,
+      "start_us": 190900000,
+      "text": "today"
+    },
+    {
+      "end_us": 191260000,
+      "start_us": 191260000,
+      "text": "."
+    },
+    {
+      "end_us": 193270000,
+      "start_us": 192930000,
+      "text": "And"
+    },
+    {
+      "end_us": 193370000,
+      "start_us": 193270000,
+      "text": "the"
+    },
+    {
+      "end_us": 193870000,
+      "start_us": 193370000,
+      "text": "decision"
+    },
+    {
+      "end_us": 194010000,
+      "start_us": 193870000,
+      "text": "that"
+    },
+    {
+      "end_us": 194120000,
+      "start_us": 194010000,
+      "text": "we"
+    },
+    {
+      "end_us": 194520000,
+      "start_us": 194120000,
+      "text": "took"
+    },
+    {
+      "end_us": 194900000,
+      "start_us": 194520000,
+      "text": "last"
+    },
+    {
+      "end_us": 195570000,
+      "start_us": 194900000,
+      "text": "time"
+    },
+    {
+      "end_us": 196140000,
+      "start_us": 195570000,
+      "text": "was"
+    },
+    {
+      "end_us": 196590000,
+      "start_us": 196140000,
+      "text": "that"
+    },
+    {
+      "end_us": 197600000,
+      "start_us": 196590000,
+      "text": "uh"
+    },
+    {
+      "end_us": 197950000,
+      "start_us": 197600000,
+      "text": "the"
+    },
+    {
+      "end_us": 198470000,
+      "start_us": 197950000,
+      "text": "special"
+    },
+    {
+      "end_us": 198920000,
+      "start_us": 198470000,
+      "text": "feature"
+    },
+    {
+      "end_us": 199010000,
+      "start_us": 198920000,
+      "text": "we"
+    },
+    {
+      "end_us": 199170000,
+      "start_us": 199010000,
+      "text": "would"
+    },
+    {
+      "end_us": 199360000,
+      "start_us": 199170000,
+      "text": "like"
+    },
+    {
+      "end_us": 199460000,
+      "start_us": 199360000,
+      "text": "to"
+    },
+    {
+      "end_us": 199650000,
+      "start_us": 199460000,
+      "text": "see"
+    },
+    {
+      "end_us": 199790000,
+      "start_us": 199650000,
+      "text": "is"
+    },
+    {
+      "end_us": 199850000,
+      "start_us": 199790000,
+      "text": "a"
+    },
+    {
+      "end_us": 200180000,
+      "start_us": 199850000,
+      "text": "speech"
+    },
+    {
+      "end_us": 200970000,
+      "start_us": 200180000,
+      "text": "recogniser"
+    },
+    {
+      "end_us": 200970000,
+      "start_us": 200970000,
+      "text": ","
+    },
+    {
+      "end_us": 202380000,
+      "start_us": 202180000,
+      "text": "the"
+    },
+    {
+      "end_us": 202900000,
+      "start_us": 202380000,
+      "text": "energy"
+    },
+    {
+      "end_us": 203110000,
+      "start_us": 202900000,
+      "text": "should"
+    },
+    {
+      "end_us": 203240000,
+      "start_us": 203110000,
+      "text": "be"
+    },
+    {
+      "end_us": 204880000,
+      "start_us": 203240000,
+      "text": "battery"
+    },
+    {
+      "end_us": 205240000,
+      "start_us": 204880000,
+      "text": "uh"
+    },
+    {
+      "end_us": 205520000,
+      "start_us": 205240000,
+      "text": "should"
+    },
+    {
+      "end_us": 206240000,
+      "start_us": 205520000,
+      "text": "be"
+    },
+    {
+      "end_us": 206410000,
+      "start_us": 206240000,
+      "text": "on"
+    },
+    {
+      "end_us": 206450000,
+      "start_us": 206410000,
+      "text": "a"
+    },
+    {
+      "end_us": 207550000,
+      "start_us": 206450000,
+      "text": "chip"
+    },
+    {
+      "end_us": 207550000,
+      "start_us": 207550000,
+      "text": ","
+    },
+    {
+      "end_us": 207760000,
+      "start_us": 207550000,
+      "text": "should"
+    },
+    {
+      "end_us": 207870000,
+      "start_us": 207760000,
+      "text": "be"
+    },
+    {
+      "end_us": 208230000,
+      "start_us": 207870000,
+      "text": "trendy"
+    },
+    {
+      "end_us": 208930000,
+      "start_us": 208230000,
+      "text": "design"
+    },
+    {
+      "end_us": 208930000,
+      "start_us": 208930000,
+      "text": ","
+    },
+    {
+      "end_us": 209510000,
+      "start_us": 208930000,
+      "text": "compact"
+    },
+    {
+      "end_us": 209640000,
+      "start_us": 209510000,
+      "text": "and"
+    },
+    {
+      "end_us": 210770000,
+      "start_us": 209640000,
+      "text": "strong"
+    },
+    {
+      "end_us": 210770000,
+      "start_us": 210770000,
+      "text": ","
+    },
+    {
+      "end_us": 210960000,
+      "start_us": 210770000,
+      "text": "and"
+    },
+    {
+      "end_us": 211110000,
+      "start_us": 210960000,
+      "text": "should"
+    },
+    {
+      "end_us": 211310000,
+      "start_us": 211110000,
+      "text": "have"
+    },
+    {
+      "end_us": 211890000,
+      "start_us": 211310000,
+      "text": "buttons"
+    },
+    {
+      "end_us": 211890000,
+      "start_us": 211890000,
+      "text": "."
+    },
+    {
+      "end_us": 213410000,
+      "start_us": 213250000,
+      "text": "And"
+    },
+    {
+      "end_us": 213550000,
+      "start_us": 213410000,
+      "text": "that"
+    },
+    {
+      "end_us": 214190000,
+      "start_us": 213550000,
+      "text": "concludes"
+    },
+    {
+      "end_us": 214280000,
+      "start_us": 214190000,
+      "text": "the"
+    },
+    {
+      "end_us": 215130000,
+      "start_us": 214280000,
+      "text": "presentation"
+    },
+    {
+      "end_us": 215590000,
+      "start_us": 215130000,
+      "text": "from"
+    },
+    {
+      "end_us": 215710000,
+      "start_us": 215590000,
+      "text": "the"
+    },
+    {
+      "end_us": 216620000,
+      "start_us": 215710000,
+      "text": "last"
+    },
+    {
+      "end_us": 217110000,
+      "start_us": 216620000,
+      "text": "minutes"
+    },
+    {
+      "end_us": 217250000,
+      "start_us": 217110000,
+      "text": "from"
+    },
+    {
+      "end_us": 217340000,
+      "start_us": 217250000,
+      "text": "the"
+    },
+    {
+      "end_us": 217640000,
+      "start_us": 217340000,
+      "text": "last"
+    },
+    {
+      "end_us": 217980000,
+      "start_us": 217640000,
+      "text": "meeting"
+    },
+    {
+      "end_us": 217980000,
+      "start_us": 217980000,
+      "text": "."
+    },
+    {
+      "end_us": 221340000,
+      "start_us": 220720000,
+      "text": "Now"
+    },
+    {
+      "end_us": 221930000,
+      "start_us": 221340000,
+      "text": "uh"
+    },
+    {
+      "end_us": 222050000,
+      "start_us": 221930000,
+      "text": "we"
+    },
+    {
+      "end_us": 222180000,
+      "start_us": 222050000,
+      "text": "are"
+    },
+    {
+      "end_us": 222530000,
+      "start_us": 222180000,
+      "text": "ready"
+    },
+    {
+      "end_us": 222770000,
+      "start_us": 222530000,
+      "text": "for"
+    },
+    {
+      "end_us": 222860000,
+      "start_us": 222770000,
+      "text": "the"
+    },
+    {
+      "end_us": 224310000,
+      "start_us": 222860000,
+      "text": "presentation"
+    },
+    {
+      "end_us": 224550000,
+      "start_us": 224310000,
+      "text": "of"
+    },
+    {
+      "end_us": 224610000,
+      "start_us": 224550000,
+      "text": "the"
+    },
+    {
+      "end_us": 225350000,
+      "start_us": 224610000,
+      "text": "prototype"
+    },
+    {
+      "end_us": 225350000,
+      "start_us": 225350000,
+      "text": "."
+    }
+  ]
+}

@@ -122,6 +122,11 @@ def test_whisper_env_is_cpu_int8_with_pinned_cache(tmp_path: Path) -> None:
     assert env["DEVICE"] == "cpu"  # v1: CT2 on CPU, Metal ASR is a follow-up
     assert env["WHISPER_MODEL"] == "large-v2"
     assert env["COMPUTE_TYPE"] == "int8"
+    # Mirror the CPU image (Dockerfile.cpu BATCH_SIZE=4), not the GPU/ROCm app
+    # default of 16: CPU cannot sustain GPU-sized batches, batch_size is
+    # numerics-affecting (feeds the vad_filter=True batched pipeline), and the
+    # frozen #33 CT2-CPU baseline oracle is captured at this value.
+    assert env["BATCH_SIZE"] == "4"
     assert env["WHISPER_DOWNLOAD_ROOT"] == f"{tmp_path}/models/whisper"
     assert env["PYTHONUNBUFFERED"] == "1"
     # Setup pre-downloads the sha-pinned snapshot; the running service must

@@ -1,0 +1,41 @@
+{
+  "component": "openai-whisper text normalizers (EnglishTextNormalizer)",
+  "purpose": "Frozen denominator for every WER/CER number in the whisper Metal ASR bakeoff (issue #33); see tests/parity/bakeoff/normalize.py and docs/gpu-contracts.md.",
+  "upstream_repo": "openai/whisper",
+  "upstream_commit": "5f86d1d86363843179951550570367b37c5d6f78",
+  "upstream_path": "whisper/normalizers/",
+  "vendored": "2026-08-16",
+  "license": "MIT",
+  "license_holder": "Copyright (c) 2022 OpenAI",
+  "license_file": "LICENSE.openai-whisper",
+  "verbatim": true,
+  "files": {
+    "openai_whisper_normalizers/__init__.py": {
+      "sha256": "f18fcdce4caee7f2e80e4c01ab0457d3a080a872a29489542c6d23c4b0bba572",
+      "size_bytes": 130
+    },
+    "openai_whisper_normalizers/basic.py": {
+      "sha256": "4742eaa040e0657fa1247a1361e0d856c62317a43326ea59a40c2e9edd8d2c38",
+      "size_bytes": 2064
+    },
+    "openai_whisper_normalizers/english.py": {
+      "sha256": "2898e4672aeefc9f44cb4de38c115cdf286f5b35ae321433467a7674ce8841d0",
+      "size_bytes": 20868
+    },
+    "openai_whisper_normalizers/english.json": {
+      "sha256": "6607f948be9824d2e1b2fa2223cd94c06c45afa4e05ea0e3d5e1f2bdffde2465",
+      "size_bytes": 56128
+    },
+    "openai_whisper_normalizers/LICENSE.openai-whisper": {
+      "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+      "size_bytes": 1063
+    }
+  },
+  "runtime_deps": {
+    "note": "more-itertools is on the EnglishNumberNormalizer output path (windowed); regex is imported by basic.py but NOT exercised by EnglishTextNormalizer (which uses stdlib re) — installed so the package imports. Exact-pinned in the pyproject 'parity' extra; uv.lock binds transitives.",
+    "more-itertools": "==11.1.0",
+    "regex": "==2026.7.19"
+  },
+  "output_freeze_note": "The API alone does not freeze output. The freeze is: these byte digests + the exact-pinned deps above + the recorded runtime fingerprint (Python minor and unicodedata Unicode version, the likeliest exotic-character drift source) + the golden input->output vectors asserted by tests/contracts/test_bakeoff_normalizer.py.",
+  "regeneration": "Verbatim re-fetch from the pinned commit (run from repo root):\n  COMMIT=5f86d1d86363843179951550570367b37c5d6f78\n  BASE=https://raw.githubusercontent.com/openai/whisper/$COMMIT\n  DEST=tests/parity/bakeoff/_vendor/openai_whisper_normalizers\n  curl -fsS $BASE/whisper/normalizers/__init__.py   -o $DEST/__init__.py\n  curl -fsS $BASE/whisper/normalizers/basic.py      -o $DEST/basic.py\n  curl -fsS $BASE/whisper/normalizers/english.py    -o $DEST/english.py\n  curl -fsS $BASE/whisper/normalizers/english.json  -o $DEST/english.json\n  curl -fsS $BASE/LICENSE                            -o $DEST/LICENSE.openai-whisper\nA refresh to a new commit is a normalizer change: bump WRAPPER_REVISION's peer (the upstream_commit here), refresh these digests, and re-record the golden vectors + baselines together."
+}

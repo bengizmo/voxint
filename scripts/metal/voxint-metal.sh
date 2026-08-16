@@ -305,6 +305,13 @@ service_env() {
       printf 'DEVICE=cpu\n'
       printf 'WHISPER_MODEL=large-v2\n'
       printf 'COMPUTE_TYPE=int8\n'
+      # Mirror the CPU image (Dockerfile.cpu BATCH_SIZE=4), NOT the app default
+      # of 16 (main.py) the GPU/ROCm images ship: "CPU inference cannot sustain
+      # GPU-sized batches". batch_size feeds the vad_filter=True batched
+      # pipeline and is numerics-affecting, so leaving it unset silently ran the
+      # CT2-CPU tier at a batch size no shipped CPU deployment uses. The frozen
+      # #33 CT2-CPU baseline oracle is captured at this value. Contract-tested.
+      printf 'BATCH_SIZE=4\n'
       printf 'WHISPER_DOWNLOAD_ROOT=%s/models/whisper\n' "$VOXINT_METAL_HOME"
       # Pin the runtime load to the snapshot setup downloaded -- without it
       # faster-whisper resolves "latest", which could re-download a different
