@@ -1,0 +1,3 @@
+# Keeps src/voxint/api/static/app present in the tree so pyproject's
+# force-include (issue #48) resolves even without a frontend build. The
+# Dockerfile's Node stage overlays the real hashed island bundles here.

@@ -12,6 +12,7 @@ appends; the newest ruling per label wins at read time).
 import contextlib
 import json
 import logging
+import re
 import secrets
 import uuid
 from collections.abc import Iterator
@@ -248,6 +249,65 @@ from voxint.tutorial.steps import (
 logger = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+# Prebuilt frontend island bundles (issue #48). The Vite build stage in the
+# Dockerfile copies dist/ here; running from source with no build leaves it
+# absent, which the manifest helper and the asset route both tolerate (pages
+# still render server-side — progressive enhancement holds even without a build).
+_APP_ASSETS_DIR = (Path(__file__).parent / "static" / "app").resolve()
+_APP_MANIFEST_PATH = _APP_ASSETS_DIR / ".vite" / "manifest.json"
+_APP_ASSET_MEDIA_TYPES = {
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
+    ".css": "text/css",
+    ".map": "application/json",
+    ".json": "application/json",
+    ".woff2": "font/woff2",
+    ".svg": "image/svg+xml",
+}
+# Vite fingerprints emitted filenames as `<name>-<hash>.<ext>` (base64url hash);
+# only those get long-immutable caching (an unhashed name could change in place).
+_HASHED_ASSET_RE = re.compile(r"-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9]+$")
+
+
+def _looks_hashed(name: str) -> bool:
+    """True for Vite content-hashed filenames, which are safe to cache forever."""
+    return _HASHED_ASSET_RE.search(name) is not None
+
+
+def _load_asset_manifest() -> dict[str, str]:
+    """Map each Vite entry name to its served ``/static/app/...`` URL.
+
+    Parsed once at import. The Vite manifest is keyed by source path
+    (``src/main.ts``); we key by the path stem (``main``) so templates request
+    islands by their logical entry name. Returns ``{}`` when no build is present
+    so ``asset_url`` yields ``None`` and templates emit nothing.
+    """
+    try:
+        raw = _APP_MANIFEST_PATH.read_text()
+    except OSError:
+        return {}
+    try:
+        records: dict[str, Any] = json.loads(raw)
+    except json.JSONDecodeError:
+        logger.warning("frontend asset manifest is not valid JSON; islands disabled")
+        return {}
+    by_entry: dict[str, str] = {}
+    for src, record in records.items():
+        file = record.get("file") if isinstance(record, dict) else None
+        if isinstance(file, str):
+            by_entry[Path(src).stem] = "/static/app/" + file
+    return by_entry
+
+
+_APP_ASSET_URLS = _load_asset_manifest()
+
+
+def asset_url(entry_name: str) -> str | None:
+    """Jinja global: entry name -> served URL, or ``None`` when unbuilt."""
+    return _APP_ASSET_URLS.get(entry_name)
+
+
 _MEDIA_CHUNK_BYTES = 256 * 1024
 # Bound on the per-run operator notes (issue #36) — hygiene for a TEXT column,
 # generous enough for real operator prose.
@@ -522,6 +582,9 @@ def require_onboarded(
 
 
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+# Island bundle lookup for base.html: `asset_url('main')` / `asset_url('tailwind')`
+# resolve to the hashed built file, or None (guarded in the template) when unbuilt.
+templates.env.globals["asset_url"] = asset_url
 
 
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
@@ -1350,6 +1413,31 @@ def _register_routes(app: FastAPI) -> None:
             media_type="text/javascript",
         )
 
+    @app.get("/static/app/{asset_path:path}")
+    def app_asset(asset_path: str, operator: OperatorDep) -> FileResponse:
+        # Same rationale as htmx_asset: a route, not a StaticFiles mount, so the
+        # operator auth dependency stays on every byte served ("everything but
+        # /healthz authenticates" is absolute). asset_path is untrusted request
+        # input; resolve()+is_relative_to() closes the traversal a StaticFiles
+        # mount would otherwise expose. The containment guard runs BEFORE any
+        # filesystem access, so a traversal attempt gets no timing signal about
+        # what exists outside the root. Mirrors the resolve-then-contain shape
+        # the model services use for media paths (resolve_media_path).
+        # {asset_path:path} (greedy) is required — Vite nests output under
+        # assets/, so a plain segment converter would 404 on any '/'.
+        candidate = (_APP_ASSETS_DIR / asset_path).resolve()
+        if not candidate.is_relative_to(_APP_ASSETS_DIR):
+            raise HTTPException(status_code=404, detail="not found")
+        if not candidate.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        media_type = _APP_ASSET_MEDIA_TYPES.get(candidate.suffix, "application/octet-stream")
+        headers: dict[str, str] = {}
+        # Hashed filenames are fingerprinted, so long-immutable caching is safe
+        # and honest; unhashed entry names must not get it (they change in place).
+        if _looks_hashed(candidate.name):
+            headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return FileResponse(candidate, media_type=media_type, headers=headers)
+
     @protected.get("/runs")
     def runs(
         request: Request,
@@ -1640,13 +1728,32 @@ def _register_routes(app: FastAPI) -> None:
             variant = parse_transcript_text(text)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Compute once, reuse for both the server-rendered fallback (`lines`) and
+        # the island props (avoids a double query). The transcript-player island
+        # (issue #48) reuses the already-auth-gated, Range-capable GET /media
+        # for its <audio src>; no new backend route.
+        lines = attributed_transcript(session, run_id, text=variant)
+        island_props = {
+            "runId": str(run_id),
+            "mediaUrl": f"/media/{run_id}",
+            "segments": [
+                {
+                    "start": ln.start_seconds,
+                    "end": ln.end_seconds,
+                    "speaker": ln.speaker,
+                    "text": ln.text,
+                }
+                for ln in lines
+            ],
+        }
         return templates.TemplateResponse(
             request,
             "transcript.html",
             {
                 "request": request,
                 "run": run,
-                "lines": attributed_transcript(session, run_id, text=variant),
+                "lines": lines,
+                "island_props": island_props,
                 "text": variant,
                 "variants": list(TranscriptText),
                 "active_nav": "runs",

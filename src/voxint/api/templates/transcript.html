@@ -16,11 +16,18 @@
 {% if not lines %}
 <p>No transcript segments for this run.</p>
 {% else %}
-{% for ln in lines %}
-<p class="preview">
-  <span class="t">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}]</span>
-  <strong>{{ ln.speaker }}:</strong> {{ ln.text }}
-</p>
-{% endfor %}
+{# Island mount point (issue #48): the transcript-player island renders the
+   audio-synced view over this fallback once hydrated. The server-rendered loop
+   below is fully functional with JS disabled, htmx off, or the asset route
+   misconfigured — the same "degrades to plain HTML" guarantee the rest of the
+   console has. Islands are leaf nodes htmx does not swap. #}
+<div data-island="transcript-player" data-props='{{ island_props|tojson }}'>
+  {% for ln in lines %}
+  <p class="preview">
+    <span class="t">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}]</span>
+    <strong>{{ ln.speaker }}:</strong> {{ ln.text }}
+  </p>
+  {% endfor %}
+</div>
 {% endif %}
 {% endblock %}

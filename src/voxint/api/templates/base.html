@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Voxint review{% endblock %}</title>
   <script src="/static/htmx.min.js"></script>
+  {# Island stylesheet (issue #48). Placed BEFORE the inline <style> so the
+     hand-authored block wins any property collision as the later source. The
+     guard keeps source-run/dev (no build) fully functional. #}
+  {% if asset_url('tailwind') %}<link rel="stylesheet" href="{{ asset_url('tailwind') }}">{% endif %}
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem;
@@ -97,5 +101,10 @@
      remove it. #}
   {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
   {% block body %}{% endblock %}
+  {# Shared island loader (issue #48): the ONLY script every page pulls in. It
+     no-ops when a page has no [data-island] nodes and dynamically imports only
+     the island bundles present, so adding an island never touches base.html.
+     The guard keeps dev/source-run (no build) working — no broken script tag. #}
+  {% if asset_url('main') %}<script type="module" src="{{ asset_url('main') }}"></script>{% endif %}
 </body>
 </html>
