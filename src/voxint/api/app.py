@@ -82,6 +82,10 @@ from voxint.api.csrf import (
     verify_csrf_token,
 )
 from voxint.api.health_probe import probe_services
+from voxint.api.playback import (
+    MediaResolutionError,
+    resolve_servable_media,
+)
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
@@ -215,7 +219,6 @@ from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
     MediaGate,
-    MediaNotServableError,
     RangeNotSatisfiableError,
     parse_range,
 )
@@ -2863,19 +2866,16 @@ def _register_routes(app: FastAPI) -> None:
     ) -> Response:
         settings: Settings = request.app.state.settings
         _run_or_404(session, run_id)
-        # Reclaimed intermediates (issue #15): the row survives but the file is
-        # gone — answer 410 Gone, an honest, distinguishable status.
-        if run_intermediate_reclaimed_at(session, run_id) is not None:
-            raise HTTPException(status_code=410, detail="media reclaimed")
-        try:
-            path = normalized_audio_path(session, run_id, settings.media_root)
-        except StageDataError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
         gate = _get_media_gate(request)
+        # ONE servability seam (issue #55): resolve_servable_media runs the same
+        # reclaimed -> artifact -> gate checks the playback-capability predicate
+        # uses, and carries the honest HTTP status on each failure (410 reclaimed,
+        # 404 missing/unservable). Capability can therefore never advertise
+        # seek_enabled while this route would 404/410.
         try:
-            fh, size = gate.open_for_serving(path)
-        except MediaNotServableError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
+            fh, size = resolve_servable_media(session, run_id, settings, gate)
+        except MediaResolutionError as exc:
+            raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
         try:
             byte_range = parse_range(request.headers.get("range"), size)
         except RangeNotSatisfiableError:
