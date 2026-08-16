@@ -156,13 +156,19 @@ def claim_job(session: Session, job_id: uuid.UUID) -> ResearchJob | None:
     return session.get(ResearchJob, job_id)
 
 
-# Grace a provably-dead RUNNING job gets past its deadline before the operator
+# Grace a presumed-dead RUNNING job gets past its deadline before the operator
 # may force-cancel it. The deadline is checked between rounds, and the forced
 # conclude gets its own single repair attempt (research.agent._round_reply),
-# so two post-deadline LLM calls are legitimate — the stale bound allows both.
-# A round already in flight when the deadline trips can stretch further still;
-# a misfire on such a job resolves safely (the finalize CAS turns its late
-# outcome into CANCELLED — the state the operator asked for anyway).
+# so two post-deadline LLM calls are routine — the stale bound allows both.
+# The bound is a heuristic, not a proof of death: a round already in flight
+# when the deadline trips can stretch the tail to four timeout-length calls
+# (its own repair plus the forced conclude's pair). A misfire on such a job
+# resolves safely — the cooperative flag this same UPDATE sets stops the live
+# loop at its next round boundary, and the finalize CAS turns any late
+# outcome into CANCELLED, the state the operator asked for anyway. Widening
+# the bound to cover that worst case would instead make every genuinely
+# crashed worker block the speaker four timeouts long — the wrong trade for
+# an operator-initiated path whose misfires are benign.
 STALE_RUNNING_GRACE_SECONDS = 60.0
 
 
@@ -182,11 +188,11 @@ def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
 
     One guarded UPDATE sets the flag and resolves QUEUED outright (its delivery
     will fail the claim and no-op); a RUNNING loop observes the flag between
-    rounds. A RUNNING job that provably outlived its own wall-clock budget
+    rounds. A RUNNING job that outlived its expected wall-clock budget
     (deadline + two LLM timeouts + grace — the forced conclude plus its single
-    repair attempt) has no live loop left to observe anything — cancel it
-    outright so a worker crash cannot block the speaker forever. The caller
-    commits."""
+    repair attempt; see STALE_RUNNING_GRACE_SECONDS for why this heuristic is
+    deliberately not worst-case) is presumed crashed — cancel it outright so
+    a dead worker cannot block the speaker forever. The caller commits."""
     flagged = cast(
         CursorResult[Any],
         session.execute(

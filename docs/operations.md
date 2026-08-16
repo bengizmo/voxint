@@ -578,19 +578,22 @@ that.
 
 Two ceilings the client timeout **cannot** override:
 
-- **A proxy in front of your endpoint.** LiteLLM's backend request timeout
-  defaults to **180 s** and returns HTTP 408 when a call exceeds it,
-  regardless of what Voxint is configured to wait. If long local-model calls
-  fail with 408 despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own
-  limit (`request_timeout` in LiteLLM config). The effective limit is always
-  the *lower* of the client timeout and every proxy/backend ceiling between
+- **A proxy in front of your endpoint.** Proxies impose their own request
+  ceilings and return HTTP 408 when a call exceeds them, regardless of what
+  Voxint is configured to wait. On the maintainer's LiteLLM deployment that
+  ceiling was **180 s**; LiteLLM's default varies by version and
+  configuration, so check yours. If long local-model calls fail with 408
+  despite a high `LLM_TIMEOUT_SECONDS`, raise the proxy's own limit
+  (`request_timeout` in LiteLLM config). The effective limit is always the
+  *lower* of the client timeout and every proxy/backend ceiling between
   Voxint and the model.
 - **The web-research deadline.** `RESEARCH_DEADLINE_SECONDS` (default 300 s)
-  is checked between model calls, never mid-call — a single slow local-model
-  call can consume most of it, leaving the researcher one round before it is
-  forced to conclude. With a local model in the 180–300 s-per-call range,
-  raise the deadline to several multiples of your typical call time if you
-  want multi-round research.
+  is checked between research rounds, never mid-round — a round's model call
+  (and, on a malformed reply, its one repair call) always finishes first. A
+  single slow local-model call can consume most of the deadline, leaving the
+  researcher one round before it is forced to conclude. With a local model
+  in the 180–300 s-per-call range, raise the deadline to several multiples
+  of your typical call time if you want multi-round research.
 
 ## Adjudication workflow
 
