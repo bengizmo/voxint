@@ -32,6 +32,10 @@ _ZERO = uuid.UUID(int=0)
 EXEMPT_PATHS = {
     "/healthz",
     "/static/htmx.min.js",
+    # Island bundles (issue #48): on `app`, not the protected router, so they
+    # load before onboarding completes (the setup wizard extends base.html).
+    # Still auth-gated by the route's own OperatorDep, not open like /healthz.
+    "/static/app/{asset_path:path}",
     "/setup",
     "/setup/media",
     "/setup/scan",
