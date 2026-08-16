@@ -16,11 +16,14 @@ validated up front and fail-closed. The writer mirrors ``drafts.py``:
 
 The module also owns the **source snapshot**: :func:`load_source` reads
 exactly what the generators are allowed to see (the ordered transcript with
-its raw diarization labels — resolved speaker names are a deliberate v1 cut —
-plus the #36 metadata snapshot and operator notes), and
-:func:`source_content_hash` canonicalizes it into the sha256 staleness
-detector stored on every asset. Content only — model/prompt versions are
-recorded separately, so a prompt upgrade never masquerades as a source
+each segment's *attributed* speaker — resolved through the shared
+:func:`voxint.adjudication.transcript.display_name`, so run assets read the
+same name the review console and export show — plus the #36 metadata snapshot
+and operator notes), and :func:`source_content_hash` canonicalizes it into the
+sha256 staleness detector stored on every asset. Because attribution is part of
+the hashed content, re-adjudicating (or renaming/merging) a speaker changes the
+hash and correctly marks the asset stale. Content only — model/prompt versions
+are recorded separately, so a prompt upgrade never masquerades as a source
 change.
 """
 
@@ -38,6 +41,8 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import label_states
+from voxint.adjudication.transcript import display_name
 from voxint.db.models import (
     MediaSourceMetadata,
     PipelineRun,
@@ -103,10 +108,17 @@ def span_boundaries_ok(segment: str, start: int, end: int) -> bool:
 
 @dataclass(frozen=True)
 class SegmentSource:
-    """One transcript segment as the generators see it."""
+    """One transcript segment as the generators see it.
+
+    ``speaker`` is the *attributed* name — the same string the review console
+    and export render via :func:`voxint.adjudication.transcript.display_name`
+    (a resolved identity, an ``(excluded)``/``Unknown`` annotation, or the raw
+    diarization label when nothing resolves). It is already control-char
+    sanitized so the line-oriented prompt cannot be spoofed by a name.
+    """
 
     segment_index: int
-    diarization_label: str | None
+    speaker: str
     text: str
 
 
@@ -126,9 +138,13 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
     Segment text is the operator-facing best text (``enhanced_text`` falling
     back to ``raw_text``) — the same pinning as ``names.llm``: enhancement
     changing SHOULD make assets stale, because it changes what a regeneration
-    would read. Raises :class:`RunAssetError` for an unknown run or one with
-    no transcript yet (there is nothing to summarize; an asset over an empty
-    source would be an authoritative-sounding lie).
+    would read. Each segment's speaker is the *attributed* name resolved
+    through :func:`voxint.adjudication.transcript.display_name` (the one
+    attribution truth the console and export share), so an adjudication or a
+    speaker rename/merge changes the snapshot and marks assets stale. Raises
+    :class:`RunAssetError` for an unknown run or one with no transcript yet
+    (there is nothing to summarize; an asset over an empty source would be an
+    authoritative-sounding lie).
     """
     run = session.get(PipelineRun, pipeline_run_id)
     if run is None:
@@ -147,6 +163,10 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
             "run has no transcript segments yet — assets are generated from the"
             " transcript, so the run must finish transcription first"
         )
+    # Resolve every diarization label of the run once (bulk queries, not N+1),
+    # keyed by label; a segment whose label has no resolver state (e.g. no
+    # diarization turn) falls back to the raw label inside ``display_name``.
+    states = {state.label: state for state in label_states(session, pipeline_run_id)}
     metadata_row = session.execute(
         select(MediaSourceMetadata).where(MediaSourceMetadata.media_item_id == run.media_item_id)
     ).scalar_one_or_none()
@@ -169,7 +189,14 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
         segments=tuple(
             SegmentSource(
                 segment_index=row.segment_index,
-                diarization_label=row.diarization_label,
+                # Collapse control whitespace so an operator-set display name
+                # can never inject or blur a line in the `[i] speaker: text`
+                # prompt; applied here, not in the renderer, so the prompt and
+                # the hash render the identical string. A raw label like
+                # "SPEAKER_00" is unchanged, keeping legacy hashes stable.
+                speaker=" ".join(
+                    display_name(states.get(row.diarization_label or ""), row).split()
+                ),
                 text=row.enhanced_text or row.raw_text,
             )
             for row in rows
@@ -186,12 +213,19 @@ def source_content_hash(source: RunAssetSource) -> str:
     explicit nulls. Excludes model/producer/prompt versions on purpose — those
     are provenance columns, and folding them in would make every code upgrade
     look like a source change.
+
+    ``SOURCE_SCHEMA_VERSION`` stays 1 across the raw-label→attributed-speaker
+    change on purpose (selective compatibility): each segment now serializes its
+    *attributed* speaker string, which equals the old raw label whenever nothing
+    resolves — so an unadjudicated run keeps its exact prior hash (no needless
+    regeneration) while any change to attribution flips it. Bump the constant
+    only for a change that must invalidate every asset regardless of content.
     """
     payload: dict[str, Any] = {
         "source_schema_version": SOURCE_SCHEMA_VERSION,
         "pipeline_run_id": str(source.pipeline_run_id),
         "segments": [
-            [segment.segment_index, segment.diarization_label, segment.text]
+            [segment.segment_index, segment.speaker, segment.text]
             for segment in source.segments
         ],
         "metadata": dict(source.metadata) if source.metadata is not None else None,

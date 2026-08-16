@@ -66,6 +66,30 @@ class TestSourceContentHash:
         }
         assert len(hashes) == 4
 
+    def test_legacy_raw_label_hash_is_stable(self) -> None:
+        # Selective compatibility: a segment whose attributed speaker equals its
+        # old raw diarization label (an unadjudicated run) must serialize —
+        # `[index, speaker, text]` — byte-for-byte as before the raw-label →
+        # attributed-speaker change, so its hash is unchanged and it never
+        # regenerates for free. Pinned value; a serialization change breaks it.
+        assert (
+            source_content_hash(make_source())
+            == "7934e3f3635716e043ac7903f120b7666aeb11fc7fcab58972b35ad66e7eb597"
+        )
+
+    def test_attribution_change_flips_hash(self) -> None:
+        # Same run, same text — only the resolved speaker differs (S0 → Alice).
+        raw = source_content_hash(make_source())
+        attributed = source_content_hash(
+            make_source(
+                segments=(
+                    SegmentSource(0, "Alice", "Hello, I am Joanne from Acme Corp."),
+                    SegmentSource(1, "S1", "Thanks Ann. Let's talk about widgets."),
+                )
+            )
+        )
+        assert raw != attributed
+
     def test_is_lowercase_hex_sha256(self) -> None:
         value = source_content_hash(make_source())
         assert len(value) == 64
@@ -197,6 +221,21 @@ class TestRenderSource:
         assert '"title": "T"' in document
         assert "note" in document
         assert "[0] S0: Hello, I am Joanne from Acme Corp." in document
+
+    def test_renders_attributed_speaker_verbatim(self) -> None:
+        # An attributed name (with spaces / annotations) is rendered exactly as
+        # it sits in SegmentSource.speaker — the same string the hash covers.
+        document, _ = render_source(
+            make_source(
+                segments=(
+                    SegmentSource(0, "Alice Ramirez", "Opening remarks."),
+                    SegmentSource(1, "(excluded) S1", "Background noise."),
+                )
+            ),
+            max_chars=10_000,
+        )
+        assert "[0] Alice Ramirez: Opening remarks." in document
+        assert "[1] (excluded) S1: Background noise." in document
 
     def test_truncates_head_and_tail_over_budget(self) -> None:
         long_segments = tuple(
