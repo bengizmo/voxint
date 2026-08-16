@@ -18,8 +18,22 @@ unavailable. This run is queued and will start automatically once the broker
 recovers — no action needed.</p>
 {% endif %}
 
+{% if media_delete_result %}
+<p class="notice">Deleted {{ media_delete_result.files }} derived audio
+file{{ "" if media_delete_result.files == 1 else "s" }}{% if media_delete_result.missing %}
+({{ media_delete_result.missing }} already gone){% endif %}{% if media_delete_result.failed %},
+{{ media_delete_result.failed }} could not be removed and will be swept later{% endif %}.
+The original source recording was kept.</p>
+{% endif %}
+
+{% if run_archived %}
+<p class="notice">This run is <strong>archived</strong> — hidden from the runs
+list and the review queue. All its data is intact; un-archive to restore it.</p>
+{% endif %}
+
 <dl>
-  <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span></dd>
+  <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span>
+    {% if run_archived %}<span class="pill skipped">archived</span>{% endif %}</dd>
   <dt>Current stage</dt><dd>{{ run.current_stage or "—" }}</dd>
   <dt>Revision</dt><dd>{{ run.revision }}</dd>
   <dt>Created</dt><dd>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
@@ -75,6 +89,32 @@ up, then requeue.</p>
     <span class="muted">No audio or transcript yet.</span>
   {% endif %}
 </p>
+
+{% if run_terminal %}
+{# Archive / un-archive + derived-media deletion (issue #5). Only terminal runs
+   (completed / failed / cancelled) — a live run must be cancelled first. #}
+<h2>Manage</h2>
+{% if run_archived %}
+<form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_unarchive }}">
+  <button type="submit">Un-archive run</button>
+  <span class="muted">Restores this run to the runs list and review queue.</span>
+</form>
+{% else %}
+<form method="post" action="/runs/{{ run.id }}/archive" class="archive">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_archive }}">
+  <button type="submit">Archive run</button>
+  <span class="muted">Hides this run from the runs list and review queue. Keeps
+    all its data; reversible.</span>
+</form>
+{% endif %}
+<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_media_delete }}">
+  <button type="submit">Delete derived audio files</button>
+  <span class="muted">Frees disk by removing this run's preprocessed and chunked
+    audio. <strong>Irreversible</strong>; the original source recording is kept.</span>
+</form>
+{% endif %}
 
 {% if source_metadata %}
 {# Scraped acquisition context (issue #36) — write-once, shown apart from the

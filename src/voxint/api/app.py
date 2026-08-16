@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
@@ -70,6 +71,9 @@ from voxint.api.csrf import (
     CSRF_ROSTER_MERGE,
     CSRF_ROSTER_RENAME,
     CSRF_ROSTER_RESTORE,
+    CSRF_RUN_ARCHIVE,
+    CSRF_RUN_MEDIA_DELETE,
+    CSRF_RUN_UNARCHIVE,
     CSRF_SETTINGS,
     CSRF_SETUP,
     CSRF_SUBMIT,
@@ -183,6 +187,8 @@ from voxint.export import (
 )
 from voxint.ingest import (
     MissingStageError,
+    RunMediaNotDeletableError,
+    RunNotArchivableError,
     RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
@@ -190,11 +196,15 @@ from voxint.ingest import (
     UploadTooLargeError,
     UploadValidationError,
     UrlValidationError,
+    archive_run,
     cancel_run,
+    delete_run_derived_media,
     requeue_failed_run,
     submit_media_item_if_new,
     submit_upload,
     submit_url,
+    unarchive_run,
+    unlink_media_paths,
 )
 from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
@@ -514,6 +524,41 @@ def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
     if run is None:
         raise HTTPException(status_code=404, detail=f"no run {run_id}")
     return run
+
+
+def _reject_if_archived(run: PipelineRun) -> None:
+    """409 if the run is soft-archived (issue #5) — archived runs are read-only.
+
+    Filtering hides archived runs from ``/runs`` and the review queue, but a
+    stale tab or a hand-crafted POST could still drive one live (requeue) or
+    claim it. Refuse those mutations until the operator un-archives it, so
+    visibility and mutability stay aligned."""
+    if run.archived_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="run is archived; un-archive it before requeue/claim",
+        )
+
+
+def _media_delete_banner(request: Request) -> dict[str, int] | None:
+    """Parse the post-delete PRG counters into a banner dict, or None.
+
+    A derived-media deletion (issue #5) redirects back with ``?media=deleted``
+    and non-negative ``files``/``missing``/``failed`` counts. They are read as
+    bare ints and never echoed as text; a malformed/absent value yields no
+    banner (a refresh or bookmark can carry the parameter past its meaning)."""
+    if request.query_params.get("media") != "deleted":
+        return None
+
+    def _count(name: str) -> int:
+        raw = request.query_params.get(name, "0")
+        return int(raw) if raw.isdigit() else 0
+
+    return {
+        "files": _count("files"),
+        "missing": _count("missing"),
+        "failed": _count("failed"),
+    }
 
 
 def _require_csrf(request: Request, action: str, token: str | None) -> None:
@@ -1241,8 +1286,12 @@ def _register_routes(app: FastAPI) -> None:
         source: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
+        archived: str | None = None,
     ) -> Response:
         settings: Settings = request.app.state.settings
+        # ?archived=1 flips to the archived-only view (issue #5); anything else
+        # (absent / "0" / blank) is the default listing that hides archived runs.
+        show_archived = archived == "1"
         try:
             status_filter = parse_status_filter(status)
             review_filter = parse_review_filter(review)
@@ -1270,12 +1319,14 @@ def _register_routes(app: FastAPI) -> None:
             cursor=parsed_cursor,
             page_size=settings.runs_page_size,
             filters=search_filters,
+            archived=show_archived,
         )
         next_url = (
             runs_url(
                 status=status_filter,
                 review=review_filter,
                 filters=search_filters,
+                archived=show_archived,
                 cursor=page.next_cursor,
             )
             if page.next_cursor
@@ -1292,6 +1343,15 @@ def _register_routes(app: FastAPI) -> None:
                 "statuses": list(RunStatus),
                 "reviews": list(ReviewFilter),
                 "filters": search_filters,
+                "show_archived": show_archived,
+                # Toggle target: the same listing in the opposite archive view,
+                # preserving the active status/review/search facets.
+                "archived_toggle_url": runs_url(
+                    status=status_filter,
+                    review=review_filter,
+                    filters=search_filters,
+                    archived=not show_archived,
+                ),
                 "facet_speakers": searchable_speakers(session),
                 "next_url": next_url,
                 # Server-issued per-render ids: each namespaces its form's path and
@@ -1440,6 +1500,28 @@ def _register_routes(app: FastAPI) -> None:
                 # CSRF token for the cancel form (rendered only for a live run:
                 # queued / running / awaiting_adjudication — issue #5).
                 "csrf_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_CANCEL),
+                # Soft-archive + derived-media deletion (issue #5, slice 2). The
+                # buttons render only for a terminal run; un-archive replaces
+                # archive once the run carries a stamp.
+                "run_archived": run.archived_at is not None,
+                "run_terminal": run.status
+                in (
+                    RunStatus.COMPLETED.value,
+                    RunStatus.FAILED.value,
+                    RunStatus.CANCELLED.value,
+                ),
+                "csrf_run_archive": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_RUN_ARCHIVE
+                ),
+                "csrf_run_unarchive": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_RUN_UNARCHIVE
+                ),
+                "csrf_run_media_delete": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_RUN_MEDIA_DELETE
+                ),
+                # Post-redirect banner after a derived-media deletion (PRG): the
+                # non-negative counts are read as bare ints, never echoed as text.
+                "media_delete_result": _media_delete_banner(request),
                 # Acquisition context (issue #36): the write-once snapshot, or
                 # None for uploads / pre-capture URL runs. Scraped metadata and
                 # the operator's own notes render in separate sections.
@@ -1497,6 +1579,9 @@ def _register_routes(app: FastAPI) -> None:
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> RedirectResponse:
         _require_csrf(request, CSRF_REQUEUE, csrf_token)
+        # An archived run is read-only — refuse before touching pipeline state so
+        # a stale tab can't drive a hidden run live (issue #5).
+        _reject_if_archived(_run_or_404(session, run_id))
         # Exact-revision CAS from the form's hidden field: a stale browser tab
         # holding an older revision 409s rather than requeuing a run that already
         # moved on. FAILED-only, at the failed stage (the service enforces both).
@@ -1551,6 +1636,86 @@ def _register_routes(app: FastAPI) -> None:
         # Pure DB state, no enqueue — commit and return to the run detail (PRG).
         session.commit()
         return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @protected.post("/runs/{run_id}/archive")
+    def archive_run_route(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        """Soft-archive a terminal run — hide it from /runs and /review while
+        keeping every row intact (issue #5). Last-write-wins operator-visibility
+        metadata, so — unlike /requeue and /cancel — there is NO revision field
+        and no CAS: a stale tab never 409s, and re-archiving is an idempotent
+        303. Only terminal runs archive; a live run 409s (cancel it first)."""
+        _require_csrf(request, CSRF_RUN_ARCHIVE, csrf_token)
+        try:
+            archive_run(session, run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RunNotArchivableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @protected.post("/runs/{run_id}/unarchive")
+    def unarchive_run_route(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        """Reverse an archive — the run reappears in /runs and /review. Always
+        allowed and idempotent (un-archiving a non-archived run is a no-op 303).
+        Last-write-wins, no CAS (issue #5)."""
+        _require_csrf(request, CSRF_RUN_UNARCHIVE, csrf_token)
+        try:
+            unarchive_run(session, run_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}", status_code=303)
+
+    @protected.post("/runs/{run_id}/media/delete")
+    def delete_run_media_route(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> RedirectResponse:
+        """Delete a terminal run's DERIVED audio files — the preprocessed wav and
+        per-chunk files — and their rows (issue #5). Irreversible, but scoped:
+        it NEVER touches the shared original source (that would orphan a sibling
+        run) or the evidence ledger. Commit-before-side-effect: the row delete
+        commits first, THEN the files are unlinked (a rolled-back request must
+        not leave the DB pointing at a file already gone). A live run 409s."""
+        _require_csrf(request, CSRF_RUN_MEDIA_DELETE, csrf_token)
+        settings: Settings = request.app.state.settings
+        try:
+            plan = delete_run_derived_media(
+                session, run_id, media_root=settings.media_root
+            )
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RunMediaNotDeletableError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        session.commit()
+        # Post-commit unlink (best-effort, idempotent): the rows are already gone,
+        # so a partial filesystem failure is swept later, never fails the action.
+        result = unlink_media_paths(plan.paths)
+        params = urlencode(
+            {
+                "media": "deleted",
+                "files": result.files_deleted,
+                "missing": result.files_missing,
+                "failed": result.files_failed,
+            }
+        )
+        return RedirectResponse(f"/runs/{run_id}?{params}", status_code=303)
 
     @protected.post("/runs/{run_id}/notes")
     def save_operator_notes(
@@ -1698,7 +1863,9 @@ def _register_routes(app: FastAPI) -> None:
         # the victim for the claim TTL). Verified before claim_run touches the DB.
         _require_csrf(request, CSRF_CLAIM, csrf_token)
         settings: Settings = request.app.state.settings
-        _run_or_404(session, run_id)
+        # An archived run is hidden from the queue; refuse a stale/forged claim so
+        # it can't be pinned to a reviewer while hidden (issue #5).
+        _reject_if_archived(_run_or_404(session, run_id))
         try:
             token = claim_run(
                 session,
