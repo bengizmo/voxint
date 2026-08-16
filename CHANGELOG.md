@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-08-16
+
 ### Added
 - **Follow-along highlight + per-speaker colors** (#50, #47): the transcript
   player now keeps the currently-playing line in view as playback advances

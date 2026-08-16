@@ -1,6 +1,6 @@
 [project]
 name = "voxint"
-version = "0.14.0"
+version = "0.15.0"
 description = "From sound to intelligence: end-to-end transcription, diarization, and speaker identity with human-grade quality gates."
 readme = "README.md"
 license = { file = "LICENSE" }
