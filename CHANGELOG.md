@@ -6,6 +6,33 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Runtime feature-flag foundation (#74, settings-overhaul arc #47)**: the
+  singleton `app_settings` row gains one nullable column per in-UI-editable
+  feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`,
+  `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`,
+  `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`,
+  `source_authority_domains`, `web_search_base_url`, `web_search_api_key`;
+  migration `0021`). Each resolves **DB-row-wins-over-env** (the `llm_*`
+  tri-state precedent): NULL/blank inherits the environment default, a stored
+  value overrides it — so once the console lands (later arc children), an
+  operator toggle applies at the next job with no restart and no `.env` edit.
+  Every runtime gate now routes through a `resolve_effective_<flag>` resolver
+  and the five cross-flag invariants live in one `validate_effective_flags`
+  shared with the boot-time config validator. `web_search_api_key` is a
+  credential (plaintext at rest, like `llm_api_key`): resolved only through its
+  resolver, never rendered or logged. Purely additive and behavior-preserving —
+  with every column NULL the environment still governs exactly as before. No UI
+  in this change.
+
+### Changed
+- **CLI honors the effective (row-over-env) capability gates (#74)**: `voxint
+  fetch`, `voxint research search|read`, and `voxint enrich names` now resolve
+  their enablement from the database (row-over-env) instead of a bare
+  environment flag, so a future in-UI disable governs the CLI too. On an
+  unavailable database these commands **fail honestly** (exit non-zero) rather
+  than silently falling back to the environment, which could otherwise bypass a
+  console disable. No change when no override is stored.
+
 - **Whisper Metal bakeoff (#33) — mlx candidate measured ineligible**: the
   Slice-3 decode diagnostic
   (`docs/reports/whisper-metal-bakeoff-slice3-decode-2026-08-17.md`) measured
