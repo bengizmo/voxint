@@ -41,6 +41,7 @@ import socket
 import socketserver
 import sys
 import threading
+import time
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
@@ -138,11 +139,19 @@ def _read_head(reader: io.RawIOBase, conn: socket.socket) -> tuple[str, list[str
     ``reader`` is the handler's UNBUFFERED ``rfile`` (``rbufsize = 0``), so it
     never reads past the blank line into the body or TLS ClientHello — leaving
     those bytes on the raw socket for :func:`_tunnel` to forward.
+
+    The timeout is an ABSOLUTE deadline over the whole head, not per-read: a client
+    dribbling one byte per socket-timeout would otherwise pin a handler thread for
+    (byte-cap * timeout) seconds. Once the deadline passes the read is refused.
     """
-    conn.settimeout(_HEADER_READ_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + _HEADER_READ_TIMEOUT_SECONDS
     lines: list[str] = []
     total = 0
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProxyError("408 Request Timeout", "request head timed out")
+        conn.settimeout(remaining)
         raw = reader.readline(_MAX_HEADER_BYTES + 1)
         if not raw:
             raise ProxyError("400 Bad Request", "connection closed before request head")
@@ -162,11 +171,29 @@ def _read_head(reader: io.RawIOBase, conn: socket.socket) -> tuple[str, list[str
 
 
 def _parse_request_line(request_line: str) -> tuple[str, str, str]:
-    """Split ``METHOD TARGET VERSION``; refuse anything malformed."""
+    """Split ``METHOD TARGET VERSION``; refuse anything malformed.
+
+    HTTP permits exactly one SP between the three tokens, and none may be empty —
+    reject multi-space / tab / empty-token lines rather than guess.
+    """
     parts = request_line.split(" ")
-    if len(parts) != 3:
+    if len(parts) != 3 or not all(parts):
         raise ProxyError("400 Bad Request", "malformed request line")
     return parts[0], parts[1], parts[2]
+
+
+def _parse_port(port_s: str) -> int:
+    """Parse an explicit port string strictly: digits only, in ``1..65535``.
+
+    Rejects empty, non-numeric, out-of-range, and absurdly long inputs (a
+    >4300-digit string would otherwise raise ``ValueError`` from ``int()`` under
+    the CPython int-string limit, or ``OverflowError`` later at connect time)."""
+    if not port_s.isdigit() or len(port_s) > 5:
+        raise ProxyError("400 Bad Request", "malformed port")
+    port = int(port_s)
+    if not 1 <= port <= 65535:
+        raise ProxyError("400 Bad Request", "port out of range")
+    return port
 
 
 def _pump(src: socket.socket, dst: socket.socket) -> None:
@@ -243,19 +270,14 @@ class _Handler(socketserver.StreamRequestHandler):
     # -- absolute-form HTTP: vet, pin, forward rewritten head, tunnel ----------
     def _do_absolute(self, method: str, target: str, headers: list[str]) -> None:
         try:
-            parts = urlsplit(target)
-            if parts.scheme not in ("http", "https"):
-                raise ProxyError("400 Bad Request", "proxy target must be an absolute http(s) URL")
-            host = (parts.hostname or "").rstrip(".")
-            port = parts.port or (443 if parts.scheme == "https" else 80)
+            host, port, origin = _parse_absolute_target(target)
             addresses = _vetted_addresses(host, self.resolver)
             upstream = self._connect_any(addresses, port)
         except ProxyError as exc:
             _send_error(self.connection, exc.status, str(exc))
             return
         try:
-            origin = target[len(f"{parts.scheme}://{parts.netloc}") :] or "/"
-            head = _rewrite_head(method, origin, host, port, parts.scheme, headers)
+            head = _rewrite_head(method, origin, host, port, headers)
             upstream.sendall(head)
             _tunnel(self.connection, upstream)
         finally:
@@ -275,7 +297,12 @@ class _Handler(socketserver.StreamRequestHandler):
 
 
 def _split_authority(authority: str, *, default_port: int) -> tuple[str, int]:
-    """Split a ``CONNECT`` ``host:port`` (or bracketed ``[v6]:port``) authority."""
+    """Split a ``CONNECT`` ``host:port`` (or bracketed ``[v6]:port``) authority.
+
+    Strict: a malformed or out-of-range port, or any trailing garbage after a
+    bracketed IPv6 literal, is a 400 — never silently swallowed and defaulted. A
+    filtering proxy must not be lenient about input it will act on.
+    """
     authority = authority.strip()
     if authority.startswith("["):
         end = authority.find("]")
@@ -283,45 +310,100 @@ def _split_authority(authority: str, *, default_port: int) -> tuple[str, int]:
             raise ProxyError("400 Bad Request", "malformed IPv6 authority")
         host = authority[1:end]
         rest = authority[end + 1 :]
-        port = int(rest[1:]) if rest.startswith(":") and rest[1:].isdigit() else default_port
+        if rest == "":
+            port = default_port
+        elif rest.startswith(":"):
+            port = _parse_port(rest[1:])
+        else:
+            raise ProxyError("400 Bad Request", "malformed IPv6 authority")
     elif ":" in authority:
         host, _, port_s = authority.rpartition(":")
-        port = int(port_s) if port_s.isdigit() else default_port
+        port = _parse_port(port_s)
     else:
         host, port = authority, default_port
     host = host.rstrip(".")
     if not host:
-        raise ProxyError("400 Bad Request", "CONNECT authority has no host")
+        raise ProxyError("400 Bad Request", "authority has no host")
     return host, port
 
 
+def _parse_absolute_target(target: str) -> tuple[str, int, str]:
+    """Validate an absolute-form ``http://…`` proxy target and return
+    ``(host, port, origin)``.
+
+    Fail-closed and http-only: a malformed URL (bad IPv6 literal, out-of-range
+    port) becomes a clean 400 rather than an unhandled ``ValueError`` out of the
+    handler; an ``https://`` absolute-form target is refused (yt-dlp uses CONNECT
+    for TLS — forwarding it as cleartext to :443 would mis-speak the protocol);
+    embedded credentials are refused (matching ``netcheck.parse_http_url``). The
+    origin-form target is rebuilt from the parsed parts (never a string slice, and
+    the fragment — client-side only — is dropped).
+    """
+    try:
+        parts = urlsplit(target)
+        port = parts.port  # lazily parsed; touch it so a bad port raises here
+        host = parts.hostname
+    except ValueError:
+        raise ProxyError("400 Bad Request", "malformed proxy target") from None
+    if parts.scheme != "http":
+        raise ProxyError(
+            "400 Bad Request", "absolute-form proxy target must be http (use CONNECT for https)"
+        )
+    if parts.username is not None or parts.password is not None:
+        raise ProxyError("400 Bad Request", "proxy target must not embed credentials")
+    host = (host or "").rstrip(".")
+    if not host:
+        raise ProxyError("400 Bad Request", "proxy target has no host")
+    origin = parts.path or "/"
+    if parts.query:
+        origin += f"?{parts.query}"
+    return host, port or 80, origin
+
+
+# Headers a forward proxy must not pass upstream: RFC 7230 hop-by-hop plus the
+# proxy-auth pair. ``Host`` is stripped too — we synthesize exactly one from the
+# VETTED authority so a client cannot front a different vhost than the one vetted.
+_HOP_BY_HOP = frozenset({
+    "connection", "keep-alive", "proxy-connection", "proxy-authorization",
+    "proxy-authenticate", "te", "trailer", "transfer-encoding", "upgrade", "host",
+})
+
+
 def _rewrite_head(
-    method: str, origin: str, host: str, port: int, scheme: str, headers: list[str]
+    method: str, origin: str, host: str, port: int, headers: list[str]
 ) -> bytes:
     """Rebuild the request head in origin-form for the upstream connection.
 
-    Drops proxy-hop headers and guarantees a ``Host`` header (the vetted host,
-    not the pinned IP, so name-based vhosts and TLS resolve correctly). All other
-    client headers pass through unchanged.
+    Drops every hop-by-hop header (and every field a ``Connection`` header names),
+    synthesizes exactly one ``Host`` from the vetted authority (bracketing an IPv6
+    literal, appending a non-default port), and forces ``Connection: close`` — so
+    the blind tunnel cannot carry a second, unvetted pipelined request to the
+    pinned upstream. All other client headers pass through unchanged.
     """
-    kept: list[str] = []
-    have_host = False
+    # Any token named by a Connection header is also hop-by-hop for this message.
+    nominated: set[str] = set()
     for line in headers:
-        name = line.split(":", 1)[0].strip().lower()
-        if name in ("proxy-connection", "proxy-authorization"):
-            continue
-        if name == "host":
-            have_host = True
-        kept.append(line)
-    if not have_host:
-        authority = host if _is_default_port(scheme, port) else f"{host}:{port}"
-        kept.insert(0, f"Host: {authority}")
-    out = [f"{method} {origin} HTTP/1.1", *kept, "", ""]
+        name, _, value = line.partition(":")
+        if name.strip().lower() == "connection":
+            nominated.update(t.strip().lower() for t in value.split(",") if t.strip())
+    kept = [
+        line
+        for line in headers
+        if (name := line.split(":", 1)[0].strip().lower()) not in _HOP_BY_HOP
+        and name not in nominated
+    ]
+    authority = f"[{host}]" if ":" in host else host
+    if port != 80:
+        authority = f"{authority}:{port}"
+    out = [
+        f"{method} {origin} HTTP/1.1",
+        f"Host: {authority}",
+        "Connection: close",
+        *kept,
+        "",
+        "",
+    ]
     return "\r\n".join(out).encode("iso-8859-1")
-
-
-def _is_default_port(scheme: str, port: int) -> bool:
-    return (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
 
 
 def _close(sock: socket.socket) -> None:
@@ -373,7 +455,10 @@ def main(argv: list[str] | None = None) -> int:
         help=f"HOST:PORT to bind (default {DEFAULT_LISTEN}).",
     )
     args = parser.parse_args(argv)
-    host, port = _split_authority(args.listen, default_port=3128)
+    try:
+        host, port = _split_authority(args.listen, default_port=3128)
+    except ProxyError as exc:
+        parser.error(f"invalid --listen {args.listen!r}: {exc}")  # exit 2 with usage
     server = run_proxy(host, port)
     print(f"voxint egress proxy listening on {host}:{port}", file=sys.stderr, flush=True)
     try:

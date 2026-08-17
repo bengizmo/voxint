@@ -9,12 +9,14 @@ vetted public IP (the pin); on REFUSE the connector is NEVER called (fail-closed
 no unvetted connection).
 """
 
+import contextlib
 import socket
 import threading
 from collections.abc import Callable, Iterator
 
 import pytest
 
+from voxint.media import egress_proxy
 from voxint.media.egress_proxy import _ProxyServer, run_proxy
 
 _Answer = list[tuple[int, int, int, str, tuple[str, int]]]
@@ -33,9 +35,15 @@ def _resolver(mapping: dict[str, list[str]]) -> Callable[..., _Answer]:
 
 class _Stub:
     """A one-shot local origin: either replies with a canned HTTP response then
-    closes (HTTP path), or echoes bytes until EOF (CONNECT tunnel path)."""
+    closes (HTTP path), or echoes bytes until EOF (CONNECT tunnel path).
 
-    def __init__(self, *, mode: str, payload: bytes = b"") -> None:
+    In canned mode it records everything received in ``self.received`` (up to
+    ``reply_after``, if given) so a test can assert the request body reached the
+    upstream — the unbuffered-``rfile`` tunnel invariant."""
+
+    def __init__(
+        self, *, mode: str, payload: bytes = b"", reply_after: bytes | None = None
+    ) -> None:
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind(("127.0.0.1", 0))
@@ -43,6 +51,8 @@ class _Stub:
         self.addr: tuple[str, int] = self._sock.getsockname()
         self._mode = mode
         self._payload = payload
+        self._reply_after = reply_after
+        self.received = b""
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
 
@@ -57,11 +67,27 @@ class _Stub:
     def _handle(self, conn: socket.socket) -> None:
         with conn:
             if self._mode == "canned":
-                conn.recv(65536)  # drain the forwarded request head
-                conn.sendall(self._payload)
+                conn.settimeout(1.0)
+                buf = b""
+                try:
+                    while True:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        if self._reply_after is None or self._reply_after in buf:
+                            break
+                except OSError:
+                    pass
+                self.received = buf
+                with contextlib.suppress(OSError):
+                    conn.sendall(self._payload)
             else:  # echo
                 while True:
-                    chunk = conn.recv(65536)
+                    try:
+                        chunk = conn.recv(65536)
+                    except OSError:
+                        return
                     if not chunk:
                         return
                     conn.sendall(chunk)
@@ -244,3 +270,103 @@ def test_connect_upstream_failure_is_502_not_fallback() -> None:
         server.shutdown()
         server.server_close()
     assert data.startswith(b"HTTP/1.1 502")
+
+
+def test_connect_mixed_public_private_refused(make_proxy) -> None:
+    # A host resolving to one public AND one private address is refused wholesale,
+    # never filtered to its public member — and no connection is attempted.
+    stub = _Stub(mode="echo")
+    try:
+        proxy = make_proxy({"mixed.test": [_PUBLIC_IP, "192.0.2.9"]}, stub.addr)
+        c = proxy.client()
+        c.sendall(b"CONNECT mixed.test:443 HTTP/1.1\r\n\r\n")
+        data = c.recv(65536)
+        c.close()
+    finally:
+        stub.close()
+    assert data.startswith(b"HTTP/1.1 403")
+    assert proxy.calls == []
+
+
+def test_connect_ipv6_allow_pins_compressed(make_proxy) -> None:
+    # A host that resolves to IPv6 pins the compressed literal at connect time.
+    stub = _Stub(mode="echo")
+    try:
+        proxy = make_proxy({"v6.test": ["2606:4700:4700::1111"]}, stub.addr)
+        c = proxy.client()
+        c.sendall(b"CONNECT v6.test:443 HTTP/1.1\r\n\r\n")
+        established = c.recv(65536)
+        c.close()
+    finally:
+        stub.close()
+    assert established.startswith(b"HTTP/1.1 200")
+    assert proxy.calls == [("2606:4700:4700::1111", 443)]  # compressed literal pin
+
+
+def test_http_malformed_port_is_400_no_connect(make_proxy) -> None:
+    stub = _Stub(mode="canned", payload=b"HTTP/1.1 200 OK\r\n\r\n")
+    try:
+        proxy = make_proxy({"public.test": [_PUBLIC_IP]}, stub.addr)
+        c = proxy.client()
+        c.sendall(b"GET http://public.test:99999/ HTTP/1.1\r\nHost: public.test\r\n\r\n")
+        data = _recv_all(c)
+        c.close()
+    finally:
+        stub.close()
+    assert data.startswith(b"HTTP/1.1 400")
+    assert proxy.calls == []  # malformed target never reaches the connector
+
+
+def test_http_https_absolute_form_refused(make_proxy) -> None:
+    stub = _Stub(mode="canned", payload=b"HTTP/1.1 200 OK\r\n\r\n")
+    try:
+        proxy = make_proxy({"public.test": [_PUBLIC_IP]}, stub.addr)
+        c = proxy.client()
+        c.sendall(b"GET https://public.test/ HTTP/1.1\r\nHost: public.test\r\n\r\n")
+        data = _recv_all(c)
+        c.close()
+    finally:
+        stub.close()
+    assert data.startswith(b"HTTP/1.1 400")  # https must use CONNECT
+    assert proxy.calls == []
+
+
+def test_http_request_body_reaches_upstream(make_proxy) -> None:
+    # The unbuffered-rfile invariant: bytes after the head (here a request body)
+    # are NOT stranded in a reader buffer — the tunnel forwards them upstream.
+    reply = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+    stub = _Stub(mode="canned", payload=reply, reply_after=b"hello")
+    try:
+        proxy = make_proxy({"public.test": [_PUBLIC_IP]}, stub.addr)
+        c = proxy.client()
+        c.sendall(
+            b"POST http://public.test/ HTTP/1.1\r\n"
+            b"Host: public.test\r\nContent-Length: 5\r\n\r\nhello"
+        )
+        data = _recv_all(c)
+        c.close()
+    finally:
+        stub.close()
+    assert data.endswith(b"ok")
+    assert stub.received.endswith(b"hello")  # body made it through the tunnel
+    # and the rewritten head forced Connection: close + kept the vetted Host
+    assert b"Connection: close" in stub.received
+    assert b"Host: public.test" in stub.received
+
+
+def test_header_read_deadline_refuses_dribbler(make_proxy, monkeypatch) -> None:
+    # A client that opens a request but never finishes the head must be refused on
+    # the absolute deadline, not held until the byte cap.
+    monkeypatch.setattr(egress_proxy, "_HEADER_READ_TIMEOUT_SECONDS", 0.3)
+    stub = _Stub(mode="canned", payload=b"HTTP/1.1 200 OK\r\n\r\n")
+    try:
+        proxy = make_proxy({"public.test": [_PUBLIC_IP]}, stub.addr)
+        c = proxy.client()
+        c.sendall(b"GET http://public.test/ HTTP/1.1\r\n")  # no terminating blank line
+        c.settimeout(3)
+        data = _recv_all(c)
+        c.close()
+    finally:
+        stub.close()
+    assert data.startswith(b"HTTP/1.1 408") or data == b""  # timed out, refused
+    assert proxy.calls == []
