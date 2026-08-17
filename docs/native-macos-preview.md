@@ -130,6 +130,30 @@ This is acceptance-lite: a single-operator `pg_dump`/`pg_restore` of the `voxint
 database. Hardened backup/restore and Postgres major-version upgrades are
 deferred to the bundled-Postgres child (#71).
 
+## Verifying the install (E2E)
+
+A maintainer, opt-in acceptance lane gates this whole path — the `voxint-native-e2e`
+skill driving `tools/native_e2e_lifecycle.py`. It has two rungs:
+
+- **Smoke inner gate** (`--no-models`, fast): after `up --no-models`,
+  `doctor` reports PASS and
+  `uv run python tools/native_e2e_lifecycle.py smoke` confirms `/healthz` plus every
+  hashed island bundle in the Vite manifest serves 200 — proof the install stood up
+  and the frontend staged, no model tier required.
+- **Full usage lane** (with models): `drive --file media/diarize-3speaker.wav`
+  submits over the real HTTP surface (CSRF minted from `state.env`), drives the
+  launchd-supervised Celery worker through the real Metal pipeline, and
+  `verify --run-id <id>` reads back the durable invariants (run + all six stages
+  `completed`, non-empty transcript text, diarization turns embedded in
+  `titanet-large-v1`, and zero operator-enrollment rows). It then checks `backup`
+  and restart-survival persistence.
+
+The verifier is **read-back only** (SELECT against the live `voxint` database — no
+schema-drop path), and the generated `DB_PASSWORD`/`CSRF_SECRET` are read from
+`state.env` internally, never passed on the command line. See
+[testing.md](testing.md) for the full lane description. Set `VOXINT_NATIVE_E2E=1`
+to run it; it is macOS/Apple-Silicon only and never part of public CI.
+
 ## Logs
 
 Each service logs to `~/.voxint-native/logs/<service>.log`. Follow one with

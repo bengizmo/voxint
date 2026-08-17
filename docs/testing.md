@@ -185,16 +185,44 @@ It is built in lanes; **landed so far:**
   it exits non-zero. This replaces the manual browser pass above; run it serially
   on maintainer hardware (issue #23).
 
+- **Native (docker-free) install + usage** (the `voxint-native-e2e` skill +
+  `tools/native_e2e_lifecycle.py`) — the lane for epic #68's no-Docker path. The
+  launchd-supervised launcher `scripts/native/voxint-native.sh` stands up brew
+  Postgres+pgvector + Redis + api/worker/beat (no containers) and delegates to the
+  metal launcher for the model services. A fast `--no-models` **smoke** inner gate
+  proves the install: `/healthz` 200, `doctor` PASS, `/setup` references the hashed
+  island bundles, and every bundle in the Vite manifest serves 200. The **full
+  usage** lane then submits `media/diarize-3speaker.wav` over the real HTTP surface
+  (mint CSRF from `state.env` → onboard → `/submit` → poll `export.json`), so it
+  exercises the API→enqueue→**Celery worker** path the in-process pipeline lane
+  above never touches, and reads back the durable invariants (run + all six stages
+  `completed`, non-empty ASR text, diarization turns embedded in `titanet-large-v1`
+  at 192 dims, and zero operator-enrollment rows). Finally it checks `backup` +
+  **restart-survival** persistence (down → up → re-verify). Unlike every other lane
+  it runs against the launcher's **live** `voxint` database (the native install is
+  throwaway), so the verifier is **read-back / SELECT-only** — there is no
+  schema-drop path in the tool, and the generated `DB_PASSWORD`/`CSRF_SECRET` are
+  read from `state.env` internally, never passed on argv. macOS/Apple-Silicon only;
+  serial (issue #23).
+
 ### Gate semantics
 
-The directory keys off `VOXINT_E2E`, deliberately asymmetric so an explicit run
-can never go green by skipping itself:
+The `tests/e2e/` directory keys off `VOXINT_E2E`, deliberately asymmetric so an
+explicit run can never go green by skipping itself:
 
 - **`VOXINT_E2E` unset** → the whole directory is skipped at collection, so a
   bare `pytest` run (or CI) stays green with no model services present.
 - **`VOXINT_E2E=1`** → any missing prerequisite (the test DB, model-service
   health, or a wrong `/healthz` device identity) is a **hard failure, not a
   skip**.
+
+The **native install + usage** lane is a skill, not a pytest module, so its
+fail-not-skip is enforced by the skill: it keys off `VOXINT_NATIVE_E2E=1` and
+stops (never silently green) when macOS/Apple-Silicon, the native install, or the
+model tier is absent. Its tool's own unit + integration tests (`parse_state_env`
+parity, the DSN composer, the manifest extractor, and the read-back verifier with
+one negative case per invariant) run in the normal suites against a disposable
+`voxint_e2e` — no model tier needed.
 
 The real-LLM lane is an **optional sub-lane** with one extra rung: it is skipped
 (never failed) when the LLM env is not configured — an operator may run the
