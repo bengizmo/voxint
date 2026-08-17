@@ -4,6 +4,8 @@ Repo-level contract tests import this module without GPU dependencies; keep it
 pydantic-only. See docs/gpu-contracts.md for the authoritative contract.
 """
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 SERVICE_NAME = "whisper"
@@ -69,3 +71,14 @@ class HealthResponse(BaseModel):
     runtime: str | None = None
     runtime_version: str | None = None
     model_loaded: bool
+    # Additive v1 fields (#33 Slice 2b): the effective decode identity so two
+    # deployments are distinguishable and a numerics change is visible on
+    # /healthz. Computed once at load and cached (never hashes weights).
+    # ``decode_config_hash`` digests the effective decode config (engine, model,
+    # compute_type, batch_size, engine/runtime versions, vad params + plan
+    # version) — NOT the kwargs BatchedInferencePipeline silently ignores.
+    # Null until the model is loaded.
+    vad_plan_version: str | None = None
+    vad_params: dict[str, Any] | None = None
+    decode_config_hash: str | None = None
+    model_revision: str | None = None

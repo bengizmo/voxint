@@ -109,10 +109,14 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
   tag checked out, `voxint-metal.sh setup && up && doctor`, then run the
   metal parity lanes from the metal venvs
   (`tests/parity/test_pyannote_metal.py`, `test_whisper_metal.py`,
-  `test_titanet_onnx.py`, and — once the `WHISPER_ENGINE` seam is present (#33
-  Slice 2a) — `test_whisper_ct2_legacy_replay.py`, which must replay the frozen
-  CT2-CPU baseline with zero drift; on arm64; see docs/gpu-contracts.md "Metal
-  tier"), and record/refresh the per-chip verdict report. `VOXINT_PARITY_REQUIRED`
+  `test_titanet_onnx.py`, plus the two whisper-engine lanes from the
+  `WHISPER_ENGINE` seam (#33): `test_whisper_ct2_legacy_replay.py`, which must
+  replay the frozen CT2-CPU baseline with zero drift — run the full 15-AMI +
+  synthetic sweep here, not just the fast synthetic subset — and, once shipping
+  the shared `ct2` engine, `test_whisper_ct2_self_parity.py`, which must hold
+  `ct2 ≈ ct2-legacy` to ≤0.5pp pooled WER per vad mode; on arm64; see
+  docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
+  report. `VOXINT_PARITY_REQUIRED`
   is deliberately never set for these lanes; the compensating control is
   this gate being listed here and the PENDING verdict table in
   gpu-contracts.md, which a release must not leave stale.

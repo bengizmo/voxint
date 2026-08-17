@@ -16,6 +16,7 @@ from tests.contracts.conftest import load_service_module
 detector = load_service_module("whisper", "transcription")
 whisper_backends = load_service_module("whisper", "backends")
 whisper_ct2_legacy = load_service_module("whisper", "backends.ct2_legacy")
+whisper_ct2 = load_service_module("whisper", "backends.ct2")
 postprocess = load_service_module("pyannote", "postprocess")
 diarizer = load_service_module("pyannote", "diarizer")
 embedding = load_service_module("titanet", "embedding")
@@ -654,17 +655,20 @@ class TestWhisperEngineRegistry:
                 model_name="large-v2", device="cpu", compute_type="int8", batch_size=4
             )
 
-    def test_ct2_shared_reserved_for_2b_fails_closed_at_load(
+    def test_ct2_shared_resolves_to_shared_windows_backend(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # ct2 (shared-VAD) is a known engine kind but its decode lands in Slice
-        # 2b; selecting it resolves the shared_windows backend, which fails
-        # closed at load — never a silent fallback to the legacy path.
+        # ct2 (shared-VAD) resolves the shared_windows backend (Slice 2b): a
+        # real decode engine exposing decode_windows + transcribe_raw, with the
+        # same /healthz identity as the legacy path (only the decode differs).
         monkeypatch.setenv("WHISPER_ENGINE", "ct2")
         transcriber = self._make()
         assert transcriber._backend.kind == "shared_windows"  # type: ignore[attr-defined]
-        with pytest.raises(NotImplementedError, match="2b"):
-            transcriber.load_model()  # type: ignore[attr-defined]
+        assert transcriber.engine == "faster-whisper"  # type: ignore[attr-defined]
+        assert transcriber.runtime == "ctranslate2"  # type: ignore[attr-defined]
+        assert transcriber.model_name == "large-v2"  # type: ignore[attr-defined]
+        assert callable(transcriber._backend.decode_windows)  # type: ignore[attr-defined]
+        assert callable(transcriber._backend.transcribe_raw)  # type: ignore[attr-defined]
 
 
 class TestCt2DeviceVerify:
@@ -686,6 +690,16 @@ class TestCt2DeviceVerify:
         backend = whisper_ct2_legacy.Ct2LegacyBackend(device="cuda")
         backend.device = "rocm"  # simulate post-load relabelling
         backend.verify_device()  # still passes: requested device was cuda
+
+    def test_ct2_shared_shipped_devices_pass(self) -> None:
+        # The shared-window ct2 backend applies the same fail-closed device
+        # policy as ct2-legacy (no-op for the shipped cpu/cuda strings).
+        whisper_ct2.Ct2Backend(device="cpu").verify_device()
+        whisper_ct2.Ct2Backend(device="cuda").verify_device()
+
+    def test_ct2_shared_unsupported_device_fails_closed(self) -> None:
+        with pytest.raises(RuntimeError, match="mps"):
+            whisper_ct2.Ct2Backend(device="mps").verify_device()
 
 
 def _fake_ort(available: list[str], session_providers: list[str]) -> SimpleNamespace:

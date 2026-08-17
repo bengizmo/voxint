@@ -94,6 +94,13 @@ same contract.
     provenance is **not** readiness truth and is never required for `"ok"`.
   - The four fields are additive within `v1`; consumers must tolerate their
     absence (older services) and any future additive values.
+  - **whisper only** additionally carries a cached *decode identity* (#33
+    Slice 2b), populated once the model is loaded (`null` while `degraded`):
+    `decode_config_hash` (digest of the effective decode config — engine,
+    model, compute_type, batch_size, engine/runtime versions, VAD params +
+    plan version), `vad_plan_version`, `vad_params`, and `model_revision`
+    (the pinned HF snapshot). It never hashes weights per request; it exists so
+    two deployments are distinguishable and a numerics change is visible.
 
 ## whisper: `POST /v1/transcribe` (port 8022)
 
@@ -432,14 +439,17 @@ gate AGAINST them:
   same knife edges).
 - `tests/parity/test_whisper_metal.py`: native CT2 transcript vs
   `references/cuda/transcribe.json` (similarity / segments / confidence).
-- `tests/parity/test_whisper_ct2_legacy_replay.py` (#33 Slice 2a): the
+- `tests/parity/test_whisper_ct2_legacy_replay.py` (#33 Slice 2a/2b): the
   `ct2-legacy` engine, driven in-process at the pinned oracle `batch_size=4`,
   must replay the frozen CT2-CPU baseline
   (`references/ct2-cpu-metal/transcribe.json`) with **zero drift** on every
-  committed entry × both decode paths — the anchor proof that the
-  `WHISPER_ENGINE` seam refactor moved the shipped path mechanically. The AMI
-  windows need the prepared work-dir corpus; the committed synthetic clips run
-  anywhere on Apple Silicon.
+  committed entry × both decode paths. Originally the anchor proof that the
+  `WHISPER_ENGINE` seam refactor moved the shipped path mechanically (Slice 2a);
+  after Slice 2b it also guards the shared `assemble_transcription_output` — the
+  result-assembly loop deduplicated into the front layer and now called by
+  `ct2-legacy` too, so zero drift here proves that dedup is byte-faithful. The
+  AMI windows need the prepared work-dir corpus; the committed synthetic clips
+  run anywhere on Apple Silicon.
 - `tests/parity/test_titanet_onnx.py`: the FULL 3-level gate re-run on
   arm64; `VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider` re-runs it
   under the CoreML EP, plus a same-window repeat-determinism probe.
@@ -593,9 +603,12 @@ CPU. A shared, engine-agnostic front layer owns audio decode → 16 kHz mono PCM
 the voxint-owned Silero **VADPlan** (speech intervals + pad/merge + decode
 windows + source-time offsets), window→file timestamp remapping, the
 `exp(avg_logprob)` confidence transform, and repetition soft-tagging; engines
-only decode identical pre-cut windows. `/healthz` identity gains `model_sha`,
-`vad_params`, and `decode_config_hash`, and device selection is verified
-fail-closed so a requested Metal engine cannot silently execute on CPU.
+only decode identical pre-cut windows. `/healthz` identity gains a cached decode
+identity — `decode_config_hash` (digest of the effective decode config: engine,
+model, compute_type, batch_size, engine/runtime versions, VAD params + plan
+version), `vad_plan_version`, `vad_params`, and `model_revision` (the pinned HF
+snapshot; weights are never hashed per request) — and device selection is
+verified fail-closed so a requested Metal engine cannot silently execute on CPU.
 
 **Two denominators, named explicitly.** `ct2-legacy` is the untouched shipped path
 (`BatchedInferencePipeline` + its internal VAD); `ct2` is the same engine on the
@@ -613,7 +626,7 @@ Pre-registered bounds (ratcheting any afterwards is a numerics decision):
 
 | Gate | Bound |
 |---|---|
-| CT2 self-parity (`legacy` vs `ct2`, `vad_filter` true & false) | normalized WER-diff ≤ 0.5 pp; segmentation delta reported |
+| CT2 self-parity (`legacy` vs `ct2`, `vad_filter` true & false) | normalized WER-diff ≤ 0.5 pp; segmentation delta reported — implemented in `tests/parity/test_whisper_ct2_self_parity.py` (#33 Slice 2b), pooled micro-average per vad mode, empty refs held to zero-insertion |
 | Contract: disagreement vs frozen CT2 baseline | normalized WER-diff ≤ 2.0 pp pooled; p95 per-file ≤ 5 pp; token agreement ≥ 97 % |
 | Guardrail: accuracy vs gold | candidate normalized WER ≤ CT2 normalized WER + 1.0 pp (per-stratum and pooled) |
 | Segment boundary drift (text-aligned, matched non-empty only) | p95 ≤ 0.5 s **and** p99/max ≤ 1.5 s; unmatched-segment rate ≤ 2 %; word-timestamp drift reported |

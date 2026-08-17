@@ -224,6 +224,85 @@ class TranscriptionOutput:
     suspect_segment_count: int = 0
 
 
+def assemble_transcription_output(
+    segments: Any,
+    *,
+    language: str,
+    duration_seconds: float,
+) -> TranscriptionOutput:
+    """Assemble a ``TranscriptionOutput`` from faster-whisper ``Segment``s.
+
+    The shared result-assembly loop used by BOTH engines (deduplicated from the
+    byte-faithful ``ct2-legacy`` path): builds the joined transcript, the flat
+    word list, per-segment annotations with repetition soft-tagging, and the
+    mean-of-``exp(avg_logprob)`` confidence (0.8 when no segment carried a
+    logprob — e.g. no speech). ``segments`` are consumed once; on the VAD path
+    the caller has already restored them to the original timeline. Byte-identity
+    with the frozen #33 CT2-CPU oracle is guarded by
+    ``tests/parity/test_whisper_ct2_legacy_replay.py``.
+    """
+    import numpy as np
+
+    transcript_parts: list[str] = []
+    words: list[dict[str, Any]] = []
+    seg_annotations: list[dict[str, Any]] = []
+    suspect_count = 0
+    total_confidence = 0.0
+    confidence_count = 0
+
+    for segment in segments:
+        transcript_parts.append(segment.text)
+
+        seg_conf: float | None = None
+        if getattr(segment, "avg_logprob", None) is not None:
+            seg_conf = float(min(1.0, max(0.0, np.exp(segment.avg_logprob))))
+            total_confidence += seg_conf
+            confidence_count += 1
+
+        if getattr(segment, "words", None):
+            for word in segment.words:
+                words.append(
+                    {
+                        "start_seconds": word.start,
+                        "end_seconds": word.end,
+                        "word": word.word,
+                        "confidence": getattr(word, "probability", 0.8),
+                    }
+                )
+
+        record, flagged = build_segment_annotation(
+            start_seconds=float(getattr(segment, "start", 0.0) or 0.0),
+            end_seconds=float(getattr(segment, "end", 0.0) or 0.0),
+            text=segment.text,
+            confidence=seg_conf,
+        )
+        if flagged:
+            suspect_count += 1
+        seg_annotations.append(record)
+
+    overall_confidence = (
+        (total_confidence / confidence_count) if confidence_count > 0 else 0.8
+    )
+    transcript = " ".join(transcript_parts).strip()
+
+    if suspect_count:
+        logger.warning(
+            "Hallucination soft-tag: %d/%d segments flagged",
+            suspect_count,
+            len(seg_annotations),
+        )
+
+    return TranscriptionOutput(
+        transcript=transcript,
+        language=language,
+        confidence=overall_confidence,
+        duration_seconds=duration_seconds,
+        words=words,
+        segments=seg_annotations,
+        suspect_segment_count=suspect_count,
+    )
+
+
 class WhisperTranscriber:
     """Engine-agnostic facade over a ``WHISPER_ENGINE`` backend.
 
@@ -261,6 +340,7 @@ class WhisperTranscriber:
                 batch_size=batch_size,
             )
         self._backend: LegacyFileBackend | SharedWindowsBackend = backend
+        self._decode_identity: dict[str, Any] | None = None
 
     # --- /healthz identity + config, delegated to the selected backend ---
     @property
@@ -297,6 +377,46 @@ class WhisperTranscriber:
     def cleanup_memory(self) -> None:
         self._backend.cleanup_memory()
 
+    def decode_identity(self) -> dict[str, Any]:
+        """The effective decode identity for /healthz, computed once and cached.
+
+        Digests everything that moves numerics deployment-to-deployment: the
+        engine kind + package versions, the model/compute/batch config, and the
+        shared VAD plan version + parameters. Never hashes weights (the pinned
+        HF revision is the weight provenance). Call after ``load_model`` so the
+        engine/runtime versions are resolved; the result is cached so healthz
+        never recomputes it per request.
+        """
+        if self._decode_identity is None:
+            import hashlib
+            import json
+            import os
+
+            from app.backends.vad_plan import VAD_PARAMS, VAD_PLAN_VERSION
+
+            config: dict[str, Any] = {
+                "engine_kind": self._backend.kind,
+                "engine": self._backend.engine,
+                "engine_version": self._backend.engine_version,
+                "runtime": self._backend.runtime,
+                "runtime_version": self._backend.runtime_version,
+                "model_name": self._backend.model_name,
+                "compute_type": getattr(self._backend, "compute_type", None),
+                "batch_size": getattr(self._backend, "batch_size", None),
+                "vad_plan_version": VAD_PLAN_VERSION,
+                "vad_params": VAD_PARAMS,
+            }
+            digest = hashlib.sha256(
+                json.dumps(config, sort_keys=True, default=str).encode("utf-8")
+            ).hexdigest()
+            self._decode_identity = {
+                "vad_plan_version": VAD_PLAN_VERSION,
+                "vad_params": dict(VAD_PARAMS),
+                "decode_config_hash": digest,
+                "model_revision": os.getenv("WHISPER_REVISION") or None,
+            }
+        return self._decode_identity
+
     def transcribe(
         self,
         audio_path: str,
@@ -312,7 +432,62 @@ class WhisperTranscriber:
         if self._backend.kind == "legacy_file":
             return self._backend.transcribe_file(audio_path, options)
         if self._backend.kind == "shared_windows":
-            raise NotImplementedError(
-                "shared_windows front-layer assembly lands in Slice 2b"
-            )
+            return self._transcribe_shared_windows(audio_path, options)
         raise ValueError(f"Unknown backend kind {self._backend.kind!r}")
+
+    def _transcribe_shared_windows(
+        self, audio_path: str, options: TranscribeOptions
+    ) -> TranscriptionOutput:
+        """Front layer for the ``shared_windows`` engine (VAD + raw modes).
+
+        Owns everything engine-agnostic: the undecodable-input probe (-> 400),
+        VAD planning + packing, packed->source time restoration, and assembly.
+        The backend only decodes. faster-whisper is lazy-imported here (like the
+        legacy backend) so this module stays importable in the torch-free
+        contract-test path.
+
+        VAD mode: build the plan, hand the packed windows to ``decode_windows``,
+        restore the packed segment times against the plan's *global* speech-chunk
+        list (faster-whisper's own ``restore_speech_timestamps``), then assemble.
+        No speech -> empty windows -> empty segments (the backend still returns
+        the detected language), assembled at the original duration. Non-VAD mode:
+        ``transcribe_raw`` returns segments already on the original timeline;
+        assemble without restoration.
+        """
+        import av
+        from faster_whisper.audio import decode_audio
+        from faster_whisper.transcribe import restore_speech_timestamps
+
+        from app.backends.vad_plan import SAMPLING_RATE, build_vad_plan
+
+        # Probe up front: faster-whisper decodes via PyAV deep inside inference,
+        # where a decode failure is indistinguishable from an inference failure.
+        # The contract wants undecodable input -> 400 (mirrors ct2_legacy).
+        try:
+            with av.open(audio_path) as container:
+                if not container.streams.audio:
+                    raise DecodeError("No audio stream in file")
+        except DecodeError:
+            raise
+        except Exception as exc:
+            raise DecodeError(f"Could not decode audio: {exc}") from exc
+
+        if not options.vad_filter:
+            raw = self._backend.transcribe_raw(audio_path, options)
+            return assemble_transcription_output(
+                raw.segments,
+                language=raw.language or "en",
+                duration_seconds=raw.duration,
+            )
+
+        audio = decode_audio(audio_path, sampling_rate=SAMPLING_RATE)
+        plan = build_vad_plan(audio)
+        raw = self._backend.decode_windows(plan.windows, options)
+        restored = list(
+            restore_speech_timestamps(raw.segments, plan.speech_chunks, SAMPLING_RATE)
+        )
+        return assemble_transcription_output(
+            restored,
+            language=raw.language or "en",
+            duration_seconds=plan.duration_seconds,
+        )

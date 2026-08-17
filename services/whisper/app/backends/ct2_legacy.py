@@ -18,13 +18,11 @@ import threading
 import time
 from typing import Any, Literal
 
-import numpy as np
-
 from app.backends import TranscribeOptions
 from app.transcription import (
     DecodeError,
     TranscriptionOutput,
-    build_segment_annotation,
+    assemble_transcription_output,
     resolve_device_name,
 )
 
@@ -191,63 +189,12 @@ class Ct2LegacyBackend:
             # Consume the generator inside the lock (model is not thread-safe).
             segments = list(segments_iter)
 
-        transcript_parts: list[str] = []
-        words: list[dict[str, Any]] = []
-        seg_annotations: list[dict[str, Any]] = []
-        suspect_count = 0
-        total_confidence = 0.0
-        confidence_count = 0
-
-        for segment in segments:
-            transcript_parts.append(segment.text)
-
-            seg_conf: float | None = None
-            if getattr(segment, "avg_logprob", None) is not None:
-                seg_conf = float(min(1.0, max(0.0, np.exp(segment.avg_logprob))))
-                total_confidence += seg_conf
-                confidence_count += 1
-
-            if getattr(segment, "words", None):
-                for word in segment.words:
-                    words.append(
-                        {
-                            "start_seconds": word.start,
-                            "end_seconds": word.end,
-                            "word": word.word,
-                            "confidence": getattr(word, "probability", 0.8),
-                        }
-                    )
-
-            record, flagged = build_segment_annotation(
-                start_seconds=float(getattr(segment, "start", 0.0) or 0.0),
-                end_seconds=float(getattr(segment, "end", 0.0) or 0.0),
-                text=segment.text,
-                confidence=seg_conf,
-            )
-            if flagged:
-                suspect_count += 1
-            seg_annotations.append(record)
-
-        overall_confidence = (
-            (total_confidence / confidence_count) if confidence_count > 0 else 0.8
-        )
-        transcript = " ".join(transcript_parts).strip()
-
-        if suspect_count:
-            logger.warning(
-                "Hallucination soft-tag: %d/%d segments flagged",
-                suspect_count,
-                len(seg_annotations),
-            )
-
-        return TranscriptionOutput(
-            transcript=transcript,
+        # Shared assembly (dedup'd into the front layer; byte-identity with the
+        # frozen oracle is guarded by test_whisper_ct2_legacy_replay.py).
+        return assemble_transcription_output(
+            segments,
             language=info.language,
-            confidence=overall_confidence,
             duration_seconds=info.duration,
-            words=words,
-            segments=seg_annotations,
-            suspect_segment_count=suspect_count,
         )
 
     def cleanup_memory(self) -> None:

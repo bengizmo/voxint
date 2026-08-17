@@ -67,6 +67,12 @@ class TestWhisperRoutes:
                 runtime_version="test-runtime-ver",
                 transcribe=lambda *a, **k: fake_output,
                 cleanup_memory=lambda: None,
+                decode_identity=lambda: {
+                    "vad_plan_version": "fw-1.2.1-batched-v1",
+                    "vad_params": {"threshold": 0.5, "min_silence_duration_ms": 160},
+                    "decode_config_hash": "deadbeef",
+                    "model_revision": "test-rev",
+                },
             ),
         )
         return mod
@@ -89,6 +95,11 @@ class TestWhisperRoutes:
         assert body["engine_version"] == "test-engine-ver"
         assert body["runtime"] == "ctranslate2"
         assert body["runtime_version"] == "test-runtime-ver"
+        # Decode identity (#33 Slice 2b) surfaced once loaded.
+        assert body["vad_plan_version"] == "fw-1.2.1-batched-v1"
+        assert body["vad_params"]["min_silence_duration_ms"] == 160
+        assert body["decode_config_hash"] == "deadbeef"
+        assert body["model_revision"] == "test-rev"
 
     def test_healthz_degraded_503_null_model(
         self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch
@@ -99,6 +110,9 @@ class TestWhisperRoutes:
         body = response.json()
         assert body["status"] == "degraded"
         assert body["model"] is None
+        # Decode identity is null until the model is loaded.
+        assert body["decode_config_hash"] is None
+        assert body["vad_plan_version"] is None
 
     def test_model_unavailable(
         self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch

@@ -16,10 +16,10 @@ different layers, so they expose different methods:
   ``ct2-legacy`` is the only implementation and is byte-faithful to the
   pre-seam shipped code (Slice 2a of #33).
 * ``shared_windows`` (``kind == "shared_windows"``): decodes pre-VAD'd,
-  packed windows; the shared front owns VAD, packing, time remap, confidence
-  and assembly. Implemented in Slice 2b (see ``app.backends.ct2``); the types
-  + descriptor kind are defined now so the abstraction does not harden around
-  the wrong shape.
+  packed windows (``decode_windows``) or runs the non-VAD sequential path
+  (``transcribe_raw``); the shared front owns VAD, packing, time remap,
+  confidence and assembly. ``ct2`` is the implementation (see
+  ``app.backends.ct2``, Slice 2b of #33).
 
 Selection is fail-closed: an unknown ``WHISPER_ENGINE`` raises ``ValueError``,
 never a silent fallback (numerics doctrine — model outputs are contract). The
@@ -41,9 +41,9 @@ if TYPE_CHECKING:
 # not set WHISPER_ENGINE gets exactly the pre-seam numerics.
 DEFAULT_ENGINE = "ct2-legacy"
 
-# Engines the registry knows how to construct. ``ct2`` resolves to a
-# shared-window backend that is not decode-ready until Slice 2b — it fails
-# closed at load, never silently degrading to the legacy path.
+# Engines the registry knows how to construct. ``ct2`` resolves to the
+# shared-window backend (batched VAD decode + raw sequential decode); an
+# unknown value fails closed, never silently degrading to the legacy path.
 KNOWN_ENGINES = ("ct2-legacy", "ct2")
 
 
@@ -97,7 +97,10 @@ class SharedWindowsBackend(Protocol):
     def cleanup_memory(self) -> None: ...
     def decode_windows(
         self, windows: list[SpeechWindow], options: TranscribeOptions
-    ) -> list[RawResult]: ...
+    ) -> RawResult: ...
+    def transcribe_raw(
+        self, audio_path: str, options: TranscribeOptions
+    ) -> RawResult: ...
 
 
 def create_transcriber(

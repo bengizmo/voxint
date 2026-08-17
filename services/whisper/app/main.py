@@ -91,6 +91,9 @@ app = FastAPI(
 @app.get("/healthz", response_model=HealthResponse)
 async def healthz() -> HealthResponse | JSONResponse:
     loaded = transcriber.is_initialized
+    # Decode identity is null until load (versions unresolved); computed once
+    # and cached by the facade, so healthz never recomputes it per request.
+    identity = transcriber.decode_identity() if loaded else {}
     body = HealthResponse(
         status="ok" if loaded else "degraded",
         service=SERVICE_NAME,
@@ -103,6 +106,10 @@ async def healthz() -> HealthResponse | JSONResponse:
         runtime=transcriber.runtime,
         runtime_version=transcriber.runtime_version,
         model_loaded=loaded,
+        vad_plan_version=identity.get("vad_plan_version"),
+        vad_params=identity.get("vad_params"),
+        decode_config_hash=identity.get("decode_config_hash"),
+        model_revision=identity.get("model_revision"),
     )
     if not loaded:
         return JSONResponse(status_code=503, content=body.model_dump())

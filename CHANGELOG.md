@@ -149,6 +149,33 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `/healthz` identity, the public `transcribe` signature, and every existing
   test are unchanged. This is the structural half of Slice 2; the shared-VAD
   `ct2` backend and its self-parity gate (Slice 2b) fail closed until they land.
+- **Whisper shared-VAD `ct2` decode engine** (#33, Slice 2b): the real
+  `shared_windows` engine now decodes. A shared front layer
+  (`app.backends.vad_plan.build_vad_plan` + the `WhisperTranscriber` facade)
+  owns VAD, packing, packed→source time restoration and result assembly by
+  reusing faster-whisper 1.2.1's OWN primitives (`get_speech_timestamps`,
+  `collect_chunks`, `restore_speech_timestamps`) with the exact
+  `BatchedInferencePipeline` parameters; the backend (`Ct2Backend`) does only
+  the raw batched CT2 forward on the packed windows, so a future mlx backend
+  consumes identical windows. The decode vehicle (direct `pipeline.forward` vs
+  the public `transcribe(clip_timestamps=…)` path) was **chosen by
+  measurement** — both are byte-exact on the comparison fixtures; `forward`
+  wins because it feeds integer-exact audio and reconstructs no metadata. The
+  batched decode reproduces `_batched_segments_generator`'s exact
+  `Segment`/`Word` materialization (global ids, three-decimal rounding,
+  `last_speech_timestamp` threading). The result-assembly loop is
+  deduplicated into a shared front helper used by BOTH engines
+  (`ct2-legacy` byte-identity still guarded by the frozen-oracle replay gate).
+  Equivalence is proven by a new self-parity gate
+  (`tests/parity/test_whisper_ct2_self_parity.py`, Apple-Silicon-only, plain
+  SKIP elsewhere): `ct2 ≈ ct2-legacy` to **≤0.5pp pooled WER per vad mode**
+  (micro-averaged S/D/I/N; empty-reference clips held to a separate
+  zero-insertion invariant) over the committed synthetic fixture + a curated
+  AMI subset spanning 2–10 packed windows. `/healthz` gains a cached decode
+  identity (`decode_config_hash`, `vad_plan_version`, `vad_params`,
+  `model_revision`) so two deployments are distinguishable and a numerics
+  change is visible. **Behind-seam and off by default** (`WHISPER_ENGINE`
+  stays `ct2-legacy`): zero behavior change until a deployment opts in.
 
 ### Fixed
 - **Metal launcher whisper batch size** (#33): the native launcher
