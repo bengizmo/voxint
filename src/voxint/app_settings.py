@@ -7,7 +7,9 @@ transaction — every function takes a live ``Session`` and never commits.
 """
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlsplit
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -100,6 +102,239 @@ def effective_llm_key_source(row: AppSettings | None, settings: Settings) -> str
     if settings.llm_api_key.strip():
         return "environment"
     return "none"
+
+
+# ---------------------------------------------------------------------------
+# Tri-state feature-flag resolvers (issue #74)
+#
+# Each in-UI-editable flag has a nullable column on ``AppSettings``: NULL means
+# "inherit the env default" (``config.Settings``), a non-NULL value overrides it
+# (the ``llm_base_url`` nullable pattern). Every runtime gate resolves through the
+# matching ``resolve_effective_<flag>`` so a UI toggle applies with no restart and
+# no read-site can drift onto a bare ``settings.<flag>`` env read. The column name
+# mirrors the config field name, which the private helpers rely on.
+# ---------------------------------------------------------------------------
+
+
+def _resolve_bool_flag(row: AppSettings | None, settings: Settings, name: str) -> bool:
+    """Tri-state boolean: the ROW column wins when non-NULL, else the env default.
+
+    ``NULL`` (column unset) inherits ``settings.<name>``; ``True``/``False`` on the
+    row overrides it. Shared by the per-flag public resolvers so the precedence is
+    defined exactly once.
+    """
+    if row is not None:
+        value = getattr(row, name)
+        if value is not None:
+            return bool(value)
+    return bool(getattr(settings, name))
+
+
+def _resolve_str_flag(row: AppSettings | None, settings: Settings, name: str) -> str:
+    """Tri-state string/secret: a non-blank ROW value wins, else the env default.
+
+    ``NULL`` or a blank row value inherits ``settings.<name>`` (the
+    ``resolve_effective_llm_endpoint``/``resolve_effective_llm_api_key`` precedent),
+    so clearing the field in the UI reverts to the installation setting rather than
+    pinning an empty override over a valid env value.
+    """
+    if row is not None:
+        value: str | None = getattr(row, name)
+        if value is not None and value.strip():
+            return value
+    env_value: str = getattr(settings, name)
+    return env_value
+
+
+def resolve_effective_enrichment_names_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "enrichment_names_enabled")
+
+
+def resolve_effective_enrichment_names_llm_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "enrichment_names_llm_enabled")
+
+
+def resolve_effective_enrichment_run_assets_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "enrichment_run_assets_enabled")
+
+
+def resolve_effective_enrichment_run_assets_autogenerate(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "enrichment_run_assets_autogenerate")
+
+
+def resolve_effective_voxint_web_research(row: AppSettings | None, settings: Settings) -> bool:
+    return _resolve_bool_flag(row, settings, "voxint_web_research")
+
+
+def resolve_effective_enrichment_web_research_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "enrichment_web_research_enabled")
+
+
+def resolve_effective_ytdlp_enabled(row: AppSettings | None, settings: Settings) -> bool:
+    return _resolve_bool_flag(row, settings, "ytdlp_enabled")
+
+
+def resolve_effective_source_authority_domains(
+    row: AppSettings | None, settings: Settings
+) -> str:
+    return _resolve_str_flag(row, settings, "source_authority_domains")
+
+
+def resolve_effective_web_search_base_url(row: AppSettings | None, settings: Settings) -> str:
+    return _resolve_str_flag(row, settings, "web_search_base_url")
+
+
+def resolve_effective_web_search_api_key(row: AppSettings | None, settings: Settings) -> str:
+    """Effective web-search provider credential — a non-blank ROW value WINS, else
+    env ``WEB_SEARCH_API_KEY``. Like :func:`resolve_effective_llm_api_key` this is a
+    credential: never log, render, or export it (see the ``AppSettings`` docstring).
+    """
+    return _resolve_str_flag(row, settings, "web_search_api_key")
+
+
+@dataclass(frozen=True)
+class EffectiveWebResearch:
+    """The resolved web-research provider config for one job execution (issue #74).
+
+    Built once at the row-owning boundary (the research worker / the CLI) from
+    ``(row, settings)`` and threaded down into :mod:`voxint.research.fetch` and
+    :mod:`voxint.research.search`, which have no ``Session`` in scope. This makes the
+    deep retrieval gate honor the *effective* (row-over-env) value — an env-only
+    read there would silently veto a UI enable (env false + row true). ``api_key``
+    is a credential: never log/render it (only for the provider call + redaction).
+    """
+
+    enabled: bool
+    base_url: str
+    api_key: str
+
+
+def resolve_effective_web_research(
+    row: AppSettings | None, settings: Settings
+) -> EffectiveWebResearch:
+    """Resolve the whole web-research provider config in one shot (issue #74)."""
+    return EffectiveWebResearch(
+        enabled=resolve_effective_voxint_web_research(row, settings),
+        base_url=resolve_effective_web_search_base_url(row, settings),
+        api_key=resolve_effective_web_search_api_key(row, settings),
+    )
+
+
+@dataclass(frozen=True)
+class EffectiveFlags:
+    """POST-resolve (effective) feature-flag values for :func:`validate_effective_flags`.
+
+    A plain value object so the cross-flag invariant check is pure and importable
+    without depending on ``config.Settings`` (which would cycle: ``app_settings``
+    already imports ``Settings``). Both the ``config.py`` env-time validator and
+    every runtime settings form build one and call the validator, so the five
+    invariants live in exactly one place.
+    """
+
+    llm_enabled: bool
+    enrichment_names_enabled: bool
+    enrichment_names_llm_enabled: bool
+    enrichment_run_assets_enabled: bool
+    enrichment_run_assets_autogenerate: bool
+    voxint_web_research: bool
+    enrichment_web_research_enabled: bool
+    web_search_base_url: str
+
+
+def validate_web_search_base_url(base: str) -> str | None:
+    """Return an operator-facing error message if ``base`` is not a usable searxng
+    endpoint, else ``None``. Extracted so the ``config.py`` env validator and
+    :func:`validate_effective_flags` share one definition of "valid base URL" and
+    can never drift. The base URL must be absolute http(s), whitespace/backslash-
+    free, credential-free (provider auth goes in ``web_search_api_key`` so it can be
+    redacted uniformly), and a bare endpoint (no query/fragment).
+    """
+    if not base.strip():
+        return (
+            "voxint_web_research=true requires web_search_base_url — the"
+            " searxng provider has no default endpoint"
+        )
+    if base != base.strip() or any(c.isspace() for c in base) or "\\" in base:
+        return "web_search_base_url must not contain whitespace or backslashes"
+    try:
+        parts = urlsplit(base)
+        # .port parses lazily; touch it so ":abc"/out-of-range fails here instead
+        # of as an opaque provider_error on first search.
+        _ = parts.port
+    except ValueError:
+        return "web_search_base_url is malformed"
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return "web_search_base_url must be an absolute http(s) URL"
+    if parts.username is not None or parts.password is not None:
+        return "web_search_base_url must not embed credentials — use web_search_api_key"
+    if parts.query or parts.fragment:
+        return "web_search_base_url must be a bare endpoint (no query/fragment)"
+    return None
+
+
+def validate_effective_flags(effective: EffectiveFlags) -> list[str]:
+    """The five cross-flag invariants over POST-resolve values (issue #74).
+
+    Returns the operator-facing error messages for every violated invariant (empty
+    list ⇒ valid), in a stable order. This is the SINGLE source of the invariant
+    logic: ``config.py``'s ``@model_validator`` adapts env values into an
+    :class:`EffectiveFlags` and raises the first message (preserving boot-strict
+    behavior + the exact messages), and every runtime settings form validates the
+    effective (row-over-env) combination the same way — so a DB override can never
+    create a combination the env-time check would have rejected. The invariants:
+
+    * ``enrichment_names_llm_enabled`` ⇒ ``llm_enabled`` + ``enrichment_names_enabled``
+    * ``enrichment_web_research_enabled`` ⇒ ``voxint_web_research`` + ``llm_enabled``
+    * ``enrichment_run_assets_autogenerate`` ⇒ ``enrichment_run_assets_enabled`` ⇒ ``llm_enabled``
+    * ``voxint_web_research`` ⇒ a valid ``web_search_base_url``
+    """
+    errors: list[str] = []
+    if effective.enrichment_names_llm_enabled and not effective.llm_enabled:
+        errors.append(
+            "enrichment_names_llm_enabled requires llm_enabled=true — the "
+            "LLM name pass reuses the configured enhancement endpoint"
+        )
+    if effective.enrichment_names_llm_enabled and not effective.enrichment_names_enabled:
+        errors.append(
+            "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
+            " — the LLM pass is additive to the offline name producer"
+        )
+    if effective.enrichment_web_research_enabled and not effective.voxint_web_research:
+        errors.append(
+            "enrichment_web_research_enabled requires voxint_web_research=true"
+            " — the producer's only egress is the controlled retrieval tools"
+        )
+    if effective.enrichment_web_research_enabled and not effective.llm_enabled:
+        errors.append(
+            "enrichment_web_research_enabled requires llm_enabled=true — the"
+            " producer reuses the configured enhancement endpoint"
+        )
+    if effective.enrichment_run_assets_enabled and not effective.llm_enabled:
+        errors.append(
+            "enrichment_run_assets_enabled requires llm_enabled=true — the"
+            " asset generators reuse the configured enhancement endpoint"
+        )
+    if effective.enrichment_run_assets_autogenerate and not effective.enrichment_run_assets_enabled:
+        errors.append(
+            "enrichment_run_assets_autogenerate requires"
+            " enrichment_run_assets_enabled=true — the post-finalize step"
+            " only enqueues the feature it rides on"
+        )
+    if effective.voxint_web_research:
+        url_error = validate_web_search_base_url(effective.web_search_base_url)
+        if url_error is not None:
+            errors.append(url_error)
+    return errors
 
 
 def get_app_settings(session: Session) -> AppSettings | None:
