@@ -321,7 +321,12 @@ def test_export_txt_route_matches_cli_bytes(
         route_bytes = client.get(f"/review/{run_id}/export.txt", params=query).content
         out = tmp_path / f"cli-{label}.txt"
         assert main(["export", str(run_id), "--format", "txt", *cli_args, "-o", str(out)]) == 0
-        assert out.read_bytes() == route_bytes, label
+        cli_bytes = out.read_bytes()
+        assert cli_bytes == route_bytes, label
+        # Both transports emit LF, never CRLF — the CLI writes UTF-8 bytes
+        # directly rather than through a platform text stream, so the contract
+        # holds on Windows too (where text mode would translate \n to \r\n).
+        assert b"\r\n" not in cli_bytes and b"\r\n" not in route_bytes, label
 
 
 def test_export_menu_surfaces_every_format(

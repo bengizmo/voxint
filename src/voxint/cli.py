@@ -680,13 +680,20 @@ def _export(args: argparse.Namespace) -> int:
     finally:
         engine.dispose()
 
+    # Write the formatter's exact UTF-8 bytes with LF — never a platform text
+    # stream, whose newline translation would turn LF into CRLF on Windows and
+    # break the byte-identity contract with the HTTP export routes (which always
+    # emit LF). Both transports must produce the same file on every OS.
     if out_path is None:
-        sys.stdout.write(output)
+        sys.stdout.buffer.write(output.encode("utf-8"))
         return 0
     # Exclusive create unless --force, so a file that appeared after the pre-DB
-    # check is not silently overwritten (nor a symlink followed).
+    # check is not silently overwritten (nor a symlink followed). newline="" keeps
+    # text mode (utf-8 + x/w semantics) while disabling newline translation.
     try:
-        with open(out_path, "w" if args.force else "x", encoding="utf-8") as fh:
+        with open(
+            out_path, "w" if args.force else "x", encoding="utf-8", newline=""
+        ) as fh:
             fh.write(output)
     except FileExistsError:
         print(f"error: {out_path} exists (use --force to overwrite)")
