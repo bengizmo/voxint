@@ -46,6 +46,7 @@ from voxint.adjudication.merge import (
     preview_merge,
 )
 from voxint.adjudication.resolver import (
+    QUEUE_SORTS,
     LabelState,
     Resolution,
     adjudication_queue,
@@ -104,6 +105,13 @@ from voxint.api.playback import (
     playback_capability,
     representative_turns,
     resolve_servable_media,
+)
+from voxint.api.presentation import (
+    format_age,
+    format_duration,
+    friendly_media_label,
+    humanize_stage,
+    humanize_status,
 )
 from voxint.api.runs_query import (
     Cursor,
@@ -622,6 +630,13 @@ templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Island bundle lookup for base.html: `asset_url('main')` / `asset_url('tailwind')`
 # resolve to the hashed built file, or None (guarded in the template) when unbuilt.
 templates.env.globals["asset_url"] = asset_url
+# Operator-facing display helpers (issue #56), called directly from the console
+# templates. `format_age` takes an injected `now` the routes pass in context.
+templates.env.globals["friendly_media_label"] = friendly_media_label
+templates.env.globals["format_duration"] = format_duration
+templates.env.globals["format_age"] = format_age
+templates.env.globals["humanize_stage"] = humanize_stage
+templates.env.globals["humanize_status"] = humanize_status
 
 
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
@@ -1837,6 +1852,8 @@ def _register_routes(app: FastAPI) -> None:
                 # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
                 # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
                 "ytdlp_enabled": settings.ytdlp_enabled,
+                # Injected clock for the relative-age render (format_age(now=…)).
+                "now": datetime.now(UTC),
                 "active_nav": "runs",
             },
         )
@@ -2385,12 +2402,20 @@ def _register_routes(app: FastAPI) -> None:
 
     @protected.get("/review")
     def review_queue(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
+        # Whitelist the sort so a bookmarked/garbage value degrades to the
+        # default FIFO order rather than erroring (issue #56).
+        sort = request.query_params.get("sort") or "oldest"
+        if sort not in QUEUE_SORTS:
+            sort = "oldest"
         return templates.TemplateResponse(
             request,
             "queue.html",
             {
                 "request": request,
-                "entries": adjudication_queue(session),
+                "entries": adjudication_queue(session, sort=sort),
+                "sort": sort,
+                # Injected clock for the relative-age render (format_age(now=…)).
+                "now": datetime.now(UTC),
                 "operator": operator,
                 # CSRF token for the per-row claim forms.
                 "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),

@@ -116,15 +116,20 @@ def test_dashboard_renders_aggregated_numbers(
     assert "2 run(s) awaiting adjudication" in body
     assert "2 enrolled speaker(s)" in body
     # Status table zero-fills the enum: a status with no runs renders a 0 row.
-    assert re.search(r"queued</span></td>\s*<td>0</td>", body)
+    # The LABEL is humanized (issue #56) but the pill's CSS class stays the raw
+    # enum so it keeps its colour — assert both, since keeping the class raw is
+    # the load-bearing invariant of the humanization.
+    assert re.search(r"Queued</span></td>\s*<td>0</td>", body)
+    assert 'class="pill queued"' in body
     # Stage timing binds the seeded values, not just the stage names: transcribe
     # ran 30s, the failed diarize_embed attempt 5s (finished attempts count for
-    # duration regardless of terminal status).
-    assert "transcribe" in body
+    # duration regardless of terminal status). Stage names render humanized.
+    assert "Transcribe" in body
     assert "30.00s" in body
     assert "5.00s" in body
-    # The one seeded diarize_embed failure renders in the failures table.
-    assert re.search(r"diarize_embed</td>\s*<td>1</td>", body)
+    # The one seeded diarize_embed failure renders in the failures table, with the
+    # humanized stage label.
+    assert re.search(r"Diarize &amp; embed</td>\s*<td>1</td>", body)
 
 
 def test_dashboard_htmx_returns_fragment_without_chrome(
@@ -162,6 +167,21 @@ def test_dashboard_since_narrows_created_window(
     # default page polls the bare route.
     assert 'hx-get="/dashboard?since=7d"' in wide_body
     assert 'hx-get="/dashboard"' in default_body
+
+
+def test_dashboard_window_selector_marks_the_active_preset(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    seed_snapshot(session_factory)
+    # In-page window picker (issue #56): a GET <select name="since"> whose options
+    # are exactly the strings parse_since accepts. Default (no ?since=) selects 24h.
+    default_body = client.get("/dashboard").text
+    assert '<select name="since"' in default_body
+    assert re.search(r'<option value="24h" selected>', default_body)
+    # Choosing 7d marks that option selected instead and re-seeds the poll URL.
+    wide_body = client.get("/dashboard", params={"since": "7d"}).text
+    assert re.search(r'<option value="7d" selected>', wide_body)
+    assert "24h\" selected" not in wide_body
 
 
 def test_dashboard_malformed_since_shows_notice_and_drops_poll_param(

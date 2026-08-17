@@ -33,13 +33,15 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from voxint.db.models import (
     AdjudicationDecision,
     AssignmentMethod,
     Decision,
     DiarizationTurn,
+    MediaItem,
+    MediaSourceMetadata,
     PipelineRun,
     RunStatus,
     SegmentReviewState,
@@ -477,17 +479,40 @@ class QueueEntry:
     unresolved_labels: int
     total_labels: int
     claimed_by: str | None
+    # Operator-facing display context (issue #56); appended with defaults so
+    # older positional/attribute construction stays valid. ``title`` is the
+    # acquisition-metadata title (issue #36) when present; ``duration_seconds``
+    # is the PROBED media length (``media_items.duration_seconds``), the truth,
+    # not the source-claimed metadata figure; ``created_at`` is the run's.
+    title: str | None = None
+    duration_seconds: float | None = None
+    created_at: datetime | None = None
 
 
-def adjudication_queue(session: Session) -> list[QueueEntry]:
-    """COMPLETED runs with at least one unresolved label, oldest first.
+# The queue's ordering options (issue #56). ``oldest`` is the historical FIFO
+# fairness order and the default; ``unresolved`` surfaces the runs with the most
+# voices still to adjudicate first ("Most voices to resolve"). An unknown value
+# degrades to ``oldest`` rather than erroring — the route whitelists, but this
+# keeps the function total.
+QUEUE_SORTS = ("oldest", "unresolved")
 
+
+def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueEntry]:
+    """COMPLETED runs with at least one unresolved label.
+
+    Ordered oldest-first (FIFO fairness, the default) or — with
+    ``sort="unresolved"`` — most-unresolved-first, tie-broken oldest-first.
     Exact per-run resolution at single-operator scale — correctness over a
-    clever SQL reduction of the precedence rules.
+    clever SQL reduction of the precedence rules. Both the media item and its
+    (usually absent) source-metadata snapshot are eager-loaded so enriching a
+    row with a friendly title costs no per-run follow-up query.
     """
     now = datetime.now(tz=UTC)
     runs = session.execute(
         select(PipelineRun)
+        .options(
+            joinedload(PipelineRun.media_item).joinedload(MediaItem.source_metadata)
+        )
         .where(
             PipelineRun.status == RunStatus.COMPLETED.value,
             # Soft-archived runs (issue #5) are hidden from the review queue.
@@ -504,6 +529,7 @@ def adjudication_queue(session: Session) -> list[QueueEntry]:
         claim_live = (
             run.review_claim_expires_at is not None and run.review_claim_expires_at > now
         )
+        metadata: MediaSourceMetadata | None = run.media_item.source_metadata
         entries.append(
             QueueEntry(
                 run_id=run.id,
@@ -511,6 +537,13 @@ def adjudication_queue(session: Session) -> list[QueueEntry]:
                 unresolved_labels=unresolved,
                 total_labels=len(states),
                 claimed_by=run.review_claimed_by if claim_live else None,
+                title=metadata.title if metadata is not None else None,
+                duration_seconds=run.media_item.duration_seconds,
+                created_at=run.created_at,
             )
         )
+    # Stable sort over the oldest-first list: ``unresolved`` reorders by voice
+    # count while preserving oldest-first among ties for free.
+    if sort == "unresolved":
+        entries.sort(key=lambda e: e.unresolved_labels, reverse=True)
     return entries

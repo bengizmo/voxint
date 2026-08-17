@@ -1,0 +1,152 @@
+"""Pure display helpers for the operator-facing console (issue #56).
+
+The console's data comes from :mod:`voxint.api.runs_query`,
+:mod:`voxint.api.stats_query`, and :mod:`voxint.adjudication.resolver`; this
+module holds the small, dependency-free formatting functions that turn that data
+into text a non-technical operator can read. Every function is a pure transform
+over primitives — no DB, no HTTP, no clock of its own — so the whole module
+unit-tests without a database (like ``tests/unit/test_runs_cursor.py``).
+
+Two rules the callers rely on:
+
+- ``now`` is always injected (never read from the wall clock here) so relative
+  times are deterministic under test, mirroring
+  :func:`voxint.api.stats_query.parse_since`.
+- The ``humanize_*`` helpers produce **display text only**. Their input is a raw
+  enum ``value`` that also keys a CSS class and the machine-facing
+  Prometheus/JSON/CLI outputs; templates must keep the raw value in ``class=``
+  and only swap the visible label, and the machine renderers must not call these
+  at all.
+"""
+
+import re
+from datetime import datetime
+from urllib.parse import unquote
+
+# Collapses any run of whitespace/control characters a percent-decode can
+# surface (newline, tab, NUL) into a single space so a decoded basename stays a
+# single clean line.
+_CONTROL_RUN = re.compile(r"[\s\x00-\x1f\x7f]+")
+
+
+def _clean_basename(source_path: str) -> str:
+    """The last path segment of ``source_path``, percent-decoded and de-noised.
+
+    Splits on both separators (a Windows-style path can reach a POSIX host),
+    falls back to the whole value when there is no trailing segment (a path
+    ending in a slash), and never returns an empty string.
+    """
+    segment = re.split(r"[\\/]", source_path.rstrip("\\/"))[-1]
+    decoded = unquote(segment) if segment else source_path
+    cleaned = _CONTROL_RUN.sub(" ", decoded).strip()
+    return cleaned or source_path.strip() or source_path
+
+
+def friendly_media_label(title: str | None, source_path: str) -> str:
+    """A human name for a recording: the source title, else a cleaned filename.
+
+    Prefers the acquisition-metadata ``title`` (issue #36) when it carries actual
+    text — ``.strip()`` guards a whitespace-only title that would otherwise render
+    blank (a latent bug in the pre-#56 ``runs.html`` ``{% if it.title %}``
+    fallback). Otherwise it derives a readable name from ``source_path``'s
+    basename (percent-decoded, extension kept — a non-technical operator
+    recognizes ``.mp3``). For a pre-#36 URL run whose ``source_path`` is a bare
+    uuid with no title, the honest result is that uuid basename; the caller keeps
+    the raw path visible as ground truth rather than this inventing an origin.
+    Never truncates — the template does that in CSS so copy/paste stays intact.
+    """
+    if title is not None:
+        stripped = title.strip()
+        if stripped:
+            return stripped
+    return _clean_basename(source_path)
+
+
+def format_duration(seconds: float | None) -> str:
+    """A recording length as ``H:MM:SS`` / ``M:SS``; ``"—"`` when unknown.
+
+    Unknown (``None``) is the honest render for media that was never probed;
+    a negative value (which the DB check-constraint forbids, but a caller could
+    still pass) is treated as unknown rather than shown as a nonsense clock.
+    """
+    if seconds is None or seconds < 0:
+        return "—"
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def format_age(created_at: datetime, *, now: datetime) -> str:
+    """A coarse, human relative age ("3 hours ago") for a timestamp.
+
+    Deliberately coarse — a non-technical operator wants "how stale is this",
+    not a precise interval — and single-unit (never "1 hour 3 minutes"). ``now``
+    is injected so the output is deterministic under test. A ``created_at`` in
+    the (clock-skewed) future collapses to "just now" rather than a negative age.
+    Absolute wall-clock time stays available to the caller via a ``title=``
+    tooltip; this is the at-a-glance label.
+    """
+    delta = now - created_at
+    seconds = delta.total_seconds()
+    if seconds < 60:
+        return "just now"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours} hour{'s' if hours != 1 else ''} ago"
+    days = hours // 24
+    if days < 7:
+        return f"{days} day{'s' if days != 1 else ''} ago"
+    weeks = days // 7
+    if days < 30:
+        return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+    months = days // 30
+    if days < 365:
+        return f"{months} month{'s' if months != 1 else ''} ago"
+    years = days // 365
+    return f"{years} year{'s' if years != 1 else ''} ago"
+
+
+def _humanize_enum(value: str) -> str:
+    """``diarize_embed`` → ``Diarize embed``: split on ``_``, sentence-case.
+
+    Only the first word is capitalized (sentence case, not Title Case) so a
+    multi-word label reads as prose, not a header.
+    """
+    words = value.replace("_", " ").split()
+    if not words:
+        return value
+    return " ".join([words[0].capitalize(), *words[1:]])
+
+
+# Stage identifiers whose plain de-underscoring does not read well. Anything not
+# listed falls through to the generic sentence-case above, so a new Stage enum
+# value renders acceptably without a code change here.
+_STAGE_LABELS = {
+    "diarize_embed": "Diarize & embed",
+    "enhance_match": "Enhance & match",
+}
+
+
+def humanize_stage(value: str) -> str:
+    """A pipeline stage identifier as an operator-readable label. Display only.
+
+    ``value`` is the raw ``Stage`` enum string, which also keys a CSS class and
+    the Prometheus/JSON/CLI outputs — callers keep the raw value there and use
+    this for the visible text alone.
+    """
+    return _STAGE_LABELS.get(value, _humanize_enum(value))
+
+
+def humanize_status(value: str) -> str:
+    """A run-status identifier as an operator-readable label. Display only.
+
+    Same display-only contract as :func:`humanize_stage`: the raw ``RunStatus``
+    value stays in ``class=`` and the machine outputs; this is the label text.
+    """
+    return _humanize_enum(value)

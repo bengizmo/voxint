@@ -356,10 +356,12 @@ top nav) renders the *same* aggregates as a read-only page: runs by status, the
 review backlog, per-stage timing and failures, roster size, and runs created in
 the window. It is authenticated like every non-`/healthz` page and shares the
 `stats_query` data layer with `/metrics` and `voxint stats`, so the three surfaces
-always agree. The page auto-refreshes every 15 seconds (an htmx fragment poll, no
-external assets); a `?since=` query param overrides the default 24h throughput
-window (same span/ISO-8601 syntax as `voxint stats --since`), degrading to 24h if
-malformed.
+always agree. Stage names render in plain language ("Diarize & embed") while the
+machine `/metrics`, JSON, and `voxint stats` outputs keep their raw identifiers.
+The page auto-refreshes every 15 seconds (an htmx fragment poll, no external
+assets). The throughput window is a **24h / 7d / 30d picker on the page**; the
+same `?since=` query param still overrides it directly (any span/ISO-8601 syntax
+`voxint stats --since` accepts), degrading to 24h if malformed.
 
 ### Exporting transcripts
 
@@ -400,6 +402,13 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `review=needed|resolved|claimed`. **`GET /runs/{id}`** shows the run detail and
   the per-stage attempt ledger (the same data as `voxint status`), with
   transcript and audio links when present.
+- **`GET /review`**: the adjudication queue — completed runs with at least one
+  voice still needing a human ruling. Each row shows a **friendly title**, the
+  recording **duration** and **age**, and a **resolved-of-total** progress bar,
+  so it is clear at a glance both what a recording is and how much is left to
+  adjudicate. `?sort=` chooses the order: `oldest` (default, FIFO) or
+  `unresolved` ("Most voices to resolve"). The **Review** button claims the run
+  and opens the workbench.
 - **`POST /submit`**: a bounded **file upload**. `UPLOAD_MAX_BYTES` (default
   5 GiB) is enforced *while streaming* (never a single unbounded read); the file
   lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,

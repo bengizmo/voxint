@@ -3,8 +3,8 @@
    Pure read-only render over a SystemStats snapshot — no aggregation here;
    that all lives in stats_query.collect_stats(). #}
 <p class="muted">
-  Snapshot at {{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%SZ") }}.
-  Throughput window since {{ stats.since.strftime("%Y-%m-%d %H:%M:%SZ") }}.
+  Snapshot at {{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}.
+  Throughput window since {{ stats.since.strftime("%Y-%m-%d %H:%M:%S UTC") }}.
 </p>
 {% if since_invalid %}
 <p class="notice">Unrecognized <code>?since=</code> value — showing the last 24 hours.</p>
@@ -25,7 +25,9 @@
   <tbody>
     {% for status in run_statuses %}
     <tr>
-      <td><span class="pill {{ status.value }}">{{ status.value }}</span></td>
+      {# Humanized LABEL only — the CSS class stays the raw enum so the pill keeps
+         its colour, and /metrics + JSON + `voxint stats` keep the raw string. #}
+      <td><span class="pill {{ status.value }}">{{ humanize_status(status.value) }}</span></td>
       <td>{{ stats.status_counts.get(status.value, 0) }}</td>
     </tr>
     {% endfor %}
@@ -39,7 +41,7 @@
   <tbody>
     {% for d in stats.stage_durations %}
     <tr>
-      <td>{{ d.stage }}</td>
+      <td>{{ humanize_stage(d.stage) }}</td>
       <td>{{ "%.2f"|format(d.avg_seconds) }}s</td>
       <td>{{ d.attempt_count }}</td>
     </tr>
@@ -56,7 +58,7 @@
   <thead><tr><th>Stage</th><th>Failed attempts</th></tr></thead>
   <tbody>
     {% for f in stats.stage_failure_counts %}
-    <tr><td>{{ f.stage }}</td><td>{{ f.attempt_count }}</td></tr>
+    <tr><td>{{ humanize_stage(f.stage) }}</td><td>{{ f.attempt_count }}</td></tr>
     {% endfor %}
   </tbody>
 </table>

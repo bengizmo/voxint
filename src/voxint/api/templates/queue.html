@@ -6,16 +6,40 @@
 {% if not entries %}
 <p>Nothing to review — every completed run is fully resolved. 🎉</p>
 {% else %}
+{# Sort control — mirrors the runs.html filter idiom, but the queue has no other
+   query state to preserve, so these are plain links. Default stays "oldest"
+   (FIFO fairness + guided-tutorial continuity). #}
+<p class="sort-control muted">
+  Sort:
+  <a href="/review"{% if sort == "oldest" %} aria-current="true"{% endif %}>Oldest first</a> ·
+  <a href="/review?sort=unresolved"{% if sort == "unresolved" %} aria-current="true"{% endif %}>Most voices to resolve</a>
+</p>
 <table>
   <thead>
-    <tr><th>Media</th><th>Unresolved</th><th>Labels</th><th>Claimed by</th><th></th></tr>
+    <tr><th>Media</th><th>Duration</th><th>Age</th><th>Progress</th><th>Claimed by</th><th></th></tr>
   </thead>
   <tbody>
     {% for e in entries %}
+    {% set resolved = e.total_labels - e.unresolved_labels %}
     <tr>
-      <td><code>{{ e.source_path }}</code></td>
-      <td>{{ e.unresolved_labels }}</td>
-      <td>{{ e.total_labels }}</td>
+      <td>
+        <span class="media-title" title="{{ e.source_path }}">{{ friendly_media_label(e.title, e.source_path) }}</span>
+        <br><code class="muted">{{ e.source_path }}</code>
+      </td>
+      <td>{{ format_duration(e.duration_seconds) }}</td>
+      <td>
+        {% if e.created_at %}<span title="{{ e.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(e.created_at, now=now) }}</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
+      <td>
+        {# Fills toward done: resolved-of-total, so fuller = closer to finished. #}
+        <div class="progress" role="progressbar"
+             aria-valuenow="{{ resolved }}" aria-valuemin="0" aria-valuemax="{{ e.total_labels }}"
+             aria-label="{{ resolved }} of {{ e.total_labels }} voices resolved">
+          <div class="progress-fill" style="width: {{ (100 * resolved / e.total_labels) if e.total_labels else 0 }}%"></div>
+          <span class="progress-label">{{ resolved }} of {{ e.total_labels }} resolved</span>
+        </div>
+      </td>
       <td>{{ e.claimed_by or "—" }}</td>
       <td>
         <form method="post" action="/review/{{ e.run_id }}/claim">

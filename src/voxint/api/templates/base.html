@@ -115,6 +115,17 @@
     .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
                  color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: .5rem;
                  padding: 0 .35rem; margin-right: .4rem; white-space: nowrap; }
+    /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
+       (resolved-of-total), with always-visible text so the bar is never the
+       only signal for a screen reader or a non-technical operator. */
+    .media-title { font-weight: 600; }
+    .sort-control { font-size: .9rem; margin: .5rem 0 1rem; }
+    .sort-control a[aria-current="true"] { font-weight: 600; text-decoration: none; }
+    .progress { position: relative; min-width: 8rem; height: 1.2rem; border: 1px solid #8886;
+                border-radius: .6rem; overflow: hidden; background: #8881; }
+    .progress-fill { position: absolute; inset: 0 auto 0 0; background: #2a2; opacity: .35; }
+    .progress-label { position: relative; display: block; text-align: center;
+                      font-size: .75rem; line-height: 1.2rem; white-space: nowrap; }
   </style>
 </head>
 <body>

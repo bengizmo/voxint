@@ -99,7 +99,11 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
   <tbody>
     {% for it in page.items %}
     <tr>
-      <td><a href="/runs/{{ it.run_id }}"><code>{{ it.run_id.hex[:8] }}</code></a></td>
+      {# The friendly title in the Media column carries identity; the run id is a
+         uuid with no friendlier form, so it stays a small muted "open" link with
+         the short hex available on hover (issue #56). #}
+      <td><a href="/runs/{{ it.run_id }}" title="run {{ it.run_id }}"
+             class="muted">open <code>{{ it.run_id.hex[:8] }}</code></a></td>
       <td><span class="pill {{ it.status }}">{{ it.status }}</span>
         {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}</td>
       <td>
@@ -111,12 +115,12 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
         {% if it.claim_live %}<span class="pill grounded">claimed{% if it.claimed_by %} · {{ it.claimed_by }}{% endif %}</span>{% endif %}
       </td>
       <td>
-        {# Source title from the acquisition metadata (issue #36); uploads and
-           pre-capture runs fall back to the media path. #}
-        {% if it.title %}{{ it.title }}<br><code class="muted">{{ it.source_path }}</code>
-        {% else %}<code>{{ it.source_path }}</code>{% endif %}
+        {# Friendly label: acquisition-metadata title (issue #36) else a cleaned
+           filename; the raw path stays muted beneath as ground truth (issue #56). #}
+        <span class="media-title" title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</span>
+        <br><code class="muted">{{ it.source_path }}</code>
       </td>
-      <td>{{ it.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></td>
     </tr>
     {% if it.snippet %}
     <tr class="snippet">

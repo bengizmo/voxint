@@ -23,6 +23,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   source** for a value (previously it dropped duplicate sources) as separate
   evidence rows. Documented in `docs/enrichment-triage.md`; the LLM-key and
   research config knobs are unchanged. Off-by-default features stay off.
+- **Review-queue & dashboard ergonomics** (#56): the adjudication queue and the
+  operator dashboard now read for a non-technical operator instead of an
+  engineer. Each **queue** row shows a **friendly title** (the acquisition
+  metadata title when present, else a cleaned, percent-decoded filename), the
+  recording **duration**, its **age** ("3 hours ago", with the exact UTC time on
+  hover), and a **resolved-of-total progress bar** that fills toward done — so a
+  glance says both *what* a recording is and *how much* is left to adjudicate.
+  The queue can be **sorted** "Oldest first" (default, unchanged FIFO order) or
+  "Most voices to resolve". The `/runs` listing shows the same friendly title and
+  relative age. On the **dashboard**, the time window is now a **24h / 7d / 30d
+  picker on the page** (no longer URL-only) and pipeline **stage names are
+  human-readable** ("Diarize & embed"). The machine-facing `/metrics`, JSON, and
+  `voxint stats` outputs are unchanged — humanization is display-only, and the
+  status pills keep their colours. No new dependency, config, or schema change.
 - **Restricted URL-download egress overlay** (#16): a new opt-in
   `compose.ytdlp-egress.yaml` productizes the previously docs-only "run the worker
   with restricted egress" guidance for the URL-ingestion SSRF residual. It routes

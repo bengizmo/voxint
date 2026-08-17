@@ -1,6 +1,7 @@
 """Read-time attribution: decision precedence, queue membership, correction order."""
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,6 +18,7 @@ from voxint.db.models import (
     Decision,
     DiarizationTurn,
     MediaItem,
+    MediaSourceMetadata,
     PipelineRun,
     RunStatus,
     Speaker,
@@ -240,3 +242,78 @@ def test_queue_lists_only_completed_runs_with_unresolved_labels(
         claim_run(session, queued_run, reviewer="ben", ttl_seconds=600)
         session.commit()
         assert adjudication_queue(session)[0].claimed_by == "ben"
+
+
+def test_queue_entry_carries_display_context(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The queue row exposes title, probed duration, and created_at (issue #56)."""
+    with session_factory() as session:
+        media = MediaItem(
+            source_path=f"incoming/{uuid.uuid4()}.wav",
+            duration_seconds=125.0,
+        )
+        session.add(media)
+        session.flush()
+        session.add(
+            MediaSourceMetadata(
+                media_item_id=media.id,
+                source_kind="ytdlp",
+                title="City Council 2026-08",
+                raw={"id": "abc"},
+                raw_schema_version=1,
+                acquired_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            )
+        )
+        run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+        session.add(run)
+        session.flush()
+        add_turn(session, run.id, 0, "S0")
+        session.commit()
+
+        entry = adjudication_queue(session)[0]
+        assert entry.title == "City Council 2026-08"
+        assert entry.duration_seconds == 125.0
+        assert entry.created_at is not None
+
+    # An upload with no metadata snapshot leaves title/duration None, no error.
+    with session_factory() as session:
+        bare = make_completed_run(session)
+        add_turn(session, bare, 0, "S0")
+        session.commit()
+        entry = next(e for e in adjudication_queue(session) if e.run_id == bare)
+        assert entry.title is None
+        assert entry.duration_seconds is None
+        assert entry.created_at is not None
+
+
+def test_queue_sort_unresolved_orders_by_voice_count(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """sort="unresolved" surfaces the most-unresolved runs first, oldest-tie-broken."""
+    with session_factory() as session:
+        # Created oldest→newest: one-voice, then two-voice, then another one-voice.
+        one_a = make_completed_run(session)
+        add_turn(session, one_a, 0, "S0")
+        two = make_completed_run(session)
+        add_turn(session, two, 0, "S0")
+        add_turn(session, two, 1, "S1")
+        one_b = make_completed_run(session)
+        add_turn(session, one_b, 0, "S0")
+        session.commit()
+
+        # Default: oldest-first (FIFO), unchanged behaviour.
+        assert [e.run_id for e in adjudication_queue(session)] == [one_a, two, one_b]
+
+        # Unresolved-first: the two-voice run leads; the two one-voice runs keep
+        # their oldest-first order among the tie (stable sort).
+        by_work = adjudication_queue(session, sort="unresolved")
+        assert [e.run_id for e in by_work] == [two, one_a, one_b]
+        assert [e.unresolved_labels for e in by_work] == [2, 1, 1]
+
+        # An unknown sort degrades to the default order rather than erroring.
+        assert [e.run_id for e in adjudication_queue(session, sort="bogus")] == [
+            one_a,
+            two,
+            one_b,
+        ]

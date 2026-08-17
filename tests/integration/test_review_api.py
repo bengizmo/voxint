@@ -172,6 +172,30 @@ def test_claim_rejected_without_csrf_token(
     assert resp.status_code == 403
 
 
+def test_queue_renders_operator_ergonomics(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """The queue row shows friendly label, duration, progress, and a sort control
+    (issue #56). seed_run has 2 labels with 1 unresolved (S1) → 1 of 2 resolved."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    body = client.get("/review").text
+    assert str(run_id) in body
+    # Friendly label leads; the raw path stays as muted ground truth beneath.
+    assert 'class="media-title"' in body
+    # No probed duration on this upload → the honest em-dash, not "0:00".
+    assert "—" in body
+    # Progress bar fills toward done with always-visible text.
+    assert 'role="progressbar"' in body
+    assert "1 of 2 resolved" in body
+    # Sort control offers the actionability option; default stays oldest.
+    assert "Most voices to resolve" in body
+    sorted_body = client.get("/review", params={"sort": "unresolved"}).text
+    assert 'href="/review?sort=unresolved"' in sorted_body
+    assert 'aria-current="true"' in sorted_body
+
+
 def test_full_review_flow(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
