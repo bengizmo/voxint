@@ -62,13 +62,15 @@ test runner** (no vitest/jest): island behaviour is covered by the Python
 integration tests plus the manual browser pass below. Don't add one without
 discussing it — it is bloat this single-operator app does not need.
 
-## Manual browser verification of the review console
+## Browser verification of the review console
 
 Interactive island behaviour (the #53/#58 verify-and-advance loop, click-to-edit,
-the unsaved-edit discard warning) is confirmed by driving a real browser against a
-**local** instance. This is a manual procedure today; the browser lane of the
-[automated E2E suite](#automated-e2e-testse2e) is planned to replace it (the
-real-pipeline lane has landed; the browser lane has not).
+the unsaved-edit discard warning, keymap suppression) is confirmed by driving a
+real browser against a **local** instance. This is now automated as the
+[browser E2E lane](#automated-e2e-testse2e) — a canonical lifecycle tool
+(`tools/e2e_browser_lifecycle.py`) plus the `voxint-e2e-review` skill that drives
+Playwright and reconciles durable state. The manual steps below remain the
+fallback (and document exactly what the tool automates) for a hand-run pass.
 
 The dockerized `api` service runs the **released** image, not your working tree,
 so browser-verifying a local change means running a fresh local instance:
@@ -164,9 +166,24 @@ It is built in lanes; **landed so far:**
   a flake. The transcript is seeded (not produced by the pipeline) to isolate the
   LLM boundary — a failure names the LLM chain, not an upstream model service.
 
-**Still upcoming** (tracked in the maintainer plan, not yet committed): a browser
-lane that drives the review-console UI and reconciles durable state — that lane
-will replace the **manual browser pass above** when it lands.
+- **Browser runtime acceptance** (the `voxint-e2e-review` skill +
+  `tools/e2e_browser_lifecycle.py`) — the one lane that is **not** a pytest
+  module: Playwright MCP is a Claude-Code capability, not a test dependency, and
+  the durable-state check is post-hoc (it runs only after a browser has driven
+  the UI). The lifecycle tool builds and stages the islands, seeds a disposable
+  database with a COMPLETED run shaped for the loop (an audio artifact,
+  `duration_seconds` set, and varied-confidence segments including sub-threshold
+  ones so the "uncertain" chips appear), and serves a working-tree instance. The
+  skill then drives the review-console islands — `v` verify-and-advance, `e` +
+  `⌘/Ctrl+Enter` save, `n` skip, `p` replay, click-to-edit, the type-then-verify
+  discard warning (warn on the first `v`, advance on the second), and the keymap
+  suppression while a `<select>`/`<textarea>` has focus — asserting the DOM and
+  network behaviour of each immediately (only verify and save touch the wire).
+  Finally the tool's `reconcile` subcommand is a **fail-closed** verifier over
+  `segment_review_states`: the browser was the sole writer, so the verified rows,
+  corrected text, and the N-of-M progress must match exactly what was driven, or
+  it exits non-zero. This replaces the manual browser pass above; run it serially
+  on maintainer hardware (issue #23).
 
 ### Gate semantics
 

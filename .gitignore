@@ -47,3 +47,12 @@ services/pyannote/models/*.bin
 /internal/
 # Session prompts symlink into internal/ — session tooling writes here.
 /docs/session-prompts
+
+# Browser E2E lane scratch: Playwright MCP writes snapshots/logs here, and the
+# lifecycle tool's disposable media root. Both are per-run, never committed.
+/.playwright-mcp/
+/media-e2e/
+
+# Claude Code local worktree scratch (the committed skill under .claude/skills
+# IS tracked; this is per-session working space).
+/.claude/worktrees/
