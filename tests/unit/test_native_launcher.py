@@ -609,6 +609,7 @@ def test_prune_log_archives_keeps_newest_n(tmp_path: Path) -> None:
     assert remaining == ["api_2026-08-12-00-00-00.log", "api_2026-08-13-00-00-00.log"]
 
 
+@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_logrotate_plist_lints_and_invokes_native_rotate(tmp_path: Path) -> None:
     out = tmp_path / "lr.plist"
     proc = run_lib(tmp_path, f'render_logrotate_plist "{out}"')
