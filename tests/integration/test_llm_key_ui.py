@@ -396,3 +396,26 @@ def test_setup_endpoint_inputs_blank_when_inheriting_env(
     body = client.get("/setup?step=llm").text
     assert f'value="{ENV_BASE}"' not in body
     assert f'placeholder="{ENV_BASE}"' in body
+
+
+def test_setup_validation_rerender_preserves_blank_endpoints(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A blank-endpoint submission that fails the enable guard (no key anywhere)
+    # re-renders with the inputs still BLANK — the env default is the placeholder,
+    # never echoed into `value` (which would falsely show inherited state as
+    # pinned). The DB row endpoint columns stay NULL.
+    client = make_client(
+        session_factory, media_root,
+        llm_api_key="", llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    resp = client.post("/setup/llm", data=_setup_form(enabled="true"))
+    assert resp.status_code == 200  # enable failed → re-render
+    body = resp.text
+    assert f'value="{ENV_BASE}"' not in body
+    assert f'value="{ENV_MODEL}"' not in body
+    assert f'placeholder="{ENV_BASE}"' in body
+    assert f'placeholder="{ENV_MODEL}"' in body
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_base_url is None and row.llm_model is None

@@ -1673,10 +1673,15 @@ def _register_routes(app: FastAPI) -> None:
         def _rerender(error: str) -> Response:
             # The key field is a password, never prefilled — so the submitted key is
             # never echoed. Only the non-secret overrides survive the re-render.
-            # `llm_enabled` is NOT overridden: _setup_context reads the persisted row,
-            # so a validation failure that fail-closes shows the checkbox OFF — the
-            # honest state — rather than echoing the submitted intent as if it stuck
-            # (matching /settings/llm).
+            # Echo the operator's SUBMITTED endpoint text verbatim (blank stays
+            # blank, with the env default as the placeholder) so their in-progress
+            # input survives — never fall back to settings.llm_base_url here, which
+            # would put the env default in the input `value` and falsely show an
+            # inheriting field as pinned (issue #46). `llm_enabled` is NOT
+            # overridden: _setup_context reads the persisted row, so a validation
+            # failure that fail-closes shows the checkbox OFF — the honest state —
+            # rather than echoing the submitted intent as if it stuck (matching
+            # /settings/llm).
             return templates.TemplateResponse(
                 request,
                 "setup.html",
@@ -1685,8 +1690,8 @@ def _register_routes(app: FastAPI) -> None:
                     session,
                     WizardStep.LLM,
                     error=error,
-                    llm_base_url=llm_base_url or settings.llm_base_url,
-                    llm_model=llm_model or settings.llm_model,
+                    llm_base_url=llm_base_url,
+                    llm_model=llm_model,
                 ),
             )
 
