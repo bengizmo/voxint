@@ -102,5 +102,5 @@ def test_single_alembic_head() -> None:
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
     # One linear head, no branches. Bump this to the newest revision whenever a
-    # migration is added (0017 = adjudication segment scope, issue #54).
-    assert list(heads) == ["0017"]
+    # migration is added (0018 = transcript_segments.confidence, issue #53).
+    assert list(heads) == ["0018"]

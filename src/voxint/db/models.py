@@ -428,6 +428,10 @@ class TranscriptSegment(Base):
             "start_seconds >= 0 AND end_seconds >= start_seconds",
             name="transcript_segments_interval_check",
         ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="transcript_segments_confidence_range_check",
+        ),
         # FTS expression indexes (migration 0008). Declared here for the
         # model↔migration parity tests; the DDL literals must match
         # ``voxint.db.search`` (contract-tested). Safe to declare as ORM
@@ -456,6 +460,11 @@ class TranscriptSegment(Base):
     diarization_label: Mapped[str | None] = mapped_column(Text)
     # ASR hallucination soft-tag, preserved verbatim from the service; gates weight it.
     suspect: Mapped[bool] = mapped_column(Boolean, default=False)
+    # ASR confidence = exp(avg_logprob) clamped to [0, 1] (a transformed
+    # likelihood, NOT a calibrated probability — docs/quality-gates.md). NULL when
+    # the provider reported none (older runs, non-confidence backends); the #53
+    # review console flags low-confidence segments and never fabricates a NULL.
+    confidence: Mapped[float | None] = mapped_column(Float)
 
 
 class DiarizationTurn(Base):

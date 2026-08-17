@@ -26,8 +26,10 @@
 <div data-island="transcript-player" data-props='{{ island_props|tojson }}'>
   {% for ln in lines %}
   {% set idx = palette.get(ln.diarization_label) %}
-  <p class="preview tp-line{% if idx is not none %} spk-{{ idx }}{% endif %}">
+  {% set uncertain = ln.confidence is not none and ln.confidence < low_confidence_threshold %}
+  <p class="preview tp-line{% if idx is not none %} spk-{{ idx }}{% endif %}{% if uncertain %} tp-uncertain{% endif %}">
     <span class="t">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}]</span>
+    {% if uncertain %}<span class="tp-uncertain-chip" title="Low ASR confidence — uncertain, not necessarily wrong">uncertain</span>{% endif %}
     {% if ln.diarization_label %}<span class="spk-badge">{{ ln.diarization_label }}</span>{% endif %}
     {% if ln.speaker != ln.diarization_label %}<strong>{{ ln.speaker }}:</strong>{% endif %}
     {{ ln.text }}

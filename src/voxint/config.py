@@ -100,6 +100,17 @@ class Settings(BaseSettings):
     media_probe_timeout_seconds: PositiveSeconds = 30.0
     # Transcript preview length per label in the workbench.
     review_preview_segments: int = Field(default=8, ge=1)
+    # Triage threshold for the review console's low-confidence highlight (#53):
+    # a segment whose ASR confidence (exp(avg_logprob), a transformed likelihood
+    # — NOT a calibrated probability; see docs/quality-gates.md) is BELOW this is
+    # flagged "uncertain, not necessarily wrong". Segments with no stored
+    # confidence (NULL) are never flagged. Configurable, but deliberately NOT a
+    # UI slider: a non-technical operator mis-setting it would distrust the whole
+    # signal. 0.6 is a conservative starting default on the exp(avg_logprob)
+    # scale (whisper's own logprob_threshold=-1.0 ⇒ exp≈0.37 marks "failed"; 0.6
+    # surfaces the genuinely shaky, not just the discarded); refine against a
+    # real-corpus histogram in a follow-up before exposing any tuning UI.
+    review_low_confidence_threshold: Ratio = Field(default=0.6)
     # Bounded page size for the /runs execution-history browser (keyset paged).
     runs_page_size: int = Field(default=50, ge=1, le=500)
     # Hard ceiling on a browser upload (POST /submit), enforced authoritatively

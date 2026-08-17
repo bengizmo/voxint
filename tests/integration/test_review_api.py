@@ -4,6 +4,7 @@ Real Postgres (migrated), real templates, real ffprobe on a real WAV.
 """
 
 import io
+import json
 import re
 import uuid
 import wave
@@ -571,3 +572,65 @@ def test_workbench_and_transcript_agree_on_speaker_color(
     assert set(card_colors) == {"S0", "S1"} == set(line_colors)
     # ...and they agree label-for-label (no drift between independent renders).
     assert card_colors == line_colors
+
+
+def _seed_run_with_confidences(
+    session: Session, media_root: Path, confidences: list[float | None]
+) -> uuid.UUID:
+    """A completed run whose segments carry the given per-segment ASR confidences."""
+    media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    audio_rel = f"artifacts/{run.id}/normalized.wav"
+    audio_abs = media_root / audio_rel
+    audio_abs.parent.mkdir(parents=True, exist_ok=True)
+    write_wav(audio_abs)
+    session.add(
+        AudioArtifact(
+            pipeline_run_id=run.id,
+            kind=ArtifactKind.PREPROCESSED_AUDIO.value,
+            path=audio_rel,
+        )
+    )
+    for index, conf in enumerate(confidences):
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run.id,
+                segment_index=index,
+                start_seconds=float(index * 10),
+                end_seconds=float(index * 10 + 8),
+                raw_text=f"segment {index}",
+                diarization_label="S0",
+                confidence=conf,
+            )
+        )
+    session.commit()
+    return run.id
+
+
+def test_transcript_flags_low_confidence_segments(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #53: a segment below the (default 0.6) triage threshold is flagged
+    # "uncertain" in the JS-off fallback; a confident one and a NULL one are not.
+    # The island props carry the raw confidence + the shared threshold, so the
+    # hydrated island flags identically.
+    with session_factory() as session:
+        run_id = _seed_run_with_confidences(session, media_root, [0.30, 0.95, None])
+
+    body = client.get(f"/runs/{run_id}/transcript").text
+    # Exactly one line is flagged uncertain (the 0.30 segment); its chip is honest.
+    # (Assert on rendered HTML markers, not the class name — that also appears in
+    # the stylesheet.) The chip tooltip text is HTML-only.
+    assert body.count(' tp-uncertain"') == 1  # the flagged line's class list
+    assert body.count("Low ASR confidence — uncertain, not necessarily wrong") == 1
+
+    # Island props expose the threshold and every segment's confidence (incl. null).
+    match = re.search(r"data-props='([^']*)'", body)
+    assert match is not None
+    props = json.loads(match.group(1))
+    assert props["lowConfidenceThreshold"] == 0.6
+    assert [s["confidence"] for s in props["segments"]] == [0.30, 0.95, None]

@@ -18,6 +18,11 @@ class TranscriptionSegment:
     text: str
     # Provider-flagged suspect content (e.g. hallucination soft-tags); gates consume this.
     suspect: bool = False
+    # ASR confidence = exp(avg_logprob) clamped to [0, 1] (a transformed
+    # likelihood, NOT a calibrated probability — see docs/quality-gates.md).
+    # None when the provider reported none; the #53 review console flags
+    # low-confidence segments and never fabricates a value for a NULL.
+    confidence: float | None = None
 
 
 @dataclass(frozen=True)

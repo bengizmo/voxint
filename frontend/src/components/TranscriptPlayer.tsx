@@ -21,6 +21,9 @@ export interface Segment {
   // canonical universe). Drives the `spk-N` class → the same CSS accent the
   // server-rendered fallback uses, so island and fallback color identically.
   paletteIndex: number | null;
+  // ASR confidence (exp(avg_logprob), a transformed likelihood — NOT a
+  // calibrated probability). null when unknown; never flagged when null.
+  confidence: number | null;
 }
 
 export interface TranscriptPlayerProps {
@@ -28,6 +31,10 @@ export interface TranscriptPlayerProps {
   mediaUrl: string;
   segments: Segment[];
   capability: PlaybackCapability;
+  // Triage cutoff (issue #53): a segment with confidence < this is flagged
+  // "uncertain". Same server setting the JS-off fallback compares against, so
+  // the island and fallback flag identically.
+  lowConfidenceThreshold: number;
 }
 
 function formatTime(seconds: number): string {
@@ -67,6 +74,7 @@ export function TranscriptPlayer({
   mediaUrl,
   segments,
   capability,
+  lowConfidenceThreshold,
 }: TranscriptPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
@@ -185,8 +193,13 @@ export function TranscriptPlayer({
       <div>
         {segments.map((seg, i) => {
           const active = i === activeIndex;
+          // Uncertain is a NON-background cue (a dashed underline + chip): the
+          // active line owns the background tint, so the two never collide.
+          const uncertain =
+            seg.confidence != null && seg.confidence < lowConfidenceThreshold;
           const classes = ["tp-line", "my-1", "text-sm"];
           if (seg.paletteIndex != null) classes.push(`spk-${seg.paletteIndex}`);
+          if (uncertain) classes.push("tp-uncertain");
           classes.push(active ? "rounded" : "opacity-85");
           if (active) classes.push("bg-sky-500/20", "px-1");
           return (
@@ -216,6 +229,14 @@ export function TranscriptPlayer({
               <span className="opacity-60 tabular-nums mr-2">
                 [{formatTime(seg.start)}–{formatTime(seg.end)}]
               </span>
+              {uncertain && (
+                <span
+                  className="tp-uncertain-chip"
+                  title="Low ASR confidence — uncertain, not necessarily wrong"
+                >
+                  uncertain
+                </span>
+              )}
               {seg.label != null && <span className="spk-badge">{seg.label}</span>}
               {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>} {seg.text}
             </p>

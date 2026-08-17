@@ -245,7 +245,33 @@ def test_transcribe_maps_segments_and_tolerates_additive_fields() -> None:
     assert result.language == "en"
     assert len(result.segments) == 2
     assert result.segments[0].text == "hello"
+    assert result.segments[0].confidence == 0.95  # captured (issue #53)
     assert result.segments[1].suspect is True
+    assert result.segments[1].confidence is None  # absent → None, never fabricated
+
+
+@pytest.mark.parametrize("bad", [1.5, -0.1, "0.9", True])
+def test_transcribe_invalid_confidence_raises_protocol_error(bad: object) -> None:
+    body = {
+        "language": "en",
+        "segments": [
+            {"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi", "confidence": bad}
+        ],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
+def test_transcribe_null_confidence_maps_to_none() -> None:
+    body = {
+        "language": "en",
+        "segments": [
+            {"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi", "confidence": None}
+        ],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    assert client.transcribe(AUDIO).segments[0].confidence is None
 
 
 def test_transcribe_malformed_body_raises_protocol_error() -> None:

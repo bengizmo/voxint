@@ -104,6 +104,17 @@
       .spk-3{--spk-accent:#bc8cff} .spk-4{--spk-accent:#39c5cf} .spk-5{--spk-accent:#f778ba}
       .spk-6{--spk-accent:#d29922} .spk-7{--spk-accent:#ff7b72}
     }
+    /* Low-confidence triage (issue #53). A NON-background treatment: the active
+       playing line already owns the background tint and the left border carries
+       the speaker accent, so uncertainty reads as a dashed amber underline plus
+       a small "uncertain" chip — supplemental, never the only cue, and honest
+       ("uncertain, not necessarily wrong"). */
+    :root { --uncertain: #9a6700; }
+    @media (prefers-color-scheme: dark) { :root { --uncertain: #d29922; } }
+    .tp-uncertain { border-bottom: 1px dashed var(--uncertain); }
+    .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
+                 color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: .5rem;
+                 padding: 0 .35rem; margin-right: .4rem; white-space: nowrap; }
   </style>
 </head>
 <body>

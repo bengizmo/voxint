@@ -47,5 +47,6 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
                 end_seconds=segment.end_seconds,
                 raw_text=segment.text,
                 suspect=segment.suspect,
+                confidence=segment.confidence,
             )
         )

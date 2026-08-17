@@ -1,11 +1,27 @@
 """HTTP client for the whisper service's v1 transcription contract."""
 
+import math
 from pathlib import Path
 from typing import Any
 
 from voxint.clients._http import ServiceHttpClient, finite_interval
 from voxint.clients.base import TranscriptionResult, TranscriptionSegment
 from voxint.clients.errors import ProtocolError
+
+
+def _parse_confidence(raw: Any) -> float | None:
+    """A missing/null confidence stays None; anything present must be a finite
+    number in [0, 1] (the whisper service emits exp(avg_logprob) already
+    clamped). We validate rather than clamp so a malformed value is a loud
+    ProtocolError, never a silently-massaged score."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ProtocolError("segment confidence must be a number or null")
+    value = float(raw)
+    if not math.isfinite(value) or not (0.0 <= value <= 1.0):
+        raise ProtocolError("segment confidence must be finite in [0, 1]")
+    return value
 
 
 class HttpASRClient(ServiceHttpClient):
@@ -27,9 +43,14 @@ class HttpASRClient(ServiceHttpClient):
                 text, suspect = seg["text"], seg.get("suspect", False)
                 if not isinstance(text, str) or not isinstance(suspect, bool):
                     raise ProtocolError("segment text/suspect have wrong types")
+                confidence = _parse_confidence(seg.get("confidence"))
                 segments.append(
                     TranscriptionSegment(
-                        start_seconds=start, end_seconds=end, text=text, suspect=suspect
+                        start_seconds=start,
+                        end_seconds=end,
+                        text=text,
+                        suspect=suspect,
+                        confidence=confidence,
                     )
                 )
             language = body["language"]

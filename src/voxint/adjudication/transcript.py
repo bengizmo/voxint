@@ -39,6 +39,11 @@ class TranscriptLine:
     speaker: str
     text: str
     diarization_label: str | None = None  # raw label (identity key for #50 colors)
+    # ASR confidence (exp(avg_logprob), a transformed likelihood — NOT a
+    # calibrated probability). None when unknown; the #53 review console flags
+    # low-confidence segments. Carried on the resolved line so the JS-off
+    # fallback and the island flag identically; exports ignore it.
+    confidence: float | None = None
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -112,6 +117,7 @@ def attributed_transcript(
                 speaker=speaker,
                 text=body,
                 diarization_label=seg.diarization_label,
+                confidence=seg.confidence,
             )
         )
     return lines

@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
+  already reports how sure it was of each segment, but Voxint used to throw that
+  away. The transcript now flags segments the model was **uncertain** about — a
+  dashed underline and a small "uncertain" chip — so a non-technical operator is
+  drawn straight to the parts worth a listen instead of re-reading everything.
+  The label is deliberately honest: **"uncertain, not necessarily wrong"** — the
+  score is a transformed likelihood, not a probability of error, and it never
+  claims a percentage. Segments the model reported no confidence for (older runs)
+  are never flagged. The cutoff is a configurable setting
+  (`REVIEW_LOW_CONFIDENCE_THRESHOLD`, default 0.6), intentionally not a UI
+  slider. Reads existing model output only — inference and the parity gates are
+  untouched.
 - **Export picker — every format, one menu** (#52, #47): the console already
   produced SubRip (`.srt`), WebVTT (`.vtt`), JSON, and RTTM alongside plain
   text, but only the `.txt` download was ever linked — the subtitle and

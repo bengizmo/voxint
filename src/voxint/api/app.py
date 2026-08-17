@@ -1809,6 +1809,10 @@ def _register_routes(app: FastAPI) -> None:
             "runId": str(run_id),
             "mediaUrl": f"/media/{run_id}",
             "capability": capability.to_props(),
+            # Low-confidence triage threshold (issue #53): the island and the
+            # JS-off fallback compare against the SAME server setting, so they
+            # flag identically. A segment with confidence None is never flagged.
+            "lowConfidenceThreshold": settings.review_low_confidence_threshold,
             "segments": [
                 {
                     "start": ln.start_seconds,
@@ -1816,6 +1820,7 @@ def _register_routes(app: FastAPI) -> None:
                     "speaker": ln.speaker,
                     "text": ln.text,
                     "label": ln.diarization_label,
+                    "confidence": ln.confidence,
                     # None short-circuits (palette is keyed on real labels only);
                     # keeps mypy happy without changing the value (get(None) → None).
                     "paletteIndex": (
@@ -1836,6 +1841,7 @@ def _register_routes(app: FastAPI) -> None:
                 "lines": lines,
                 "island_props": island_props,
                 "palette": palette,
+                "low_confidence_threshold": settings.review_low_confidence_threshold,
                 "text": variant,
                 "variants": list(TranscriptText),
                 "active_nav": "runs",

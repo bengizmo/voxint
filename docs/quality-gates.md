@@ -80,6 +80,18 @@ vote agreement act as separate decision gates rather than being blended into
 an opaque score. `llm_hint` rows store `confidence = NULL`, because
 model-reported confidence is not calibrated and is not recorded.
 
+`transcript_segments.confidence` (issue #53) is the same kind of thing for ASR:
+`exp(avg_logprob)` clamped to [0, 1] — a *transformed likelihood* (the geometric
+mean of the segment's token probabilities), **not** the probability that the
+segment is correct. It is persisted verbatim from the whisper service, NULL when
+the backend reports none (older runs never fabricate a value). The review console
+flags segments below `review_low_confidence_threshold` (default 0.6) for triage
+and labels them **"uncertain, not necessarily wrong"** — never "N% correct". The
+threshold is a configurable starting default, deliberately **not** a UI slider (a
+non-technical operator mis-setting it would distrust the signal); refine it
+against a real-corpus histogram before exposing any tuning UI. This reads existing
+model output and does not touch inference — parity/contract gates are unaffected.
+
 ## Named ≠ grounded
 
 An LLM name hint (`method = 'llm_hint'`, `proposed_name`) is review-side
