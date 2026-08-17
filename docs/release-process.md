@@ -121,16 +121,44 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
   this gate being listed here and the PENDING verdict table in
   gpu-contracts.md, which a release must not leave stale.
 
+### E2E gate (Gate E — whole pipeline, maintainer-run)
+
+The per-service smokes (`smoke-cpu`, Gate R) prove each model service in
+isolation; the parity gates prove numerics. Neither proves the **whole
+pipeline** — submit → PREPARE → transcribe → diarize → embed → persist — holds
+together against the real services. `tests/e2e/` is that gate. It is
+**maintainer-run and never wired into CI** (GitHub has neither GPUs nor the
+weights), so it runs on maintainer hardware BEFORE tagging.
+
+Before tagging a release that touches `services/` or the pipeline stages, bring
+up the three model services on a lane the host supports (the maintainer's
+host-specific bring-up — compose overlays and CPU limits — lives outside this
+public repo) and run the real-pipeline lane against a disposable database:
+
+```bash
+export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
+VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+```
+
+Expect COMPLETED runs with the persistence invariants intact and no
+model-service restarts. Keep it serial. `VOXINT_E2E=1` makes a missing
+prerequisite a hard failure, not a skip — see
+[`testing.md`](testing.md#automated-e2e-testse2e). (The LLM and browser lanes of
+this suite are still being built; this gate currently covers the pipeline lane.)
+Gate E follows the same carry-over rule as Gates A/R below: an empty
+`git diff vPREV..main --stat -- services/` carries the previous evidence.
+
 ### Gate-evidence carry-over
 
 The maintainer-run gates re-verify the *model services*, so they re-run only
 when what they measure could have changed. Before tagging, check
 `git diff vPREV..main --stat -- services/`:
 
-- **Empty** → Gates A (CUDA reference regeneration) and R (ROCm smoke) carry
-  over from the previous release's evidence; the new images are rebuilds of
-  the same numerics (CI's parity + smoke jobs still run unconditionally and
-  prove the rebuild). Record the carry-over and the commit range it rests on
+- **Empty** → Gates A (CUDA reference regeneration), R (ROCm smoke), and E
+  (whole-pipeline E2E) carry over from the previous release's evidence; the new
+  images are rebuilds of the same numerics (CI's parity + smoke jobs still run
+  unconditionally and prove the rebuild). Record the carry-over and the commit
+  range it rests on
   in the release-commit message (v0.10.0 is the precedent: `services/`
   untouched since v0.9.0, A/R carried, Gate M satisfied by the committed
   per-chip verdict plus a green `metal-lane` run on the pre-bump commit).

@@ -12,6 +12,7 @@ doctrine — see [`gpu-contracts.md`](gpu-contracts.md) and the parity notes bel
 | Contracts | `tests/contracts/` | Invariants that would rot silently: version-pin parity across pyproject/compose/`.env.example`, Dockerfile sha ARGs ↔ provenance, restart policies, routes/schemas, the **frontend build/island wiring** (`test_frontend_build.py`). | nothing |
 | Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, dashboard, migrations). | a pgvector database |
 | Parity | `tests/parity/` | Model-output equivalence gates (mel / vector / decision) against committed CUDA references. Real audio fixtures live under `tests/parity/fixtures/`. | strict mode: `VOXINT_PARITY_REQUIRED=1` |
+| E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Maintainer-run, opt-in gate — **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running (see below) |
 
 The layout is the standard `pytest` tree; add a test in the same commit that adds
 the behaviour or invariant it guards (a new island → a row in
@@ -65,9 +66,9 @@ discussing it — it is bloat this single-operator app does not need.
 
 Interactive island behaviour (the #53/#58 verify-and-advance loop, click-to-edit,
 the unsaved-edit discard warning) is confirmed by driving a real browser against a
-**local** instance. This is a manual procedure today; an automated end-to-end
-suite that seeds fixtures, drives the UI, and asserts the results is planned to
-replace it (see *Planned: automated E2E* below).
+**local** instance. This is a manual procedure today; the browser lane of the
+[automated E2E suite](#automated-e2e-testse2e) is planned to replace it (the
+real-pipeline lane has landed; the browser lane has not).
 
 The dockerized `api` service runs the **released** image, not your working tree,
 so browser-verifying a local change means running a fresh local instance:
@@ -127,13 +128,58 @@ so browser-verifying a local change means running a fresh local instance:
    git checkout -- src/voxint/api/static/app/.gitkeep
    ```
 
-### Planned: automated E2E
+## Automated E2E (`tests/e2e/`)
 
-The manual pass above is the current state. A committed end-to-end suite is
-planned to seed a set of audio fixtures covering the common cases, drive the
-review-console UI, and assert both existing and changed behaviour in a disposable
-test environment — including a real-LLM lane for the enrichment producers (the
-run-asset summary/topics/entity generators bypass the UI's LLM toggle and read
-`LLM_ENABLED` + `LLM_BASE_URL/MODEL/API_KEY` from the environment; see
-[`operations.md`](operations.md) and `src/voxint/enrichment/`). When it lands,
-this section is updated to point at it and the manual recipe becomes the fallback.
+`tests/e2e/` is a **maintainer-run, opt-in** gate that exercises the whole
+pipeline end to end against the *real* model services — no fakes. It is
+**never** part of public CI (GitHub has no GPU runners and no model weights) and
+never operator ceremony; it runs on maintainer hardware before a release (see
+[`release-process.md`](release-process.md)).
+
+It is built in lanes; **landed so far:**
+
+- **Real pipeline** (`test_real_pipeline.py`) — submits `sample-3speaker.wav`,
+  runs PREPARE → transcribe → diarize → embed in-process against the running
+  services, and asserts the persistence invariants: run COMPLETED, exactly one
+  `preprocessed_audio` artifact normalized to 16 kHz mono, non-empty transcript
+  segments, diarization turns all embedded in `titanet-large-v1`, and a
+  `duration_seconds` populated by the real PREPARE stage. Assertions are on
+  *ranges and shape*, never exact transcript text (real ASR is not
+  bit-deterministic). Two serial runs are checked for clean repetition with no
+  cross-run leakage.
+
+**Still upcoming** (tracked in the maintainer plan, not yet committed): a
+real-LLM lane for the enrichment producers (the run-asset summary/topics/entity
+generators bypass the UI's LLM toggle and read `LLM_ENABLED` +
+`LLM_BASE_URL/MODEL/API_KEY` from the environment; see
+[`operations.md`](operations.md) and `src/voxint/enrichment/`), and a browser
+lane that drives the review-console UI and reconciles durable state — that lane
+will replace the **manual browser pass above** when it lands.
+
+### Gate semantics
+
+The directory keys off `VOXINT_E2E`, deliberately asymmetric so an explicit run
+can never go green by skipping itself:
+
+- **`VOXINT_E2E` unset** → the whole directory is skipped at collection, so a
+  bare `pytest` run (or CI) stays green with no model services present.
+- **`VOXINT_E2E=1`** → any missing prerequisite (the test DB, model-service
+  health, or a wrong `/healthz` device identity) is a **hard failure, not a
+  skip**.
+
+### Running it
+
+Bring up the model services on a lane your host supports (host-specific
+bring-up — compose overlays, CPU limits, the AMD render gid — lives outside this
+public repo). Then, against a **disposable** database (its schema is dropped and
+rebuilt from the alembic chain — never the live `voxint` DB):
+
+```bash
+export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
+VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+```
+
+Keep it **serial / low concurrency** — the pipeline is heavy and the lane is not
+built for parallel fan-out. The suite stages audio under `MEDIA_ROOT` (the same
+host directory the containers mount at `/data/media`) and cleans up after
+itself.
