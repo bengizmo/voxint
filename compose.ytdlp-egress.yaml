@@ -1,0 +1,56 @@
+# Voxint — restricted yt-dlp egress overlay (opt-in URL-download hardening).
+#
+#   docker compose -f compose.yaml -f compose.ytdlp-egress.yaml up -d
+#   # stack a tier too, e.g. ... -f compose.gpu.yaml -f compose.ytdlp-egress.yaml up -d
+#
+# WHY: URL ingestion downloads with yt-dlp, which re-resolves the host itself and
+# follows redirects / extractor-constructed URLs, so a DNS rebind or a redirect to
+# a private address is beyond Voxint's userland SSRF gates (see docs/architecture.md,
+# "Residual: needs network policy, not a userland check"). This overlay routes
+# yt-dlp's egress through a small filtering proxy that re-applies the SAME
+# public-address policy the worker gate uses (voxint.media.netcheck.ip_is_public)
+# at the connection boundary and PINS the vetted IP — closing the rebind window and
+# refusing redirect/extractor destinations that resolve to private space. The proxy
+# sits on an internal network (worker-facing) plus a routable one (Internet-facing);
+# the worker keeps its normal network so Postgres/Redis/model-services/LLM still work.
+#
+# PRECISE GUARANTEE (do not overstate): this constrains the HTTP(S) traffic that
+# honours yt-dlp's always-passed --proxy, INCLUDING its redirects and extractor
+# URLs. It is NOT a kernel route removal and NOT a sandbox: a sub-process yt-dlp
+# spawns (e.g. ffmpeg) that ignores the proxy, or the worker's own routable network,
+# is beyond it — that needs a host-level egress firewall. See docs/operations.md.
+
+services:
+  worker:
+    # Keep the default network (DB, Redis, model services, LLM/research/notify) AND
+    # join the private client network to the egress proxy.
+    networks:
+      - default
+      - ytdlp_egress
+    environment:
+      # yt-dlp's --proxy is ALWAYS passed; point it at the filtering proxy. An
+      # empty YTDLP_PROXY means direct egress, so this override is what engages it.
+      YTDLP_PROXY: http://ytdlp-egress-proxy:3128
+
+  ytdlp-egress-proxy:
+    # Same pinned app image (one VOXINT_IMAGE_TAG pin, machine-checked by the
+    # pin-parity contract test) — no extra image in the supply chain.
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.16.0}
+    pull_policy: missing
+    command: ["python", "-m", "voxint.media.egress_proxy", "--listen", "0.0.0.0:3128"]
+    restart: unless-stopped
+    networks:
+      - ytdlp_egress   # reachable by the worker only
+      - ytdlp_public   # the proxy's own route to the Internet
+    # Least privilege: the proxy needs no filesystem writes, no new privileges,
+    # no extra capabilities, and publishes no host port.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+
+networks:
+  ytdlp_egress:
+    internal: true    # worker <-> proxy only; no external route on this network
+  ytdlp_public: {}    # proxy -> Internet

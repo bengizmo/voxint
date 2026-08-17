@@ -32,6 +32,12 @@
   </label>
   <button type="submit">Fetch &amp; transcribe</button>
 </form>
+{# Passive, honest notice — NOT a status badge (the app can't prove every private
+   destination is blocked). See docs/operations.md "URL ingestion & egress security". #}
+<p class="muted">Fetching a URL lets the downloader contact other sites, including
+ones a link redirects to. If you fetch links you don't fully trust, run the
+restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see the
+operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 {% else %}
 <p class="muted">URL ingestion is disabled.</p>
 {% endif %}

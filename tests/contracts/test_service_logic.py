@@ -1165,6 +1165,7 @@ class TestCpuImageProvenance:
             "compose.cpu.yaml",
             "compose.rocm.yaml",
             "compose.metal.yaml",
+            "compose.ytdlp-egress.yaml",
         ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():
@@ -1214,6 +1215,46 @@ class TestCpuImageProvenance:
             assert "host.docker.internal:host-gateway" in svc.get("extra_hosts", []), (
                 f"{svc_name} missing the host-gateway extra_hosts mapping"
             )
+
+    def test_ytdlp_egress_overlay_wiring(self) -> None:
+        # Issue #16: the opt-in restricted-egress overlay must (a) route the
+        # worker's yt-dlp egress through the filtering proxy via the always-passed
+        # YTDLP_PROXY, (b) keep the worker on its normal network so DB/Redis/model
+        # services still resolve, (c) run the proxy on an INTERNAL worker-facing
+        # network plus a routable one, and (d) run it least-privilege. A drift in
+        # any of these silently turns the hardening off or breaks the worker.
+        import yaml
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        doc = yaml.safe_load((REPO_ROOT / "compose.ytdlp-egress.yaml").read_text())
+        assert set(doc) == {"services", "networks"}, (
+            f"unexpected top-level keys: {set(doc) - {'services', 'networks'}}"
+        )
+        worker = doc["services"]["worker"]
+        # (a) + (b): worker points yt-dlp at the proxy AND keeps the default network.
+        assert worker["environment"]["YTDLP_PROXY"] == "http://ytdlp-egress-proxy:3128"
+        assert set(worker["networks"]) == {"default", "ytdlp_egress"}, (
+            f"worker networks must keep 'default' + add 'ytdlp_egress', got {worker['networks']}"
+        )
+        proxy = doc["services"]["ytdlp-egress-proxy"]
+        # (c): the proxy bridges the internal client net to a routable one, and it
+        # runs the egress-proxy module from the SAME app image (one pin).
+        assert set(proxy["networks"]) == {"ytdlp_egress", "ytdlp_public"}
+        assert proxy["image"].startswith("ghcr.io/bengizmo/voxint:")
+        assert proxy["command"] == [
+            "python", "-m", "voxint.media.egress_proxy", "--listen", "0.0.0.0:3128"
+        ]
+        # (d): least privilege — no writes, no new privileges, no extra caps.
+        assert proxy["read_only"] is True
+        assert proxy["cap_drop"] == ["ALL"]
+        assert "no-new-privileges:true" in proxy["security_opt"]
+        # The worker-facing network has no external route; the proxy is the only
+        # way out. (An accidental non-internal here would defeat the isolation.)
+        assert doc["networks"]["ytdlp_egress"].get("internal") is True
+        assert doc["networks"].get("ytdlp_public") in ({}, None), (
+            "ytdlp_public must be a plain routable network (no 'internal: true')"
+        )
 
     def test_torch_pins_match_across_flavors(self) -> None:
         # A one-sided torch bump silently changes cross-flavor numerics; the

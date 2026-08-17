@@ -222,6 +222,17 @@ metadata endpoint** (egress firewall or a dedicated egress). The resolved-host
 gate raises the bar and closes the literal / rebind-at-check-time holes; it is not
 a substitute for egress control.
 
+The opt-in **`compose.ytdlp-egress.yaml`** overlay (issue #16) productizes that
+network policy without a config knob: it routes yt-dlp's always-passed `--proxy`
+through a small filtering forward proxy (`voxint.media.egress_proxy`, the same
+image) that re-applies `ip_is_public` **at the connection boundary** and connects
+only to the vetted public IP. Because the proxy makes the outbound connection, the
+rebind window is closed and redirect / extractor destinations that resolve to
+private space are refused — for yt-dlp's own HTTP(S) traffic. It is deliberately
+**not** a sandbox: a helper yt-dlp spawns that ignores the proxy, or the worker's
+routable network, still wants a host-level egress firewall. See
+`docs/operations.md`, "Restricted URL-download overlay".
+
 **CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
 and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 (`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
