@@ -78,7 +78,11 @@ class TestConsole:
             run_id = seed_run(session)
         fragment = client.get(f"/runs/{run_id}/assets")
         assert fragment.status_code == 200
-        assert "ENRICHMENT_RUN_ASSETS_ENABLED" in fragment.text
+        # Plain-language remediation pointing at the in-UI Settings toggles, not a
+        # raw env var (issue #62).
+        assert "ENRICHMENT_RUN_ASSETS_ENABLED" not in fragment.text
+        assert "Run assets are off" in fragment.text
+        assert "/settings#features" in fragment.text
 
     def test_generate_all_creates_three_jobs_and_publishes(
         self, session_factory: sessionmaker[Session], published: list[uuid.UUID]

@@ -1346,23 +1346,64 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
     ),
 )
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
+_FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
+
+# Operator-plain copy for the invariant violations this section can surface (#62).
+# validate_effective_flags is the SINGLE source of WHICH combinations are invalid,
+# but its messages name the flag identifiers (enrichment_run_assets_enabled, …) —
+# the exact jargon this arc exists to keep out of a non-technical operator's way.
+# So the Features boundary translates the reachable messages to plain language,
+# while the config boot validator keeps the identifier-bearing strings (a .env
+# editor wants the variable name). Keyed on the exact shared message; an
+# un-mapped message (e.g. a web-research invariant, unreachable from this form)
+# falls through to the original. A drift test locks the four reachable keys so a
+# reworded invariant can never silently fall back to jargon here.
+_FEATURE_INVARIANT_COPY: dict[str, str] = {
+    "enrichment_names_llm_enabled requires llm_enabled=true — the "
+    "LLM name pass reuses the configured enhancement endpoint": (
+        "The LLM name pass needs LLM transcript enhancement turned on. Turn it on"
+        " in the LLM section below, or turn the LLM name pass off."
+    ),
+    "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
+    " — the LLM pass is additive to the offline name producer": (
+        "The LLM name pass needs speaker name suggestions turned on — it adds to"
+        " the offline name finder."
+    ),
+    "enrichment_run_assets_enabled requires llm_enabled=true — the"
+    " asset generators reuse the configured enhancement endpoint": (
+        "Run assets need LLM transcript enhancement turned on. Turn it on in the"
+        " LLM section below, or turn run assets off."
+    ),
+    "enrichment_run_assets_autogenerate requires"
+    " enrichment_run_assets_enabled=true — the post-finalize step"
+    " only enqueues the feature it rides on": (
+        "Auto-generating run assets needs run assets turned on."
+    ),
+}
 
 
 def _persist_feature_flags(
     session: Session, settings: Settings, *, submitted: dict[str, str]
-) -> str | None:
+) -> list[str]:
     """Apply the Features-section tri-state toggles as ONE deliberate mutation (#62).
 
     ``submitted`` maps each flag name to ``"on"``/``"off"``/``"inherit"``. The
     candidate column value is ``True``/``False``/``None`` respectively (``None`` =
     inherit the env default — the tri-state that never permanently pins an
-    override). Following the ``_persist_llm_settings`` contract, this computes the
-    candidate effective combination and validates it through the SINGLE shared
+    override). Returns the list of operator-plain error messages (empty ⇒ success);
+    following the ``_persist_llm_settings`` contract, it computes the candidate
+    effective combination and validates it through the SINGLE shared
     :func:`validate_effective_flags` BEFORE touching the row, so an
     invariant-violating submission (e.g. the LLM name pass without LLM enhancement)
-    returns the plain-language message and writes NOTHING — not even a get_or_create
-    (the API session commits on the 200 error re-render). A valid submission then
-    performs the single mutation and the caller commits.
+    writes NOTHING — not even a get_or_create (the API session commits on the 200
+    error re-render). A valid submission then performs the single mutation and the
+    caller commits.
+
+    An unexpected choice value (a stale client, a hand-crafted POST — never the
+    shipped radios) is REJECTED rather than silently coerced: mapping it to "off"
+    would quietly disable a feature, and to "inherit" would quietly drop an
+    override. Missing fields still default to ``"inherit"`` — this is a full-form
+    replace, and the real form always submits all five radios.
 
     The flags NOT edited here (``llm_enabled`` and the web-research provider trio)
     are resolved at their CURRENT effective value so a dependency invariant fires
@@ -1373,6 +1414,8 @@ def _persist_feature_flags(
     candidates: dict[str, bool | None] = {}
     for name in _FEATURE_FLAG_NAMES:
         choice = submitted.get(name, "inherit")
+        if choice not in _FEATURE_FLAG_CHOICES:
+            return ["Unrecognized feature setting — choose On, Off, or Use installation setting."]
         candidates[name] = None if choice == "inherit" else (choice == "on")
 
     def _effective(name: str) -> bool:
@@ -1398,12 +1441,14 @@ def _persist_feature_flags(
         )
     )
     if errors:
-        return errors[0]
+        # Translate every violated invariant to operator-plain copy (all of them,
+        # so a two-fault submission fixes in one pass). Nothing is written.
+        return [_FEATURE_INVARIANT_COPY.get(message, message) for message in errors]
     # Valid → one mutation. get_or_create only now, so a rejected save writes nothing.
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     for name, value in candidates.items():
         setattr(row, name, value)
-    return None
+    return []
 
 
 def _tutorial_banner(
@@ -3504,7 +3549,7 @@ def _register_routes(app: FastAPI) -> None:
             "active_nav": "settings",
             "llm_error": None,
             "feature_flags": feature_flags,
-            "features_error": None,
+            "features_errors": [],
         }
         context.update(overrides)
         return context
@@ -3579,14 +3624,14 @@ def _register_routes(app: FastAPI) -> None:
         }
         # Candidate → validate (shared invariants) → ONE mutation. On an invariant
         # violation nothing is written and the operator's choices are re-rendered
-        # with the plain-language message (issue #62).
-        error = _persist_feature_flags(session, settings, submitted=submitted)
-        if error is not None:
+        # with the plain-language message(s) (issue #62).
+        errors = _persist_feature_flags(session, settings, submitted=submitted)
+        if errors:
             return templates.TemplateResponse(
                 request,
                 "settings.html",
                 _settings_context(
-                    request, session, features_error=error, features_submitted=submitted
+                    request, session, features_errors=errors, features_submitted=submitted
                 ),
             )
         session.commit()

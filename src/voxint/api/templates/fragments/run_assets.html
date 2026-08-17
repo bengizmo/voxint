@@ -13,9 +13,10 @@ starting point, not a verified record.</p>
 
 {% if not assets.gates_open %}
 <p class="muted">
-  Run assets are off. Turn on <strong>Run assets</strong> and
+  Run assets are off. Turn on <strong>Run assets</strong> in
+  <a href="/settings#features">Settings → Features</a> and
   <strong>LLM transcript enhancement</strong> in
-  <a href="/settings#features">Settings → Features</a> — no restart needed.
+  <a href="/settings#llm">Settings → LLM</a> — no restart needed.
 </p>
 {% elif assets.source_problem %}
 <p class="muted">{{ assets.source_problem }}</p>

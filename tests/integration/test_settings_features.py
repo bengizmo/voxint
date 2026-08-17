@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, mint_csrf_token
-from voxint.app_settings import get_app_settings
+from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import Settings
 from voxint.db.models import AppSettings
 from voxint.enrichment.asset_jobs import run_asset_gates_open
@@ -62,6 +62,16 @@ def _form(**fields: str) -> dict[str, str]:
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
     with session_factory() as session:
         return get_app_settings(session)
+
+
+def _seed_flags(session_factory: sessionmaker[Session], **columns: object) -> None:
+    """Force feature-flag columns on the row directly (bypassing the form/validator)
+    to set up a pre-existing override for the write-nothing regression."""
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        for name, value in columns.items():
+            setattr(row, name, value)
+        session.commit()
 
 
 def test_features_section_renders_tristate(
@@ -125,19 +135,109 @@ def test_invariant_violation_writes_nothing_and_preserves_input(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     # env LLM off → enabling the LLM name pass violates names_llm ⇒ llm_enabled.
+    # Seed an unrelated stored override first: a rejected save must leave the WHOLE
+    # row untouched, not just the rejected column.
     client, _ = make_client(session_factory, media_root, seed_llm_enabled=False)
+    _seed_flags(session_factory, ytdlp_enabled=False, enrichment_names_enabled=False)
     resp = client.post(
         "/settings/features",
         data=_form(enrichment_names_llm_enabled="on"),
         follow_redirects=False,
     )
     assert resp.status_code == 200  # re-render, not a redirect
-    assert "requires llm_enabled=true" in resp.text  # plain-language invariant message
-    # Nothing written: the column stays NULL (inheriting env).
+    # Plain-language message — NOT the raw invariant identifier string.
+    assert "LLM name pass needs LLM transcript enhancement" in resp.text
+    assert "requires llm_enabled=true" not in resp.text
+    # Nothing written: the rejected column stays NULL AND the seeded overrides survive.
     row = _row(session_factory)
-    assert row is not None and row.enrichment_names_llm_enabled is None
+    assert row is not None
+    assert row.enrichment_names_llm_enabled is None
+    assert row.ytdlp_enabled is False
+    assert row.enrichment_names_enabled is False
     # The operator's rejected choice is rendered back for correction.
     assert 'name="enrichment_names_llm_enabled" value="on" checked' in resp.text
+
+
+def test_names_llm_requires_names_enabled(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # names_llm on + names off in the same POST violates names_llm ⇒ names.
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    resp = client.post(
+        "/settings/features",
+        data=_form(
+            enrichment_names_enabled="off",
+            enrichment_names_llm_enabled="on",
+        ),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "needs speaker name suggestions turned on" in resp.text
+    row = _row(session_factory)
+    assert row is not None
+    assert row.enrichment_names_llm_enabled is None  # nothing written
+    assert row.enrichment_names_enabled is None
+
+
+def test_autogenerate_requires_run_assets(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # autogenerate on while run assets inherit env-off violates autogenerate ⇒ run_assets.
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    resp = client.post(
+        "/settings/features",
+        data=_form(enrichment_run_assets_autogenerate="on"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "Auto-generating run assets needs run assets turned on" in resp.text
+    assert _row(session_factory).enrichment_run_assets_autogenerate is None  # type: ignore[union-attr]
+
+
+def test_all_inherit_leaves_every_column_null(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Saving with every control on "use installation setting" must not pin any env
+    # default onto the row (all columns stay NULL).
+    client, _ = make_client(session_factory, media_root)
+    resp = client.post(
+        "/settings/features",
+        data=_form(
+            enrichment_names_enabled="inherit",
+            enrichment_names_llm_enabled="inherit",
+            enrichment_run_assets_enabled="inherit",
+            enrichment_run_assets_autogenerate="inherit",
+            ytdlp_enabled="inherit",
+        ),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None
+    for name in (
+        "enrichment_names_enabled",
+        "enrichment_names_llm_enabled",
+        "enrichment_run_assets_enabled",
+        "enrichment_run_assets_autogenerate",
+        "ytdlp_enabled",
+    ):
+        assert getattr(row, name) is None, name
+
+
+def test_malformed_choice_is_rejected_without_writing(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A value outside {on,off,inherit} (stale client / hand-crafted POST) is
+    # rejected, not silently coerced to off/inherit.
+    client, _ = make_client(session_factory, media_root, seed_llm_enabled=True)
+    resp = client.post(
+        "/settings/features",
+        data=_form(enrichment_run_assets_enabled="yes-please"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200
+    assert "Unrecognized feature setting" in resp.text
+    assert _row(session_factory).enrichment_run_assets_enabled is None  # type: ignore[union-attr]
 
 
 def test_valid_dependent_enable_succeeds(
