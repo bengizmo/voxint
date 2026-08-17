@@ -1039,6 +1039,15 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept and "application/json" not in accept
 
 
+def _wants_island_json(request: Request) -> bool:
+    """True only when the caller explicitly asks for JSON (the island's ``apiFetch``
+    sets ``Accept: application/json``). Unlike ``not _wants_html``, this is a
+    POSITIVE signal: the htmx labels workbench and the default ``*/*`` test client
+    stay on the server-rendered path, so a route that also serves the island keeps
+    its HTML-fragment contract byte-identical for every non-island caller."""
+    return "application/json" in request.headers.get("accept", "")
+
+
 # Capability reason codes meaning GET /media would not serve bytes at all (as
 # opposed to a present-but-untrusted timeline). Mirrors MEDIA_UNAVAILABLE_CODES
 # in frontend/src/components/PlaybackControls.tsx.
@@ -1149,6 +1158,11 @@ def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, An
             str(ln.source_segment_id) if ln.source_segment_id is not None else None
         ),
         "reviewTarget": ln.review_target,
+        # Word-range coordinates of a split child (issue #59 slice 3): what the
+        # per-child reassign picker posts to /relabel to scope a ruling to this
+        # child. Both None on unsplit and synthetic lines.
+        "wordStart": ln.word_start,
+        "wordEnd": ln.word_end,
     }
 
 
@@ -1159,6 +1173,21 @@ def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, 
     palette = speaker_palette(_run_label_universe(session, run_id))
     lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
     return [_island_segment(ln, palette) for ln in lines]
+
+
+def _run_reconcile_response(session: Session, run_id: uuid.UUID) -> JSONResponse:
+    """The whole-run island reconcile — every segment (split parents expanded) plus
+    the run's N-of-M counter — the shape a STRUCTURAL write returns so the console
+    adopts server truth wholesale rather than patching one line. Shared by /split
+    and the island /relabel path (a reassignment changes a child's speaker string,
+    which a per-segment patch cannot express, so both re-render the whole run)."""
+    verified_n, total = verified_progress(session, run_id)
+    return JSONResponse(
+        {
+            "segments": _run_island_segments(session, run_id),
+            "progress": {"verified": verified_n, "total": total},
+        }
+    )
 
 
 def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
@@ -2435,6 +2464,16 @@ def _register_routes(app: FastAPI) -> None:
         # Extras the review loop needs beyond the shared display props.
         island_props["reviewToken"] = str(token) if token is not None else None
         island_props["initialProgress"] = {"verified": verified_n, "total": total}
+        # The assignable roster for the per-child reassign picker (issue #59 slice
+        # 3): ACTIVE identities only — merged/archived speakers are curated out and
+        # must not attract new rulings, mirroring the /relabel route's own
+        # roster_is_active guard so the picker never offers a speaker the write
+        # would reject. The read-only transcript-player never gets this (it cannot
+        # relabel); only the claim-gated review-stepper needs a picker.
+        island_props["speakers"] = [
+            {"id": str(sp.id), "displayName": sp.display_name}
+            for sp in active_speakers(session)
+        ]
         return templates.TemplateResponse(
             request,
             "review_transcript.html",
@@ -3115,6 +3154,12 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except WordRangeError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # The island (JSON Accept) reassigns a split child and reconciles against a
+        # whole-run render — a child's speaker string moved, which the per-segment
+        # review shape can't carry. The htmx labels workbench (and any non-island
+        # caller) keeps the byte-identical server-rendered fragment.
+        if _wants_island_json(request):
+            return _run_reconcile_response(session, run_id)
         return _labels_response(request, session, run, token)
 
     def _segment_review_json(
@@ -3234,13 +3279,7 @@ def _register_routes(app: FastAPI) -> None:
             )
         except UnsplittableError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        verified_n, total = verified_progress(session, run_id)
-        return JSONResponse(
-            {
-                "segments": _run_island_segments(session, run_id),
-                "progress": {"verified": verified_n, "total": total},
-            }
-        )
+        return _run_reconcile_response(session, run_id)
 
     @protected.get("/review/{run_id}/segments/{segment_id}/words")
     def segment_words(

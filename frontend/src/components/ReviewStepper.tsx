@@ -26,6 +26,22 @@ export interface ReviewStepperProps {
   // Waveform strip (issue #57): forwarded to the player untouched.
   peaksUrl?: string | null;
   turns?: Turn[];
+  // The assignable speaker roster for the per-child reassign picker (issue #59
+  // slice 3). ACTIVE identities only (the server filters merged/archived out, so
+  // the picker never offers a speaker the /relabel write would reject). Empty on
+  // a run with no roster yet — the picker then offers only "inherit / reset".
+  speakers: { id: string; displayName: string }[];
+}
+
+// A fresh idempotency nonce for a /relabel write (issue #59 slice 3). Uses
+// crypto.getRandomValues — NOT crypto.randomUUID — deliberately: this is a
+// self-hosted tool an operator may reach over plain HTTP on a LAN, where
+// randomUUID (secure-context only) is undefined, while getRandomValues works
+// everywhere. 16 bytes → a 32-char hex string, inside the route's [8, 64] bound.
+function makeNonce(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // A segment is a REVIEW TARGET when it is the queue entry for its parent and is
@@ -76,6 +92,7 @@ export function ReviewStepper({
   initialProgress,
   peaksUrl,
   turns,
+  speakers,
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
   // the (pure) player. Verify/correct responses patch this array in place.
@@ -442,6 +459,55 @@ export function ReviewStepper({
     [postForm, runId, current, editText, confirmDiscard],
   );
 
+  // Reassign ONE derived split child to a roster speaker — or reset it to inherit
+  // its label (issue #59 slice 3). Posts the child's word range to /relabel with a
+  // fresh idempotency nonce. Like splitAt, the response is a whole-run reconcile (a
+  // child's speaker string moved, which the per-segment shape can't carry), so we
+  // adopt segments + progress wholesale WITHOUT moving the cursor or restarting
+  // audio — reassignment is an attribution edit, not a navigation. busyRef mirrors
+  // the verify/split guard so a second pick can't race two writes. A 409 here is a
+  // segment-STATE conflict (the range is no longer a current child — a re-split
+  // landed elsewhere), NOT a claim loss: show the server's reason and keep the
+  // claim, rather than falsely locking the surface.
+  const reassignChild = useCallback(
+    async (seg: Segment, speakerId: string | null) => {
+      if (busyRef.current) return;
+      if (
+        seg.sourceSegmentId === null ||
+        seg.wordStart === null ||
+        seg.wordEnd === null
+      )
+        return;
+      busyRef.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        const body: Record<string, string> = {
+          nonce: makeNonce(),
+          action: speakerId === null ? "inherit" : "assign",
+          start_word_index: String(seg.wordStart),
+          end_word_index: String(seg.wordEnd),
+        };
+        if (speakerId !== null) body.speaker_id = speakerId;
+        const result = await postForm<{
+          segments: Segment[];
+          progress: { verified: number; total: number };
+        }>(
+          `/review/${runId}/segments/${seg.sourceSegmentId}/relabel`,
+          body,
+          { claimLostOnConflict: false },
+        );
+        if (!result) return;
+        setSegments(result.segments);
+        setProgress(result.progress);
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [postForm, runId],
+  );
+
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the
   // native <audio> and the player's own scroll handling (never rebound here).
@@ -668,6 +734,16 @@ export function ReviewStepper({
             : null
         }
         onSplitAt={writable ? (id, wi) => void splitAt(id, wi) : undefined}
+        // Per-child reassign (issue #59 slice 3): a split parent's derived child
+        // lines (those carrying wordStart/wordEnd) render a speaker <select>.
+        // Only when this tab holds the claim; the read-only surface passes none,
+        // so it stays byte-identical (no picker). busy disables the picker mid-
+        // write, sharing the verify/split/save guard.
+        reassignSpeakers={writable ? speakers : undefined}
+        onReassign={
+          writable ? (seg, speakerId) => void reassignChild(seg, speakerId) : undefined
+        }
+        reassignBusy={busy}
       />
     </div>
   );

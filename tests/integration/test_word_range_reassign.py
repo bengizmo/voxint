@@ -9,6 +9,9 @@ route rejects a range that is not a current split child and a half-set range; an
 a ranged ruling replays idempotently.
 """
 
+import datetime as _dt
+import json
+import re
 import uuid
 from pathlib import Path
 
@@ -136,6 +139,37 @@ def _reassign(
     )
 
 
+def _reassign_island(
+    client: TestClient,
+    run_id: uuid.UUID,
+    seg_id: uuid.UUID,
+    token: str,
+    *,
+    action: str,
+    speaker_id: uuid.UUID | None = None,
+    start: int | None = None,
+    end: int | None = None,
+):
+    """A reassign POST as the React island sends it: JSON Accept (no HX header),
+    which selects the whole-run reconcile response instead of the labels HTML."""
+    data: dict[str, str] = {
+        "token": token,
+        "nonce": uuid.uuid4().hex,
+        "action": action,
+    }
+    if speaker_id is not None:
+        data["speaker_id"] = str(speaker_id)
+    if start is not None:
+        data["start_word_index"] = str(start)
+    if end is not None:
+        data["end_word_index"] = str(end)
+    return client.post(
+        f"/review/{run_id}/segments/{seg_id}/relabel",
+        data=data,
+        headers={"Accept": "application/json"},
+    )
+
+
 def _export(client: TestClient, run_id: uuid.UUID) -> list[dict[str, str]]:
     return client.get(f"/review/{run_id}/export.json").json()
 
@@ -218,6 +252,80 @@ def test_reassign_rejects_half_set_range(
         client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=None
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_island_reassign_returns_whole_run_reconcile(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A JSON-Accept (island) reassign returns the whole-run reconcile shape
+    ({segments, progress}) with the child's new speaker string, so the console
+    adopts server truth wholesale — mirroring the /split response."""
+    run_id, seg_id, other = _seed(session_factory)
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    resp = _reassign_island(
+        client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"segments", "progress"}
+    segments = body["segments"]
+    # Both children still render, and only the reassigned child ([2,4)) moved.
+    assert [s["text"] for s in segments] == ["Hello there", "big world"]
+    assert [s["speaker"] for s in segments] == ["S0", "Other Person"]
+    # Each child carries its word range so the picker can post the next ruling.
+    assert [(s["wordStart"], s["wordEnd"]) for s in segments] == [(0, 2), (2, 4)]
+    assert body["progress"] == {"verified": 0, "total": 1}
+
+
+def test_htmx_reassign_still_returns_labels_fragment(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The labels workbench (htmx / non-JSON Accept) keeps its server-rendered
+    HTML fragment byte-for-byte — the island branch is a positive JSON opt-in,
+    never a silent change for the existing caller."""
+    run_id, seg_id, other = _seed(session_factory)
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    resp = _reassign(
+        client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4
+    )
+    assert resp.status_code == 200, resp.text
+    # An HTML fragment, not the JSON reconcile shape.
+    assert "application/json" not in resp.headers.get("content-type", "")
+    assert resp.text.lstrip().startswith("<")
+
+
+def _island_props(client: TestClient, run_id: uuid.UUID, token: str) -> dict:
+    """The review-stepper island's hydrated props, parsed out of the page."""
+    html = client.get(f"/review/{run_id}/transcript?token={token}").text
+    m = re.search(r"data-island=\"review-stepper\" data-props='([^']*)'", html)
+    assert m is not None, "review-stepper island props not found on the page"
+    return json.loads(m.group(1))
+
+
+def test_review_page_hydrates_active_roster_for_picker(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The review-stepper island is hydrated with the ACTIVE roster (id +
+    displayName) for the per-child picker — archived/merged speakers are curated
+    out, mirroring the /relabel write guard so the picker never offers a speaker
+    the write would reject."""
+    run_id, _seg_id, _other = _seed(session_factory)  # seeds "Other Person" (active)
+    with session_factory() as session:
+        archived = Speaker(
+            display_name="Archived One",
+            deleted_at=_dt.datetime.now(tz=_dt.UTC),
+        )
+        session.add(archived)
+        session.commit()
+    token = _claim(client, run_id)
+    props = _island_props(client, run_id, token)
+    names = {sp["displayName"] for sp in props["speakers"]}
+    assert "Other Person" in names
+    assert "Archived One" not in names
+    # Each entry carries exactly the id + displayName the picker binds on.
+    assert all(set(sp) == {"id", "displayName"} for sp in props["speakers"])
 
 
 def test_ranged_reassign_replays_idempotently(

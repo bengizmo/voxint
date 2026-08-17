@@ -47,6 +47,13 @@ export interface Segment {
   // entry), so the loop counts one target per parent, never per child.
   sourceSegmentId: string | null;
   reviewTarget: boolean;
+  // Word-range coordinates of a split child (issue #59 slice 3): the exact
+  // half-open [wordStart, wordEnd) this line covers within its parent. Set only
+  // on a split parent's derived children — the coordinates the per-child reassign
+  // picker posts to /relabel to scope a ruling to this child alone. Both null on
+  // unsplit lines and synthetic/blank lines (no partitionable range).
+  wordStart: number | null;
+  wordEnd: number | null;
 }
 
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The
@@ -97,6 +104,17 @@ export interface TranscriptPlayerProps {
   // driver (ReviewStepper), which POSTs it — the player never touches the DB.
   splitFocus?: SplitFocus | null;
   onSplitAt?: (sourceSegmentId: string, wordIndex: number) => void;
+  // Per-child reassign (issue #59 slice 3). Present only on the claim-gated review
+  // surface. When onReassign is set, a split parent's derived child lines (those
+  // carrying wordStart/wordEnd — the ONLY lines the backend ranges) render a
+  // speaker <select>: choosing a roster speaker assigns just that child's word
+  // range, choosing "inherit" resets it to follow the label. The player raises the
+  // choice; ReviewStepper POSTs /relabel — the player never touches the DB.
+  // reassignSpeakers is the ACTIVE roster; reassignBusy disables the picker while a
+  // write is in flight. Absent on the read-only surface (no picker rendered).
+  reassignSpeakers?: { id: string; displayName: string }[];
+  onReassign?: (seg: Segment, speakerId: string | null) => void;
+  reassignBusy?: boolean;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -156,6 +174,9 @@ export const TranscriptPlayer = forwardRef<
     cursorIndex,
     splitFocus,
     onSplitAt,
+    reassignSpeakers,
+    onReassign,
+    reassignBusy,
   },
   ref,
 ) {
@@ -475,6 +496,42 @@ export const TranscriptPlayer = forwardRef<
               ) : (
                 seg.text
               )}
+              {onReassign != null &&
+                reassignSpeakers != null &&
+                seg.wordStart != null &&
+                seg.wordEnd != null && (
+                  <label className="tp-reassign ml-2 text-xs opacity-80">
+                    {" · "}speaker:{" "}
+                    <select
+                      // Best-effort current selection: match the child's resolved
+                      // speaker string to a roster identity. A child with no
+                      // word-range override of its own shows its inherited speaker
+                      // (a broader override, or the raw label); when that is not a
+                      // roster name it falls to the "inherit" option. The WRITE is
+                      // by id, never by this display match, so a duplicate name can
+                      // only mis-preselect, never mis-assign.
+                      value={
+                        reassignSpeakers.find((s) => s.displayName === seg.speaker)
+                          ?.id ?? ""
+                      }
+                      disabled={reassignBusy}
+                      aria-label={`Reassign speaker for “${seg.text}”`}
+                      // Keep the picker's clicks off the line's seek handler.
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onReassign(seg, e.target.value === "" ? null : e.target.value);
+                      }}
+                    >
+                      <option value="">↺ inherit (follow the segment)</option>
+                      {reassignSpeakers.map((sp) => (
+                        <option key={sp.id} value={sp.id}>
+                          {sp.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
             </p>
           );
         })}

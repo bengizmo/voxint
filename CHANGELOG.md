@@ -92,8 +92,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `start_word_index`/`end_word_index`; a range is accepted only when it matches a
   *current* split child (never an arbitrary span the read path would ignore) and
   is validated against the parent's word count. Same claim-lock + nonce
-  idempotency as every other review mutation. (Frontend affordance and
-  un-split/re-split of an already-reassigned range are later work.)
+  idempotency as every other review mutation. The **review-stepper island now
+  renders a per-child speaker picker**: each derived child line carries its
+  `[wordStart, wordEnd)` and a `<select>` of the active roster; choosing a
+  speaker reassigns just that child, choosing "inherit" resets it to follow the
+  label. The picker POSTs the range to `/relabel` (which gains a JSON-Accept
+  response path returning the whole-run reconcile, leaving the htmx labels
+  workbench's HTML fragment byte-identical) and the console adopts server truth
+  wholesale. (Un-split/re-split of an already-reassigned range, and ranged
+  *correction* of a split child, remain later work.)
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

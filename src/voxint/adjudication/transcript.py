@@ -72,6 +72,13 @@ class TranscriptLine:
     # and its own review target. ``None``/``False`` on a synthetic export line.
     source_segment_id: uuid.UUID | None = None
     review_target: bool = False
+    # Word-range coordinates of a split child (issue #59 slice 3): the exact
+    # ``[word_start, word_end)`` this line covers within its parent. Set only on
+    # a split parent's derived children — the coordinate the per-child reassign
+    # picker posts to ``/relabel`` to scope a ruling to this child alone. ``None``
+    # on unsplit lines and synthetic/export lines (no partitionable range).
+    word_start: int | None = None
+    word_end: int | None = None
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -206,6 +213,10 @@ def attributed_transcript(
                         source_segment_id=seg.id,
                         # One queue entry per parent: only the first child counts.
                         review_target=child_i == 0,
+                        # The child's exact word range — what the per-child
+                        # reassign picker posts to scope a ruling to this child.
+                        word_start=child.word_start,
+                        word_end=child.word_end,
                     )
                 )
         else:
