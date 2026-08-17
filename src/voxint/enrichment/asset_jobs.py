@@ -20,6 +20,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+import httpx
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -354,12 +355,29 @@ def execute_job(
             # key wins over env and is never snapshotted into job.config, so a key
             # rotated after enqueue takes effect on execution with no restart.
             effective_key = resolve_effective_llm_api_key(get_app_settings(session), settings)
-            owned_client = HttpLLMClient(
-                exec_settings.llm_base_url,
-                exec_settings.llm_model,
-                effective_key,
-                exec_settings.llm_timeout_seconds,
-            )
+            try:
+                owned_client = HttpLLMClient(
+                    exec_settings.llm_base_url,
+                    exec_settings.llm_model,
+                    effective_key,
+                    exec_settings.llm_timeout_seconds,
+                )
+            except (httpx.InvalidURL, httpx.HTTPError) as exc:
+                # A malformed base_url — an env-only LLM_BASE_URL the wizard
+                # normalizer never validated — raises while httpx builds the
+                # client. Construction sits OUTSIDE the generation try below, so
+                # without this the job would strand RUNNING forever (there is no
+                # recovery sweep). Catch narrowly around construction ONLY: a raw
+                # httpx error from generation must not be relabeled "endpoint
+                # misconfigured". Closed-vocabulary error, key never in the text.
+                logger.warning("run-asset job %s LLM client init failed: %s", job_id, exc)
+                _finish(
+                    session,
+                    job_id,
+                    status=RunAssetJobStatus.FAILED,
+                    error="LLM endpoint could not be initialized (check LLM_BASE_URL)",
+                )
+                return
             client = owned_client
         else:
             client = llm

@@ -30,6 +30,7 @@ import unicodedata
 import uuid
 from datetime import UTC, datetime
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -239,12 +240,27 @@ def run_llm_name_producer(
     hints: list[SpeakerNameHint] = []
     if segments:
         owned = client is None
-        llm: LLMClient = client or HttpLLMClient(
-            exec_settings.llm_base_url,
-            exec_settings.llm_model,
-            effective_key,
-            exec_settings.llm_timeout_seconds,
-        )
+        llm: LLMClient
+        if client is None:
+            try:
+                llm = HttpLLMClient(
+                    exec_settings.llm_base_url,
+                    exec_settings.llm_model,
+                    effective_key,
+                    exec_settings.llm_timeout_seconds,
+                )
+            except (httpx.InvalidURL, httpx.HTTPError) as exc:
+                # A malformed base_url — an env-only LLM_BASE_URL the wizard
+                # normalizer never validated — raises while httpx builds the
+                # client. Map it to the producer's own failure so the CLI batch
+                # (`enrich names --llm`, which catches NameProducerError per run)
+                # isolates the bad run instead of aborting on an uncaught
+                # InvalidURL. Message names no URL — it may carry unwanted detail.
+                raise NameProducerError(
+                    "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+                ) from exc
+        else:
+            llm = client
         try:
             for batch in _batches(
                 segments,

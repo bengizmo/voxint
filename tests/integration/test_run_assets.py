@@ -416,6 +416,34 @@ class TestJobs:
             assert job.status == RunAssetJobStatus.FAILED.value
             assert "no usable topics" in job.error
 
+    def test_execute_job_malformed_base_url_fails_not_stuck_running(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # A malformed env-only LLM_BASE_URL raises httpx.InvalidURL while the
+        # worker builds its own client (llm=None, no injected fake). Construction
+        # must be inside the failure boundary: the job lands FAILED with a
+        # closed-vocabulary message, never stranded RUNNING (there is no recovery
+        # sweep). The bad URL is frozen into the job's config snapshot at create
+        # time (the #40 snapshot-executes doctrine), so it must be present then.
+        bad_settings = make_settings(llm_base_url="http://[::1")
+        with session_factory() as session:
+            run_id = seed_run(session)
+        with session_factory() as session:
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=bad_settings,
+            )
+            session.commit()
+            job_id = created[0].id
+        execute_job(session_factory, job_id, settings=bad_settings, llm=None)
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.FAILED.value
+            assert job.error == "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+            assert job.asset_id is None
+
     def test_execute_job_gates_recheck(self, session_factory: sessionmaker[Session]) -> None:
         with session_factory() as session:
             run_id = seed_run(session)

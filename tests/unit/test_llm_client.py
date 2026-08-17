@@ -297,6 +297,38 @@ def test_chat_json_surfaces_http_and_transport_failures() -> None:
         transport.chat_json([ChatMessage(role="user", content="go")])
 
 
+def test_http_error_body_redacts_the_api_key() -> None:
+    # An endpoint that echoes the request's Authorization header back in its
+    # error body must not leak the key: the enrichment jobs log the LLMError
+    # text verbatim. The key is scrubbed from both enhance_segments and chat_json
+    # HTTP-error paths, while the status and a redacted body remain for debugging.
+    key = "sk-unit-test-do-not-log"
+
+    def echo_auth(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401, text=f'{{"error":"bad key: {request.headers["authorization"]}"}}'
+        )
+
+    enhance = make_client(echo_auth, api_key=key)
+    with pytest.raises(LLMError) as enhance_exc:
+        enhance.enhance_segments(SEGMENTS, "")
+    assert "HTTP 401" in str(enhance_exc.value)
+    assert key not in str(enhance_exc.value)
+
+    chat = make_client(echo_auth, api_key=key)
+    with pytest.raises(LLMError) as chat_exc:
+        chat.chat_json([ChatMessage(role="user", content="go")])
+    assert "HTTP 401" in str(chat_exc.value)
+    assert key not in str(chat_exc.value)
+
+
+def test_http_error_without_key_still_surfaces_body() -> None:
+    # No configured key (empty) must not break redaction — the body still surfaces.
+    client = make_client(lambda r: httpx.Response(500, text="upstream boom"), api_key="")
+    with pytest.raises(LLMError, match="HTTP 500: upstream boom"):
+        client.chat_json([ChatMessage(role="user", content="go")])
+
+
 def test_chat_message_rejects_unknown_role() -> None:
     with pytest.raises(ValueError, match="unknown chat role"):
         ChatMessage(role="tool", content="x")

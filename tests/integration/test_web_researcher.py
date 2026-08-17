@@ -136,6 +136,28 @@ def test_job_records_grounded_drafts_and_succeeds(
         assert run.config is not None and run.config["job_id"] == str(job_id)
 
 
+def test_malformed_base_url_fails_not_stuck_running(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A malformed env-only LLM_BASE_URL raises httpx.InvalidURL while the worker
+    # builds its own client (llm=None). Construction must be inside the failure
+    # boundary — but narrowly, around construction ONLY: the research loop also
+    # drives httpx (search/read), so a raw HTTP error there must not be relabeled
+    # "endpoint misconfigured". The job lands FAILED with the closed-vocabulary
+    # init message, never stranded RUNNING.
+    speaker_id = seed_speaker(session_factory)
+    settings = research_settings(llm_base_url="http://[::1")
+    with session_factory() as session:
+        job = create_job(session, speaker_id=speaker_id, settings=settings)
+        job_id = job.id
+        session.commit()
+    execute_job(session_factory, job_id, settings=settings, llm=None)
+    job = get_job(session_factory, job_id)
+    assert job.status == ResearchJobStatus.FAILED.value
+    assert job.error == "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+    assert job.producer_run_id is None
+
+
 def test_rerun_supersedes_and_found_false_records_none(
     session_factory: sessionmaker[Session],
 ) -> None:

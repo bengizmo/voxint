@@ -52,6 +52,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   slider. Reads existing model output only — inference and the parity gates are
   untouched.
 
+### Fixed
+- **Enrichment jobs no longer strand on a malformed LLM endpoint** (#46): the
+  LLM client is now built *inside* each enrichment worker's failure boundary, so
+  a malformed `LLM_BASE_URL` set only in the environment (never validated by the
+  setup wizard) fails the run-asset, web-research, or LLM-name job cleanly —
+  status `FAILED` with the plain message "LLM endpoint could not be initialized
+  (check LLM_BASE_URL)" — instead of raising out of the worker and leaving the
+  job stuck `RUNNING` forever (there is no recovery sweep). The catch is narrow,
+  around client construction only, so a genuine HTTP error from web research's
+  own fetches is never mislabeled an endpoint problem.
+
+### Security
+- **The LLM API key can no longer leak into logs via an echoed error body**
+  (#46): when an LLM endpoint returns an HTTP error whose body echoes the request
+  back (including the `Authorization` header), the key is now scrubbed from the
+  error before it is raised and logged. Status and a redacted body are still
+  surfaced for debugging.
+
 ## [0.16.0] - 2026-08-17
 
 ### Added

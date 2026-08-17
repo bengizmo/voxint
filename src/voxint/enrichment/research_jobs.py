@@ -19,6 +19,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, cast
 
+import httpx
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -371,12 +372,30 @@ def execute_job(
             # stale-RUNNING bound is computed from the snapshot, so the client
             # must run under the same value or a settings change between
             # enqueue and execution could force-cancel a still-live request.
-            owned_client = HttpLLMClient(
-                live_base_url,
-                live_model,
-                effective_key,
-                _snapshot_llm_timeout(job.budget),
-            )
+            try:
+                owned_client = HttpLLMClient(
+                    live_base_url,
+                    live_model,
+                    effective_key,
+                    _snapshot_llm_timeout(job.budget),
+                )
+            except (httpx.InvalidURL, httpx.HTTPError) as exc:
+                # A malformed base_url — an env-only LLM_BASE_URL the wizard
+                # normalizer never validated — raises while httpx builds the
+                # client. Construction sits OUTSIDE the research try below, so
+                # without this the job would strand RUNNING forever (there is no
+                # recovery sweep). Catch narrowly around construction ONLY: the
+                # research loop also drives httpx (web search/read), and a raw
+                # HTTP error from there must NOT be relabeled "endpoint
+                # misconfigured". Closed-vocabulary error, key never in the text.
+                logger.warning("research job %s LLM client init failed: %s", job_id, exc)
+                _finish(
+                    session,
+                    job_id,
+                    status=ResearchJobStatus.FAILED,
+                    error="LLM endpoint could not be initialized (check LLM_BASE_URL)",
+                )
+                return
             client = owned_client
         else:
             client = llm
