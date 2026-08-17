@@ -375,6 +375,33 @@ def test_repeat_value_same_url_is_redundant_and_dropped() -> None:
     assert conclusion.dropped_claims == 1
 
 
+def test_link_values_are_case_sensitive_and_do_not_coalesce() -> None:
+    """A URL's path/query is case-sensitive, so two link claims differing only by
+    case are distinct resources — they must stay separate claims, not merge."""
+    seed = ResearchSeed(
+        display_name="Jane Doe",
+        seed_urls=("https://example.com/a", "https://example.com/A"),
+    )
+    read_lower: dict[str, object] = {"actions": [{"tool": "read_url", "url": "https://example.com/a"}]}
+    read_upper: dict[str, object] = {"actions": [{"tool": "read_url", "url": "https://example.com/A"}]}
+    ground = "Jane Doe is the chief scientist at Acme Corporation"
+    link_lower: dict[str, object] = {
+        "field": "link", "value": "https://example.com/a", "source": "s1", "snippet": ground
+    }
+    link_upper: dict[str, object] = {
+        "field": "link", "value": "https://example.com/A", "source": "s2", "snippet": ground
+    }
+    conclusion, _, _ = run(
+        [read_lower, read_upper, conclude(link_lower, link_upper)],
+        seed=seed,
+        resolver={"example.com": [PUBLIC_A]},
+    )
+    assert {c.value for c in conclusion.claims} == {
+        "https://example.com/a",
+        "https://example.com/A",
+    }
+
+
 def test_found_false_must_carry_no_claims() -> None:
     with pytest.raises(ResearchAgentError, match="invalid conclusion"):
         run([ACTION_SEARCH, ACTION_READ, conclude(CLAIM_OK, found=False)])

@@ -158,6 +158,37 @@ def test_name_triage_orders_and_scores(session_factory: sessionmaker[Session]) -
         assert bt.components["voice_support"] == 0.0
 
 
+def test_merged_speaker_voice_is_excluded(session_factory: sessionmaker[Session]) -> None:
+    """A cosine assignment to a since-merged speaker must NOT drive voice
+    matching — its stale tombstone name would otherwise invert the signal."""
+    with session_factory() as session:
+        run_id, meta_id = _run_with_metadata(session)
+        _name_run(
+            session, run_id=run_id, meta_id=meta_id, producer="names.offline",
+            claims=(("SPEAKER_00", "Jane Doe", 0.8, {"base": 0.8}),),
+        )
+        jane = Speaker(display_name="Jane Doe")
+        canonical = Speaker(display_name="Jane Q. Doe")
+        session.add_all([jane, canonical])
+        session.flush()
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id, diarization_label="SPEAKER_00",
+                speaker_id=jane.id, method="cosine", confidence=0.9, grounded=True,
+            )
+        )
+        session.flush()
+        jane.merged_into_id = canonical.id  # Jane is now a tombstone
+        jane.merged_at = NOW  # constraint: merged_into_id and merged_at set together
+        session.commit()
+
+        _, per_label, triage = _name_suggestions(session, run_id)
+        rep = per_label["SPEAKER_00"][0]
+        # No voice row for the merged speaker → neither support nor conflict.
+        assert triage[rep.candidate.id].components["voice_support"] == 0.0
+        assert triage[rep.candidate.id].components["voice_conflict"] == 0.0
+
+
 def test_rejected_claim_does_not_inflate_agreement(
     session_factory: sessionmaker[Session],
 ) -> None:

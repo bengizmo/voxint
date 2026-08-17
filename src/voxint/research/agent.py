@@ -346,7 +346,9 @@ def _validate_conclusion(
     # independently grounded sources, preserving first-grounded order. A repeat
     # source for the same value is corroboration (#42), not a duplicate to drop
     # — but a source citing a URL already attached to this value, or one past
-    # the per-claim cap, is redundant and counted as dropped.
+    # the per-claim cap, is redundant and counted as dropped. Note ``dropped``
+    # therefore counts raw claim *items* not kept as distinct evidence
+    # (ungrounded OR redundant/over-cap sources), not lost distinct findings.
     order: list[tuple[ClaimField, str]] = []
     value_by_key: dict[tuple[ClaimField, str], str] = {}
     sources_by_key: dict[tuple[ClaimField, str], list[GroundedSource]] = {}
@@ -358,7 +360,10 @@ def _validate_conclusion(
             dropped += 1
             continue
         field, value, source = grounded
-        key = (field, value.casefold())
+        # A LINK value IS a URL: paths/queries are case-sensitive, so distinct
+        # links must NOT casefold-merge. Names/bios/affiliations fold case.
+        merge_value = value if field is ClaimField.LINK else value.casefold()
+        key = (field, merge_value)
         if key not in sources_by_key:
             order.append(key)
             value_by_key[key] = value  # first grounded occurrence keeps its casing

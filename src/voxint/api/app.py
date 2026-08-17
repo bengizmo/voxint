@@ -266,7 +266,6 @@ from voxint.speakers.roster import (
     archive_speaker,
     delete_embedding,
     merge_speakers,
-    normalize_display_name,
     rename_speaker,
     restore_speaker,
     roster_overview,
@@ -752,11 +751,29 @@ class _HintTriage:
     unresolved_peers: int
 
 
+def _name_match_key(value: str) -> str:
+    """The one normalization for matching a name candidate to its peers, to a
+    voice assignment, and for representative grouping: strip + casefold.
+
+    Deliberately NOT ``roster.normalize_display_name`` — that raises above 120
+    chars, and a NAME candidate ``value`` may be longer (the column allows 4000);
+    calling it in this read path would 500 the workbench. Using one key
+    everywhere keeps a representative card and its agreement/voice signals about
+    the same set of candidates.
+    """
+    return value.strip().casefold()
+
+
 def _voice_by_label(session: Session, run_id: uuid.UUID) -> dict[str, _VoiceRow]:
     """Grounded cosine facts per diarization label (one cosine row per label).
 
     Only ``method='cosine'`` carries a roster speaker + confidence + grounding;
-    ``llm_hint`` has none. The speaker name is normalized for value-matching.
+    ``llm_hint`` has none. **Active roster identities only** — a since-merged or
+    archived speaker's stale display name must not drive voice matching (it would
+    invert the signal: a false conflict against the merge target, or false
+    support for a tombstone). ``UNIQUE(run, label, method)`` gives one row per
+    label; the ORDER BY only makes the dict-build deterministic if that ever
+    changes.
     """
     rows = session.execute(
         select(
@@ -769,11 +786,14 @@ def _voice_by_label(session: Session, run_id: uuid.UUID) -> dict[str, _VoiceRow]
         .where(
             SpeakerAssignment.pipeline_run_id == run_id,
             SpeakerAssignment.method == AssignmentMethod.COSINE.value,
+            Speaker.merged_into_id.is_(None),
+            Speaker.deleted_at.is_(None),
         )
+        .order_by(SpeakerAssignment.id)
     ).all()
     return {
         label: _VoiceRow(
-            name_norm=normalize_display_name(name).casefold(),
+            name_norm=_name_match_key(name),
             confidence=confidence,
             grounded=grounded,
         )
@@ -789,10 +809,7 @@ def _name_peer_counts(views: Sequence[CandidateView]) -> dict[tuple[str | None, 
     for view in views:
         if view.state not in (CandidateState.PROPOSED, CandidateState.ACCEPTED):
             continue
-        key = (
-            view.candidate.diarization_label,
-            normalize_display_name(view.candidate.value).casefold(),
-        )
+        key = (view.candidate.diarization_label, _name_match_key(view.candidate.value))
         producers.setdefault(key, set()).add(view.candidate.producer_run.producer)
     return {key: len(names) for key, names in producers.items()}
 
@@ -809,7 +826,7 @@ def _triage_for(
     voice_signal: VoiceSignal | None = None
     if voice is not None:
         voice_signal = VoiceSignal(
-            matches_value=normalize_display_name(candidate.value).casefold() == voice.name_norm,
+            matches_value=_name_match_key(candidate.value) == voice.name_norm,
             grounded=voice.grounded,
             confidence=voice.confidence,
         )
@@ -833,11 +850,10 @@ def _name_suggestions(
     """Representative NAME suggestions for the workbench: run-level + per-label,
     triage-ordered, with a per-representative triage map.
 
-    Each (target, casefolded value) group renders one representative so rerun
+    Each (target, normalized value) group renders one representative so rerun
     duplicates beside decided history are never presented as new suggestions.
-    Ordering within each list is by triage review priority (#42); cross-producer
-    facts (voice support, agreement) are computed over all active candidates
-    before collapsing to representatives.
+    Cross-producer facts (voice support, agreement) and each candidate's triage
+    priority are computed over all active candidates BEFORE collapsing.
     """
     views = [
         view
@@ -846,45 +862,48 @@ def _name_suggestions(
     ]
     voice_map = _voice_by_label(session, run_id)
     peer_counts = _name_peer_counts(views)
-    groups: dict[tuple[str | None, str], CandidateView] = {}
-    proposed_counts: dict[tuple[str | None, str], int] = {}
-    for view in views:
-        key = (view.candidate.diarization_label, view.candidate.value.casefold())
-        if view.state is CandidateState.PROPOSED:
-            proposed_counts[key] = proposed_counts.get(key, 0) + 1
-        current = groups.get(key)
-        if (
-            current is None
-            or _HINT_STATE_PRECEDENCE[view.state] < _HINT_STATE_PRECEDENCE[current.state]
-            or (
-                # Equal state (e.g. names.offline and names.llm both proposed
-                # for the same value): the stronger-scored claim represents.
-                _HINT_STATE_PRECEDENCE[view.state] == _HINT_STATE_PRECEDENCE[current.state]
-                and (view.candidate.score or 0.0) > (current.candidate.score or 0.0)
-            )
-        ):
-            groups[key] = view
 
-    triage: dict[uuid.UUID, _HintTriage] = {}
-    for key, view in groups.items():
-        label, _ = key
-        peer_key = (label, normalize_display_name(view.candidate.value).casefold())
-        score = _triage_for(
+    def _score(view: CandidateView) -> TriageScore:
+        label = view.candidate.diarization_label
+        peer_key = (label, _name_match_key(view.candidate.value))
+        return _triage_for(
             view,
             voice=voice_map.get(label) if label is not None else None,
             peer_count=peer_counts.get(peer_key, 1),
             authority=frozenset(),  # name candidates carry no URL evidence
         )
-        hidden = proposed_counts.get(key, 0) - (1 if view.state is CandidateState.PROPOSED else 0)
-        triage[view.candidate.id] = _HintTriage(
-            priority=score.priority, components=score.components, unresolved_peers=hidden
-        )
 
-    def _order(view: CandidateView) -> tuple[int, float, str]:
+    scores: dict[uuid.UUID, TriageScore] = {v.candidate.id: _score(v) for v in views}
+
+    def _order(view: CandidateView) -> tuple[int, float, str, str]:
+        # Decided history first (a decided value is never re-shown as new), then
+        # higher triage PRIORITY — never a raw cross-producer score — then a
+        # stable tiebreak. Same key selects representatives and orders the lists.
         return (
             _HINT_STATE_PRECEDENCE[view.state],
-            -triage[view.candidate.id].priority,
+            -scores[view.candidate.id].priority,
             view.candidate.value.casefold(),
+            str(view.candidate.id),
+        )
+
+    groups: dict[tuple[str | None, str], CandidateView] = {}
+    proposed_counts: dict[tuple[str | None, str], int] = {}
+    for view in views:
+        key = (view.candidate.diarization_label, _name_match_key(view.candidate.value))
+        if view.state is CandidateState.PROPOSED:
+            proposed_counts[key] = proposed_counts.get(key, 0) + 1
+        current = groups.get(key)
+        if current is None or _order(view) < _order(current):
+            groups[key] = view
+
+    triage: dict[uuid.UUID, _HintTriage] = {}
+    for key, view in groups.items():
+        score = scores[view.candidate.id]
+        # Proposed peers hidden behind this representative — never below zero.
+        rep_is_proposed = 1 if view.state is CandidateState.PROPOSED else 0
+        hidden = max(0, proposed_counts.get(key, 0) - rep_is_proposed)
+        triage[view.candidate.id] = _HintTriage(
+            priority=score.priority, components=score.components, unresolved_peers=hidden
         )
 
     run_level = sorted((view for (label, _), view in groups.items() if label is None), key=_order)

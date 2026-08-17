@@ -74,6 +74,8 @@ def profile_inputs(**over: object) -> TriageInputs:
         ("not a url", None),
         ("mailto:a@b.com", None),
         ("", None),
+        ("http://[::1", None),  # malformed bracket — urlsplit raises, caught
+        ("https://example..com/x", None),  # empty label — not a real domain
     ],
 )
 def test_registrable_domain(url: str, expected: str | None) -> None:

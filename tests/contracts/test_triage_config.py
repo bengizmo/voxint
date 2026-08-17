@@ -45,6 +45,15 @@ def test_profile_component_keys_pinned() -> None:
     ) == PROFILE_COMPONENT_KEYS
 
 
+def test_sources_per_claim_fits_evidence_rows() -> None:
+    # Each grounded source becomes one evidence row; the per-claim source cap
+    # must fit under the writer's evidence-row bound or sources truncate silently.
+    from voxint.enrichment.drafts import MAX_EVIDENCE_ROWS
+    from voxint.research.agent import MAX_SOURCES_PER_CLAIM
+
+    assert MAX_SOURCES_PER_CLAIM <= MAX_EVIDENCE_ROWS
+
+
 def test_source_authority_domains_documented_and_neutral_default() -> None:
     env_example = (REPO_ROOT / ".env.example").read_text()
     assert re.search(r"^#?\s*SOURCE_AUTHORITY_DOMAINS=", env_example, re.MULTILINE)

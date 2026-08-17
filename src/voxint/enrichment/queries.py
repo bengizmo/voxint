@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import ColumnElement, case, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from voxint.db.models import (
     EnrichmentCandidate,
@@ -98,9 +98,10 @@ def _views(
         .options(
             selectinload(EnrichmentCandidate.evidence),
             # Triage (#42) reads the producing producer per candidate for the
-            # name-match adapter and cross-producer agreement — eager-load to
-            # avoid an N+1 across a run's / speaker's candidate list.
-            selectinload(EnrichmentCandidate.producer_run),
+            # name-match adapter and cross-producer agreement. joinedload (not
+            # selectinload) folds this many-to-one into the main query rather
+            # than emitting a second round-trip.
+            joinedload(EnrichmentCandidate.producer_run),
         )
         .where(*criteria)
         .order_by(EnrichmentCandidate.created_at, EnrichmentCandidate.id)

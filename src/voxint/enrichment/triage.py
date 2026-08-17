@@ -183,7 +183,10 @@ def registrable_domain(url: str) -> str | None:
     third label under a known multi-part suffix (``foo.co.uk`` -> ``foo.co.uk``),
     and returns an IP literal unchanged. ``None`` when there is no usable host.
     """
-    host = urlsplit(url).hostname  # already lowercased; IPv6 brackets stripped
+    try:
+        host = urlsplit(url).hostname  # already lowercased; IPv6 brackets stripped
+    except ValueError:
+        return None  # malformed authority (e.g. an unclosed IPv6 bracket)
     if not host:
         return None
     host = host.strip(".")
@@ -194,7 +197,10 @@ def registrable_domain(url: str) -> str | None:
         return host
     except ValueError:
         pass
-    return _registrable_from_labels(host.split("."))
+    labels = host.split(".")
+    if any(not label for label in labels):
+        return None  # empty label ("example..com") — not a real domain
+    return _registrable_from_labels(labels)
 
 
 def normalize_authority_domain(raw: str) -> str | None:
@@ -204,6 +210,12 @@ def normalize_authority_domain(raw: str) -> str | None:
     credentials, wildcard, or otherwise malformed labels — the allowlist counts
     *domains*, never URLs. ``www.example.com`` and ``example.com`` both reduce to
     ``example.com`` (so an allowlisted registrable domain covers its subdomains).
+
+    No IDN/punycode conversion is done (stdlib-only, anti-bloat): an
+    internationalized domain must be entered in the same form the evidence hosts
+    are served in — in practice **punycode** (``xn--…``), since fetched-page
+    hostnames arrive already encoded. Entering the Unicode form would be accepted
+    but never match. Documented in ``.env.example``.
     """
     candidate = raw.strip().lower().rstrip(".")
     if not candidate:

@@ -40,8 +40,14 @@ naming a different identity. It lightly demotes the priority
 
 Because the workbench collapses duplicate `(label, value)` claims to one
 representative, a decision on one producer's claim could otherwise hide another
-producer's still-open proposal. Triage surfaces an `unresolved_peers` count so
-those hidden open proposals stay visible.
+producer's still-open proposal. Triage surfaces an `unresolved_peers` count
+(rendered on the representative, decided or not) so those hidden open proposals
+stay visible. The count is informational for this slice — deciding a value's
+representative expresses the operator's judgment on that value; making each
+hidden duplicate individually actionable is left to the review-console overhaul
+(#47). Grouping, agreement, and voice-matching all key off one normalization
+(strip + casefold), so a card and its signals always describe the same
+candidates.
 
 ## Profile drafts (bio / affiliation / link)
 
