@@ -37,6 +37,7 @@ from voxint.db.models import (
     MediaSourceMetadata,
     PipelineRun,
     RunStatus,
+    SegmentReviewState,
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
@@ -261,14 +262,35 @@ def _render_headline(fragment: str) -> Markup:
 
 
 def _segment_matches(tsq: ColumnElement[Any]) -> ColumnElement[bool]:
-    """The one match predicate both the run filter and the snippet query share.
+    """The transcript_segments match predicate the run filter and snippet share.
 
-    Both text variants, OR'd — never coalesced — so the filter and snippet
-    paths cannot drift apart on which segments count as hits.
+    Both pipeline renderings, OR'd — never coalesced — so the filter and snippet
+    paths cannot drift apart on which segments count as hits. Operator-corrected
+    text is a THIRD rendering matched by :func:`_corrected_matches`; it is kept
+    separate because it lives on ``segment_review_states`` (see that helper).
     """
     return or_(
         ts_vector(TranscriptSegment.raw_text).bool_op("@@")(tsq),
         ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq),
+    )
+
+
+def _corrected_matches(tsq: ColumnElement[Any]) -> ColumnElement[bool]:
+    """Match predicate for operator-corrected text (issue #58, D3) — the third
+    independently-searchable rendering, never coalesced with raw/enhanced.
+
+    Deliberately NOT folded into :func:`_segment_matches`: ``corrected_text``
+    lives on ``segment_review_states``, and OR-ing a second table's column into
+    the transcript_segments predicate would make the planner unable to use the
+    partial GIN index (an OR across two tables cannot become a BitmapOr). The
+    run filter therefore evaluates this in its OWN correlated ``EXISTS`` over
+    ``segment_review_states`` so the index is usable. The ``IS NOT NULL`` guard
+    mirrors the index's partial ``WHERE`` so the planner selects it (EXPLAIN-
+    tested). Corrected text is sparse, so this branch touches few rows.
+    """
+    return and_(
+        SegmentReviewState.corrected_text.is_not(None),
+        ts_vector(SegmentReviewState.corrected_text).bool_op("@@")(tsq),
     )
 
 
@@ -280,30 +302,48 @@ def _snippets_for(
     Bounded work: DISTINCT ON over only the page's run ids, so ts_headline
     runs on at most page_size short segments. "First by segment_index", not
     "best" — there is no ranking pre-1.0. The headline is computed over the
-    text variant that actually matched, preferring enhanced (the variant the
-    reader sees in the workbench) when both do.
+    text variant that actually matched, in the display precedence
+    corrected → enhanced → raw among the renderings that matched (never
+    coalesced — a coalesced headline could highlight a rendering that lacks the
+    matched term). The LEFT JOIN keeps at most one review row per segment (PK on
+    transcript_segment_id), so it never multiplies rows.
     """
     if not run_ids:
         return {}
     tsq = ts_query(q)
+    corrected_matches = _corrected_matches(tsq)
     enhanced_matches = ts_vector(TranscriptSegment.enhanced_text).bool_op("@@")(tsq)
-    headline = sa_select(
-        TranscriptSegment.pipeline_run_id,
-        TranscriptSegment.start_seconds,
-        case(
-            (
-                enhanced_matches,
-                ts_headline(
-                    TranscriptSegment.enhanced_text, tsq, _HEADLINE_OPTIONS
+    headline = (
+        sa_select(
+            TranscriptSegment.pipeline_run_id,
+            TranscriptSegment.start_seconds,
+            case(
+                (
+                    corrected_matches,
+                    ts_headline(
+                        SegmentReviewState.corrected_text, tsq, _HEADLINE_OPTIONS
+                    ),
                 ),
-            ),
-            else_=ts_headline(
-                TranscriptSegment.raw_text, tsq, _HEADLINE_OPTIONS
-            ),
-        ).label("fragment"),
-    ).where(
-        TranscriptSegment.pipeline_run_id.in_(run_ids),
-        _segment_matches(tsq),
+                (
+                    enhanced_matches,
+                    ts_headline(
+                        TranscriptSegment.enhanced_text, tsq, _HEADLINE_OPTIONS
+                    ),
+                ),
+                else_=ts_headline(
+                    TranscriptSegment.raw_text, tsq, _HEADLINE_OPTIONS
+                ),
+            ).label("fragment"),
+        )
+        .select_from(TranscriptSegment)
+        .outerjoin(
+            SegmentReviewState,
+            SegmentReviewState.transcript_segment_id == TranscriptSegment.id,
+        )
+        .where(
+            TranscriptSegment.pipeline_run_id.in_(run_ids),
+            or_(_segment_matches(tsq), corrected_matches),
+        )
     )
     stmt = headline.distinct(TranscriptSegment.pipeline_run_id).order_by(
         TranscriptSegment.pipeline_run_id, TranscriptSegment.segment_index
@@ -389,14 +429,28 @@ def list_runs(
     # Search facets: plain AND-composed predicates, applied before the keyset
     # clause so pagination walks exactly the filtered set.
     if filters is not None and filters.q is not None:
+        tsq = ts_query(filters.q)
+        # Two correlated EXISTS OR'd at the run level, not one predicate OR'd
+        # across tables: the corrected rendering lives on segment_review_states,
+        # so a single OR would defeat its partial GIN index (see
+        # _corrected_matches). Each EXISTS scans one table's own indexes.
         stmt = stmt.where(
-            sa_select(1)
-            .where(
-                TranscriptSegment.pipeline_run_id == PipelineRun.id,
-                _segment_matches(ts_query(filters.q)),
+            or_(
+                sa_select(1)
+                .where(
+                    TranscriptSegment.pipeline_run_id == PipelineRun.id,
+                    _segment_matches(tsq),
+                )
+                .correlate(PipelineRun)
+                .exists(),
+                sa_select(1)
+                .where(
+                    SegmentReviewState.pipeline_run_id == PipelineRun.id,
+                    _corrected_matches(tsq),
+                )
+                .correlate(PipelineRun)
+                .exists(),
             )
-            .correlate(PipelineRun)
-            .exists()
         )
     if filters is not None and filters.speaker_id is not None:
         stmt = stmt.where(

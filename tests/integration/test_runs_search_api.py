@@ -16,15 +16,21 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import and_, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from tests.integration.test_runs_api import make_run
+from voxint.adjudication.review_state import set_correction
 from voxint.api.app import create_app
 from voxint.api.runs_query import ReviewFilter, SearchFilters, list_runs
 from voxint.config import Settings
-from voxint.db.models import RunStatus, Speaker, TranscriptSegment
+from voxint.db.models import (
+    RunStatus,
+    SegmentReviewState,
+    Speaker,
+    TranscriptSegment,
+)
 from voxint.db.search import ts_query, ts_vector
 
 CREDS = ("reviewer", "s3cret")
@@ -137,6 +143,75 @@ class TestTranscriptSearch:
                 segments=[(None, "txv only here", None), (None, "orifice only here", None)],
             )
             assert search(session, q="txv orifice") == []
+
+
+def _correct_segment(session: Session, run_id: uuid.UUID, index: int, text_: str) -> None:
+    """Write an operator correction on one segment via the sanctioned writer."""
+    segment = session.execute(
+        select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+            TranscriptSegment.segment_index == index,
+        )
+    ).scalar_one()
+    set_correction(session, segment=segment, text=text_)
+    session.flush()
+
+
+class TestCorrectedTextSearch:
+    """Operator corrections (#58, D3) are a third searchable rendering: never
+    coalesced, so a term is findable in raw, enhanced, OR corrected."""
+
+    def test_corrected_only_term_is_findable(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run = make_run(
+                session,
+                segments=[(None, "the jessca hums", "the jessca hums")],
+            )
+            # ASR + enhancement both got the name wrong; only the operator's
+            # correction contains "Jessica". A silent search miss here would be
+            # the completeness lie the design note forbids.
+            assert search(session, q="Jessica") == []
+            _correct_segment(session, run, 0, "the Jessica hums")
+            assert search(session, q="Jessica") == [run]
+            # raw/enhanced renderings stay independently searchable.
+            assert search(session, q="jessca") == [run]
+
+    def test_reverting_a_correction_drops_it_from_search(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run = make_run(session, segments=[(None, "manifld gauge", None)])
+            _correct_segment(session, run, 0, "manifold gauge")
+            assert search(session, q="manifold") == [run]
+            # Clearing the correction (empty → NULL) removes it from the index.
+            _correct_segment(session, run, 0, "")
+            assert search(session, q="manifold") == []
+            assert search(session, q="manifld") == [run]
+
+    def test_snippet_prefers_corrected_rendering(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run = make_run(
+                session,
+                segments=[(None, "raw krypton line", "enhanced krypton line")],
+            )
+            _correct_segment(session, run, 0, "corrected krypton line")
+            page = list_runs(
+                session,
+                status=None,
+                review=None,
+                cursor=None,
+                page_size=10,
+                filters=SearchFilters(q="krypton"),
+            )
+            (item,) = [i for i in page.items if i.run_id == run]
+            assert item.snippet is not None
+            # Corrected takes top precedence among matched renderings.
+            assert "corrected" in str(item.snippet.html)
+            assert "<mark>krypton</mark>" in str(item.snippet.html)
 
 
 class TestSpeakerAndCompositionFacets:
@@ -419,3 +494,32 @@ def test_fts_predicate_uses_expression_indexes(
             )
         ).scalar_one()
         assert index_name in json.dumps(plan)
+
+
+def test_corrected_fts_predicate_uses_partial_index(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The corrected rendering (#58, D3) must reach its PARTIAL GIN index, not a
+    seqscan — the whole point of the LEFT-JOIN-vs-EXISTS structuring in the run
+    filter. The predicate's IS NOT NULL guard must mirror the index's partial
+    WHERE, or the planner cannot use it (design note's flagged risk)."""
+    with session_factory() as session:
+        run = make_run(session, segments=[(None, "raw wording", None)])
+        _correct_segment(session, run, 0, "explainable krypton condenser")
+        session.execute(text("SET enable_seqscan = off"))
+        tsq = ts_query("condenser")
+        predicate = and_(
+            SegmentReviewState.corrected_text.is_not(None),
+            ts_vector(SegmentReviewState.corrected_text).bool_op("@@")(tsq),
+        )
+        compiled = predicate.compile(
+            dialect=session.bind.dialect,  # type: ignore[union-attr]
+            compile_kwargs={"literal_binds": True},
+        )
+        plan = session.execute(
+            text(
+                "EXPLAIN (FORMAT JSON) SELECT 1 FROM segment_review_states "
+                f"WHERE {compiled}"
+            )
+        ).scalar_one()
+        assert "segment_review_states_corrected_fts_idx" in json.dumps(plan)

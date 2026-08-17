@@ -17,9 +17,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   raw`); `?text=enhanced` still gives the pipeline text without them. Editing a
   segment's text clears its verified mark (edited text must be re-checked).
   Reverting to the pipeline wording (or clearing the box) removes the
-  correction. Claim-gated like every other review write. *(The verify-and-advance
-  keyboard loop UI and making corrections searchable / feed name enrichment land
-  next.)*
+  correction. Claim-gated like every other review write. **Corrections are also
+  full-text-searchable** (#58): a word you fixed is findable from the `/runs`
+  search alongside the raw and enhanced renderings — never coalesced, so a term
+  is found in whichever rendering contains it, and the hit snippet shows the
+  corrected wording. *(The verify-and-advance keyboard loop UI and feeding
+  corrections to name enrichment land next.)*
 - **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
   already reports how sure it was of each segment, but Voxint used to throw that
   away. The transcript now flags segments the model was **uncertain** about — a
