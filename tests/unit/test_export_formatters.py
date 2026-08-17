@@ -50,6 +50,23 @@ def test_txt_empty_is_empty_string() -> None:
     assert to_txt([]) == ""
 
 
+def test_txt_without_timestamps_drops_bracket_column() -> None:
+    # issue #52: a clean reading copy — just "speaker: text" per line.
+    assert to_txt(LINES, timestamps=False) == (
+        "Alice: Hello there.\n(no speaker): multi\nline\n"
+    )
+
+
+def test_txt_without_timestamps_empty_is_empty_string() -> None:
+    assert to_txt([], timestamps=False) == ""
+
+
+def test_txt_timestamps_default_is_unchanged() -> None:
+    # The default keeps the original bytes — CLI/route parity and every existing
+    # caller stay byte-identical.
+    assert to_txt(LINES, timestamps=True) == to_txt(LINES)
+
+
 def test_srt_cue_numbering_and_comma_timestamps() -> None:
     assert to_srt(LINES) == (
         "1\n00:00:00,000 --> 00:00:02,500\nAlice:\nHello there.\n"
@@ -135,6 +152,20 @@ def test_dispatcher_matches_direct_formatters(fmt: TranscriptFormat) -> None:
         TranscriptFormat.JSON: to_json,
     }[fmt]
     assert render_transcript(LINES, fmt) == direct(LINES)
+
+
+def test_dispatcher_timestamps_flag_only_affects_txt() -> None:
+    # TXT honors timestamps=False; the flag is inert for the other formats
+    # (subtitle timing is structural, JSON keys are a frozen contract).
+    assert render_transcript(LINES, TranscriptFormat.TXT, timestamps=False) == to_txt(
+        LINES, timestamps=False
+    )
+    for fmt, direct in (
+        (TranscriptFormat.SRT, to_srt),
+        (TranscriptFormat.VTT, to_vtt),
+        (TranscriptFormat.JSON, to_json),
+    ):
+        assert render_transcript(LINES, fmt, timestamps=False) == direct(LINES)
 
 
 def test_media_types_cover_every_cli_format() -> None:

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "fragments/export_menu.html" import export_menu %}
 {% block title %}Voxint — transcript {{ run.id.hex[:8] }}{% endblock %}
 {% block body %}
 <p><a href="/runs/{{ run.id }}">← run</a></p>
@@ -10,8 +11,9 @@
   <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}"
      {% if text == v %}aria-current="page"{% endif %}>{{ v.value }}</a>
   {% endfor %}
-  <a href="/review/{{ run.id }}/export.txt">export .txt</a>
 </nav>
+
+{{ export_menu(run) }}
 
 {% if not lines %}
 <p>No transcript segments for this run.</p>

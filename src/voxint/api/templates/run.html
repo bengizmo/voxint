@@ -1,28 +1,25 @@
 {% extends "base.html" %}
+{% from "fragments/export_menu.html" import export_menu %}
 {% block title %}Voxint — review {{ run.media_item.source_path }}{% endblock %}
 {% block body %}
 <p><a href="/review">← queue</a></p>
 <h1>{{ run.media_item.source_path }}</h1>
 
 {% if token %}
-<p class="muted">
-  Claimed by you.
-  <a href="/review/{{ run.id }}/export.txt">Export transcript</a>
-</p>
+<p class="muted">Claimed by you.</p>
 <form method="post" action="/review/{{ run.id }}/release" class="inline">
   <input type="hidden" name="token" value="{{ token }}">
   <button type="submit">Release claim</button>
 </form>
 {% else %}
-<p class="muted">
-  Not claimed by this tab — decisions are disabled.
-  <a href="/review/{{ run.id }}/export.txt">Export transcript</a>
-</p>
+<p class="muted">Not claimed by this tab — decisions are disabled.</p>
 <form method="post" action="/review/{{ run.id }}/claim" class="inline">
   <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
   <button type="submit">Claim for review</button>
 </form>
 {% endif %}
+
+{{ export_menu(run) }}
 
 {# Workbench-player island (issues #49 + #55). Mounted OUTSIDE #labels so it
    survives every htmx innerHTML swap of the decision cards. It owns the <audio>

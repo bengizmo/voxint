@@ -372,6 +372,23 @@ def test_export_formats_and_file_output(
     assert [r["text"] for r in json.loads(out.read_text())] == ["hello", "hi"]
 
 
+def test_export_txt_no_timestamps(
+    session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # issue #52: --no-timestamps drops the [start end] column (txt only); the
+    # default keeps it.
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    assert main(["export", str(run_id), "--format", "txt", "--no-timestamps"]) == 0
+    plain = capsys.readouterr().out
+    assert plain == "SPEAKER_00: hello\nSPEAKER_01: hi\n"
+    assert "[" not in plain
+
+    assert main(["export", str(run_id), "--format", "txt"]) == 0
+    assert "[" in capsys.readouterr().out  # default still bracketed
+
+
 def test_export_unknown_run_errors(
     session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
 ) -> None:

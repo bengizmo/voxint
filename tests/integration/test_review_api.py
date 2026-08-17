@@ -281,6 +281,66 @@ def test_export_text_variant_and_errors(
     assert client.get(f"/review/{uuid.uuid4()}/export.rttm").status_code == 404
 
 
+def test_export_txt_timestamps_toggle(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # issue #52: ?timestamps=false drops the [start end] bracket column; the
+    # default keeps it. Only the txt route exposes the flag.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    default = client.get(f"/review/{run_id}/export.txt")
+    assert default.status_code == 200
+    assert "[" in default.text and "Known Voice: hello there" in default.text
+
+    plain = client.get(f"/review/{run_id}/export.txt", params={"timestamps": "false"})
+    assert plain.status_code == 200
+    assert "[" not in plain.text
+    assert plain.text.startswith("Known Voice: hello there\n")
+
+
+def test_export_txt_route_matches_cli_bytes(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    tmp_path: Path,
+) -> None:
+    # AC #3 honesty: the downloaded file is byte-identical to the CLI export for
+    # the equivalent options — proven directly, not just "by construction". The
+    # CLI (`main`) and the TestClient share the migrated test DB (conftest sets
+    # DATABASE_URL), so both read the same seeded run.
+    from voxint.cli import main
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    for label, query, cli_args in (
+        ("default", {}, []),
+        ("no-timestamps", {"timestamps": "false"}, ["--no-timestamps"]),
+    ):
+        route_bytes = client.get(f"/review/{run_id}/export.txt", params=query).content
+        out = tmp_path / f"cli-{label}.txt"
+        assert main(["export", str(run_id), "--format", "txt", *cli_args, "-o", str(out)]) == 0
+        assert out.read_bytes() == route_bytes, label
+
+
+def test_export_menu_surfaces_every_format(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # issue #52: the picker makes every built format reachable from the UI. The
+    # transcript page and the workbench both render the shared menu.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    for page in (f"/runs/{run_id}/transcript", f"/review/{run_id}"):
+        html = client.get(page).text
+        for ext in ("txt", "srt", "vtt", "json", "rttm"):
+            assert f"/review/{run_id}/export.{ext}" in html, f"{ext} missing on {page}"
+        # Both text variants are selectable, and txt offers a timestamp-free copy.
+        assert "text=enhanced" in html and "text=raw" in html
+        assert "timestamps=false" in html
+
+
 def test_decision_correction_and_stale_token(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

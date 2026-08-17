@@ -2587,7 +2587,12 @@ def _register_routes(app: FastAPI) -> None:
     # (it reads diarization turns, not attributed lines). All accept ?text=raw|
     # enhanced (default enhanced), except RTTM which is speaker-label-only.
     def _export_transcript(
-        run_id: uuid.UUID, session: Session, fmt: TranscriptFormat, text: str | None
+        run_id: uuid.UUID,
+        session: Session,
+        fmt: TranscriptFormat,
+        text: str | None,
+        *,
+        timestamps: bool = True,
     ) -> Response:
         _run_or_404(session, run_id)
         try:
@@ -2595,13 +2600,24 @@ def _register_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         lines = attributed_transcript(session, run_id, text=variant)
-        return Response(content=render_transcript(lines, fmt), media_type=MEDIA_TYPES[fmt.value])
+        return Response(
+            content=render_transcript(lines, fmt, timestamps=timestamps),
+            media_type=MEDIA_TYPES[fmt.value],
+        )
 
     @protected.get("/review/{run_id}/export.txt")
     def export_transcript_txt(
-        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+        timestamps: bool = True,
     ) -> Response:
-        return _export_transcript(run_id, session, TranscriptFormat.TXT, text)
+        # ?timestamps=false drops the [start end] bracket column for a clean
+        # reading copy (issue #52). TXT is the only format where the flag applies.
+        return _export_transcript(
+            run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps
+        )
 
     @protected.get("/review/{run_id}/export.srt")
     def export_transcript_srt(

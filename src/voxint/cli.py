@@ -674,7 +674,9 @@ def _export(args: argparse.Namespace) -> int:
                 output = to_rttm(turns, str(args.run_id))
             else:
                 lines = attributed_transcript(session, args.run_id, text=variant)
-                output = render_transcript(lines, TranscriptFormat(args.format))
+                output = render_transcript(
+                    lines, TranscriptFormat(args.format), timestamps=args.timestamps
+                )
     finally:
         engine.dispose()
 
@@ -1004,6 +1006,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--text",
         choices=["raw", "enhanced"],
         help="which transcript text to render (default: enhanced; ignored for rttm)",
+    )
+    export_p.add_argument(
+        "--no-timestamps",
+        dest="timestamps",
+        action="store_false",
+        default=True,
+        help="omit the [start end] time column (txt only; ignored for other formats)",
     )
     export_p.add_argument("-o", "--output", help="write to PATH instead of stdout")
     export_p.add_argument(

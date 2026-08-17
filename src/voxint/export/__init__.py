@@ -95,16 +95,24 @@ def _cue_text(line: TranscriptLine) -> str:
     return f"{speaker}:\n{text}"
 
 
-def to_txt(lines: Sequence[TranscriptLine]) -> str:
-    """The bracketed plain-text transcript (the original ``export.txt`` format).
+def to_txt(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> str:
+    """The plain-text transcript (the original ``export.txt`` format).
 
     ``[   start     end] speaker: text`` per line; a trailing newline only when
     there is at least one line, so an empty run yields an empty file.
+
+    ``timestamps=False`` drops the ``[start end]`` bracket column, yielding
+    ``speaker: text`` — a clean reading copy for quoting into a document (issue
+    #52). The default keeps the byte-for-byte original output, so every existing
+    caller and the CLI/route parity are unchanged.
     """
-    body = "\n".join(
-        f"[{line.start_seconds:9.2f} {line.end_seconds:9.2f}] {line.speaker}: {line.text}"
-        for line in lines
-    )
+    if timestamps:
+        body = "\n".join(
+            f"[{line.start_seconds:9.2f} {line.end_seconds:9.2f}] {line.speaker}: {line.text}"
+            for line in lines
+        )
+    else:
+        body = "\n".join(f"{line.speaker}: {line.text}" for line in lines)
     return body + ("\n" if lines else "")
 
 
@@ -179,15 +187,21 @@ def to_rttm(turns: Sequence[RttmTurn], file_id: str) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def render_transcript(lines: Sequence[TranscriptLine], fmt: TranscriptFormat) -> str:
+def render_transcript(
+    lines: Sequence[TranscriptLine], fmt: TranscriptFormat, *, timestamps: bool = True
+) -> str:
     """Render transcript lines in ``fmt`` — the shared API/CLI dispatch point.
 
     RTTM is deliberately not here: it consumes diarization turns, not transcript
     lines, so callers reach :func:`to_rttm` directly.
+
+    ``timestamps`` is meaningful for TXT only (its bracket column is optional);
+    SRT/VTT cue timing is structural and JSON keys are a frozen contract, so the
+    flag is intentionally inert for those formats rather than corrupting them.
     """
     match fmt:
         case TranscriptFormat.TXT:
-            return to_txt(lines)
+            return to_txt(lines, timestamps=timestamps)
         case TranscriptFormat.SRT:
             return to_srt(lines)
         case TranscriptFormat.VTT:

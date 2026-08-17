@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Export picker — every format, one menu** (#52, #47): the console already
+  produced SubRip (`.srt`), WebVTT (`.vtt`), JSON, and RTTM alongside plain
+  text, but only the `.txt` download was ever linked — the subtitle and
+  diarization formats a journalist or researcher actually needs were invisible.
+  The workbench and the transcript page now show a single **Download transcript**
+  menu listing all five formats with a plain-language description of each, plus
+  the raw/enhanced text choice (RTTM carries the raw diarization labels, so it
+  has no variant). Plain text additionally offers a **timestamp-free** copy —
+  just the words with speaker labels, for pasting into a document — mirrored on
+  the command line as `voxint export --format txt --no-timestamps`; the download
+  is byte-for-byte identical to the CLI. Built as plain HTML links (no new
+  frontend dependency; works with JavaScript off). Subtitle timing and the JSON
+  key layout are left untouched — a subtitle without timing or a JSON with
+  missing keys would be a broken file, not an option.
 - **Inline speaker merge in the workbench** (#54, #47): the most common
   diarization fix — one person split across labels (`SPEAKER_00` + `SPEAKER_03`)
   — is now a one-click action where the operator is actually reviewing, instead

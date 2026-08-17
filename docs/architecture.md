@@ -429,6 +429,20 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   merge tombstones as the label path; `attributed_transcript` overlays it, so the
   HTML page and every export agree. Deliberate v1 limit: speaker search and the
   queue stay label-scoped (a segment-only speaker does not surface there).
+- **Export picker** (issue #52): every built transcript format is reachable from
+  the workbench and the transcript page through one shared Jinja fragment
+  (`fragments/export_menu.html`) — TXT, SubRip (`.srt`), WebVTT (`.vtt`), JSON,
+  and RTTM, each with a plain-language label. Pure HTML (no island): each option
+  is a plain `<a>` whose href carries the query, so the menu works with
+  JavaScript off. The raw/enhanced text variant is selectable for the
+  transcript-line formats (RTTM carries raw diarization labels only, so it takes
+  no variant). TXT alone offers a **timestamp-free** reading copy
+  (`?timestamps=false`) — a `to_txt(timestamps=...)` keyword the CLI mirrors
+  (`voxint export --no-timestamps`); an integration test asserts the download is
+  byte-identical to the CLI for both settings. The flag is inert for SRT/VTT (cue
+  timing is structural) and JSON (keys are a frozen contract). Deliberately not
+  built: a speaker-name toggle (caption guidance keeps speaker IDs; anonymization
+  belongs in the roster, not the exporter) — filed as a follow-up.
 - **Auth**: single-operator HTTP Basic (constant-time compare) on every route
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default

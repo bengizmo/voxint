@@ -84,7 +84,9 @@ up, then requeue.</p>
   {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
   {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
   {% if run.status == "completed" %}<a href="/review/{{ run.id }}">Review</a>{% endif %}
-  <a href="/runs/{{ run.id }}/export.json">Export (JSON)</a>
+  <a href="/runs/{{ run.id }}/export.json">Complete run archive (JSON)</a>
+  {% if transcript_available %}<span class="muted">(transcript &amp; subtitle exports are on the
+    <a href="/runs/{{ run.id }}/transcript">Transcript</a> page)</span>{% endif %}
   {% if media_reclaimed_at %}
     <span class="muted">Media reclaimed on {{ media_reclaimed_at.strftime("%Y-%m-%d") }}
       (transcript and decisions kept; re-run from source to restore audio).</span>
