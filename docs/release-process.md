@@ -156,14 +156,24 @@ export LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=...
 ```
 
 That lane is an optional sub-lane: unconfigured it skips, configured-but-broken
-it fails (see [`testing.md`](testing.md#gate-semantics)). (The browser lane of
-this suite is still being built.)
+it fails (see [`testing.md`](testing.md#gate-semantics)).
+
+Gate E also covers a **browser runtime acceptance lane** for the review-console
+islands (#53/#58) — the one lane that is not a `tests/e2e/` pytest module
+(Playwright is a Claude-Code capability, and the durable check is post-hoc). Run
+it via the `voxint-e2e-review` skill over `tools/e2e_browser_lifecycle.py`: it
+builds + serves a working-tree instance, drives the verify-and-advance loop
+(verify/edit/skip/replay, click-to-edit, the discard warning, keymap
+suppression) with immediate DOM + network assertions, and reconciles
+`segment_review_states` fail-closed. Run it before tagging a release that touches
+the review console or the island build path (`frontend/`, `src/voxint/api/`),
+serially on maintainer hardware (issue #23).
 
 Gate E's carry-over is **pipeline-aware**, not services-only: it exercises the
-whole submit→persist chain plus the real-LLM enrichment chain, so it must re-run
-whenever anything it measures could have changed. Carry the previous release's
-Gate-E evidence only when
-`git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/enrichment/ src/voxint/db/ tests/e2e/`
+whole submit→persist chain, the real-LLM enrichment chain, and the browser
+review loop, so it must re-run whenever anything it measures could have changed.
+Carry the previous release's Gate-E evidence only when
+`git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/enrichment/ src/voxint/db/ src/voxint/api/ frontend/ tests/e2e/ tools/e2e_browser_lifecycle.py`
 is empty; otherwise re-run it before tagging. (Gates A/R below stay
 `services/`-scoped — they measure the model services in isolation.)
 
