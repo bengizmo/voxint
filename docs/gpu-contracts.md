@@ -466,6 +466,46 @@ generalizing the ONNX verdict-table pattern above. Reference data for such
 reports comes from `tools/generate_parity_references.py --tier metal
 --out-dir <scratch>` (refuses the committed reference dir).
 
+#### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-17, #33 Slice 2a/2b whisper engine)
+
+Gate M re-run for the **v0.16.0 release**, triggered by #33 Slice 2a/2b landing the
+`WHISPER_ENGINE` compatibility seam and the shared-VAD `ct2` decode engine — a
+substantial refactor of `services/whisper` (non-empty `git diff v0.15.0..dee0f65
+-- services/`), so the whisper metal lanes must be re-measured before the tag.
+Measured on maintainer Apple Silicon hardware (Apple M1 Pro, 16 GB, macOS 26.5.2
+build 25F84), working tree `main` @ `dee0f65`, the pinned metal stack (python
+3.11 per-service venvs, torch 2.5.0 / pyannote.audio 3.1.1 / faster-whisper 1.2.1
+/ CT2 4.8.1 / onnxruntime 1.28.0). Campaign 2026-08-16 23:05 → 2026-08-17 00:14
+ADT (~1h08m). **All six lanes green** (the two #33 lanes below are new on Apple
+Silicon; they were flagged as absent at `dca6c06` in the verdict just below and
+are added here as that note required):
+
+| Lane | Assertion | Result |
+|---|---|---|
+| `test_whisper_ct2_legacy_replay.py` (#33 Slice 2a/2b, full sweep) | `ct2-legacy` replays the frozen CT2-CPU oracle (`references/ct2-cpu-metal/`) with **zero drift** on every committed entry × both decode paths — full 30 synthetic + 30 AMI corpus at oracle `batch_size=4` | **60 passed** (39m07s), zero drift |
+| `test_whisper_ct2_self_parity.py` (#33 Slice 2b) | shared `ct2` ≈ `ct2-legacy` to **≤ 0.5pp pooled WER per vad mode** (micro-avg S/D/I/N; empty-ref clips held to a zero-insertion invariant) over synthetic + curated AMI 2–10 window subset | **2 passed** (27m33s) |
+| `test_whisper_metal.py` | native CT2 transcript vs cuda ref (similarity / segments / confidence) | 3 passed |
+| `test_pyannote_metal.py` | full mps=cpu=cuda-ref speaker/turn/mapping gate | 7 passed |
+| `test_titanet_onnx.py` | full 3-level gate on arm64 (default EP) | 7 passed |
+| `test_titanet_onnx.py` (`VOXINT_PARITY_ORT_PROVIDERS=CoreMLExecutionProvider`) | same gate under the CoreML EP + repeat-determinism probe | 7 passed |
+
+**Scope of what this run re-measures.** Only `services/whisper` changed since
+v0.15.0, so the whisper lanes (the two #33 lanes above plus `test_whisper_metal`)
+are the numerics under test; the granular pyannote and titanet per-bound margins
+carry over unchanged from the 2026-08-16 `batch_size=4` verdict below (those
+services are byte-identical since v0.15.0). Their lanes were re-run here anyway
+and stayed green as a regression net. The pytest lanes assert silently against
+their bounds (pass/fail, no printed margins); the two #33 lanes prove the seam
+refactor and the shared-front `assemble_transcription_output` dedup are
+byte-faithful (`ct2-legacy` zero drift) and that the new shared `ct2` engine
+holds equivalence to it (≤ 0.5pp WER), while `ct2-legacy` remains the shipped
+default (`WHISPER_ENGINE` unset → no behavior change).
+
+Combined with **Gate A (CUDA, `transcribe.json` byte-identical to the committed
+reference)** and **Gate R (ROCm / RX 9060 XT, `device: rocm` + correct
+transcription at GPU speed)**, all three maintainer GPU gates PASS at `dee0f65`
+for the v0.16.0 tag.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the

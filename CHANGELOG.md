@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-08-17
+
 ### Added
 - **Export picker — every format, one menu** (#52, #47): the console already
   produced SubRip (`.srt`), WebVTT (`.vtt`), JSON, and RTTM alongside plain
