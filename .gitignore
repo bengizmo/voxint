@@ -12,6 +12,13 @@ dist/
 build/
 frontend/node_modules/
 
+# Natively-built review-console islands: the Dockerfile builds the Vite output
+# inside the image, but the native launcher (scripts/native/voxint-native.sh)
+# stages it into this tracked assets dir on the host -- ignore the build output,
+# keep the .gitkeep so the directory still ships.
+/src/voxint/api/static/app/*
+!/src/voxint/api/static/app/.gitkeep
+
 # Tooling caches
 .pytest_cache/
 .mypy_cache/
