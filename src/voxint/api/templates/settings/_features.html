@@ -1,0 +1,31 @@
+{# Settings → Features (issue #62): real DB-row runtime toggles for the live-read
+   capability flags. Each control is tri-state — On / Off / use the installation
+   (env) setting (which writes NULL so an override never permanently pins). The
+   POST validates the effective combination server-side through the shared
+   validate_effective_flags and re-renders with a plain-language message on a
+   violation, writing nothing. Self-contained: renders from _settings_context. #}
+<section id="features" aria-labelledby="features-heading">
+<h2 id="features-heading">Features</h2>
+<p class="muted">Turn Voxint's optional features on or off here — changes apply to
+   your next run or job, no restart needed. “Use installation setting” follows the
+   value configured in the environment, so you can always revert an override.</p>
+{% if features_error %}
+  <p class="notice" role="alert">{{ features_error }}</p>
+{% endif %}
+<form method="post" action="/settings/features">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  {% for flag in feature_flags %}
+  <fieldset class="field feature-flag">
+    <legend>{{ flag.label }}</legend>
+    <p class="muted">{{ flag.help }}</p>
+    <label><input type="radio" name="{{ flag.name }}" value="on"{% if flag.state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="{{ flag.name }}" value="off"{% if flag.state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="{{ flag.name }}" value="inherit"{% if flag.state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if flag.env_default else "Off" }})</span></label>
+  </fieldset>
+  {% endfor %}
+  <button type="submit">Save feature settings</button>
+</form>
+</section>

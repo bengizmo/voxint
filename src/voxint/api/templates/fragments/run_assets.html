@@ -13,8 +13,9 @@ starting point, not a verified record.</p>
 
 {% if not assets.gates_open %}
 <p class="muted">
-  Run assets are off. They need ENRICHMENT_RUN_ASSETS_ENABLED and LLM_ENABLED —
-  both set in the environment.
+  Run assets are off. Turn on <strong>Run assets</strong> and
+  <strong>LLM transcript enhancement</strong> in
+  <a href="/settings#features">Settings → Features</a> — no restart needed.
 </p>
 {% elif assets.source_problem %}
 <p class="muted">{{ assets.source_problem }}</p>

@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Settings → Features: in-UI runtime toggles (#62, settings-overhaul arc #47)**:
+  a new **Features** section on the Settings page exposes the live-read capability
+  flags as real **tri-state** controls — **On / Off / use installation setting** —
+  backed by #74's `resolve_effective_*` resolvers, so a non-technical operator
+  turns speaker-name suggestions, the LLM name pass, run assets (+ auto-generate),
+  and URL downloads on or off from the browser with **no `.env` edit and no
+  restart** (DB-row-wins-over-env; "use installation setting" writes `NULL` so an
+  override never permanently pins). The `POST /settings/features` route validates
+  the effective combination through the single shared `validate_effective_flags`
+  and, on an invariant violation (e.g. the LLM name pass without LLM enhancement),
+  re-renders with the plain-language message and the operator's choices preserved,
+  **writing nothing** — it never silently enables or disables an unrelated setting.
+  The Settings page is now decomposed into self-contained per-section partials
+  (`templates/settings/`), each with its own CSRF-guarded POST, so later arc
+  children slot a section in without disturbing another's save.
 - **Native macOS/arm64 core-stack technical preview** (#69, the MVP of epic
   #68 "run without Docker"): a `launchd`-supervised launcher
   (`scripts/native/voxint-native.sh`) that runs the whole stack on Apple Silicon
@@ -212,6 +227,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   untouched.
 
 ### Changed
+- **Gated-feature panels remediate in plain language, not env vars (#62)**: the
+  "run assets are off" and "web research is off" blocks on the run and speaker
+  pages no longer instruct a non-technical operator to set raw environment
+  variables (`ENRICHMENT_RUN_ASSETS_ENABLED`, `VOXINT_WEB_RESEARCH`, …); they name
+  the in-UI Settings toggle to turn the feature on instead. A contract test keeps
+  the copy from regressing.
 - **CLI honors the effective (row-over-env) capability gates (#74)**: `voxint
   fetch`, `voxint research search|read`, and `voxint enrich names` now resolve
   their enablement from the database (row-over-env) instead of a bare

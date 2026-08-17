@@ -206,6 +206,26 @@ def resolve_effective_web_search_api_key(row: AppSettings | None, settings: Sett
     return _resolve_str_flag(row, settings, "web_search_api_key")
 
 
+def feature_flag_state(row: AppSettings | None, name: str) -> str:
+    """Raw tri-state of a nullable boolean flag column, for the settings form.
+
+    Returns ``"inherit"`` when the column is ``NULL`` (or no row exists) — the
+    operator is inheriting the env default — else ``"on"``/``"off"`` for a stored
+    ``True``/``False`` override. This is the boolean counterpart to
+    :func:`llm_endpoint_form_fields`: the form renders the RAW column, not the
+    resolved effective value, so saving an untouched "use installation setting"
+    choice writes ``NULL`` (keeps inheriting env) instead of pinning the current
+    env default onto the row. The three states map exactly onto the tri-state
+    radio the ``Features`` section renders (issue #62).
+    """
+    if row is None:
+        return "inherit"
+    value = getattr(row, name)
+    if value is None:
+        return "inherit"
+    return "on" if value else "off"
+
+
 @dataclass(frozen=True)
 class EffectiveWebResearch:
     """The resolved web-research provider config for one job execution (issue #74).
