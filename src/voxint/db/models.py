@@ -119,6 +119,11 @@ class ArtifactKind(enum.StrEnum):
     PREPROCESSED_AUDIO = "preprocessed_audio"
     CHUNK = "chunk"
     TRANSCRIPT_EXPORT = "transcript_export"
+    # Lazily-computed waveform amplitude envelope (issue #57); one per run,
+    # cached under artifacts/{run_id}/peaks.json. Survives reclamation (the
+    # sweep targets preprocessed_audio only) so a static waveform can still
+    # render after the WAV is reclaimed.
+    WAVEFORM_PEAKS = "waveform_peaks"
 
 
 class SourceKind(enum.StrEnum):
@@ -393,6 +398,16 @@ class AudioArtifact(Base):
             postgresql_where=text(
                 "kind = 'preprocessed_audio' AND reclaimed_at IS NULL"
             ),
+        ),
+        # One waveform-peaks cache row per run (issue #57): concurrent first
+        # requests both compute, but INSERT … ON CONFLICT DO NOTHING against
+        # this index keeps exactly one canonical row. Keep in lockstep with
+        # migration 0021.
+        Index(
+            "uq_audio_artifacts_waveform_peaks",
+            "pipeline_run_id",
+            unique=True,
+            postgresql_where=text("kind = 'waveform_peaks'"),
         ),
     )
 

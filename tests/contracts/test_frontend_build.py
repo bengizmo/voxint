@@ -190,6 +190,21 @@ def test_symlink_escape_is_404(
 
 
 # --------------------------------------------------------------------------- #
+# 4b. Runtime npm dependencies stay exactly {react, react-dom} (issue #57).
+#     The waveform strip was deliberately hand-rolled instead of vendoring
+#     wavesurfer.js; this pin turns that no-new-runtime-dep decision into an
+#     enforced invariant rather than a review norm. Widening it is a deliberate
+#     act: update this test in the same commit, with the reasoning recorded.
+# --------------------------------------------------------------------------- #
+def test_runtime_npm_dependencies_are_exactly_react() -> None:
+    package_json = json.loads((REPO_ROOT / "frontend" / "package.json").read_text())
+    assert set(package_json["dependencies"]) == {"react", "react-dom"}, (
+        "frontend runtime dependencies changed — if deliberate, update this "
+        "contract in the same commit and record why the new dep earns its place"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # 5. Node-version pin parity across Dockerfile, ci.yml, and .nvmrc.
 # --------------------------------------------------------------------------- #
 def test_node_version_pins_agree() -> None:

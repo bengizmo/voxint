@@ -58,6 +58,7 @@ from voxint.app_settings import complete_onboarding
 from voxint.db.models import (
     ArtifactKind,
     AudioArtifact,
+    DiarizationTurn,
     MediaItem,
     PipelineRun,
     RunStatus,
@@ -185,13 +186,17 @@ def cmd_setup(args: argparse.Namespace) -> None:
 # seed — disposable DB with a COMPLETED review run
 # --------------------------------------------------------------------------- #
 def _silent_wav_bytes(seconds: float) -> bytes:
+    """Quiet constant-amplitude PCM (NOT pure silence): the waveform strip
+    (issue #57) draws an amplitude envelope, and all-zero peaks would make the
+    seeded strip an unreviewable flat line. A small DC value keeps the file
+    trivially cheap to generate while giving every peak bucket a visible bar."""
     frames = int(16000 * seconds)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(16000)
-        w.writeframes(b"\x00\x00" * frames)
+        w.writeframes((4096).to_bytes(2, "little", signed=True) * frames)
     return buf.getvalue()
 
 
@@ -238,6 +243,21 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
                 raw_text=seg_text,
                 diarization_label=label,
                 confidence=confidence,
+            )
+        )
+        # A matching diarization turn per segment (issue #57): the waveform
+        # strip paints TURNS, so without these the seeded strip would render
+        # bare gray bars and the region assertions would have nothing to test.
+        # No embedding — the browser lane never runs speaker matching — so the
+        # embedding-XOR-skip CHECK requires an honest skip_reason instead.
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run.id,
+                turn_index=index,
+                start_seconds=float(index) * _SEGMENT_SECONDS,
+                end_seconds=float(index) * _SEGMENT_SECONDS + _SEGMENT_SECONDS,
+                label=label,
+                skip_reason="e2e seed: embedding lane not exercised",
             )
         )
     session.commit()

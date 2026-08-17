@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
 import type { PlaybackCapability } from "../lib/playback";
+import type { Turn } from "../lib/peaks";
 import {
   type Segment,
   TranscriptPlayer,
@@ -21,6 +22,9 @@ export interface ReviewStepperProps {
   // The run's N-of-M counter at page load (verified, total-segments). Kept in
   // sync from each write's JSON response — never recomputed on the client.
   initialProgress: { verified: number; total: number };
+  // Waveform strip (issue #57): forwarded to the player untouched.
+  peaksUrl?: string | null;
+  turns?: Turn[];
 }
 
 // A segment is a REVIEW TARGET when it has a write id and is not yet verified.
@@ -55,6 +59,8 @@ export function ReviewStepper({
   lowConfidenceThreshold,
   reviewToken,
   initialProgress,
+  peaksUrl,
+  turns,
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
   // the (pure) player. Verify/correct responses patch this array in place.
@@ -83,11 +89,9 @@ export function ReviewStepper({
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
 
-  const current = cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
-  const remaining = useMemo(
-    () => segments.filter(isTarget).length,
-    [segments],
-  );
+  const current =
+    cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
+  const remaining = useMemo(() => segments.filter(isTarget).length, [segments]);
   const writable = reviewToken !== null && !claimLost;
 
   // Keep the edit box in step with the segment under the cursor (its effective
@@ -131,7 +135,12 @@ export function ReviewStepper({
     ): Segment[] => {
       const patched = segments.map((seg, i) =>
         i === index
-          ? { ...seg, verified: result.verified, corrected: result.corrected, text: result.text }
+          ? {
+              ...seg,
+              verified: result.verified,
+              corrected: result.corrected,
+              text: result.text,
+            }
           : seg,
       );
       setSegments(patched);
@@ -205,7 +214,16 @@ export function ReviewStepper({
       busyRef.current = false;
       setBusy(false);
     }
-  }, [current, cursor, editText, confirmDiscard, postJson, runId, applyResult, goTo]);
+  }, [
+    current,
+    cursor,
+    editText,
+    confirmDiscard,
+    postJson,
+    runId,
+    applyResult,
+    goTo,
+  ]);
 
   const saveEdit = useCallback(async () => {
     if (current?.segmentId == null || busyRef.current) return;
@@ -284,22 +302,23 @@ export function ReviewStepper({
       {reviewToken === null && (
         <p className="muted" role="status">
           Not claimed by this tab — verifying and editing are disabled.{" "}
-          <a href={`/review/${runId}`}>Claim this run in the workbench</a> to review.
+          <a href={`/review/${runId}`}>Claim this run in the workbench</a> to
+          review.
         </p>
       )}
       {claimLost && (
         <p role="alert" className="tp-uncertain-chip">
           Your claim expired or was taken over. Everything you already saved is
           safe — copy any unsaved edit from the box first, then{" "}
-          <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen this
-          page to continue.
+          <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen
+          this page to continue.
         </p>
       )}
       {writable && (
         <div className="review-stepper my-2" aria-label="Verify and advance">
           <p aria-live="polite">
-            <strong>{progress.verified}</strong> of <strong>{progress.total}</strong>{" "}
-            segments verified
+            <strong>{progress.verified}</strong> of{" "}
+            <strong>{progress.total}</strong> segments verified
             {done ? " — all done" : ` · ${remaining} left`}
           </p>
           {current && current.segmentId !== null && (
@@ -310,8 +329,12 @@ export function ReviewStepper({
                   current.confidence < lowConfidenceThreshold && (
                     <span className="tp-uncertain-chip ml-2">uncertain</span>
                   )}
-                {current.verified && <span className="spk-badge ml-2">verified</span>}
-                {current.corrected && <span className="spk-badge ml-2">edited</span>}
+                {current.verified && (
+                  <span className="spk-badge ml-2">verified</span>
+                )}
+                {current.corrected && (
+                  <span className="spk-badge ml-2">edited</span>
+                )}
               </p>
               <textarea
                 ref={editRef}
@@ -352,7 +375,12 @@ export function ReviewStepper({
                 >
                   Save edit <kbd>Ctrl/⌘+↵</kbd>
                 </button>
-                <button type="button" onClick={jumpNext} disabled={busy} className="mr-2">
+                <button
+                  type="button"
+                  onClick={jumpNext}
+                  disabled={busy}
+                  className="mr-2"
+                >
                   Skip <kbd>n</kbd>
                 </button>
                 <button
@@ -365,9 +393,9 @@ export function ReviewStepper({
               </div>
               {confirmDiscard && (
                 <p role="alert" className="text-sm">
-                  You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save it,
-                  or <kbd>v</kbd> again to verify the original wording and discard
-                  the edit.
+                  You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save
+                  it, or <kbd>v</kbd> again to verify the original wording and
+                  discard the edit.
                 </p>
               )}
               {error && (
@@ -391,6 +419,11 @@ export function ReviewStepper({
         // — and a segment already verified can be reached again to fix. Only when
         // this tab holds the claim; the read-only surface passes no callback.
         onSegmentSelect={writable ? setCursor : undefined}
+        // Waveform strip (issue #57): the review surface additionally shows the
+        // cursor marker so region clicks and the keymap stay visibly in sync.
+        peaksUrl={peaksUrl}
+        turns={turns}
+        cursorIndex={writable ? cursor : undefined}
       />
     </div>
   );

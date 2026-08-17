@@ -714,6 +714,29 @@ def test_transcript_flags_low_confidence_segments(
     assert [s["confidence"] for s in props["segments"]] == [0.30, 0.95, None]
 
 
+def test_transcript_island_props_offer_peaks_url_with_servable_media(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #57: with a real servable WAV, peaksUrl points at the lazy peaks
+    # route (the first island fetch computes the envelope) and the turns carry
+    # the diarization timeline for the strip.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+
+    body = client.get(f"/runs/{run_id}/transcript").text
+    match = re.search(r"data-props='([^']*)'", body)
+    assert match is not None
+    props = json.loads(match.group(1))
+    assert props["peaksUrl"] == f"/media/{run_id}/peaks"
+    # seed_run's four turns, in (start, turn_index) order, palette-aligned with
+    # the segment list (S0 -> 0, S1 -> 1 over the sorted universe).
+    assert [t["start"] for t in props["turns"]] == [0.0, 10.0, 20.0, 30.0]
+    assert [t["paletteIndex"] for t in props["turns"]] == [0, 0, 1, 1]
+    assert all(t["overlap"] is False for t in props["turns"])
+    # And the offered URL actually serves an envelope.
+    assert client.get(props["peaksUrl"]).status_code == 200
+
+
 def _segment_ids(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> list[uuid.UUID]:
     with session_factory() as session:
         return list(

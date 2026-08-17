@@ -6,6 +6,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Waveform strip with per-speaker regions** (#57): the transcript and review
+  pages draw a compact amplitude strip under the audio player, tinted per
+  speaker from the **diarization turns** (the honest who-spoke-when record —
+  overlapping speech gets a hatched marker; diarized-but-untranscribed speech
+  still appears), using the same palette as the segment list. Clicking the
+  strip selects that segment in the list and — only when the fail-closed seek
+  gate (#55) trusts the timeline — plays it; the review surface also shows the
+  cursor position, and a playhead tracks playback. Rendering is a hand-rolled
+  canvas (no new frontend dependency — a contract test now pins the runtime
+  npm dependencies to exactly `react`+`react-dom`; deliberate deviation from
+  the issue's wavesurfer.js suggestion, rationale on #57). Peaks are computed
+  lazily on first view from the normalized WAV by a new
+  `GET /media/{run_id}/peaks` route and cached as a `waveform_peaks` artifact
+  (migration 0021) with a source fingerprint so a re-prepared run can never
+  show a stale envelope; the cached strip keeps rendering (statically) after
+  the WAV is reclaimed. Fully offline; ~14 KB payload regardless of duration.
 - **Whisper Metal bakeoff (#33) — mlx candidate measured ineligible**: the
   Slice-3 decode diagnostic
   (`docs/reports/whisper-metal-bakeoff-slice3-decode-2026-08-17.md`) measured

@@ -474,6 +474,21 @@ tab). With JavaScript off the same page lists every segment, with a plain
 island, stated plainly), and it renders read-only with a prompt to claim when
 this tab does not hold the run's claim.
 
+**Waveform strip (who spoke when).** The transcript pages (read-only and
+review) draw a compact waveform under the audio player, tinted per speaker with
+the same colors as the segment list — the colored regions come from the
+diarization turns themselves, so overlapping speech shows a hatched marker and
+diarized-but-untranscribed stretches still appear. Clicking the strip jumps to
+that segment in the list (and plays it, when seeking is trusted); the review
+page also underlines the segment under the review cursor. The amplitude data is
+computed once per run on first view (a second or two for long recordings) and
+cached; the strip keeps rendering as a static who-spoke-when map even after the
+run's processed audio has been reclaimed to free disk space — though when
+seeking is disabled (untrusted timeline, missing media) a strip click only
+selects the segment, never seeks, and no playhead is shown. If the amplitude
+data cannot be computed (e.g. the media file is gone and nothing was cached)
+the strip simply does not appear; the transcript list is unaffected.
+
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
 that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)

@@ -257,6 +257,14 @@ from voxint.ingest import (
     unarchive_run,
     unlink_media_paths,
 )
+from voxint.media.peaks import (
+    PeaksError,
+    SourceFingerprint,
+    compute_peaks,
+    load_cached_peaks,
+    peaks_artifact_row,
+    store_peaks,
+)
 from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
@@ -1007,7 +1015,14 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept and "application/json" not in accept
 
 
+# Capability reason codes meaning GET /media would not serve bytes at all (as
+# opposed to a present-but-untrusted timeline). Mirrors MEDIA_UNAVAILABLE_CODES
+# in frontend/src/components/PlaybackControls.tsx.
+_MEDIA_UNAVAILABLE_CODES = frozenset({"media_missing", "media_reclaimed", "media_unservable"})
+
+
 def _transcript_island_props(
+    session: Session,
     run_id: uuid.UUID,
     lines: list[TranscriptLine],
     palette: dict[str, int],
@@ -1021,10 +1036,45 @@ def _transcript_island_props(
     fallback flag/color identically and a segment's write id never drifts between
     the display and the review loop.
     """
+    # Waveform strip (issue #57): the strip's colored regions come from the
+    # DIARIZATION TURNS, not the transcript segments — a segment carries only
+    # its dominant-overlap label, which is not an honest who-spoke-when map
+    # (it hides overlaps and untranscribed speech). Same palette as the list
+    # badges, so the colors can never disagree.
+    turn_rows = session.execute(
+        select(
+            DiarizationTurn.start_seconds,
+            DiarizationTurn.end_seconds,
+            DiarizationTurn.label,
+            DiarizationTurn.overlap,
+        )
+        .where(DiarizationTurn.pipeline_run_id == run_id)
+        .order_by(DiarizationTurn.start_seconds, DiarizationTurn.turn_index)
+    ).all()
+    # peaksUrl is server-owned truth like mediaUrl: non-null only when the
+    # peaks route could plausibly answer 200 — a cached envelope exists (it
+    # survives reclamation) or the WAV is servable so a first request can
+    # compute one. Otherwise null, and the island never issues a doomed fetch.
+    media_unavailable = any(
+        r.code in _MEDIA_UNAVAILABLE_CODES for r in capability.reasons
+    )
+    peaks_available = not media_unavailable or (
+        peaks_artifact_row(session, run_id) is not None
+    )
     return {
         "runId": str(run_id),
         "mediaUrl": f"/media/{run_id}",
+        "peaksUrl": f"/media/{run_id}/peaks" if peaks_available else None,
         "capability": capability.to_props(),
+        "turns": [
+            {
+                "start": start,
+                "end": end,
+                "paletteIndex": palette.get(label),
+                "overlap": overlap,
+            }
+            for start, end, label, overlap in turn_rows
+        ],
         # Low-confidence triage threshold (issue #53): the island and the JS-off
         # fallback compare against the SAME server setting, so they flag
         # identically. A segment with confidence None is never flagged.
@@ -2087,7 +2137,7 @@ def _register_routes(app: FastAPI) -> None:
         # DISTINCT queries, kept explicit so the shared universe is provable here.
         palette = speaker_palette(_run_label_universe(session, run_id))
         island_props = _transcript_island_props(
-            run_id, lines, palette, capability, settings
+            session, run_id, lines, palette, capability, settings
         )
         return templates.TemplateResponse(
             request,
@@ -2134,7 +2184,7 @@ def _register_routes(app: FastAPI) -> None:
         palette = speaker_palette(_run_label_universe(session, run_id))
         verified_n, total = verified_progress(session, run_id)
         island_props = _transcript_island_props(
-            run_id, lines, palette, capability, settings
+            session, run_id, lines, palette, capability, settings
         )
         # Extras the review loop needs beyond the shared display props.
         island_props["reviewToken"] = str(token) if token is not None else None
@@ -3603,9 +3653,84 @@ def _register_routes(app: FastAPI) -> None:
             _stream_file(fh, start, length), status_code=status, headers=headers
         )
 
+    @protected.get("/media/{run_id}/peaks")
+    def media_peaks(
+        run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        """Waveform amplitude envelope (issue #57): lazy compute, cached artifact.
+
+        Cache trust: while the WAV is live, the cached row's source fingerprint
+        is fstat-verified (prepare replaces the WAV before its DB commit, so a
+        crash can strand a stale row) and a mismatch recomputes. A reclaimed WAV
+        cannot be verified — the cache is served as-is so a static waveform
+        still renders (derived evidence, like the transcript itself survives
+        reclamation). No cache + no servable WAV answers with /media's honest
+        status (410 reclaimed, 404 missing/unservable); a WAV that cannot yield
+        trustworthy peaks answers 404 and caches nothing (fail closed).
+        """
+        settings = request.app.state.settings
+        _run_or_404(session, run_id)
+        media_root: Path = settings.media_root
+
+        cached = load_cached_peaks(session, run_id, media_root)
+        if cached is not None:
+            trusted = True
+            if run_intermediate_reclaimed_at(session, run_id) is None:
+                try:
+                    wav_path = normalized_audio_path(session, run_id, media_root)
+                except StageDataError:
+                    wav_path = None
+                if wav_path is not None:
+                    live = SourceFingerprint.of_path(wav_path)
+                    trusted = live is not None and live == cached.source_fingerprint
+            if trusted:
+                return _peaks_cache_response(request, cached.body, cached.artifact_id)
+            # Stale fingerprint: fall through and recompute from the live WAV.
+
+        gate = _get_media_gate(request)
+        try:
+            fh, _size = resolve_servable_media(session, run_id, settings, gate)
+        except MediaResolutionError as exc:
+            raise HTTPException(
+                status_code=exc.http_status, detail=f"waveform unavailable: {exc}"
+            ) from exc
+        try:
+            fingerprint = SourceFingerprint.of_descriptor(fh)
+            try:
+                payload = compute_peaks(fh)
+            except PeaksError as exc:
+                raise HTTPException(
+                    status_code=404, detail=f"waveform unavailable: {exc}"
+                ) from exc
+        finally:
+            fh.close()
+        row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
+        session.commit()
+        return _peaks_cache_response(request, payload.to_json_bytes(), row_id)
+
     # Mount the gated routes last: every @protected route above is now attached to
     # `app` behind require_onboarded, while the @app routes stay exempt.
     app.include_router(protected)
+
+
+def _peaks_cache_response(request: Request, body: bytes, artifact_id: uuid.UUID) -> Response:
+    """Serve the cached envelope with real conditional-GET semantics.
+
+    The artifact row UUID is a valid strong ETag because a row's bytes are
+    immutable once published — every refresh (re-prepare, stale-fingerprint
+    recompute) mints a new row or rewrites meta+file together before this is
+    called. ``no-cache`` forces revalidation, so a requeued run can never show
+    a stale waveform from the browser cache; the 304 makes that revalidation
+    cost one conditional GET.
+    """
+    etag = f'"{artifact_id}"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match is not None:
+        candidates = {v.strip() for v in if_none_match.split(",")}
+        if "*" in candidates or etag in candidates:
+            return Response(status_code=304, headers=headers)
+    return Response(content=body, media_type="application/json", headers=headers)
 
 
 def _stream_file(fh: BinaryIO, start: int, length: int) -> Iterator[bytes]:

@@ -7,9 +7,10 @@ description: >-
   real browser (Playwright MCP) asserting DOM + network behaviour, reconcile the
   durable state, then clean up. Use whenever verifying the transcript review loop
   end to end in a browser — verify/edit/skip/replay keys, click-to-edit, the
-  unsaved-edit discard warning, or the keymap suppression on focused form
-  controls — or when a Gate E release check calls for the browser lane. Serial
-  only on maintainer hardware; never public CI.
+  unsaved-edit discard warning, the keymap suppression on focused form
+  controls, or the waveform strip (#57: peaks fetch, region click → selection,
+  playhead/cursor sync) — or when a Gate E release check calls for the browser
+  lane. Serial only on maintainer hardware; never public CI.
 ---
 
 # Voxint browser E2E review lane
@@ -112,6 +113,43 @@ Note: `aria-current` on `p.tp-line` tracks the audio **playback** highlight, not
 the review cursor — assert the review cursor via the edit box's value and the
 "Reviewing segment at …" line, not `aria-current` (which stays put when the
 headless browser cannot play the audio element).
+
+### Waveform strip (#57)
+
+The strip (`[data-testid="waveform-strip"]`) mounts inside the player when the
+island's `peaksUrl` fetch succeeds. The seed writes quiet constant-amplitude
+audio plus one diarization turn per segment, so the strip renders five colored
+regions. Assert:
+
+- **Presence + single fetch:** the strip container and its `<canvas>` exist;
+  `browser_network_requests` shows exactly **one** `GET /media/<RUN_ID>/peaks`
+  (200) — no retry loop, and none of the other actions below add another.
+- **Region click → selection (+ seek):** via `browser_evaluate`, compute the
+  midpoint x of segment 2's span
+  (`(2.5 * 5.0 / duration) * canvas.getBoundingClientRect().width`) and
+  dispatch a click there → "Reviewing segment at 10.00s" appears, the
+  container's `data-cursor-index` is `2`, and (instrumented as for `p` above)
+  the audio element's `currentTime` lands inside `[10, 15)`. **No** `/verify`
+  or `/text` request fires — a region click is selection + playback, never a
+  write.
+- **Keymap ↔ strip sync:** press `n` → `data-cursor-index` advances to the next
+  unverified segment's index with no network request; press `p` → the playhead
+  div (`[data-testid="waveform-playhead"]`) is present and its `style.left`
+  moves off `0%` (instrument `play()` as usual — the headless browser may not
+  actually decode).
+- **Gap click is a no-op:** click the far right edge of the strip (past the
+  last segment's end, if the seed leaves tail silence) — cursor and network
+  both unchanged. Skip this check when the seed's segments tile the whole
+  duration.
+- **Peaks-absent degradation (spot-check, cheap):** `browser_evaluate`
+  `fetch('/media/<RUN_ID>/peaks').then(r => r.status)` must be 200 here; the
+  no-strip path (`peaksUrl: null` ⇒ no strip node, no `/peaks` request at all)
+  is already pinned server-side in
+  `tests/integration/test_runs_api.py::test_transcript_island_props_carry_turns_and_gate_peaks_url`
+  — do not rebuild a second seed just for it.
+
+The strip is `aria-hidden` (the list is the accessible surface): never assert
+on its accessibility tree, only `data-*` attributes, the canvas, and network.
 
 ## 3. Reconcile durable state, then always clean up
 

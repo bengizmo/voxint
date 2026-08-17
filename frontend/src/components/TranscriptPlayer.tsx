@@ -14,7 +14,9 @@ import {
   setStoredRate,
   type PlaybackCapability,
 } from "../lib/playback";
+import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
+import { WaveformStrip } from "./WaveformStrip";
 
 export interface Segment {
   start: number;
@@ -55,6 +57,14 @@ export interface TranscriptPlayerProps {
   // segment being played, never the one under a stale cursor. Absent on the
   // read-only transcript page, which stays byte-identical (play only).
   onSegmentSelect?: (index: number) => void;
+  // Waveform strip (issue #57). peaksUrl is server-owned truth: null/absent ⇒
+  // no fetch, no strip, rendered output unchanged. turns are the diarization
+  // regions the strip paints (an honest who-spoke-when map — see peaks.ts).
+  peaksUrl?: string | null;
+  turns?: Turn[];
+  // Review-cursor position for the strip's underline marker (ReviewStepper's
+  // `cursor`). Absent on the read-only surface.
+  cursorIndex?: number;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -102,12 +112,29 @@ export const TranscriptPlayer = forwardRef<
   TranscriptPlayerHandle,
   TranscriptPlayerProps
 >(function TranscriptPlayer(
-  { runId, mediaUrl, segments, capability, lowConfidenceThreshold, onSegmentSelect },
+  {
+    runId,
+    mediaUrl,
+    segments,
+    capability,
+    lowConfidenceThreshold,
+    onSegmentSelect,
+    peaksUrl,
+    turns,
+    cursorIndex,
+  },
   ref,
 ) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const [rate, setRate] = useState<number>(() => getStoredRate());
+  // Waveform envelope (issue #57): null until (and unless) the fetch succeeds
+  // and validates — the strip is pure enhancement, absent on any failure.
+  const [peaks, setPeaks] = useState<PeaksPayload | null>(null);
+  // Playhead position, quantized to 0.5s so timeupdate never re-renders more
+  // than ~2Hz (at overview scale one strip pixel spans far more than that).
+  const [playheadTime, setPlayheadTime] = useState<number>(0);
   // Follow-along: keep the active line in view as playback advances. Starts on;
   // any manual scroll turns it off; the single "Resume following" control turns
   // it back on. No always-on checkbox, no status dot.
@@ -137,6 +164,9 @@ export const TranscriptPlayer = forwardRef<
       const t = audio.currentTime;
       const idx = segments.findIndex((seg) => t >= seg.start && t < seg.end);
       setActiveIndex(idx);
+      // Quantized: setState with an unchanged value skips the re-render, so
+      // this costs nothing between half-second boundaries.
+      setPlayheadTime(Math.round(t * 2) / 2);
     };
     audio.addEventListener("timeupdate", onTimeUpdate);
     return () => {
@@ -191,6 +221,22 @@ export const TranscriptPlayer = forwardRef<
     if (audio) audio.playbackRate = rate;
   }, [rate]);
 
+  // One aborted-on-unmount peaks fetch (issue #57). No peaksUrl ⇒ nothing —
+  // the server sends null when the route would only 404/410. The Abort +
+  // stale-check pair keeps StrictMode's double-mount and a mid-flight prop
+  // change from applying a superseded response.
+  useEffect(() => {
+    setPeaks(null);
+    if (!peaksUrl) return;
+    const controller = new AbortController();
+    void fetchPeaks(peaksUrl, controller.signal).then((payload) => {
+      if (!controller.signal.aborted) setPeaks(payload);
+    });
+    return () => {
+      controller.abort();
+    };
+  }, [peaksUrl]);
+
   const seek = capability.seekEnabled;
   const play = (seg: Segment) => {
     const audio = audioRef.current;
@@ -202,6 +248,23 @@ export const TranscriptPlayer = forwardRef<
   const activateLine = (index: number, seg: Segment) => {
     play(seg);
     onSegmentSelect?.(index);
+  };
+  // A waveform-region click (issue #57): ALWAYS select + reveal the segment in
+  // the list (selection is a reading act), and additionally play it only when
+  // seeking is trusted — the strip itself never touches the audio element, so
+  // the fail-closed gate stays structural.
+  const onRegionActivate = (index: number) => {
+    const seg = segments[index];
+    if (!seg) return;
+    onSegmentSelect?.(index);
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-seg-index="${index}"]`,
+    );
+    if (el) {
+      scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
+      el.scrollIntoView({ block: "nearest" });
+    }
+    play(seg);
   };
   const onRateChange = (next: number) => {
     setRate(next);
@@ -234,16 +297,38 @@ export const TranscriptPlayer = forwardRef<
       <div className="flex items-center my-2">
         <SpeedControl rate={rate} onChange={onRateChange} />
         {!following && (
-          <button type="button" onClick={resumeFollowing} className="text-sm mr-2">
+          <button
+            type="button"
+            onClick={resumeFollowing}
+            className="text-sm mr-2"
+          >
             Resume following
           </button>
         )}
       </div>
-      <audio ref={audioRef} controls src={mediaUrl} className="w-full my-2" data-run-id={runId}>
+      <audio
+        ref={audioRef}
+        controls
+        src={mediaUrl}
+        className="w-full my-2"
+        data-run-id={runId}
+      >
         Your browser does not support the audio element.
       </audio>
+      {peaks && (
+        <WaveformStrip
+          peaks={peaks}
+          turns={turns ?? []}
+          segments={segments}
+          activeIndex={activeIndex}
+          cursorIndex={cursorIndex}
+          seekEnabled={seek}
+          currentTime={playheadTime}
+          onRegionActivate={onRegionActivate}
+        />
+      )}
       <CapabilityBanner capability={capability} />
-      <div>
+      <div ref={listRef}>
         {segments.map((seg, i) => {
           const active = i === activeIndex;
           // Uncertain is a NON-background cue (a dashed underline + chip): the
@@ -259,11 +344,18 @@ export const TranscriptPlayer = forwardRef<
             <p
               key={`${seg.start}-${i}`}
               ref={active ? activeLineRef : undefined}
+              data-seg-index={i}
               className={classes.join(" ")}
               aria-current={active ? "true" : undefined}
               // Click-the-line-to-seek (issue #49). Only a hint when seeking is
               // disabled — the button carries the accessible affordance.
-              onClick={seek ? () => { activateLine(i, seg); } : undefined}
+              onClick={
+                seek
+                  ? () => {
+                      activateLine(i, seg);
+                    }
+                  : undefined
+              }
               style={seek ? { cursor: "pointer" } : undefined}
             >
               <button
@@ -290,8 +382,11 @@ export const TranscriptPlayer = forwardRef<
                   uncertain
                 </span>
               )}
-              {seg.label != null && <span className="spk-badge">{seg.label}</span>}
-              {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>} {seg.text}
+              {seg.label != null && (
+                <span className="spk-badge">{seg.label}</span>
+              )}
+              {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>}{" "}
+              {seg.text}
             </p>
           );
         })}

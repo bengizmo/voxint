@@ -683,6 +683,42 @@ def test_transcript_island_props_carry_palette_and_label(
     assert [s["paletteIndex"] for s in segments] == [0, 1]
 
 
+def test_transcript_island_props_carry_turns_and_gate_peaks_url(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Issue #57: the waveform strip paints DIARIZATION TURNS (the honest
+    # who-spoke-when record), serialized in (start, turn_index) order with the
+    # SAME palette indices the segment list uses. peaksUrl is server-owned
+    # truth: this run has no servable media and no cached envelope, so it is
+    # null and the island never issues a doomed fetch.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            segments=[
+                ("S0", "s0 raw", "s0 enh"),
+                ("S1", "s1 raw", "s1 enh"),
+            ],
+        )
+    body = client.get(f"/runs/{run_id}/transcript", params={"text": "enhanced"}).text
+    props = _island_props(body)
+    assert props["turns"] == [
+        {"start": 0.0, "end": 8.0, "paletteIndex": 0, "overlap": False},
+        {"start": 10.0, "end": 18.0, "paletteIndex": 1, "overlap": False},
+    ]
+    # Turn colors can never diverge from the list badges: same palette mapping.
+    seg_palette = {s["label"]: s["paletteIndex"] for s in props["segments"]}
+    assert [t["paletteIndex"] for t in props["turns"]] == [
+        seg_palette["S0"],
+        seg_palette["S1"],
+    ]
+    assert props["peaksUrl"] is None
+    # The strip is island-only enhancement: the JS-off fallback carries no
+    # waveform markup (its absence IS the fallback).
+    assert "waveform-strip" not in body
+
+
 def test_transcript_fallback_lines_carry_color_class_and_badge(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

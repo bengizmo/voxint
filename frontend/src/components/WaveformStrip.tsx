@@ -1,0 +1,264 @@
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+
+import type { PeaksPayload, Turn } from "../lib/peaks";
+import { segmentAtTime } from "../lib/peaks";
+import type { Segment } from "./TranscriptPlayer";
+
+// Who-spoke-when waveform strip (issue #57). One DPR-aware canvas: mirrored
+// amplitude bars from the precomputed peaks, tinted per DIARIZATION TURN with
+// the same `--spk-accent` palette the list badges use (turns are the honest
+// speaker record; transcript segments only carry a dominant label). A click
+// maps time → transcript segment and reports it upward — the strip itself
+// NEVER touches the audio element, so the fail-closed seek gate (issue #55)
+// stays structural: the only seek path is the caller's gated playTurn.
+//
+// aria-hidden by design: every action here (select / play a segment) exists in
+// the accessible list with real buttons; exposing 2000 canvas regions to AT
+// would be noise, not access. The data-* attributes are for the E2E lane.
+
+interface WaveformStripProps {
+  peaks: PeaksPayload;
+  turns: Turn[];
+  segments: Segment[];
+  // Playback follow-along emphasis (index into `segments`, -1 when none).
+  activeIndex: number;
+  // Review-cursor marker (underline). Absent on the read-only surface.
+  cursorIndex?: number;
+  seekEnabled: boolean;
+  // Quantized playhead position (seconds). Hidden when seeking is untrusted —
+  // a playback affordance would over-promise on an unreliable timeline.
+  currentTime: number;
+  onRegionActivate: (index: number) => void;
+}
+
+const STRIP_HEIGHT = 72;
+const PALETTE_SIZE = 8; // mirrors speaker_colors.PALETTE_SIZE
+const NEUTRAL_BAR = "#88888c";
+
+// Resolve the run palette's CSS accents from probe spans so the canvas uses
+// EXACTLY the colors the stylesheet (light or dark) currently resolves to.
+function resolveAccents(probes: HTMLElement | null): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < PALETTE_SIZE; i += 1) {
+    const el = probes?.querySelector<HTMLElement>(`.spk-${i}`);
+    const v = el
+      ? getComputedStyle(el).getPropertyValue("--spk-accent").trim()
+      : "";
+    out.push(v || NEUTRAL_BAR);
+  }
+  return out;
+}
+
+export function WaveformStrip({
+  peaks,
+  turns,
+  segments,
+  activeIndex,
+  cursorIndex,
+  seekEnabled,
+  currentTime,
+  onRegionActivate,
+}: WaveformStripProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const probesRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<number>(0);
+  // Bumped when the color scheme flips so the draw effect re-resolves accents.
+  const [themeEpoch, setThemeEpoch] = useState<number>(0);
+
+  // Track the rendered width (ResizeObserver, not window resize: the strip
+  // lives in a variable-width column).
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0;
+      setWidth(Math.round(w));
+    });
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => {
+      setThemeEpoch((n) => n + 1);
+    };
+    mq.addEventListener("change", onChange);
+    return () => {
+      mq.removeEventListener("change", onChange);
+    };
+  }, []);
+
+  // Full repaint. Runs only on mount / resize / theme flip / emphasis change —
+  // never per playback frame (the playhead is a separately-positioned div).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || width <= 0) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(STRIP_HEIGHT * dpr);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, STRIP_HEIGHT);
+
+    const accents = resolveAccents(probesRef.current);
+    const accentOf = (paletteIndex: number | null): string =>
+      paletteIndex != null && paletteIndex >= 0 && paletteIndex < accents.length
+        ? accents[paletteIndex]
+        : NEUTRAL_BAR;
+    const { duration } = peaks;
+    const xOf = (t: number): number =>
+      Math.max(0, Math.min(width, (t / duration) * width));
+    const mid = STRIP_HEIGHT / 2;
+    const buckets = peaks.peaks.length;
+
+    // 1. Region backdrops: a faint full-height tint per turn, painted in
+    //    (start, turn_index) order so a later turn wins visually — the same
+    //    deterministic rule everywhere. Regions must read even during silence.
+    for (const turn of turns) {
+      const x0 = xOf(turn.start);
+      const x1 = xOf(turn.end);
+      if (x1 <= x0) continue;
+      ctx.globalAlpha = 0.16;
+      ctx.fillStyle = accentOf(turn.paletteIndex);
+      ctx.fillRect(x0, 0, x1 - x0, STRIP_HEIGHT);
+    }
+
+    // 2. Bars: color each fixed bucket by the LAST turn covering its center
+    //    (same later-wins rule); uncovered buckets stay neutral.
+    const bucketColor: string[] = new Array<string>(buckets).fill(NEUTRAL_BAR);
+    const covered: boolean[] = new Array<boolean>(buckets).fill(false);
+    for (const turn of turns) {
+      const b0 = Math.max(0, Math.floor((turn.start / duration) * buckets));
+      const b1 = Math.min(buckets, Math.ceil((turn.end / duration) * buckets));
+      const color = accentOf(turn.paletteIndex);
+      for (let b = b0; b < b1; b += 1) {
+        bucketColor[b] = color;
+        covered[b] = true;
+      }
+    }
+    const barW = width / buckets;
+    for (let b = 0; b < buckets; b += 1) {
+      const amp = Math.max(peaks.peaks[b] * (mid - 2), 0.75);
+      ctx.globalAlpha = covered[b] ? 0.9 : 0.45;
+      ctx.fillStyle = bucketColor[b];
+      ctx.fillRect(b * barW, mid - amp, Math.max(barW * 0.8, 0.5), amp * 2);
+    }
+
+    // 3. Overlap marker: diagonal hatching where the diarizer flagged two
+    //    voices — an honest "not one speaker here" cue.
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = NEUTRAL_BAR;
+    ctx.lineWidth = 1;
+    for (const turn of turns) {
+      if (!turn.overlap) continue;
+      const x0 = xOf(turn.start);
+      const x1 = xOf(turn.end);
+      if (x1 <= x0) continue;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(x0, 0, x1 - x0, STRIP_HEIGHT);
+      ctx.clip();
+      ctx.beginPath();
+      for (let x = x0 - STRIP_HEIGHT; x < x1; x += 6) {
+        ctx.moveTo(x, STRIP_HEIGHT);
+        ctx.lineTo(x + STRIP_HEIGHT, 0);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // 4. Emphasis from the LIST's state (segments, not turns): the playing
+    //    segment gets a brighter full-height tint; the review cursor gets a
+    //    3px underline in its accent.
+    const active = activeIndex >= 0 ? segments[activeIndex] : undefined;
+    if (active) {
+      ctx.globalAlpha = 0.28;
+      ctx.fillStyle = accentOf(active.paletteIndex);
+      ctx.fillRect(
+        xOf(active.start),
+        0,
+        Math.max(xOf(active.end) - xOf(active.start), 1),
+        STRIP_HEIGHT,
+      );
+    }
+    const cursor =
+      cursorIndex != null && cursorIndex >= 0
+        ? segments[cursorIndex]
+        : undefined;
+    if (cursor) {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = accentOf(cursor.paletteIndex);
+      ctx.fillRect(
+        xOf(cursor.start),
+        STRIP_HEIGHT - 3,
+        Math.max(xOf(cursor.end) - xOf(cursor.start), 2),
+        3,
+      );
+    }
+    ctx.globalAlpha = 1;
+  }, [peaks, turns, segments, activeIndex, cursorIndex, width, themeEpoch]);
+
+  const onClick = useCallback(
+    (event: React.MouseEvent<HTMLCanvasElement>) => {
+      const canvas = canvasRef.current;
+      if (!canvas || width <= 0) return;
+      const rect = canvas.getBoundingClientRect();
+      const t = ((event.clientX - rect.left) / rect.width) * peaks.duration;
+      const index = segmentAtTime(segments, t);
+      if (index >= 0) onRegionActivate(index);
+    },
+    [segments, peaks.duration, width, onRegionActivate],
+  );
+
+  const playheadPct =
+    seekEnabled && Number.isFinite(currentTime) && currentTime > 0
+      ? Math.min((currentTime / peaks.duration) * 100, 100)
+      : null;
+
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="waveform-strip"
+      data-active-index={activeIndex}
+      data-cursor-index={cursorIndex ?? -1}
+      className="relative w-full my-2 rounded border border-[#8886] overflow-hidden"
+      style={{ height: STRIP_HEIGHT }}
+      title={
+        seekEnabled
+          ? "Who spoke when — click to play that part"
+          : "Who spoke when — seeking is unavailable, so clicking only shows the segment in the list"
+      }
+    >
+      {/* Palette probes: resolve the stylesheet's current --spk-accent values
+          (light/dark) without duplicating them in JS. */}
+      <div ref={probesRef} className="hidden">
+        {Array.from({ length: PALETTE_SIZE }, (_, i) => (
+          <span key={i} className={`spk-${i}`} />
+        ))}
+      </div>
+      <canvas
+        ref={canvasRef}
+        onClick={onClick}
+        className="block w-full h-full"
+        style={{ cursor: "pointer" }}
+      />
+      {playheadPct != null && (
+        <div
+          data-testid="waveform-playhead"
+          className="absolute top-0 bottom-0 w-[1.5px] bg-current pointer-events-none"
+          style={{ left: `${playheadPct}%` }}
+        />
+      )}
+    </div>
+  );
+}

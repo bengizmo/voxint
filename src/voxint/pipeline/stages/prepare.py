@@ -48,10 +48,18 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     media.duration_seconds = info.duration_seconds
     media.size_bytes = source.stat().st_size
 
+    # Also drop any waveform-peaks cache (issue #57): the WAV it described no
+    # longer exists, and its row-level source fingerprint would fail anyway —
+    # deleting here keeps re-runs from serving a stale envelope even briefly.
     session.execute(
         delete(AudioArtifact).where(
             AudioArtifact.pipeline_run_id == run_id,
-            AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
+            AudioArtifact.kind.in_(
+                (
+                    ArtifactKind.PREPROCESSED_AUDIO.value,
+                    ArtifactKind.WAVEFORM_PEAKS.value,
+                )
+            ),
         )
     )
     session.add(
