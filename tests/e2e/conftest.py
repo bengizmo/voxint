@@ -256,12 +256,16 @@ def llm_config(settings: Settings) -> LLMConfig:
       not resolve → **fail** (a configured-but-broken lane must not go green,
       exactly as a device fallback fails the model-service gate).
 
-    Enablement is read from ``Settings`` (env / .env): the lane is "configured"
-    when ``LLM_ENABLED`` and ``ENRICHMENT_RUN_ASSETS_ENABLED`` are true and a
-    model alias is set. The endpoint URL / model / key live in the operator's
-    environment (gitignored ``internal/``), never in this committed file.
+    Enablement is read from ``Settings`` (env / .env): the two feature flags
+    ``LLM_ENABLED`` and ``ENRICHMENT_RUN_ASSETS_ENABLED`` are the *intent* signal,
+    and they alone decide skip-vs-run. ``LLM_BASE_URL``/``LLM_MODEL`` carry
+    non-empty defaults (OpenAI / gpt-4o-mini), so an operator who flips the flags
+    on but leaves the endpoint wrong is "configured but broken", not unconfigured —
+    the ``/models`` probe below then FAILS rather than skips (Kimi review). The
+    endpoint URL / model / key live in the operator's environment (gitignored
+    ``internal/``), never in this committed file.
     """
-    if not (settings.llm_enabled and settings.enrichment_run_assets_enabled and settings.llm_model):
+    if not (settings.llm_enabled and settings.enrichment_run_assets_enabled):
         pytest.skip(
             "LLM enrichment lane not configured — set LLM_ENABLED=true, "
             "ENRICHMENT_RUN_ASSETS_ENABLED=true, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY "

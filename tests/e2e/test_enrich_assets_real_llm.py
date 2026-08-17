@@ -38,6 +38,7 @@ import uuid
 
 import httpx
 import pytest
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.adjudication.review_state import set_correction
@@ -56,6 +57,7 @@ from voxint.db.models import (
 )
 from voxint.enrichment.asset_jobs import create_jobs, execute_job, kinds_needing_generation
 from voxint.enrichment.producers.run_assets_llm import (
+    CONFIG_SCHEMA_VERSION,
     PRODUCER_NAME,
     PRODUCER_VERSION,
     PROMPT_VERSION,
@@ -172,10 +174,19 @@ def test_real_llm_summary_chain(
         assert _SHA256_HEX.match(asset.source_content_hash or ""), (
             f"source_content_hash is not a sha256 hex: {asset.source_content_hash!r}"
         )
-        assert isinstance(asset.config, dict)
-        assert asset.config["prompt_version"] == PROMPT_VERSION
-        assert asset.config["producer_version"] == PRODUCER_VERSION
-        assert asset.config["model"] == settings.llm_model
+        # The WHOLE config snapshot, not a subset — a persisted snapshot that
+        # dropped or corrupted base_url / max_input_chars / truncated must not slip
+        # through a partial check (Codex review). `truncated` is deterministically
+        # False here: the seeded transcript is far under run_assets_max_input_chars.
+        assert asset.config == {
+            "producer_version": PRODUCER_VERSION,
+            "prompt_version": PROMPT_VERSION,
+            "model": settings.llm_model,
+            "base_url": settings.llm_base_url,
+            "max_input_chars": settings.run_assets_max_input_chars,
+            "truncated": False,
+        }
+        assert asset.config_schema_version == CONFIG_SCHEMA_VERSION
 
         # The stored hash must equal a fresh recompute over the same source, or
         # the asset would be born stale.
@@ -229,11 +240,9 @@ class _MockLLMClient:
     verdict is production code.
     """
 
-    def __init__(self, body: dict[str, object]) -> None:
+    def __init__(self, content: str) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(
-                200, json={"choices": [{"message": {"content": json.dumps(body)}}]}
-            )
+            return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
         self._transport = httpx.Client(
             transport=httpx.MockTransport(handler), base_url="http://stub.invalid"
@@ -253,28 +262,55 @@ class _MockLLMClient:
         self._transport.close()
 
 
+@pytest.mark.parametrize(
+    ("content", "error_fragment"),
+    [
+        # A well-formed envelope whose summary is blank → _parse_summary rejects it.
+        pytest.param(json.dumps({"summary": ""}), "no usable summary", id="blank-summary"),
+        # The missing key path lands in the same rejection.
+        pytest.param(json.dumps({}), "no usable summary", id="missing-summary-key"),
+        # The most common REAL reasoning-model failure: prose / reasoning leaks
+        # into `content` instead of a JSON object → the adapter's json.loads fails.
+        pytest.param("Here is your summary: the team met.", "not valid JSON", id="prose-not-json"),
+    ],
+)
 def test_malformed_summary_reply_is_honest_failure(
+    content: str,
+    error_fragment: str,
     session_factory: sessionmaker[Session],
     settings: Settings,
     llm_config: LLMConfig,
 ) -> None:
-    """Step 6: a 200 reply with an unusable summary fails the job honestly —
-    ``failed`` status, a closed-vocabulary error, and NO asset (not partial)."""
+    """Step 6: a 200 reply that cannot become a usable summary fails the job
+    honestly — ``failed`` status, a closed-vocabulary error, and NO asset row at
+    all (not a partial or an orphaned non-current asset)."""
     run_id = seed_completed_run(session_factory)
     job_id = _create_summary_job(session_factory, run_id, settings)
 
-    # A well-formed envelope whose summary is blank → _parse_summary rejects it.
-    with _MockLLMClient({"summary": ""}) as llm:
+    with _MockLLMClient(content) as llm:
         execute_job(session_factory, job_id, settings=settings, llm=llm)
 
     with session_factory() as session:
         job = session.get(RunAssetJob, job_id)
         assert job is not None
         assert job.status == RunAssetJobStatus.FAILED.value, f"expected FAILED, got {job.status}"
-        assert job.error is not None and "no usable summary" in job.error, (
-            f"error should name the unusable summary, got {job.error!r}"
+        assert job.error is not None and error_fragment in job.error, (
+            f"error should contain {error_fragment!r}, got {job.error!r}"
         )
         assert job.asset_id is None, "a failed job must record no asset"
+        # Prove NO asset row exists at all — not merely no *current* one. An
+        # orphaned, already-superseded asset would escape a latest_assets() check
+        # (which returns only current rows) yet still violate the "no asset"
+        # contract (Codex review).
+        total = session.execute(
+            select(func.count())
+            .select_from(RunEnrichmentAsset)
+            .where(
+                RunEnrichmentAsset.pipeline_run_id == run_id,
+                RunEnrichmentAsset.asset_kind == RunAssetKind.SUMMARY.value,
+            )
+        ).scalar_one()
+        assert total == 0, "a failed generation must persist no asset row at all"
         assert "summary" not in latest_assets(session, run_id), (
             "a failed generation must not leave a current summary asset"
         )
