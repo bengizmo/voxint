@@ -143,13 +143,27 @@ VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
 Expect COMPLETED runs with the persistence invariants intact and no
 model-service restarts. Keep it serial. `VOXINT_E2E=1` makes a missing
 prerequisite a hard failure, not a skip — see
-[`testing.md`](testing.md#automated-e2e-testse2e). (The LLM and browser lanes of
-this suite are still being built; this gate currently covers the pipeline lane.)
+[`testing.md`](testing.md#automated-e2e-testse2e).
+
+To also gate the **real-LLM enrichment lane** (a real `HttpLLMClient` against a
+real endpoint — the summary chain), set the enrichment LLM env before the run
+(the endpoint URL, model alias, and key live in the maintainer's environment,
+never in the repo):
+
+```bash
+export LLM_ENABLED=true ENRICHMENT_RUN_ASSETS_ENABLED=true
+export LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=...
+```
+
+That lane is an optional sub-lane: unconfigured it skips, configured-but-broken
+it fails (see [`testing.md`](testing.md#gate-semantics)). (The browser lane of
+this suite is still being built.)
 
 Gate E's carry-over is **pipeline-aware**, not services-only: it exercises the
-whole submit→persist chain, so it must re-run whenever anything it measures could
-have changed. Carry the previous release's Gate-E evidence only when
-`git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/db/ tests/e2e/`
+whole submit→persist chain plus the real-LLM enrichment chain, so it must re-run
+whenever anything it measures could have changed. Carry the previous release's
+Gate-E evidence only when
+`git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/enrichment/ src/voxint/db/ tests/e2e/`
 is empty; otherwise re-run it before tagging. (Gates A/R below stay
 `services/`-scoped — they measure the model services in isolation.)
 

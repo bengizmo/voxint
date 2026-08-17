@@ -35,6 +35,7 @@ import os
 import shutil
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -223,6 +224,76 @@ def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
         conn.commit()
+
+
+@dataclass(frozen=True)
+class LLMConfig:
+    """The resolved, verified LLM endpoint for the real-enrichment lane.
+
+    ``resolved_identity`` is the concrete backend the alias routed to at gate
+    time (an endpoint's ``root``/served-model field). A LiteLLM/vLLM alias can
+    be silently repointed at different weights; recording what it resolved to
+    turns that kind of reroute into a named signal instead of an invisible
+    flake in the summary text.
+    """
+
+    base_url: str
+    model: str
+    resolved_identity: str
+
+
+@pytest.fixture(scope="session")
+def llm_config(settings: Settings) -> LLMConfig:
+    """Gate + resolve the real LLM endpoint for the enrichment lane.
+
+    Asymmetric like ``model_services``, but with an extra *unconfigured* rung —
+    the LLM lane is an OPTIONAL sub-lane of the E2E gate. An operator may run the
+    real-pipeline lane (Phase 1) without wiring an LLM, so:
+
+    * LLM not enabled / no model configured → **skip** these tests (unconfigured);
+      never fail — the operator did not ask for the LLM lane.
+    * enabled AND configured, but the endpoint is unreachable or the alias does
+      not resolve → **fail** (a configured-but-broken lane must not go green,
+      exactly as a device fallback fails the model-service gate).
+
+    Enablement is read from ``Settings`` (env / .env): the lane is "configured"
+    when ``LLM_ENABLED`` and ``ENRICHMENT_RUN_ASSETS_ENABLED`` are true and a
+    model alias is set. The endpoint URL / model / key live in the operator's
+    environment (gitignored ``internal/``), never in this committed file.
+    """
+    if not (settings.llm_enabled and settings.enrichment_run_assets_enabled and settings.llm_model):
+        pytest.skip(
+            "LLM enrichment lane not configured — set LLM_ENABLED=true, "
+            "ENRICHMENT_RUN_ASSETS_ENABLED=true, LLM_BASE_URL, LLM_MODEL, LLM_API_KEY "
+            "to exercise it (optional sub-lane of the E2E gate)."
+        )
+    base_url = settings.llm_base_url.rstrip("/")
+    headers = {"Authorization": f"Bearer {settings.llm_api_key}"} if settings.llm_api_key else {}
+    try:
+        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=15.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as exc:  # unreachable / non-JSON
+        pytest.fail(
+            f"VOXINT_E2E=1 and the LLM lane is configured, but its endpoint "
+            f"{base_url} is not answering /models: {exc}"
+        )
+    entries = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        pytest.fail(f"LLM endpoint {base_url}/models did not return a model list: {data!r:.200}")
+    match = next(
+        (e for e in entries if isinstance(e, dict) and e.get("id") == settings.llm_model), None
+    )
+    if match is None:
+        available = sorted(str(e.get("id")) for e in entries if isinstance(e, dict))
+        pytest.fail(
+            f"LLM alias {settings.llm_model!r} does not resolve at {base_url}; "
+            f"available: {available}"
+        )
+    resolved = str(match.get("root") or match.get("id"))
+    return LLMConfig(
+        base_url=settings.llm_base_url, model=settings.llm_model, resolved_identity=resolved
+    )
 
 
 @pytest.fixture()

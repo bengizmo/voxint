@@ -12,7 +12,7 @@ doctrine — see [`gpu-contracts.md`](gpu-contracts.md) and the parity notes bel
 | Contracts | `tests/contracts/` | Invariants that would rot silently: version-pin parity across pyproject/compose/`.env.example`, Dockerfile sha ARGs ↔ provenance, restart policies, routes/schemas, the **frontend build/island wiring** (`test_frontend_build.py`). | nothing |
 | Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, dashboard, migrations). | a pgvector database |
 | Parity | `tests/parity/` | Model-output equivalence gates (mel / vector / decision) against committed CUDA references. Real audio fixtures live under `tests/parity/fixtures/`. | strict mode: `VOXINT_PARITY_REQUIRED=1` |
-| E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Maintainer-run, opt-in gate — **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running (see below) |
+| E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Plus a **real-LLM** enrichment lane (real `HttpLLMClient` → real endpoint) that gates the summary chain. Maintainer-run, opt-in gate — **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running; the LLM lane also needs the enrichment LLM env (see below) |
 
 The layout is the standard `pytest` tree; add a test in the same commit that adds
 the behaviour or invariant it guards (a new island → a row in
@@ -148,11 +148,23 @@ It is built in lanes; **landed so far:**
   bit-deterministic). Two serial runs are checked for clean repetition with no
   cross-run leakage.
 
-**Still upcoming** (tracked in the maintainer plan, not yet committed): a
-real-LLM lane for the enrichment producers (the run-asset summary/topics/entity
-generators bypass the UI's LLM toggle and read `LLM_ENABLED` +
-`LLM_BASE_URL/MODEL/API_KEY` from the environment; see
-[`operations.md`](operations.md) and `src/voxint/enrichment/`), and a browser
+- **Real LLM — enrichment summary** (`test_enrich_assets_real_llm.py`) — the one
+  lane that drives a real `HttpLLMClient` against a real OpenAI-compatible
+  endpoint (every other enrichment test injects a `FakeLLM`). It gates the
+  **chain, not the prose**: a seeded COMPLETED run's transcript is fed to
+  `voxint enrich assets`' code path (`create_jobs` → `execute_job` with the real
+  client), and it asserts the endpoint is reachable, the durable job reaches
+  `succeeded` with `error` NULL, a *current* summary asset persists with the
+  expected producer/prompt version + model alias + `config` snapshot + a
+  well-formed `source_content_hash`, the asset is non-stale immediately after
+  generation, one real operator correction re-stales it, and a malformed model
+  reply yields an honest `failed` job (no asset, no partial success). The
+  summary's semantic quality is *characterized* (printed), never asserted — a
+  real, nondeterministic model produces the text, so an assertion on it would be
+  a flake. The transcript is seeded (not produced by the pipeline) to isolate the
+  LLM boundary — a failure names the LLM chain, not an upstream model service.
+
+**Still upcoming** (tracked in the maintainer plan, not yet committed): a browser
 lane that drives the review-console UI and reconciles durable state — that lane
 will replace the **manual browser pass above** when it lands.
 
@@ -167,6 +179,14 @@ can never go green by skipping itself:
   health, or a wrong `/healthz` device identity) is a **hard failure, not a
   skip**.
 
+The real-LLM lane is an **optional sub-lane** with one extra rung: it is skipped
+(never failed) when the LLM env is not configured — an operator may run the
+pipeline lane without wiring an LLM — but once configured (`LLM_ENABLED=true`,
+`ENRICHMENT_RUN_ASSETS_ENABLED=true`, a model alias set), an unreachable endpoint
+or an alias that does not resolve is a **hard failure**. The gate records the
+concrete backend the alias resolved to, so a silent reroute to different weights
+is a named signal rather than an invisible change in the summary text.
+
 ### Running it
 
 Bring up the model services on a lane your host supports (host-specific
@@ -176,6 +196,15 @@ rebuilt from the alembic chain — never the live `voxint` DB):
 
 ```bash
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
+VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
+```
+
+To include the real-LLM lane, also set the enrichment LLM env (endpoint URL,
+model alias, and key live in your own environment, never in the repo):
+
+```bash
+export LLM_ENABLED=true ENRICHMENT_RUN_ASSETS_ENABLED=true
+export LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=...
 VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
 ```
 
