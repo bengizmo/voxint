@@ -713,6 +713,29 @@ out of `KNOWN_ENGINES`. Next measured candidate arm: **whisper.cpp Metal**
 (has beam search and int8-family quantization, addressing both measured root
 causes); CT2-MPS remains deferred (upstream PR OpenNMT/CTranslate2#2077).
 
+**Measured verdict — whisper.cpp (2026-08-17): documented-ineligible in
+current form.** The same 4-file screen (same harness, frozen baseline, and
+per-window feeding) measured whisper.cpp Metal (`pywhispercpp==1.5.0`,
+`ggml-large-v2-q8_0`, beam_size 5, CT2-parity decode map incl.
+`suppress_nst`) at worst-file WER-diff **98.57 pp** (EN2002c) vs the ≤5 pp
+bound and pooled **11.60 pp** vs ≤2.0 pp. Clean-file drift is largely solved
+(ES2009a 0.92 pp, IS1004d 4.79 pp — inside the per-file bound; ES2009a beats
+CT2 against gold) and reconstructed `avg_logprob` confidence matches CT2 with
+MAE 0.002–0.016 where transcripts agree, but the EN2002c failure is the same
+confident-crosstalk transcription that killed mlx, and measured attribution
+shows no decode knob reaches it: whisper.cpp's `beam_size=5` output ≈ its
+greedy output (its "beam" *samples* candidates via `std::discrete_distribution`
+rather than expanding top-k, so the true-beam-suppression hypothesis was
+never actually exercised), and an f16 control reproduces the Q8_0 blowup
+word-for-word-scale (quantization irrelevant). Performance again not the
+blocker (≈1.58× pooled, indicative). Re-measure only if upstream whisper.cpp
+lands true top-k beam expansion — the strongest recorded re-measure trigger,
+since every other gate dimension screened is passing or near-passing. Full
+evidence: `docs/reports/whisper-metal-bakeoff-whispercpp-arm-2026-08-17.md`.
+With mlx and whisper.cpp both measured-ineligible and CT2-MPS deferred
+upstream, no Metal `WHISPER_ENGINE` candidate is currently eligible; `ct2`
+remains the default and only shipped engine.
+
 ## Contract tests
 
 `tests/contracts/` validates (CPU-only, no model deps) that:
