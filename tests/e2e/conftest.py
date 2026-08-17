@@ -36,6 +36,7 @@ import shutil
 import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 import pytest
@@ -46,8 +47,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.config import Settings
 from voxint.db.models import Base
+from voxint.pipeline.stages.context import StageContext, build_stage_context
 
-E2E_ENABLED = os.environ.get("VOXINT_E2E") is not None
+# Enabled by a truthy VOXINT_E2E. Deliberately treat unset / empty / "0" / "false"
+# as OFF: an explicit ``VOXINT_E2E=0`` reads as "off" to any operator, and turning
+# the destructive lane ON for it would be the opposite of the fail-safe intent.
+E2E_ENABLED = os.environ.get("VOXINT_E2E", "").strip().lower() not in ("", "0", "false", "no")
 TEST_DB_URL = os.environ.get("VOXINT_TEST_DATABASE_URL")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TUTORIAL_WAV = REPO_ROOT / "src" / "voxint" / "tutorial" / "assets" / "sample-3speaker.wav"
@@ -119,21 +124,52 @@ def assert_service_identity(base_url: str, expected: dict[str, str]) -> None:
             )
 
 
+def _assert_disposable_db(url: str) -> None:
+    """Refuse to run against anything that is not unmistakably a throwaway DB.
+
+    The ``engine`` fixture opens with ``DROP SCHEMA public CASCADE`` — pointed at
+    the live ``voxint`` database (a typo in ``VOXINT_TEST_DATABASE_URL`` is all it
+    takes) that silently destroys the operator's data before a single test runs.
+    Fail closed: the database name must carry an explicit disposable marker
+    (``test`` or ``e2e``). The live database is named ``voxint`` and is rejected.
+    """
+    db_name = urlsplit(url).path.lstrip("/").lower()
+    if not db_name or ("test" not in db_name and "e2e" not in db_name):
+        pytest.fail(
+            "VOXINT_TEST_DATABASE_URL must name a DISPOSABLE database whose name "
+            f"contains 'test' or 'e2e' (its schema is dropped and rebuilt); got "
+            f"{db_name!r}. Refusing to run destructive setup against a database "
+            "that could be live data."
+        )
+
+
 @pytest.fixture(scope="session")
 def settings() -> Settings:
     """Application settings for the E2E lane, pinned to the disposable test DB.
 
-    Fails (not skips) when the test DB URL is absent: an explicit E2E run with no
-    isolated database is a misconfiguration, and we must never silently fall back
-    to ``Settings``' default live DSN.
+    Fails (not skips) when the test DB URL is absent or not clearly disposable: an
+    explicit E2E run with no isolated database is a misconfiguration, and we must
+    never silently fall back to ``Settings``' default live DSN nor drop the live
+    schema.
     """
     if TEST_DB_URL is None:
         pytest.fail(
             "VOXINT_E2E=1 requires VOXINT_TEST_DATABASE_URL pointing at a "
             "disposable database (its schema is dropped and rebuilt)."
         )
+    # Read the operator's REAL config (env / .env) BEFORE we override DATABASE_URL,
+    # and refuse if the test URL is the live one — the sharpest guard against a
+    # copy-pasted DSN, on top of the disposable-name heuristic below.
+    if str(Settings().database_url) == TEST_DB_URL:
+        pytest.fail(
+            "VOXINT_TEST_DATABASE_URL equals the live DATABASE_URL; the E2E engine "
+            "drops and rebuilds its schema. Point it at a disposable database."
+        )
+    _assert_disposable_db(TEST_DB_URL)
     # Settings reads DATABASE_URL from the environment over any .env value; pin it
-    # to the disposable DB so the in-process pipeline never touches live data.
+    # to the disposable DB so the in-process pipeline never touches live data. This
+    # process-wide mutation is not restored (mirrors tests/integration/conftest.py);
+    # it only matters for a combined full-suite run and always points at the test DB.
     os.environ["DATABASE_URL"] = TEST_DB_URL
     return Settings()
 
@@ -144,6 +180,24 @@ def model_services(settings: Settings) -> None:
     assert_service_identity(settings.asr_url, EXPECTED_SERVICES["asr_url"])
     assert_service_identity(settings.diarizer_url, EXPECTED_SERVICES["diarizer_url"])
     assert_service_identity(settings.embedder_url, EXPECTED_SERVICES["embedder_url"])
+
+
+@pytest.fixture(scope="session")
+def stage_context(settings: Settings, model_services: None) -> Iterator[StageContext]:
+    """One process-cached stage context with real HTTP clients, closed at teardown.
+
+    This mirrors the worker, which builds the transport clients once and reuses
+    them across runs (``build_stage_context`` docstring), and — unlike a
+    per-run context — owns the clients' connection pools so they are closed
+    instead of leaking until the interpreter exits. ``llm`` stays ``None`` (the
+    pipeline lane runs no enrichment).
+    """
+    ctx = build_stage_context(settings)
+    yield ctx
+    for client in (ctx.asr, ctx.diarizer, ctx.embedder):
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
 
 
 @pytest.fixture(scope="session")
@@ -199,3 +253,9 @@ def stage_media(settings: Settings) -> Iterator[Callable[[], str]]:
 
     for dest in staged:
         dest.unlink(missing_ok=True)
+    # Leave no empty `e2e/` behind in the operator's media root. (A crash mid-run
+    # can still orphan a staged WAV or an `artifacts/<run_id>/` tree — the `e2e/`
+    # prefix and per-run-id dirs keep those findable.)
+    staging_dir = media_root / "e2e"
+    if staging_dir.is_dir() and not any(staging_dir.iterdir()):
+        staging_dir.rmdir()

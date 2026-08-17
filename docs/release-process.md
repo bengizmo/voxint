@@ -145,8 +145,13 @@ model-service restarts. Keep it serial. `VOXINT_E2E=1` makes a missing
 prerequisite a hard failure, not a skip — see
 [`testing.md`](testing.md#automated-e2e-testse2e). (The LLM and browser lanes of
 this suite are still being built; this gate currently covers the pipeline lane.)
-Gate E follows the same carry-over rule as Gates A/R below: an empty
-`git diff vPREV..main --stat -- services/` carries the previous evidence.
+
+Gate E's carry-over is **pipeline-aware**, not services-only: it exercises the
+whole submit→persist chain, so it must re-run whenever anything it measures could
+have changed. Carry the previous release's Gate-E evidence only when
+`git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/db/ tests/e2e/`
+is empty; otherwise re-run it before tagging. (Gates A/R below stay
+`services/`-scoped — they measure the model services in isolation.)
 
 ### Gate-evidence carry-over
 
@@ -154,11 +159,12 @@ The maintainer-run gates re-verify the *model services*, so they re-run only
 when what they measure could have changed. Before tagging, check
 `git diff vPREV..main --stat -- services/`:
 
-- **Empty** → Gates A (CUDA reference regeneration), R (ROCm smoke), and E
-  (whole-pipeline E2E) carry over from the previous release's evidence; the new
-  images are rebuilds of the same numerics (CI's parity + smoke jobs still run
-  unconditionally and prove the rebuild). Record the carry-over and the commit
-  range it rests on
+- **Empty** → Gates A (CUDA reference regeneration) and R (ROCm smoke) carry
+  over from the previous release's evidence; the new images are rebuilds of the
+  same numerics (CI's parity + smoke jobs still run unconditionally and prove the
+  rebuild). Gate E (whole-pipeline E2E) carries over under its own **pipeline-aware**
+  diff scope stated above — a services-only empty diff is not sufficient for it.
+  Record the carry-over and the commit range it rests on
   in the release-commit message (v0.10.0 is the precedent: `services/`
   untouched since v0.9.0, A/R carried, Gate M satisfied by the committed
   per-chip verdict plus a green `metal-lane` run on the pre-bump commit).
