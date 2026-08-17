@@ -491,6 +491,16 @@ class TranscriptSegment(Base):
     # the provider reported none (older runs, non-confidence backends); the #53
     # review console flags low-confidence segments and never fabricates a NULL.
     confidence: Mapped[float | None] = mapped_column(Float)
+    # Per-word timings (issue #59), bucketed from the whisper service's flat
+    # word_timestamps output: a list of {start, end, word, confidence}. NULL for
+    # runs transcribed before #59 and providers without word timing — never
+    # backfilled onto existing evidence rows. The word-boundary split UI reads
+    # these; the ASR text/interval remain the numerics contract, words are derived
+    # detail. No GIN index (never queried by content).
+    words: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=True,
+    )
 
 
 class DiarizationTurn(Base):

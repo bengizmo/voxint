@@ -282,6 +282,61 @@ def test_transcribe_malformed_body_raises_protocol_error() -> None:
         client.transcribe(AUDIO)
 
 
+def test_transcribe_maps_words() -> None:
+    body = {
+        "language": "en",
+        "segments": [{"start_seconds": 0.0, "end_seconds": 2.0, "text": "hi there"}],
+        "words": [
+            {"start_seconds": 0.0, "end_seconds": 0.4, "word": "hi", "confidence": 0.99},
+            {
+                "start_seconds": 0.4,
+                "end_seconds": 2.0,
+                "word": "there",
+                "confidence": None,
+            },
+        ],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    result = client.transcribe(AUDIO)
+    assert len(result.words) == 2
+    assert result.words[0].word == "hi"
+    assert result.words[0].confidence == 0.99
+    assert result.words[1].confidence is None  # absent/null → None, never fabricated
+
+
+def test_transcribe_absent_words_key_is_empty_not_error() -> None:
+    # A service or fake predating #59 omits the key entirely; that is "no word
+    # timing", not a protocol violation.
+    body = {
+        "language": "en",
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    assert client.transcribe(AUDIO).words == ()
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        [{"start_seconds": 0.0, "end_seconds": 1.0, "confidence": 0.9}],  # no word text
+        [{"start_seconds": 0.0, "end_seconds": 1.0, "word": 5}],  # word not a string
+        [{"start_seconds": 1.0, "end_seconds": 0.0, "word": "x"}],  # reversed interval
+        [{"start_seconds": "0", "end_seconds": 1.0, "word": "x"}],  # non-numeric bound
+        [{"start_seconds": 0.0, "end_seconds": 1.0, "word": "x", "confidence": 2.0}],
+        "not-a-list",
+    ],
+)
+def test_transcribe_malformed_words_raise_protocol_error(words: object) -> None:
+    body = {
+        "language": "en",
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+        "words": words,
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
 # ---------------------------------------------------------------- diarizer mapping
 
 

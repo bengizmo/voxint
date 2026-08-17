@@ -26,9 +26,28 @@ class TranscriptionSegment:
 
 
 @dataclass(frozen=True)
+class TranscriptionWord:
+    """One word with its timing, as the whisper service already emits them
+    (``word_timestamps=True``). Voxint historically dropped these; #59 threads
+    them through so the review console can split a segment at a word boundary.
+    A flat, run-level sequence — the transcribe stage buckets them into segments.
+    ``confidence`` mirrors the segment convention: a transformed likelihood in
+    [0, 1], not a calibrated probability."""
+
+    start_seconds: float
+    end_seconds: float
+    word: str
+    confidence: float | None = None
+
+
+@dataclass(frozen=True)
 class TranscriptionResult:
     segments: tuple[TranscriptionSegment, ...]
     language: str | None = None
+    # Flat, in-order word timings for the whole transcript (empty when the
+    # provider reports none — older services, fakes). Downstream buckets them
+    # into segments; never inferred when absent.
+    words: tuple[TranscriptionWord, ...] = ()
 
 
 @dataclass(frozen=True)

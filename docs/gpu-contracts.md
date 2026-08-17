@@ -153,7 +153,12 @@ Response:
 ```
 
 - Word timestamps are always requested from the model; `words` may still be
-  empty when the model yields none (e.g. pure silence).
+  empty when the model yields none (e.g. pure silence). Since #59 the pipeline
+  consumes this flat list (it was previously dropped at the ASR client),
+  buckets each word into its segment by maximum temporal overlap, and stores
+  the result as a nullable `words` JSONB column on `transcript_segments`. This
+  is derived detail beside the immutable ASR text/interval — not a numerics
+  contract of its own, so it carries no parity gate.
 - `transcript` is the segment texts joined with single spaces, verbatim.
 - `confidence` values are `exp(avg_logprob)` clamped to [0, 1]; segment
   `confidence` is `null` when the model provides no logprob; the top-level

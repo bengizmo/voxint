@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Per-word timings captured from ASR** (#59, foundation): the whisper service
+  already computes word-level timestamps (`word_timestamps=True`) but voxint
+  dropped them at the client seam; they now flow through and are stored as a
+  nullable `words` JSONB column on `transcript_segments` (migration 0022),
+  bucketed into their segment by maximum temporal overlap. No numerics change
+  (word timing was already part of the decode config), no UI change yet, and no
+  backfill — runs transcribed before this keep `words = NULL`. This is the
+  groundwork for click-a-word-to-split in the review console.
 - **Waveform strip with per-speaker regions** (#57): the transcript and review
   pages draw a compact amplitude strip under the audio player, tinted per
   speaker from the **diarization turns** (the honest who-spoke-when record —

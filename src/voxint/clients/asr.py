@@ -5,7 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from voxint.clients._http import ServiceHttpClient, finite_interval
-from voxint.clients.base import TranscriptionResult, TranscriptionSegment
+from voxint.clients.base import (
+    TranscriptionResult,
+    TranscriptionSegment,
+    TranscriptionWord,
+)
 from voxint.clients.errors import ProtocolError
 
 
@@ -56,6 +60,42 @@ class HttpASRClient(ServiceHttpClient):
             language = body["language"]
             if language is not None and not isinstance(language, str):
                 raise ProtocolError("language must be a string or null")
+            # Word timings (word_timestamps=True) are a flat, run-level list in
+            # the v1 contract. A service or fake that omits the key predates #59;
+            # treat that as "no word data" rather than a protocol error.
+            words = _parse_words(body.get("words"))
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError(f"malformed transcribe response: {exc!r}") from exc
-        return TranscriptionResult(segments=tuple(segments), language=language)
+        return TranscriptionResult(
+            segments=tuple(segments), language=language, words=words
+        )
+
+
+def _parse_words(raw: Any) -> tuple[TranscriptionWord, ...]:
+    """Parse the response's flat ``words`` list, validating each as strictly as
+    segments. A missing/null key means the provider emitted none (empty tuple);
+    a present-but-malformed value is a loud ProtocolError, never silently
+    dropped."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ProtocolError("words must be a list or null")
+    words: list[TranscriptionWord] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ProtocolError("each word must be an object")
+        start, end = finite_interval(
+            entry["start_seconds"], entry["end_seconds"], zero_length_ok=True
+        )
+        token = entry["word"]
+        if not isinstance(token, str):
+            raise ProtocolError("word text must be a string")
+        words.append(
+            TranscriptionWord(
+                start_seconds=start,
+                end_seconds=end,
+                word=token,
+                confidence=_parse_confidence(entry.get("confidence")),
+            )
+        )
+    return tuple(words)

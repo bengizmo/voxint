@@ -12,10 +12,29 @@ from voxint.clients.base import (
     SpeakerNameHint,
     TranscriptionResult,
     TranscriptionSegment,
+    TranscriptionWord,
 )
 from voxint.clients.llm import LLMError
 
 FAKE_EMBEDDING_SPACE = "fake-192-v1"
+
+
+def _fake_words(text: str, start: float, end: float) -> tuple[TranscriptionWord, ...]:
+    """Evenly-spaced word timings spanning [start, end) for a segment's text —
+    deterministic, so the transcribe stage's word bucketing runs on the fakes."""
+    tokens = text.split()
+    if not tokens:
+        return ()
+    step = (end - start) / len(tokens)
+    return tuple(
+        TranscriptionWord(
+            start_seconds=start + i * step,
+            end_seconds=start + (i + 1) * step,
+            word=token,
+            confidence=0.9,
+        )
+        for i, token in enumerate(tokens)
+    )
 
 
 class FakeASR:
@@ -28,14 +47,17 @@ class FakeASR:
         self, audio_path: Path, initial_prompt: str | None = None
     ) -> TranscriptionResult:
         self.last_initial_prompt = initial_prompt
-        return TranscriptionResult(
-            segments=(
-                TranscriptionSegment(0.0, 4.0, "hello and welcome to the show"),
-                TranscriptionSegment(4.0, 8.0, "thanks for having me"),
-                TranscriptionSegment(8.0, 9.0, "mm", suspect=True),
-            ),
-            language="en",
+        segments = (
+            TranscriptionSegment(0.0, 4.0, "hello and welcome to the show"),
+            TranscriptionSegment(4.0, 8.0, "thanks for having me"),
+            TranscriptionSegment(8.0, 9.0, "mm", suspect=True),
         )
+        words = tuple(
+            w
+            for seg in segments
+            for w in _fake_words(seg.text, seg.start_seconds, seg.end_seconds)
+        )
+        return TranscriptionResult(segments=segments, language="en", words=words)
 
 
 class FakeDiarizer:
