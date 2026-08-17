@@ -466,9 +466,10 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   over it; one shared `effective_text` selector (`corrected → enhanced → raw`, by
   `IS NOT NULL`) makes the default transcript view and every text export agree.
   `?text=raw` is always the untouched ASR evidence, `?text=enhanced` the pipeline
-  text without corrections. (Making corrections full-text-searchable and feeding
-  them to enrichment — both settled in the provenance design note — land next; the
-  partial FTS index is already created.) Editing text clears the verified mark in the same
+  text without corrections. Corrections are full-text-searchable (a partial FTS
+  index over `corrected_text`, never coalesced with the raw/enhanced renderings)
+  and feed enrichment (the name miners and run-asset generators read the same
+  `effective_text`) — both as settled in the provenance design note. Editing text clears the verified mark in the same
   transaction (edited text must be re-verified); reverting to the pipeline wording
   clears the correction. Both writes are claim-gated; the UPSERT is idempotent
   without a nonce.

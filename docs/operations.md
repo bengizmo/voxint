@@ -460,10 +460,10 @@ correction is stored **beside** the immutable `raw_text` and clears that
 segment's verified mark (edited text must be re-checked); reverting to the
 pipeline wording removes it. All writes are claim-gated and carry the workbench's
 claim token — the page never re-claims (a fresh claim would evict the workbench
-tab). With JavaScript off the same page lists the flagged segments with a plain
-per-segment **Verify** form (inline editing needs the browser island, stated
-plainly), and it renders read-only with a prompt to claim when this tab does not
-hold the run's claim.
+tab). With JavaScript off the same page lists every segment, with a plain
+**Verify** form on each one still unverified (inline editing needs the browser
+island, stated plainly), and it renders read-only with a prompt to claim when
+this tab does not hold the run's claim.
 
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at

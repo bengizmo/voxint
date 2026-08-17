@@ -49,6 +49,12 @@ export interface TranscriptPlayerProps {
   // "uncertain". Same server setting the JS-off fallback compares against, so
   // the island and fallback flag identically.
   lowConfidenceThreshold: number;
+  // Optional selection callback (issue #53): fired with the segment index when a
+  // line (or its ▶) is activated, so a driver like ReviewStepper can move its
+  // edit cursor to the line the operator clicked — a correction then lands on the
+  // segment being played, never the one under a stale cursor. Absent on the
+  // read-only transcript page, which stays byte-identical (play only).
+  onSegmentSelect?: (index: number) => void;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -96,7 +102,7 @@ export const TranscriptPlayer = forwardRef<
   TranscriptPlayerHandle,
   TranscriptPlayerProps
 >(function TranscriptPlayer(
-  { runId, mediaUrl, segments, capability, lowConfidenceThreshold },
+  { runId, mediaUrl, segments, capability, lowConfidenceThreshold, onSegmentSelect },
   ref,
 ) {
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -190,6 +196,13 @@ export const TranscriptPlayer = forwardRef<
     const audio = audioRef.current;
     if (audio && seek) playTurn(audio, seg.start, seg.end);
   };
+  // Activating a line plays it AND (when a driver is attached) selects it, so the
+  // edit cursor tracks what the operator clicked. Without the callback this is
+  // exactly `play` — the read-only page is unchanged.
+  const activateLine = (index: number, seg: Segment) => {
+    play(seg);
+    onSegmentSelect?.(index);
+  };
   const onRateChange = (next: number) => {
     setRate(next);
     setStoredRate(next);
@@ -250,14 +263,14 @@ export const TranscriptPlayer = forwardRef<
               aria-current={active ? "true" : undefined}
               // Click-the-line-to-seek (issue #49). Only a hint when seeking is
               // disabled — the button carries the accessible affordance.
-              onClick={seek ? () => { play(seg); } : undefined}
+              onClick={seek ? () => { activateLine(i, seg); } : undefined}
               style={seek ? { cursor: "pointer" } : undefined}
             >
               <button
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  play(seg);
+                  activateLine(i, seg);
                 }}
                 disabled={!seek}
                 title={seek ? "Play this line" : capability.reasons[0]?.message}

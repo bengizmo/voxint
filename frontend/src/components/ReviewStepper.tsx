@@ -65,10 +65,20 @@ export function ReviewStepper({
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  // Guards re-entry synchronously: a state `busy` flips a render too late to stop
+  // a second key that fires before React re-renders, so two writes could overlap
+  // and apply out of order. The ref is set/cleared around the WHOLE operation
+  // (fetch + parse + apply), so a second action is refused until the first has
+  // fully landed. `busy` state still drives the disabled buttons.
+  const busyRef = useRef<boolean>(false);
   // Set when a write 409s (claim expired or reclaimed elsewhere). The loop stops
   // and keeps the operator's place + edit — never advances against a dead claim.
   const [claimLost, setClaimLost] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // Armed when `v` is pressed with an unsaved edit in the box: the first press
+  // warns (rather than silently discarding the typed text and verifying the old
+  // wording); a second `v` verifies anyway. Cleared on edit, save, or move.
+  const [confirmDiscard, setConfirmDiscard] = useState<boolean>(false);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -81,9 +91,11 @@ export function ReviewStepper({
   const writable = reviewToken !== null && !claimLost;
 
   // Keep the edit box in step with the segment under the cursor (its effective
-  // text — corrected-or-pipeline, already what the page rendered).
+  // text — corrected-or-pipeline, already what the page rendered). Moving to a
+  // fresh segment also disarms any pending discard warning.
   useEffect(() => {
     setEditText(current?.text ?? "");
+    setConfirmDiscard(false);
   }, [current?.segmentId, current?.text]);
 
   const play = useCallback((index: number) => {
@@ -129,13 +141,20 @@ export function ReviewStepper({
     [segments],
   );
 
-  const post = useCallback(
-    async (path: string, body: Record<string, string>): Promise<Response | null> => {
+  // POST a form-encoded write and return the parsed JSON state, or null on any
+  // failure. A 409 is the stale/reclaimed claim → stop the loop (keep place +
+  // edit); every other error (network, a non-JSON body from a proxy) surfaces an
+  // inline message. Parsing lives INSIDE the try so a bad body is handled, never
+  // an unhandled rejection. Busy is owned by the callers (they hold the ref
+  // across the whole operation), so this helper does not touch it.
+  const postJson = useCallback(
+    async (
+      path: string,
+      body: Record<string, string>,
+    ): Promise<Parameters<typeof applyResult>[1] | null> => {
       if (!writable || reviewToken === null) return null;
-      setBusy(true);
-      setError(null);
       try {
-        return await apiFetch(path, {
+        const res = await apiFetch(path, {
           method: "POST",
           headers: {
             "content-type": "application/x-www-form-urlencoded",
@@ -145,6 +164,7 @@ export function ReviewStepper({
           },
           body: new URLSearchParams({ token: reviewToken, ...body }).toString(),
         });
+        return (await res.json()) as Parameters<typeof applyResult>[1];
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           // Stale/reclaimed: stop the loop, keep place + edit. The operator must
@@ -154,41 +174,62 @@ export function ReviewStepper({
           setError(err instanceof ApiError ? err.detail : "Request failed.");
         }
         return null;
-      } finally {
-        setBusy(false);
       }
     },
     [writable, reviewToken],
   );
 
   const verifyAndAdvance = useCallback(async () => {
-    if (current?.segmentId == null || busy) return;
-    const index = cursor;
-    const res = await post(
-      `/review/${runId}/segments/${current.segmentId}/verify`,
-      { verified: "true" },
-    );
-    if (!res) return;
-    const result = (await res.json()) as Parameters<typeof applyResult>[1];
-    const patched = applyResult(index, result);
-    const next = nextTarget(patched, index + 1);
-    if (next >= 0) goTo(next);
-  }, [current, busy, cursor, post, runId, applyResult, goTo]);
+    if (current?.segmentId == null || busyRef.current) return;
+    // A pending edit in the box would be silently discarded by verifying the old
+    // wording. Warn on the first `v`; a second one verifies anyway (explicit).
+    if (editText !== (current.text ?? "") && !confirmDiscard) {
+      setConfirmDiscard(true);
+      return;
+    }
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const index = cursor;
+      const result = await postJson(
+        `/review/${runId}/segments/${current.segmentId}/verify`,
+        { verified: "true" },
+      );
+      if (!result) return;
+      const patched = applyResult(index, result);
+      setConfirmDiscard(false);
+      const next = nextTarget(patched, index + 1);
+      if (next >= 0) goTo(next);
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [current, cursor, editText, confirmDiscard, postJson, runId, applyResult, goTo]);
 
   const saveEdit = useCallback(async () => {
-    if (current?.segmentId == null || busy) return;
-    const index = cursor;
-    const res = await post(`/review/${runId}/segments/${current.segmentId}/text`, {
-      text: editText,
-    });
-    if (!res) return;
-    const result = (await res.json()) as Parameters<typeof applyResult>[1];
-    applyResult(index, result);
-    // Stay on the segment after an edit (the operator likely wants to verify it
-    // next); editing cleared its verified mark server-side, so it is a target
-    // again and the counter reflects that.
-    editRef.current?.blur();
-  }, [current, busy, cursor, post, runId, editText, applyResult]);
+    if (current?.segmentId == null || busyRef.current) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      const index = cursor;
+      const result = await postJson(
+        `/review/${runId}/segments/${current.segmentId}/text`,
+        { text: editText },
+      );
+      if (!result) return;
+      applyResult(index, result);
+      setConfirmDiscard(false);
+      // Stay on the segment after an edit (the operator likely wants to verify it
+      // next); editing cleared its verified mark server-side, so it is a target
+      // again and the counter reflects that.
+      editRef.current?.blur();
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  }, [current, cursor, postJson, runId, editText, applyResult]);
 
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the
@@ -199,7 +240,16 @@ export function ReviewStepper({
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       const el = event.target as HTMLElement | null;
       const tag = el?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      // Never steal a key from a form control the operator is using — the
+      // textarea, but also the player's playback-speed <select> (a focused
+      // <select> must not let `v` fire a verify write).
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el?.isContentEditable
+      )
+        return;
       switch (event.key) {
         case "v":
           event.preventDefault();
@@ -239,8 +289,9 @@ export function ReviewStepper({
       )}
       {claimLost && (
         <p role="alert" className="tp-uncertain-chip">
-          Your claim expired or was taken over. Nothing was lost.{" "}
-          <a href={`/review/${runId}`}>Re-claim in the workbench</a> and reopen this
+          Your claim expired or was taken over. Everything you already saved is
+          safe — copy any unsaved edit from the box first, then{" "}
+          <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen this
           page to continue.
         </p>
       )}
@@ -251,7 +302,7 @@ export function ReviewStepper({
             segments verified
             {done ? " — all done" : ` · ${remaining} left`}
           </p>
-          {!done && current && (
+          {current && current.segmentId !== null && (
             <div>
               <p className="muted text-sm">
                 Reviewing segment at {current.start.toFixed(2)}s
@@ -259,6 +310,7 @@ export function ReviewStepper({
                   current.confidence < lowConfidenceThreshold && (
                     <span className="tp-uncertain-chip ml-2">uncertain</span>
                   )}
+                {current.verified && <span className="spk-badge ml-2">verified</span>}
                 {current.corrected && <span className="spk-badge ml-2">edited</span>}
               </p>
               <textarea
@@ -266,6 +318,7 @@ export function ReviewStepper({
                 value={editText}
                 onChange={(e) => {
                   setEditText(e.target.value);
+                  setConfirmDiscard(false);
                 }}
                 onKeyDown={(e) => {
                   // Ctrl/Cmd+Enter saves from within the box; Escape returns keys
@@ -297,7 +350,7 @@ export function ReviewStepper({
                   disabled={busy}
                   className="mr-2"
                 >
-                  Save edit <kbd>⌘⏎</kbd>
+                  Save edit <kbd>Ctrl/⌘+↵</kbd>
                 </button>
                 <button type="button" onClick={jumpNext} disabled={busy} className="mr-2">
                   Skip <kbd>n</kbd>
@@ -310,6 +363,13 @@ export function ReviewStepper({
                   Replay <kbd>p</kbd>
                 </button>
               </div>
+              {confirmDiscard && (
+                <p role="alert" className="text-sm">
+                  You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save it,
+                  or <kbd>v</kbd> again to verify the original wording and discard
+                  the edit.
+                </p>
+              )}
               {error && (
                 <p role="alert" className="text-sm">
                   {error}
@@ -326,6 +386,11 @@ export function ReviewStepper({
         segments={segments}
         capability={capability}
         lowConfidenceThreshold={lowConfidenceThreshold}
+        // Clicking a transcript line moves the edit cursor there (and plays it),
+        // so a correction always lands on the segment the operator is looking at
+        // — and a segment already verified can be reached again to fix. Only when
+        // this tab holds the claim; the read-only surface passes no callback.
+        onSegmentSelect={writable ? setCursor : undefined}
       />
     </div>
   );
