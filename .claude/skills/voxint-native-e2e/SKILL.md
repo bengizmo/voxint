@@ -114,6 +114,41 @@ uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"   # survi
 scripts/native/voxint-native.sh down
 ```
 
+## Part C — destructive restore rung (`--with-restore`, opt-in)
+
+Runs **after** Part B, reusing its green `<RUN_ID>`. This is the honest
+disaster-recovery gate: `restore --fresh` **drops the database, proves it is
+genuinely empty, then rebuilds it from a dump** (the dump is the sole schema
+source; the vendored pgvector extension is preinstalled by the superuser and
+excluded from the restore — never recreated as the unprivileged `voxint` role).
+The unchanged Python `verify` then proves the same run survived a full rebuild.
+
+```bash
+scripts/native/voxint-native.sh backup     # capture the EXACT printed dump path
+scripts/native/voxint-native.sh down        # services down (required for --fresh)
+scripts/native/voxint-native.sh restore --fresh "<that-dump-path>"
+#   → prints `EMPTY_DB PASS (old_oid=… new_oid=…, 0 public tables)` then rebuilds
+scripts/native/voxint-native.sh up          # alembic no-ops at head; app starts
+uv run python tools/native_e2e_lifecycle.py env      # wait /healthz 200
+uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"
+#   → VERIFY PASS: the run survived a destructive drop + rebuild-from-dump
+scripts/native/voxint-native.sh down
+```
+
+- **Capture the dump path from `backup`'s own output** (`backup complete: …`),
+  not a newest-file heuristic.
+- `restore --fresh` refuses to run while api/worker/beat are supervised (the flag
+  is destructive consent, not license to force past a live app). **Before dropping
+  anything** it validates the archive (`pg_restore --list`), requires it to *be* a
+  voxint dump (an `alembic_version` table entry in the TOC — a valid dump of some
+  other database is refused, not restored over your data), and confirms the
+  postmaster on the port is the managed cluster (`SHOW data_directory`). On a
+  restore failure the single transaction rolls back and the dump is left untouched;
+  it prints the exact retry command (the prior DB is already dropped by then, so
+  the message says so).
+- **Recovery scope is DB-only.** `pg_dump`/`restore --fresh` cover database state,
+  **not** external media files or model weights.
+
 ## Cleanup
 
 The native install is **throwaway** and the driver never mutates the DB, so
@@ -124,10 +159,11 @@ machine in the state you found it (stack down unless the operator wants it up).
 ## Notes
 
 - **Serial only** (issue #23): keep concurrency at one on maintainer hardware.
-- A full `restore`-into-fresh rung is deliberately **not** in this lane yet — an
-  honest restore must first destroy the install (down → drop/recreate DB → up
-  empty → `restore <dump>` → verify). `backup` + restart-survival is the slice-1
-  persistence check; the destructive restore rung is a future `--with-restore`.
+- The honest restore-into-fresh rung is **Part C** (`restore --fresh`): down →
+  drop/recreate DB from `template0` (proving emptiness) → restore the dump as the
+  sole schema source → up (alembic no-ops at head) → verify. It is launcher-owned
+  and destructive; the Python driver stays SELECT-only and unchanged. `backup` +
+  restart-survival (Part B) remains the non-destructive persistence check.
 - **Invariant 5** (`speakers`/`speaker_embeddings` = 0 rows) is table-level and
   assumes a *fresh* install — which the full lane always is (it starts from
   `setup`). Those rows are operator-enrollment centroids from human adjudication,

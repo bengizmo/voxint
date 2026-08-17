@@ -38,6 +38,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and its command/port parity with compose and the metal launcher. Technical
   preview, **not** the signed non-technical release (#73); on the metal tier
   long recordings take real compute time. See `docs/native-macos-preview.md`.
+- **Native launcher `restore --fresh` disaster-recovery** (#69): a destructive
+  `scripts/native/voxint-native.sh restore --fresh <dump>` that, with the app
+  services down, drops the database, proves it is genuinely empty (OID flip +
+  zero public tables), and rebuilds it from a dump as the sole schema source —
+  the vendored pgvector extension is preinstalled by the superuser and excluded
+  from the restore so the unprivileged role never recreates a non-trusted
+  extension. It **fails closed before touching your data**: it refuses while
+  api/worker/beat are supervised, verifies the archive is a voxint dump
+  (`alembic_version` in its TOC) and that the postmaster on the port is the
+  managed cluster, all **before** the drop; the restore runs in a single
+  transaction (no `--clean`). Recovery scope is DB-only (not media/weights).
 - **Word-boundary segment splits** (#59, slice 2): an operator can
   split a mis-split diarization segment at a word boundary. A split is stored as
   an append-only *cut* ("split before word i") in a new `segment_split_boundaries`
