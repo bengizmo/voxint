@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.app_settings import (
     get_app_settings,
+    resolve_effective_enrichment_run_assets_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
@@ -80,14 +81,14 @@ def run_asset_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """Checked at job creation AND again in the worker, so queued work cannot
     outlive a capability shutdown.
 
-    LLM enablement is the effective (row-over-env) value — a UI toggle applies with
-    no restart, matching transcript enhancement and ``voxint doctor`` (issue #10).
-    Callers pass the ``app_settings`` row they already hold via
-    :func:`~voxint.app_settings.get_app_settings`.
+    Both the run-assets flag and LLM enablement are the effective (row-over-env)
+    values — a UI toggle applies with no restart, matching transcript enhancement
+    and ``voxint doctor`` (issues #10/#74). Callers pass the ``app_settings`` row
+    they already hold via :func:`~voxint.app_settings.get_app_settings`.
     """
-    return settings.enrichment_run_assets_enabled and resolve_effective_llm_enabled(
+    return resolve_effective_enrichment_run_assets_enabled(
         row, settings
-    )
+    ) and resolve_effective_llm_enabled(row, settings)
 
 
 # snapshot key → the Settings field the executor actually reads. The worker

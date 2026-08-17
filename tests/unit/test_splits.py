@@ -98,9 +98,18 @@ def test_empty_and_single_word_are_unsplittable() -> None:
 def test_malformed_tokens_are_unsplittable() -> None:
     # Non-string word, empty word, missing timing, non-finite timing, inverted
     # interval — each fails closed rather than guessing a boundary.
-    assert splittable_words(_seg(raw_text="x y", words=[{"word": 1}, _word(" y", 0.1, 0.2)])) is None
-    assert splittable_words(_seg(raw_text=" y", words=[_word("", 0.0, 0.1), _word(" y", 0.1, 0.2)])) is None
-    assert splittable_words(_seg(raw_text="a b", words=[{"word": "a"}, _word(" b", 0.1, 0.2)])) is None
+    assert (
+        splittable_words(_seg(raw_text="x y", words=[{"word": 1}, _word(" y", 0.1, 0.2)]))
+        is None
+    )
+    assert (
+        splittable_words(_seg(raw_text=" y", words=[_word("", 0.0, 0.1), _word(" y", 0.1, 0.2)]))
+        is None
+    )
+    assert (
+        splittable_words(_seg(raw_text="a b", words=[{"word": "a"}, _word(" b", 0.1, 0.2)]))
+        is None
+    )
     assert (
         splittable_words(
             _seg(raw_text="a b", words=[_word("a", float("nan"), 0.1), _word(" b", 0.1, 0.2)])

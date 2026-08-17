@@ -1213,6 +1213,13 @@ class AppSettings(Base):
     ``app_settings.resolve_effective_llm_api_key`` and keep it out of any
     repr/serialization (this model defines no custom ``__repr__``, so the default
     shows only the class + primary key).
+
+    ``web_search_api_key`` (issue #74) is the second credential stored here, for
+    the web-search provider, and carries the identical contract: non-blank wins
+    over env ``WEB_SEARCH_API_KEY``, plaintext at rest, never rendered/logged/
+    exported, resolved only via ``app_settings.resolve_effective_web_search_api_key``.
+    The tri-state feature-flag columns (issue #74) are NON-secret: NULL means
+    "inherit the env default", a non-NULL value overrides it.
     """
 
     __tablename__ = "app_settings"
@@ -1244,6 +1251,30 @@ class AppSettings(Base):
     # non-blank value wins. Credential, plaintext at rest — never render/log/export;
     # resolve only via app_settings.resolve_effective_llm_api_key. See class docstring.
     llm_api_key: Mapped[str | None] = mapped_column(Text)
+    # Live-read feature flags the settings console can toggle at runtime (issue #74,
+    # under the #47 arc). Tri-state: NULL means "inherit the env default"
+    # (config.Settings), a non-NULL value overrides it — the llm_base_url nullable
+    # pattern, NOT the llm_enabled hard-row pattern, so an operator can always revert
+    # an override to the installation setting by clearing it (writes NULL). Every
+    # runtime gate resolves these through app_settings.resolve_effective_<flag>, so a
+    # UI toggle applies with no restart and no read-site can drift onto a bare env
+    # read. Names mirror the config fields exactly.
+    enrichment_names_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    enrichment_names_llm_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    enrichment_run_assets_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    enrichment_run_assets_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
+    voxint_web_research: Mapped[bool | None] = mapped_column(Boolean)
+    enrichment_web_research_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    ytdlp_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # External-sources config (issue #74). NULL/blank -> inherit the env default; a
+    # non-blank value overrides it (the llm_base_url/llm_api_key precedent).
+    source_authority_domains: Mapped[str | None] = mapped_column(Text)
+    web_search_base_url: Mapped[str | None] = mapped_column(Text)
+    # In-UI web-search provider credential (issue #74). NULL/blank -> fall back to env
+    # WEB_SEARCH_API_KEY; a non-blank value wins. Credential, plaintext at rest — never
+    # render/log/export; resolve only via app_settings.resolve_effective_web_search_api_key.
+    # Same handling as llm_api_key (see class docstring).
+    web_search_api_key: Mapped[str | None] = mapped_column(Text)
     # The bundled guided-tutorial run, seeded idempotently by `voxint tutorial seed`.
     tutorial_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("pipeline_runs.id", ondelete="SET NULL")

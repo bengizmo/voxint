@@ -25,6 +25,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from voxint.app_settings import EffectiveWebResearch
 from voxint.config import Settings
 from voxint.media.redaction import cap_length, redact
 from voxint.research.budget import Attribution, ResearchBudget
@@ -228,20 +229,25 @@ class SearxngProvider:
         return kept
 
 
-def provider_from_settings(
+def build_web_search_provider(
     settings: Settings,
     *,
+    base_url: str,
+    api_key: str,
     client: httpx.Client | None = None,
     timeout_seconds: float | None = None,
 ) -> SearchProvider:
-    """Build the configured provider (the Literal in Settings bounds the set).
+    """Build the configured provider from the resolved (row-over-env) endpoint.
 
-    ``timeout_seconds`` overrides the settings timeout — ``web_search`` uses it
-    to clamp the provider call to the budget's remaining wall clock.
+    ``base_url``/``api_key`` are the *effective* values resolved at the job
+    boundary (issue #74), not read from ``settings`` — so a UI-stored endpoint
+    or credential wins over env. The timeout knob stays a ``Settings`` value;
+    ``timeout_seconds`` overrides it so ``web_search`` can clamp the provider
+    call to the budget's remaining wall clock.
     """
     return SearxngProvider(
-        base_url=settings.web_search_base_url,
-        api_key=settings.web_search_api_key,
+        base_url=base_url,
+        api_key=api_key,
         timeout_seconds=(
             settings.web_search_timeout_seconds
             if timeout_seconds is None
@@ -255,6 +261,7 @@ def web_search(
     query: str,
     *,
     settings: Settings,
+    effective_web: EffectiveWebResearch,
     budget: ResearchBudget,
     attribution: Attribution,
     provider: SearchProvider | None = None,
@@ -263,9 +270,11 @@ def web_search(
     """One bounded provider query → normalized, egress-gated results.
 
     Consumes one search-budget unit per invocation. All failures are
-    structured outcomes; the query never appears in any error or log line.
+    structured outcomes; the query never appears in any error or log line. The
+    enablement gate and provider endpoint are the effective (row-over-env)
+    values resolved at the job boundary (issue #74), not read from ``settings``.
     """
-    if not settings.voxint_web_research:
+    if not effective_web.enabled:
         return SearchOutcome(
             ok=False, error=ERROR_DISABLED, error_detail="web research is disabled"
         )
@@ -291,7 +300,12 @@ def web_search(
         budget_left = budget.remaining_seconds()
         if budget_left is not None:
             timeout = max(0.1, min(timeout, budget_left))
-        chosen = provider_from_settings(settings, timeout_seconds=timeout)
+        chosen = build_web_search_provider(
+            settings,
+            base_url=effective_web.base_url,
+            api_key=effective_web.api_key,
+            timeout_seconds=timeout,
+        )
     verdict = "provider_error"
     result_count = 0
     try:
@@ -308,7 +322,7 @@ def web_search(
             duration_seconds=max(0.0, clock() - started),
         )
     except ProviderError as exc:
-        detail = cap_length(redact(str(exc), extra_secrets=(settings.web_search_api_key,)))
+        detail = cap_length(redact(str(exc), extra_secrets=(effective_web.api_key,)))
         return SearchOutcome(
             ok=False,
             error=ERROR_PROVIDER,

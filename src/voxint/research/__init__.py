@@ -16,7 +16,7 @@ from voxint.research.search import (
     SearchOutcome,
     SearchProvider,
     SearchResult,
-    provider_from_settings,
+    build_web_search_provider,
     web_search,
 )
 
@@ -27,7 +27,7 @@ __all__ = [
     "SearchOutcome",
     "SearchProvider",
     "SearchResult",
-    "provider_from_settings",
+    "build_web_search_provider",
     "read_url",
     "web_search",
 ]

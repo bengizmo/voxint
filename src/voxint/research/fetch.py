@@ -50,6 +50,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from voxint.app_settings import EffectiveWebResearch
 from voxint.config import Settings
 from voxint.media.netcheck import (
     HostNotPublicError,
@@ -169,6 +170,7 @@ def read_url(
     url: str,
     *,
     settings: Settings,
+    effective_web: EffectiveWebResearch,
     budget: ResearchBudget,
     attribution: Attribution,
     client_factory: ClientFactory | None = None,
@@ -179,9 +181,11 @@ def read_url(
 
     Consumes one unit of the budget's read quota per invocation (not per hop).
     All failure modes return structured outcomes; nothing here raises for a
-    remote server's behavior.
+    remote server's behavior. The enablement gate is the effective (row-over-env)
+    value resolved at the job boundary (issue #74) — reading ``settings`` here
+    would veto a UI enable that env alone does not carry.
     """
-    if not settings.voxint_web_research:
+    if not effective_web.enabled:
         return _refusal(ERROR_DISABLED, "web research is disabled")
 
     started = clock()

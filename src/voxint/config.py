@@ -7,7 +7,6 @@ hardcoded elsewhere. Values come from the environment (or an ``.env`` file in de
 import os
 from pathlib import Path
 from typing import Annotated, Literal
-from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -484,95 +483,33 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _names_llm_pass_requires_llm(self) -> "Settings":
-        # The LLM name pass reuses the enhancement endpoint configuration and
-        # rides the name-enrichment feature; enabling it with either
-        # prerequisite off would be a silently unusable configuration, so
-        # refuse the combination instead of masking it.
-        if self.enrichment_names_llm_enabled and not self.llm_enabled:
-            raise ValueError(
-                "enrichment_names_llm_enabled requires llm_enabled=true — the "
-                "LLM name pass reuses the configured enhancement endpoint"
-            )
-        if self.enrichment_names_llm_enabled and not self.enrichment_names_enabled:
-            raise ValueError(
-                "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
-                " — the LLM pass is additive to the offline name producer"
-            )
-        return self
+    def _effective_flag_invariants(self) -> "Settings":
+        # The five cross-flag invariants (names.llm ⇒ names+llm; web-research
+        # producer ⇒ retrieval+llm; run-assets autogenerate ⇒ run-assets ⇒ llm;
+        # retrieval ⇒ valid provider URL) live in ONE place —
+        # app_settings.validate_effective_flags — so this env-time check and every
+        # runtime settings form (which validates the effective, row-over-env
+        # combination — issue #74) can never drift. A DB override that enables a
+        # dependent flag while its prerequisite resolves false is caught there with
+        # the same message. Imported locally because app_settings imports Settings,
+        # so a module-level import would cycle. Raising the first message preserves
+        # the prior boot-strict behavior and the exact operator-facing copy.
+        from voxint.app_settings import EffectiveFlags, validate_effective_flags
 
-    @model_validator(mode="after")
-    def _web_research_producer_requires_capabilities(self) -> "Settings":
-        # The producer composes two independent capabilities; enabling it with
-        # either prerequisite off would be a silently unusable configuration,
-        # so refuse the combination instead of masking it (the names.llm
-        # precedent). The worker re-checks all three flags at execution time so
-        # queued jobs cannot outlive a capability shutdown.
-        if self.enrichment_web_research_enabled and not self.voxint_web_research:
-            raise ValueError(
-                "enrichment_web_research_enabled requires voxint_web_research=true"
-                " — the producer's only egress is the controlled retrieval tools"
+        errors = validate_effective_flags(
+            EffectiveFlags(
+                llm_enabled=self.llm_enabled,
+                enrichment_names_enabled=self.enrichment_names_enabled,
+                enrichment_names_llm_enabled=self.enrichment_names_llm_enabled,
+                enrichment_run_assets_enabled=self.enrichment_run_assets_enabled,
+                enrichment_run_assets_autogenerate=self.enrichment_run_assets_autogenerate,
+                voxint_web_research=self.voxint_web_research,
+                enrichment_web_research_enabled=self.enrichment_web_research_enabled,
+                web_search_base_url=self.web_search_base_url,
             )
-        if self.enrichment_web_research_enabled and not self.llm_enabled:
-            raise ValueError(
-                "enrichment_web_research_enabled requires llm_enabled=true — the"
-                " producer reuses the configured enhancement endpoint"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _run_assets_require_llm(self) -> "Settings":
-        # The asset generators reuse the enhancement endpoint configuration;
-        # enabling them without an LLM would be a silently unusable
-        # configuration, so refuse the combination (names.llm precedent). The
-        # worker re-checks at execution time so queued jobs cannot outlive a
-        # capability shutdown.
-        if self.enrichment_run_assets_enabled and not self.llm_enabled:
-            raise ValueError(
-                "enrichment_run_assets_enabled requires llm_enabled=true — the"
-                " asset generators reuse the configured enhancement endpoint"
-            )
-        if self.enrichment_run_assets_autogenerate and not self.enrichment_run_assets_enabled:
-            raise ValueError(
-                "enrichment_run_assets_autogenerate requires"
-                " enrichment_run_assets_enabled=true — the post-finalize step"
-                " only enqueues the feature it rides on"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def _web_research_provider_config(self) -> "Settings":
-        # Enabling retrieval with an unusable provider config would surface as
-        # a confusing runtime failure on the first search — refuse at startup
-        # instead. The base URL must be absolute http(s) and credential-free
-        # (provider auth goes in web_search_api_key, never the URL, so it can
-        # be redacted uniformly). Deliberately NO check against llm_enabled in
-        # either direction: the capabilities are independent by design.
-        if not self.voxint_web_research:
-            return self
-        base = self.web_search_base_url
-        if not base.strip():
-            raise ValueError(
-                "voxint_web_research=true requires web_search_base_url — the"
-                " searxng provider has no default endpoint"
-            )
-        if base != base.strip() or any(c.isspace() for c in base) or "\\" in base:
-            raise ValueError("web_search_base_url must not contain whitespace or backslashes")
-        try:
-            parts = urlsplit(base)
-            # .port parses lazily; touch it so ":abc"/out-of-range fails at
-            # startup instead of as an opaque provider_error on first search.
-            _ = parts.port
-        except ValueError:
-            raise ValueError("web_search_base_url is malformed") from None
-        if parts.scheme not in ("http", "https") or not parts.hostname:
-            raise ValueError("web_search_base_url must be an absolute http(s) URL")
-        if parts.username is not None or parts.password is not None:
-            raise ValueError(
-                "web_search_base_url must not embed credentials — use web_search_api_key"
-            )
-        if parts.query or parts.fragment:
-            raise ValueError("web_search_base_url must be a bare endpoint (no query/fragment)")
+        )
+        if errors:
+            raise ValueError(errors[0])
         return self
 
     @model_validator(mode="after")

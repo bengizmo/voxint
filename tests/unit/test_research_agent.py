@@ -16,6 +16,7 @@ from collections.abc import Callable, Sequence
 import httpx
 import pytest
 
+from voxint.app_settings import resolve_effective_web_research
 from voxint.clients.llm import ChatMessage
 from voxint.config import Settings
 from voxint.db.models import ClaimField
@@ -152,9 +153,11 @@ def run(
 ) -> tuple[ResearchConclusion, list[str], FakeLLM]:
     fetched: list[str] = []
     llm = FakeLLM(replies)
+    resolved_settings = settings or make_settings()
     conclusion = run_research_loop(
         llm=llm,
-        settings=settings or make_settings(),
+        settings=resolved_settings,
+        effective_web=resolve_effective_web_research(None, resolved_settings),
         seed=seed or ResearchSeed(display_name="Jane Doe"),
         roster_lookup=roster or (lambda query: []),
         should_cancel=should_cancel,
@@ -231,6 +234,7 @@ def test_seed_urls_are_readable() -> None:
     conclusion = run_research_loop(
         llm=llm,
         settings=make_settings(),
+        effective_web=resolve_effective_web_research(None, make_settings()),
         seed=ResearchSeed(display_name="Jane Doe", seed_urls=("https://example.com/about",)),
         roster_lookup=lambda query: [],
         search_provider=FakeProvider([]),

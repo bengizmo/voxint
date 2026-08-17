@@ -753,7 +753,9 @@ def test_enrich_names_llm_flag_requires_both_settings(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     assert main(["enrich", "names", str(uuid.uuid4()), "--llm"]) == 2
-    assert "ENRICHMENT_NAMES_LLM_ENABLED" in capsys.readouterr().err
+    # Field-style copy under row-over-env resolution (#74): names the field, not
+    # the env var (a console override can be the cause too).
+    assert "enrichment_names_llm_enabled" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------

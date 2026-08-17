@@ -24,9 +24,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.app_settings import (
     get_app_settings,
+    resolve_effective_enrichment_web_research_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
+    resolve_effective_voxint_web_research,
+    resolve_effective_web_research,
 )
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
@@ -62,12 +65,13 @@ def research_gates_open(settings: Settings, row: AppSettings | None) -> bool:
     """All three capability gates, together — checked at job creation AND again
     in the worker, so queued work cannot outlive a capability shutdown.
 
-    LLM enablement is the effective (row-over-env) value so a UI toggle applies with
-    no restart (issue #10); the caller passes the ``app_settings`` row it holds.
+    All three gates are the effective (row-over-env) values so a UI toggle applies
+    with no restart (issues #10/#74); the caller passes the ``app_settings`` row it
+    holds.
     """
     return (
-        settings.enrichment_web_research_enabled
-        and settings.voxint_web_research
+        resolve_effective_enrichment_web_research_enabled(row, settings)
+        and resolve_effective_voxint_web_research(row, settings)
         and resolve_effective_llm_enabled(row, settings)
     )
 
@@ -354,12 +358,17 @@ def execute_job(
         started_at = job.started_at or datetime.now(tz=UTC)
         owned_client: HttpLLMClient | None = None
         client: ChatJsonClient
+        # Resolve the effective (row-over-env) web-research provider config ONCE at
+        # this row-owning boundary and thread it into the retrieval path (issue #74):
+        # fetch.py/search.py have no Session, so an env-only read there would veto a
+        # UI enable (env false + row true). Read live like the LLM endpoint below.
+        row = get_app_settings(session)
+        effective_web = resolve_effective_web_research(row, settings)
         if llm is None:
             # Endpoint + key resolved LIVE from the row (issue #10): research reads
             # base_url/model live (not from the budget snapshot), and the effective
             # key (UI-stored value wins over env) is never snapshotted, so a key or
             # endpoint changed after enqueue takes effect with no restart.
-            row = get_app_settings(session)
             live_base_url, live_model = resolve_effective_llm_endpoint(row, settings)
             effective_key = resolve_effective_llm_api_key(row, settings)
             # Fold the live endpoint into exec_settings so the recorded producer-run
@@ -407,6 +416,7 @@ def execute_job(
             conclusion = run_research_loop(
                 llm=client,
                 settings=exec_settings,
+                effective_web=effective_web,
                 seed=seed,
                 roster_lookup=make_roster_lookup(session, target_speaker_id=speaker.id),
                 should_cancel=should_cancel,

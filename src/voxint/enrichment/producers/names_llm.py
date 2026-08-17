@@ -37,6 +37,7 @@ from voxint.adjudication.resolver import review_states
 from voxint.adjudication.transcript import effective_text
 from voxint.app_settings import (
     get_app_settings,
+    resolve_effective_enrichment_names_llm_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
@@ -192,7 +193,7 @@ def run_llm_name_producer(
     # separately and never persisted.
     row = get_app_settings(session)
     if not (
-        settings.enrichment_names_llm_enabled
+        resolve_effective_enrichment_names_llm_enabled(row, settings)
         and resolve_effective_llm_enabled(row, settings)
     ):
         raise NameProducerError(

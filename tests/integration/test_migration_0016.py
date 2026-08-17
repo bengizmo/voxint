@@ -106,5 +106,6 @@ def test_single_alembic_head() -> None:
     # 0018 = adjudication segment scope, issue #54; 0019 = transcript segment
     # confidence, 0020 = segment_review_states, issues #53/#58; 0021 =
     # waveform_peaks artifact kind, issue #57; 0022 = transcript_segments word
-    # timings JSONB, issue #59; 0023 = segment_split_boundaries, issue #59 slice 2).
-    assert list(heads) == ["0023"]
+    # timings JSONB, issue #59; 0023 = segment_split_boundaries, issue #59 slice 2;
+    # 0024 = app_settings feature-flag columns, issue #74).
+    assert list(heads) == ["0024"]
