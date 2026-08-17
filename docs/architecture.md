@@ -63,14 +63,14 @@ interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
 
-## Data model (alembic revisions 0001–0010)
+## Data model (alembic revisions 0001–0017)
 
 | Table | Role |
 |---|---|
-| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, and guided-tutorial state (revision 0006) |
+| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), and the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017) |
 | `media_items` | media identity, one row per source file. `source_path` (UNIQUE) is already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs; a nullable, non-unique `source_url` records URL provenance (revision 0005) |
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity: nothing here feeds attribution, and a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
-| `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry) and the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS) |
+| `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry), the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS), and the **write-once** `domain_pack` JSONB snapshot resolved at submit (revision 0017: the exact pack the run was transcribed with, read by the worker and enrichment; `NULL` on pre-0017 runs) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
 | `audio_artifacts` | derived files (preprocessed audio, chunks, exports); `reclaimed_at`/`reclaimed_bytes` record GC reclamation of the preprocessed-audio intermediate (issue #15) — the row survives as an audit stamp after its file is unlinked |
 | `audio_chunks` | chunk boundaries for long-file processing |
@@ -352,9 +352,20 @@ violations DO fail the stage. Test fakes satisfy the same protocols, which is
 how the end-to-end contract tests run without a GPU.
 
 Domain-specific vocabulary and prompts are their own seam: a **domain pack**
-(`voxint.domain_packs`, selected via `DOMAIN_PACK_PATH`) supplies ASR
-vocabulary hints, name seeds, and LLM prompt fragments; a neutral
-meeting/podcast pack ships as the default.
+(`voxint.domain_packs`) supplies ASR vocabulary hints, name seeds, and LLM
+prompt fragments; a neutral meeting/podcast pack ships as the default.
+Selection is **per run**, resolved once at submit and **frozen onto the run**
+as a JSON snapshot (`pipeline_runs.domain_pack`, revision 0017): the pipeline
+worker and the offline name producer both read that snapshot, never the live
+env, so late enrichment can never diverge from what transcription used and a
+manifest edited on disk afterward never changes a past run's result. The pack
+is chosen **per watched folder** via a `{media_folder → pack_name}` map on
+`app_settings` (`folder_domain_packs`) — an unmapped folder, an upload, or a
+URL takes the default pack (`DOMAIN_PACK_PATH`, else the bundled `generic`).
+Several named packs may live under `DOMAIN_PACKS_DIR` (one child folder per
+pack, resolved by manifest `name`); `voxint.domain_packs.registry` is the
+shared resolver, and a `NULL` snapshot (a run predating revision 0017) falls
+back to the current default at execution time.
 
 ## Review console (P5)
 

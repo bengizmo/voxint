@@ -4,6 +4,7 @@
 |---|---|
 | `onboarding.md` | First-run path: guided installer, setup wizard, and the bundled guided tutorial |
 | `architecture.md` | Pipeline stages, state machine, data model |
+| `domain-packs.md` | Domain packs: manifest, resolution, the per-run frozen snapshot, and which fields shape which stages |
 | `gpu-contracts.md` | Versioned HTTP contracts for the ASR / diarizer / embedder services |
 | `gpu-smoke.md` | Build + real-inference smoke procedure for the GPU service images |
 | `quality-gates.md` | Enhancement failure semantics, matching eligibility + grounding gates, confidence semantics |

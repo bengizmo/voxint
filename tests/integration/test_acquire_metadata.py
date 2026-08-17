@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint.db.models import MediaItem, MediaSourceMetadata
+from voxint.domain_packs.base import load_default
 from voxint.media.netcheck import Resolver
 from voxint.media.source_metadata import extract as extract_snapshot
 from voxint.media.source_metadata import sidecar_filename, to_sidecar_bytes
@@ -108,7 +109,7 @@ def _make_url_run(
         session.add(media)
         session.flush()
         media_id = media.id
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     return run_id, media_id, sp
 

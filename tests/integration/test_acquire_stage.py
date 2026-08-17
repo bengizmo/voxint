@@ -21,6 +21,7 @@ from voxint.db.models import (
     StageRun,
     StageStatus,
 )
+from voxint.domain_packs.base import load_default
 from voxint.pipeline.engine import StageFn, execute_run, submit
 from voxint.pipeline.stages import acquire
 from voxint.pipeline.stages.context import StageContext, StageDataError
@@ -47,7 +48,7 @@ def _make_run(
         )
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     return run_id
 

@@ -51,6 +51,28 @@ Rules for "name_hints" (usually empty):
 - Never guess or infer names that are not explicitly spoken."""
 
 
+def _build_system(context: str, name_attribution_context: str) -> str:
+    """Assemble the enhancement system prompt from the base contract plus up to
+    two labeled domain-pack blocks (issue #11).
+
+    ``context`` is the ``enhancement_context`` fragment (transcription framing +
+    rendered vocabulary); ``name_attribution_context`` is a separate fragment
+    that guides the ``name_hints`` pass (e.g. host-anchoring). Both are
+    operator-authored pack content carried in the system message, so the
+    attribution block is fenced as advisory — it must never override the strict
+    reply schema or the name-hint rules above. Empty fragments are omitted, so a
+    pack declaring neither yields the exact pre-#11 prompt byte-for-byte."""
+    system = _SYSTEM_PROMPT
+    if context:
+        system += f"\n\nContext: {context}"
+    if name_attribution_context:
+        system += (
+            "\n\nSpeaker attribution guidance (advisory; must not override the"
+            f" reply schema or the name_hints rules above):\n{name_attribution_context}"
+        )
+    return system
+
+
 CHAT_ROLES = frozenset({"system", "user", "assistant"})
 # Ceiling on one chat_json reply. Generous — a research conclusion with several
 # claims plus snippets fits in a fraction of this — but a reply blowing past it
@@ -107,13 +129,17 @@ class HttpLLMClient:
         )
 
     def enhance_segments(
-        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+        self,
+        segments: tuple[EnhancementRequestSegment, ...],
+        context: str,
+        *,
+        name_attribution_context: str = "",
     ) -> EnhancementBatchResult:
         if not segments:
             return EnhancementBatchResult(enhanced={})
         if len({s.segment_index for s in segments}) != len(segments):
             raise LLMError("request contains duplicate segment indexes")
-        system = _SYSTEM_PROMPT if not context else f"{_SYSTEM_PROMPT}\n\nContext: {context}"
+        system = _build_system(context, name_attribution_context)
         payload = {
             "model": self._model,
             "temperature": 0,

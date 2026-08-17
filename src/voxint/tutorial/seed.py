@@ -68,6 +68,7 @@ from voxint.db.models import (
     StageStatus,
     TranscriptSegment,
 )
+from voxint.domain_packs.base import load_default
 from voxint.pipeline.stages.context import normalized_audio_path
 from voxint.speakers.matching import (
     CosineProposal,
@@ -272,6 +273,9 @@ def _build_run(
             current_stage=None,
             revision=_TERMINAL_REVISION,
             error=None,
+            # The tutorial is a fixed teaching artifact — always the bundled
+            # generic pack, frozen like any other run (issue #11).
+            domain_pack=load_default().to_mapping(),
         )
     )
     session.flush()  # parent row must exist before its FK-bearing children insert

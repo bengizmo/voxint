@@ -55,7 +55,20 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
 
     hints: list[SpeakerNameHint] = []
     if ctx.llm is not None and segments:
-        hints = _enhance(ctx.llm, ctx.llm_policy, ctx.enhancement_context, segments, run_id)
+        # The run's frozen #11 pack may add a name-attribution fragment. Read it
+        # straight from the pack (unlike enhancement_context it needs no derived
+        # form — no vocabulary is folded in), keeping one source of truth.
+        name_attribution_context = ctx.domain_pack.prompt_fragments.get(
+            "name_attribution_context", ""
+        )
+        hints = _enhance(
+            ctx.llm,
+            ctx.llm_policy,
+            ctx.enhancement_context,
+            segments,
+            run_id,
+            name_attribution_context=name_attribution_context,
+        )
 
     proposals = match_speakers(session, run_id, ctx.matching_gates)
     replace_run_proposals(session, run_id, proposals, _select_hints(hints))
@@ -67,9 +80,13 @@ def _enhance(
     context: str,
     segments: Sequence[TranscriptSegment],
     run_id: uuid.UUID,
+    *,
+    name_attribution_context: str = "",
 ) -> list[SpeakerNameHint]:
     """Write enhanced_text onto ``segments`` batch by batch; return the name
-    hints heard along the way (in encounter order)."""
+    hints heard along the way (in encounter order). ``name_attribution_context``
+    is the run's #11 pack fragment guiding the name_hints pass ("" when the pack
+    declares none)."""
     batches = _build_batches(segments, policy)
     deadline = time.monotonic() + policy.run_budget_seconds
     consecutive_failures = 0
@@ -109,7 +126,9 @@ def _enhance(
             if attempt > 1 and time.monotonic() >= deadline:
                 break
             try:
-                result = llm.enhance_segments(request, context)
+                result = llm.enhance_segments(
+                    request, context, name_attribution_context=name_attribution_context
+                )
                 break
             except LLMError as exc:
                 logger.warning(

@@ -114,6 +114,54 @@ def test_request_carries_auth_model_context_and_segments() -> None:
     ]
 
 
+def _sent_system(handler_seen: dict[str, Any]) -> str:
+    return str(handler_seen["body"]["messages"][0]["content"])
+
+
+def _capture_system(seen: dict[str, Any]) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return reply([{"index": 0, "text": "a"}, {"index": 1, "text": "b"}])
+
+    return handler
+
+
+def test_no_fragments_leaves_system_prompt_unchanged() -> None:
+    # Byte-for-byte the pre-#11 prompt when a pack declares neither fragment.
+    seen: dict[str, Any] = {}
+    make_client(_capture_system(seen)).enhance_segments(SEGMENTS, "")
+    from voxint.clients.llm import _SYSTEM_PROMPT
+
+    assert _sent_system(seen) == _SYSTEM_PROMPT
+
+
+def test_name_attribution_context_appears_as_second_labeled_block() -> None:
+    seen: dict[str, Any] = {}
+    make_client(_capture_system(seen)).enhance_segments(
+        SEGMENTS, "astronomy podcast", name_attribution_context="Host is the most talkative voice."
+    )
+    system = _sent_system(seen)
+    # Both blocks present, enhancement Context first then the advisory
+    # attribution block.
+    ctx_at = system.index("Context: astronomy podcast")
+    attr_at = system.index("Host is the most talkative voice.")
+    assert ctx_at < attr_at
+    assert "Speaker attribution guidance" in system
+    assert "advisory" in system[:attr_at]
+
+
+def test_attribution_context_without_enhancement_context() -> None:
+    # A pack may declare only the attribution fragment — no stray "Context:" line.
+    seen: dict[str, Any] = {}
+    make_client(_capture_system(seen)).enhance_segments(
+        SEGMENTS, "", name_attribution_context="Anchor the recurring host."
+    )
+    system = _sent_system(seen)
+    assert "Context:" not in system
+    assert "Speaker attribution guidance" in system
+    assert "Anchor the recurring host." in system
+
+
 def test_no_auth_header_without_api_key() -> None:
     seen: dict[str, Any] = {}
 
