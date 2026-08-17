@@ -672,7 +672,7 @@ Pre-registered bounds (ratcheting any afterwards is a numerics decision):
 | Segment boundary drift (text-aligned, matched non-empty only) | p95 ≤ 0.5 s **and** p99/max ≤ 1.5 s; unmatched-segment rate ≤ 2 %; word-timestamp drift reported |
 | Zero-insertion (true non-speech fixtures) | absolute 0 chars; where CT2 already emits, ≤ baseline + 0 (no growth) |
 | Confidence conformance | per-file Spearman ρ(candidate, CT2) median ≥ 0.90 **and** top-level confidence MAE ≤ 0.05 **and** logprob coverage within ±5 % |
-| Performance (the point of Metal) | warm long-form RTF ≥ 1.5× over CT2-CPU on the maintainer box; peak unified memory ≤ ceiling (one engine resident); cold-start recorded |
+| Performance (the point of Metal) | warm long-form speedup = CT2-CPU wall / candidate wall ≥ 1.5× on the maintainer box; peak unified memory ≤ ceiling (one engine resident); cold-start recorded |
 | Determinism | two warm runs identical or within a stated stdev |
 
 A confidence miss is an explicit amendment to the Confidence contract above,
@@ -693,6 +693,25 @@ and boundary drift is scored only on files with word/tight-segment gold.
 verdict row + report under `docs/reports/`) in a separate change from the flip,
 which ships as a MINOR release with `WHISPER_ENGINE=ct2`/`ct2-legacy` as the
 rollback path and a diarization canary on a diarized AMI slice beforehand.
+
+**Measured verdict — mlx (2026-08-17): documented-ineligible in current form.**
+A 4-file diagnostic screen (AMI, 3–10 VAD windows each, committed scoring
+harness vs the frozen CT2 baseline) measured `mlx-whisper==0.4.3` +
+`whisper-large-v2-mlx` (fp16; greedy — no beam search exists upstream) at
+pooled WER-diff **19–21 pp** vs the ≤2.0 pp bound and worst-file **115–149 pp**
+vs ≤5 pp, under every decode configuration tested (temperature-fallback ladder
+on/off, per-window and concatenated feeding). Not a fixable decode-config
+problem: the dominant failure is confident transcription of headset crosstalk
+(real speech decoded below every fallback trigger), plus systematic
+greedy-fp16 vs beam5-int8 drift on clean files; where the fallback ladder did
+fire it kept a degenerate last attempt (upstream `mlx-examples` #1427) and made
+output worse. Performance was **not** the blocker (pooled warm speedup 1.72×,
+gate ≥1.5×). Full evidence:
+`docs/reports/whisper-metal-bakeoff-slice3-decode-2026-08-17.md`. Re-measure
+only if upstream lands beam search and/or the #1427 fallback fix; `mlx` stays
+out of `KNOWN_ENGINES`. Next measured candidate arm: **whisper.cpp Metal**
+(has beam search and int8-family quantization, addressing both measured root
+causes); CT2-MPS remains deferred (upstream PR OpenNMT/CTranslate2#2077).
 
 ## Contract tests
 

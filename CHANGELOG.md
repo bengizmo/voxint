@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Whisper Metal bakeoff (#33) — mlx candidate measured ineligible**: the
+  Slice-3 decode diagnostic
+  (`docs/reports/whisper-metal-bakeoff-slice3-decode-2026-08-17.md`) measured
+  mlx-whisper large-v2 (fp16, greedy) at 19–21 pp pooled disagreement vs the
+  frozen CT2 baseline against a ≤2.0 pp gate, under every decode configuration
+  tested — a negative result recorded per the numerics doctrine (the gate is
+  unchanged). `docs/gpu-contracts.md` gains the dated verdict block, names
+  whisper.cpp Metal as the next measured candidate arm, and corrects the
+  performance-gate wording to the intended `speedup = CT2 wall / candidate
+  wall ≥ 1.5×` form. No behavior change: `mlx` was never registered in
+  `WHISPER_ENGINE`.
 - **Draft triage: multi-signal review-priority scoring** (#42): enrichment drafts
   now carry an explainable **review priority** that orders them and populates the
   `unresolved` bucket, so an operator sees the strongest name and profile
