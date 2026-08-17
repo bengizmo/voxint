@@ -3,35 +3,41 @@
 #
 # The counterpart to scripts/metal/voxint-metal.sh: that script supervises the
 # three MODEL services natively; this one supervises the CORE control plane --
-# the api server, the Celery worker, and Celery beat -- under launchd, with no
-# Docker at all. Issue #69 (the MVP of epic #68, "run without Docker").
+# a launcher-managed PostgreSQL 17 + pgvector, Redis, the api server, the Celery
+# worker, and Celery beat -- all under launchd, with no Docker at all. Issue #69
+# (the MVP of epic #68, "run without Docker").
 #
 # This is a TECHNICAL PREVIEW, not the non-technical packaged release (#73). It
 # keeps the current architecture (Postgres+pgvector, Redis, Celery, beat) to
 # prove the native lifecycle end-to-end before any dependency is removed.
 #
-#   setup                 create the core venv (uv), install voxint editable
-#   up | down             start/stop api/worker/beat under launchd (KeepAlive
-#                         restarts them after a crash -- the native equivalent
-#                         of the containers' restart policy). `up` runs
+#   setup                 brew-install the datastore binaries, create the core
+#                         venv, initdb a PRIVATE cluster, generate secrets
+#   up | down             start/stop the whole core stack under launchd
+#                         (KeepAlive restarts a crashed service -- the native
+#                         equivalent of the containers' restart policy). `up`
+#                         provisions the role/db/extension and runs
 #                         `alembic upgrade head` BEFORE starting api/worker,
 #                         reproducing compose's migrate gate.
 #   status                per-service supervision state + api /healthz +
 #                         Postgres/Redis reachability
 #   logs <svc> [-f]       show (or follow) a service's log
-#   doctor                environment checks: tooling, venv, ffmpeg/ffprobe,
-#                         Postgres/Redis reachability, ports
+#   doctor                environment checks: tooling, brew formulae, venv,
+#                         ffmpeg/ffprobe, cluster + pgvector, ports
+#   backup                pg_dump -Fc the voxint database into backups/
+#   restore <file>        pg_restore a dump into the voxint database
 #   run <svc> --foreground  run one service in the foreground for debugging
 #
 # Layout (override the root with VOXINT_NATIVE_HOME):
-#   $HOME/.voxint-native/{venv,logs,run,backups}
+#   $HOME/.voxint-native/{venv,pgdata,logs,run,backups,state.env}
 #
-# SLICE 1 SCOPE: Postgres 17 + pgvector and Redis are OPERATOR-PROVIDED and
-# already running on 127.0.0.1 (doctor checks reachability). A later slice adds
-# a launcher-managed private cluster; model-service delegation, the frontend
-# island build, and log rotation land alongside it.
+# A launcher-managed PRIVATE Postgres+Redis is the default: brew provides the
+# binaries, but the cluster + data live under VOXINT_NATIVE_HOME on their own
+# ports, so nothing collides with an operator's existing brew Postgres. If the
+# cluster has not been initialized, `up` falls back to operator-provided
+# datastores on 127.0.0.1 (doctor reports which mode is in effect).
 #
-# Requirements: macOS on Apple Silicon, uv. Bash 3.2 compatible.
+# Requirements: macOS on Apple Silicon, uv, Homebrew. Bash 3.2 compatible.
 #
 # Sourcing with VOXINT_NATIVE_LIB=1 loads the functions without running main
 # (tests/unit/test_native_launcher.py exercises the pure logic that way).
@@ -55,14 +61,15 @@ fi
 
 VOXINT_NATIVE_HOME=${VOXINT_NATIVE_HOME:-$HOME/.voxint-native}
 
-# Supervised core processes. Model services stay under voxint-metal.sh.
+# Supervised processes. Datastores come up (and go down) as a group distinct
+# from the core services, with the migrate gate between them in `up`.
+NATIVE_DATASTORES="postgres redis"
 NATIVE_SERVICES="api worker beat"
 LAUNCHD_PREFIX=com.voxint.native
 
 # Core-service connection config. All overridable; the defaults match the app's
-# own config.py fallbacks (localhost Postgres/Redis) with the host/port made
-# explicit. The DB password default mirrors compose's voxint:voxint dev pair;
-# a managed cluster (later slice) generates a real one into state.env.
+# own config.py fallbacks with the host/port made explicit. `setup` may move the
+# ports off a collision and persists the chosen values to state.env.
 NATIVE_DB_USER=${VOXINT_NATIVE_DB_USER:-voxint}
 NATIVE_DB_NAME=${VOXINT_NATIVE_DB_NAME:-voxint}
 NATIVE_DB_PASSWORD=${VOXINT_NATIVE_DB_PASSWORD:-voxint}
@@ -71,9 +78,26 @@ NATIVE_REDIS_PORT=${VOXINT_NATIVE_REDIS_PORT:-6379}
 NATIVE_API_HOST=${VOXINT_NATIVE_API_HOST:-127.0.0.1}
 NATIVE_API_PORT=${VOXINT_NATIVE_API_PORT:-8080}
 # Homebrew prefix -- put its bin on each service's PATH so the worker finds
-# ffmpeg/ffprobe (the app resolves the bare names "ffmpeg"/"ffprobe" on PATH,
-# and launchd inherits none of the login shell's PATH). Arm64 default.
+# ffmpeg/ffprobe (the app resolves the bare names on PATH, and launchd inherits
+# none of the login shell's PATH). Arm64 default.
 NATIVE_BREW_PREFIX=${VOXINT_NATIVE_BREW_PREFIX:-/opt/homebrew}
+# postgresql@17 is keg-only, so its binaries live under opt/. Overridable.
+NATIVE_PG_BINDIR=${VOXINT_NATIVE_PG_BINDIR:-$NATIVE_BREW_PREFIX/opt/postgresql@17/bin}
+NATIVE_PGDATA=$VOXINT_NATIVE_HOME/pgdata
+NATIVE_STATE=$VOXINT_NATIVE_HOME/state.env
+
+# Remember which connection knobs the operator set explicitly: load_state and
+# the setup port-picker must never clobber an explicit override with a
+# persisted or auto-picked value.
+_pg_port_explicit=${VOXINT_NATIVE_PG_PORT:+1}
+_redis_port_explicit=${VOXINT_NATIVE_REDIS_PORT:+1}
+_api_port_explicit=${VOXINT_NATIVE_API_PORT:+1}
+_db_password_explicit=${VOXINT_NATIVE_DB_PASSWORD:+1}
+
+# Secrets, threaded through native_service_env when set. load_state fills these
+# from state.env; setup generates them on a fresh install.
+VOXINT_NATIVE_PASSWORD=${VOXINT_NATIVE_PASSWORD:-}
+VOXINT_NATIVE_CSRF_SECRET=${VOXINT_NATIVE_CSRF_SECRET:-}
 
 # Model-service ports the api/worker reach over loopback. These are owned by
 # scripts/metal/voxint-metal.sh (service_port there); a contract test binds the
@@ -103,6 +127,16 @@ native_redis_url() {
   printf 'redis://127.0.0.1:%s/0' "$NATIVE_REDIS_PORT"
 }
 
+# 32 bytes of /dev/urandom as 64 hex chars (256 bits). Lifted from
+# scripts/install.sh: no openssl/python dependency, hex needs no dotenv
+# escaping, and it exceeds the app's 16-char CSRF minimum.
+generate_secret() {
+  local s
+  s=$(od -An -N32 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n') || return 1
+  [ "${#s}" -eq 64 ] || return 1
+  printf '%s' "$s"
+}
+
 # True if something on 127.0.0.1:$1 accepts a TCP connection or leaves it
 # hanging. Same watchdog probe as the metal launcher / scripts/install.sh --
 # macOS drops the SYN silently on a full accept queue, so a plain /dev/tcp
@@ -121,6 +155,15 @@ port_in_use() {
     sleep 0.1
   done
   wait "$probe_pid"
+}
+
+next_free_port() {
+  local p=$1
+  while port_in_use "$p"; do
+    p=$((p + 1))
+    [ "$p" -le 65535 ] || { printf '%s' "$1"; return; }
+  done
+  printf '%s' "$p"
 }
 
 # ---------------------------------------------------------------------------
@@ -171,16 +214,68 @@ resolved_media_root_or_fail() {
 }
 
 # ---------------------------------------------------------------------------
+# Persisted state. setup writes the chosen ports + generated secrets to
+# state.env (mode 0600); up/status/doctor/backup load it before doing anything.
+# An explicit env override always wins over the persisted value.
+# ---------------------------------------------------------------------------
+load_state() {
+  local sf=$NATIVE_STATE v
+  [ -f "$sf" ] || return 0
+  if [ -z "$_pg_port_explicit" ]; then
+    v=$(env_value_from_file PG_PORT "$sf"); [ -n "$v" ] && NATIVE_PG_PORT=$v
+  fi
+  if [ -z "$_redis_port_explicit" ]; then
+    v=$(env_value_from_file REDIS_PORT "$sf"); [ -n "$v" ] && NATIVE_REDIS_PORT=$v
+  fi
+  if [ -z "$_api_port_explicit" ]; then
+    v=$(env_value_from_file API_PORT "$sf"); [ -n "$v" ] && NATIVE_API_PORT=$v
+  fi
+  if [ -z "$_db_password_explicit" ]; then
+    v=$(env_value_from_file DB_PASSWORD "$sf"); [ -n "$v" ] && NATIVE_DB_PASSWORD=$v
+  fi
+  v=$(env_value_from_file VOXINT_PASSWORD "$sf"); [ -n "$v" ] && VOXINT_NATIVE_PASSWORD=$v
+  v=$(env_value_from_file CSRF_SECRET "$sf"); [ -n "$v" ] && VOXINT_NATIVE_CSRF_SECRET=$v
+  return 0
+}
+
+write_state_env() {
+  # umask 077 -> the temp is 0600 from birth; atomic mv; explicit chmod. Secrets
+  # never touch a world-readable inode. Mirrors scripts/install.sh write_env.
+  local tmp
+  ( umask 077
+    tmp=$(mktemp "$VOXINT_NATIVE_HOME/state.env.XXXXXX") || exit 1
+    {
+      printf '# Written by voxint-native.sh setup -- ports + secrets (mode 0600).\n'
+      printf 'PG_PORT=%s\n' "$NATIVE_PG_PORT"
+      printf 'REDIS_PORT=%s\n' "$NATIVE_REDIS_PORT"
+      printf 'API_PORT=%s\n' "$NATIVE_API_PORT"
+      printf 'DB_PASSWORD=%s\n' "$NATIVE_DB_PASSWORD"
+      printf 'VOXINT_PASSWORD=%s\n' "$VOXINT_NATIVE_PASSWORD"
+      printf 'CSRF_SECRET=%s\n' "$VOXINT_NATIVE_CSRF_SECRET"
+    } > "$tmp"
+    mv -f "$tmp" "$NATIVE_STATE"
+    chmod 600 "$NATIVE_STATE"
+  ) || fail "could not write $NATIVE_STATE"
+}
+
+# ---------------------------------------------------------------------------
 # Per-service argv and environment. ONE assembly point each, used by both the
 # launchd plist generator and `run --foreground`, so the supervised and debug
 # paths cannot drift. native_program_args prints one argv element per line;
-# native_service_env prints KEY=VALUE lines. launchd inherits no shell
-# environment -- everything a service needs must be listed explicitly.
+# native_service_env prints KEY=VALUE lines (datastores carry their config as
+# flags and need no baked env). launchd inherits no shell environment.
 # ---------------------------------------------------------------------------
 native_program_args() {
   local svc=$1 venv
   venv=$(core_venv)
   case $svc in
+    # Managed datastores. Bind 127.0.0.1 only; data + socket live under our home.
+    postgres) printf '%s\n' "$NATIVE_PG_BINDIR/postgres" \
+                "-D" "$NATIVE_PGDATA" "-p" "$NATIVE_PG_PORT" \
+                "-k" "$VOXINT_NATIVE_HOME/run" "-c" "listen_addresses=127.0.0.1" ;;
+    redis)    printf '%s\n' "$NATIVE_BREW_PREFIX/bin/redis-server" \
+                "--port" "$NATIVE_REDIS_PORT" "--bind" "127.0.0.1" \
+                "--dir" "$VOXINT_NATIVE_HOME" ;;
     # `voxint serve` reads API_HOST/API_PORT from the env below and calls
     # uvicorn.run("voxint.api.app:app", ...) -- byte-identical to the image CMD.
     api)    printf '%s\n' "$venv/bin/voxint" "serve" ;;
@@ -195,7 +290,19 @@ native_program_args() {
 
 native_service_env() {
   local svc=$1 media_root=$2
-  case $svc in api|worker|beat) : ;; *) return 1 ;; esac
+  case $svc in
+    postgres)
+      # macOS launchd inherits no locale; without a valid LC_ALL the postmaster
+      # "becomes multithreaded during startup" and dies (a known Darwin trap).
+      # Match the cluster's initdb --locale=C.
+      printf 'LC_ALL=C\n'
+      printf 'LANG=C\n'
+      return 0
+      ;;
+    redis) return 0 ;;
+    api|worker|beat) : ;;
+    *) return 1 ;;
+  esac
   printf 'DATABASE_URL=%s\n' "$(native_database_url)"
   printf 'REDIS_URL=%s\n' "$(native_redis_url)"
   printf 'MEDIA_ROOT=%s\n' "$media_root"
@@ -210,12 +317,11 @@ native_service_env() {
   # venv/bin first, then Homebrew (ffmpeg/ffprobe), then the system dirs.
   printf 'PATH=%s/bin:%s/bin:/usr/bin:/bin:/usr/sbin:/sbin\n' \
     "$(core_venv)" "$NATIVE_BREW_PREFIX"
-  # Secrets are threaded through only when provided (a managed deployment sets
-  # them; on loopback the app tolerates its own defaults). Emitting an empty
-  # value would override the app default with a weaker one.
-  [ -n "${VOXINT_NATIVE_PASSWORD:-}" ] \
+  # Secrets are threaded through only when provided. Emitting an empty value
+  # would override the app default with a weaker one.
+  [ -n "$VOXINT_NATIVE_PASSWORD" ] \
     && printf 'VOXINT_PASSWORD=%s\n' "$VOXINT_NATIVE_PASSWORD"
-  [ -n "${VOXINT_NATIVE_CSRF_SECRET:-}" ] \
+  [ -n "$VOXINT_NATIVE_CSRF_SECRET" ] \
     && printf 'CSRF_SECRET=%s\n' "$VOXINT_NATIVE_CSRF_SECRET"
   case $svc in
     api)
@@ -255,6 +361,7 @@ render_plist() {
       "$(xml_escape "$REPO_ROOT")"
     printf '  <key>EnvironmentVariables</key>\n  <dict>\n'
     printf '%s\n' "$env_block" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
       key=${line%%=*}
       value=${line#*=}
       printf '    <key>%s</key><string>%s</string>\n' \
@@ -284,14 +391,93 @@ require_macos() {
 require_tools() {
   command -v uv >/dev/null 2>&1 \
     || fail "uv is required (https://docs.astral.sh/uv/ or: brew install uv)"
+  command -v brew >/dev/null 2>&1 \
+    || fail "Homebrew is required to provision Postgres/Redis (https://brew.sh)"
+}
+
+brew_install_datastores() {
+  local f
+  for f in postgresql@17 pgvector redis; do
+    if brew list --versions "$f" >/dev/null 2>&1; then
+      say "  $f already installed"
+    else
+      say "  brew install $f"
+      brew install "$f" >&2 || fail "brew install $f failed"
+    fi
+  done
+  # Prefer brew's own answer for the (keg-only) bindir when we can get it.
+  local prefix
+  prefix=$(brew --prefix postgresql@17 2>/dev/null) || prefix=""
+  [ -n "$prefix" ] && [ -x "$prefix/bin/initdb" ] && NATIVE_PG_BINDIR=$prefix/bin
+  [ -x "$NATIVE_PG_BINDIR/initdb" ] \
+    || fail "cannot find initdb under $NATIVE_PG_BINDIR (set VOXINT_NATIVE_PG_BINDIR)"
+}
+
+init_cluster() {
+  if [ -f "$NATIVE_PGDATA/PG_VERSION" ]; then
+    say "  cluster already initialized at $NATIVE_PGDATA"
+    return 0
+  fi
+  say "  initdb $NATIVE_PGDATA"
+  # trust auth on the loopback-only cluster: this is a single-operator local
+  # preview, not a shared server (#71 hardens the DB story). UTF-8 / C locale.
+  "$NATIVE_PG_BINDIR/initdb" -D "$NATIVE_PGDATA" \
+    --encoding=UTF8 --locale=C \
+    --auth-local=trust --auth-host=trust >&2 \
+    || fail "initdb failed"
+}
+
+ensure_database() {
+  # Idempotent role/db/extension provisioning. Runs as the OS superuser initdb
+  # created (the current user), over loopback TCP. The extension is created here
+  # by the superuser so migration 0001's `CREATE EXTENSION IF NOT EXISTS vector`
+  # (which the unprivileged voxint role could not run) simply no-ops.
+  local psql=$NATIVE_PG_BINDIR/psql su
+  su=$(id -un)
+  "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -tAc \
+    "SELECT 1 FROM pg_roles WHERE rolname='$NATIVE_DB_USER'" | grep -q 1 \
+    || "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -c \
+       "CREATE ROLE \"$NATIVE_DB_USER\" LOGIN PASSWORD '$NATIVE_DB_PASSWORD'" >&2
+  "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -tAc \
+    "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'" | grep -q 1 \
+    || "$NATIVE_PG_BINDIR/createdb" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" \
+       -O "$NATIVE_DB_USER" "$NATIVE_DB_NAME" >&2
+  "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d "$NATIVE_DB_NAME" -v ON_ERROR_STOP=1 -c \
+    "CREATE EXTENSION IF NOT EXISTS vector" >&2 \
+    || fail "CREATE EXTENSION vector failed -- is pgvector built against postgresql@17? (brew reinstall pgvector)"
 }
 
 cmd_setup() {
   require_macos
   require_tools
-  local venv
+  local venv fresh=0
   step "Directories under $VOXINT_NATIVE_HOME"
   mkdir -p "$VOXINT_NATIVE_HOME/logs" "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/backups"
+
+  step "Datastore binaries (Homebrew)"
+  brew_install_datastores
+
+  # Load any prior state first so re-running setup keeps the same ports/secrets;
+  # only a fresh install picks ports and mints secrets.
+  load_state
+  [ -f "$NATIVE_STATE" ] || fresh=1
+  if [ "$fresh" = 1 ]; then
+    step "Choosing ports (moving off collisions) and generating secrets"
+    [ -n "$_pg_port_explicit" ]    || NATIVE_PG_PORT=$(next_free_port "$NATIVE_PG_PORT")
+    [ -n "$_redis_port_explicit" ] || NATIVE_REDIS_PORT=$(next_free_port "$NATIVE_REDIS_PORT")
+    [ -n "$_api_port_explicit" ]   || NATIVE_API_PORT=$(next_free_port "$NATIVE_API_PORT")
+    [ -n "$_db_password_explicit" ] || NATIVE_DB_PASSWORD=$(generate_secret) \
+      || fail "secret generation failed"
+    [ -n "$VOXINT_NATIVE_PASSWORD" ] || VOXINT_NATIVE_PASSWORD=$(generate_secret) \
+      || fail "secret generation failed"
+    [ -n "$VOXINT_NATIVE_CSRF_SECRET" ] || VOXINT_NATIVE_CSRF_SECRET=$(generate_secret) \
+      || fail "secret generation failed"
+    write_state_env
+    say "  postgres :$NATIVE_PG_PORT  redis :$NATIVE_REDIS_PORT  api :$NATIVE_API_PORT"
+    say "  secrets written to $NATIVE_STATE (mode 0600)"
+  else
+    say "  reusing ports + secrets from $NATIVE_STATE"
+  fi
 
   step "Core Python 3.11 venv (uv)"
   venv=$(core_venv)
@@ -302,10 +488,11 @@ cmd_setup() {
   say "  installing voxint (editable) into the core venv"
   uv pip install --quiet --python "$venv/bin/python" -e "$REPO_ROOT" >&2
 
+  step "Private PostgreSQL 17 cluster"
+  init_cluster
+
   step "Setup complete"
-  say "This preview slice expects an operator-provided PostgreSQL 17 + pgvector"
-  say "and Redis on 127.0.0.1. Verify with: $0 doctor"
-  say "Then start the core stack with: $0 up"
+  say "Start the whole stack (Postgres + Redis + api/worker/beat) with: $0 up"
   say "Note: submissions will fail until the model services are also up"
   say "(scripts/metal/voxint-metal.sh up)."
 }
@@ -323,7 +510,9 @@ run_alembic() {
 wait_for_postgres() {
   local i=0
   while [ "$i" -lt 60 ]; do
-    if command -v pg_isready >/dev/null 2>&1; then
+    if [ -x "$NATIVE_PG_BINDIR/pg_isready" ]; then
+      "$NATIVE_PG_BINDIR/pg_isready" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -q && return 0
+    elif command -v pg_isready >/dev/null 2>&1; then
       pg_isready -h 127.0.0.1 -p "$NATIVE_PG_PORT" -q && return 0
     else
       port_in_use "$NATIVE_PG_PORT" && return 0
@@ -335,10 +524,11 @@ wait_for_postgres() {
 }
 
 wait_for_redis() {
-  local i=0
+  local i=0 cli=$NATIVE_BREW_PREFIX/bin/redis-cli
+  [ -x "$cli" ] || cli=redis-cli
   while [ "$i" -lt 60 ]; do
-    if command -v redis-cli >/dev/null 2>&1; then
-      [ "$(redis-cli -h 127.0.0.1 -p "$NATIVE_REDIS_PORT" ping 2>/dev/null)" = "PONG" ] \
+    if command -v "$cli" >/dev/null 2>&1 || [ -x "$cli" ]; then
+      [ "$("$cli" -h 127.0.0.1 -p "$NATIVE_REDIS_PORT" ping 2>/dev/null)" = "PONG" ] \
         && return 0
     else
       port_in_use "$NATIVE_REDIS_PORT" && return 0
@@ -370,18 +560,37 @@ bootstrap_service() {
   say "started $label"
 }
 
+managed_cluster() { [ -f "$NATIVE_PGDATA/PG_VERSION" ]; }
+
 cmd_up() {
   require_macos
-  local media_root svc
+  load_state
+  local media_root svc managed=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
+  managed_cluster && managed=1
   media_root=$(resolved_media_root_or_fail)
   mkdir -p "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/logs"
 
-  step "Waiting for Postgres + Redis (operator-provided in this slice)"
-  wait_for_postgres || fail "Postgres not reachable at 127.0.0.1:$NATIVE_PG_PORT -- start PostgreSQL 17 + pgvector, then re-run (see: $0 doctor)"
+  if [ "$managed" = 1 ]; then
+    step "Starting managed datastores under launchd"
+    for svc in $NATIVE_DATASTORES; do
+      bootstrap_service "$svc" "$media_root"
+    done
+  else
+    step "Using operator-provided Postgres + Redis (no managed cluster found)"
+  fi
+
+  step "Waiting for Postgres + Redis"
+  wait_for_postgres || fail "Postgres not reachable at 127.0.0.1:$NATIVE_PG_PORT (see: $0 doctor)"
   say "  Postgres reachable on :$NATIVE_PG_PORT"
-  wait_for_redis || fail "Redis not reachable at 127.0.0.1:$NATIVE_REDIS_PORT -- start Redis, then re-run"
+  wait_for_redis || fail "Redis not reachable at 127.0.0.1:$NATIVE_REDIS_PORT"
   say "  Redis reachable on :$NATIVE_REDIS_PORT"
+
+  if [ "$managed" = 1 ]; then
+    step "Provisioning role / database / pgvector extension"
+    ensure_database
+    say "  role, database, and vector extension present"
+  fi
 
   step "Applying migrations (alembic upgrade head) BEFORE starting api/worker"
   run_alembic upgrade head || fail "alembic upgrade head failed (see the error above)"
@@ -396,10 +605,19 @@ cmd_up() {
 }
 
 cmd_down() {
-  local svc label
-  for svc in $NATIVE_SERVICES; do
+  local svc label i
+  # Core services first, then the datastores they depend on.
+  for svc in $NATIVE_SERVICES $NATIVE_DATASTORES; do
     label=$(plist_label "$svc")
     if launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      # bootout returns before the job is fully torn down; wait (bounded) so a
+      # following `status`/`up` sees the real state, not a mid-teardown ghost.
+      i=0
+      while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+        i=$((i + 1))
+        [ "$i" -le 50 ] || break
+        sleep 0.2
+      done
       say "stopped $label"
     else
       say "$label was not running"
@@ -408,8 +626,26 @@ cmd_down() {
 }
 
 cmd_status() {
-  local svc label state health pg redis
-  step "Native core services"
+  load_state
+  local svc label state health
+  step "Managed datastores"
+  for svc in $NATIVE_DATASTORES; do
+    label=$(plist_label "$svc")
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      state="supervised"
+    else
+      state="NOT loaded"
+    fi
+    if [ "$svc" = postgres ]; then
+      printf '%-9s %-12s :%s  %s\n' "$svc" "[$state]" "$NATIVE_PG_PORT" \
+        "$(port_in_use "$NATIVE_PG_PORT" && echo listening || echo 'not reachable')"
+    else
+      printf '%-9s %-12s :%s  %s\n' "$svc" "[$state]" "$NATIVE_REDIS_PORT" \
+        "$(port_in_use "$NATIVE_REDIS_PORT" && echo listening || echo 'not reachable')"
+    fi
+  done
+
+  step "Core services"
   for svc in $NATIVE_SERVICES; do
     label=$(plist_label "$svc")
     if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
@@ -417,20 +653,14 @@ cmd_status() {
     else
       state="NOT loaded"
     fi
-    if [ "$svc" = "api" ]; then
+    if [ "$svc" = api ]; then
       health=$(curl -fsS -m 3 "http://127.0.0.1:$NATIVE_API_PORT/healthz" 2>/dev/null) \
         || health="unreachable"
-      printf '%-7s %-12s :%s  %s\n' "$svc" "[$state]" "$NATIVE_API_PORT" "$health"
+      printf '%-9s %-12s :%s  %s\n' "$svc" "[$state]" "$NATIVE_API_PORT" "$health"
     else
-      printf '%-7s %-12s\n' "$svc" "[$state]"
+      printf '%-9s %-12s\n' "$svc" "[$state]"
     fi
   done
-
-  step "Datastores"
-  if port_in_use "$NATIVE_PG_PORT"; then pg="listening"; else pg="not reachable"; fi
-  if port_in_use "$NATIVE_REDIS_PORT"; then redis="listening"; else redis="not reachable"; fi
-  printf 'postgres  :%s  %s\n' "$NATIVE_PG_PORT" "$pg"
-  printf 'redis     :%s  %s\n' "$NATIVE_REDIS_PORT" "$redis"
 
   step "Version"
   say "working tree: $(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
@@ -438,14 +668,45 @@ cmd_status() {
 
 cmd_logs() {
   local svc=${1:-} follow=${2:-}
-  [ -n "$svc" ] || fail "usage: $0 logs <api|worker|beat> [-f]"
-  case $svc in api|worker|beat) : ;; *) fail "unknown service: $svc" ;; esac
+  [ -n "$svc" ] || fail "usage: $0 logs <postgres|redis|api|worker|beat> [-f]"
+  case $svc in postgres|redis|api|worker|beat) : ;; *) fail "unknown service: $svc" ;; esac
   if [ "$follow" = "-f" ]; then
-    # -F, not -f: a manually deleted/recreated log would strand a plain -f follower.
     tail -F "$(service_log "$svc")"
   else
     tail -n 100 "$(service_log "$svc")"
   fi
+}
+
+# ---------------------------------------------------------------------------
+# Backup / restore
+# ---------------------------------------------------------------------------
+cmd_backup() {
+  load_state
+  managed_cluster || fail "no managed cluster to back up (see: $0 setup)"
+  wait_for_postgres || fail "Postgres not reachable on :$NATIVE_PG_PORT -- is the stack up?"
+  local stamp out
+  stamp=$(date +%Y-%m-%d-%H-%M-%S)
+  out=$VOXINT_NATIVE_HOME/backups/voxint-$stamp.dump
+  say "pg_dump -> $out"
+  "$NATIVE_PG_BINDIR/pg_dump" -Fc -h 127.0.0.1 -p "$NATIVE_PG_PORT" \
+    -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$out" \
+    || fail "pg_dump failed"
+  say "backup complete: $out"
+}
+
+cmd_restore() {
+  load_state
+  local file=${1:-}
+  [ -n "$file" ] || fail "usage: $0 restore <dump-file>"
+  [ -f "$file" ] || fail "no such dump: $file"
+  managed_cluster || fail "no managed cluster to restore into (see: $0 setup)"
+  wait_for_postgres || fail "Postgres not reachable on :$NATIVE_PG_PORT -- is the stack up?"
+  say "pg_restore <- $file (into $NATIVE_DB_NAME)"
+  # --clean --if-exists so a restore over an existing schema replaces it.
+  "$NATIVE_PG_BINDIR/pg_restore" --clean --if-exists --no-owner \
+    -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" -d "$NATIVE_DB_NAME" "$file" \
+    || fail "pg_restore reported errors (see above)"
+  say "restore complete"
 }
 
 # ---------------------------------------------------------------------------
@@ -460,7 +721,8 @@ doctor_report() {
 
 cmd_doctor() {
   DOCTOR_RC=0
-  local venv bin
+  load_state
+  local venv bin su
 
   step "Tooling"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
@@ -470,6 +732,8 @@ cmd_doctor() {
   fi
   command -v uv >/dev/null 2>&1 \
     && doctor_report PASS "uv present" || doctor_report FAIL "uv missing"
+  command -v brew >/dev/null 2>&1 \
+    && doctor_report PASS "Homebrew present" || doctor_report FAIL "Homebrew missing"
   for bin in ffmpeg ffprobe; do
     if PATH="$NATIVE_BREW_PREFIX/bin:$PATH" command -v "$bin" >/dev/null 2>&1; then
       doctor_report PASS "$bin present"
@@ -478,15 +742,21 @@ cmd_doctor() {
     fi
   done
 
+  step "Datastore binaries"
+  [ -x "$NATIVE_PG_BINDIR/postgres" ] \
+    && doctor_report PASS "postgresql@17 binaries at $NATIVE_PG_BINDIR" \
+    || doctor_report FAIL "postgresql@17 binaries missing -- run: $0 setup"
+  [ -x "$NATIVE_BREW_PREFIX/bin/redis-server" ] \
+    && doctor_report PASS "redis-server present" \
+    || doctor_report FAIL "redis-server missing -- run: $0 setup"
+
   step "Core venv"
   venv=$(core_venv)
   if [ -x "$venv/bin/python" ]; then
     doctor_report PASS "core venv present ($venv)"
-    if "$venv/bin/python" -c "import voxint" >/dev/null 2>&1; then
-      doctor_report PASS "voxint importable in the core venv"
-    else
-      doctor_report FAIL "voxint not importable in the core venv -- run: $0 setup"
-    fi
+    "$venv/bin/python" -c "import voxint" >/dev/null 2>&1 \
+      && doctor_report PASS "voxint importable in the core venv" \
+      || doctor_report FAIL "voxint not importable in the core venv -- run: $0 setup"
     [ -x "$venv/bin/alembic" ] \
       && doctor_report PASS "alembic present" \
       || doctor_report FAIL "alembic missing in the core venv -- run: $0 setup"
@@ -497,22 +767,28 @@ cmd_doctor() {
     doctor_report FAIL "core venv missing ($venv) -- run: $0 setup"
   fi
 
-  step "Datastores (operator-provided in this slice)"
-  if command -v pg_isready >/dev/null 2>&1 \
-      && pg_isready -h 127.0.0.1 -p "$NATIVE_PG_PORT" -q; then
-    doctor_report PASS "Postgres ready on :$NATIVE_PG_PORT"
-  elif port_in_use "$NATIVE_PG_PORT"; then
-    doctor_report PASS "something is listening on :$NATIVE_PG_PORT (pg_isready unavailable to confirm)"
+  step "Cluster + datastores"
+  if managed_cluster; then
+    doctor_report PASS "private cluster initialized ($NATIVE_PGDATA)"
   else
-    doctor_report FAIL "Postgres not reachable on :$NATIVE_PG_PORT -- start PostgreSQL 17 + pgvector"
+    doctor_report SKIP "no managed cluster -- $0 up will expect operator-provided datastores"
   fi
-  if command -v redis-cli >/dev/null 2>&1 \
-      && [ "$(redis-cli -h 127.0.0.1 -p "$NATIVE_REDIS_PORT" ping 2>/dev/null)" = "PONG" ]; then
-    doctor_report PASS "Redis ready on :$NATIVE_REDIS_PORT"
-  elif port_in_use "$NATIVE_REDIS_PORT"; then
-    doctor_report PASS "something is listening on :$NATIVE_REDIS_PORT (redis-cli unavailable to confirm)"
+  if wait_for_postgres_once; then
+    doctor_report PASS "Postgres reachable on :$NATIVE_PG_PORT"
+    su=$(id -un)
+    if "$NATIVE_PG_BINDIR/psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -tAc \
+        "SELECT 1 FROM pg_available_extensions WHERE name='vector'" 2>/dev/null | grep -q 1; then
+      doctor_report PASS "pgvector available to the cluster"
+    else
+      doctor_report FAIL "pgvector NOT available to the cluster -- brew reinstall pgvector (must build against postgresql@17)"
+    fi
   else
-    doctor_report FAIL "Redis not reachable on :$NATIVE_REDIS_PORT -- start Redis"
+    doctor_report SKIP "Postgres not running on :$NATIVE_PG_PORT -- $0 up"
+  fi
+  if redis_ping_once; then
+    doctor_report PASS "Redis reachable on :$NATIVE_REDIS_PORT"
+  else
+    doctor_report SKIP "Redis not running on :$NATIVE_REDIS_PORT -- $0 up"
   fi
 
   step "MEDIA_ROOT"
@@ -534,19 +810,40 @@ cmd_doctor() {
   return "$DOCTOR_RC"
 }
 
+# Single-shot reachability probes for doctor (the up-path versions block up to
+# 60s; doctor must report current state, not wait).
+wait_for_postgres_once() {
+  if [ -x "$NATIVE_PG_BINDIR/pg_isready" ]; then
+    "$NATIVE_PG_BINDIR/pg_isready" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -q && return 0
+    return 1
+  fi
+  port_in_use "$NATIVE_PG_PORT"
+}
+
+redis_ping_once() {
+  local cli=$NATIVE_BREW_PREFIX/bin/redis-cli
+  [ -x "$cli" ] || cli=redis-cli
+  if command -v "$cli" >/dev/null 2>&1 || [ -x "$cli" ]; then
+    [ "$("$cli" -h 127.0.0.1 -p "$NATIVE_REDIS_PORT" ping 2>/dev/null)" = "PONG" ]
+    return
+  fi
+  port_in_use "$NATIVE_REDIS_PORT"
+}
+
 # ---------------------------------------------------------------------------
 # Foreground run (debugging)
 # ---------------------------------------------------------------------------
 cmd_run() {
   local svc=${1:-} mode=${2:-} media_root line oldifs
   [ -n "$svc" ] || fail "usage: $0 run <api|worker|beat> --foreground"
-  native_program_args "$svc" >/dev/null || fail "unknown service: $svc"
+  case $svc in api|worker|beat) : ;; *) fail "run supports api|worker|beat (datastores go through: $0 up)" ;; esac
   [ "$mode" = "--foreground" ] \
     || fail "only --foreground is supported (background runs go through: $0 up)"
+  load_state
   media_root=$(resolved_media_root_or_fail)
   # Same env assembly the plists use -- the debug path may not drift.
   while IFS= read -r line; do
-    export "${line?}"
+    [ -n "$line" ] && export "${line?}"
   done <<EOF
 $(native_service_env "$svc" "$media_root")
 EOF
@@ -572,23 +869,27 @@ main() {
   local cmd=${1:-}
   [ $# -gt 0 ] && shift
   case $cmd in
-    setup)  cmd_setup "$@" ;;
-    up)     cmd_up "$@" ;;
-    down)   cmd_down "$@" ;;
-    status) cmd_status "$@" ;;
-    logs)   cmd_logs "$@" ;;
-    doctor) cmd_doctor "$@" ;;
-    run)    cmd_run "$@" ;;
+    setup)   cmd_setup "$@" ;;
+    up)      cmd_up "$@" ;;
+    down)    cmd_down "$@" ;;
+    status)  cmd_status "$@" ;;
+    logs)    cmd_logs "$@" ;;
+    doctor)  cmd_doctor "$@" ;;
+    backup)  cmd_backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    run)     cmd_run "$@" ;;
     *)
       say "voxint-native.sh -- native (no-Docker) core control plane for macOS/arm64"
-      say "usage: $0 <setup|up|down|status|logs|doctor|run>"
-      say "  setup                 create the core venv, install voxint editable"
-      say "  up / down             start/stop api/worker/beat under launchd"
-      say "                        (up runs alembic upgrade head first)"
+      say "usage: $0 <setup|up|down|status|logs|doctor|backup|restore|run>"
+      say "  setup                 brew datastores + core venv + private cluster + secrets"
+      say "  up / down             start/stop Postgres+Redis+api/worker/beat under launchd"
+      say "                        (up provisions the db and runs alembic upgrade head first)"
       say "  status                supervision state + /healthz + datastore reachability"
       say "  logs <svc> [-f]       show/follow a service log"
       say "  doctor                environment checks"
-      say "  run <svc> --foreground  debug one service in the foreground"
+      say "  backup                pg_dump -Fc into backups/"
+      say "  restore <file>        pg_restore a dump"
+      say "  run <svc> --foreground  debug api|worker|beat in the foreground"
       exit 1
       ;;
   esac

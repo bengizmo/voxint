@@ -331,6 +331,113 @@ def test_service_commands_match_compose(tmp_path: Path) -> None:
     assert beat[1:6] == ["-A", "voxint.worker.app", "beat", "--loglevel=INFO", "-s"]
 
 
+# --------------------------------------------------------------------------- #
+# Slice 2 — managed datastores, secrets, and persisted state
+# --------------------------------------------------------------------------- #
+def test_postgres_program_args(tmp_path: Path) -> None:
+    args = argv_lines(run_lib(tmp_path, "native_program_args postgres"))
+    assert args == [
+        "/opt/homebrew/opt/postgresql@17/bin/postgres",
+        "-D",
+        f"{tmp_path}/pgdata",
+        "-p",
+        "5432",
+        "-k",
+        f"{tmp_path}/run",
+        "-c",
+        "listen_addresses=127.0.0.1",
+    ]
+
+
+def test_redis_program_args(tmp_path: Path) -> None:
+    args = argv_lines(run_lib(tmp_path, "native_program_args redis"))
+    assert args == [
+        "/opt/homebrew/bin/redis-server",
+        "--port",
+        "6379",
+        "--bind",
+        "127.0.0.1",
+        "--dir",
+        str(tmp_path),
+    ]
+
+
+def test_redis_carries_no_baked_env(tmp_path: Path) -> None:
+    # Redis config rides entirely on argv flags; its env is empty.
+    proc = run_lib(tmp_path, "native_service_env redis /media/root")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == ""
+
+
+def test_postgres_carries_only_locale_env(tmp_path: Path) -> None:
+    # launchd inherits no locale; without a valid LC_ALL the macOS postmaster
+    # dies ("became multithreaded during startup"). Config still rides on argv.
+    env = env_lines(run_lib(tmp_path, "native_service_env postgres /media/root"))
+    assert env == {"LC_ALL": "C", "LANG": "C"}
+
+
+def test_datastore_plist_env_and_argv(tmp_path: Path) -> None:
+    pg = render(tmp_path, "postgres")
+    assert pg["Label"] == "com.voxint.native.postgres"
+    assert pg["EnvironmentVariables"] == {"LC_ALL": "C", "LANG": "C"}
+    assert pg["ProgramArguments"] == argv_lines(
+        run_lib(tmp_path, "native_program_args postgres")
+    )
+    assert pg["KeepAlive"] == {"SuccessfulExit": False}
+    redis = render(tmp_path, "redis")
+    assert redis["EnvironmentVariables"] == {}
+
+
+def test_generate_secret_is_64_hex(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, "generate_secret")
+    assert proc.returncode == 0
+    assert len(proc.stdout) == 64
+    assert all(c in "0123456789abcdef" for c in proc.stdout)
+
+
+def test_next_free_port_returns_a_free_port(tmp_path: Path) -> None:
+    # An almost-certainly-free high port comes back unchanged.
+    proc = run_lib(tmp_path, "next_free_port 54999")
+    assert proc.returncode == 0
+    assert proc.stdout == "54999"
+
+
+def test_load_state_restores_persisted_values(tmp_path: Path) -> None:
+    (tmp_path / "state.env").write_text(
+        "PG_PORT=5433\nREDIS_PORT=6380\nAPI_PORT=8081\n"
+        "DB_PASSWORD=abc123\nVOXINT_PASSWORD=pw\nCSRF_SECRET=cs\n"
+    )
+    proc = run_lib(
+        tmp_path,
+        'load_state\nprintf "%s|%s|%s|%s\\n" '
+        '"$NATIVE_PG_PORT" "$NATIVE_REDIS_PORT" "$NATIVE_DB_PASSWORD" '
+        '"$VOXINT_NATIVE_PASSWORD"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "5433|6380|abc123|pw"
+
+
+def test_explicit_env_override_wins_over_state(tmp_path: Path) -> None:
+    # A persisted PG_PORT must not clobber an operator's explicit override.
+    (tmp_path / "state.env").write_text("PG_PORT=5433\n")
+    proc = run_lib(
+        tmp_path,
+        'load_state\nprintf "%s\\n" "$NATIVE_PG_PORT"',
+        extra_env={"VOXINT_NATIVE_PG_PORT": "5999"},
+    )
+    assert proc.stdout.strip() == "5999"
+
+
+def test_write_state_env_is_mode_0600(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, "write_state_env")
+    assert proc.returncode == 0, proc.stderr
+    state = tmp_path / "state.env"
+    assert state.exists()
+    assert (state.stat().st_mode & 0o777) == 0o600
+    body = state.read_text()
+    assert "PG_PORT=" in body and "DB_PASSWORD=" in body
+
+
 def test_model_urls_match_metal_launcher_ports(tmp_path: Path) -> None:
     # The api/worker reach the model services on the ports the metal launcher
     # binds; bind the two directly so a port moved in one place is caught here.
