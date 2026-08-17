@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 
 import {
   cancelActiveTurn,
@@ -24,6 +31,13 @@ export interface Segment {
   // ASR confidence (exp(avg_logprob), a transformed likelihood — NOT a
   // calibrated probability). null when unknown; never flagged when null.
   confidence: number | null;
+  // Per-segment review state (issues #53/#58). segmentId is the write target for
+  // verify/correct; null for a synthetic/blank line that is never a review
+  // target. verified drives the verify-and-advance loop; corrected keys the
+  // "edited" badge. Both default false on an un-reviewed segment.
+  segmentId: string | null;
+  verified: boolean;
+  corrected: boolean;
 }
 
 export interface TranscriptPlayerProps {
@@ -35,6 +49,15 @@ export interface TranscriptPlayerProps {
   // "uncertain". Same server setting the JS-off fallback compares against, so
   // the island and fallback flag identically.
   lowConfidenceThreshold: number;
+}
+
+// Imperative handle (issue #53): the ONLY review affordance the pure player
+// exposes. The verify-and-advance loop (ReviewStepper) commands playback of one
+// segment through this — the same code path as clicking a line — so highlight
+// and follow-scroll come free and the read-only page stays byte-identical
+// (it renders the player with no ref).
+export interface TranscriptPlayerHandle {
+  playSegment: (index: number) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -69,13 +92,13 @@ const SCROLL_KEYS = new Set([
 // span; both are gated on the fail-closed capability contract (issue #55) and,
 // when disabled, an honest banner explains why. Color is SUPPLEMENTAL — the raw
 // label badge is the primary, non-color identity cue (accessibility).
-export function TranscriptPlayer({
-  runId,
-  mediaUrl,
-  segments,
-  capability,
-  lowConfidenceThreshold,
-}: TranscriptPlayerProps) {
+export const TranscriptPlayer = forwardRef<
+  TranscriptPlayerHandle,
+  TranscriptPlayerProps
+>(function TranscriptPlayer(
+  { runId, mediaUrl, segments, capability, lowConfidenceThreshold },
+  ref,
+) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [activeIndex, setActiveIndex] = useState<number>(-1);
   const [rate, setRate] = useState<number>(() => getStoredRate());
@@ -176,6 +199,23 @@ export function TranscriptPlayer({
     scrollActiveIntoView();
   };
 
+  // Expose only "play this segment" to the review loop. Bounds-guarded and
+  // capability-gated (via `play`), so a bad index or disabled seek is a no-op,
+  // never a throw.
+  useImperativeHandle(
+    ref,
+    () => ({
+      playSegment: (index: number) => {
+        const seg = segments[index];
+        if (seg) play(seg);
+      },
+    }),
+    // `play` closes over audioRef + seek (both stable for a given render);
+    // segments identity is what actually changes the mapping.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [segments, seek],
+  );
+
   return (
     <div>
       <div className="flex items-center my-2">
@@ -245,4 +285,4 @@ export function TranscriptPlayer({
       </div>
     </div>
   );
-}
+});

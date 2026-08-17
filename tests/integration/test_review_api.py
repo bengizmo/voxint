@@ -750,3 +750,75 @@ def test_segment_review_rejects_cross_run_segment(
         f"/review/{run_a}/segments/{seg_b}/verify", data={"token": token_a}
     )
     assert resp.status_code == 404
+
+
+def test_review_transcript_mounts_stepper_with_token_and_props(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #53: the claim-gated review surface reuses the token from ?token= (no
+    # re-claim) and mounts the review-stepper island with the write token + the
+    # N-of-M counter + per-segment review state in its props.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)  # 3 segments
+    token = claim_token(client, run_id)
+
+    page = client.get(f"/review/{run_id}/transcript", params={"token": token})
+    assert page.status_code == 200
+    assert 'data-island="review-stepper"' in page.text
+    assert "Claimed by you" in page.text
+    match = re.search(r"data-props='([^']*)'", page.text)
+    assert match is not None
+    props = json.loads(match.group(1))
+    assert props["reviewToken"] == token  # the SAME token, reused not re-minted
+    assert props["initialProgress"] == {"verified": 0, "total": 3}
+    # Every segment carries its write id + review flags for the loop.
+    assert all(s["segmentId"] is not None for s in props["segments"])
+    assert all(s["verified"] is False for s in props["segments"])
+    # JS-off fallback: a real verify form per unverified segment.
+    assert page.text.count(f"/review/{run_id}/segments/") >= 3
+
+
+def test_review_transcript_degrades_read_only_without_token(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A stale/absent token renders read-only (no re-claim, honest copy), mirroring
+    # the workbench GET. reviewToken is null so the island disables writes.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    claim_token(client, run_id)  # a DIFFERENT tab holds the live claim
+
+    stale = client.get(
+        f"/review/{run_id}/transcript", params={"token": str(uuid.uuid4())}
+    )
+    assert stale.status_code == 200
+    assert "Not claimed by this tab" in stale.text
+    props = json.loads(re.search(r"data-props='([^']*)'", stale.text).group(1))  # type: ignore[union-attr]
+    assert props["reviewToken"] is None
+    # No verify forms are offered when this tab cannot write.
+    assert f"/review/{run_id}/segments/" not in stale.text
+
+
+def test_verify_form_navigation_redirects_back_to_review(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # The JS-off fallback POSTs a plain form (Accept: text/html); the write route
+    # content-negotiates and 303s back to the review page instead of dumping JSON,
+    # so the server-rendered list verifies for real. The island (Accept: json)
+    # still gets JSON — asserted by every other verify test in this file.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+
+    resp = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/verify",
+        data={"token": token, "verified": "true"},
+        headers={"accept": "text/html"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/review/{run_id}/transcript?token={token}"
+    # The redirect is not cosmetic — the segment is verified.
+    page = client.get(f"/review/{run_id}/transcript", params={"token": token})
+    props = json.loads(re.search(r"data-props='([^']*)'", page.text).group(1))  # type: ignore[union-attr]
+    assert props["initialProgress"]["verified"] == 1

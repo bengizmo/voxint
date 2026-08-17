@@ -225,3 +225,31 @@ speaker overrides via `segment_states`). Variant semantics:
 | Enrichment (D2) | `producers/names.py:115,251`, `names_llm.py:87,110`, `run_assets.py:234` | use `effective_text`; `source_content_hash` now covers corrected (honest staleness) |
 | Write path | new claim-gated `PATCH /review/{run}/segments/{id}/text` | UPSERT; clears verification same-tx; no-op→NULL; empty→NULL; **not** wiped by `enhance_match.py:53-54` reset |
 | Immutability docs | `models.py:452`, `docs/architecture.md` | extend prose: corrected written beside, never over, raw |
+
+## Phase 3 — verify-and-advance UI surface decision (2026-08-17)
+
+Settled with a 2-flagship consult (codex + kimi-k3); both independently chose the
+same option, and both flagged the same single risk.
+
+**Decision: a dedicated claim-gated route `GET /review/{run_id}/transcript?token=…`**
+mounting one island (`review-stepper`) that *composes* the pure `TranscriptPlayer`.
+Rejected: (B) mounting the review player onto the existing `/review/{id}` workbench
+page — two `<audio>` on one page (keyboard-focus ambiguity); (C) a brand-new
+stepper island duplicating playback/scroll/highlight.
+
+- **Compose, don't mode-flag** (kimi): `TranscriptPlayer` stays pure (playback,
+  highlight, auto-scroll, `playTurn`) and gains only a `forwardRef` imperative
+  handle (`playSegment`). The loop — flag queue, typing-guarded keymap, verify/
+  correct POSTs, N-of-M counter, current-segment edit textarea — lives in the thin
+  `ReviewStepper` wrapper. The read-only `/runs/{id}/transcript` page ships
+  byte-identical (it passes no ref, no review props).
+- **The claim risk, and why A is safe** (both models): `claim_run` is per-reviewer
+  with *takeover* — re-claiming mints a fresh token and kills the old one, NOT
+  idempotent-per-holder. So the transcript review route must **reuse the existing
+  claim token** carried in `?token=` (the same convention the workbench redirect
+  already uses: `/review/{id}?token=…`), never acquire a fresh claim. On a stale
+  token the GET renders read-only (mirrors the workbench GET); a 409 from a verify/
+  correct POST stops the loop and preserves position + edit — never advances
+  optimistically.
+- **JS-off fallback**: the new page still owes a server-rendered flagged-segment
+  list with plain verify form POSTs carrying the token.

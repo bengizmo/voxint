@@ -25,6 +25,7 @@ export default defineConfig({
         tailwind: "src/styles/tailwind.css",
         "transcript-player": "src/entries/transcript-player.tsx",
         "workbench-player": "src/entries/workbench-player.tsx",
+        "review-stepper": "src/entries/review-stepper.tsx",
       },
     },
   },

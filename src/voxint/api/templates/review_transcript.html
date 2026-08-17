@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Voxint — review transcript {{ run.id.hex[:8] }}{% endblock %}
+{% block body %}
+<p><a href="/review/{{ run.id }}{% if token %}?token={{ token }}{% endif %}">← workbench</a></p>
+<h1>Review transcript <code>{{ run.id.hex[:8] }}</code></h1>
+<p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+
+{% if token %}
+<p class="muted">Claimed by you — verify and edit are enabled.</p>
+{% else %}
+<p class="muted">Not claimed by this tab — verifying and editing are disabled.
+  <a href="/review/{{ run.id }}">Claim this run in the workbench</a> to review.</p>
+{% endif %}
+
+<p class="muted"><a href="/runs/{{ run.id }}/transcript">Read-only transcript</a>
+  (raw ASR evidence, all variants).</p>
+
+{% if not lines %}
+<p>No transcript segments for this run.</p>
+{% else %}
+{# Island mount (issue #53): the review-stepper hydrates the verify-and-advance
+   loop + inline edit over this fallback. JS-off, the list below is fully usable:
+   each unverified segment carries a plain verify form that POSTs and redirects
+   back here (the write route content-negotiates). Inline TEXT editing needs the
+   island — stated honestly, never faked. #}
+<div data-island="review-stepper" data-props='{{ island_props|tojson }}'>
+  <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
+    segments verified.</p>
+  {% for ln in lines %}
+  {% set idx = palette.get(ln.diarization_label) %}
+  {% set uncertain = ln.confidence is not none and ln.confidence < low_confidence_threshold %}
+  <p class="preview tp-line{% if idx is not none %} spk-{{ idx }}{% endif %}{% if uncertain %} tp-uncertain{% endif %}">
+    <span class="t">[{{ "%.2f"|format(ln.start_seconds) }}–{{ "%.2f"|format(ln.end_seconds) }}]</span>
+    {% if uncertain %}<span class="tp-uncertain-chip" title="Low ASR confidence — uncertain, not necessarily wrong">uncertain</span>{% endif %}
+    {% if ln.verified %}<span class="spk-badge" title="Verified by the operator">verified</span>{% endif %}
+    {% if ln.corrected %}<span class="spk-badge" title="Edited by the operator">edited</span>{% endif %}
+    {% if ln.diarization_label %}<span class="spk-badge">{{ ln.diarization_label }}</span>{% endif %}
+    {% if ln.speaker != ln.diarization_label %}<strong>{{ ln.speaker }}:</strong>{% endif %}
+    {{ ln.text }}
+    {% if token and ln.segment_id and not ln.verified %}
+    <form method="post" action="/review/{{ run.id }}/segments/{{ ln.segment_id }}/verify" class="inline">
+      <input type="hidden" name="token" value="{{ token }}">
+      <input type="hidden" name="verified" value="true">
+      <button type="submit">Verify</button>
+    </form>
+    {% endif %}
+  </p>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

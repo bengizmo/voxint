@@ -64,6 +64,7 @@ from voxint.adjudication.slots import (
     verify_claim,
 )
 from voxint.adjudication.transcript import (
+    TranscriptLine,
     TranscriptText,
     attributed_transcript,
     effective_text,
@@ -98,6 +99,7 @@ from voxint.api.csrf import (
 from voxint.api.health_probe import probe_services
 from voxint.api.playback import (
     MediaResolutionError,
+    PlaybackCapability,
     playback_capability,
     representative_turns,
     resolve_servable_media,
@@ -821,6 +823,66 @@ def _workbench_context(
         "nonce": lambda: uuid.uuid4().hex,
         # CSRF token for the (re)claim form shown when the run is not claimed here.
         "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
+    }
+
+
+def _wants_html(request: Request) -> bool:
+    """True for a plain browser form navigation (Accept prefers text/html), False
+    for the island's fetch (which asks for application/json explicitly). Lets one
+    write route serve the JSON island contract AND a JS-off HTML redirect fallback
+    without a second route. The default httpx/TestClient Accept (``*/*``) is not
+    HTML, so it keeps the JSON path — existing route tests are unaffected."""
+    accept = request.headers.get("accept", "")
+    return "text/html" in accept and "application/json" not in accept
+
+
+def _transcript_island_props(
+    run_id: uuid.UUID,
+    lines: list[TranscriptLine],
+    palette: dict[str, int],
+    capability: PlaybackCapability,
+    settings: Settings,
+) -> dict[str, Any]:
+    """Shared island props for the linear transcript surfaces (issues #48/#50/#53).
+
+    Both the read-only ``transcript-player`` and the claim-gated ``review-stepper``
+    read the SAME per-segment shape, so the hydrated island and the JS-off
+    fallback flag/color identically and a segment's write id never drifts between
+    the display and the review loop.
+    """
+    return {
+        "runId": str(run_id),
+        "mediaUrl": f"/media/{run_id}",
+        "capability": capability.to_props(),
+        # Low-confidence triage threshold (issue #53): the island and the JS-off
+        # fallback compare against the SAME server setting, so they flag
+        # identically. A segment with confidence None is never flagged.
+        "lowConfidenceThreshold": settings.review_low_confidence_threshold,
+        "segments": [
+            {
+                "start": ln.start_seconds,
+                "end": ln.end_seconds,
+                "speaker": ln.speaker,
+                "text": ln.text,
+                "label": ln.diarization_label,
+                "confidence": ln.confidence,
+                # None short-circuits (palette is keyed on real labels only);
+                # keeps mypy happy without changing the value (get(None) → None).
+                "paletteIndex": (
+                    palette.get(ln.diarization_label)
+                    if ln.diarization_label is not None
+                    else None
+                ),
+                # Per-segment review state (issues #53/#58). segmentId is the write
+                # target for verify/correct; verified/corrected drive the
+                # verify-and-advance loop and the "edited" badge. None segmentId (a
+                # synthetic/blank line) is simply never a review target.
+                "segmentId": (str(ln.segment_id) if ln.segment_id is not None else None),
+                "verified": ln.verified,
+                "corrected": ln.corrected,
+            }
+            for ln in lines
+        ],
     }
 
 
@@ -1814,33 +1876,9 @@ def _register_routes(app: FastAPI) -> None:
         # transcript-only label (a segment whose label has no turn). Two cheap
         # DISTINCT queries, kept explicit so the shared universe is provable here.
         palette = speaker_palette(_run_label_universe(session, run_id))
-        island_props = {
-            "runId": str(run_id),
-            "mediaUrl": f"/media/{run_id}",
-            "capability": capability.to_props(),
-            # Low-confidence triage threshold (issue #53): the island and the
-            # JS-off fallback compare against the SAME server setting, so they
-            # flag identically. A segment with confidence None is never flagged.
-            "lowConfidenceThreshold": settings.review_low_confidence_threshold,
-            "segments": [
-                {
-                    "start": ln.start_seconds,
-                    "end": ln.end_seconds,
-                    "speaker": ln.speaker,
-                    "text": ln.text,
-                    "label": ln.diarization_label,
-                    "confidence": ln.confidence,
-                    # None short-circuits (palette is keyed on real labels only);
-                    # keeps mypy happy without changing the value (get(None) → None).
-                    "paletteIndex": (
-                        palette.get(ln.diarization_label)
-                        if ln.diarization_label is not None
-                        else None
-                    ),
-                }
-                for ln in lines
-            ],
-        }
+        island_props = _transcript_island_props(
+            run_id, lines, palette, capability, settings
+        )
         return templates.TemplateResponse(
             request,
             "transcript.html",
@@ -1853,6 +1891,57 @@ def _register_routes(app: FastAPI) -> None:
                 "low_confidence_threshold": settings.review_low_confidence_threshold,
                 "text": variant,
                 "variants": list(TranscriptText),
+                "active_nav": "runs",
+            },
+        )
+
+    @protected.get("/review/{run_id}/transcript")
+    def review_transcript(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: uuid.UUID | None = None,
+    ) -> Response:
+        """Claim-gated verify-and-advance surface (issue #53) + inline text
+        correction (issue #58). Reuses the SAME linear player/props as the
+        read-only transcript; the difference is the claim token (carried in
+        ``?token=`` from the workbench, never re-acquired here — claims are
+        takeover, so a fresh claim would kill the workbench tab) which unlocks the
+        review-stepper island. A stale/absent token degrades to read-only with a
+        prompt to claim, exactly like the workbench GET."""
+        run = _run_or_404(session, run_id)
+        if token is not None:
+            try:
+                verify_claim(session, run_id, token)
+            except ClaimMismatchError:
+                token = None  # stale tab: render read-only with a claim prompt
+        # The review surface always shows operator-effective text (corrected →
+        # enhanced → raw); raw evidence stays reachable on the read-only page.
+        lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+        settings: Settings = request.app.state.settings
+        capability = playback_capability(session, run, settings, _get_media_gate(request))
+        palette = speaker_palette(_run_label_universe(session, run_id))
+        verified_n, total = verified_progress(session, run_id)
+        island_props = _transcript_island_props(
+            run_id, lines, palette, capability, settings
+        )
+        # Extras the review loop needs beyond the shared display props.
+        island_props["reviewToken"] = str(token) if token is not None else None
+        island_props["initialProgress"] = {"verified": verified_n, "total": total}
+        return templates.TemplateResponse(
+            request,
+            "review_transcript.html",
+            {
+                "request": request,
+                "run": run,
+                "lines": lines,
+                "island_props": island_props,
+                "palette": palette,
+                "low_confidence_threshold": settings.review_low_confidence_threshold,
+                "token": token,
+                "progress": {"verified": verified_n, "total": total},
+                "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
                 "active_nav": "runs",
             },
         )
@@ -2505,14 +2594,17 @@ def _register_routes(app: FastAPI) -> None:
     def verify_segment(
         run_id: uuid.UUID,
         segment_id: uuid.UUID,
+        request: Request,
         operator: OperatorDep,
         session: SessionDep,
         token: Annotated[uuid.UUID, Form()],
         verified: Annotated[bool, Form()] = True,
-    ) -> JSONResponse:
+    ) -> Response:
         """Mark (or unmark) a segment verified — the verify-and-advance step
         (issue #53). Claim-gated; a mutable UPSERT, so idempotent without a nonce.
-        Returns the updated state + the run's N-of-M progress as JSON."""
+        The island (fetch) gets the updated state + N-of-M progress as JSON; a
+        JS-off browser form navigation is redirected back to the review page, so
+        the server-rendered fallback verifies for real (degrade-to-plain-HTML)."""
         try:
             verify_claim(session, run_id, token, for_update=True)
         except ClaimMismatchError as exc:
@@ -2521,6 +2613,10 @@ def _register_routes(app: FastAPI) -> None:
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
         set_verified(session, segment=segment, verified=verified)
+        if _wants_html(request):
+            return RedirectResponse(
+                f"/review/{run_id}/transcript?token={token}", status_code=303
+            )
         return _segment_review_json(session, run_id, segment)
 
     @protected.post("/review/{run_id}/segments/{segment_id}/text")

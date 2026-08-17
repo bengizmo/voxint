@@ -11,6 +11,10 @@
   <input type="hidden" name="token" value="{{ token }}">
   <button type="submit">Release claim</button>
 </form>
+{# Verify-and-advance transcript review (issue #53): carries the live claim token
+   so the linear player writes without re-claiming (a fresh claim would kill this
+   tab's token). #}
+<p><a href="/review/{{ run.id }}/transcript?token={{ token }}">Review transcript →</a></p>
 {% else %}
 <p class="muted">Not claimed by this tab — decisions are disabled.</p>
 <form method="post" action="/review/{{ run.id }}/claim" class="inline">

@@ -25,8 +25,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   corrections too** (#58): the offline/LLM name miners and the run-asset
   generators consume the same effective text the console shows, so fixing a
   proper name honestly re-mines names and marks the affected summaries stale for
-  regeneration (operator-triggered — no rerun storm). *(The verify-and-advance
-  keyboard loop UI lands next.)*
+  regeneration (operator-triggered — no rerun storm). **A keyboard-first
+  verify-and-advance loop** (#53) makes this usable end-to-end: a claim-gated
+  review surface (`/review/{id}/transcript`, reached from the workbench) walks
+  the operator through the transcript one unverified segment at a time — press
+  **`v`** to confirm a segment and jump to the next (uncertain segments are
+  surfaced with the "uncertain" chip), **`e`** to edit its words in place, **`n`**
+  to skip, **`p`** to replay — with a live "N of M verified" readout. Editing
+  posts a correction (clearing the verified mark); every keystroke is
+  typing-guarded so the keys never fire while you are typing, and Space/scroll
+  keys stay with the native player. It **degrades to plain HTML**: with
+  JavaScript off the same page lists the flagged segments with a plain "Verify"
+  form per segment (editing needs the island, stated honestly), and it renders
+  read-only with a prompt to claim when this tab does not hold the run's claim.
 - **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
   already reports how sure it was of each segment, but Voxint used to throw that
   away. The transcript now flags segments the model was **uncertain** about — a

@@ -313,7 +313,7 @@ def test_asset_url_reads_the_loaded_map(monkeypatch: pytest.MonkeyPatch) -> None
 #    places (issue #48 contract) — this pins that for both islands so a new one
 #    can't half-land (issues #49/#55 add `workbench-player`).
 # --------------------------------------------------------------------------- #
-@pytest.mark.parametrize("island", ["transcript-player", "workbench-player"])
+@pytest.mark.parametrize("island", ["transcript-player", "workbench-player", "review-stepper"])
 def test_island_registered_in_main_ts(island: str) -> None:
     text = _MAIN_TS.read_text()
     assert re.search(
@@ -322,7 +322,7 @@ def test_island_registered_in_main_ts(island: str) -> None:
     ), f"main.ts registry is missing the {island!r} island"
 
 
-@pytest.mark.parametrize("island", ["transcript-player", "workbench-player"])
+@pytest.mark.parametrize("island", ["transcript-player", "workbench-player", "review-stepper"])
 def test_island_entry_file_exists(island: str) -> None:
     entry = _ENTRIES_DIR / f"{island}.tsx"
     assert entry.is_file(), f"missing island entry file {entry}"
@@ -332,7 +332,7 @@ def test_island_entry_file_exists(island: str) -> None:
     )
 
 
-@pytest.mark.parametrize("island", ["transcript-player", "workbench-player"])
+@pytest.mark.parametrize("island", ["transcript-player", "workbench-player", "review-stepper"])
 def test_island_is_a_vite_input(island: str) -> None:
     text = _VITE_CONFIG.read_text()
     assert re.search(

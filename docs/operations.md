@@ -448,6 +448,23 @@ ledger), and there is no speaker-roster editing from these pages (roster changes
 happen only through adjudication). The pipeline-state surface (`/runs*`) and the
 adjudication surface (`/review*`) stay separate.
 
+**Verify-and-advance transcript review** (`GET /review/{id}/transcript`, reached
+from the claimed workbench). A keyboard-first loop for confirming the transcript
+one segment at a time: **`v`** verifies the current segment and jumps to the next
+unverified one (segments faster-whisper was uncertain about carry an "uncertain"
+chip so they draw the eye first), **`e`** edits its words in an inline box (save
+with `⌘/Ctrl+Enter`), **`n`** skips, **`p`** replays the segment's audio; a live
+"N of M verified" readout tracks progress. Keys are typing-guarded (they never
+fire while you are typing, and Space/scroll keys stay with the native player). A
+correction is stored **beside** the immutable `raw_text` and clears that
+segment's verified mark (edited text must be re-checked); reverting to the
+pipeline wording removes it. All writes are claim-gated and carry the workbench's
+claim token — the page never re-claims (a fresh claim would evict the workbench
+tab). With JavaScript off the same page lists the flagged segments with a plain
+per-segment **Verify** form (inline editing needs the browser island, stated
+plainly), and it renders read-only with a prompt to claim when this tab does not
+hold the run's claim.
+
 **Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
 that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)
