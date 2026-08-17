@@ -28,6 +28,12 @@ TS_CONFIG = "english"
 
 RAW_FTS_INDEX_NAME = "transcript_segments_raw_fts_idx"
 ENHANCED_FTS_INDEX_NAME = "transcript_segments_enhanced_fts_idx"
+# Operator-corrected text (issue #58) is a third independently-searchable
+# rendering (never coalesced, same reasoning as raw/enhanced). It lives on
+# segment_review_states and is NULL for most rows, so the index is PARTIAL
+# (WHERE corrected_text IS NOT NULL) — sparse and cheap. Declared in migration
+# 0019 alongside the table; an EXPLAIN test proves the planner uses it.
+CORRECTED_FTS_INDEX_NAME = "segment_review_states_corrected_fts_idx"
 
 _CONFIG_LITERAL: ColumnElement[str] = literal_column(f"'{TS_CONFIG}'")
 

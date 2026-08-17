@@ -453,7 +453,9 @@ class TranscriptSegment(Base):
     segment_index: Mapped[int] = mapped_column(Integer)
     start_seconds: Mapped[float] = mapped_column(Float)
     end_seconds: Mapped[float] = mapped_column(Float)
-    # Raw ASR output is immutable; enhancement writes enhanced_text, never over raw_text.
+    # Raw ASR output is immutable; enhancement writes enhanced_text, never over
+    # raw_text, and operator corrections (issue #58) live in segment_review_states
+    # — also beside raw_text, never over it. raw_text stays the ASR evidence of record.
     raw_text: Mapped[str] = mapped_column(Text)
     enhanced_text: Mapped[str | None] = mapped_column(Text)
     # Local diarization label within this run (e.g. "SPEAKER_00"), not a speaker identity.
@@ -679,6 +681,66 @@ class AdjudicationDecision(Base):
     operator: Mapped[str] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# Length bound on operator-corrected text (issue #58): a segment is a short
+# utterance; this is a pathological-input sanity cap, not a UX limit. The route
+# validates against it and the DB CHECK below is the backstop.
+MAX_CORRECTED_TEXT_CHARS = 20_000
+
+
+class SegmentReviewState(Base):
+    """Mutable per-segment operator workflow state (issues #53/#58): the verified
+    mark (#53) and the operator's corrected text (#58). One row per reviewed
+    segment, UPSERTed latest-wins.
+
+    Deliberately NOT the append-only ``adjudication_decisions`` ledger — verified
+    /corrected is orthogonal to speaker attribution and would violate its CHECK
+    grammar and pollute resolution counts — and NOT columns on the immutable
+    ``transcript_segments`` observation row. ``raw_text`` stays the ASR evidence
+    of record; a correction is written *beside* it, never over it. See
+    docs/plans/2026-08-16-2227_transcript-text-correction-provenance.md.
+
+    ``pipeline_run_id`` is denormalized (derived from the segment by the one
+    writer) so the per-run overlay, the "N of M verified" counter, and the search
+    join load without a join — mirroring how ``adjudication_decisions`` carries it.
+    """
+
+    __tablename__ = "segment_review_states"
+    __table_args__ = (
+        # corrected_at is set exactly when corrected_text is (paired-shape).
+        CheckConstraint(
+            "(corrected_text IS NULL) = (corrected_at IS NULL)",
+            name="segment_review_states_corrected_pair_check",
+        ),
+        CheckConstraint(
+            f"corrected_text IS NULL OR char_length(corrected_text) <= {MAX_CORRECTED_TEXT_CHARS}",
+            name="segment_review_states_corrected_len_check",
+        ),
+        Index("ix_segment_review_states_run", "pipeline_run_id"),
+        # Corrected text is FTS-searchable (issue #58, D3): a PARTIAL GIN index,
+        # since corrected_text is NULL for most rows. Declared here for the
+        # model↔migration parity test; the DDL literal must match db.search and
+        # migration 0019 (contract-tested). Never coalesced with raw/enhanced.
+        Index(
+            search.CORRECTED_FTS_INDEX_NAME,
+            text(f"to_tsvector('{search.TS_CONFIG}', corrected_text)"),
+            postgresql_using="gin",
+            postgresql_where=text("corrected_text IS NOT NULL"),
+        ),
+    )
+
+    transcript_segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE"), primary_key=True
+    )
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"))
+    # NULL = unverified; a timestamp = the operator has confirmed this segment.
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # NULL = no correction (segment renders enhanced-or-raw); non-NULL = operator
+    # text, which takes display/export/search precedence. Empty/whitespace-only is
+    # normalized to NULL at the writer, so this is never an empty rendering.
+    corrected_text: Mapped[str | None] = mapped_column(Text)
+    corrected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class EnrichmentProducerRun(Base):

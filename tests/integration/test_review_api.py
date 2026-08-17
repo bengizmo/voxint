@@ -634,3 +634,109 @@ def test_transcript_flags_low_confidence_segments(
     props = json.loads(match.group(1))
     assert props["lowConfidenceThreshold"] == 0.6
     assert [s["confidence"] for s in props["segments"]] == [0.30, 0.95, None]
+
+
+def _segment_ids(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> list[uuid.UUID]:
+    with session_factory() as session:
+        return list(
+            session.execute(
+                select(TranscriptSegment.id)
+                .where(TranscriptSegment.pipeline_run_id == run_id)
+                .order_by(TranscriptSegment.segment_index)
+            ).scalars()
+        )
+
+
+def test_verify_segment_updates_progress(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #53: verify marks a segment and reports N-of-M; unverify reverses it.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)  # 3 segments
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+
+    r = client.post(f"/review/{run_id}/segments/{segs[0]}/verify", data={"token": token})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["verified"] is True
+    assert body["progress"] == {"verified": 1, "total": 3}
+
+    # Idempotent: verifying again keeps the count at 1.
+    again = client.post(f"/review/{run_id}/segments/{segs[0]}/verify", data={"token": token})
+    assert again.json()["progress"]["verified"] == 1
+
+    # Unverify.
+    off = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/verify",
+        data={"token": token, "verified": "false"},
+    )
+    assert off.json()["verified"] is False
+    assert off.json()["progress"]["verified"] == 0
+
+
+def test_correct_segment_precedence_and_clears_verification(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #58: a correction takes display precedence in the default view but
+    # never touches ?text=raw (immutable evidence), and editing clears a prior
+    # verified mark (edited text must be re-verified).
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)  # segment 0 raw = "hello there"
+    segs = _segment_ids(session_factory, run_id)
+    token = claim_token(client, run_id)
+
+    client.post(f"/review/{run_id}/segments/{segs[0]}/verify", data={"token": token})
+    r = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/text",
+        data={"token": token, "text": "hello THERE (fixed)"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["corrected"] is True
+    assert body["text"] == "hello THERE (fixed)"
+    assert body["verified"] is False  # editing cleared the verification
+
+    default_view = client.get(f"/runs/{run_id}/transcript").text
+    raw_view = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
+    assert "hello THERE (fixed)" in default_view  # correction applied by default
+    assert "hello THERE (fixed)" not in raw_view  # raw is immutable ASR evidence
+    assert "hello there" in raw_view
+
+    # Reverting: text equal to the pipeline rendering (or empty) clears it.
+    revert = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/text",
+        data={"token": token, "text": "  "},
+    )
+    assert revert.json()["corrected"] is False
+    assert "hello THERE (fixed)" not in client.get(f"/runs/{run_id}/transcript").text
+
+
+def test_segment_review_writes_are_claim_gated(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    segs = _segment_ids(session_factory, run_id)
+    claim_token(client, run_id)  # someone else holds the claim
+
+    wrong = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/verify",
+        data={"token": str(uuid.uuid4())},
+    )
+    assert wrong.status_code == 409
+
+
+def test_segment_review_rejects_cross_run_segment(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    with session_factory() as session:
+        run_a = _seed_run_with_confidences(session, media_root, [None])
+        run_b = _seed_run_with_confidences(session, media_root, [None])
+    seg_b = _segment_ids(session_factory, run_b)[0]
+    token_a = claim_token(client, run_a)
+
+    resp = client.post(
+        f"/review/{run_a}/segments/{seg_b}/verify", data={"token": token_a}
+    )
+    assert resp.status_code == 404

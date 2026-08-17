@@ -1011,8 +1011,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     export_p.add_argument(
         "--text",
-        choices=["raw", "enhanced"],
-        help="which transcript text to render (default: enhanced; ignored for rttm)",
+        choices=["corrected", "enhanced", "raw"],
+        help=(
+            "which transcript text to render (default: corrected — operator"
+            " corrections applied over enhanced/raw; 'enhanced' is the pipeline"
+            " text without corrections; 'raw' is the immutable ASR output;"
+            " ignored for rttm)"
+        ),
     )
     export_p.add_argument(
         "--no-timestamps",

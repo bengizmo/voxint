@@ -18,14 +18,22 @@ from voxint.adjudication.resolver import (
     Resolution,
     SegmentOverride,
     label_states,
+    review_states,
     segment_states,
 )
 from voxint.db.models import TranscriptSegment
 
 
 class TranscriptText(enum.StrEnum):
-    """Which stored text a transcript view renders."""
+    """Which stored text a transcript view renders (precedence ladder).
 
+    CORRECTED is the default: it applies the operator's per-segment corrections
+    (issue #58) on top of the pipeline text. ENHANCED is the pipeline rendering
+    with no corrections; RAW is the immutable ASR evidence. Order here is the
+    order the variant switcher shows.
+    """
+
+    CORRECTED = "corrected"  # corrected → enhanced → raw (operator-effective; default)
     ENHANCED = "enhanced"  # prefer enhanced_text, fall back to raw when NULL
     RAW = "raw"  # the immutable ASR output, always
 
@@ -44,16 +52,41 @@ class TranscriptLine:
     # low-confidence segments. Carried on the resolved line so the JS-off
     # fallback and the island flag identically; exports ignore it.
     confidence: float | None = None
+    # The transcript segment this line resolves — the write target for the
+    # verify / correct routes (issues #53/#58). Always set by the resolver;
+    # optional only so export-formatter tests can build a line without one.
+    segment_id: uuid.UUID | None = None
+    # Operator review state (issues #53/#58): whether this segment is verified,
+    # and whether the rendered text is an operator correction (drives the
+    # "edited" badge). Both default to the unreviewed state.
+    verified: bool = False
+    corrected: bool = False
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
-    """A blank/absent value means 'enhanced'; anything else must be a variant."""
+    """A blank/absent value means the default 'corrected' (operator-effective)
+    view; anything else must be a named variant."""
     if raw in (None, ""):
-        return TranscriptText.ENHANCED
+        return TranscriptText.CORRECTED
     try:
         return TranscriptText(raw)
     except ValueError as exc:
         raise ValueError(f"unknown transcript text {raw!r}") from exc
+
+
+def effective_text(seg: TranscriptSegment, corrected_text: str | None) -> str:
+    """The operator-effective rendering: corrected → enhanced → raw.
+
+    ``IS NOT NULL``, never truthiness — the ONE selector shared by the CORRECTED
+    display default, the exports, the search index, and the run-asset/enrichment
+    generators, so those four can never drift. Callers with no review row pass
+    ``corrected_text=None``.
+    """
+    if corrected_text is not None:
+        return corrected_text
+    if seg.enhanced_text is not None:
+        return seg.enhanced_text
+    return seg.raw_text
 
 
 def display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
@@ -97,6 +130,7 @@ def attributed_transcript(
     """
     states = {s.label: s for s in label_states(session, run_id)}
     overrides = segment_states(session, run_id)
+    review = review_states(session, run_id)
     segments = session.execute(
         select(TranscriptSegment)
         .where(TranscriptSegment.pipeline_run_id == run_id)
@@ -104,7 +138,9 @@ def attributed_transcript(
     ).scalars()
     lines: list[TranscriptLine] = []
     for seg in segments:
-        body = seg.raw_text if text is TranscriptText.RAW else (seg.enhanced_text or seg.raw_text)
+        rs = review.get(seg.id)
+        corrected_text = rs.corrected_text if rs is not None else None
+        body = _resolve_body(seg, corrected_text, text)
         override = overrides.get(seg.id)
         if override is not None:
             speaker = segment_speaker(override, seg)
@@ -118,6 +154,25 @@ def attributed_transcript(
                 text=body,
                 diarization_label=seg.diarization_label,
                 confidence=seg.confidence,
+                segment_id=seg.id,
+                verified=rs is not None and rs.verified_at is not None,
+                # Reflects whether a correction EXISTS, independent of which
+                # variant is being rendered — so a ?text=raw view can still badge
+                # "this segment was corrected" while showing the raw evidence.
+                corrected=corrected_text is not None,
             )
         )
     return lines
+
+
+def _resolve_body(
+    seg: TranscriptSegment, corrected_text: str | None, variant: TranscriptText
+) -> str:
+    """The text a variant renders for one segment. RAW is the immutable ASR
+    evidence; ENHANCED is the pipeline text (no corrections); CORRECTED (default)
+    applies the operator's correction via :func:`effective_text`."""
+    if variant is TranscriptText.RAW:
+        return seg.raw_text
+    if variant is TranscriptText.ENHANCED:
+        return seg.enhanced_text or seg.raw_text
+    return effective_text(seg, corrected_text)

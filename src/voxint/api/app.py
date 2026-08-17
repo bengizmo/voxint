@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
     StreamingResponse,
@@ -50,6 +51,11 @@ from voxint.adjudication.resolver import (
     label_states,
     segment_states,
 )
+from voxint.adjudication.review_state import (
+    set_correction,
+    set_verified,
+    verified_progress,
+)
 from voxint.adjudication.slots import (
     ClaimMismatchError,
     ClaimUnavailableError,
@@ -60,6 +66,7 @@ from voxint.adjudication.slots import (
 from voxint.adjudication.transcript import (
     TranscriptText,
     attributed_transcript,
+    effective_text,
     parse_transcript_text,
 )
 from voxint.api.auth import require_operator
@@ -141,6 +148,7 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
+    MAX_CORRECTED_TEXT_CHARS,
     ClaimField,
     Decision,
     DiarizationTurn,
@@ -153,6 +161,7 @@ from voxint.db.models import (
     RunAssetJobStatus,
     RunAssetKind,
     RunStatus,
+    SegmentReviewState,
     Speaker,
     StageRun,
     TranscriptSegment,
@@ -2474,6 +2483,70 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
+    def _segment_review_json(
+        session: Session, run_id: uuid.UUID, segment: TranscriptSegment
+    ) -> JSONResponse:
+        """The state a triage-loop write returns to the island: this segment's
+        verified/corrected flags + effective text, and the run's N-of-M counter."""
+        row = session.get(SegmentReviewState, segment.id)
+        corrected = row.corrected_text if row is not None else None
+        verified_n, total = verified_progress(session, run_id)
+        return JSONResponse(
+            {
+                "segmentId": str(segment.id),
+                "verified": row is not None and row.verified_at is not None,
+                "corrected": corrected is not None,
+                "text": effective_text(segment, corrected),
+                "progress": {"verified": verified_n, "total": total},
+            }
+        )
+
+    @protected.post("/review/{run_id}/segments/{segment_id}/verify")
+    def verify_segment(
+        run_id: uuid.UUID,
+        segment_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        verified: Annotated[bool, Form()] = True,
+    ) -> JSONResponse:
+        """Mark (or unmark) a segment verified — the verify-and-advance step
+        (issue #53). Claim-gated; a mutable UPSERT, so idempotent without a nonce.
+        Returns the updated state + the run's N-of-M progress as JSON."""
+        try:
+            verify_claim(session, run_id, token, for_update=True)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        segment = session.get(TranscriptSegment, segment_id)
+        if segment is None or segment.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+        set_verified(session, segment=segment, verified=verified)
+        return _segment_review_json(session, run_id, segment)
+
+    @protected.post("/review/{run_id}/segments/{segment_id}/text")
+    def correct_segment(
+        run_id: uuid.UUID,
+        segment_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        text: Annotated[str, Form(max_length=MAX_CORRECTED_TEXT_CHARS)] = "",
+    ) -> JSONResponse:
+        """Set or clear the operator's corrected text for a segment (issue #58).
+        Empty text, or text equal to the pipeline rendering, reverts to no
+        correction. Editing clears the segment's verified mark in the same
+        transaction. Claim-gated; the corrected text is written beside raw_text,
+        never over it (raw stays the immutable ASR evidence)."""
+        try:
+            verify_claim(session, run_id, token, for_update=True)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        segment = session.get(TranscriptSegment, segment_id)
+        if segment is None or segment.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+        set_correction(session, segment=segment, text=text)
+        return _segment_review_json(session, run_id, segment)
+
     @protected.post("/review/{run_id}/labels/{label}/enroll")
     def enroll(
         run_id: uuid.UUID,
@@ -2590,8 +2663,10 @@ def _register_routes(app: FastAPI) -> None:
     # voxint/export). The sibling extensions (.txt/.srt/.vtt/.json) share the CLI's
     # exact byte output through render_transcript, so a download and a piped
     # `voxint export … --format …` can never disagree. RTTM lives on its own route
-    # (it reads diarization turns, not attributed lines). All accept ?text=raw|
-    # enhanced (default enhanced), except RTTM which is speaker-label-only.
+    # (it reads diarization turns, not attributed lines). All accept
+    # ?text=corrected|enhanced|raw (default corrected: operator corrections applied
+    # over enhanced/raw; enhanced = pipeline text, no corrections; raw = immutable
+    # ASR evidence), except RTTM which is speaker-label-only.
     def _export_transcript(
         run_id: uuid.UUID,
         session: Session,

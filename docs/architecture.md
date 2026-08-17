@@ -443,6 +443,24 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   timing is structural) and JSON (keys are a frozen contract). Deliberately not
   built: a speaker-name toggle (caption guidance keeps speaker IDs; anonymization
   belongs in the roster, not the exporter) — filed as a follow-up.
+- **Triage & correction** (issues #53/#58): the transcript flags **low-confidence**
+  segments (persisted `transcript_segments.confidence = exp(avg_logprob)`, below a
+  configurable threshold) as "uncertain" — a non-background cue so it never
+  collides with the active-line highlight or the speaker accent. Per-segment
+  operator workflow state lives in **`segment_review_states`** (mutable, one row
+  per segment, UPSERT latest-wins) — deliberately NOT the append-only adjudication
+  ledger (orthogonal to speaker attribution) and NOT columns on the immutable
+  `transcript_segments`: a **verified** mark (feeds an "N of M" counter) and an
+  operator **corrected_text**. A correction is written *beside* `raw_text`, never
+  over it; one shared `effective_text` selector (`corrected → enhanced → raw`, by
+  `IS NOT NULL`) makes the default transcript view and every text export agree.
+  `?text=raw` is always the untouched ASR evidence, `?text=enhanced` the pipeline
+  text without corrections. (Making corrections full-text-searchable and feeding
+  them to enrichment — both settled in the provenance design note — land next; the
+  partial FTS index is already created.) Editing text clears the verified mark in the same
+  transaction (edited text must be re-verified); reverting to the pipeline wording
+  clears the correction. Both writes are claim-gated; the UPSERT is idempotent
+  without a nonce.
 - **Auth**: single-operator HTTP Basic (constant-time compare) on every route
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default

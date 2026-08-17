@@ -42,6 +42,7 @@ from voxint.db.models import (
     DiarizationTurn,
     PipelineRun,
     RunStatus,
+    SegmentReviewState,
     Speaker,
     SpeakerAssignment,
 )
@@ -281,6 +282,19 @@ def effective_decisions(
     for row in rows:
         effective.setdefault(row.diarization_label, row)
     return effective
+
+
+def review_states(
+    session: Session, run_id: uuid.UUID
+) -> dict[uuid.UUID, SegmentReviewState]:
+    """Per-segment operator review state (verified mark + corrected text) for a
+    run, keyed by ``transcript_segment_id``. One indexed batch load (no N+1) —
+    the overlay the transcript resolver folds over segments (issues #53/#58),
+    exactly as :func:`segment_states` folds attribution overrides."""
+    rows = session.execute(
+        select(SegmentReviewState).where(SegmentReviewState.pipeline_run_id == run_id)
+    ).scalars()
+    return {row.transcript_segment_id: row for row in rows}
 
 
 @dataclass(frozen=True)

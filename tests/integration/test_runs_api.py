@@ -528,8 +528,12 @@ def test_runs_list_links_to_detail(
 
 
 def test_parse_transcript_text_defaults_and_rejects() -> None:
-    assert parse_transcript_text(None) is TranscriptText.ENHANCED
-    assert parse_transcript_text("") is TranscriptText.ENHANCED
+    # Default is now 'corrected' (operator-effective) — issue #58. It renders
+    # identically to 'enhanced' until a correction exists, so this is a contract
+    # change, not a behavior change for uncorrected runs.
+    assert parse_transcript_text(None) is TranscriptText.CORRECTED
+    assert parse_transcript_text("") is TranscriptText.CORRECTED
+    assert parse_transcript_text("corrected") is TranscriptText.CORRECTED
     assert parse_transcript_text("raw") is TranscriptText.RAW
     assert parse_transcript_text("enhanced") is TranscriptText.ENHANCED
     with pytest.raises(ValueError):
@@ -575,7 +579,9 @@ def test_transcript_defaults_to_enhanced(
             grounded=["S0"],
             segments=[("S0", "raw only", "enhanced only")],
         )
-    body = client.get(f"/runs/{run_id}/transcript").text  # no text= → enhanced
+    # No text= → default 'corrected'; with no correction it falls through to
+    # enhanced (then raw), so an uncorrected run renders exactly as before.
+    body = client.get(f"/runs/{run_id}/transcript").text
     assert "enhanced only" in body
     assert "raw only" not in body
 

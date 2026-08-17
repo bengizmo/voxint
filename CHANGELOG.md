@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Per-segment verify + transcript text correction** (#53 #58, #47): the
+  review console can now record that a segment has been **checked** and let the
+  operator **fix the words** the model got wrong — the two halves of "adjudicate
+  the results" that were missing. Both are stored as mutable, per-segment
+  operator state (`segment_review_states`), kept separate from the immutable ASR
+  evidence: `raw_text` is never overwritten, a correction is written beside it,
+  and `?text=raw` always shows the untouched original. The default transcript
+  view and every text export now render corrections (`corrected → enhanced →
+  raw`); `?text=enhanced` still gives the pipeline text without them. Editing a
+  segment's text clears its verified mark (edited text must be re-checked).
+  Reverting to the pipeline wording (or clearing the box) removes the
+  correction. Claim-gated like every other review write. *(The verify-and-advance
+  keyboard loop UI and making corrections searchable / feed name enrichment land
+  next.)*
 - **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
   already reports how sure it was of each segment, but Voxint used to throw that
   away. The transcript now flags segments the model was **uncertain** about — a
