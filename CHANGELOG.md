@@ -17,6 +17,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   performance-gate wording to the intended `speedup = CT2 wall / candidate
   wall ≥ 1.5×` form. No behavior change: `mlx` was never registered in
   `WHISPER_ENGINE`.
+- **Whisper Metal bakeoff (#33) — whisper.cpp candidate measured ineligible**:
+  the fail-fast diagnostic
+  (`docs/reports/whisper-metal-bakeoff-whispercpp-arm-2026-08-17.md`) measured
+  whisper.cpp Metal (`pywhispercpp==1.5.0`, `ggml-large-v2-q8_0`, beam_size 5,
+  CT2-parity decode map) at 98.57 pp worst-file disagreement vs the frozen CT2
+  baseline against a ≤5 pp gate — the same confident headset-crosstalk
+  transcription that killed mlx. Measured attribution: whisper.cpp's "beam"
+  samples candidates rather than expanding top-k, so beam-5 ≈ greedy on the
+  failing windows, and an f16 control reproduced the Q8_0 blowup (quantization
+  irrelevant). Clean-file drift, reconstructed confidence, and performance all
+  pass or near-pass; re-measure only if upstream lands true top-k beam
+  expansion. `docs/gpu-contracts.md` gains the dated verdict block: with mlx
+  and whisper.cpp measured-ineligible and CT2-MPS deferred upstream, no Metal
+  `WHISPER_ENGINE` candidate is eligible and `ct2` remains the default and
+  only shipped engine. No behavior change.
 - **Draft triage: multi-signal review-priority scoring** (#42): enrichment drafts
   now carry an explainable **review priority** that orders them and populates the
   `unresolved` bucket, so an operator sees the strongest name and profile
