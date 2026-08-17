@@ -23,7 +23,7 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and its command/port parity with compose and the metal launcher. Technical
   preview, **not** the signed non-technical release (#73); on the metal tier
   long recordings take real compute time. See `docs/native-macos-preview.md`.
-- **Word-boundary segment splits — backend** (#59, slice 2): an operator can
+- **Word-boundary segment splits** (#59, slice 2): an operator can
   split a mis-split diarization segment at a word boundary. A split is stored as
   an append-only *cut* ("split before word i") in a new `segment_split_boundaries`
   table (migration 0023) — never a new transcript row and never a mutable overlay
@@ -41,8 +41,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   correcting a split one) are mutually refused. New routes:
   `POST /review/{run}/segments/{seg}/split` and a lazy
   `GET /review/{run}/segments/{seg}/words` (words are fetched only when split mode
-  engages — never bloating the shared read payload). *(Frontend split UI lands
-  next.)*
+  engages — never bloating the shared read payload). In the review console a
+  **⎇ Split at a word** toggle turns the focused segment's words into clickable
+  cut points; the words load lazily on first use. A split segment's derived
+  children keep their own word-derived text (a parent-scoped verify never clobbers
+  them), and editing is disabled on a split segment with a plain note — splitting
+  and free-form correction are mutually exclusive. An unsplittable segment says so
+  rather than offering a control that would fail. Splitting needs the browser
+  island; with JavaScript off the transcript still lists any already-derived
+  child lines.
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

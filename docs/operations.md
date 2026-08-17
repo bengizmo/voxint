@@ -474,6 +474,25 @@ tab). With JavaScript off the same page lists every segment, with a plain
 island, stated plainly), and it renders read-only with a prompt to claim when
 this tab does not hold the run's claim.
 
+**Split a segment at a word boundary.** When faster-whisper merges two speakers'
+words into one segment, the review page can cut it at a word. Press the **⎇ Split
+at a word** button to enter split mode; the segment under the review cursor then
+shows its individual words, and clicking a word cuts the segment *before* it (you
+cannot cut before the first word). The cut is stored as an append-only boundary
+on the immutable segment — the original `raw_text` and its word timings are never
+altered — and the segment renders from then on as the derived child lines, each
+inheriting the parent's speaker and review state. A split is only offered when the
+segment's words reconcatenate exactly to its `raw_text` and its text has not been
+materially enhanced; otherwise split mode reports plainly that the segment cannot
+be split rather than guessing at boundaries. Splitting and inline editing are
+**mutually exclusive**: a segment that has been split cannot then be edited (and a
+segment with an operator correction cannot be split) — the box is disabled with a
+short note, because a split's text is word-derived and a free-form edit would have
+nowhere faithful to live. There is no un-split control in this release; a mis-split
+is cleared by re-transcribing the run. Like inline editing, splitting needs the
+browser island — with JavaScript off the transcript still lists any already-derived
+child lines, but no new split can be made.
+
 **Waveform strip (who spoke when).** The transcript pages (read-only and
 review) draw a compact waveform under the audio player, tinted per speaker with
 the same colors as the segment list — the colored regions come from the

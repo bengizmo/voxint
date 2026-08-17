@@ -5,6 +5,7 @@ import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import {
   type Segment,
+  type SplitWord,
   TranscriptPlayer,
   type TranscriptPlayerHandle,
 } from "./TranscriptPlayer";
@@ -27,12 +28,26 @@ export interface ReviewStepperProps {
   turns?: Turn[];
 }
 
-// A segment is a REVIEW TARGET when it has a write id and is not yet verified.
-// Low-confidence segments carry the "uncertain" chip in the list (they draw the
-// eye), but the terminating condition of the loop is verified — the counter is
-// verified/total, so the queue empties exactly when every segment is confirmed.
+// A segment is a REVIEW TARGET when it is the queue entry for its parent and is
+// not yet verified. `reviewTarget` is true on exactly one line per parent (issue
+// #59): an unsplit line, or the FIRST child of a split parent — so a split
+// parent's children never double-count the queue. Low-confidence segments carry
+// the "uncertain" chip in the list (they draw the eye), but the terminating
+// condition of the loop is verified — the counter is verified/total, so the
+// queue empties exactly when every parent is confirmed.
 function isTarget(seg: Segment): boolean {
-  return seg.segmentId !== null && !seg.verified;
+  return seg.reviewTarget && !seg.verified;
+}
+
+// How many rendered lines share this parent id (issue #59). >1 ⇒ the parent has
+// been split into derived children; splitting further and editing are disabled
+// on such a parent this slice, and its children keep their word-derived text.
+function siblingCount(
+  segments: Segment[],
+  sourceSegmentId: string | null,
+): number {
+  if (sourceSegmentId === null) return 0;
+  return segments.filter((s) => s.sourceSegmentId === sourceSegmentId).length;
 }
 
 // Next review target at or after `from` (document order), else the first target
@@ -85,6 +100,18 @@ export function ReviewStepper({
   // warns (rather than silently discarding the typed text and verifying the old
   // wording); a second `v` verifies anyway. Cleared on edit, save, or move.
   const [confirmDiscard, setConfirmDiscard] = useState<boolean>(false);
+  // Split mode (issue #59): an explicit toggle — word clicks split a segment only
+  // while ON, so ordinary line/word/waveform clicks stay non-destructive (they
+  // select/seek). `splitData` is the focused segment's lazily-fetched words +
+  // splittability, refreshed whenever the focus or mode changes. Null while off,
+  // between fetches, or for an already-split parent (no further split this slice).
+  const [splitMode, setSplitMode] = useState<boolean>(false);
+  const [splitData, setSplitData] = useState<{
+    segmentId: string;
+    splittable: boolean;
+    reason: string | null;
+    words: SplitWord[];
+  } | null>(null);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -93,6 +120,13 @@ export function ReviewStepper({
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
   const remaining = useMemo(() => segments.filter(isTarget).length, [segments]);
   const writable = reviewToken !== null && !claimLost;
+  // The focused line's parent (its write target) and whether that parent has
+  // already been split — the latter gates both re-splitting and editing (issue
+  // #59): a split parent's text is word-derived, so free-form correction is
+  // mutually exclusive with it (the /text route 409s this; we never show a
+  // button that will fail).
+  const focusParentId = current?.sourceSegmentId ?? null;
+  const isSplitParent = siblingCount(segments, focusParentId) > 1;
 
   // Keep the edit box in step with the segment under the cursor (its effective
   // text — corrected-or-pipeline, already what the page rendered). Moving to a
@@ -120,9 +154,17 @@ export function ReviewStepper({
     if (next >= 0) goTo(next);
   }, [segments, cursor, goTo]);
 
-  // Apply a write's JSON response to local state: patch the segment, refresh the
-  // counter. Returns the patched array so the caller can pick the next target
-  // from post-write truth (a just-verified segment is no longer a target).
+  // Apply a verify/correct JSON response to local state: patch the segment,
+  // refresh the counter. Returns the patched array so the caller can pick the
+  // next target from post-write truth (a just-verified segment is no longer a
+  // target).
+  //
+  // The write targets a PARENT id, so the response's verified/corrected flags
+  // apply to EVERY line sharing that parent — a split parent's derived children
+  // are verified together (issue #59). But the response's `text` is the parent's
+  // full effective text; a split parent's children keep their own word-derived
+  // text and must NOT be clobbered with it. So: patch flags across all siblings;
+  // adopt the response text only in the unsplit single-line case.
   const applyResult = useCallback(
     (
       index: number,
@@ -133,16 +175,19 @@ export function ReviewStepper({
         progress: { verified: number; total: number };
       },
     ): Segment[] => {
-      const patched = segments.map((seg, i) =>
-        i === index
-          ? {
-              ...seg,
-              verified: result.verified,
-              corrected: result.corrected,
-              text: result.text,
-            }
-          : seg,
-      );
+      const parentId = segments[index]?.sourceSegmentId ?? null;
+      const split = siblingCount(segments, parentId) > 1;
+      const patched = segments.map((seg, i) => {
+        const isSibling =
+          parentId !== null ? seg.sourceSegmentId === parentId : i === index;
+        if (!isSibling) return seg;
+        return {
+          ...seg,
+          verified: result.verified,
+          corrected: result.corrected,
+          text: split ? seg.text : result.text,
+        };
+      });
       setSegments(patched);
       setProgress(result.progress);
       return patched;
@@ -150,17 +195,17 @@ export function ReviewStepper({
     [segments],
   );
 
-  // POST a form-encoded write and return the parsed JSON state, or null on any
-  // failure. A 409 is the stale/reclaimed claim → stop the loop (keep place +
-  // edit); every other error (network, a non-JSON body from a proxy) surfaces an
-  // inline message. Parsing lives INSIDE the try so a bad body is handled, never
-  // an unhandled rejection. Busy is owned by the callers (they hold the ref
-  // across the whole operation), so this helper does not touch it.
-  const postJson = useCallback(
-    async (
+  // POST a form-encoded write and return its parsed JSON body (of whatever
+  // shape), or null on any failure. A 409 is the stale/reclaimed claim → stop the
+  // loop (keep place + edit); every other error (network, a non-JSON body from a
+  // proxy) surfaces an inline message. Parsing lives INSIDE the try so a bad body
+  // is handled, never an unhandled rejection. Busy is owned by the callers (they
+  // hold the ref across the whole operation), so this helper does not touch it.
+  const postForm = useCallback(
+    async <T,>(
       path: string,
       body: Record<string, string>,
-    ): Promise<Parameters<typeof applyResult>[1] | null> => {
+    ): Promise<T | null> => {
       if (!writable || reviewToken === null) return null;
       try {
         const res = await apiFetch(path, {
@@ -173,7 +218,7 @@ export function ReviewStepper({
           },
           body: new URLSearchParams({ token: reviewToken, ...body }).toString(),
         });
-        return (await res.json()) as Parameters<typeof applyResult>[1];
+        return (await res.json()) as T;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           // Stale/reclaimed: stop the loop, keep place + edit. The operator must
@@ -186,6 +231,16 @@ export function ReviewStepper({
       }
     },
     [writable, reviewToken],
+  );
+
+  // Verify/correct writes: the parent-scoped review-state shape applyResult eats.
+  const postJson = useCallback(
+    (
+      path: string,
+      body: Record<string, string>,
+    ): Promise<Parameters<typeof applyResult>[1] | null> =>
+      postForm<Parameters<typeof applyResult>[1]>(path, body),
+    [postForm],
   );
 
   const verifyAndAdvance = useCallback(async () => {
@@ -248,6 +303,90 @@ export function ReviewStepper({
       setBusy(false);
     }
   }, [current, cursor, postJson, runId, editText, applyResult]);
+
+  // Lazily fetch the focused segment's words when split mode is engaged (issue
+  // #59) — the /words payload is never folded into the shared hydration props, so
+  // it costs nothing until the operator actually splits. Skipped for an already-
+  // split parent (no further split this slice) and re-run on every focus change.
+  // The abort + parent-id guard keep a superseded response from painting a line.
+  useEffect(() => {
+    if (!splitMode || !writable || focusParentId === null || isSplitParent) {
+      setSplitData(null);
+      return;
+    }
+    const parentId = focusParentId;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const res = await apiFetch(
+          `/review/${runId}/segments/${parentId}/words`,
+          {
+            headers: { accept: "application/json" },
+            signal: controller.signal,
+          },
+        );
+        const data = (await res.json()) as {
+          splittable: boolean;
+          reason: string | null;
+          words: SplitWord[];
+        };
+        if (!controller.signal.aborted) {
+          setSplitData({ segmentId: parentId, ...data });
+        }
+      } catch (err) {
+        // An abort is the effect superseding itself — not an error to surface.
+        if (controller.signal.aborted || (err as Error).name === "AbortError") {
+          return;
+        }
+        setSplitData({
+          segmentId: parentId,
+          splittable: false,
+          reason: "Could not load words for splitting.",
+          words: [],
+        });
+      }
+    })();
+    return () => {
+      controller.abort();
+    };
+  }, [splitMode, writable, focusParentId, isSplitParent, runId]);
+
+  // Split the focused parent BEFORE word `wordIndex` (issue #59). The response is
+  // a whole-run reconcile (segments + progress, the hydration shape), so we adopt
+  // it wholesale and re-seat the cursor on the parent's queue entry (its first
+  // child). busyRef mirrors the verify/correct guard so a double word-click can't
+  // race two splits. A structurally-idempotent backend makes a replay a no-op.
+  const splitAt = useCallback(
+    async (sourceSegmentId: string, wordIndex: number) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await postForm<{
+          segments: Segment[];
+          progress: { verified: number; total: number };
+        }>(`/review/${runId}/segments/${sourceSegmentId}/split`, {
+          word_index: String(wordIndex),
+        });
+        if (!result) return;
+        setSegments(result.segments);
+        setProgress(result.progress);
+        const targetIdx = result.segments.findIndex(
+          (s) => s.sourceSegmentId === sourceSegmentId && s.reviewTarget,
+        );
+        setCursor(
+          targetIdx >= 0
+            ? targetIdx
+            : Math.max(nextTarget(result.segments, 0), 0),
+        );
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [postForm, runId],
+  );
 
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the
@@ -321,6 +460,14 @@ export function ReviewStepper({
             <strong>{progress.total}</strong> segments verified
             {done ? " — all done" : ` · ${remaining} left`}
           </p>
+          <button
+            type="button"
+            onClick={() => setSplitMode((on) => !on)}
+            aria-pressed={splitMode}
+            className="text-sm my-1"
+          >
+            {splitMode ? "Exit split mode" : "⎇ Split at a word"}
+          </button>
           {current && current.segmentId !== null && (
             <div>
               <p className="muted text-sm">
@@ -339,6 +486,7 @@ export function ReviewStepper({
               <textarea
                 ref={editRef}
                 value={editText}
+                disabled={isSplitParent}
                 onChange={(e) => {
                   setEditText(e.target.value);
                   setConfirmDiscard(false);
@@ -355,9 +503,26 @@ export function ReviewStepper({
                   }
                 }}
                 rows={2}
-                className="w-full text-sm"
+                className="w-full text-sm disabled:opacity-60"
                 aria-label="Corrected transcript text for this segment"
               />
+              {isSplitParent && (
+                <p className="muted text-sm" role="note">
+                  This segment is split, so editing is disabled — splitting and
+                  free-form correction are mutually exclusive. (Re-transcribe to
+                  clear the split.)
+                </p>
+              )}
+              {splitMode && !isSplitParent && (
+                <p className="text-sm" role="status">
+                  {splitData == null
+                    ? "Loading words…"
+                    : splitData.splittable
+                      ? "Split mode on — click a word to cut the segment before it."
+                      : (splitData.reason ??
+                        "This segment can’t be split at a word boundary.")}
+                </p>
+              )}
               <div className="flex items-center my-1">
                 <button
                   type="button"
@@ -370,7 +535,7 @@ export function ReviewStepper({
                 <button
                   type="button"
                   onClick={() => void saveEdit()}
-                  disabled={busy}
+                  disabled={busy || isSplitParent}
                   className="mr-2"
                 >
                   Save edit <kbd>Ctrl/⌘+↵</kbd>
@@ -424,6 +589,25 @@ export function ReviewStepper({
         peaksUrl={peaksUrl}
         turns={turns}
         cursorIndex={writable ? cursor : undefined}
+        // Split mode (issue #59): render the focused line's words as clickable cut
+        // points only when split mode is on, the segment is splittable, and the
+        // fetched words belong to the segment now under the cursor (a stale fetch
+        // never paints the wrong line). onSplitAt raises the chosen cut here.
+        splitFocus={
+          splitMode &&
+          !isSplitParent &&
+          cursor >= 0 &&
+          splitData !== null &&
+          splitData.splittable &&
+          splitData.segmentId === focusParentId
+            ? {
+                segmentIndex: cursor,
+                sourceSegmentId: splitData.segmentId,
+                words: splitData.words,
+              }
+            : null
+        }
+        onSplitAt={writable ? (id, wi) => void splitAt(id, wi) : undefined}
       />
     </div>
   );

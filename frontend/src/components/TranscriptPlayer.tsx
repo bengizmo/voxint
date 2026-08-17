@@ -40,6 +40,31 @@ export interface Segment {
   segmentId: string | null;
   verified: boolean;
   corrected: boolean;
+  // Split provenance (issue #59). sourceSegmentId is the IMMUTABLE PARENT id —
+  // the verify/correct/split write target — identical to segmentId for an
+  // unsplit line and SHARED across a split parent's derived child lines.
+  // reviewTarget is true on exactly one line per parent (the N-of-M queue
+  // entry), so the loop counts one target per parent, never per child.
+  sourceSegmentId: string | null;
+  reviewTarget: boolean;
+}
+
+// One word token of a segment (issue #59), from the lazy `/words` endpoint. The
+// server names the string field `word`; timings are seconds into the media.
+export interface SplitWord {
+  start: number;
+  end: number;
+  word: string;
+}
+
+// The focused segment's split affordance (issue #59): the line index whose words
+// render as clickable split points, the parent id every cut writes to, and the
+// word tokens. Present only while split mode is engaged on an unsplit, splittable
+// segment; null otherwise (ordinary text rendering).
+export interface SplitFocus {
+  segmentIndex: number;
+  sourceSegmentId: string;
+  words: SplitWord[];
 }
 
 export interface TranscriptPlayerProps {
@@ -65,6 +90,13 @@ export interface TranscriptPlayerProps {
   // Review-cursor position for the strip's underline marker (ReviewStepper's
   // `cursor`). Absent on the read-only surface.
   cursorIndex?: number;
+  // Split mode (issue #59). When set, the focused segment's words render as
+  // clickable split points instead of its text; a click cuts "before" that word.
+  // Null/absent ⇒ ordinary text rendering (the read-only surface and every
+  // non-split-mode render pass nothing). onSplitAt raises the chosen cut to the
+  // driver (ReviewStepper), which POSTs it — the player never touches the DB.
+  splitFocus?: SplitFocus | null;
+  onSplitAt?: (sourceSegmentId: string, wordIndex: number) => void;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -122,6 +154,8 @@ export const TranscriptPlayer = forwardRef<
     peaksUrl,
     turns,
     cursorIndex,
+    splitFocus,
+    onSplitAt,
   },
   ref,
 ) {
@@ -349,6 +383,14 @@ export const TranscriptPlayer = forwardRef<
       <div ref={listRef}>
         {segments.map((seg, i) => {
           const active = i === activeIndex;
+          // Split mode (issue #59): this focused, unsplit, splittable line shows
+          // its words as clickable cut points instead of its plain text. Guarded
+          // on a matching parent id so a stale fetch never paints the wrong line.
+          const splitting =
+            splitFocus != null &&
+            onSplitAt != null &&
+            i === splitFocus.segmentIndex &&
+            seg.sourceSegmentId === splitFocus.sourceSegmentId;
           // Uncertain is a NON-background cue (a dashed underline + chip): the
           // active line owns the background tint, so the two never collide.
           const uncertain =
@@ -404,7 +446,35 @@ export const TranscriptPlayer = forwardRef<
                 <span className="spk-badge">{seg.label}</span>
               )}
               {seg.speaker !== seg.label && <strong>{seg.speaker}:</strong>}{" "}
-              {seg.text}
+              {splitting ? (
+                // A cut lands BEFORE the clicked word, so word 0 has no legal cut
+                // (its index would be 0, and the backend requires 0 < index < n);
+                // it renders inert. stopPropagation keeps the click off the line's
+                // seek handler — splitting must not also scrub the audio.
+                <span>
+                  {splitFocus.words.map((w, wi) => (
+                    <button
+                      key={wi}
+                      type="button"
+                      disabled={wi === 0}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSplitAt(splitFocus.sourceSegmentId, wi);
+                      }}
+                      title={
+                        wi === 0
+                          ? "Cannot split before the first word"
+                          : `Split before “${w.word.trim()}”`
+                      }
+                      className="tp-split-word px-0.5 rounded hover:bg-amber-500/30 disabled:opacity-60 disabled:cursor-default"
+                    >
+                      {w.word}
+                    </button>
+                  ))}
+                </span>
+              ) : (
+                seg.text
+              )}
             </p>
           );
         })}
