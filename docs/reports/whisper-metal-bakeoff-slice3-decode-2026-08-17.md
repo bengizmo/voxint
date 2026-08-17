@@ -1,6 +1,7 @@
 # Whisper Metal bakeoff — Slice 3 decode-quality diagnostic (mlx) — 2026-08-17
 
-**Status: DRAFT · negative result for the current mlx candidate.**
+**Status: FINAL · negative result for the current mlx candidate** (verdict
+block landed in `docs/gpu-contracts.md`; issue #33 closed 2026-08-17).
 Experiment ran on Apple-Silicon maintainer hardware (M1 Pro, 16 GB). All
 numbers below are measured, produced by the committed scoring harness
 (`tests/parity/whisper_bakeoff_score.py`, jiwer 4.0.0 + frozen normalizer)
@@ -186,7 +187,9 @@ mlx-whisper 0.4.3 closes the gap.
   safe, though it would not fix EN2002c-class crosstalk.
 - A **different candidate stack** on Apple Silicon (e.g. whisper.cpp Metal,
   which supports beam search and int8-family quantization closer to the CT2
-  reference) — a separate bakeoff arm with its own diagnostic.
+  reference) — a separate bakeoff arm with its own diagnostic. *(Since
+  measured, same day: also ineligible — see
+  `whisper-metal-bakeoff-whispercpp-arm-2026-08-17.md`.)*
 - Revisiting the **windowing/feeding contract** (C-arm-style decode) — only
   worthwhile after a quality-passing decode stack exists.
 

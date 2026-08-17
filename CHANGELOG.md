@@ -13,7 +13,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   frozen CT2 baseline against a ≤2.0 pp gate, under every decode configuration
   tested — a negative result recorded per the numerics doctrine (the gate is
   unchanged). `docs/gpu-contracts.md` gains the dated verdict block, names
-  whisper.cpp Metal as the next measured candidate arm, and corrects the
+  whisper.cpp Metal as the next measured candidate arm (since measured — see
+  the entry below), and corrects the
   performance-gate wording to the intended `speedup = CT2 wall / candidate
   wall ≥ 1.5×` form. No behavior change: `mlx` was never registered in
   `WHISPER_ENGINE`.

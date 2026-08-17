@@ -627,14 +627,16 @@ fix.
 Metal tier v1 runs whisper on **CPU** (row above); a Metal-accelerated ASR
 engine is the single biggest end-to-end speedup left (runs are
 transcribe-bound). This is the gate a candidate engine must pass **before** the
-launcher default flips. It is designed and recorded here BEFORE any candidate output
-is measured, per the numerics doctrine. **mlx-whisper** is the leading candidate
-(it ports openai-whisper's `avg_logprob` semantics, the contracted confidence
-field). whisper.cpp and CTranslate2-MPS are named candidates too, but the first
-landing measures **mlx only**; the other two carry a *documented-ineligible /
-deferred* row (CT2-MPS is an open source-build-only upstream PR,
-OpenNMT/CTranslate2#2077, where MPS-int8 can be slower than CPU-int8). Closing
-#33 requires a measured-or-ineligible row for every named candidate.
+launcher default flips. It was designed and recorded here BEFORE any candidate
+output was measured, per the numerics doctrine, and it remains the standing
+gate for any future candidate. **Issue #33 closed 2026-08-17 with every named
+candidate carrying its measured-or-ineligible row** (the dated verdict blocks
+at the end of this section): **mlx** and **whisper.cpp** are
+measured-ineligible; **CT2-MPS** is deferred upstream (an open
+source-build-only PR, OpenNMT/CTranslate2#2077, where MPS-int8 can be slower
+than CPU-int8). No default flip occurred; `ct2` remains the default and only
+shipped engine. Each verdict block records the upstream change that would
+trigger a re-measure against this same gate and frozen baseline.
 
 **Seam contract.** Engine is selected by `WHISPER_ENGINE`
 (`ct2-legacy` | `ct2` | `mlx`), resolved through a **fail-closed** registry.
@@ -709,9 +711,11 @@ output worse. Performance was **not** the blocker (pooled warm speedup 1.72×,
 gate ≥1.5×). Full evidence:
 `docs/reports/whisper-metal-bakeoff-slice3-decode-2026-08-17.md`. Re-measure
 only if upstream lands beam search and/or the #1427 fallback fix; `mlx` stays
-out of `KNOWN_ENGINES`. Next measured candidate arm: **whisper.cpp Metal**
-(has beam search and int8-family quantization, addressing both measured root
-causes); CT2-MPS remains deferred (upstream PR OpenNMT/CTranslate2#2077).
+out of `KNOWN_ENGINES`. The next measured candidate arm was **whisper.cpp
+Metal** (nominally addressing both measured root causes via beam search and
+int8-family quantization) — see the following verdict block: also
+measured-ineligible. CT2-MPS remains deferred (upstream PR
+OpenNMT/CTranslate2#2077).
 
 **Measured verdict — whisper.cpp (2026-08-17): documented-ineligible in
 current form.** The same 4-file screen (same harness, frozen baseline, and

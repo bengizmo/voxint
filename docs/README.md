@@ -15,4 +15,5 @@
 | `operations.md` | Deployment, migrations, pipeline operations, recovery, adjudication workflow |
 | `testing.md` | Test layers and how to run them; the manual browser-verification procedure for the review console |
 | `release-process.md` | Maintainers: how a release is cut (tag → GHCR images → PyPI → GitHub Release) |
+| `reports/` | Dated measurement reports (parity screens, bakeoff diagnostics, negative results) — the evidence behind verdict blocks in `gpu-contracts.md` |
 | [`../examples/`](../examples/README.md) | End-to-end `voxint score` walkthrough on a synthetic dataset |

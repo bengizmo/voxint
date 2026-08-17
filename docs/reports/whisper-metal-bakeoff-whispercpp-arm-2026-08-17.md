@@ -1,6 +1,7 @@
 # Whisper Metal bakeoff — whisper.cpp candidate arm (fail-fast screen) — 2026-08-17
 
-**Status: DRAFT · negative result for the whisper.cpp candidate.**
+**Status: FINAL · negative result for the whisper.cpp candidate** (verdict
+block landed in `docs/gpu-contracts.md`; issue #33 closed 2026-08-17).
 Experiment ran on Apple-Silicon maintainer hardware (M1 Pro, 16 GB), same
 protocol and harness as the mlx Slice-3 diagnostic
 (`whisper-metal-bakeoff-slice3-decode-2026-08-17.md`): the repo's own

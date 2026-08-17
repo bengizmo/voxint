@@ -118,7 +118,7 @@ Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
   docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
   report. `VOXINT_PARITY_REQUIRED`
   is deliberately never set for these lanes; the compensating control is
-  this gate being listed here and the PENDING verdict table in
+  this gate being listed here and the dated verdict blocks in
   gpu-contracts.md, which a release must not leave stale.
 
 ### E2E gate (Gate E — whole pipeline, maintainer-run)
