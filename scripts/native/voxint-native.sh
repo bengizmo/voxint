@@ -27,6 +27,11 @@
 #   backup                pg_dump -Fc the voxint database into backups/
 #   restore <file>        pg_restore a dump into the voxint database
 #   run <svc> --foreground  run one service in the foreground for debugging
+#   rotate-logs           copytruncate-rotate oversized logs (also daily via launchd)
+#
+# By default setup/up/down/status/doctor ALSO drive scripts/metal/voxint-metal.sh
+# so one command runs the whole preview (core + whisper/pyannote/titanet). Pass
+# --no-models (or set VOXINT_NATIVE_WITH_MODELS=0) to manage the models yourself.
 #
 # Layout (override the root with VOXINT_NATIVE_HOME):
 #   $HOME/.voxint-native/{venv,pgdata,logs,run,backups,state.env}
@@ -106,6 +111,36 @@ WHISPER_PORT=8022
 PYANNOTE_PORT=8024
 TITANET_PORT=8021
 
+# The model-service URLs the api/worker reach. Default to the metal launcher's
+# loopback ports (the delegated, same-box case). Overridable so `--no-models`
+# with the models on OTHER hardware actually works: launchd bakes these into the
+# plist and inherits no ambient env, so a bare `ASR_URL` in the operator's shell
+# would be ignored -- the override MUST flow through here.
+NATIVE_ASR_URL=${VOXINT_NATIVE_ASR_URL:-http://127.0.0.1:$WHISPER_PORT}
+NATIVE_DIARIZER_URL=${VOXINT_NATIVE_DIARIZER_URL:-http://127.0.0.1:$PYANNOTE_PORT}
+NATIVE_EMBEDDER_URL=${VOXINT_NATIVE_EMBEDDER_URL:-http://127.0.0.1:$TITANET_PORT}
+
+# One-command preview: by default setup/up/down/status/doctor also drive the
+# metal launcher (the three model services), so a single `voxint-native up`
+# brings up the WHOLE preview -- core + whisper/pyannote/titanet. `--no-models`
+# (or VOXINT_NATIVE_WITH_MODELS=0) skips that delegation for operators running
+# the models elsewhere.
+NATIVE_WITH_MODELS=${VOXINT_NATIVE_WITH_MODELS:-1}
+
+# Frontend island build + staging. `setup` runs `npm ci && npm run build` in the
+# frontend dir and stages frontend/dist -> the api's asset dir (app.py reads
+# _APP_ASSETS_DIR = src/voxint/api/static/app, manifest at .vite/manifest.json).
+# Both are overridable so the offline tests can exercise staging against a
+# throwaway tree without dirtying the repo.
+NATIVE_FRONTEND_DIR=${VOXINT_NATIVE_FRONTEND_DIR:-$REPO_ROOT/frontend}
+NATIVE_APP_ASSETS_DIR=${VOXINT_NATIVE_APP_ASSETS_DIR:-$REPO_ROOT/src/voxint/api/static/app}
+
+# Log rotation (copytruncate + a daily launchd job), lifted from the metal
+# launcher: the core services run for months under KeepAlive, so their stdout
+# logs need bounding. Same knobs as the metal tier.
+VOXINT_NATIVE_LOG_MAX_MB=${VOXINT_NATIVE_LOG_MAX_MB:-50}
+VOXINT_NATIVE_LOG_ARCHIVES=${VOXINT_NATIVE_LOG_ARCHIVES:-5}
+
 say()  { printf '%s\n' "$*" >&2; }
 step() { printf '\n== %s\n' "$*" >&2; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -117,6 +152,30 @@ core_venv()   { printf '%s/venv' "$VOXINT_NATIVE_HOME"; }
 plist_label() { printf '%s.%s' "$LAUNCHD_PREFIX" "$1"; }
 plist_path()  { printf '%s/run/%s.plist' "$VOXINT_NATIVE_HOME" "$(plist_label "$1")"; }
 service_log() { printf '%s/logs/%s.log' "$VOXINT_NATIVE_HOME" "$1"; }
+
+# Model-service delegation. metal_script is the sibling launcher; models_delegated
+# is the pure predicate `up`/`down`/etc. consult before driving it.
+metal_script()    { printf '%s/scripts/metal/voxint-metal.sh' "$REPO_ROOT"; }
+models_delegated() { [ "${NATIVE_WITH_MODELS:-1}" = 1 ]; }
+
+# --no-models parsing, split into a pure predicate + filter so main can both
+# flip the module-level flag and strip the token from the positional args. A
+# command substitution runs in a subshell (its global writes are invisible),
+# hence the two-function shape rather than one mutating filter.
+no_models_flag_present() {
+  local a
+  for a in "$@"; do [ "x$a" = "x--no-models" ] && return 0; done
+  return 1
+}
+args_without_no_models() {
+  local a
+  for a in "$@"; do [ "x$a" = "x--no-models" ] || printf '%s\n' "$a"; done
+}
+
+# Frontend island build + staging paths (overridable for offline tests).
+frontend_dir()     { printf '%s' "$NATIVE_FRONTEND_DIR"; }
+app_assets_dir()   { printf '%s' "$NATIVE_APP_ASSETS_DIR"; }
+app_manifest_path() { printf '%s/.vite/manifest.json' "$NATIVE_APP_ASSETS_DIR"; }
 
 native_database_url() {
   printf 'postgresql+psycopg://%s:%s@127.0.0.1:%s/%s' \
@@ -306,12 +365,13 @@ native_service_env() {
   printf 'DATABASE_URL=%s\n' "$(native_database_url)"
   printf 'REDIS_URL=%s\n' "$(native_redis_url)"
   printf 'MEDIA_ROOT=%s\n' "$media_root"
-  # api/worker reach the model services over loopback (metal launcher supervises
-  # them). COMPUTE_TIER=metal picks the timing profile the Apple-Silicon tier
-  # was tuned for.
-  printf 'ASR_URL=http://127.0.0.1:%s\n' "$WHISPER_PORT"
-  printf 'DIARIZER_URL=http://127.0.0.1:%s\n' "$PYANNOTE_PORT"
-  printf 'EMBEDDER_URL=http://127.0.0.1:%s\n' "$TITANET_PORT"
+  # api/worker reach the model services at these URLs (loopback + the metal
+  # launcher's ports by default; overridable for models on other hardware).
+  # COMPUTE_TIER=metal picks the timing profile the Apple-Silicon tier was tuned
+  # for.
+  printf 'ASR_URL=%s\n' "$NATIVE_ASR_URL"
+  printf 'DIARIZER_URL=%s\n' "$NATIVE_DIARIZER_URL"
+  printf 'EMBEDDER_URL=%s\n' "$NATIVE_EMBEDDER_URL"
   printf 'COMPUTE_TIER=metal\n'
   printf 'PYTHONUNBUFFERED=1\n'
   # venv/bin first, then Homebrew (ffmpeg/ffprobe), then the system dirs.
@@ -378,6 +438,183 @@ render_plist() {
       "$(xml_escape "$(service_log "$svc")")"
     printf '</dict>\n</plist>\n'
   } > "$out"
+}
+
+# ---------------------------------------------------------------------------
+# Model-service delegation. The metal launcher owns whisper/pyannote/titanet
+# under com.voxint.metal.*; we drive it with the bare subcommand so a single
+# native command controls the whole preview. MEDIA_ROOT agreement is by
+# construction: both launchers read $REPO_ROOT/.env's MEDIA_ROOT and resolve it
+# against $REPO_ROOT with `pwd -P`, so they land on the identical physical dir.
+# (Metal's `up` REQUIRES that .env; native's own MEDIA_ROOT falls back to
+# ./media, so without an .env the delegated model `up` fails with metal's own
+# clear message while the core stack stays up -- an honest, non-fatal outcome.)
+# ---------------------------------------------------------------------------
+delegate_metal() {
+  local cmd=$1 ms
+  models_delegated || { say "  --no-models: leaving the model services to you ('$cmd' skipped)"; return 0; }
+  ms=$(metal_script)
+  # Test presence, not the executable bit, and invoke via `bash` (as the
+  # logrotate plist does): a checkout that lost the +x bit (zip export,
+  # core.fileMode=false) still has a runnable script. A genuinely absent
+  # launcher when models WERE meant to be managed is a failure, not a skip.
+  if [ ! -f "$ms" ]; then
+    say "  model launcher not found at $ms -- cannot manage the model services"
+    return 1
+  fi
+  step "Model services -> voxint-metal.sh $cmd"
+  bash "$ms" "$cmd"
+}
+
+# ---------------------------------------------------------------------------
+# Frontend island build + staging. Vite builds frontend/dist (base=/static/app/,
+# manifest emitted at dist/.vite/manifest.json); the api serves those files from
+# _APP_ASSETS_DIR. `setup` builds and stages; without node/npm it degrades
+# gracefully (the console will not hydrate until the islands are built).
+# ---------------------------------------------------------------------------
+stage_frontend_dist() {
+  local app dist
+  app=$(app_assets_dir); dist=$(frontend_dir)/dist
+  [ -f "$dist/.vite/manifest.json" ] \
+    || fail "no built frontend at $dist (missing .vite/manifest.json) -- build it first"
+  mkdir -p "$app"
+  # OVERLAY the new build rather than wipe-then-copy. The api parses its manifest
+  # once at import, so deleting the old hashed bundles before it restarts would
+  # 404 the still-running console mid-upgrade; and a wipe that partially failed
+  # could serve a new manifest against stale files. Copying the dist CONTENTS
+  # (trailing /. = "contents of") overwrites the manifest + adds the new hashed
+  # files, which is all the freshly-restarted api references. Old fingerprinted
+  # bundles linger unreferenced (negligible for a single-operator preview);
+  # the tracked .gitkeep is untouched.
+  cp -R "$dist"/. "$app"/ || fail "staging frontend dist into $app failed"
+}
+
+build_frontend() {
+  local fe app
+  fe=$(frontend_dir); app=$(app_assets_dir)
+  if [ ! -d "$fe" ]; then
+    say "  no frontend/ directory at $fe -- skipping island build"
+    return 0
+  fi
+  if ! command -v npm >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
+    say "  node/npm not found -- skipping island build; the console will not"
+    say "  hydrate until you build $fe and re-run setup (see docs/operations/native-macos-preview.md)"
+    return 0
+  fi
+  say "  npm ci && npm run build in $fe"
+  ( cd "$fe" && npm ci >&2 && npm run build >&2 ) || fail "frontend build failed"
+  stage_frontend_dist
+  say "  islands staged -> $app"
+}
+
+# ---------------------------------------------------------------------------
+# Log rotation. launchd opened each service's StandardOutPath fd ONCE at
+# bootstrap, so an mv-style rotation would leave the running service writing
+# into the archive's inode. copytruncate (cp then truncate the live inode)
+# matches that fd reality; the handful of bytes written between the cp and the
+# truncate are accepted losses for single-operator stdout logs. Lifted from the
+# metal launcher, which supervises its services the same way.
+# ---------------------------------------------------------------------------
+rotate_log_file() {
+  # $1 = live log path, $2 = max size in MB, $3 = newest archives to keep.
+  local log=$1 max_mb=$2 keep=$3 size stamp archive
+  [ -f "$log" ] || return 0
+  size=$(wc -c < "$log")
+  [ "$size" -ge $((max_mb * 1024 * 1024)) ] || return 0
+  stamp=$(date +%Y-%m-%d-%H-%M-%S)
+  archive=${log%.log}_$stamp.log
+  cp "$log" "$archive" || return 1
+  # Guard the truncate: rotate_log_file runs on the left of `||` (cmd_rotate_logs),
+  # which disables errexit inside it, so a failed `: > "$log"` (e.g. a read-only
+  # log) would otherwise be masked and the log would grow unbounded while we
+  # claim success.
+  : > "$log" || return 1
+  say "rotated $(basename "$log") ($size bytes) -> $(basename "$archive")"
+  prune_log_archives "$log" "$keep"
+}
+
+prune_log_archives() {
+  # $1 = live log path, $2 = newest archives to keep. The timestamp format sorts
+  # lexicographically == chronologically, so `sort -r | tail +N` drops the
+  # oldest. macOS head has no negative -n; tail -n +K is POSIX on both platforms.
+  local log=$1 keep=$2 dir base old
+  dir=$(dirname "$log")
+  base=$(basename "$log" .log)
+  ls -1 "$dir" 2>/dev/null \
+    | grep -E "^${base}_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}\.log$" \
+    | sort -r | tail -n +$((keep + 1)) | while IFS= read -r old; do
+      rm -f "$dir/$old"
+    done
+}
+
+cmd_rotate_logs() {
+  # Rotates every service log AND the rotation job's own log.
+  local svc rc=0
+  mkdir -p "$VOXINT_NATIVE_HOME/logs"
+  for svc in $NATIVE_DATASTORES $NATIVE_SERVICES logrotate; do
+    rotate_log_file "$(service_log "$svc")" \
+      "$VOXINT_NATIVE_LOG_MAX_MB" "$VOXINT_NATIVE_LOG_ARCHIVES" || rc=1
+  done
+  return $rc
+}
+
+render_logrotate_plist() {
+  # $1 = output path. Daily one-shot (03:17 -- an arbitrary quiet minute, off the
+  # exact hour where periodic jobs pile up); launchd coalesces intervals missed
+  # while the Mac slept into one run on wake. No KeepAlive: a clean exit stays
+  # exited until the next calendar fire.
+  local out=$1
+  {
+    printf '<?xml version="1.0" encoding="UTF-8"?>\n'
+    printf '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+    printf '<plist version="1.0">\n<dict>\n'
+    printf '  <key>Label</key><string>%s</string>\n' "$(plist_label logrotate)"
+    printf '  <key>ProgramArguments</key>\n  <array>\n'
+    printf '    <string>/bin/bash</string>\n'
+    printf '    <string>%s</string>\n' "$(xml_escape "$NATIVE_SCRIPT_DIR/voxint-native.sh")"
+    printf '    <string>rotate-logs</string>\n'
+    printf '  </array>\n'
+    printf '  <key>EnvironmentVariables</key>\n  <dict>\n'
+    printf '    <key>VOXINT_NATIVE_HOME</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_NATIVE_HOME")"
+    printf '    <key>VOXINT_NATIVE_LOG_MAX_MB</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_NATIVE_LOG_MAX_MB")"
+    printf '    <key>VOXINT_NATIVE_LOG_ARCHIVES</key><string>%s</string>\n' \
+      "$(xml_escape "$VOXINT_NATIVE_LOG_ARCHIVES")"
+    printf '  </dict>\n'
+    printf '  <key>RunAtLoad</key><false/>\n'
+    printf '  <key>StartCalendarInterval</key>\n  <dict>\n'
+    printf '    <key>Hour</key><integer>3</integer>\n'
+    printf '    <key>Minute</key><integer>17</integer>\n'
+    printf '  </dict>\n'
+    printf '  <key>StandardOutPath</key><string>%s</string>\n' \
+      "$(xml_escape "$(service_log logrotate)")"
+    printf '  <key>StandardErrorPath</key><string>%s</string>\n' \
+      "$(xml_escape "$(service_log logrotate)")"
+    printf '</dict>\n</plist>\n'
+  } > "$out"
+}
+
+install_logrotate() {
+  # Rotate oversized logs now AND (re)install the daily job -- under KeepAlive the
+  # services can run for months without another `up`, so the inline rotation
+  # alone would not bound growth. Same bounded bootout-race dance as services.
+  local plist label i
+  cmd_rotate_logs || true
+  plist=$(plist_path logrotate)
+  label=$(plist_label logrotate)
+  render_logrotate_plist "$plist"
+  plutil -lint -s "$plist" || fail "generated plist failed plutil lint: $plist"
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  i=0
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -le 50 ] || fail "$label did not unload within 10s (launchctl bootout race)"
+    sleep 0.2
+  done
+  launchctl bootstrap "gui/$(id -u)" "$plist" \
+    || fail "launchctl bootstrap failed for $label (see $(service_log logrotate))"
+  say "installed $label (daily, keeps $VOXINT_NATIVE_LOG_ARCHIVES archives over ${VOXINT_NATIVE_LOG_MAX_MB}MB)"
 }
 
 # ---------------------------------------------------------------------------
@@ -450,7 +687,7 @@ ensure_database() {
 cmd_setup() {
   require_macos
   require_tools
-  local venv fresh=0
+  local venv fresh=0 metal_setup_rc=0
   step "Directories under $VOXINT_NATIVE_HOME"
   mkdir -p "$VOXINT_NATIVE_HOME/logs" "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/backups"
 
@@ -488,13 +725,29 @@ cmd_setup() {
   say "  installing voxint (editable) into the core venv"
   uv pip install --quiet --python "$venv/bin/python" -e "$REPO_ROOT" >&2
 
+  step "Frontend islands (npm build + stage)"
+  build_frontend
+
   step "Private PostgreSQL 17 cluster"
   init_cluster
 
+  # Bring the model tier's own setup along (weights download; network required),
+  # unless --no-models. The core install is complete either way and metal setup
+  # can be re-run, so we do NOT abort -- but we record the failure and return it
+  # so a scripted `setup && up` sees the incomplete preview.
+  delegate_metal setup || metal_setup_rc=$?
+  [ "$metal_setup_rc" -eq 0 ] \
+    || say "  model setup did not complete (network needed) -- retry: $(metal_script) setup"
+
   step "Setup complete"
-  say "Start the whole stack (Postgres + Redis + api/worker/beat) with: $0 up"
-  say "Note: submissions will fail until the model services are also up"
-  say "(scripts/metal/voxint-metal.sh up)."
+  if models_delegated; then
+    say "Start the whole preview (core + models) with: $0 up"
+  else
+    say "Start the core stack with: $0 up   (models run elsewhere: --no-models)"
+    say "Note: submissions will fail until the model services are also up"
+    say "(scripts/metal/voxint-metal.sh up)."
+  fi
+  return "$metal_setup_rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -565,7 +818,7 @@ managed_cluster() { [ -f "$NATIVE_PGDATA/PG_VERSION" ]; }
 cmd_up() {
   require_macos
   load_state
-  local media_root svc managed=0
+  local media_root svc managed=0 metal_up_rc=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
   managed_cluster && managed=1
   media_root=$(resolved_media_root_or_fail)
@@ -600,14 +853,49 @@ cmd_up() {
   for svc in $NATIVE_SERVICES; do
     bootstrap_service "$svc" "$media_root"
   done
+
+  step "Log rotation"
+  install_logrotate
+
+  # Bring up the model services (unless --no-models) so a single `up` yields the
+  # whole preview. The core stack is NOT torn down on a model failure -- a
+  # missing weight or .env leaves the console usable, submissions just fail until
+  # the models are up. But we record the failure and return it, so `up && submit`
+  # does not proceed against a half-up preview claiming success.
+  delegate_metal up || metal_up_rc=$?
+  [ "$metal_up_rc" -eq 0 ] \
+    || say "  model services did not all start -- submissions will fail until they do (retry: $(metal_script) up; check: $(metal_script) doctor)"
+
+  step "Ready"
   say "Core stack starting. Console: http://$NATIVE_API_HOST:$NATIVE_API_PORT"
   say "Check readiness with: $0 status"
+  # Open the console in the default browser (macOS `open`); harmless if absent.
+  # Wait (bounded) for /healthz first so the browser does not race the api's
+  # bind and land on a connection-refused page.
+  if command -v open >/dev/null 2>&1; then
+    wait_for_api
+    open "http://$NATIVE_API_HOST:$NATIVE_API_PORT" >/dev/null 2>&1 || true
+  fi
+  return "$metal_up_rc"
+}
+
+wait_for_api() {
+  # Poll /healthz briefly (best-effort; never fails the caller). Used only to
+  # avoid opening the browser before the api has bound its port.
+  local i=0
+  while [ "$i" -lt 20 ]; do
+    curl -fsS -m 2 "http://127.0.0.1:$NATIVE_API_PORT/healthz" >/dev/null 2>&1 && return 0
+    i=$((i + 1))
+    sleep 0.5
+  done
+  return 0
 }
 
 cmd_down() {
   local svc label i
-  # Core services first, then the datastores they depend on.
-  for svc in $NATIVE_SERVICES $NATIVE_DATASTORES; do
+  # Core services first, then the datastores they depend on, then the daily
+  # rotation job. Order among these does not matter for teardown.
+  for svc in $NATIVE_SERVICES $NATIVE_DATASTORES logrotate; do
     label=$(plist_label "$svc")
     if launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1; then
       # bootout returns before the job is fully torn down; wait (bounded) so a
@@ -623,6 +911,8 @@ cmd_down() {
       say "$label was not running"
     fi
   done
+  # Stop the model services too (unless --no-models). Non-fatal.
+  delegate_metal down || true
 }
 
 cmd_status() {
@@ -664,12 +954,15 @@ cmd_status() {
 
   step "Version"
   say "working tree: $(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+
+  # Append the model tier's own status (unless --no-models). Non-fatal.
+  delegate_metal status || true
 }
 
 cmd_logs() {
   local svc=${1:-} follow=${2:-}
-  [ -n "$svc" ] || fail "usage: $0 logs <postgres|redis|api|worker|beat> [-f]"
-  case $svc in postgres|redis|api|worker|beat) : ;; *) fail "unknown service: $svc" ;; esac
+  [ -n "$svc" ] || fail "usage: $0 logs <postgres|redis|api|worker|beat|logrotate> [-f]"
+  case $svc in postgres|redis|api|worker|beat|logrotate) : ;; *) fail "unknown service: $svc" ;; esac
   if [ "$follow" = "-f" ]; then
     tail -F "$(service_log "$svc")"
   else
@@ -801,6 +1094,33 @@ cmd_doctor() {
   else
     doctor_report SKIP "MEDIA_ROOT=$raw not created yet ($0 up creates it)"
   fi
+  # metal reads the SAME .env MEDIA_ROOT and resolves it against the SAME repo
+  # root, so the two launchers land on the identical physical dir by construction.
+  say "  (the model launcher reads the same MEDIA_ROOT from $envf)"
+
+  step "Frontend islands"
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    doctor_report PASS "node + npm present (needed to build the console islands)"
+  else
+    doctor_report FAIL "node/npm missing -- the review console cannot be built (brew install node)"
+  fi
+  if [ -f "$(app_manifest_path)" ]; then
+    doctor_report PASS "console islands staged ($(app_manifest_path))"
+  else
+    doctor_report FAIL "console islands not staged -- run: $0 setup (the console will not hydrate)"
+  fi
+
+  step "Model services"
+  if models_delegated; then
+    if [ -f "$(metal_script)" ]; then
+      doctor_report PASS "delegating to $(metal_script) doctor (output below)"
+      bash "$(metal_script)" doctor || DOCTOR_RC=1
+    else
+      doctor_report FAIL "model launcher not found at $(metal_script)"
+    fi
+  else
+    doctor_report SKIP "--no-models: model services are managed elsewhere"
+  fi
 
   if [ "$DOCTOR_RC" -eq 0 ]; then
     step "doctor: all checks passed"
@@ -866,8 +1186,31 @@ EOF
 # Entry point
 # ---------------------------------------------------------------------------
 main() {
-  local cmd=${1:-}
+  local cmd oldifs
+  # Strip a LEADING --no-models (the common `tool --flag cmd` habit) before we
+  # pick the subcommand, so `voxint-native --no-models up` is not mistaken for a
+  # command named --no-models.
+  while [ "${1:-}" = "--no-models" ]; do
+    NATIVE_WITH_MODELS=0
+    shift
+  done
+  cmd=${1:-}
   [ $# -gt 0 ] && shift
+  # Also pull a TRAILING/interspersed --no-models out of the remaining args (it
+  # applies to the delegating commands and is harmless elsewhere): flip the
+  # module flag, then rebuild the positional args without it. Same IFS=newline
+  # rebuild cmd_run uses -- array-free for Bash 3.2.
+  if no_models_flag_present "$@"; then
+    NATIVE_WITH_MODELS=0
+    oldifs=$IFS
+    set -f
+    IFS='
+'
+    # shellcheck disable=SC2046
+    set -- $(args_without_no_models "$@")
+    set +f
+    IFS=$oldifs
+  fi
   case $cmd in
     setup)   cmd_setup "$@" ;;
     up)      cmd_up "$@" ;;
@@ -878,10 +1221,11 @@ main() {
     backup)  cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;
     run)     cmd_run "$@" ;;
+    rotate-logs) cmd_rotate_logs "$@" ;;
     *)
       say "voxint-native.sh -- native (no-Docker) core control plane for macOS/arm64"
-      say "usage: $0 <setup|up|down|status|logs|doctor|backup|restore|run>"
-      say "  setup                 brew datastores + core venv + private cluster + secrets"
+      say "usage: $0 <setup|up|down|status|logs|doctor|backup|restore|run|rotate-logs> [--no-models]"
+      say "  setup                 brew datastores + core venv + islands + cluster + secrets"
       say "  up / down             start/stop Postgres+Redis+api/worker/beat under launchd"
       say "                        (up provisions the db and runs alembic upgrade head first)"
       say "  status                supervision state + /healthz + datastore reachability"
@@ -890,6 +1234,10 @@ main() {
       say "  backup                pg_dump -Fc into backups/"
       say "  restore <file>        pg_restore a dump"
       say "  run <svc> --foreground  debug api|worker|beat in the foreground"
+      say "  rotate-logs           copytruncate-rotate oversized service logs"
+      say "                        (also runs daily via launchd once 'up' has run)"
+      say "  --no-models           skip driving scripts/metal/voxint-metal.sh"
+      say "                        (setup/up/down/status/doctor); models run elsewhere"
       exit 1
       ;;
   esac

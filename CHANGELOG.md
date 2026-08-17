@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Native macOS/arm64 core-stack technical preview** (#69, the MVP of epic
+  #68 "run without Docker"): a `launchd`-supervised launcher
+  (`scripts/native/voxint-native.sh`) that runs the whole stack on Apple Silicon
+  **without Docker** — a launcher-managed private PostgreSQL 17 + pgvector,
+  Redis, the API server, and the Celery worker/beat, all under
+  `~/.voxint-native/` on collision-free ports and isolated from any Docker or
+  brew Postgres. `up` provisions the role/db/extension and runs
+  `alembic upgrade head` before starting the app (compose's migrate gate);
+  `setup` builds and stages the review-console islands and, by default, drives
+  `scripts/metal/voxint-metal.sh` so **one command brings up the whole preview**
+  (core + whisper/pyannote/titanet). `--no-models` skips that for operators
+  running the models elsewhere. Includes backup/restore, `copytruncate` log
+  rotation (a daily `launchd` job), a `doctor` that checks every prerequisite,
+  and the offline unit + contract tests that pin the launcher's env/plist logic
+  and its command/port parity with compose and the metal launcher. Technical
+  preview, **not** the signed non-technical release (#73); on the metal tier
+  long recordings take real compute time. See `docs/native-macos-preview.md`.
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

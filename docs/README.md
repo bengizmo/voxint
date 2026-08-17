@@ -13,6 +13,7 @@
 | `timeouts-and-leases.md` | COMPUTE_TIER timing profiles: stage timeouts and worker leases per tier |
 | `harness.md` | Offline scoring harness: `voxint score` file contracts, verdict vocabularies, the cross-space invariant |
 | `operations.md` | Deployment, migrations, pipeline operations, recovery, adjudication workflow |
+| `native-macos-preview.md` | Technical preview: run the whole stack on macOS/arm64 without Docker, under `launchd` (`scripts/native/voxint-native.sh`) |
 | `testing.md` | Test layers and how to run them; the manual browser-verification procedure for the review console |
 | `release-process.md` | Maintainers: how a release is cut (tag → GHCR images → PyPI → GitHub Release) |
 | `reports/` | Dated measurement reports (parity screens, bakeoff diagnostics, negative results) — the evidence behind verdict blocks in `gpu-contracts.md` |

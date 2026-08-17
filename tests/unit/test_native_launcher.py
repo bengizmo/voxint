@@ -23,7 +23,6 @@ import pytest
 
 REAL_REPO = Path(__file__).resolve().parents[2]
 NATIVE_SCRIPT = REAL_REPO / "scripts" / "native" / "voxint-native.sh"
-COMPOSE = REAL_REPO / "compose.yaml"
 
 CORE_SERVICES = ("api", "worker", "beat")
 
@@ -50,6 +49,17 @@ def run_lib(
         "VOXINT_NATIVE_PASSWORD",
         "VOXINT_NATIVE_CSRF_SECRET",
         "VOXINT_NATIVE_MEDIA_ROOT",
+        # Slice-3 knobs: a developer's ambient value must not perturb the
+        # asserted defaults (e.g. VOXINT_NATIVE_WITH_MODELS=0 would flip the
+        # delegation default; the URL/dir overrides steer staging + env).
+        "VOXINT_NATIVE_WITH_MODELS",
+        "VOXINT_NATIVE_ASR_URL",
+        "VOXINT_NATIVE_DIARIZER_URL",
+        "VOXINT_NATIVE_EMBEDDER_URL",
+        "VOXINT_NATIVE_FRONTEND_DIR",
+        "VOXINT_NATIVE_APP_ASSETS_DIR",
+        "VOXINT_NATIVE_LOG_MAX_MB",
+        "VOXINT_NATIVE_LOG_ARCHIVES",
     ):
         env.pop(key, None)
     if extra_env:
@@ -288,47 +298,10 @@ def test_env_value_from_file_strips_quotes(tmp_path: Path) -> None:
     assert proc.stdout == "./media"
 
 
-# --------------------------------------------------------------------------- #
-# Cross-file drift guard: the argv/ports the launcher bakes must match compose
-# --------------------------------------------------------------------------- #
-def test_service_commands_match_compose(tmp_path: Path) -> None:
-    # The native launcher and compose.yaml must run the SAME api/worker/beat
-    # commands, or a native preview silently diverges from the shipped stack.
-    import yaml
-
-    doc = yaml.safe_load(COMPOSE.read_text())
-
-    def compose_cmd(service: str) -> str:
-        return doc["services"][service]["command"]
-
-    # api: compose runs the console script `voxint serve`.
-    assert compose_cmd("api").split() == ["voxint", "serve"]
-    api = argv_lines(run_lib(tmp_path, "native_program_args api"))
-    assert api[-1] == "serve" and api[0].endswith("/bin/voxint")
-
-    # worker: same celery app + subcommand.
-    assert compose_cmd("worker").split() == [
-        "celery",
-        "-A",
-        "voxint.worker.app",
-        "worker",
-        "--loglevel=INFO",
-    ]
-    worker = argv_lines(run_lib(tmp_path, "native_program_args worker"))
-    assert worker[1:] == ["-A", "voxint.worker.app", "worker", "--loglevel=INFO"]
-
-    # beat: same celery app + subcommand (the -s schedule path legitimately
-    # differs — compose writes /tmp, native writes under its own home).
-    beat_compose = compose_cmd("beat").split()
-    assert beat_compose[:5] == [
-        "celery",
-        "-A",
-        "voxint.worker.app",
-        "beat",
-        "--loglevel=INFO",
-    ]
-    beat = argv_lines(run_lib(tmp_path, "native_program_args beat"))
-    assert beat[1:6] == ["-A", "voxint.worker.app", "beat", "--loglevel=INFO", "-s"]
+# NOTE: the cross-file drift guards (native argv ↔ compose.yaml, native model
+# URLs ↔ metal launcher ports, and MEDIA_ROOT resolution parity) live in
+# tests/contracts/test_native_launcher_contract.py, where the pin-parity
+# invariants belong. This module stays focused on the launcher's pure logic.
 
 
 # --------------------------------------------------------------------------- #
@@ -438,25 +411,240 @@ def test_write_state_env_is_mode_0600(tmp_path: Path) -> None:
     assert "PG_PORT=" in body and "DB_PASSWORD=" in body
 
 
-def test_model_urls_match_metal_launcher_ports(tmp_path: Path) -> None:
-    # The api/worker reach the model services on the ports the metal launcher
-    # binds; bind the two directly so a port moved in one place is caught here.
-    metal = REAL_REPO / "scripts" / "metal" / "voxint-metal.sh"
-    metal_env = os.environ.copy()
-    metal_env["VOXINT_METAL_LIB"] = "1"
-    metal_env["VOXINT_METAL_HOME"] = str(tmp_path)
+# --------------------------------------------------------------------------- #
+# Slice 3 — model delegation, frontend staging, and log rotation
+# --------------------------------------------------------------------------- #
+def test_metal_script_points_at_the_sibling_launcher(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, "metal_script")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == str(REAL_REPO / "scripts" / "metal" / "voxint-metal.sh")
 
-    def metal_port(svc: str) -> str:
-        proc = subprocess.run(
-            ["bash", "-c", f'source "{metal}"\nservice_port {svc}'],
-            env=metal_env,
-            capture_output=True,
-            text=True,
-        )
-        assert proc.returncode == 0, proc.stderr
-        return proc.stdout
 
+def test_models_delegated_default_on_and_env_off(tmp_path: Path) -> None:
+    # Default: the native launcher drives the metal launcher.
+    on = run_lib(tmp_path, 'models_delegated && echo yes || echo no')
+    assert on.stdout.strip() == "yes"
+    # VOXINT_NATIVE_WITH_MODELS=0 (the --no-models persistence) skips delegation.
+    off = run_lib(
+        tmp_path,
+        'models_delegated && echo yes || echo no',
+        extra_env={"VOXINT_NATIVE_WITH_MODELS": "0"},
+    )
+    assert off.stdout.strip() == "no"
+
+
+def test_no_models_flag_detected_and_stripped(tmp_path: Path) -> None:
+    # The predicate main uses to flip the flag, and the filter that removes the
+    # token from the positional args (leaving order + non-flag args intact).
+    hit = run_lib(
+        tmp_path, 'no_models_flag_present up --no-models && echo hit || echo miss'
+    )
+    assert hit.stdout.strip() == "hit"
+    miss = run_lib(
+        tmp_path, 'no_models_flag_present logs api && echo hit || echo miss'
+    )
+    assert miss.stdout.strip() == "miss"
+    kept = run_lib(tmp_path, "args_without_no_models logs --no-models api")
+    assert kept.stdout.splitlines() == ["logs", "api"]
+
+
+def test_app_asset_paths_honour_overrides(tmp_path: Path) -> None:
+    proc = run_lib(
+        tmp_path,
+        'printf "%s\\n%s\\n" "$(app_assets_dir)" "$(app_manifest_path)"',
+        extra_env={"VOXINT_NATIVE_APP_ASSETS_DIR": str(tmp_path / "app")},
+    )
+    lines = proc.stdout.splitlines()
+    assert lines[0] == str(tmp_path / "app")
+    assert lines[1] == str(tmp_path / "app" / ".vite" / "manifest.json")
+
+
+def test_stage_frontend_dist_overlays_and_keeps_gitkeep(tmp_path: Path) -> None:
+    dist = tmp_path / "frontend" / "dist"
+    (dist / ".vite").mkdir(parents=True)
+    (dist / ".vite" / "manifest.json").write_text('{"main":{"file":"new.js"}}')
+    (dist / "new.js").write_text("new")
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / ".gitkeep").write_text("keep\n")
+    # A previous build's manifest + hashed asset already staged. Overlay MUST
+    # replace the manifest (authoritative) and add the new asset, while leaving
+    # the old hashed asset in place so a still-running api does not 404 mid-
+    # upgrade -- and it must never touch the tracked .gitkeep.
+    (app / ".vite").mkdir()
+    (app / ".vite" / "manifest.json").write_text('{"main":{"file":"old.js"}}')
+    (app / "old.js").write_text("old")
+
+    proc = run_lib(
+        tmp_path,
+        "stage_frontend_dist",
+        extra_env={
+            "VOXINT_NATIVE_FRONTEND_DIR": str(tmp_path / "frontend"),
+            "VOXINT_NATIVE_APP_ASSETS_DIR": str(app),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (app / "new.js").is_file()  # new asset added
+    assert (app / ".gitkeep").is_file()  # tracked placeholder survives
+    # Manifest replaced by the new build (the only source the fresh api reads).
+    assert "new.js" in (app / ".vite" / "manifest.json").read_text()
+    # Old hashed asset lingers unreferenced (overlay, not wipe) -- harmless.
+    assert (app / "old.js").is_file()
+
+
+def test_native_model_urls_default_to_metal_loopback_ports(tmp_path: Path) -> None:
     env = env_lines(run_lib(tmp_path, "native_service_env api /media/root"))
-    assert env["ASR_URL"].rsplit(":", 1)[1] == metal_port("whisper")
-    assert env["DIARIZER_URL"].rsplit(":", 1)[1] == metal_port("pyannote")
-    assert env["EMBEDDER_URL"].rsplit(":", 1)[1] == metal_port("titanet")
+    assert env["ASR_URL"] == "http://127.0.0.1:8022"
+    assert env["DIARIZER_URL"] == "http://127.0.0.1:8024"
+    assert env["EMBEDDER_URL"] == "http://127.0.0.1:8021"
+
+
+def test_native_model_urls_honour_remote_overrides(tmp_path: Path) -> None:
+    # --no-models with the models on other hardware only works if the override
+    # actually reaches the baked env (launchd inherits no ambient ASR_URL).
+    env = env_lines(
+        run_lib(
+            tmp_path,
+            "native_service_env api /media/root",
+            extra_env={
+                "VOXINT_NATIVE_ASR_URL": "http://gpubox:9002",
+                "VOXINT_NATIVE_DIARIZER_URL": "http://gpubox:9004",
+                "VOXINT_NATIVE_EMBEDDER_URL": "http://gpubox:9001",
+            },
+        )
+    )
+    assert env["ASR_URL"] == "http://gpubox:9002"
+    assert env["DIARIZER_URL"] == "http://gpubox:9004"
+    assert env["EMBEDDER_URL"] == "http://gpubox:9001"
+
+
+def test_rotate_logs_reports_truncation_failure(tmp_path: Path) -> None:
+    # A read-only log the archive-copy can read but the truncate cannot empty
+    # must surface as a failure. cmd_rotate_logs calls rotate_log_file under an
+    # errexit-suppressing `|| rc=1`, so without the guarded truncate the failure
+    # would be masked and cmd_rotate_logs would (wrongly) return 0.
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    log = logs / "api.log"
+    log.write_bytes(b"x" * (1024 * 1024 + 10))
+    log.chmod(0o444)  # read-only: cp succeeds, `: > log` fails
+    try:
+        proc = run_lib(
+            tmp_path,
+            "cmd_rotate_logs",
+            extra_env={
+                "VOXINT_NATIVE_LOG_MAX_MB": "1",
+                "VOXINT_NATIVE_LOG_ARCHIVES": "2",
+            },
+        )
+        assert proc.returncode != 0
+    finally:
+        log.chmod(0o644)
+
+
+def test_stage_frontend_dist_fails_without_manifest(tmp_path: Path) -> None:
+    (tmp_path / "frontend" / "dist").mkdir(parents=True)  # dist but no manifest
+    proc = run_lib(
+        tmp_path,
+        "stage_frontend_dist",
+        extra_env={
+            "VOXINT_NATIVE_FRONTEND_DIR": str(tmp_path / "frontend"),
+            "VOXINT_NATIVE_APP_ASSETS_DIR": str(tmp_path / "app"),
+        },
+    )
+    assert proc.returncode != 0
+    assert "manifest" in proc.stderr
+
+
+def test_build_frontend_skips_gracefully_without_frontend_dir(tmp_path: Path) -> None:
+    # No frontend/ dir -> setup degrades (returns 0, says it skipped) rather than
+    # failing the whole install.
+    proc = run_lib(
+        tmp_path,
+        "build_frontend",
+        extra_env={"VOXINT_NATIVE_FRONTEND_DIR": str(tmp_path / "nope")},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "skipping island build" in proc.stderr
+
+
+def test_rotate_log_file_rotates_when_oversized(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    log = logs / "api.log"
+    log.write_bytes(b"x" * (1024 * 1024 + 10))  # just over 1 MB
+    proc = run_lib(tmp_path, f'rotate_log_file "{log}" 1 2')
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_bytes() == b""  # truncated in place (copytruncate)
+    archives = [p for p in logs.iterdir() if p.name != "api.log"]
+    assert len(archives) == 1 and archives[0].name.startswith("api_")
+
+
+def test_rotate_log_file_keeps_below_threshold(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    log = logs / "api.log"
+    log.write_text("small\n")
+    proc = run_lib(tmp_path, f'rotate_log_file "{log}" 1 2')
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text() == "small\n"
+    assert list(logs.iterdir()) == [log]  # no archive created
+
+
+def test_prune_log_archives_keeps_newest_n(tmp_path: Path) -> None:
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "api.log").write_text("live\n")
+    stamps = [
+        "2026-08-10-00-00-00",
+        "2026-08-11-00-00-00",
+        "2026-08-12-00-00-00",
+        "2026-08-13-00-00-00",
+    ]
+    for s in stamps:
+        (logs / f"api_{s}.log").write_text("old\n")
+    proc = run_lib(tmp_path, f'prune_log_archives "{logs / "api.log"}" 2')
+    assert proc.returncode == 0, proc.stderr
+    remaining = sorted(p.name for p in logs.iterdir() if p.name != "api.log")
+    assert remaining == ["api_2026-08-12-00-00-00.log", "api_2026-08-13-00-00-00.log"]
+
+
+def test_logrotate_plist_lints_and_invokes_native_rotate(tmp_path: Path) -> None:
+    out = tmp_path / "lr.plist"
+    proc = run_lib(tmp_path, f'render_logrotate_plist "{out}"')
+    assert proc.returncode == 0, proc.stderr
+    # plutil is the same gate the launcher applies before bootstrap.
+    lint = subprocess.run(
+        ["plutil", "-lint", "-s", str(out)], capture_output=True, text=True
+    )
+    assert lint.returncode == 0, lint.stdout + lint.stderr
+    doc = plistlib.loads(out.read_bytes())
+    assert doc["Label"] == "com.voxint.native.logrotate"
+    assert doc["ProgramArguments"] == [
+        "/bin/bash",
+        str(REAL_REPO / "scripts" / "native" / "voxint-native.sh"),
+        "rotate-logs",
+    ]
+    assert doc["StartCalendarInterval"] == {"Hour": 3, "Minute": 17}
+    assert doc["RunAtLoad"] is False
+    assert doc["EnvironmentVariables"]["VOXINT_NATIVE_HOME"] == str(tmp_path)
+    assert "VOXINT_NATIVE_LOG_MAX_MB" in doc["EnvironmentVariables"]
+
+
+def test_rotate_logs_command_covers_all_service_logs(tmp_path: Path) -> None:
+    # rotate-logs must sweep every supervised log AND its own; an oversized log
+    # for each is rotated in one pass.
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    for svc in ("postgres", "redis", "api", "worker", "beat", "logrotate"):
+        (logs / f"{svc}.log").write_bytes(b"x" * (1024 * 1024 + 10))
+    proc = run_lib(
+        tmp_path,
+        "cmd_rotate_logs",
+        extra_env={"VOXINT_NATIVE_LOG_MAX_MB": "1", "VOXINT_NATIVE_LOG_ARCHIVES": "3"},
+    )
+    assert proc.returncode == 0, proc.stderr
+    for svc in ("postgres", "redis", "api", "worker", "beat", "logrotate"):
+        assert (logs / f"{svc}.log").read_bytes() == b""
+        archives = [p for p in logs.iterdir() if p.name.startswith(f"{svc}_")]
+        assert len(archives) == 1
