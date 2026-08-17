@@ -196,15 +196,22 @@ export function ReviewStepper({
   );
 
   // POST a form-encoded write and return its parsed JSON body (of whatever
-  // shape), or null on any failure. A 409 is the stale/reclaimed claim → stop the
-  // loop (keep place + edit); every other error (network, a non-JSON body from a
-  // proxy) surfaces an inline message. Parsing lives INSIDE the try so a bad body
-  // is handled, never an unhandled rejection. Busy is owned by the callers (they
+  // shape), or null on any failure. Parsing lives INSIDE the try so a bad body is
+  // handled, never an unhandled rejection. Busy is owned by the callers (they
   // hold the ref across the whole operation), so this helper does not touch it.
+  //
+  // A 409 has TWO meanings on these routes and the caller says which applies. For
+  // verify/correct it is always a stale/reclaimed claim (default) → stop the loop
+  // and prompt a re-claim. For /split it can instead be a segment-STATE conflict
+  // (e.g. the parent was corrected in another tab between the words fetch and the
+  // click); `claimLostOnConflict:false` surfaces the server's honest reason inline
+  // and keeps the claim, rather than falsely locking the whole surface. Every
+  // other error (network, a non-JSON body from a proxy) surfaces inline.
   const postForm = useCallback(
     async <T,>(
       path: string,
       body: Record<string, string>,
+      opts?: { claimLostOnConflict?: boolean },
     ): Promise<T | null> => {
       if (!writable || reviewToken === null) return null;
       try {
@@ -221,9 +228,15 @@ export function ReviewStepper({
         return (await res.json()) as T;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          // Stale/reclaimed: stop the loop, keep place + edit. The operator must
-          // re-claim from the workbench; we say so rather than silently failing.
-          setClaimLost(true);
+          if (opts?.claimLostOnConflict === false) {
+            // Segment-state conflict, not a claim loss: show the server reason
+            // (e.g. "cannot split a corrected segment") and keep the claim.
+            setError(err.detail);
+          } else {
+            // Stale/reclaimed: stop the loop, keep place + edit. The operator must
+            // re-claim from the workbench; we say so rather than silently failing.
+            setClaimLost(true);
+          }
         } else {
           setError(err instanceof ApiError ? err.detail : "Request failed.");
         }
@@ -282,6 +295,10 @@ export function ReviewStepper({
 
   const saveEdit = useCallback(async () => {
     if (current?.segmentId == null || busyRef.current) return;
+    // Never POST /text for a split parent — it would 409 (split and correction
+    // are mutually exclusive). The Save button is already disabled for this case;
+    // this guards the keyboard path (Ctrl/⌘+↵) too.
+    if (siblingCount(segments, current.sourceSegmentId) > 1) return;
     busyRef.current = true;
     setBusy(true);
     setError(null);
@@ -302,19 +319,26 @@ export function ReviewStepper({
       busyRef.current = false;
       setBusy(false);
     }
-  }, [current, cursor, postJson, runId, editText, applyResult]);
+  }, [current, cursor, postJson, runId, editText, applyResult, segments]);
 
   // Lazily fetch the focused segment's words when split mode is engaged (issue
   // #59) — the /words payload is never folded into the shared hydration props, so
   // it costs nothing until the operator actually splits. Skipped for an already-
   // split parent (no further split this slice) and re-run on every focus change.
   // The abort + parent-id guard keep a superseded response from painting a line.
+  // `current?.corrected` is a dep so that correcting the focused segment (which
+  // makes it unsplittable server-side) forces a refetch — otherwise the cut
+  // points would stay live and a click would 409 on the now-corrected segment.
   useEffect(() => {
     if (!splitMode || !writable || focusParentId === null || isSplitParent) {
       setSplitData(null);
       return;
     }
     const parentId = focusParentId;
+    // Clear first so the status line reads "Loading words…" during a refetch,
+    // never the previous segment's stale splittability (honest UX). The cut
+    // buttons are already parent-id guarded, but the status line is not.
+    setSplitData(null);
     const controller = new AbortController();
     void (async () => {
       try {
@@ -331,7 +355,14 @@ export function ReviewStepper({
           words: SplitWord[];
         };
         if (!controller.signal.aborted) {
-          setSplitData({ segmentId: parentId, ...data });
+          // Pick fields explicitly — the payload also carries its own segmentId,
+          // and a blind spread would overwrite the parent-id guard value.
+          setSplitData({
+            segmentId: parentId,
+            splittable: data.splittable,
+            reason: data.reason,
+            words: data.words,
+          });
         }
       } catch (err) {
         // An abort is the effect superseding itself — not an error to surface.
@@ -349,16 +380,33 @@ export function ReviewStepper({
     return () => {
       controller.abort();
     };
-  }, [splitMode, writable, focusParentId, isSplitParent, runId]);
+  }, [
+    splitMode,
+    writable,
+    focusParentId,
+    isSplitParent,
+    runId,
+    current?.corrected,
+  ]);
 
   // Split the focused parent BEFORE word `wordIndex` (issue #59). The response is
   // a whole-run reconcile (segments + progress, the hydration shape), so we adopt
   // it wholesale and re-seat the cursor on the parent's queue entry (its first
-  // child). busyRef mirrors the verify/correct guard so a double word-click can't
-  // race two splits. A structurally-idempotent backend makes a replay a no-op.
+  // child) via setCursor — WITHOUT play(): a split is a structural edit, not a
+  // navigation, so we don't restart audio the way verifyAndAdvance's goTo does.
+  // busyRef mirrors the verify/correct guard so a double word-click can't race
+  // two splits. A structurally-idempotent backend makes a replay a no-op.
   const splitAt = useCallback(
     async (sourceSegmentId: string, wordIndex: number) => {
       if (busyRef.current) return;
+      // A pending edit in the box would be silently discarded by the split's
+      // whole-run reconcile (it re-syncs the edit box to the child's word-derived
+      // text). Warn on the first click; a second word click splits anyway — the
+      // same explicit-discard contract verifyAndAdvance uses for `v`.
+      if (current && editText !== (current.text ?? "") && !confirmDiscard) {
+        setConfirmDiscard(true);
+        return;
+      }
       busyRef.current = true;
       setBusy(true);
       setError(null);
@@ -366,10 +414,16 @@ export function ReviewStepper({
         const result = await postForm<{
           segments: Segment[];
           progress: { verified: number; total: number };
-        }>(`/review/${runId}/segments/${sourceSegmentId}/split`, {
-          word_index: String(wordIndex),
-        });
+        }>(
+          `/review/${runId}/segments/${sourceSegmentId}/split`,
+          { word_index: String(wordIndex) },
+          // A 409 here is a segment-STATE conflict (the parent was corrected
+          // out from under us), not a claim loss: show the reason, keep the
+          // claim, do not lock the surface.
+          { claimLostOnConflict: false },
+        );
         if (!result) return;
+        setConfirmDiscard(false);
         setSegments(result.segments);
         setProgress(result.progress);
         const targetIdx = result.segments.findIndex(
@@ -385,7 +439,7 @@ export function ReviewStepper({
         setBusy(false);
       }
     },
-    [postForm, runId],
+    [postForm, runId, current, editText, confirmDiscard],
   );
 
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
@@ -523,6 +577,12 @@ export function ReviewStepper({
                         "This segment can’t be split at a word boundary.")}
                 </p>
               )}
+              {splitMode && isSplitParent && (
+                <p className="muted text-sm" role="status">
+                  This segment is already split — it can’t be split further in
+                  this release.
+                </p>
+              )}
               <div className="flex items-center my-1">
                 <button
                   type="button"
@@ -559,8 +619,8 @@ export function ReviewStepper({
               {confirmDiscard && (
                 <p role="alert" className="text-sm">
                   You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save
-                  it, or <kbd>v</kbd> again to verify the original wording and
-                  discard the edit.
+                  it, or repeat the action (<kbd>v</kbd> to verify, or click the
+                  word again to split) to discard the edit and continue.
                 </p>
               )}
               {error && (
