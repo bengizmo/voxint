@@ -104,7 +104,9 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
          the short hex available on hover (issue #56). #}
       <td><a href="/runs/{{ it.run_id }}" title="run {{ it.run_id }}"
              class="muted">open <code>{{ it.run_id.hex[:8] }}</code></a></td>
-      <td><span class="pill {{ it.status }}">{{ it.status }}</span>
+      {# Humanized LABEL only — the pill's CSS class stays the raw enum so it
+         keeps its colour (same display-only invariant as the dashboard). #}
+      <td><span class="pill {{ it.status }}">{{ humanize_status(it.status) }}</span>
         {% if it.archived %}<span class="pill skipped">archived</span>{% endif %}</td>
       <td>
         {% if it.status == "completed" %}

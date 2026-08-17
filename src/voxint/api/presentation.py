@@ -19,14 +19,26 @@ Two rules the callers rely on:
   at all.
 """
 
+import math
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from urllib.parse import unquote
 
-# Collapses any run of whitespace/control characters a percent-decode can
-# surface (newline, tab, NUL) into a single space so a decoded basename stays a
-# single clean line.
-_CONTROL_RUN = re.compile(r"[\s\x00-\x1f\x7f]+")
+# Collapses any run of whitespace or non-printing character a display string can
+# carry into a single space, so a name stays a single clean, non-spoofable line.
+# Covers C0/DEL/C1 controls, zero-width and directionality marks, the bidi
+# override/isolate ranges, and the BOM — the title of a fetched URL is the most
+# externally-controlled string in the console, and a bidi override there would
+# let a hostile title reorder how a filename reads.
+_CONTROL_RUN = re.compile(
+    "[\\s"  # any Unicode whitespace (newline, tab, NBSP, separators)
+    "\\x00-\\x1f\\x7f-\\x9f"  # C0 controls, DEL, C1 controls
+    "\\u200b-\\u200f"  # zero-width space/NJ/J + LRM/RLM
+    "\\u202a-\\u202e"  # bidi embeddings + overrides (display-spoofing vector)
+    "\\u2066-\\u2069"  # bidi isolates
+    "\\ufeff"  # BOM / zero-width no-break space
+    "]+"
+)
 
 
 def _clean_basename(source_path: str) -> str:
@@ -56,9 +68,12 @@ def friendly_media_label(title: str | None, source_path: str) -> str:
     Never truncates — the template does that in CSS so copy/paste stays intact.
     """
     if title is not None:
-        stripped = title.strip()
-        if stripped:
-            return stripped
+        # Clean the title the same way as a basename: it is the most externally
+        # controlled string in the console (a fetched URL's title), so strip the
+        # bidi/zero-width family before it reaches the DOM, not just whitespace.
+        cleaned = _CONTROL_RUN.sub(" ", title).strip()
+        if cleaned:
+            return cleaned
     return _clean_basename(source_path)
 
 
@@ -66,10 +81,12 @@ def format_duration(seconds: float | None) -> str:
     """A recording length as ``H:MM:SS`` / ``M:SS``; ``"—"`` when unknown.
 
     Unknown (``None``) is the honest render for media that was never probed;
-    a negative value (which the DB check-constraint forbids, but a caller could
-    still pass) is treated as unknown rather than shown as a nonsense clock.
+    a negative or non-finite value (the DB check-constraint forbids negatives,
+    but Postgres accepts ``NaN`` in a ``float`` column, and ``NaN < 0`` is
+    ``False``, so guard it explicitly) is treated as unknown rather than shown
+    as a nonsense clock or crashing ``int()`` on ``NaN``/``inf``.
     """
-    if seconds is None or seconds < 0:
+    if seconds is None or not math.isfinite(seconds) or seconds < 0:
         return "—"
     total = int(seconds)
     hours, remainder = divmod(total, 3600)
@@ -87,8 +104,15 @@ def format_age(created_at: datetime, *, now: datetime) -> str:
     is injected so the output is deterministic under test. A ``created_at`` in
     the (clock-skewed) future collapses to "just now" rather than a negative age.
     Absolute wall-clock time stays available to the caller via a ``title=``
-    tooltip; this is the at-a-glance label.
+    tooltip; this is the at-a-glance label. Both operands are expected tz-aware
+    (the DB columns are ``TIMESTAMPTZ`` and the route injects ``now`` as UTC); a
+    naive value is normalized to UTC rather than raising a ``TypeError`` that
+    would 500 the whole listing.
     """
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
     delta = now - created_at
     seconds = delta.total_seconds()
     if seconds < 60:

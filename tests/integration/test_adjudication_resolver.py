@@ -1,7 +1,7 @@
 """Read-time attribution: decision precedence, queue membership, correction order."""
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -293,6 +293,10 @@ def test_queue_sort_unresolved_orders_by_voice_count(
     """sort="unresolved" surfaces the most-unresolved runs first, oldest-tie-broken."""
     with session_factory() as session:
         # Created oldest→newest: one-voice, then two-voice, then another one-voice.
+        # Explicit, distinct created_at values give a well-defined oldest-first
+        # order (same-transaction rows share the server default now(), so their
+        # order is otherwise decided only by the id tie-breaker).
+        base = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
         one_a = make_completed_run(session)
         add_turn(session, one_a, 0, "S0")
         two = make_completed_run(session)
@@ -300,6 +304,8 @@ def test_queue_sort_unresolved_orders_by_voice_count(
         add_turn(session, two, 1, "S1")
         one_b = make_completed_run(session)
         add_turn(session, one_b, 0, "S0")
+        for offset, rid in enumerate((one_a, two, one_b)):
+            session.get(PipelineRun, rid).created_at = base + timedelta(minutes=offset)
         session.commit()
 
         # Default: oldest-first (FIFO), unchanged behaviour.

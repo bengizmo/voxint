@@ -8,6 +8,7 @@ import json
 import re
 import uuid
 import wave
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,7 @@ from voxint.db.models import (
     AudioArtifact,
     DiarizationTurn,
     MediaItem,
+    MediaSourceMetadata,
     PipelineRun,
     RunStatus,
     Speaker,
@@ -186,14 +188,66 @@ def test_queue_renders_operator_ergonomics(
     assert 'class="media-title"' in body
     # No probed duration on this upload → the honest em-dash, not "0:00".
     assert "—" in body
-    # Progress bar fills toward done with always-visible text.
+    # Progress bar fills toward done with always-visible text + full ARIA state.
     assert 'role="progressbar"' in body
+    assert 'aria-valuenow="1"' in body
+    assert 'aria-valuemax="2"' in body
     assert "1 of 2 resolved" in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text
     assert 'href="/review?sort=unresolved"' in sorted_body
     assert 'aria-current="true"' in sorted_body
+
+
+def test_queue_and_runs_escape_hostile_media_metadata(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """A fetched URL's title/path are attacker-influenced; the console must escape
+    them in both element text and the title="..." attribute (issue #56 review)."""
+    with session_factory() as session:
+        media = MediaItem(
+            source_path='incoming/x" onmouseover="alert(1) .wav',
+            duration_seconds=None,
+        )
+        session.add(media)
+        session.flush()
+        session.add(
+            MediaSourceMetadata(
+                media_item_id=media.id,
+                source_kind="ytdlp",
+                title="<script>alert(1)</script>",
+                raw={"id": "x"},
+                raw_schema_version=1,
+                acquired_at=datetime(2026, 8, 1, tzinfo=UTC),
+            )
+        )
+        run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+        session.add(run)
+        session.flush()
+        vec = [0.0] * EMBEDDING_DIM
+        vec[0] = 1.0
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=run.id,
+                turn_index=0,
+                start_seconds=0.0,
+                end_seconds=8.0,
+                label="S0",
+                embedding=vec,
+                embedding_space=SPACE,
+            )
+        )
+        session.commit()
+
+    for path in ("/review", "/runs"):
+        body = client.get(path).text
+        # The live script tag never reaches the DOM; only its escaped form does.
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+        # The quote in source_path cannot break out of the title="..." attribute.
+        assert 'onmouseover="alert(1)' not in body
+        assert "&#34;" in body or "&quot;" in body
 
 
 def test_full_review_flow(

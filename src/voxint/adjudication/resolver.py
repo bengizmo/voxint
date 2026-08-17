@@ -518,7 +518,13 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
             # Soft-archived runs (issue #5) are hidden from the review queue.
             PipelineRun.archived_at.is_(None),
         )
-        .order_by(PipelineRun.created_at)
+        # ``id`` is a deterministic secondary key: Postgres makes no ordering
+        # promise among rows sharing a ``created_at`` (reachable when several
+        # runs are inserted in one transaction under the DB-side ``now()``
+        # default), so without it the oldest-first order — and the stable-sort
+        # tie-break the ``unresolved`` mode relies on — would vary per request.
+        # Matches the ledger's ``(created_at, id)`` discipline.
+        .order_by(PipelineRun.created_at, PipelineRun.id)
     ).scalars()
     entries: list[QueueEntry] = []
     for run in runs:

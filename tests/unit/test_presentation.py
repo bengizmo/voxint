@@ -57,6 +57,19 @@ def test_friendly_label_collapses_control_chars() -> None:
     assert friendly_media_label(None, "/m/we%0Aird%09name.mp3") == "we ird name.mp3"
 
 
+def test_friendly_label_cleans_bidi_and_zero_width_in_title() -> None:
+    # The title is the most externally-controlled string (a fetched URL title);
+    # a bidi override (U+202E) or zero-width char must be stripped, not rendered.
+    rlo, zwsp, bom = chr(0x202E), chr(0x200B), chr(0xFEFF)
+    # Each invisible run collapses to a single space (never glues or vanishes
+    # silently), and a trailing one is stripped.
+    assert friendly_media_label(f"Talk{rlo}evil{zwsp}", "/x/y.mp3") == "Talk evil"
+    # A newline in the title collapses to a single space, not a broken line.
+    assert friendly_media_label("line1\nline2", "/x/y.mp3") == "line1 line2"
+    # A title that is only invisibles falls through to the path.
+    assert friendly_media_label(f"{zwsp}{bom}", "/x/real.mp3") == "real.mp3"
+
+
 # ---- format_duration --------------------------------------------------------
 
 
@@ -65,6 +78,8 @@ def test_friendly_label_collapses_control_chars() -> None:
     [
         (None, "—"),
         (-5.0, "—"),
+        (float("nan"), "—"),
+        (float("inf"), "—"),
         (0.0, "0:00"),
         (9.0, "0:09"),
         (65.0, "1:05"),
@@ -110,10 +125,40 @@ def test_format_age_buckets(delta: dict[str, float], expected: str) -> None:
     assert format_age(created_at, now=now) == expected
 
 
+@pytest.mark.parametrize(
+    ("delta", "expected"),
+    [
+        ({"seconds": 60}, "1 minute ago"),
+        ({"minutes": 60}, "1 hour ago"),
+        ({"hours": 24}, "1 day ago"),
+        ({"days": 7}, "1 week ago"),
+        ({"days": 30}, "1 month ago"),
+        ({"days": 365}, "1 year ago"),
+    ],
+)
+def test_format_age_bucket_boundaries(delta: dict[str, float], expected: str) -> None:
+    # Lock the exact edge where each unit rolls over to the next.
+    created_at, now = _ago(**delta)
+    assert format_age(created_at, now=now) == expected
+
+
 def test_format_age_future_is_just_now() -> None:
     # Clock skew: a future timestamp never renders a negative age.
     now = datetime(2026, 8, 17, 12, 0, 0, tzinfo=UTC)
     assert format_age(now + timedelta(minutes=5), now=now) == "just now"
+
+
+def test_format_age_normalizes_naive_operands() -> None:
+    # A naive created_at (or now) must not raise TypeError and 500 the listing;
+    # it is treated as UTC.
+    aware_now = datetime(2026, 8, 17, 12, 0, 0, tzinfo=UTC)
+    naive_created = datetime(2026, 8, 17, 9, 0, 0)  # deliberately tz-naive
+    assert format_age(naive_created, now=aware_now) == "3 hours ago"
+    # A naive `now` is normalized too (both operands guarded).
+    naive_now = datetime(2026, 8, 17, 12, 0, 0)
+    assert format_age(datetime(2026, 8, 17, 10, 0, 0, tzinfo=UTC), now=naive_now) == (
+        "2 hours ago"
+    )
 
 
 # ---- humanize_stage / humanize_status ---------------------------------------

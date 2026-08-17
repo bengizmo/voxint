@@ -36,7 +36,7 @@
         <div class="progress" role="progressbar"
              aria-valuenow="{{ resolved }}" aria-valuemin="0" aria-valuemax="{{ e.total_labels }}"
              aria-label="{{ resolved }} of {{ e.total_labels }} voices resolved">
-          <div class="progress-fill" style="width: {{ (100 * resolved / e.total_labels) if e.total_labels else 0 }}%"></div>
+          <div class="progress-fill" style="width: {{ ((100 * resolved / e.total_labels) | round(1)) if e.total_labels else 0 }}%"></div>
           <span class="progress-label">{{ resolved }} of {{ e.total_labels }} resolved</span>
         </div>
       </td>

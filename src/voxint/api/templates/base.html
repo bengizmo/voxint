@@ -118,7 +118,9 @@
     /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
        (resolved-of-total), with always-visible text so the bar is never the
        only signal for a screen reader or a non-technical operator. */
-    .media-title { font-weight: 600; }
+    .media-title { font-weight: 600; display: inline-block; max-width: 30rem;
+                   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   vertical-align: bottom; }
     .sort-control { font-size: .9rem; margin: .5rem 0 1rem; }
     .sort-control a[aria-current="true"] { font-weight: 600; text-decoration: none; }
     .progress { position: relative; min-width: 8rem; height: 1.2rem; border: 1px solid #8886;

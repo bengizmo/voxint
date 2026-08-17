@@ -184,6 +184,19 @@ def test_dashboard_window_selector_marks_the_active_preset(
     assert "24h\" selected" not in wide_body
 
 
+def test_dashboard_window_selector_echoes_valid_custom_window(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A valid ?since= that is not one of the presets (parse_since accepts 48h) is
+    # the *active* window, so the selector must echo it as selected — never show a
+    # shorter preset than the data reflects (issue #56 review).
+    seed_snapshot(session_factory)
+    body = client.get("/dashboard", params={"since": "48h"}).text
+    assert '<option value="48h" selected>Custom (48h)</option>' in body
+    # The presets are not falsely marked selected in that case.
+    assert '<option value="24h" selected>' not in body
+
+
 def test_dashboard_malformed_since_shows_notice_and_drops_poll_param(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
