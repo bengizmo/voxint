@@ -31,7 +31,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -258,6 +258,7 @@ from voxint.ingest import (
     unlink_media_paths,
 )
 from voxint.media.peaks import (
+    CachedPeaks,
     PeaksError,
     SourceFingerprint,
     compute_peaks,
@@ -1051,16 +1052,22 @@ def _transcript_island_props(
         .where(DiarizationTurn.pipeline_run_id == run_id)
         .order_by(DiarizationTurn.start_seconds, DiarizationTurn.turn_index)
     ).all()
-    # peaksUrl is server-owned truth like mediaUrl: non-null only when the
-    # peaks route could plausibly answer 200 — a cached envelope exists (it
-    # survives reclamation) or the WAV is servable so a first request can
-    # compute one. Otherwise null, and the island never issues a doomed fetch.
-    media_unavailable = any(
-        r.code in _MEDIA_UNAVAILABLE_CODES for r in capability.reasons
+    # peaksUrl is server-owned truth like mediaUrl: non-null only when the peaks
+    # route could actually answer 200 — either the WAV is servable (a first
+    # request computes the envelope) OR it was formally RECLAIMED and a cached
+    # envelope survives (served unverified, by design). A cached row does NOT
+    # rescue media_missing/media_unservable: with no reclamation stamp the route
+    # cannot verify the (absent/unopenable) WAV, so it fails closed to 404/410 —
+    # emitting the URL there would make the island fetch on a loop. Any capability
+    # reason not about media servability (a bad timeline) still leaves the
+    # amplitude route answerable, so it does not gate peaksUrl.
+    reason_codes = {r.code for r in capability.reasons}
+    media_unavailable = bool(reason_codes & _MEDIA_UNAVAILABLE_CODES)
+    reclaimed_with_cache = (
+        "media_reclaimed" in reason_codes
+        and peaks_artifact_row(session, run_id) is not None
     )
-    peaks_available = not media_unavailable or (
-        peaks_artifact_row(session, run_id) is not None
-    )
+    peaks_available = not media_unavailable or reclaimed_with_cache
     return {
         "runId": str(run_id),
         "mediaUrl": f"/media/{run_id}",
@@ -3672,20 +3679,28 @@ def _register_routes(app: FastAPI) -> None:
         _run_or_404(session, run_id)
         media_root: Path = settings.media_root
 
+        # Fast path: a trusted cache hit, no lock.
         cached = load_cached_peaks(session, run_id, media_root)
-        if cached is not None:
-            trusted = True
-            if run_intermediate_reclaimed_at(session, run_id) is None:
-                try:
-                    wav_path = normalized_audio_path(session, run_id, media_root)
-                except StageDataError:
-                    wav_path = None
-                if wav_path is not None:
-                    live = SourceFingerprint.of_path(wav_path)
-                    trusted = live is not None and live == cached.source_fingerprint
-            if trusted:
-                return _peaks_cache_response(request, cached.body, cached.artifact_id)
-            # Stale fingerprint: fall through and recompute from the live WAV.
+        if cached is not None and _peaks_cache_trusted(
+            session, run_id, media_root, cached
+        ):
+            return _peaks_cache_response(request, cached.body, cached.artifact_id)
+
+        # Slow path: serialize compute+publish per run with a transaction-scoped
+        # advisory lock, so two first-paint tabs (possibly straddling a prepare
+        # re-run) can never publish divergent bytes under one row/ETag. Held
+        # until this request's transaction ends (the commit below). Key: a
+        # stable 63-bit digest of the run UUID — same run, same lock, any worker.
+        lock_key = run_id.int & 0x7FFFFFFFFFFFFFFF
+        session.execute(select(func.pg_advisory_xact_lock(lock_key)))
+
+        # Re-check under the lock: a racing request may have just populated the
+        # cache while we waited, and its committed row is the canonical one.
+        cached = load_cached_peaks(session, run_id, media_root)
+        if cached is not None and _peaks_cache_trusted(
+            session, run_id, media_root, cached
+        ):
+            return _peaks_cache_response(request, cached.body, cached.artifact_id)
 
         gate = _get_media_gate(request)
         try:
@@ -3713,6 +3728,29 @@ def _register_routes(app: FastAPI) -> None:
     app.include_router(protected)
 
 
+def _peaks_cache_trusted(
+    session: Session, run_id: uuid.UUID, media_root: Path, cached: CachedPeaks
+) -> bool:
+    """Whether a cached envelope may be served for this run.
+
+    Fail-closed: trusted ONLY when the WAV is formally reclaimed (nothing left
+    to verify against — the static waveform is honest derived evidence) OR the
+    live WAV's fstat fingerprint still matches what the peaks were computed
+    from. Any other live-media state — no resolvable preprocessed row, a stat
+    failure, a malformed stored fingerprint — is untrusted, so the route falls
+    through to ``resolve_servable_media`` and answers the honest 404/410 (or
+    recomputes) rather than serving unverified bytes.
+    """
+    if run_intermediate_reclaimed_at(session, run_id) is not None:
+        return True
+    try:
+        wav_path = normalized_audio_path(session, run_id, media_root)
+    except StageDataError:
+        return False
+    live = SourceFingerprint.of_path(wav_path)
+    return live is not None and live == cached.source_fingerprint
+
+
 def _peaks_cache_response(request: Request, body: bytes, artifact_id: uuid.UUID) -> Response:
     """Serve the cached envelope with real conditional-GET semantics.
 
@@ -3722,12 +3760,19 @@ def _peaks_cache_response(request: Request, body: bytes, artifact_id: uuid.UUID)
     called. ``no-cache`` forces revalidation, so a requeued run can never show
     a stale waveform from the browser cache; the 304 makes that revalidation
     cost one conditional GET.
+
+    ``If-None-Match`` uses the weak comparison RFC 9110 §13.1.2 mandates, so a
+    ``W/"<uuid>"`` validator from an intermediary still matches our strong tag.
     """
     etag = f'"{artifact_id}"'
     headers = {"ETag": etag, "Cache-Control": "private, no-cache"}
     if_none_match = request.headers.get("if-none-match")
     if if_none_match is not None:
-        candidates = {v.strip() for v in if_none_match.split(",")}
+        # Strip an optional weak-validator prefix before comparing (weak match).
+        candidates = {
+            v.strip()[2:] if v.strip().startswith('W/') else v.strip()
+            for v in if_none_match.split(",")
+        }
         if "*" in candidates or etag in candidates:
             return Response(status_code=304, headers=headers)
     return Response(content=body, media_type="application/json", headers=headers)

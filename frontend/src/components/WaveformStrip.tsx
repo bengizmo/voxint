@@ -121,20 +121,13 @@ export function WaveformStrip({
     const mid = STRIP_HEIGHT / 2;
     const buckets = peaks.peaks.length;
 
-    // 1. Region backdrops: a faint full-height tint per turn, painted in
-    //    (start, turn_index) order so a later turn wins visually — the same
-    //    deterministic rule everywhere. Regions must read even during silence.
-    for (const turn of turns) {
-      const x0 = xOf(turn.start);
-      const x1 = xOf(turn.end);
-      if (x1 <= x0) continue;
-      ctx.globalAlpha = 0.16;
-      ctx.fillStyle = accentOf(turn.paletteIndex);
-      ctx.fillRect(x0, 0, x1 - x0, STRIP_HEIGHT);
-    }
-
-    // 2. Bars: color each fixed bucket by the LAST turn covering its center
-    //    (same later-wins rule); uncovered buckets stay neutral.
+    // 1. Per-bucket ownership — ONE source of truth for both the backdrop and
+    //    the bars, so the two passes can never disagree around overlaps. Each
+    //    bucket is colored by the LAST turn (in the server's (start, turn_index)
+    //    order) whose interval intersects it (floor/ceil span, not center — a
+    //    bucket that contains any of a turn's speech reads as that speaker);
+    //    later turns overwrite earlier, so "later wins" holds deterministically.
+    const barW = width / buckets;
     const bucketColor: string[] = new Array<string>(buckets).fill(NEUTRAL_BAR);
     const covered: boolean[] = new Array<boolean>(buckets).fill(false);
     for (const turn of turns) {
@@ -146,16 +139,39 @@ export function WaveformStrip({
         covered[b] = true;
       }
     }
-    const barW = width / buckets;
+
+    // 2. Region backdrops: a faint full-height tint drawn from that same
+    //    ownership as run-length rects (consecutive same-color buckets), so the
+    //    backdrop matches the bars exactly and abutting rects never double-blend
+    //    their alpha. Regions read even during silence.
+    ctx.globalAlpha = 0.16;
+    for (let b = 0; b < buckets; ) {
+      if (!covered[b]) {
+        b += 1;
+        continue;
+      }
+      const color = bucketColor[b];
+      let e = b + 1;
+      while (e < buckets && covered[e] && bucketColor[e] === color) e += 1;
+      ctx.fillStyle = color;
+      ctx.fillRect(b * barW, 0, (e - b) * barW, STRIP_HEIGHT);
+      b = e;
+    }
+
+    // 3. Bars: mirrored amplitude, colored by the same ownership. The width is
+    //    capped at barW so a sub-pixel barW (a strip under ~1000px with 2000
+    //    buckets) can't overdraw its neighbor and band the translucent fills.
+    const drawBarW = Math.min(Math.max(barW * 0.8, 0.5), barW);
     for (let b = 0; b < buckets; b += 1) {
       const amp = Math.max(peaks.peaks[b] * (mid - 2), 0.75);
       ctx.globalAlpha = covered[b] ? 0.9 : 0.45;
       ctx.fillStyle = bucketColor[b];
-      ctx.fillRect(b * barW, mid - amp, Math.max(barW * 0.8, 0.5), amp * 2);
+      ctx.fillRect(b * barW, mid - amp, drawBarW, amp * 2);
     }
 
-    // 3. Overlap marker: diagonal hatching where the diarizer flagged two
-    //    voices — an honest "not one speaker here" cue.
+    // 4. Overlap marker: diagonal hatching where the diarizer flagged two
+    //    voices — an honest "not one speaker here" cue. Drawn per-turn (not from
+    //    bucket ownership) so a hidden earlier speaker still shows it overlapped.
     ctx.globalAlpha = 0.5;
     ctx.strokeStyle = NEUTRAL_BAR;
     ctx.lineWidth = 1;
@@ -177,7 +193,7 @@ export function WaveformStrip({
       ctx.restore();
     }
 
-    // 4. Emphasis from the LIST's state (segments, not turns): the playing
+    // 5. Emphasis from the LIST's state (segments, not turns): the playing
     //    segment gets a brighter full-height tint; the review cursor gets a
     //    3px underline in its accent.
     const active = activeIndex >= 0 ? segments[activeIndex] : undefined;
@@ -220,8 +236,10 @@ export function WaveformStrip({
     [segments, peaks.duration, width, onRegionActivate],
   );
 
+  // currentTime is -1 until the first timeupdate; >= 0 shows the playhead even
+  // while segment 0 (start = 0s) plays. Still hidden when seeking is untrusted.
   const playheadPct =
-    seekEnabled && Number.isFinite(currentTime) && currentTime > 0
+    seekEnabled && Number.isFinite(currentTime) && currentTime >= 0
       ? Math.min((currentTime / peaks.duration) * 100, 100)
       : null;
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun
 from voxint.media.normalize import normalize_to_wav
+from voxint.media.peaks import peaks_relative
 from voxint.pipeline.stages.context import StageContext, StageDataError
 
 # Run-scoped so retries overwrite their own output and runs never collide.
@@ -50,7 +51,11 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
 
     # Also drop any waveform-peaks cache (issue #57): the WAV it described no
     # longer exists, and its row-level source fingerprint would fail anyway —
-    # deleting here keeps re-runs from serving a stale envelope even briefly.
+    # deleting here keeps re-runs from serving a stale envelope even briefly. We
+    # unlink the sidecar file too: once its row is gone, media-delete (which
+    # plans from rows) could never find it, so leaving it would orphan a ~14 KB
+    # file until the next view recomputes over it.
+    (ctx.media_root / peaks_relative(run_id)).unlink(missing_ok=True)
     session.execute(
         delete(AudioArtifact).where(
             AudioArtifact.pipeline_run_id == run_id,

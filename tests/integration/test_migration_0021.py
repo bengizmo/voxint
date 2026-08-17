@@ -66,14 +66,18 @@ def _insert_artifact(engine: Engine, run_id: uuid.UUID, kind: str) -> None:
         conn.commit()
 
 
-def test_upgrade_accepts_waveform_peaks_and_rejects_unknown(engine: Engine) -> None:
+def test_upgrade_accepts_waveform_peaks_and_rejects_unknown(
+    engine: Engine, alembic_cfg: Config
+) -> None:
     run_id = _seed_run(engine)
     _insert_artifact(engine, run_id, "waveform_peaks")
     with pytest.raises(IntegrityError):
         _insert_artifact(engine, run_id, "definitely_not_a_kind")
 
 
-def test_partial_unique_index_scopes_to_waveform_peaks(engine: Engine) -> None:
+def test_partial_unique_index_scopes_to_waveform_peaks(
+    engine: Engine, alembic_cfg: Config
+) -> None:
     run_id = _seed_run(engine)
     # Multiple chunk rows for one run stay legal (the index is partial).
     _insert_artifact(engine, run_id, "chunk")
@@ -113,7 +117,7 @@ def test_downgrade_removes_rows_index_and_check(
     _insert_artifact(engine, run_id, "waveform_peaks")
 
 
-def test_model_enum_matches_live_check(engine: Engine) -> None:
+def test_model_enum_matches_live_check(engine: Engine, alembic_cfg: Config) -> None:
     # Lockstep guard: every ArtifactKind value must be accepted by the live
     # CHECK, and the CHECK definition must mention each one — so adding an enum
     # value without a migration (or vice versa) fails here.

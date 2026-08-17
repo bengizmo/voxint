@@ -737,6 +737,50 @@ def test_transcript_island_props_offer_peaks_url_with_servable_media(
     assert client.get(props["peaksUrl"]).status_code == 200
 
 
+def test_peaks_url_null_when_media_missing_even_with_cached_row(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Review fix: a cached peaks row rescues peaksUrl ONLY for a reclaimed WAV
+    # (served unverified by design). If the WAV goes missing with no reclaim
+    # stamp, the route can only 404 — so peaksUrl must be null and the island
+    # never fires a doomed fetch, even though a cached row/file exists.
+    from datetime import UTC, datetime
+
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    assert client.get(f"/media/{run_id}/peaks").status_code == 200  # cache a row
+
+    with session_factory() as session:
+        artifact = session.execute(
+            select(AudioArtifact).where(
+                AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value
+            )
+        ).scalars().one()
+        (media_root / artifact.path).unlink()
+        session.commit()
+    props = json.loads(
+        re.search(r"data-props='([^']*)'", client.get(f"/runs/{run_id}/transcript").text).group(1)  # type: ignore[union-attr]
+    )
+    assert props["peaksUrl"] is None
+
+    # But a formally RECLAIMED WAV with the same cached row DOES keep the URL
+    # (the static waveform is honest derived evidence), and it serves.
+    with session_factory() as session:
+        artifact = session.execute(
+            select(AudioArtifact).where(
+                AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value
+            )
+        ).scalars().one()
+        artifact.reclaimed_at = datetime.now(tz=UTC)
+        artifact.reclaimed_bytes = 4096
+        session.commit()
+    props = json.loads(
+        re.search(r"data-props='([^']*)'", client.get(f"/runs/{run_id}/transcript").text).group(1)  # type: ignore[union-attr]
+    )
+    assert props["peaksUrl"] == f"/media/{run_id}/peaks"
+    assert client.get(props["peaksUrl"]).status_code == 200
+
+
 def _segment_ids(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> list[uuid.UUID]:
     with session_factory() as session:
         return list(

@@ -50,6 +50,11 @@ PEAKS_VERSION = 1
 # Run-scoped, beside prepare's normalized.wav (same directory lifecycle).
 _PEAKS_TEMPLATE = "artifacts/{run_id}/peaks.json"
 
+
+def peaks_relative(run_id: uuid.UUID) -> str:
+    """The run's peaks-cache path, relative to ``media_root`` (one place)."""
+    return _PEAKS_TEMPLATE.format(run_id=run_id)
+
 # ~0.5-1 MiB of int16 frames per read keeps memory bounded on 60+ min files.
 _TARGET_CHUNK_FRAMES = 262_144
 
@@ -94,7 +99,9 @@ def compute_peaks(fh: BinaryIO, *, buckets: int = PEAK_BUCKETS) -> PeaksPayload:
     try:
         with wave.open(fh, "rb") as reader:
             return _reduce(reader, buckets)
-    except (wave.Error, EOFError) as exc:
+    except (wave.Error, EOFError, OSError) as exc:
+        # OSError too: a disk read failure mid-reduce stays fail-closed (route
+        # answers 404, nothing cached) rather than escaping as an opaque 500.
         raise PeaksError(f"unreadable WAV: {exc}") from exc
 
 
@@ -249,15 +256,16 @@ def store_peaks(
 ) -> uuid.UUID:
     """Publish the envelope atomically and return the CANONICAL row id.
 
-    File: unique temp sibling + ``os.replace`` (concurrent computes of the same
-    bytes are benign — deterministic output, last write wins). Row: any
-    stale-fingerprint survivor is DELETED first — never refreshed in place,
-    because the row UUID doubles as the strong ETag and changed bytes must mint
-    a new one — then ``INSERT … ON CONFLICT DO NOTHING`` against the
-    one-per-run partial unique index, then reselect: a losing insert must not
-    report its never-persisted UUID as the ETag.
+    The route serializes this per run with a transaction advisory lock, so for a
+    given run only one compute+publish runs at a time; file bytes, the row's
+    fingerprint, and the row-UUID ETag therefore always correspond. File: unique
+    temp sibling + ``os.replace``. Row: any stale-fingerprint survivor is DELETED
+    first — never refreshed in place, because the row UUID doubles as the strong
+    ETag and changed bytes must mint a new one — then ``INSERT … ON CONFLICT DO
+    NOTHING`` against the one-per-run partial unique index, then reselect (a
+    belt-and-braces guard should the lock ever be bypassed).
     """
-    relative = _PEAKS_TEMPLATE.format(run_id=run_id)
+    relative = peaks_relative(run_id)
     target = media_root / relative
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex}.tmp")

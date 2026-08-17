@@ -34,7 +34,15 @@ export interface PeaksPayload {
 }
 
 // Validate an untrusted response body. Anything off-contract returns null and
-// the strip simply does not render — honest degradation, never a broken axis.
+// the strip simply does not render — honest degradation, never a broken axis or
+// an overdrawn canvas. Beyond types this enforces the payload's INTERNAL
+// consistency: amplitudes in [0, 1], integer frame/rate/bucket counts, and a
+// peak-array length that matches ceil(frameCount / samplesPerBucket) — so a
+// mangled or truncated body can never paint a dishonest waveform.
+function posInt(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v) && v > 0;
+}
+
 export function parsePeaksPayload(data: unknown): PeaksPayload | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Record<string, unknown>;
@@ -45,12 +53,16 @@ export function parsePeaksPayload(data: unknown): PeaksPayload | null {
     d.duration <= 0
   )
     return null;
-  if (typeof d.sampleRate !== "number" || d.sampleRate <= 0) return null;
-  if (typeof d.frameCount !== "number" || d.frameCount <= 0) return null;
-  if (typeof d.samplesPerBucket !== "number" || d.samplesPerBucket <= 0)
+  if (
+    !posInt(d.sampleRate) ||
+    !posInt(d.frameCount) ||
+    !posInt(d.samplesPerBucket)
+  )
     return null;
   if (!Array.isArray(d.peaks) || d.peaks.length === 0) return null;
-  if (!d.peaks.every((v) => typeof v === "number" && Number.isFinite(v)))
+  if (d.peaks.length !== Math.ceil(d.frameCount / d.samplesPerBucket))
+    return null;
+  if (!d.peaks.every((v) => typeof v === "number" && v >= 0 && v <= 1))
     return null;
   return d as unknown as PeaksPayload;
 }

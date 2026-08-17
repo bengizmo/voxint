@@ -82,7 +82,11 @@ touch the network:
 - **verify-and-advance (`v`):** click the page heading (move focus off any form
   control), press `v` → exactly one `POST …/verify` (200); the counter
   (`p[aria-live="polite"]` in `.review-stepper`) advances by one and the cursor
-  moves to the next unverified segment.
+  moves to the next unverified segment. **Then press `p` (replay)** and confirm
+  the instrumented `play()` fires and `currentTime` moves — a verify patches the
+  `segments` array, and a regression that tore down the `<audio>` element on that
+  identity change would leave playback dead for the rest of the session while
+  the DB reconcile still passed. This assertion is the guard for that class.
 - **skip (`n`):** press `n` → **no** new `/verify` or `/text` request; the cursor
   advances to the next unverified segment.
 - **replay (`p`):** asserting "no network + cursor unchanged" is not enough — a

@@ -266,6 +266,30 @@ def test_no_media_artifact_404(
     assert client.get(f"/media/{run_id}/peaks").status_code == 404
 
 
+def test_cached_but_wav_missing_without_reclaim_is_untrusted(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Fail-closed cache trust (review fix): a cached envelope is served without
+    # fingerprint verification ONLY after formal reclamation. If the WAV simply
+    # goes missing with no reclaim stamp, the cache is untrusted and the route
+    # falls through to the honest 404 — never an unverified serve.
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    assert client.get(f"/media/{run_id}/peaks").status_code == 200  # populate cache
+
+    with session_factory() as session:
+        artifact = session.execute(
+            select(AudioArtifact).where(
+                AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value
+            )
+        ).scalars().one()
+        (media_root / artifact.path).unlink()  # WAV gone, NO reclaim stamp
+        session.commit()
+
+    assert (media_root / "artifacts" / str(run_id) / "peaks.json").exists()
+    assert client.get(f"/media/{run_id}/peaks").status_code == 404
+
+
 def test_corrupt_wav_404_and_nothing_cached(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

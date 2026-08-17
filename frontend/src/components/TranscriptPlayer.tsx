@@ -134,7 +134,9 @@ export const TranscriptPlayer = forwardRef<
   const [peaks, setPeaks] = useState<PeaksPayload | null>(null);
   // Playhead position, quantized to 0.5s so timeupdate never re-renders more
   // than ~2Hz (at overview scale one strip pixel spans far more than that).
-  const [playheadTime, setPlayheadTime] = useState<number>(0);
+  // Starts at -1 ("never played") so the strip hides the playhead until the
+  // first timeupdate — and DOES show it while segment 0 (start = 0s) plays.
+  const [playheadTime, setPlayheadTime] = useState<number>(-1);
   // Follow-along: keep the active line in view as playback advances. Starts on;
   // any manual scroll turns it off; the single "Resume following" control turns
   // it back on. No always-on checkbox, no status dot.
@@ -157,6 +159,12 @@ export const TranscriptPlayer = forwardRef<
     el.scrollIntoView({ block: "nearest" });
   }, []);
 
+  // Follow-along highlight + playhead. Re-subscribes when `segments` identity
+  // changes (a verify/correct patches the array), but MUST NOT tear down the
+  // media element here: ReviewStepper re-renders with a new `segments` array on
+  // every successful write, and stripping `src`/`load()` on that path would
+  // kill playback for the rest of the session (React never re-sets an unchanged
+  // `src` prop). Teardown lives in its own unmount-only effect below.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -165,20 +173,30 @@ export const TranscriptPlayer = forwardRef<
       const idx = segments.findIndex((seg) => t >= seg.start && t < seg.end);
       setActiveIndex(idx);
       // Quantized: setState with an unchanged value skips the re-render, so
-      // this costs nothing between half-second boundaries.
+      // this costs nothing between half-second boundaries. Any timeupdate (even
+      // at t=0, playing segment 0) lifts the playhead off its -1 "never played"
+      // sentinel so it becomes visible.
       setPlayheadTime(Math.round(t * 2) / 2);
     };
     audio.addEventListener("timeupdate", onTimeUpdate);
     return () => {
       audio.removeEventListener("timeupdate", onTimeUpdate);
-      // On unmount, cancel any in-flight turn guard and stop the stream so
-      // switching runs can't leave it open.
+    };
+  }, [segments]);
+
+  // Unmount-only teardown: cancel any in-flight turn guard and stop the stream
+  // so switching runs (a real unmount) can't leave it open. Empty deps — this
+  // must never fire on a `segments` change (see the effect above).
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => {
+      if (!audio) return;
       cancelActiveTurn();
       audio.pause();
       audio.removeAttribute("src");
       audio.load();
     };
-  }, [segments]);
+  }, []);
 
   // The operator taking over stops following. `wheel`/`touchmove`/scroll-key
   // presses are unambiguous manual intent — a programmatic scrollIntoView never
