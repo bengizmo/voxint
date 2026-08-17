@@ -68,6 +68,12 @@ a product bug):
    `/review/<RUN_ID>/transcript?token=…`. The `review-stepper` island mounts
    here (`[data-island="review-stepper"]`).
 
+First assert the seeded confidence signal renders: exactly **two**
+`.tp-uncertain-chip` (segments 1 and 3, confidence 0.42 / 0.31 < the 0.6
+threshold), and the high-confidence and NULL-confidence segments are **not**
+flagged — a threshold-rendering regression must fail here, not pass silently
+(`browser_evaluate` counting `.tp-line.tp-uncertain`).
+
 Then exercise each behaviour, checking `browser_network_requests` filtered to
 `/segments/.*/(verify|text)` right after each — only **verify** and **save**
 touch the network:
@@ -76,8 +82,15 @@ touch the network:
   control), press `v` → exactly one `POST …/verify` (200); the counter
   (`p[aria-live="polite"]` in `.review-stepper`) advances by one and the cursor
   moves to the next unverified segment.
-- **skip (`n`) / replay (`p`):** press each → **no** new `/verify` or `/text`
-  request; `n` advances the cursor, `p` does not.
+- **skip (`n`):** press `n` → **no** new `/verify` or `/text` request; the cursor
+  advances to the next unverified segment.
+- **replay (`p`):** asserting "no network + cursor unchanged" is not enough — a
+  removed `p` handler would pass it. Instrument playback first: via
+  `browser_evaluate`, wrap the audio element's `play()` to set a flag (and read
+  `currentTime`), then press `p` and assert `play()` was invoked for the current
+  segment (its `currentTime` set to the segment start). Still **no** network
+  request. (The headless browser may not decode the seeded WAV, so instrument
+  `play()` rather than relying on audible playback.)
 - **click-to-edit:** click a transcript line
   (`p.tp-line:has-text("<line text>")`) → the edit textarea
   (`aria-label="Corrected transcript text for this segment"`) loads that

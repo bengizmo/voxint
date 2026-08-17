@@ -38,6 +38,7 @@ import argparse
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,7 +46,7 @@ import uuid
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from alembic import command
 from alembic.config import Config
@@ -99,9 +100,28 @@ def assert_disposable_db(url: str) -> None:
     or the whole database (teardown --drop-db). Pointed at the live ``voxint``
     database, a copy-pasted DSN would destroy operator data. Fail closed: the
     database name must contain ``test`` or ``e2e``.
+
+    The guard inspects the URL *path*, but psycopg lets a ``dbname``/``database``
+    query parameter OVERRIDE the path at connect time — so ``…/voxint_e2e?dbname=
+    voxint`` would pass a path-only check yet connect to the live DB (codex+kimi
+    review). Reject any database-selecting query key outright, and restrict the
+    name to a plain identifier so the disposable check cannot be smuggled past.
     """
-    db_name = urlsplit(url).path.lstrip("/").lower()
-    if not db_name or ("test" not in db_name and "e2e" not in db_name):
+    parts = urlsplit(url)
+    selecting = {"dbname", "database"} & {k.lower() for k in parse_qs(parts.query)}
+    if selecting:
+        raise ValueError(
+            f"database URL must not select the database via a query parameter "
+            f"({', '.join(sorted(selecting))}); it can override the path and point "
+            "destructive operations at the live database. Put the database in the path."
+        )
+    db_name = parts.path.lstrip("/").lower()
+    if not re.fullmatch(r"[a-z0-9_]+", db_name or ""):
+        raise ValueError(
+            f"database name {db_name!r} is not a plain identifier ([a-z0-9_]); "
+            "refusing to build destructive DDL around it."
+        )
+    if "test" not in db_name and "e2e" not in db_name:
         raise ValueError(
             "database URL must name a DISPOSABLE database whose name contains "
             f"'test' or 'e2e' (its schema is dropped and rebuilt); got {db_name!r}. "
@@ -127,8 +147,10 @@ def stage_build(frontend_dir: Path, static_dir: Path) -> list[str]:
     """Build the islands and overlay ``dist/`` onto the served static dir.
 
     The app reads the Vite manifest once at import, so the bundles must be in
-    place BEFORE ``serve``. Returns the top-level names copied in (so teardown
-    removes exactly those and nothing tracked). ``.gitkeep`` is never touched.
+    place BEFORE ``serve``. Returns the top-level names copied in, for logging.
+    (``teardown`` does not consume this list — ``unstage_build`` removes every
+    entry except the tracked ``.gitkeep``, which is the git-clean outcome we
+    want even if a prior run left something behind.) ``.gitkeep`` is never touched.
     """
     dist = frontend_dir / "dist"
     subprocess.run(["npm", "run", "build"], cwd=frontend_dir, check=True)
@@ -223,9 +245,14 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
 
 
 def _admin_url(url: str) -> str:
-    """The same server, pointed at the ``postgres`` maintenance database."""
+    """The same server, pointed at the ``postgres`` maintenance database.
+
+    The query is dropped as well as the path: a lingering ``dbname=`` there would
+    redirect the "maintenance" connection back at a named database (the guard
+    already rejects such query keys, but do not depend on that here).
+    """
     parts = urlsplit(url)
-    return urlunsplit(parts._replace(path="/postgres"))
+    return urlunsplit(parts._replace(path="/postgres", query=""))
 
 
 def _create_database(url: str) -> None:
@@ -249,6 +276,11 @@ def _create_database(url: str) -> None:
 def _reset_schema_and_migrate(url: str) -> None:
     eng = create_engine(url)
     with eng.connect() as conn:
+        # Belt-and-suspenders over the URL guard: assert the database we actually
+        # connected to is disposable BEFORE dropping its schema, so no query-param
+        # or driver-kwarg override can land the DROP on the live DB (codex+kimi).
+        live = conn.execute(text("SELECT current_database()")).scalar_one()
+        assert_disposable_db(f"postgresql:///{live}")
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
         conn.commit()
@@ -311,6 +343,15 @@ def cmd_serve(args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- #
 # reconcile — fail-closed durable-state verifier (post-hoc)
 # --------------------------------------------------------------------------- #
+def _strict_index(value: object, what: str) -> int:
+    """A non-negative integer, rejecting bool and float (JSON ``true``/``1.9``)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{what} must be a non-negative integer, got {value!r}")
+    if value < 0:
+        raise ValueError(f"{what} must be non-negative, got {value}")
+    return value
+
+
 @dataclass(frozen=True)
 class Expectation:
     """The durable outcome the browser was supposed to leave behind.
@@ -327,20 +368,36 @@ class Expectation:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> Expectation:
+        # Validate strictly (never coerce): a malformed hand-written expectation
+        # that silently coerces — bool→int, 1.9→1, null-correction→"None" — could
+        # accidentally MATCH durable state and pass a fail-closed check that should
+        # have failed (codex+kimi). This parser is the fail-closed gate's input.
+        if not isinstance(data, dict):
+            raise ValueError("expectation must be a JSON object")
         verified = data.get("verified_segment_indexes", [])
         if not isinstance(verified, list):
             raise ValueError("verified_segment_indexes must be a list of integers")
+        indexes = [_strict_index(i, "a verified segment index") for i in verified]
+        if len(set(indexes)) != len(indexes):
+            raise ValueError("verified_segment_indexes contains duplicates")
         raw_corr = data.get("corrections", {})
         if not isinstance(raw_corr, dict):
             raise ValueError("corrections must be an object of index → text")
-        corrections = {int(k): str(v) for k, v in raw_corr.items()}
+        corrections: dict[int, str] = {}
+        for key, value in raw_corr.items():
+            if not isinstance(value, str):
+                raise ValueError(f"correction for {key!r} must be a string, got {value!r}")
+            corrections[_strict_index(int(key), "a correction index")] = value
         prog = data.get("progress", {})
         if not isinstance(prog, dict) or "verified" not in prog or "total" not in prog:
             raise ValueError("progress must be an object with 'verified' and 'total'")
         return cls(
-            verified_indexes=frozenset(int(i) for i in verified),
+            verified_indexes=frozenset(indexes),
             corrections=corrections,
-            progress=(int(prog["verified"]), int(prog["total"])),
+            progress=(
+                _strict_index(prog["verified"], "progress.verified"),
+                _strict_index(prog["total"], "progress.total"),
+            ),
         )
 
 
@@ -404,15 +461,12 @@ def cmd_reconcile(args: argparse.Namespace) -> None:
         run_id = uuid.UUID(args.run_id)
     except ValueError:
         fail(f"--run-id is not a valid UUID: {args.run_id!r}")
-    if args.expect_file:
-        raw = json.loads(Path(args.expect_file).read_text())
-    elif args.expect:
-        raw = json.loads(args.expect)
-    else:
+    if not args.expect_file and not args.expect:
         fail("provide --expect-file <path> or --expect '<json>' with the durable outcome.")
+    source = Path(args.expect_file).read_text() if args.expect_file else args.expect
     try:
-        expect = Expectation.from_dict(raw)
-    except (ValueError, TypeError) as exc:
+        expect = Expectation.from_dict(json.loads(source))
+    except (ValueError, TypeError, json.JSONDecodeError) as exc:
         fail(f"invalid expectation: {exc}")
 
     engine = create_engine(url)
@@ -465,13 +519,25 @@ def _drop_database(url: str) -> None:
 
 def cmd_teardown(args: argparse.Namespace) -> None:
     # Kill by PORT, never `pkill -f "voxint serve"` (that also restarts the
-    # dockerized api container).
+    # dockerized api container). `fuser` is Linux — the maintainer host is Linux;
+    # on macOS the equivalent is `lsof -ti tcp:<port> | xargs kill`.
     subprocess.run(["fuser", "-k", f"{args.port}/tcp"], check=False)
     removed = unstage_build(Path(args.static_dir))
     if removed:
         print(f"ok: unstaged build artifacts {removed}")
-    media_root = Path(args.media_root)
+    media_root = Path(args.media_root).resolve()
+    # rm -rf on an operator-supplied path is a footgun (`--media-root .` would
+    # delete the working tree). Only remove a disposable-looking dir under the
+    # repo (kimi review); refuse anything else rather than guess.
     if media_root.is_dir():
+        looks_disposable = REPO_ROOT in media_root.parents and (
+            "e2e" in media_root.name or "test" in media_root.name
+        )
+        if not looks_disposable:
+            fail(
+                f"refusing to rm -rf {media_root}: not a disposable media dir under "
+                f"{REPO_ROOT} (name must contain 'e2e' or 'test')."
+            )
         shutil.rmtree(media_root)
         print(f"ok: removed {media_root}")
     gitkeep = Path(args.static_dir) / GITKEEP

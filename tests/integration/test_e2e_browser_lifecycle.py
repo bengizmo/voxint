@@ -124,6 +124,56 @@ def test_reconcile_flags_under_and_over_verification(
     assert any("progress=(1," in p for p in problems)
 
 
+def test_reconcile_flags_over_verification(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # The browser verified a segment the expectation did NOT list — the fail-closed
+    # claim is "over- and under-verification both fail" (codex+kimi review).
+    with session_factory() as session:
+        run_id = seed_browser_run(session, tmp_path)
+
+    with session_factory() as session:
+        segs = _segments(session, run_id)
+        for seg in (segs[0], segs[1], segs[2]):  # verified one (index 1) it shouldn't have
+            set_verified(session, segment=seg, verified=True)
+        session.commit()
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [0, 2],
+            "corrections": {},
+            "progress": {"verified": 2, "total": len(_SEED_SEGMENTS)},
+        }
+    )
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, expect)
+    assert any("segment 1" in p and "verified=True" in p for p in problems)
+    assert any("progress=(3," in p for p in problems)
+
+
+def test_reconcile_flags_unexpected_correction(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    with session_factory() as session:
+        run_id = seed_browser_run(session, tmp_path)
+
+    with session_factory() as session:
+        segs = _segments(session, run_id)
+        set_correction(session, segment=segs[3], text="browser wrote this unprompted")
+        session.commit()
+
+    expect = Expectation.from_dict(
+        {
+            "verified_segment_indexes": [],
+            "corrections": {},  # expected NO corrections
+            "progress": {"verified": 0, "total": len(_SEED_SEGMENTS)},
+        }
+    )
+    with session_factory() as session:
+        problems = reconcile_run(session, run_id, expect)
+    assert any("segment 3" in p and "corrected_text" in p for p in problems)
+
+
 def test_reconcile_flags_wrong_correction_text(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

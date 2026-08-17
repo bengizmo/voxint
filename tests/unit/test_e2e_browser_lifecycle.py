@@ -50,11 +50,36 @@ def test_assert_disposable_db_accepts_throwaway_names(url: str) -> None:
     [
         "postgresql+psycopg://voxint:voxint@localhost:5432/voxint",  # the LIVE db
         "postgresql+psycopg://voxint:voxint@localhost:5432/production",
-        "postgresql+psycopg://voxint:voxint@localhost:5432/",  # empty name
     ],
 )
 def test_assert_disposable_db_rejects_non_disposable_names(url: str) -> None:
     with pytest.raises(ValueError, match="DISPOSABLE"):
+        assert_disposable_db(url)
+
+
+def test_assert_disposable_db_rejects_empty_name() -> None:
+    with pytest.raises(ValueError, match="plain identifier"):
+        assert_disposable_db("postgresql+psycopg://voxint:voxint@localhost:5432/")
+
+
+@pytest.mark.parametrize("key", ["dbname", "database", "DBNAME"])
+def test_assert_disposable_db_rejects_dbname_query_override(key: str) -> None:
+    # A dbname/database query param can override the path at connect time and
+    # point destructive ops at the LIVE db — must be refused (codex+kimi).
+    url = f"postgresql+psycopg://u:p@host:5432/voxint_e2e?{key}=voxint"
+    with pytest.raises(ValueError, match="query parameter"):
+        assert_disposable_db(url)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["voxint_e2e; DROP", "voxint-e2e", 'voxint"e2e', "voxint e2e"],
+)
+def test_assert_disposable_db_rejects_non_identifier_names(name: str) -> None:
+    from urllib.parse import quote
+
+    url = f"postgresql+psycopg://u:p@host:5432/{quote(name)}"
+    with pytest.raises(ValueError, match="plain identifier"):
         assert_disposable_db(url)
 
 
@@ -90,11 +115,24 @@ def test_expectation_defaults_are_empty() -> None:
         {"corrections": [], "progress": {"verified": 0, "total": 1}},
         {"progress": {"verified": 0}},  # missing total
         {},  # missing progress
+        # Strict validation (never coerce): these silently coerced before review.
+        {"verified_segment_indexes": [True], "progress": {"verified": 0, "total": 1}},
+        {"verified_segment_indexes": [1.9], "progress": {"verified": 0, "total": 1}},
+        {"verified_segment_indexes": [-1], "progress": {"verified": 0, "total": 1}},
+        {"verified_segment_indexes": [1, 1], "progress": {"verified": 0, "total": 1}},
+        {"corrections": {"0": None}, "progress": {"verified": 0, "total": 1}},
+        {"corrections": {"0": 5}, "progress": {"verified": 0, "total": 1}},
+        {"progress": {"verified": True, "total": 1}},
     ],
 )
 def test_expectation_from_dict_rejects_malformed(data: dict[str, object]) -> None:
     with pytest.raises(ValueError):
         Expectation.from_dict(data)
+
+
+def test_expectation_from_dict_rejects_non_object_root() -> None:
+    with pytest.raises(ValueError):
+        Expectation.from_dict([1, 2])  # type: ignore[arg-type]
 
 
 def test_silent_wav_bytes_is_a_valid_wav_of_expected_length() -> None:
