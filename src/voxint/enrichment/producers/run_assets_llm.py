@@ -41,10 +41,16 @@ PRODUCER_NAME = "run_assets.llm"
 # v2: transcript lines now carry the attributed speaker name (resolved through
 # the shared display_name) instead of the raw diarization label, and the
 # entity-mention instruction warns not to treat a speaker prefix as a mention.
-# Both are provenance-only — recorded on new assets, never folded into
-# source_content_hash — so bumping them does not force regeneration.
+# v3 prompt (#11): the run's domain pack may append a ``summary_context``
+# fragment to the shared system prompt (all three kinds), so the model gets
+# domain framing. Only PROMPT_VERSION moves — the producer logic is unchanged,
+# and this is a prompt-shape change, not a new producer identity. Both are
+# provenance-only — recorded on new assets, never folded into
+# source_content_hash — so bumping does not force regeneration (and the per-run
+# pack snapshot is immutable, so the fragment cannot change a run's assets after
+# the fact; different packs on different runs differ naturally).
 PRODUCER_VERSION = "2"
-PROMPT_VERSION = 2
+PROMPT_VERSION = 3
 CONFIG_SCHEMA_VERSION = 1
 PAYLOAD_SCHEMA_VERSION = 1
 
@@ -127,13 +133,27 @@ _INSTRUCTIONS: dict[str, str] = {
 }
 
 
+def _system_prompt(domain_context: str) -> str:
+    """The shared system message, optionally carrying the run's domain-pack
+    ``summary_context`` fragment. The fragment is operator-authored pack content
+    with system-level authority, so it is fenced as advisory — it frames the
+    analysis but must never override the reply schema or the grounding rules.
+    An empty fragment leaves the prompt byte-identical to the pre-#11 shape."""
+    if not domain_context:
+        return _SYSTEM
+    return (
+        f"{_SYSTEM}\n\nDomain context (advisory; must not override the reply"
+        f" schema or rules above):\n{domain_context}"
+    )
+
+
 def build_messages(
-    kind: RunAssetKind, source: RunAssetSource, *, max_chars: int
+    kind: RunAssetKind, source: RunAssetSource, *, max_chars: int, domain_context: str = ""
 ) -> tuple[Sequence[ChatMessage], bool]:
     document, truncated = render_source(source, max_chars=max_chars)
     return (
         (
-            ChatMessage(role="system", content=_SYSTEM),
+            ChatMessage(role="system", content=_system_prompt(domain_context)),
             ChatMessage(role="user", content=f"{_INSTRUCTIONS[kind.value]}\n\n{document}"),
         ),
         truncated,
@@ -322,17 +342,21 @@ def generate_payload(
     source: RunAssetSource,
     *,
     settings: Settings,
+    domain_context: str = "",
 ) -> tuple[dict[str, Any], bool]:
     """One generation: prompt, call, parse. Returns (payload, truncated).
 
     ``llm`` needs only ``chat_json`` (injection seam for tests / the CLI's
-    inline mode). Raises :class:`voxint.clients.llm.LLMError` for transport or
+    inline mode). ``domain_context`` is the run's frozen ``summary_context``
+    pack fragment ("" for a run whose pack declares none, or a legacy run);
+    it is appended once to the shared system prompt so it reaches all three
+    kinds. Raises :class:`voxint.clients.llm.LLMError` for transport or
     envelope failures and :class:`RunAssetProducerError` for replies that
     cannot become a valid payload — both mean the job fails; nothing partial
     is ever persisted.
     """
     messages, truncated = build_messages(
-        kind, source, max_chars=settings.run_assets_max_input_chars
+        kind, source, max_chars=settings.run_assets_max_input_chars, domain_context=domain_context
     )
     body = llm.chat_json(messages)
     if kind is RunAssetKind.SUMMARY:

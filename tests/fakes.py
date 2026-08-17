@@ -78,11 +78,22 @@ class FakeLLM:
     def __init__(self, name_hints: tuple[SpeakerNameHint, ...] = ()) -> None:
         self._name_hints = name_hints
         self.calls: list[tuple[EnhancementRequestSegment, ...]] = []
+        # Per-call context strings, so tests can assert the #11 pack fragments
+        # reach the client (context = enhancement_context; attribution = the
+        # name_attribution_context block).
+        self.contexts: list[str] = []
+        self.attribution_contexts: list[str] = []
 
     def enhance_segments(
-        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+        self,
+        segments: tuple[EnhancementRequestSegment, ...],
+        context: str,
+        *,
+        name_attribution_context: str = "",
     ) -> EnhancementBatchResult:
         self.calls.append(segments)
+        self.contexts.append(context)
+        self.attribution_contexts.append(name_attribution_context)
         hints = self._name_hints if len(self.calls) == 1 else ()
         return EnhancementBatchResult(
             enhanced={s.segment_index: s.text.capitalize() for s in segments},
@@ -94,6 +105,10 @@ class FailingLLM:
     """Every call raises — exercises the degraded-success path."""
 
     def enhance_segments(
-        self, segments: tuple[EnhancementRequestSegment, ...], context: str
+        self,
+        segments: tuple[EnhancementRequestSegment, ...],
+        context: str,
+        *,
+        name_attribution_context: str = "",
     ) -> EnhancementBatchResult:
         raise LLMError("endpoint down")

@@ -27,12 +27,14 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from voxint.app_settings import get_app_settings
+from voxint.config import Settings, get_settings
 from voxint.db.models import (
     AudioArtifact,
     AudioChunk,
@@ -40,6 +42,7 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
 )
+from voxint.domain_packs.registry import resolve_run_domain_pack
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
@@ -185,19 +188,62 @@ class UrlValidationError(IngestError):
     """
 
 
-def submit_media_item(session: Session, source_path: str) -> PipelineRun:
+def _run_domain_pack_snapshot(
+    session: Session,
+    source_path: str | None,
+    *,
+    settings: Settings | None,
+    domain_pack_name: str | None,
+) -> dict[str, Any]:
+    """Freeze the domain-pack snapshot for a NEW run (issue #11).
+
+    Reads the per-folder mapping off the ``app_settings`` singleton and resolves
+    it (or an explicit name, or the default pack) against the configured packs.
+    ``source_path`` is ``None`` for uploads/URLs, which never sit under a watched
+    folder and so take the default unless an explicit name is supplied. Raises
+    :class:`~voxint.domain_packs.base.DomainPackError` on an unresolvable name —
+    never a silent fallback.
+    """
+    resolved = settings or get_settings()
+    row = get_app_settings(session)
+    folder_map = dict(row.folder_domain_packs) if row is not None else {}
+    return resolve_run_domain_pack(
+        source_path,
+        settings=resolved,
+        folder_domain_packs=folder_map,
+        explicit_name=domain_pack_name,
+    )
+
+
+def submit_media_item(
+    session: Session,
+    source_path: str,
+    *,
+    settings: Settings | None = None,
+    domain_pack_name: str | None = None,
+) -> PipelineRun:
     """Create-or-reuse the MediaItem for ``source_path`` and queue a fresh run.
 
     DB-only: the caller owns the commit and, once it commits, lazily publishes
     ``voxint.run_pipeline`` (commit-before-publish). ``source_path`` is UNIQUE,
     so a repeated local path reuses its MediaItem while every submission still
-    mints a distinct run.
+    mints a distinct run. The run's domain pack is frozen from the per-folder
+    mapping (issue #11); ``domain_pack_name`` overrides it explicitly.
     """
+    domain_pack = _run_domain_pack_snapshot(
+        session, source_path, settings=settings, domain_pack_name=domain_pack_name
+    )
     media = _get_or_create_media(session, source_path)
-    return submit(session, media.id)
+    return submit(session, media.id, domain_pack=domain_pack)
 
 
-def submit_media_item_if_new(session: Session, source_path: str) -> PipelineRun | None:
+def submit_media_item_if_new(
+    session: Session,
+    source_path: str,
+    *,
+    settings: Settings | None = None,
+    domain_pack_name: str | None = None,
+) -> PipelineRun | None:
     """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
 
     Unlike :func:`submit_media_item` — which reuses an existing MediaItem and always
@@ -214,6 +260,9 @@ def submit_media_item_if_new(session: Session, source_path: str) -> PipelineRun 
     then lazily publishes ``voxint.run_pipeline`` for each returned run
     (commit-before-publish).
     """
+    domain_pack = _run_domain_pack_snapshot(
+        session, source_path, settings=settings, domain_pack_name=domain_pack_name
+    )
     media = MediaItem(source_path=source_path)
     try:
         with session.begin_nested():
@@ -231,7 +280,7 @@ def submit_media_item_if_new(session: Session, source_path: str) -> PipelineRun 
         if existing is None:
             raise
         return None
-    return submit(session, media.id)
+    return submit(session, media.id, domain_pack=domain_pack)
 
 
 def _get_or_create_media(session: Session, source_path: str) -> MediaItem:
@@ -623,14 +672,15 @@ def _stream_to_temp(dest_dir: Path, stream: BinaryIO, max_bytes: int) -> tuple[P
 
 
 def _replay_run(
-    session: Session, media: MediaItem, *, size: int, sha256: str
+    session: Session, media: MediaItem, *, size: int, sha256: str, domain_pack: dict[str, Any]
 ) -> PipelineRun:
     """Resolve a same-``submission_id`` re-POST to its original run, or 409.
 
     The uuid-namespaced ``source_path`` already exists, so this is a form replay:
     identical bytes return the run created the first time (no duplicate run, no
     file rewrite); different bytes are a conflict we refuse. A stored MediaItem
-    with no run is a partially-completed first attempt — heal it by submitting.
+    with no run is a partially-completed first attempt — heal it by submitting
+    with ``domain_pack`` (the default snapshot resolved by the caller).
     """
     if media.size_bytes != size or media.sha256 != sha256:
         raise UploadConflictError(media.source_path)
@@ -640,7 +690,7 @@ def _replay_run(
         .order_by(PipelineRun.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return run if run is not None else submit(session, media.id)
+    return run if run is not None else submit(session, media.id, domain_pack=domain_pack)
 
 
 def submit_upload(
@@ -651,6 +701,8 @@ def submit_upload(
     submission_id: str,
     media_root: Path,
     max_bytes: int,
+    settings: Settings | None = None,
+    domain_pack_name: str | None = None,
 ) -> PipelineRun:
     """Finalize a browser upload into an immutable MediaItem and queue a run.
 
@@ -666,6 +718,11 @@ def submit_upload(
     :class:`UploadTooLargeError` (over the cap), or :class:`UploadConflictError`
     (replayed id, different bytes).
     """
+    # Uploads never sit under a watched folder (uuid-namespaced path), so the pack
+    # is the default unless an explicit name is supplied (source_path=None).
+    domain_pack = _run_domain_pack_snapshot(
+        session, None, settings=settings, domain_pack_name=domain_pack_name
+    )
     safe_name = sanitize_upload_filename(filename)
     sub = _submission_dir(submission_id)
     # The idempotency key is the full source_path (submission_id + safe_name), per
@@ -703,14 +760,16 @@ def submit_upload(
             winner = session.execute(
                 select(MediaItem).where(MediaItem.source_path == rel)
             ).scalar_one()
-            return _replay_run(session, winner, size=size, sha256=sha256)
+            return _replay_run(
+                session, winner, size=size, sha256=sha256, domain_pack=domain_pack
+            )
         os.replace(temp_path, dest)  # atomic publish; only the insert winner is here
         published = True
         # Orphan-on-crash (deferred to Slice 5 recovery): if submit() or the
         # caller's commit fails after this replace, the row rolls back but the file
         # stays — a self-healing orphan, since a same-bytes retry re-inserts and
         # re-replaces identically. Durable staging state is Slice 5's job.
-        return submit(session, media.id)
+        return submit(session, media.id, domain_pack=domain_pack)
     finally:
         if not published:
             with contextlib.suppress(FileNotFoundError):
@@ -718,7 +777,7 @@ def submit_upload(
 
 
 def _replay_url_run(
-    session: Session, media: MediaItem, *, source_url: str
+    session: Session, media: MediaItem, *, source_url: str, domain_pack: dict[str, Any]
 ) -> PipelineRun:
     """Resolve a same-``submission_id`` URL re-POST to its original run, or 409.
 
@@ -740,7 +799,7 @@ def _replay_url_run(
         .order_by(PipelineRun.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return run if run is not None else submit(session, media.id)
+    return run if run is not None else submit(session, media.id, domain_pack=domain_pack)
 
 
 def submit_url(
@@ -748,6 +807,8 @@ def submit_url(
     *,
     url: str,
     submission_id: str,
+    settings: Settings | None = None,
+    domain_pack_name: str | None = None,
 ) -> PipelineRun:
     """Register a URL for acquisition as an immutable MediaItem and queue a run.
 
@@ -769,6 +830,11 @@ def submit_url(
     :class:`UploadValidationError` (bad submission id) — both HTTP 422 — or
     :class:`UploadConflictError` (replayed id, different url) — HTTP 409.
     """
+    # URLs never sit under a watched folder (uuid-namespaced path), so the pack is
+    # the default unless an explicit name is supplied (source_path=None).
+    domain_pack = _run_domain_pack_snapshot(
+        session, None, settings=settings, domain_pack_name=domain_pack_name
+    )
     validated_url = validate_ingest_url(url)
     sub = _submission_dir(submission_id)
     rel = str(PurePosixPath("incoming") / sub / "source")
@@ -786,5 +852,7 @@ def submit_url(
         winner = session.execute(
             select(MediaItem).where(MediaItem.source_path == rel)
         ).scalar_one()
-        return _replay_url_run(session, winner, source_url=validated_url)
-    return submit(session, media.id)
+        return _replay_url_run(
+            session, winner, source_url=validated_url, domain_pack=domain_pack
+        )
+    return submit(session, media.id, domain_pack=domain_pack)

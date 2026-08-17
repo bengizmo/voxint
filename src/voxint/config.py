@@ -326,8 +326,15 @@ class Settings(BaseSettings):
     # _celery_visibility_covers_all_leases enforces the floor if leases change.
     celery_visibility_timeout_seconds: int = 172800  # 48 h
 
-    # Domain pack (defaults to the bundled generic pack when unset)
+    # Domain pack (defaults to the bundled generic pack when unset). This is the
+    # DEFAULT pack: used for a run whose watched folder has no per-folder mapping
+    # (issue #11) and for legacy runs created before per-run selection existed.
     domain_pack_path: Path | None = None
+    # Optional directory whose direct child folders are each a named domain pack
+    # (a folder with a manifest.yaml). Enables selecting a pack BY NAME per
+    # watched folder (app_settings.folder_domain_packs). Unset ⇒ only the bundled
+    # generic pack and the configured default (domain_pack_path) are resolvable.
+    domain_packs_dir: Path | None = None
 
     # Name-candidate enrichment (#38): the offline producer mines speaker-name
     # suggestions from stored metadata + transcript text. Dependency-free

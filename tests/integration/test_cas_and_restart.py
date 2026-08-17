@@ -16,6 +16,7 @@ from voxint.db.models import (
     StageRun,
     StageStatus,
 )
+from voxint.domain_packs.base import load_default
 from voxint.ingest import cancel_run
 from voxint.pipeline.engine import (
     StageFailedError,
@@ -38,7 +39,7 @@ def make_run(session_factory: sessionmaker[Session], path: str) -> uuid.UUID:
         media = MediaItem(source_path=path)
         session.add(media)
         session.flush()
-        run = submit(session, media.id)
+        run = submit(session, media.id, domain_pack=load_default().to_mapping())
         run_id = run.id
         session.commit()
     return run_id

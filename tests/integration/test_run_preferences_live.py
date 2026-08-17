@@ -19,6 +19,7 @@ from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint import app_settings as store
 from voxint.config import Settings
 from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun, RunStatus, Stage
+from voxint.domain_packs.base import DomainPack
 from voxint.pipeline.stages import transcribe
 from voxint.pipeline.stages.context import (
     StageContext,
@@ -57,12 +58,18 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
 ) -> None:
     settings = Settings(_env_file=None, llm_enabled=False, llm_api_key="sk-test")
     # Built ONCE — stands in for the process-cached _runtime() base context.
+    pack = DomainPack(
+        name="live-test",
+        vocabulary=("Packword",),
+        prompt_fragments={"enhancement_context": "PACK"},
+    )
     base_ctx = StageContext(
         asr=FakeASR(),
         diarizer=FakeDiarizer(),
         embedder=FakeEmbedder(),
         llm=FakeLLM(),
         media_root=tmp_path,
+        domain_pack=pack,
         enhancement_context="PACK",
         vocabulary=("Packword",),
     )
@@ -82,7 +89,7 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
         row = store.get_app_settings(session)
         prefs = resolve_run_preferences(row, settings)
         key = store.resolve_effective_llm_api_key(row, settings)
-        ctx_a = apply_run_preferences(base_ctx, settings, prefs, llm_api_key=key)
+        ctx_a = apply_run_preferences(base_ctx, settings, prefs, pack, llm_api_key=key)
         transcribe.run(ctx_a, session, run_id)
         session.commit()
 
@@ -103,7 +110,7 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
         row = store.get_app_settings(session)
         prefs = resolve_run_preferences(row, settings)
         key = store.resolve_effective_llm_api_key(row, settings)
-        ctx_b = apply_run_preferences(base_ctx, settings, prefs, llm_api_key=key)
+        ctx_b = apply_run_preferences(base_ctx, settings, prefs, pack, llm_api_key=key)
         transcribe.run(ctx_b, session, run_id)
         session.commit()
 
@@ -130,10 +137,25 @@ def test_run_pipeline_reapplies_settings_each_invocation(
         embedder=FakeEmbedder(),
         llm=None,
         media_root=tmp_path,
-        vocabulary=("Packword",),
     )
     # Stand in for the process-cached _runtime() singleton — built ONCE, reused.
     monkeypatch.setattr(worker_tasks, "_runtime", lambda: (session_factory, base_ctx))
+
+    # The run carries a frozen pack snapshot with "Packword" (issue #11): run_pipeline
+    # resolves the pack from the RUN, not the cached base, and unions it with the
+    # user vocab from the (edited) app_settings row on each invocation.
+    with session_factory() as session:
+        media = MediaItem(source_path="incoming/reapply.wav")
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            domain_pack=DomainPack(name="p", vocabulary=("Packword",)).to_mapping(),
+        )
+        session.add(run)
+        session.flush()
+        seeded_run_id = run.id
+        session.commit()
 
     captured: list[StageContext] = []
 
@@ -150,7 +172,7 @@ def test_run_pipeline_reapplies_settings_each_invocation(
 
     monkeypatch.setattr(worker_tasks, "execute_run", fake_execute_run)
 
-    run_id = uuid.uuid4()  # execute_run is stubbed, so the run need not exist
+    run_id = seeded_run_id  # a real run so run_pipeline can read its pack snapshot
 
     with session_factory() as session:
         store.get_or_create(session, llm_enabled_default=False).vocabulary = ["Foobar"]

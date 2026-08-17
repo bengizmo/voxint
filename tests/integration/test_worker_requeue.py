@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.errors import ServiceError
 from voxint.db.models import MediaItem, PipelineRun, RunStatus, Stage
+from voxint.domain_packs.base import load_default
 from voxint.pipeline.engine import (
     StageFailedError,
     StageFn,
@@ -37,7 +38,7 @@ def submit_run(session_factory: sessionmaker[Session]) -> uuid.UUID:
         media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
         session.add(media)
         session.flush()
-        run_id = submit(session, media.id).id
+        run_id = submit(session, media.id, domain_pack=load_default().to_mapping()).id
         session.commit()
     return run_id
 

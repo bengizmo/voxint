@@ -79,6 +79,54 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the one resolver, so they can never disagree. Known v1 limitation (documented):
   the run **search** facet and the review queue stay label-scoped — a speaker
   present only via a segment override does not surface there.
+- **Whisper `WHISPER_ENGINE` compatibility seam** (#33, Slice 2a): the whisper
+  service now selects its decode engine through a fail-closed registry
+  (`services/whisper/app/backends/`, mirroring titanet's `EMBED_ENGINE`
+  factory) instead of a single hard-wired class. `WhisperTranscriber` becomes an
+  engine-agnostic facade that dispatches by a typed backend descriptor
+  (`legacy_file` vs `shared_windows`); the default engine `ct2-legacy` is a
+  **byte-faithful mechanical move** of the shipped whole-file CT2 path (decode
+  branches + result assembly), so the frozen #33 CT2-CPU baseline replays with
+  zero drift — proven by a new Apple-Silicon-only maintainer gate
+  (`tests/parity/test_whisper_ct2_legacy_replay.py`, plain SKIP elsewhere). An
+  unknown `WHISPER_ENGINE` raises rather than silently degrading to CPU, and a
+  new CT2 `verify_device()` hook fails closed on a device CTranslate2 cannot run
+  (the whisper analogue of pyannote's `probe_device`; a no-op for the shipped
+  cpu/cuda/rocm paths). The metal launcher pins `WHISPER_ENGINE=ct2-legacy`.
+  `/healthz` identity, the public `transcribe` signature, and every existing
+  test are unchanged. This is the structural half of Slice 2; the shared-VAD
+  `ct2` backend and its self-parity gate (Slice 2b) fail closed until they land.
+- **Whisper shared-VAD `ct2` decode engine** (#33, Slice 2b): the real
+  `shared_windows` engine now decodes. A shared front layer
+  (`app.backends.vad_plan.build_vad_plan` + the `WhisperTranscriber` facade)
+  owns VAD, packing, packed→source time restoration and result assembly by
+  reusing faster-whisper 1.2.1's OWN primitives (`get_speech_timestamps`,
+  `collect_chunks`, `restore_speech_timestamps`) with the exact
+  `BatchedInferencePipeline` parameters; the backend (`Ct2Backend`) does only
+  the raw batched CT2 forward on the packed windows, so a future mlx backend
+  consumes identical windows. The decode vehicle (direct `pipeline.forward` vs
+  the public `transcribe(clip_timestamps=…)` path) was **chosen by
+  measurement** — both are byte-exact on the comparison fixtures; `forward`
+  wins because it feeds integer-exact audio and reconstructs no metadata. The
+  batched decode reproduces `_batched_segments_generator`'s exact
+  `Segment`/`Word` materialization (global ids, three-decimal rounding,
+  `last_speech_timestamp` threading). The result-assembly loop is
+  deduplicated into a shared front helper used by BOTH engines
+  (`ct2-legacy` byte-identity still guarded by the frozen-oracle replay gate).
+  Equivalence is proven by a new self-parity gate
+  (`tests/parity/test_whisper_ct2_self_parity.py`, Apple-Silicon-only, plain
+  SKIP elsewhere): `ct2 ≈ ct2-legacy` to **≤0.5pp pooled WER per vad mode**
+  (micro-averaged S/D/I/N; empty-reference clips held to a separate
+  zero-insertion invariant) over the committed synthetic fixture + a curated
+  AMI subset spanning 2–10 packed windows. `/healthz` gains a cached decode
+  identity (`decode_config_hash`, `vad_plan_version`, `vad_params`,
+  `model_revision`) so two deployments are distinguishable and a numerics
+  change is visible. **Behind-seam and off by default** (`WHISPER_ENGINE`
+  stays `ct2-legacy`): zero behavior change until a deployment opts in.
+
+## [0.15.0] - 2026-08-16
+
+### Added
 - **Follow-along highlight + per-speaker colors** (#50, #47): the transcript
   player now keeps the currently-playing line in view as playback advances
   (scroll-into-view, no smooth animation, no focus stealing). Following starts
@@ -119,6 +167,35 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `api-client.ts` error seam for #49+. Node exists only in the Dockerfile build
   stage; no Node ships at runtime. A new CI `frontend` job gates
   lint/typecheck/build/audit and the offline no-CDN check.
+- **Per-run / per-folder domain pack selection** (#11, backend): a run now
+  freezes the resolved domain pack it was submitted with as a JSON snapshot on
+  the run (`pipeline_runs.domain_pack`, migration 0017), stamped write-once at
+  submit. Packs are selected **per watched folder** via a
+  `{media_folder → pack_name}` map on `app_settings` (`folder_domain_packs`) —
+  point a *podcast* folder and an *interview* folder at different packs — with an
+  optional explicit override at submit; an unmapped folder uses the default pack
+  (`DOMAIN_PACK_PATH`, else the bundled `generic`). Multiple named packs can live
+  under a new `DOMAIN_PACKS_DIR` (one child folder per pack, resolved by manifest
+  `name`). The **pipeline worker and the offline name producer both read the
+  run's frozen snapshot**, not the live global env, so late enrichment can never
+  diverge from what transcription used and a manifest edited on disk afterward
+  never changes a past run's result. `DomainPack` gained strict, round-trippable
+  serialization (`to_mapping`/`from_mapping`); a corrupt snapshot degrades to the
+  default pack with a warning rather than wedging the run. Legacy runs
+  (pre-migration, `NULL` snapshot) reproduce the prior global-pack behavior.
+  _(The default pack, `DOMAIN_PACK_PATH`, is the operator-facing control in this
+  release; the in-console UI to edit the per-folder map ships with the
+  review-console overhaul, #63.)_
+- **Domain packs shape more of the pipeline** (#11): two additional
+  `prompt_fragments` keys are now consumed from the run's frozen pack, each with
+  a single documented consumer (fragments are never concatenated). A
+  `summary_context` fragment is appended to the run-asset LLM producer's system
+  prompt, so the summary/topics/entity-mention analysis gets domain framing; a
+  `name_attribution_context` fragment is added as a second labeled block on the
+  transcript-enhancement call that harvests speaker-name hints (e.g. anchoring a
+  recurring host). Both are fenced as advisory so a pack can guide but never
+  override the strict reply schemas, and an absent fragment leaves the prompt
+  byte-for-byte unchanged.
 - **In-UI LLM API key** (#10): the optional LLM API key can now be set, replaced,
   and removed from the setup wizard and the Settings page — no more hand-editing
   `.env` and restarting the worker just to enable enhancement. The key is stored on
@@ -172,50 +249,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   one runtime, not asserted byte-identical across machines. A contract test
   (`tests/contracts/test_bakeoff_baseline.py`) binds each committed entry to its
   manifest `sha256` and enforces the no-TED-leakage doctrine.
-- **Whisper `WHISPER_ENGINE` compatibility seam** (#33, Slice 2a): the whisper
-  service now selects its decode engine through a fail-closed registry
-  (`services/whisper/app/backends/`, mirroring titanet's `EMBED_ENGINE`
-  factory) instead of a single hard-wired class. `WhisperTranscriber` becomes an
-  engine-agnostic facade that dispatches by a typed backend descriptor
-  (`legacy_file` vs `shared_windows`); the default engine `ct2-legacy` is a
-  **byte-faithful mechanical move** of the shipped whole-file CT2 path (decode
-  branches + result assembly), so the frozen #33 CT2-CPU baseline replays with
-  zero drift — proven by a new Apple-Silicon-only maintainer gate
-  (`tests/parity/test_whisper_ct2_legacy_replay.py`, plain SKIP elsewhere). An
-  unknown `WHISPER_ENGINE` raises rather than silently degrading to CPU, and a
-  new CT2 `verify_device()` hook fails closed on a device CTranslate2 cannot run
-  (the whisper analogue of pyannote's `probe_device`; a no-op for the shipped
-  cpu/cuda/rocm paths). The metal launcher pins `WHISPER_ENGINE=ct2-legacy`.
-  `/healthz` identity, the public `transcribe` signature, and every existing
-  test are unchanged. This is the structural half of Slice 2; the shared-VAD
-  `ct2` backend and its self-parity gate (Slice 2b) fail closed until they land.
-- **Whisper shared-VAD `ct2` decode engine** (#33, Slice 2b): the real
-  `shared_windows` engine now decodes. A shared front layer
-  (`app.backends.vad_plan.build_vad_plan` + the `WhisperTranscriber` facade)
-  owns VAD, packing, packed→source time restoration and result assembly by
-  reusing faster-whisper 1.2.1's OWN primitives (`get_speech_timestamps`,
-  `collect_chunks`, `restore_speech_timestamps`) with the exact
-  `BatchedInferencePipeline` parameters; the backend (`Ct2Backend`) does only
-  the raw batched CT2 forward on the packed windows, so a future mlx backend
-  consumes identical windows. The decode vehicle (direct `pipeline.forward` vs
-  the public `transcribe(clip_timestamps=…)` path) was **chosen by
-  measurement** — both are byte-exact on the comparison fixtures; `forward`
-  wins because it feeds integer-exact audio and reconstructs no metadata. The
-  batched decode reproduces `_batched_segments_generator`'s exact
-  `Segment`/`Word` materialization (global ids, three-decimal rounding,
-  `last_speech_timestamp` threading). The result-assembly loop is
-  deduplicated into a shared front helper used by BOTH engines
-  (`ct2-legacy` byte-identity still guarded by the frozen-oracle replay gate).
-  Equivalence is proven by a new self-parity gate
-  (`tests/parity/test_whisper_ct2_self_parity.py`, Apple-Silicon-only, plain
-  SKIP elsewhere): `ct2 ≈ ct2-legacy` to **≤0.5pp pooled WER per vad mode**
-  (micro-averaged S/D/I/N; empty-reference clips held to a separate
-  zero-insertion invariant) over the committed synthetic fixture + a curated
-  AMI subset spanning 2–10 packed windows. `/healthz` gains a cached decode
-  identity (`decode_config_hash`, `vad_plan_version`, `vad_params`,
-  `model_revision`) so two deployments are distinguishable and a numerics
-  change is visible. **Behind-seam and off by default** (`WHISPER_ENGINE`
-  stays `ct2-legacy`): zero behavior change until a deployment opts in.
 
 ### Fixed
 - **Metal launcher whisper batch size** (#33): the native launcher

@@ -252,9 +252,12 @@ Kubernetes is not required. It may become an optional enhancement later.
 ASR, diarizer, embedder, and LLM providers sit behind typed protocols with
 versioned HTTP contracts (`/v1/transcribe`, `/v1/diarize`, `/v1/embed`). The LLM
 enhancement stage speaks to any OpenAI-compatible endpoint and is optional
-(`LLM_ENABLED=false` by default). Domain-specific vocabulary and prompts load
-from a swappable domain pack (`DOMAIN_PACK_PATH`); a neutral meeting/podcast pack
-ships as the default.
+(`LLM_ENABLED=false` by default). Domain-specific vocabulary, name seeds, and
+prompt fragments load from a swappable **domain pack**: point `DOMAIN_PACK_PATH`
+at a default pack, or drop several named packs under `DOMAIN_PACKS_DIR` and select
+per run/folder. Each run **freezes** the pack it used, so editing a pack never
+rewrites a past run's results. A neutral meeting/podcast pack ships as the
+default. See [`docs/domain-packs.md`](docs/domain-packs.md).
 
 ## License
 

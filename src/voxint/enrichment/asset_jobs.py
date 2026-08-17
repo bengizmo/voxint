@@ -32,7 +32,14 @@ from voxint.app_settings import (
 )
 from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
-from voxint.db.models import AppSettings, RunAssetJob, RunAssetJobStatus, RunAssetKind
+from voxint.db.models import (
+    AppSettings,
+    PipelineRun,
+    RunAssetJob,
+    RunAssetJobStatus,
+    RunAssetKind,
+)
+from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment.producers.run_assets_llm import (
     CONFIG_SCHEMA_VERSION,
     PAYLOAD_SCHEMA_VERSION,
@@ -327,6 +334,18 @@ def execute_job(
         except RunAssetError as exc:
             _finish(session, job_id, status=RunAssetJobStatus.FAILED, error=str(exc))
             return
+        # The run's frozen #11 pack snapshot (default for a legacy NULL run) may
+        # append a ``summary_context`` fragment to the prompt. load_source has
+        # already proven the run exists; session.get is identity-mapped so this
+        # is not a second query.
+        run = session.get(PipelineRun, job.pipeline_run_id)
+        domain_context = (
+            domain_pack_from_snapshot(run.domain_pack, settings).prompt_fragments.get(
+                "summary_context", ""
+            )
+            if run is not None
+            else ""
+        )
         started_at = job.started_at or datetime.now(tz=UTC)
         owned_client: HttpLLMClient | None = None
         client: ChatJsonLLM
@@ -345,7 +364,9 @@ def execute_job(
         else:
             client = llm
         try:
-            payload, truncated = generate_payload(client, kind, source, settings=exec_settings)
+            payload, truncated = generate_payload(
+                client, kind, source, settings=exec_settings, domain_context=domain_context
+            )
         except LLMError as exc:
             # LLMError text can embed endpoint response bodies — persist only
             # the classification; the rest goes to the log (#40 doctrine).
