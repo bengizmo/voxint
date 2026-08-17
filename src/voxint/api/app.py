@@ -151,9 +151,11 @@ from voxint.api.stats_query import (
     render_prometheus,
 )
 from voxint.app_settings import (
+    EffectiveFlags,
     clear_tutorial_completion,
     complete_onboarding,
     effective_llm_key_source,
+    feature_flag_state,
     get_app_settings,
     get_or_create,
     is_onboarded,
@@ -161,9 +163,14 @@ from voxint.app_settings import (
     mark_tutorial_complete,
     ready_tutorial_run_id,
     resolve_effective_enrichment_names_enabled,
+    resolve_effective_enrichment_web_research_enabled,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_source_authority_domains,
+    resolve_effective_voxint_web_research,
+    resolve_effective_web_search_base_url,
     resolve_effective_ytdlp_enabled,
+    validate_effective_flags,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -1298,6 +1305,150 @@ def _persist_llm_settings(
     row.llm_api_key = candidate_key
     row.llm_enabled = enabled and error is None
     return error
+
+
+# The live-read feature flags the Settings "Features" section exposes as tri-state
+# runtime toggles (issue #62). Each entry is (column/config name, operator label,
+# help text). Order is display order. LLM enablement lives in its own section, and
+# the web-research provider toggles are the external-sources child (#76), so
+# neither appears here. The names match the ``AppSettings`` columns / ``Settings``
+# fields exactly, so the resolvers and the persist path key off them directly.
+_FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
+    (
+        "enrichment_names_enabled",
+        "Speaker name suggestions",
+        "Scan finalized transcripts for likely speaker names. Runs fully offline —"
+        " no LLM required.",
+    ),
+    (
+        "enrichment_names_llm_enabled",
+        "LLM name pass",
+        "Additionally ask the enhancement LLM to propose names. Requires LLM"
+        " enhancement and speaker name suggestions to be on.",
+    ),
+    (
+        "enrichment_run_assets_enabled",
+        "Run assets (summary, topics, entities)",
+        "Generate a summary, topic list, and grounded entity mentions for each run."
+        " Requires LLM enhancement.",
+    ),
+    (
+        "enrichment_run_assets_autogenerate",
+        "Auto-generate run assets",
+        "Start run-asset generation automatically when a run is finalized. Requires"
+        " run assets to be on.",
+    ),
+    (
+        "ytdlp_enabled",
+        "Download media from a URL",
+        "Allow submitting media by URL, fetched with yt-dlp. Independent of the LLM"
+        " features.",
+    ),
+)
+_FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
+_FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
+
+# Operator-plain copy for the invariant violations this section can surface (#62).
+# validate_effective_flags is the SINGLE source of WHICH combinations are invalid,
+# but its messages name the flag identifiers (enrichment_run_assets_enabled, …) —
+# the exact jargon this arc exists to keep out of a non-technical operator's way.
+# So the Features boundary translates the reachable messages to plain language,
+# while the config boot validator keeps the identifier-bearing strings (a .env
+# editor wants the variable name). Keyed on the exact shared message; an
+# un-mapped message (e.g. a web-research invariant, unreachable from this form)
+# falls through to the original. A drift test locks the four reachable keys so a
+# reworded invariant can never silently fall back to jargon here.
+_FEATURE_INVARIANT_COPY: dict[str, str] = {
+    "enrichment_names_llm_enabled requires llm_enabled=true — the "
+    "LLM name pass reuses the configured enhancement endpoint": (
+        "The LLM name pass needs LLM transcript enhancement turned on. Turn it on"
+        " in the LLM section below, or turn the LLM name pass off."
+    ),
+    "enrichment_names_llm_enabled requires enrichment_names_enabled=true"
+    " — the LLM pass is additive to the offline name producer": (
+        "The LLM name pass needs speaker name suggestions turned on — it adds to"
+        " the offline name finder."
+    ),
+    "enrichment_run_assets_enabled requires llm_enabled=true — the"
+    " asset generators reuse the configured enhancement endpoint": (
+        "Run assets need LLM transcript enhancement turned on. Turn it on in the"
+        " LLM section below, or turn run assets off."
+    ),
+    "enrichment_run_assets_autogenerate requires"
+    " enrichment_run_assets_enabled=true — the post-finalize step"
+    " only enqueues the feature it rides on": (
+        "Auto-generating run assets needs run assets turned on."
+    ),
+}
+
+
+def _persist_feature_flags(
+    session: Session, settings: Settings, *, submitted: dict[str, str]
+) -> list[str]:
+    """Apply the Features-section tri-state toggles as ONE deliberate mutation (#62).
+
+    ``submitted`` maps each flag name to ``"on"``/``"off"``/``"inherit"``. The
+    candidate column value is ``True``/``False``/``None`` respectively (``None`` =
+    inherit the env default — the tri-state that never permanently pins an
+    override). Returns the list of operator-plain error messages (empty ⇒ success);
+    following the ``_persist_llm_settings`` contract, it computes the candidate
+    effective combination and validates it through the SINGLE shared
+    :func:`validate_effective_flags` BEFORE touching the row, so an
+    invariant-violating submission (e.g. the LLM name pass without LLM enhancement)
+    writes NOTHING — not even a get_or_create (the API session commits on the 200
+    error re-render). A valid submission then performs the single mutation and the
+    caller commits.
+
+    An unexpected choice value (a stale client, a hand-crafted POST — never the
+    shipped radios) is REJECTED rather than silently coerced: mapping it to "off"
+    would quietly disable a feature, and to "inherit" would quietly drop an
+    override. Missing fields still default to ``"inherit"`` — this is a full-form
+    replace, and the real form always submits all five radios.
+
+    The flags NOT edited here (``llm_enabled`` and the web-research provider trio)
+    are resolved at their CURRENT effective value so a dependency invariant fires
+    against the real system state — enabling ``run_assets`` while LLM is off is
+    rejected — and this section never flips an unrelated setting.
+    """
+    row = get_app_settings(session)
+    candidates: dict[str, bool | None] = {}
+    for name in _FEATURE_FLAG_NAMES:
+        choice = submitted.get(name, "inherit")
+        if choice not in _FEATURE_FLAG_CHOICES:
+            return ["Unrecognized feature setting — choose On, Off, or Use installation setting."]
+        candidates[name] = None if choice == "inherit" else (choice == "on")
+
+    def _effective(name: str) -> bool:
+        candidate = candidates[name]
+        return bool(getattr(settings, name)) if candidate is None else candidate
+
+    errors = validate_effective_flags(
+        EffectiveFlags(
+            # Not edited in this section — resolved at the current effective value.
+            llm_enabled=resolve_effective_llm_enabled(row, settings),
+            voxint_web_research=resolve_effective_voxint_web_research(row, settings),
+            enrichment_web_research_enabled=resolve_effective_enrichment_web_research_enabled(
+                row, settings
+            ),
+            web_search_base_url=resolve_effective_web_search_base_url(row, settings),
+            # Edited here — the candidate over env default.
+            enrichment_names_enabled=_effective("enrichment_names_enabled"),
+            enrichment_names_llm_enabled=_effective("enrichment_names_llm_enabled"),
+            enrichment_run_assets_enabled=_effective("enrichment_run_assets_enabled"),
+            enrichment_run_assets_autogenerate=_effective(
+                "enrichment_run_assets_autogenerate"
+            ),
+        )
+    )
+    if errors:
+        # Translate every violated invariant to operator-plain copy (all of them,
+        # so a two-fault submission fixes in one pass). Nothing is written.
+        return [_FEATURE_INVARIANT_COPY.get(message, message) for message in errors]
+    # Valid → one mutation. get_or_create only now, so a rejected save writes nothing.
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    for name, value in candidates.items():
+        setattr(row, name, value)
+    return []
 
 
 def _tutorial_banner(
@@ -3340,8 +3491,10 @@ def _register_routes(app: FastAPI) -> None:
 
         Carries the effective LLM state (issue #10) — enablement over env, the
         effective endpoint, and whether an effective key is present and where it
-        comes from — never the key value. ``overrides`` lets a POST re-render carry
-        an ``error`` and the operator's submitted (non-secret) endpoint inputs.
+        comes from — never the key value — plus the Features-section tri-state flag
+        rows (issue #62). ``overrides`` lets a POST re-render carry a section
+        ``*_error`` and (for Features) ``features_submitted``, the operator's
+        submitted radio selections, so a rejected save re-renders their choices.
         """
         settings: Settings = request.app.state.settings
         tutorial_run = ready_tutorial_run_id(session)
@@ -3349,6 +3502,24 @@ def _register_routes(app: FastAPI) -> None:
         base_value, base_default, model_value, model_default = llm_endpoint_form_fields(
             row, settings
         )
+        # Features section (issue #62): one tri-state row per live-read flag. On an
+        # invariant-rejected save, render the operator's submitted choices back
+        # (``features_submitted``); otherwise render the stored raw tri-state.
+        features_submitted: dict[str, str] | None = overrides.pop("features_submitted", None)
+        feature_flags = [
+            {
+                "name": name,
+                "label": label,
+                "help": help_text,
+                "state": (
+                    features_submitted.get(name, "inherit")
+                    if features_submitted is not None
+                    else feature_flag_state(row, name)
+                ),
+                "env_default": bool(getattr(settings, name)),
+            }
+            for name, label, help_text in _FEATURE_FLAG_META
+        ]
         context: dict[str, Any] = {
             "request": request,
             "tutorial_available": tutorial_run is not None,
@@ -3377,6 +3548,8 @@ def _register_routes(app: FastAPI) -> None:
             "csrf_settings": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS),
             "active_nav": "settings",
             "llm_error": None,
+            "feature_flags": feature_flags,
+            "features_errors": [],
         }
         context.update(overrides)
         return context
@@ -3425,6 +3598,42 @@ def _register_routes(app: FastAPI) -> None:
             return _rerender(str(exc))
         if error is not None:
             return _rerender(error)
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/features")
+    def settings_features(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        enrichment_names_enabled: Annotated[str, Form()] = "inherit",
+        enrichment_names_llm_enabled: Annotated[str, Form()] = "inherit",
+        enrichment_run_assets_enabled: Annotated[str, Form()] = "inherit",
+        enrichment_run_assets_autogenerate: Annotated[str, Form()] = "inherit",
+        ytdlp_enabled: Annotated[str, Form()] = "inherit",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        submitted = {
+            "enrichment_names_enabled": enrichment_names_enabled,
+            "enrichment_names_llm_enabled": enrichment_names_llm_enabled,
+            "enrichment_run_assets_enabled": enrichment_run_assets_enabled,
+            "enrichment_run_assets_autogenerate": enrichment_run_assets_autogenerate,
+            "ytdlp_enabled": ytdlp_enabled,
+        }
+        # Candidate → validate (shared invariants) → ONE mutation. On an invariant
+        # violation nothing is written and the operator's choices are re-rendered
+        # with the plain-language message(s) (issue #62).
+        errors = _persist_feature_flags(session, settings, submitted=submitted)
+        if errors:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request, session, features_errors=errors, features_submitted=submitted
+                ),
+            )
         session.commit()
         return RedirectResponse("/settings", status_code=303)
 

@@ -39,9 +39,9 @@
 
   {% if not research.gates_open %}
   <p class="muted">
-    Web research is off. It needs ENRICHMENT_WEB_RESEARCH_ENABLED,
-    VOXINT_WEB_RESEARCH (with a configured search provider), and LLM_ENABLED —
-    all set in the environment.
+    Web research is off. It needs the web-research feature enabled, a configured
+    search provider, and <strong>LLM transcript enhancement</strong> — set these up
+    in <a href="/settings">Settings</a>.
   </p>
   {% elif not research.job_active %}
   <form class="inline" method="post"

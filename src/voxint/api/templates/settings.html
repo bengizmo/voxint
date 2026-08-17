@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Voxint — settings{% endblock %}
 {% block body %}
+{# Sectioned settings-page IA (issue #62): this shell holds the page frame and the
+   terminal tutorial-complete celebration; every configurable section is a
+   self-contained partial under settings/ with its own scoped, CSRF-guarded POST,
+   so later children (#76 external sources, #63 folders, #61 diagnostics, #75
+   tutorial-seed) slot a partial in here without disturbing another section's save. #}
 <div class="settings">
 <h1>Settings</h1>
 
@@ -20,84 +25,15 @@
 </section>
 {% endif %}
 
-<h2>First-run setup</h2>
+<section id="setup" aria-labelledby="setup-heading">
+<h2 id="setup-heading">First-run setup</h2>
 <p class="muted">Onboarding is complete. You can walk through the setup wizard again
    at any time — it never resets your existing preferences unless you change them.</p>
 <p><a href="/setup">Re-run the setup wizard →</a></p>
+</section>
 
-<h2>LLM transcript enhancement <span class="muted">(optional)</span></h2>
-<p class="muted">When enabled, Voxint sends transcript segments to an OpenAI-compatible
-   model to clean them up and surface likely speaker names. It's best-effort — a slow or
-   failing model never blocks a run. Changes take effect on your next run or enrichment
-   job, no restart needed.</p>
-{% if llm_error %}
-  <p class="notice" role="alert">{{ llm_error }}</p>
-{% endif %}
-{% if llm_key_present %}
-  {% if llm_key_source == "stored" %}
-    <p class="muted">An API key is saved here. ✓ <span class="muted">(stored)</span></p>
-  {% else %}
-    <p class="muted">An <code>LLM_API_KEY</code> is set in the environment. ✓
-       <span class="muted">(environment)</span></p>
-  {% endif %}
-{% else %}
-  <p class="notice">No API key is configured. Enter one below (or set
-     <code>LLM_API_KEY</code> in the environment) before enabling.</p>
-{% endif %}
-{% if not llm_budget_ok %}
-  <p class="notice">The configured LLM run budget doesn't fit the transcription stage
-     lease, so enhancement can't be enabled until that's adjusted.</p>
-{% endif %}
-<form method="post" action="/settings/llm" autocomplete="off">
-  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
-  <div class="field">
-    <label><input type="checkbox" name="enabled" value="true"{% if llm_enabled %} checked{% endif %}>
-      Enable LLM enhancement</label>
-  </div>
-  <div class="field">
-    <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = use the installation setting)</span></label>
-    <input type="url" id="llm_base_url" name="llm_base_url" value="{{ llm_base_url }}"
-           placeholder="{{ llm_base_url_default }}">
-  </div>
-  <div class="field">
-    <label for="llm_model">Model <span class="muted">(blank = use the installation setting)</span></label>
-    <input type="text" id="llm_model" name="llm_model" value="{{ llm_model }}"
-           placeholder="{{ llm_model_default }}">
-  </div>
-  <div class="field">
-    <label for="llm_api_key">API key
-      <span class="muted">(blank = keep {{ "the saved key" if llm_key_source == "stored" else "current setting" }})</span></label>
-    <input type="password" id="llm_api_key" name="llm_api_key" value=""
-           autocomplete="new-password" maxlength="512" placeholder="sk-…">
-    <p class="muted">Stored in Voxint's database and used for all LLM features. Never
-       shown again after saving.</p>
-  </div>
-  {% if llm_key_source == "stored" %}
-  <div class="field">
-    <label><input type="checkbox" name="remove_llm_api_key" value="true">
-      Remove saved key (revert to environment)</label>
-  </div>
-  {% endif %}
-  <button type="submit">Save LLM settings</button>
-</form>
-
-<h2>Guided tutorial</h2>
-{% if not tutorial_available %}
-  <p class="muted">The guided tutorial isn't set up yet. Run
-     <code>voxint tutorial seed</code> to create the bundled three-speaker sample,
-     then reload this page.</p>
-{% elif tutorial_completed_at %}
-  <p>Completed <strong>{{ tutorial_completed_at.strftime("%Y-%m-%d %H:%M") }}</strong>.</p>
-  <p class="muted">Replaying walks you through the sample again. Your previous speaker
-     rulings on the tutorial run are preserved — replay doesn't reset them.</p>
-  <form method="post" action="/settings/tutorial/replay" class="inline">
-    <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
-    <button type="submit">Replay tutorial →</button>
-  </form>
-{% else %}
-  <p class="muted">A short, hands-on walkthrough of one full run on a bundled
-     three-speaker sample.</p>
-  <p><a href="/runs/{{ tutorial_run_id }}?tutorial=run">Start the guided tutorial →</a></p>
-{% endif %}
+{% include "settings/_features.html" %}
+{% include "settings/_llm.html" %}
+{% include "settings/_tutorial.html" %}
 </div>
 {% endblock %}

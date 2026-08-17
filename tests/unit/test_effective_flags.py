@@ -9,6 +9,7 @@ invariants live in exactly one validator shared with ``config.py``.
 
 from voxint.app_settings import (
     EffectiveFlags,
+    feature_flag_state,
     resolve_effective_enrichment_names_enabled,
     resolve_effective_enrichment_names_llm_enabled,
     resolve_effective_enrichment_run_assets_autogenerate,
@@ -335,3 +336,14 @@ def test_web_research_requires_valid_base_url() -> None:
         "voxint_web_research=true requires web_search_base_url — the"
         " searxng provider has no default endpoint"
     ]
+
+
+def test_feature_flag_state_tristate() -> None:
+    # The settings form (issue #62) renders the RAW column tri-state, not the
+    # resolved effective value: NULL / no row => "inherit", True => "on", False
+    # => "off". This is what keeps an untouched "use installation setting" save
+    # writing NULL instead of pinning the env default onto the row.
+    assert feature_flag_state(None, "ytdlp_enabled") == "inherit"
+    assert feature_flag_state(AppSettings(id=1), "ytdlp_enabled") == "inherit"
+    assert feature_flag_state(AppSettings(id=1, ytdlp_enabled=True), "ytdlp_enabled") == "on"
+    assert feature_flag_state(AppSettings(id=1, ytdlp_enabled=False), "ytdlp_enabled") == "off"
