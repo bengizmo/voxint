@@ -35,9 +35,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   posts a correction (clearing the verified mark); every keystroke is
   typing-guarded so the keys never fire while you are typing, and Space/scroll
   keys stay with the native player. It **degrades to plain HTML**: with
-  JavaScript off the same page lists the flagged segments with a plain "Verify"
-  form per segment (editing needs the island, stated honestly), and it renders
-  read-only with a prompt to claim when this tab does not hold the run's claim.
+  JavaScript off the same page lists every segment, with a plain "Verify" form
+  on each one still unverified (editing needs the island, stated honestly), and
+  it renders read-only with a prompt to claim when this tab does not hold the
+  run's claim.
 - **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
   already reports how sure it was of each segment, but Voxint used to throw that
   away. The transcript now flags segments the model was **uncertain** about — a
@@ -50,6 +51,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (`REVIEW_LOW_CONFIDENCE_THRESHOLD`, default 0.6), intentionally not a UI
   slider. Reads existing model output only — inference and the parity gates are
   untouched.
+
+## [0.16.0] - 2026-08-17
+
+### Added
 - **Export picker — every format, one menu** (#52, #47): the console already
   produced SubRip (`.srt`), WebVTT (`.vtt`), JSON, and RTTM alongside plain
   text, but only the `.txt` download was ever linked — the subtitle and
