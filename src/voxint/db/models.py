@@ -456,6 +456,15 @@ class TranscriptSegment(Base):
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
             name="transcript_segments_confidence_range_check",
         ),
+        # Shape backstop for the words JSONB (migration 0022), matching the
+        # jsonb_typeof convention every other JSONB column uses. NULL = the run
+        # had no word timing; an array (possibly empty) = it did. Paired with
+        # none_as_null=True on the column so a wordless run stores SQL NULL (not
+        # JSONB 'null', which would fail this CHECK).
+        CheckConstraint(
+            "words IS NULL OR jsonb_typeof(words) = 'array'",
+            name="transcript_segments_words_array_check",
+        ),
         # FTS expression indexes (migration 0008). Declared here for the
         # model↔migration parity tests; the DDL literals must match
         # ``voxint.db.search`` (contract-tested). Safe to declare as ORM
@@ -496,9 +505,11 @@ class TranscriptSegment(Base):
     # runs transcribed before #59 and providers without word timing — never
     # backfilled onto existing evidence rows. The word-boundary split UI reads
     # these; the ASR text/interval remain the numerics contract, words are derived
-    # detail. No GIN index (never queried by content).
+    # detail. No GIN index (never queried by content). none_as_null=True so a
+    # wordless run persists SQL NULL, not JSONB 'null' — keeping `words IS NULL`
+    # (and the array-shape CHECK above) honest.
     words: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
         nullable=True,
     )
 

@@ -44,9 +44,10 @@ class TranscriptionWord:
 class TranscriptionResult:
     segments: tuple[TranscriptionSegment, ...]
     language: str | None = None
-    # Flat, in-order word timings for the whole transcript (empty when the
-    # provider reports none — older services, fakes). Downstream buckets them
-    # into segments; never inferred when absent.
+    # Flat, provider-ordered word timings for the whole transcript (empty when
+    # the provider reports none — older services, fakes). Downstream buckets them
+    # into segments by time; never inferred when absent. Order is preserved as
+    # received, not re-sorted.
     words: tuple[TranscriptionWord, ...] = ()
 
 

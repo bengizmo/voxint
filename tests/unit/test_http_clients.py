@@ -247,7 +247,7 @@ def test_transcribe_maps_segments_and_tolerates_additive_fields() -> None:
     assert result.segments[0].text == "hello"
     assert result.segments[0].confidence == 0.95  # captured (issue #53)
     assert result.segments[1].suspect is True
-    assert result.segments[1].confidence is None  # absent → None, never fabricated
+    assert result.segments[1].confidence is None  # absent -> None, never fabricated
 
 
 @pytest.mark.parametrize("bad", [1.5, -0.1, "0.9", True])
@@ -301,7 +301,7 @@ def test_transcribe_maps_words() -> None:
     assert len(result.words) == 2
     assert result.words[0].word == "hi"
     assert result.words[0].confidence == 0.99
-    assert result.words[1].confidence is None  # absent/null → None, never fabricated
+    assert result.words[1].confidence is None  # absent/null -> None, never fabricated
 
 
 def test_transcribe_absent_words_key_is_empty_not_error() -> None:
@@ -315,14 +315,30 @@ def test_transcribe_absent_words_key_is_empty_not_error() -> None:
     assert client.transcribe(AUDIO).words == ()
 
 
+def test_transcribe_explicit_null_words_is_protocol_error() -> None:
+    # Present-but-null is NOT back-compat (an omitted key is): the v1 contract
+    # types words as list[Word], so a null is a malformed current response and
+    # must be loud, not silently treated like "no words".
+    body = {
+        "language": "en",
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+        "words": None,
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
 @pytest.mark.parametrize(
     "words",
     [
         [{"start_seconds": 0.0, "end_seconds": 1.0, "confidence": 0.9}],  # no word text
         [{"start_seconds": 0.0, "end_seconds": 1.0, "word": 5}],  # word not a string
+        [{"start_seconds": 0.0, "end_seconds": 1.0, "word": ""}],  # empty word
         [{"start_seconds": 1.0, "end_seconds": 0.0, "word": "x"}],  # reversed interval
         [{"start_seconds": "0", "end_seconds": 1.0, "word": "x"}],  # non-numeric bound
         [{"start_seconds": 0.0, "end_seconds": 1.0, "word": "x", "confidence": 2.0}],
+        [5],  # word entry is not an object
         "not-a-list",
     ],
 )

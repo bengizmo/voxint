@@ -76,12 +76,12 @@ def bucket_words(
     return buckets
 
 
-def _word_payload(words: list[TranscriptionWord]) -> list[dict[str, Any]] | None:
-    """The JSONB shape stored on a segment, or None when the segment has no words
-    (so a run with no word timing at all leaves every column NULL, matching the
-    'never fabricate' rule for older providers)."""
-    if not words:
-        return None
+def _word_payload(words: list[TranscriptionWord]) -> list[dict[str, Any]]:
+    """The JSONB array stored on a segment — one object per word, in order.
+
+    Always a list (possibly empty): the NULL-vs-array decision is made per run at
+    the call site, so ``words IS NULL`` cleanly means "this run had no word
+    timing" and never "this segment happened to bucket zero words"."""
     return [
         {
             "start": w.start_seconds,
@@ -100,6 +100,10 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
         delete(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
     )
     word_buckets = bucket_words(result.segments, result.words)
+    # A run either has word timing (every segment stores an array, empty if none
+    # bucketed there) or it doesn't (every segment stores SQL NULL) — decided
+    # once here, not per segment, so NULL never ambiguously means "empty bucket".
+    run_has_words = bool(result.words)
     for index, segment in enumerate(result.segments):
         session.add(
             TranscriptSegment(
@@ -110,6 +114,6 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
                 raw_text=segment.text,
                 suspect=segment.suspect,
                 confidence=segment.confidence,
-                words=_word_payload(word_buckets[index]),
+                words=_word_payload(word_buckets[index]) if run_has_words else None,
             )
         )
