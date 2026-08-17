@@ -5,6 +5,7 @@ import json
 import httpx
 import pytest
 
+from voxint.app_settings import resolve_effective_web_research
 from voxint.config import Settings
 from voxint.research.budget import Attribution, ResearchBudget
 from voxint.research.search import (
@@ -26,6 +27,13 @@ def make_settings(**overrides: object) -> Settings:
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)  # type: ignore[arg-type]
+
+
+# The effective (row-over-env) web-research config threaded into every web_search
+# call (issue #74). row=None reproduces the pre-change env-only behavior; the ON
+# constant carries the SECRET_KEY api_key so the redaction assertions still hold.
+EWEB_ON = resolve_effective_web_research(None, make_settings())
+EWEB_OFF = resolve_effective_web_research(None, Settings(_env_file=None))
 
 
 def budget(searches: int = 5) -> ResearchBudget:
@@ -74,7 +82,7 @@ def test_normalizes_dedupes_and_caps_results() -> None:
     }
     provider = provider_with(payload)
     out = web_search(
-        "podcast host name", settings=make_settings(), budget=budget(),
+        "podcast host name", settings=make_settings(), effective_web=EWEB_ON, budget=budget(),
         attribution=ATTR, provider=provider,
     )
     assert out.ok is True
@@ -98,7 +106,7 @@ def test_non_conforming_result_urls_are_dropped_and_counted() -> None:
     }
     provider = provider_with(payload)
     out = web_search(
-        "query", settings=make_settings(), budget=budget(),
+        "query", settings=make_settings(), effective_web=EWEB_ON, budget=budget(),
         attribution=ATTR, provider=provider,
     )
     assert out.ok is True
@@ -118,7 +126,7 @@ def test_hostile_titles_and_snippets_are_sanitized() -> None:
     }
     provider = provider_with(payload)
     out = web_search(
-        "q", settings=make_settings(), budget=budget(), attribution=ATTR,
+        "q", settings=make_settings(), effective_web=EWEB_ON, budget=budget(), attribution=ATTR,
         provider=provider,
     )
     result = out.results[0]
@@ -129,7 +137,7 @@ def test_hostile_titles_and_snippets_are_sanitized() -> None:
 def test_api_key_sent_as_header_never_in_url_or_errors() -> None:
     provider = provider_with({"results": []})
     web_search(
-        "q", settings=make_settings(), budget=budget(), attribution=ATTR,
+        "q", settings=make_settings(), effective_web=EWEB_ON, budget=budget(), attribution=ATTR,
         provider=provider,
     )
     request = provider.requests_seen[0]  # type: ignore[attr-defined]
@@ -151,7 +159,7 @@ def test_malformed_or_failing_provider_is_structured_error(
 ) -> None:
     provider = provider_with(**payload_kwargs)  # type: ignore[arg-type]
     out = web_search(
-        "sensitive query text", settings=make_settings(), budget=budget(),
+        "sensitive query text", settings=make_settings(), effective_web=EWEB_ON, budget=budget(),
         attribution=ATTR, provider=provider,
     )
     if payload_kwargs.get("status") == 503 or "results" not in str(payload_kwargs):
@@ -166,7 +174,7 @@ def test_oversized_provider_response_is_refused() -> None:
     huge = json.dumps({"results": [], "pad": "x" * (1024 * 1024 + 10)})
     provider = provider_with(huge)
     out = web_search(
-        "q", settings=make_settings(), budget=budget(), attribution=ATTR,
+        "q", settings=make_settings(), effective_web=EWEB_ON, budget=budget(), attribution=ATTR,
         provider=provider,
     )
     assert out.error == "provider_error"
@@ -175,26 +183,26 @@ def test_oversized_provider_response_is_refused() -> None:
 
 def test_disabled_and_budget_and_query_bounds() -> None:
     out = web_search(
-        "q", settings=Settings(_env_file=None), budget=budget(), attribution=ATTR,
-        provider=provider_with({"results": []}),
+        "q", settings=Settings(_env_file=None), effective_web=EWEB_OFF, budget=budget(),
+        attribution=ATTR, provider=provider_with({"results": []}),
     )
     assert out.error == "disabled"
 
     b = budget(searches=0)
     out2 = web_search(
-        "q", settings=make_settings(), budget=b, attribution=ATTR,
+        "q", settings=make_settings(), effective_web=EWEB_ON, budget=b, attribution=ATTR,
         provider=provider_with({"results": []}),
     )
     assert out2.error == "budget_exhausted"
 
     out3 = web_search(
-        "", settings=make_settings(), budget=budget(), attribution=ATTR,
+        "", settings=make_settings(), effective_web=EWEB_ON, budget=budget(), attribution=ATTR,
         provider=provider_with({"results": []}),
     )
     assert out3.error == "invalid_input"
     out4 = web_search(
-        "x" * 600, settings=make_settings(), budget=budget(), attribution=ATTR,
-        provider=provider_with({"results": []}),
+        "x" * 600, settings=make_settings(), effective_web=EWEB_ON, budget=budget(),
+        attribution=ATTR, provider=provider_with({"results": []}),
     )
     assert out4.error == "invalid_input"
 
@@ -208,8 +216,8 @@ def test_max_results_cap_is_enforced() -> None:
     }
     provider = provider_with(payload)
     out = web_search(
-        "q", settings=make_settings(web_search_max_results=3), budget=budget(),
-        attribution=ATTR, provider=provider,
+        "q", settings=make_settings(web_search_max_results=3), effective_web=EWEB_ON,
+        budget=budget(), attribution=ATTR, provider=provider,
     )
     assert len(out.results) == 3
 
@@ -218,7 +226,7 @@ def test_query_never_in_attribution_log(caplog: pytest.LogCaptureFixture) -> Non
     provider = provider_with({"results": []})
     with caplog.at_level("INFO", logger="voxint.research.search"):
         web_search(
-            "operator secret research terms", settings=make_settings(),
+            "operator secret research terms", settings=make_settings(), effective_web=EWEB_ON,
             budget=budget(), attribution=ATTR, provider=provider,
         )
     lines = [r.getMessage() for r in caplog.records if "web_search" in r.getMessage()]
@@ -261,7 +269,7 @@ def test_percent_host_and_fragment_results_use_the_full_research_gate() -> None:
     }
     provider = provider_with(payload)
     out = web_search(
-        "q", settings=make_settings(), budget=budget(), attribution=ATTR,
+        "q", settings=make_settings(), effective_web=EWEB_ON, budget=budget(), attribution=ATTR,
         provider=provider,
     )
     assert [r.url for r in out.results] == ["https://ok.example.com/p"]

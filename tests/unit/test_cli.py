@@ -1,10 +1,13 @@
+import contextlib
 import io
 import uuid
+from collections.abc import Iterator
 
 import pytest
 
 from voxint import __version__
 from voxint.cli import main
+from voxint.db.models import AppSettings
 
 
 def _block_db(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15,6 +18,32 @@ def _block_db(monkeypatch: pytest.MonkeyPatch) -> None:
         raise AssertionError("build_engine must not run on this path")
 
     monkeypatch.setattr(db_session, "build_engine", _no_db)
+
+
+def _stub_db_row(monkeypatch: pytest.MonkeyPatch, row: AppSettings | None = None) -> None:
+    """Stub the CLI's DB-session layer so effective-flag resolution (issue #74)
+    runs without a real database, using ``row`` (default ``None`` ⇒ env governs)
+    as the resolved ``app_settings`` singleton.
+
+    The #74 CLI gates read the effective (row-over-env) value from the DB rather
+    than a bare env flag (decision 6: participate in effective settings, fail
+    honestly on an unavailable DB — never silently env-fallback). These unit
+    tests inject the row directly so they stay DB-free while still exercising the
+    resolved gate.
+    """
+    import voxint.app_settings as app_settings
+    import voxint.cli as cli
+    import voxint.db.session as db_session
+
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (object(), 0))
+    monkeypatch.setattr(db_session, "build_session_factory", lambda _e: object())
+
+    @contextlib.contextmanager
+    def _scope(_factory: object) -> Iterator[object]:
+        yield object()
+
+    monkeypatch.setattr(db_session, "session_scope", _scope)
+    monkeypatch.setattr(app_settings, "get_app_settings", lambda _s: row)
 
 
 def test_no_args_prints_help_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
@@ -32,16 +61,18 @@ def test_version_flag(capsys: pytest.CaptureFixture[str]) -> None:
 def test_fetch_refuses_when_ytdlp_disabled(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # ytdlp_enabled is enforced at the submission surface: the CLI refuses with a
-    # nonzero exit BEFORE it opens a DB session — proven by making build_engine
-    # explode if it is ever reached. No DB needed, so this stays a unit test.
+    # ytdlp_enabled is now resolved as the effective (row-over-env) value from the
+    # DB (issue #74, decision 6): a UI toggle governs the CLI, so the gate must
+    # read the row rather than a bare env flag. Env-disabled with no stored
+    # override refuses...
     monkeypatch.setenv("YTDLP_ENABLED", "false")
-    import voxint.db.session as db_session
+    _stub_db_row(monkeypatch, row=None)  # no override → env governs
+    assert main(["fetch", "https://www.example.com/video"]) == 2
+    assert "disabled" in capsys.readouterr().out
 
-    def _no_db(*_args: object, **_kwargs: object) -> object:
-        raise AssertionError("build_engine must not run when ingestion is disabled")
-
-    monkeypatch.setattr(db_session, "build_engine", _no_db)
+    # ...and a stored row disable wins over an env enable.
+    monkeypatch.setenv("YTDLP_ENABLED", "true")
+    _stub_db_row(monkeypatch, row=AppSettings(id=1, ytdlp_enabled=False))
     assert main(["fetch", "https://www.example.com/video"]) == 2
     assert "disabled" in capsys.readouterr().out
 
@@ -331,9 +362,12 @@ def test_watch_keyboardinterrupt_returns_130(monkeypatch: pytest.MonkeyPatch) ->
 def test_research_refuses_when_disabled_before_any_network(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # voxint_web_research is enforced at the surface: exit 2 BEFORE any DNS or
-    # socket work — proven by making getaddrinfo explode if ever reached.
+    # voxint_web_research is enforced at the surface as the effective (row-over-env)
+    # value resolved from the DB (issue #74): exit 2 BEFORE any DNS or socket work
+    # — proven by making getaddrinfo explode if ever reached. Row=None ⇒ env (false)
+    # governs.
     monkeypatch.setenv("VOXINT_WEB_RESEARCH", "false")
+    _stub_db_row(monkeypatch, row=None)
     import socket
 
     def _no_dns(*_args: object, **_kwargs: object) -> object:
@@ -369,6 +403,7 @@ def test_research_search_prints_normalized_results(
         )
 
     monkeypatch.setattr(research, "web_search", _fake_search)
+    _stub_db_row(monkeypatch)  # env governs (voxint_web_research=true)
     assert main(["research", "search", "hydronics podcast"]) == 0
     out = capsys.readouterr().out
     assert "https://a.example.com/" in out
@@ -399,6 +434,7 @@ def test_research_read_prints_extracted_text(
         )
 
     monkeypatch.setattr(research, "read_url", _fake_read)
+    _stub_db_row(monkeypatch)  # env governs (voxint_web_research=true)
     assert main(["research", "read", "https://a.example.com/page"]) == 0
     out = capsys.readouterr().out
     assert "# Page" in out
@@ -422,6 +458,7 @@ def test_research_read_failure_exits_2_without_url(
         )
 
     monkeypatch.setattr(research, "read_url", _fake_read)
+    _stub_db_row(monkeypatch)  # env governs (voxint_web_research=true)
     assert main(["research", "read", "https://x.example.com/?token=SECRETQ"]) == 2
     out = capsys.readouterr().out
     assert "policy_refused" in out
@@ -450,6 +487,7 @@ def test_research_read_prints_query_stripped_final_url(
         )
 
     monkeypatch.setattr(research, "read_url", _fake_read)
+    _stub_db_row(monkeypatch)  # env governs (voxint_web_research=true)
     assert main(["research", "read", "https://a.example.com/doc"]) == 0
     out = capsys.readouterr().out
     assert "SECRETQTOKEN" not in out
@@ -474,5 +512,53 @@ def test_research_read_accepts_url_on_stdin(
         )
 
     monkeypatch.setattr(research, "read_url", _fake_read)
+    _stub_db_row(monkeypatch)  # env governs (voxint_web_research=true)
     assert main(["research", "read"]) == 0
     assert "piped" in capsys.readouterr().out
+
+
+def test_research_fails_honestly_when_db_unavailable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Decision 6: the CLI resolves the effective gate from the DB and FAILS
+    # HONESTLY when the DB is unavailable — it must never silently fall back to
+    # env (which could bypass a UI disable). Env has research ON, but the engine
+    # cannot be built, so the command exits 2 and touches no network.
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import socket
+
+    import voxint.cli as cli
+    import voxint.research as research
+
+    def _no_engine(**_k: object) -> object:
+        return (None, 2)
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("no network or search when the DB is unavailable")
+
+    monkeypatch.setattr(cli, "_engine_or_report", _no_engine)
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    monkeypatch.setattr(research, "web_search", _boom)
+    assert main(["research", "search", "anything"]) == 2
+
+
+def test_research_search_row_disable_wins_over_env_enable(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A stored row disable must veto an env enable (the arc's whole point): env
+    # has research ON, the row turns it OFF, so the command refuses before DNS.
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import socket
+
+    import voxint.research as research
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("must not reach network/search when row disables research")
+
+    _stub_db_row(monkeypatch, row=AppSettings(id=1, voxint_web_research=False))
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    monkeypatch.setattr(research, "web_search", _boom)
+    assert main(["research", "search", "anything"]) == 2
+    assert "disabled" in capsys.readouterr().out

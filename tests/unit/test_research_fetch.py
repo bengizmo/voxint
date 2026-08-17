@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 import httpx
 import pytest
 
+from voxint.app_settings import resolve_effective_web_research
 from voxint.config import Settings
 from voxint.media.netcheck import Resolver
 from voxint.research import fetch as fetch_mod
@@ -33,6 +34,14 @@ def make_settings(**overrides: object) -> Settings:
     }
     defaults.update(overrides)
     return Settings(_env_file=None, **defaults)  # type: ignore[arg-type]
+
+
+# The effective (row-over-env) web-research config threaded into every read_url
+# call (issue #74). row=None reproduces the pre-change env-only behavior; the
+# read_* overrides on individual make_settings() calls do not affect it (it reads
+# only voxint_web_research/base_url/api_key), so one ON constant serves them all.
+EWEB_ON = resolve_effective_web_research(None, make_settings())
+EWEB_OFF = resolve_effective_web_research(None, Settings(_env_file=None))
 
 
 def budget(reads: int = 5) -> ResearchBudget:
@@ -94,6 +103,7 @@ def test_happy_path_pins_ip_and_preserves_host_identity() -> None:
     out = read_url(
         "https://example.com:8443/page?q=1#frag",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -120,6 +130,7 @@ def test_disabled_returns_structured_outcome_with_zero_network() -> None:
     out = read_url(
         "https://example.com/",
         settings=Settings(_env_file=None),  # voxint_web_research=False
+        effective_web=EWEB_OFF,
         budget=budget(),
         attribution=ATTR,
         client_factory=exploding_factory,
@@ -134,6 +145,7 @@ def test_budget_exhausted_is_structured_and_networkless() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=b,
         attribution=ATTR,
         client_factory=exploding_factory,
@@ -147,6 +159,7 @@ def test_invalid_input_urls_are_refused_before_any_network() -> None:
         out = read_url(
             url,
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=budget(),
             attribution=ATTR,
             client_factory=exploding_factory,
@@ -160,6 +173,7 @@ def test_host_resolving_private_is_policy_refused() -> None:
         out = read_url(
             "https://internal.example.com/",
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=budget(),
             attribution=ATTR,
             client_factory=exploding_factory,  # refusal happens before any client
@@ -180,6 +194,7 @@ def test_redirect_hop_rebinding_to_metadata_is_refused() -> None:
     out = read_url(
         "https://a.example.com/start",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -206,6 +221,7 @@ def test_relative_redirect_resolves_against_logical_url_and_repins() -> None:
     out = read_url(
         "https://example.com/start",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -236,6 +252,7 @@ def test_hostile_redirect_targets_are_redirect_invalid(location: str) -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -258,6 +275,7 @@ def test_missing_and_duplicate_location_are_redirect_invalid() -> None:
         out = read_url(
             "https://example.com/",
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=budget(),
             attribution=ATTR,
             client_factory=factory_for(handler),
@@ -274,6 +292,7 @@ def test_redirect_limit_is_enforced() -> None:
     out = read_url(
         "https://example.com/0",
         settings=make_settings(web_read_max_redirects=3),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -293,6 +312,7 @@ def test_non_identity_content_encoding_is_refused() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -310,6 +330,7 @@ def test_mime_allowlist_refuses_non_text(content_type: str | None) -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -331,6 +352,7 @@ def test_declared_oversize_refused_early_and_lying_length_caught_streaming() -> 
     out = read_url(
         "https://example.com/",
         settings=settings,
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(declared),
@@ -354,6 +376,7 @@ def test_declared_oversize_refused_early_and_lying_length_caught_streaming() -> 
     out2 = read_url(
         "https://example.com/",
         settings=settings,
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(lying),
@@ -372,6 +395,7 @@ def test_deadline_expiry_yields_timeout_outcome() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -388,6 +412,7 @@ def test_http_error_status_is_terminal_with_status_code() -> None:
     out = read_url(
         "https://example.com/missing",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -413,6 +438,7 @@ def test_transport_error_retries_only_within_vetted_set() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -430,6 +456,7 @@ def test_all_vetted_addresses_failing_is_transport_error() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -446,6 +473,7 @@ def test_concurrency_limit_is_structured() -> None:
         out = read_url(
             "https://example.com/",
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=budget(),
             attribution=ATTR,
             client_factory=exploding_factory,
@@ -465,6 +493,7 @@ def test_html_extraction_end_to_end_strips_script_and_truncates() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(web_read_max_text_chars=200),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -504,6 +533,7 @@ def test_hygiene_no_refusal_ever_carries_url_or_query(
     out = read_url(
         url,
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -525,6 +555,7 @@ def test_attribution_log_lines_are_host_only(caplog: pytest.LogCaptureFixture) -
         read_url(
             f"https://example.com/secret/path?{SECRET_QUERY}",
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=budget(),
             attribution=ATTR,
             client_factory=factory_for(handler),
@@ -558,6 +589,7 @@ def test_idn_host_is_resolved_and_pinned_via_punycode() -> None:
     out = read_url(
         "https://bücher.example/x",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -583,6 +615,7 @@ def test_read_consumes_exactly_one_budget_unit_even_across_hops() -> None:
     out = read_url(
         "https://example.com/start",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=b,
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -599,6 +632,7 @@ def test_invalid_input_and_concurrency_do_not_burn_read_budget() -> None:
     out = read_url(
         "http://127.0.0.1/x",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=b,
         attribution=ATTR,
         client_factory=exploding_factory,
@@ -614,6 +648,7 @@ def test_invalid_input_and_concurrency_do_not_burn_read_budget() -> None:
         out2 = read_url(
             "https://example.com/",
             settings=make_settings(),
+            effective_web=EWEB_ON,
             budget=b,
             attribution=ATTR,
             client_factory=exploding_factory,
@@ -646,6 +681,7 @@ def test_ipv6_vetted_address_is_pinned_with_brackets() -> None:
     out = read_url(
         "https://example.com:8443/page",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -672,6 +708,7 @@ def test_ipv6_literal_logical_url_pins_and_sets_bracketed_host_header() -> None:
     out = read_url(
         f"http://[{PUBLIC_V6}]:8080/x",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -695,6 +732,7 @@ def test_unparseable_location_is_a_structured_outcome_not_an_exception() -> None
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -721,6 +759,7 @@ def test_timeout_on_first_vetted_address_fails_over_to_second() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -738,6 +777,7 @@ def test_all_addresses_timing_out_reports_timeout_not_transport() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),
@@ -759,6 +799,7 @@ def test_mid_body_too_large_reports_bytes_fetched() -> None:
     out = read_url(
         "https://example.com/",
         settings=make_settings(web_read_max_bytes=4096),
+        effective_web=EWEB_ON,
         budget=budget(),
         attribution=ATTR,
         client_factory=factory_for(handler),

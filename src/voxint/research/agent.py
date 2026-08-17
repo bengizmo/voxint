@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
+from voxint.app_settings import EffectiveWebResearch
 from voxint.clients.llm import ChatMessage, LLMError
 from voxint.config import Settings
 from voxint.db.models import ClaimField
@@ -452,6 +453,7 @@ def run_research_loop(
     *,
     llm: ChatJsonClient,
     settings: Settings,
+    effective_web: EffectiveWebResearch,
     seed: ResearchSeed,
     roster_lookup: Callable[[str], Sequence[RosterMatch]],
     should_cancel: Callable[[], bool] = lambda: False,
@@ -560,6 +562,7 @@ def run_research_loop(
             outcome = web_search(
                 action.argument,
                 settings=settings,
+                effective_web=effective_web,
                 budget=budget,
                 attribution=_ATTRIBUTION,
                 provider=search_provider,
@@ -593,6 +596,7 @@ def run_research_loop(
             fetched = read_url(
                 action.argument,
                 settings=settings,
+                effective_web=effective_web,
                 budget=budget,
                 attribution=_ATTRIBUTION,
                 **kwargs,  # type: ignore[arg-type]

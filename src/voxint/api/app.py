@@ -155,7 +155,10 @@ from voxint.app_settings import (
     llm_endpoint_form_fields,
     mark_tutorial_complete,
     ready_tutorial_run_id,
+    resolve_effective_enrichment_names_enabled,
     resolve_effective_llm_api_key,
+    resolve_effective_source_authority_domains,
+    resolve_effective_ytdlp_enabled,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -954,7 +957,9 @@ def _workbench_context(
         # Review-priority + component breakdown per representative (#42), keyed by
         # candidate id so labels.html can render it without changing the hint shape.
         "name_triage": name_triage,
-        "names_enabled": settings.enrichment_names_enabled,
+        "names_enabled": resolve_effective_enrichment_names_enabled(
+            get_app_settings(session), settings
+        ),
         "names_last_run": latest_producer_run(session, NAMES_PRODUCER, EnrichmentScope.run(run.id)),
         # An accepted per-label suggestion prefills the Enroll input (editable,
         # never auto-submitted) — the one-click path from hint to enrollment.
@@ -1301,7 +1306,9 @@ def _research_state(
         for view in candidates_for_speaker(session, speaker.id)
         if view.candidate.field in _PROFILE_FIELDS
     ]
-    authority = parse_authority_domains(settings.source_authority_domains)
+    authority = parse_authority_domains(
+        resolve_effective_source_authority_domains(get_app_settings(session), settings)
+    )
     triage: dict[uuid.UUID, TriageScore] = {
         view.candidate.id: _triage_for(view, voice=None, peer_count=1, authority=authority)
         for view in views
@@ -1871,7 +1878,9 @@ def _register_routes(app: FastAPI) -> None:
                 "csrf_fetch": mint_csrf_token(request.app.state.csrf_secret, CSRF_FETCH),
                 # Gate the URL-fetch form: when off, it renders disabled (POST /fetch
                 # also refuses with 403), matching the CLI's ytdlp_enabled refusal.
-                "ytdlp_enabled": settings.ytdlp_enabled,
+                "ytdlp_enabled": resolve_effective_ytdlp_enabled(
+                    get_app_settings(session), settings
+                ),
                 # Injected clock for the relative-age render (format_age(now=…)).
                 "now": datetime.now(UTC),
                 "active_nav": "runs",
@@ -1937,7 +1946,7 @@ def _register_routes(app: FastAPI) -> None:
         # row is created and nothing is published. (The worker's ACQUIRE stage
         # never consults the flag — an already-queued URL run still completes.)
         settings: Settings = request.app.state.settings
-        if not settings.ytdlp_enabled:
+        if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
             # Generic message — never echo the submitted URL into an error body.
             raise HTTPException(status_code=403, detail="URL ingestion is disabled")
         # Mirrors POST /submit: the ingest service is broker-free and does its own
@@ -2908,7 +2917,7 @@ def _register_routes(app: FastAPI) -> None:
         Claim-token-gated like every other workbench mutation.
         """
         settings: Settings = request.app.state.settings
-        if not settings.enrichment_names_enabled:
+        if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
             raise HTTPException(status_code=404, detail="name enrichment is disabled")
         try:
             run = verify_claim(session, run_id, token)
@@ -2937,7 +2946,7 @@ def _register_routes(app: FastAPI) -> None:
         adjudication ruling is created (drafts are suggestions about identity).
         """
         settings: Settings = request.app.state.settings
-        if not settings.enrichment_names_enabled:
+        if not resolve_effective_enrichment_names_enabled(get_app_settings(session), settings):
             raise HTTPException(status_code=404, detail="name enrichment is disabled")
         try:
             run = verify_claim(session, run_id, token)

@@ -348,18 +348,15 @@ def _fetch(args: argparse.Namespace) -> int:
     to the terminal. The download itself happens later in the worker's ACQUIRE
     stage — this only creates the durable QUEUED run.
     """
+    from voxint.app_settings import get_app_settings, resolve_effective_ytdlp_enabled
     from voxint.config import get_settings
-    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.db.session import build_session_factory, session_scope
     from voxint.ingest import (
         UploadConflictError,
         UploadValidationError,
         UrlValidationError,
         submit_url,
     )
-
-    if not get_settings().ytdlp_enabled:
-        print("error: URL ingestion is disabled (ytdlp_enabled is off)")
-        return 2
 
     # Resolve the URL from argv or, when the positional is omitted, one line of
     # stdin. A URL passed positionally is exposed in ps / /proc/<pid>/cmdline and
@@ -371,12 +368,23 @@ def _fetch(args: argparse.Namespace) -> int:
         print("error: no URL provided (pass it as an argument or on stdin)")
         return 2
 
-    factory = build_session_factory(build_engine())
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    settings = get_settings()
     # No form here, so mint the idempotency id per invocation; it namespaces the
     # pre-assigned source_path the worker's ACQUIRE stage will download into.
     submission_id = uuid.uuid4().hex
     try:
         with session_scope(factory) as session:
+            # Effective (row-over-env) gate resolved from the DB so a UI disable
+            # governs the CLI too (issue #74) — no silent env fallback. The DB is
+            # already required to create the run, so an unavailable DB fails
+            # honestly above rather than bypassing a UI-disabled capability.
+            if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
+                print("error: URL ingestion is disabled (ytdlp_enabled is off)")
+                return 2
             run_id = submit_url(session, url=url, submission_id=submission_id).id
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
@@ -513,7 +521,9 @@ def _research_search(args: argparse.Namespace) -> int:
     so an operator can verify the provider config and egress policy by hand
     before anything (issue #40) consumes the tools programmatically.
     """
+    from voxint.app_settings import get_app_settings, resolve_effective_web_research
     from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory, session_scope
     from voxint.research import Attribution, ResearchBudget, web_search
 
     try:
@@ -521,12 +531,22 @@ def _research_search(args: argparse.Namespace) -> int:
     except SettingsError as exc:
         print(f"error: {exc}")
         return 2
-    if not settings.voxint_web_research:
+    # Resolve the effective (row-over-env) web-research config from the DB before
+    # any network I/O (issue #74) — a UI enable/endpoint must govern the CLI too,
+    # and a UI disable must not be bypassed. Fail honestly if the DB is
+    # unavailable rather than falling back to env.
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    with session_scope(build_session_factory(engine)) as session:
+        effective_web = resolve_effective_web_research(get_app_settings(session), settings)
+    if not effective_web.enabled:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
     outcome = web_search(
         args.query,
         settings=settings,
+        effective_web=effective_web,
         budget=ResearchBudget(max_searches=1, max_reads=0),
         attribution=Attribution(feature="cli", reason="operator-search"),
     )
@@ -556,7 +576,9 @@ def _research_read(args: argparse.Namespace) -> int:
     """
     from urllib.parse import urlsplit, urlunsplit
 
+    from voxint.app_settings import get_app_settings, resolve_effective_web_research
     from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_session_factory, session_scope
     from voxint.research import Attribution, ResearchBudget, read_url
 
     try:
@@ -564,7 +586,15 @@ def _research_read(args: argparse.Namespace) -> int:
     except SettingsError as exc:
         print(f"error: {exc}")
         return 2
-    if not settings.voxint_web_research:
+    # Effective (row-over-env) web-research config resolved from the DB before any
+    # network I/O (issue #74) — a UI enable/endpoint governs the CLI, a UI disable
+    # is honored, and an unavailable DB fails honestly rather than env-fallback.
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    with session_scope(build_session_factory(engine)) as session:
+        effective_web = resolve_effective_web_research(get_app_settings(session), settings)
+    if not effective_web.enabled:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
     url = args.url if args.url is not None else sys.stdin.readline().strip()
@@ -574,6 +604,7 @@ def _research_read(args: argparse.Namespace) -> int:
     outcome = read_url(
         url,
         settings=settings,
+        effective_web=effective_web,
         budget=ResearchBudget(max_searches=0, max_reads=1),
         attribution=Attribution(feature="cli", reason="operator-read"),
     )
@@ -858,6 +889,12 @@ def _enrich_names(args: argparse.Namespace) -> int:
 
     from sqlalchemy import func, select
 
+    from voxint.app_settings import (
+        get_app_settings,
+        resolve_effective_enrichment_names_enabled,
+        resolve_effective_enrichment_names_llm_enabled,
+        resolve_effective_llm_enabled,
+    )
     from voxint.config import get_settings
     from voxint.db.models import EnrichmentCandidate, PipelineRun, RunStatus
     from voxint.db.session import build_session_factory, session_scope
@@ -867,13 +904,23 @@ def _enrich_names(args: argparse.Namespace) -> int:
     )
 
     settings = get_settings()
-    if not settings.enrichment_names_enabled:
+    factory = build_session_factory(engine)
+    # Effective (row-over-env) gates resolved from the DB so a UI toggle governs
+    # the CLI too (issue #74) — no silent env fallback (the DB is already required
+    # for the sweep, so an unavailable DB fails honestly rather than bypassing a
+    # UI-disabled capability).
+    with session_scope(factory) as gate_session:
+        gate_row = get_app_settings(gate_session)
+        names_enabled = resolve_effective_enrichment_names_enabled(gate_row, settings)
+        names_llm_enabled = resolve_effective_enrichment_names_llm_enabled(gate_row, settings)
+        llm_enabled = resolve_effective_llm_enabled(gate_row, settings)
+    if not names_enabled:
         print(
             "error: name enrichment is disabled (ENRICHMENT_NAMES_ENABLED=false)",
             file=sys.stderr,
         )
         return 2
-    if args.llm and not (settings.enrichment_names_llm_enabled and settings.llm_enabled):
+    if args.llm and not (names_llm_enabled and llm_enabled):
         print(
             "error: the LLM name pass requires ENRICHMENT_NAMES_LLM_ENABLED=true"
             " and LLM_ENABLED=true",
@@ -882,7 +929,6 @@ def _enrich_names(args: argparse.Namespace) -> int:
         return 2
 
     try:
-        factory = build_session_factory(engine)
         if args.run_id is not None:
             run_ids = [args.run_id]
         else:
