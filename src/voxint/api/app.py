@@ -38,7 +38,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from voxint import __version__
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
-from voxint.adjudication.ledger import ConflictingReplayError, record_decision
+from voxint.adjudication.ledger import (
+    ConflictingReplayError,
+    WordRangeError,
+    record_decision,
+)
 from voxint.adjudication.merge import (
     MergeConflictError,
     MergeError,
@@ -67,6 +71,7 @@ from voxint.adjudication.slots import (
 )
 from voxint.adjudication.splits import (
     UnsplittableError,
+    derive_children,
     record_split,
     splittable_words,
 )
@@ -1166,6 +1171,31 @@ def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
         ).first()
         is not None
     )
+
+
+def _segment_child_ranges(
+    session: Session, segment: TranscriptSegment
+) -> set[tuple[int, int]]:
+    """The half-open ``(word_start, word_end)`` ranges of a segment's current
+    derived split children (issue #59 slice 3).
+
+    The reassign route validates a submitted range against this set so a ruling
+    can only target a child that actually exists right now — an arbitrary range
+    would write a ledger row the read path never applies (it matches children by
+    exact coordinates). Empty for an unsplit or unsplittable segment."""
+    cuts = list(
+        session.execute(
+            select(SegmentSplitBoundary.word_index).where(
+                SegmentSplitBoundary.parent_segment_id == segment.id
+            )
+        ).scalars()
+    )
+    if not cuts:
+        return set()
+    children = derive_children(segment, cuts)
+    if children is None or len(children) < 2:
+        return set()
+    return {(child.word_start, child.word_end) for child in children}
 
 
 def _segment_is_corrected(session: Session, segment_id: uuid.UUID) -> bool:
@@ -2993,8 +3023,11 @@ def _register_routes(app: FastAPI) -> None:
         nonce: Annotated[str, Form(min_length=8, max_length=64)],
         action: Annotated[str, Form()],
         speaker_id: Annotated[uuid.UUID | None, Form()] = None,
+        start_word_index: Annotated[int | None, Form()] = None,
+        end_word_index: Annotated[int | None, Form()] = None,
     ) -> Response:
-        """Two-scope relabel, THIS-SEGMENT scope (issue #54 Phase B).
+        """Two-scope relabel, THIS-SEGMENT scope (issue #54 Phase B), optionally
+        narrowed to a word-range (issue #59 slice 3).
 
         Overrides one transcript segment's attribution without touching the rest
         of its label. ``action`` is ``assign`` (a speaker just for this segment)
@@ -3003,6 +3036,13 @@ def _register_routes(app: FastAPI) -> None:
         server-side, never trusted from the client. Claim-gated and idempotent
         like every workbench ruling; a later whole-label ruling leaves the
         override intact, and inherit tracks the label live rather than freezing.
+
+        With ``start_word_index``/``end_word_index`` the ruling scopes just that
+        half-open ``[start, end)`` word-range — reassigning ONE derived split
+        child. The range must match a child that currently exists (validated
+        against the segment's live cut set), so a ruling can only target a real
+        partition, never an arbitrary span the read path would ignore. Both
+        indices are set together or both omitted (whole-segment scope).
         """
         try:
             run = verify_claim(session, run_id, token, for_update=True)
@@ -3020,6 +3060,11 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=422, detail="assign requires speaker_id; inherit forbids it"
             )
+        if (start_word_index is None) != (end_word_index is None):
+            raise HTTPException(
+                status_code=422,
+                detail="start_word_index and end_word_index must be set together",
+            )
         segment = session.get(TranscriptSegment, segment_id)
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -3027,6 +3072,18 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=400, detail="segment has no diarization label to override"
             )
+        if start_word_index is not None and end_word_index is not None:
+            # A ranged ruling may only target a child that exists right now, so it
+            # can never write a row the read path silently drops.
+            child_ranges = _segment_child_ranges(session, segment)
+            if (start_word_index, end_word_index) not in child_ranges:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"word-range [{start_word_index}, {end_word_index}) is not a "
+                        "current split child of this segment; re-split first"
+                    ),
+                )
         if speaker_id is not None:
             speaker = session.execute(
                 select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
@@ -3051,9 +3108,13 @@ def _register_routes(app: FastAPI) -> None:
                 idempotency_key=nonce,
                 speaker_id=speaker_id,
                 transcript_segment_id=segment_id,
+                start_word_index=start_word_index,
+                end_word_index=end_word_index,
             )
         except ConflictingReplayError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WordRangeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _labels_response(request, session, run, token)
 
     def _segment_review_json(

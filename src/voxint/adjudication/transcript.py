@@ -20,6 +20,7 @@ from voxint.adjudication.resolver import (
     label_states,
     review_states,
     segment_states,
+    word_range_states,
 )
 from voxint.adjudication.splits import boundaries_for_run, derive_children
 from voxint.db.models import TranscriptSegment
@@ -140,6 +141,9 @@ def attributed_transcript(
     """
     states = {s.label: s for s in label_states(session, run_id)}
     overrides = segment_states(session, run_id)
+    # Per-word-range overrides (issue #59 slice 3): a reassigned split child wins
+    # over its parent's whole-segment/label speaker, for its exact range only.
+    range_overrides = word_range_states(session, run_id)
     review = review_states(session, run_id)
     # Every split boundary of the run, grouped by parent id, in one query — so the
     # child expansion below adds no per-segment round-trip (issue #59).
@@ -174,11 +178,22 @@ def attributed_transcript(
         children = derive_children(seg, cuts) if cuts else None
         if children is not None and len(children) > 1:
             for child_i, child in enumerate(children):
+                # Most-specific scope wins: a word-range override for this exact
+                # child range beats the parent's whole-segment/label speaker; with
+                # no such override the child inherits the parent's ``speaker``.
+                child_override = range_overrides.get(
+                    (seg.id, child.word_start, child.word_end)
+                )
+                child_speaker = (
+                    segment_speaker(child_override, seg)
+                    if child_override is not None
+                    else speaker
+                )
                 lines.append(
                     TranscriptLine(
                         start_seconds=child.start_seconds,
                         end_seconds=child.end_seconds,
-                        speaker=speaker,
+                        speaker=child_speaker,
                         text=child.text,
                         diarization_label=seg.diarization_label,
                         confidence=seg.confidence,

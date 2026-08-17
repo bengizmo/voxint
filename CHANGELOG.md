@@ -76,6 +76,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   rather than offering a control that would fail. Splitting needs the browser
   island; with JavaScript off the transcript still lists any already-derived
   child lines.
+- **Sub-segment speaker reassignment** (#59, slice 3, backend): a derived split
+  child (or any immutable word-range of a segment) can be reassigned to a
+  different speaker, so the two halves of a mis-split segment can carry the two
+  real speakers instead of sharing the parent's one. The scope is an append-only
+  ledger ruling keyed on the *immutable parent segment id + a half-open
+  `[start, end)` word-range* (nullable `start_word_index`/`end_word_index` on
+  `adjudication_decisions`, migration 0025) — never a foreign key to a disposable
+  split-boundary row — so a reassignment survives re-split/un-split. Read-time
+  precedence is most-specific-wins: a word-range override beats a whole-segment
+  override beats the label, and an `inherit` on the exact range removes it live
+  (append-only, never a frozen copy). Applied through the one shared read path
+  (`attributed_transcript`), so the transcript export reflects a reassigned child
+  too. The `POST /review/{run}/segments/{seg}/relabel` route gains an optional
+  `start_word_index`/`end_word_index`; a range is accepted only when it matches a
+  *current* split child (never an arbitrary span the read path would ignore) and
+  is validated against the parent's word count. Same claim-lock + nonce
+  idempotency as every other review mutation. (Frontend affordance and
+  un-split/re-split of an already-reassigned range are later work.)
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a
