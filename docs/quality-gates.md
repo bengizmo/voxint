@@ -92,6 +92,14 @@ non-technical operator mis-setting it would distrust the signal); refine it
 against a real-corpus histogram before exposing any tuning UI. This reads existing
 model output and does not touch inference — parity/contract gates are unaffected.
 
+Draft **review priority** (issue #42, [`enrichment-triage.md`](enrichment-triage.md))
+is the same kind of thing for enrichment drafts: a read-time, explainable
+attention-ordering score fused from name-match, voice support, independent
+domains, source authority, and cross-source agreement. It is capped below
+certainty, never stored, never auto-accepts, and is compared only within one
+review surface. Being review ordering rather than inference, it too leaves
+parity gates unaffected.
+
 ## Named ≠ grounded
 
 An LLM name hint (`method = 'llm_hint'`, `proposed_name`) is review-side

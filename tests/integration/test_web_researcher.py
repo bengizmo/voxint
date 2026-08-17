@@ -136,6 +136,57 @@ def test_job_records_grounded_drafts_and_succeeds(
         assert run.config is not None and run.config["job_id"] == str(job_id)
 
 
+def test_coalesced_claim_persists_one_draft_per_source(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A value grounded by two independent sources becomes ONE candidate with
+    two evidence rows — the corroboration signal triage (#42) reads."""
+    from datetime import UTC, datetime
+
+    from voxint.db.models import ClaimField
+    from voxint.enrichment.producers.web_researcher import record_research_outcome
+    from voxint.research.agent import GroundedClaim, GroundedSource, ResearchConclusion
+
+    speaker_id = seed_speaker(session_factory)
+    now = datetime.now(tz=UTC)
+    conclusion = ResearchConclusion(
+        found=True,
+        reason="done",
+        claims=(
+            GroundedClaim(
+                field=ClaimField.AFFILIATION,
+                value="Acme Corporation",
+                sources=(
+                    GroundedSource(
+                        url="https://a.com/jane", requested_url="https://a.com/jane",
+                        title="A", retrieved_at=now, snippet="Jane at Acme", source_id="s1",
+                    ),
+                    GroundedSource(
+                        url="https://b.org/jane", requested_url="https://b.org/jane",
+                        title="B", retrieved_at=now, snippet="Jane joined Acme", source_id="s2",
+                    ),
+                ),
+            ),
+        ),
+        dropped_claims=0,
+        searches_used=1,
+        reads_used=2,
+        rounds_used=1,
+    )
+    with session_factory() as session:
+        record_research_outcome(
+            session,
+            job_id=uuid.uuid4(),
+            speaker_id=speaker_id,
+            settings=research_settings(),
+            conclusion=conclusion,
+            started_at=now,
+        )
+        session.commit()
+        [view] = candidates_for_speaker(session, speaker_id)
+        assert [e.url for e in view.evidence] == ["https://a.com/jane", "https://b.org/jane"]
+
+
 def test_malformed_base_url_fails_not_stuck_running(
     session_factory: sessionmaker[Session],
 ) -> None:

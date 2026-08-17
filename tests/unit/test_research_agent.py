@@ -147,18 +147,20 @@ def run(
     page: str = PAGE_TEXT,
     roster: Callable[[str], list[RosterMatch]] | None = None,
     should_cancel: Callable[[], bool] = lambda: False,
+    seed: ResearchSeed | None = None,
+    resolver: dict[str, list[str]] | None = None,
 ) -> tuple[ResearchConclusion, list[str], FakeLLM]:
     fetched: list[str] = []
     llm = FakeLLM(replies)
     conclusion = run_research_loop(
         llm=llm,
         settings=settings or make_settings(),
-        seed=ResearchSeed(display_name="Jane Doe"),
+        seed=seed or ResearchSeed(display_name="Jane Doe"),
         roster_lookup=roster or (lambda query: []),
         should_cancel=should_cancel,
         search_provider=FakeProvider([SEARCH_RESULT]),
         read_client_factory=page_factory(page, fetched),
-        read_resolver=resolver_map({"example.com": [PUBLIC_A]}),
+        read_resolver=resolver_map(resolver or {"example.com": [PUBLIC_A]}),
     )
     return conclusion, fetched, llm
 
@@ -169,8 +171,9 @@ def test_happy_path_grounds_claim_and_counts_budget() -> None:
     assert conclusion.dropped_claims == 0
     [claim] = conclusion.claims
     assert claim.field is ClaimField.AFFILIATION
-    assert claim.url == "https://example.com/jane"
-    assert claim.snippet in PAGE_TEXT
+    [source] = claim.sources
+    assert source.url == "https://example.com/jane"
+    assert source.snippet in PAGE_TEXT
     assert (conclusion.searches_used, conclusion.reads_used, conclusion.rounds_used) == (1, 1, 2)
     assert fetched == ["example.com"]
 
@@ -335,6 +338,40 @@ def test_format_characters_cannot_dodge_the_generic_gate() -> None:
     conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(laced_generic, laced_snippet)])
     [claim] = conclusion.claims
     assert claim.field is ClaimField.AFFILIATION
+    assert conclusion.dropped_claims == 1
+
+
+def test_repeat_value_coalesces_independent_sources() -> None:
+    """Two grounded sources for one (field, value) become one claim carrying
+    both — the cross-source corroboration signal, not a dropped duplicate."""
+    seed = ResearchSeed(
+        display_name="Jane Doe",
+        seed_urls=("https://example.com/jane", "https://example.org/jane"),
+    )
+    read_com: dict[str, object] = {"actions": [{"tool": "read_url", "url": "https://example.com/jane"}]}
+    read_org: dict[str, object] = {"actions": [{"tool": "read_url", "url": "https://example.org/jane"}]}
+    claim_com = dict(CLAIM_OK, source="s1")
+    claim_org = dict(CLAIM_OK, source="s2")
+    conclusion, _, _ = run(
+        [read_com, read_org, conclude(claim_com, claim_org)],
+        seed=seed,
+        resolver={"example.com": [PUBLIC_A], "example.org": [PUBLIC_A]},
+    )
+    [claim] = conclusion.claims
+    assert claim.field is ClaimField.AFFILIATION
+    urls = [source.url for source in claim.sources]
+    assert urls == ["https://example.com/jane", "https://example.org/jane"]
+    assert conclusion.dropped_claims == 0
+
+
+def test_repeat_value_same_url_is_redundant_and_dropped() -> None:
+    """A second claim citing a URL already attached to the value adds no
+    independent source — it is redundant and counted as dropped."""
+    claim_a = dict(CLAIM_OK, source="s1")
+    claim_b = dict(CLAIM_OK, source="s1", snippet="Jane Doe hosts the Building Podcast")
+    conclusion, _, _ = run([ACTION_SEARCH, ACTION_READ, conclude(claim_a, claim_b)])
+    [claim] = conclusion.claims
+    assert len(claim.sources) == 1
     assert conclusion.dropped_claims == 1
 
 

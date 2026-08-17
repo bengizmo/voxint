@@ -397,6 +397,19 @@ class Settings(BaseSettings):
     # job the moment it starts.
     research_deadline_seconds: float = Field(default=300.0, ge=30.0, allow_inf_nan=False)
 
+    # Draft triage (#42): registrable domains the operator counts as
+    # authoritative sources, feeding the PROFILE drafts' `source_authority`
+    # triage component (fraction of a draft's distinct evidence domains on this
+    # list). Comma/space-separated bare domains (`example.org, gov.uk`); a
+    # subdomain matches its registrable domain. Deployments differ on what is
+    # authoritative, so there is deliberately no built-in list — empty (the
+    # default) means `source_authority` reads 0.0 for every draft, leaving
+    # triage ordering to the other signals. A plain string (not a list): the
+    # app parses it into a domain set; pydantic-settings would JSON-parse a
+    # collection-typed env var. Env-only today (edit and restart); it moves to
+    # the AppSettings UI when the settings console (issue #47) lands.
+    source_authority_domains: str = ""
+
     # Run-level enrichment assets (#41): on-demand LLM-generated summary,
     # topics, and entity mentions per run — three independently versioned,
     # independently failing assets. OFF by default; requires the enhancement

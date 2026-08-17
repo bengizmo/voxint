@@ -95,7 +95,13 @@ def _views(
             ProfileReviewDecision,
             ProfileReviewDecision.candidate_id == EnrichmentCandidate.id,
         )
-        .options(selectinload(EnrichmentCandidate.evidence))
+        .options(
+            selectinload(EnrichmentCandidate.evidence),
+            # Triage (#42) reads the producing producer per candidate for the
+            # name-match adapter and cross-producer agreement — eager-load to
+            # avoid an N+1 across a run's / speaker's candidate list.
+            selectinload(EnrichmentCandidate.producer_run),
+        )
         .where(*criteria)
         .order_by(EnrichmentCandidate.created_at, EnrichmentCandidate.id)
     ).all()

@@ -253,25 +253,29 @@ def record_research_outcome(
             target=scope,
             field=claim.field,
             value=claim.value,
-            evidence=(
+            # One evidence row per independently grounded source — multiple
+            # distinct sources for one value is the corroboration signal triage
+            # (#42) reads. Ordered as grounded; bounded by MAX_EVIDENCE_ROWS.
+            evidence=tuple(
                 UrlEvidence(
-                    url=claim.url,
-                    retrieved_at=claim.retrieved_at,
-                    snippet=claim.snippet,
+                    url=source.url,
+                    retrieved_at=source.retrieved_at,
+                    snippet=source.snippet,
                     detail={
                         "model": settings.llm_model,
-                        "title": claim.title,
-                        "source_id": claim.source_id,
+                        "title": source.title,
+                        "source_id": source.source_id,
                         # Redirects can move the read: keep the URL the loop
                         # authorized beside the final one actually fetched.
                         **(
-                            {"requested_url": claim.requested_url}
-                            if claim.requested_url != claim.url
+                            {"requested_url": source.requested_url}
+                            if source.requested_url != source.url
                             else {}
                         ),
                     },
                     detail_schema_version=DETAIL_SCHEMA_VERSION,
-                ),
+                )
+                for source in claim.sources
             )[:MAX_EVIDENCE_ROWS],
             score=CANDIDATE_SCORE,
             score_components={"web": 1.0},

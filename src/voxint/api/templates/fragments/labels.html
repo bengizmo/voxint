@@ -5,6 +5,16 @@
   {% elif hint.state.value == "superseded" %}<span class="pill unresolved">superseded</span>
   {% endif %}
 {% endmacro %}
+{# Review-priority + explainable breakdown (issue #42). Raw facts, never a
+   "% confidence": priority is an attention-ordering signal, not a probability. #}
+{% macro triage_badge(hint) %}
+  {% set t = name_triage.get(hint.candidate.id) %}
+  {% if t %}
+  <span class="muted" title="review priority — name-match {{ "%.2f"|format(t.components.name_match) }}{% if t.components.voice_support %} · voice matches ({{ "%.2f"|format(t.components.voice_support) }}){% elif t.components.voice_conflict %} · voice names another identity{% endif %}{% if t.components.peer_producer_count and t.components.peer_producer_count > 1 %} · {{ t.components.peer_producer_count|int }} producers agree{% endif %}">priority {{ "%.2f"|format(t.priority) }}</span>
+  {% if t.components.voice_conflict %}<span class="pill unresolved">voice conflict</span>{% endif %}
+  {% if t.unresolved_peers %}<span class="pill unresolved">+{{ t.unresolved_peers }} more proposed</span>{% endif %}
+  {% endif %}
+{% endmacro %}
 {% macro hint_decision_forms(hint) %}
   {% if token and hint.state.value == "proposed" %}
   <form class="inline" method="post"
@@ -43,6 +53,7 @@
     <li>
       {{ hint.candidate.value }}
       <span class="muted">({{ "%.2f"|format(hint.candidate.score or 0) }})</span>
+      {{ triage_badge(hint) }}
       {{ hint_state_pill(hint) }}
       {% if hint.evidence %}
       <span class="muted">— {{ hint.evidence[0].source_field or "transcript" }}:
@@ -161,6 +172,7 @@
     <li>
       Self-introduced (unverified): “{{ hint.candidate.value }}”
       <span class="muted">({{ "%.2f"|format(hint.candidate.score or 0) }}{% if hint.evidence and hint.evidence[0].timestamp_seconds is not none %}, at {{ "%.0f"|format(hint.evidence[0].timestamp_seconds) }}s{% endif %})</span>
+      {{ triage_badge(hint) }}
       {{ hint_state_pill(hint) }}
       {{ hint_decision_forms(hint) }}
     </li>

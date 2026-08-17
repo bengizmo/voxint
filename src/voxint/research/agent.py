@@ -44,6 +44,12 @@ PROTOCOL_VERSION = "1"
 # rules long before it helped the model.
 PAGE_EXCERPT_CHARS = 4_000
 MAX_CLAIMS_PER_CONCLUSION = 12
+# Distinct grounded sources a single (field, value) claim may accumulate.
+# Repeat sources beyond this are counted as dropped, not persisted; must stay
+# at or below drafts.MAX_EVIDENCE_ROWS (16) since each source becomes one
+# evidence row. Multiple independent sources for one value is exactly the
+# corroboration signal draft triage (#42) reads.
+MAX_SOURCES_PER_CLAIM = 8
 # Evidence-snippet floor: a quote shorter than this cannot meaningfully
 # support a claim and would trivially "locate" in any page.
 MIN_SNIPPET_CHARS = 16
@@ -172,17 +178,30 @@ class _Source:
 
 
 @dataclass(frozen=True)
-class GroundedClaim:
-    """A claim that survived every server-side check."""
+class GroundedSource:
+    """One fetched page that independently grounds a claim's value.
 
-    field: ClaimField
-    value: str
+    Every field here passed the same server-side checks (known URL, verbatim
+    snippet). A claim may cite several — each a distinct document — which is the
+    cross-source corroboration signal draft triage (#42) reads.
+    """
+
     url: str
     requested_url: str
     title: str
     retrieved_at: datetime
     snippet: str
     source_id: str
+
+
+@dataclass(frozen=True)
+class GroundedClaim:
+    """A (field, value) claim that survived every server-side check, carrying
+    one or more independently grounded sources (first-grounded first)."""
+
+    field: ClaimField
+    value: str
+    sources: tuple[GroundedSource, ...]
 
 
 @dataclass(frozen=True)
@@ -323,28 +342,45 @@ def _validate_conclusion(
     if found and not raw_claims:
         raise _ProtocolError("found=true requires at least one claim")
 
-    claims: list[GroundedClaim] = []
+    # Coalesce repeat (field, value) claims into one claim carrying multiple
+    # independently grounded sources, preserving first-grounded order. A repeat
+    # source for the same value is corroboration (#42), not a duplicate to drop
+    # — but a source citing a URL already attached to this value, or one past
+    # the per-claim cap, is redundant and counted as dropped.
+    order: list[tuple[ClaimField, str]] = []
+    value_by_key: dict[tuple[ClaimField, str], str] = {}
+    sources_by_key: dict[tuple[ClaimField, str], list[GroundedSource]] = {}
+    urls_by_key: dict[tuple[ClaimField, str], set[str]] = {}
     dropped = 0
-    seen: set[tuple[ClaimField, str]] = set()
     for item in raw_claims:
-        claim = _ground_claim(item, sources, known_urls)
-        if claim is None:
+        grounded = _ground_claim(item, sources, known_urls)
+        if grounded is None:
             dropped += 1
             continue
-        key = (claim.field, claim.value.casefold())
-        if key in seen:
+        field, value, source = grounded
+        key = (field, value.casefold())
+        if key not in sources_by_key:
+            order.append(key)
+            value_by_key[key] = value  # first grounded occurrence keeps its casing
+            sources_by_key[key] = []
+            urls_by_key[key] = set()
+        if source.url in urls_by_key[key] or len(sources_by_key[key]) >= MAX_SOURCES_PER_CLAIM:
             dropped += 1
             continue
-        seen.add(key)
-        claims.append(claim)
-    return found, reason, tuple(claims), dropped
+        urls_by_key[key].add(source.url)
+        sources_by_key[key].append(source)
+    claims = tuple(
+        GroundedClaim(field=key[0], value=value_by_key[key], sources=tuple(sources_by_key[key]))
+        for key in order
+    )
+    return found, reason, claims, dropped
 
 
 def _ground_claim(
     item: object, sources: Mapping[str, _Source], known_urls: frozenset[str]
-) -> GroundedClaim | None:
-    """The claim iff every evidence check passes; None drops it silently
-    (the count is recorded in the producer-run config, not the drafts)."""
+) -> tuple[ClaimField, str, GroundedSource] | None:
+    """The (field, value, source) iff every evidence check passes; None drops it
+    silently (the count is recorded in the producer-run config, not the drafts)."""
     if not isinstance(item, dict):
         return None
     raw_field = item.get("field")
@@ -372,15 +408,17 @@ def _ground_claim(
     snippet = _bounded_str(item.get("snippet"), MAX_CLAIM_SNIPPET_CHARS)
     if snippet is None or not _snippet_grounded(snippet, source.kept_text):
         return None
-    return GroundedClaim(
-        field=field,
-        value=value,
-        url=source.url,
-        requested_url=source.requested_url,
-        title=source.title,
-        retrieved_at=source.retrieved_at,
-        snippet=snippet,
-        source_id=source.source_id,
+    return (
+        field,
+        value,
+        GroundedSource(
+            url=source.url,
+            requested_url=source.requested_url,
+            title=source.title,
+            retrieved_at=source.retrieved_at,
+            snippet=snippet,
+            source_id=source.source_id,
+        ),
     )
 
 

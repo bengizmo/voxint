@@ -66,6 +66,15 @@
   {% for view in research.proposed %}
   <div class="candidate">
     <p><strong>{{ view.candidate.field }}</strong>: {{ view.candidate.value }}</p>
+    {# Review-priority ordering (issue #42): raw facts, not a probability. #}
+    {% set t = research.triage.get(view.candidate.id) %}
+    {% if t %}
+    <p class="muted">
+      review priority {{ "%.2f"|format(t.priority) }}
+      — {{ t.components.distinct_domains_count|int }} distinct evidence
+      domain{{ "s" if t.components.distinct_domains_count|int != 1 }}{% if t.components.source_authority %}, {{ "%.0f"|format(t.components.source_authority * 100) }}% authority-listed{% endif %}{% if t.components.corroborated %} · corroborated{% endif %}
+    </p>
+    {% endif %}
     {% for e in view.evidence %}{% if e.url %}
     <p class="muted">
       source:

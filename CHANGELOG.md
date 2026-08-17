@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Draft triage: multi-signal review-priority scoring** (#42): enrichment drafts
+  now carry an explainable **review priority** that orders them and populates the
+  `unresolved` bucket, so an operator sees the strongest name and profile
+  suggestions first. It fuses, with visible components, per-producer name-match
+  strength (via adapters — a producer's raw score is never treated as comparable
+  to another's), grounded voice support that must match the proposed identity
+  (a cosine naming someone else is shown as a **voice conflict**, never a boost),
+  the count of **distinct evidence domains** (not raw URLs), an operator-editable
+  source-authority allowlist (`SOURCE_AUTHORITY_DOMAINS`, empty by default — no
+  built-in list), and cross-producer agreement. The score is **derived at read
+  time** (no schema change), **capped below certainty**, and **never
+  auto-accepts** — auto-accept thresholds need a deployment's own adjudicated
+  history and stay out of scope. To make the domain/authority/agreement signals
+  real, the web-research producer now **keeps every independently grounded
+  source** for a value (previously it dropped duplicate sources) as separate
+  evidence rows. Documented in `docs/enrichment-triage.md`; the LLM-key and
+  research config knobs are unchanged. Off-by-default features stay off.
 - **Restricted URL-download egress overlay** (#16): a new opt-in
   `compose.ytdlp-egress.yaml` productizes the previously docs-only "run the worker
   with restricted egress" guidance for the URL-ingestion SSRF residual. It routes

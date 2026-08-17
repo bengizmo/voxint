@@ -15,7 +15,8 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
@@ -151,6 +152,7 @@ from voxint.app_settings import (
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
     MAX_CORRECTED_TEXT_CHARS,
+    AssignmentMethod,
     ClaimField,
     Decision,
     DiarizationTurn,
@@ -165,6 +167,7 @@ from voxint.db.models import (
     RunStatus,
     SegmentReviewState,
     Speaker,
+    SpeakerAssignment,
     StageRun,
     TranscriptSegment,
 )
@@ -207,6 +210,16 @@ from voxint.enrichment.run_assets import (
     latest_assets,
     load_source,
     source_content_hash,
+)
+from voxint.enrichment.triage import (
+    EvidenceRef,
+    TriageInputs,
+    TriageScore,
+    VoiceSignal,
+    parse_authority_domains,
+)
+from voxint.enrichment.triage import (
+    score as triage_score,
 )
 from voxint.export import (
     MEDIA_TYPES,
@@ -253,6 +266,7 @@ from voxint.speakers.roster import (
     archive_speaker,
     delete_embedding,
     merge_speakers,
+    normalize_display_name,
     rename_speaker,
     restore_speaker,
     roster_overview,
@@ -717,22 +731,127 @@ _HINT_STATE_PRECEDENCE = {
 }
 
 
+@dataclass(frozen=True)
+class _VoiceRow:
+    """Per-label grounded cosine facts for triage voice-support."""
+
+    name_norm: str
+    confidence: float | None
+    grounded: bool
+
+
+@dataclass(frozen=True)
+class _HintTriage:
+    """The triage a template renders beside one representative suggestion."""
+
+    priority: float
+    components: dict[str, float]
+    # Proposed candidates for the same (label, value) hidden behind this
+    # representative — so a decision on one producer's claim never silently
+    # buries another producer's still-open proposal (#42).
+    unresolved_peers: int
+
+
+def _voice_by_label(session: Session, run_id: uuid.UUID) -> dict[str, _VoiceRow]:
+    """Grounded cosine facts per diarization label (one cosine row per label).
+
+    Only ``method='cosine'`` carries a roster speaker + confidence + grounding;
+    ``llm_hint`` has none. The speaker name is normalized for value-matching.
+    """
+    rows = session.execute(
+        select(
+            SpeakerAssignment.diarization_label,
+            Speaker.display_name,
+            SpeakerAssignment.confidence,
+            SpeakerAssignment.grounded,
+        )
+        .join(Speaker, Speaker.id == SpeakerAssignment.speaker_id)
+        .where(
+            SpeakerAssignment.pipeline_run_id == run_id,
+            SpeakerAssignment.method == AssignmentMethod.COSINE.value,
+        )
+    ).all()
+    return {
+        label: _VoiceRow(
+            name_norm=normalize_display_name(name).casefold(),
+            confidence=confidence,
+            grounded=grounded,
+        )
+        for label, name, confidence, grounded in rows
+    }
+
+
+def _name_peer_counts(views: Sequence[CandidateView]) -> dict[tuple[str | None, str], int]:
+    """Distinct producers proposing the same (label, normalized name) across
+    ACTIVE candidates (proposed or accepted). Rejected/superseded never
+    corroborate — computed over all views, before representative collapsing."""
+    producers: dict[tuple[str | None, str], set[str]] = {}
+    for view in views:
+        if view.state not in (CandidateState.PROPOSED, CandidateState.ACCEPTED):
+            continue
+        key = (
+            view.candidate.diarization_label,
+            normalize_display_name(view.candidate.value).casefold(),
+        )
+        producers.setdefault(key, set()).add(view.candidate.producer_run.producer)
+    return {key: len(names) for key, names in producers.items()}
+
+
+def _triage_for(
+    view: CandidateView,
+    *,
+    voice: _VoiceRow | None,
+    peer_count: int,
+    authority: frozenset[str],
+) -> TriageScore:
+    """Fuse one candidate's signals into an explainable review priority."""
+    candidate = view.candidate
+    voice_signal: VoiceSignal | None = None
+    if voice is not None:
+        voice_signal = VoiceSignal(
+            matches_value=normalize_display_name(candidate.value).casefold() == voice.name_norm,
+            grounded=voice.grounded,
+            confidence=voice.confidence,
+        )
+    return triage_score(
+        TriageInputs(
+            field=candidate.field,
+            producer=candidate.producer_run.producer,
+            producer_score=candidate.score,
+            producer_components=candidate.score_components or {},
+            evidence=tuple(EvidenceRef(kind=e.kind, url=e.url) for e in view.evidence),
+            voice=voice_signal,
+            peer_producer_count=peer_count,
+            authority_domains=authority,
+        )
+    )
+
+
 def _name_suggestions(
     session: Session, run_id: uuid.UUID
-) -> tuple[list[CandidateView], dict[str, list[CandidateView]]]:
-    """Representative NAME suggestions for the workbench: run-level + per-label.
+) -> tuple[list[CandidateView], dict[str, list[CandidateView]], dict[uuid.UUID, _HintTriage]]:
+    """Representative NAME suggestions for the workbench: run-level + per-label,
+    triage-ordered, with a per-representative triage map.
 
     Each (target, casefolded value) group renders one representative so rerun
     duplicates beside decided history are never presented as new suggestions.
+    Ordering within each list is by triage review priority (#42); cross-producer
+    facts (voice support, agreement) are computed over all active candidates
+    before collapsing to representatives.
     """
     views = [
         view
         for view in candidates_for_run(session, run_id)
         if view.candidate.field == ClaimField.NAME.value
     ]
+    voice_map = _voice_by_label(session, run_id)
+    peer_counts = _name_peer_counts(views)
     groups: dict[tuple[str | None, str], CandidateView] = {}
+    proposed_counts: dict[tuple[str | None, str], int] = {}
     for view in views:
         key = (view.candidate.diarization_label, view.candidate.value.casefold())
+        if view.state is CandidateState.PROPOSED:
+            proposed_counts[key] = proposed_counts.get(key, 0) + 1
         current = groups.get(key)
         if (
             current is None
@@ -746,10 +865,25 @@ def _name_suggestions(
         ):
             groups[key] = view
 
+    triage: dict[uuid.UUID, _HintTriage] = {}
+    for key, view in groups.items():
+        label, _ = key
+        peer_key = (label, normalize_display_name(view.candidate.value).casefold())
+        score = _triage_for(
+            view,
+            voice=voice_map.get(label) if label is not None else None,
+            peer_count=peer_counts.get(peer_key, 1),
+            authority=frozenset(),  # name candidates carry no URL evidence
+        )
+        hidden = proposed_counts.get(key, 0) - (1 if view.state is CandidateState.PROPOSED else 0)
+        triage[view.candidate.id] = _HintTriage(
+            priority=score.priority, components=score.components, unresolved_peers=hidden
+        )
+
     def _order(view: CandidateView) -> tuple[int, float, str]:
         return (
             _HINT_STATE_PRECEDENCE[view.state],
-            -(view.candidate.score or 0.0),
+            -triage[view.candidate.id].priority,
             view.candidate.value.casefold(),
         )
 
@@ -760,7 +894,7 @@ def _name_suggestions(
             per_label.setdefault(label, []).append(view)
     for label_views in per_label.values():
         label_views.sort(key=_order)
-    return run_level, per_label
+    return run_level, per_label, triage
 
 
 def _workbench_context(
@@ -774,7 +908,7 @@ def _workbench_context(
     # Assignable identities only — merged and archived speakers are curated out
     # of the roster and must not attract new decisions.
     speakers = active_speakers(session)
-    name_hints_run, name_hints_labels = _name_suggestions(session, run.id)
+    name_hints_run, name_hints_labels, name_triage = _name_suggestions(session, run.id)
     # Per-turn playback (issue #49) + fail-closed seek gating (issue #55). The
     # workbench-player island (mounted OUTSIDE #labels) reads `capability` to
     # enable/disable the server-rendered, htmx-swapped seek buttons; the buttons
@@ -783,6 +917,9 @@ def _workbench_context(
     return {
         "name_hints_run": name_hints_run,
         "name_hints_labels": name_hints_labels,
+        # Review-priority + component breakdown per representative (#42), keyed by
+        # candidate id so labels.html can render it without changing the hint shape.
+        "name_triage": name_triage,
         "names_enabled": settings.enrichment_names_enabled,
         "names_last_run": latest_producer_run(session, NAMES_PRODUCER, EnrichmentScope.run(run.id)),
         # An accepted per-label suggestion prefills the Enroll input (editable,
@@ -1115,13 +1252,30 @@ def _research_state(
         for view in candidates_for_speaker(session, speaker.id)
         if view.candidate.field in _PROFILE_FIELDS
     ]
+    authority = parse_authority_domains(settings.source_authority_domains)
+    triage: dict[uuid.UUID, TriageScore] = {
+        view.candidate.id: _triage_for(view, voice=None, peer_count=1, authority=authority)
+        for view in views
+        if view.state is CandidateState.PROPOSED
+    }
+    # The unresolved bucket: proposed (undecided) drafts, highest review priority
+    # first (#42). No score floor — a floor is an uncalibrated implicit reject.
+    proposed = sorted(
+        (v for v in views if v.state is CandidateState.PROPOSED),
+        key=lambda v: (
+            -triage[v.candidate.id].priority,
+            v.candidate.value.casefold(),
+            v.candidate.created_at,
+        ),
+    )
     return {
         "speaker": speaker,
         "job": job,
         "job_active": job is not None and job.status in _ACTIVE_JOB_STATUSES,
         "gates_open": research_gates_open(settings, get_app_settings(session)),
         "budget": budget_snapshot(settings),
-        "proposed": [v for v in views if v.state is CandidateState.PROPOSED],
+        "proposed": proposed,
+        "triage": triage,
         "decided_count": sum(
             1 for v in views if v.state in (CandidateState.ACCEPTED, CandidateState.REJECTED)
         ),
