@@ -1306,8 +1306,9 @@ def _research_state(
         for view in candidates_for_speaker(session, speaker.id)
         if view.candidate.field in _PROFILE_FIELDS
     ]
+    row = get_app_settings(session)
     authority = parse_authority_domains(
-        resolve_effective_source_authority_domains(get_app_settings(session), settings)
+        resolve_effective_source_authority_domains(row, settings)
     )
     triage: dict[uuid.UUID, TriageScore] = {
         view.candidate.id: _triage_for(view, voice=None, peer_count=1, authority=authority)
@@ -1328,7 +1329,7 @@ def _research_state(
         "speaker": speaker,
         "job": job,
         "job_active": job is not None and job.status in _ACTIVE_JOB_STATUSES,
-        "gates_open": research_gates_open(settings, get_app_settings(session)),
+        "gates_open": research_gates_open(settings, row),
         "budget": budget_snapshot(settings),
         "proposed": proposed,
         "triage": triage,

@@ -7,6 +7,7 @@ import pytest
 
 from voxint.app_settings import resolve_effective_web_research
 from voxint.config import Settings
+from voxint.db.models import AppSettings
 from voxint.research.budget import Attribution, ResearchBudget
 from voxint.research.search import (
     ProviderError,
@@ -168,6 +169,39 @@ def test_malformed_or_failing_provider_is_structured_error(
         assert out.error == "provider_error"
         assert "sensitive query text" not in out.error_detail
         assert SECRET_KEY not in out.error_detail
+
+
+def test_provider_error_redacts_effective_row_api_key_not_env() -> None:
+    # Redaction must scrub the EFFECTIVE (row-over-env) key actually sent to the
+    # provider, not the env key (the Group-2 fix, #74). Env carries k-env; a row
+    # override supplies a different key; a provider error echoing the row key must
+    # be redacted from error_detail.
+    env = make_settings(web_search_api_key="k-env")
+    row = AppSettings(
+        id=1,
+        voxint_web_research=True,
+        web_search_base_url="http://searx.lan:8888",
+        web_search_api_key="k-row-super-secret",
+    )
+    effective = resolve_effective_web_research(row, env)
+
+    class _RaisingProvider:
+        name = "searxng"
+
+        def search(self, query: str, *, max_results: int) -> list[SearchResult]:
+            raise ProviderError(f"upstream rejected credential {effective.api_key}")
+
+    out = web_search(
+        "q",
+        settings=env,
+        effective_web=effective,
+        budget=budget(),
+        attribution=ATTR,
+        provider=_RaisingProvider(),  # type: ignore[arg-type]
+    )
+    assert out.ok is False
+    assert out.error == "provider_error"
+    assert "k-row-super-secret" not in out.error_detail
 
 
 def test_oversized_provider_response_is_refused() -> None:

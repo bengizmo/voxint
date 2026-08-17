@@ -35,7 +35,11 @@ def _stub_db_row(monkeypatch: pytest.MonkeyPatch, row: AppSettings | None = None
     import voxint.cli as cli
     import voxint.db.session as db_session
 
-    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (object(), 0))
+    class _FakeEngine:
+        def dispose(self) -> None:  # the CLI disposes engines in a finally
+            pass
+
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (_FakeEngine(), 0))
     monkeypatch.setattr(db_session, "build_session_factory", lambda _e: object())
 
     @contextlib.contextmanager
@@ -541,6 +545,37 @@ def test_research_fails_honestly_when_db_unavailable(
     monkeypatch.setattr(socket, "getaddrinfo", _boom)
     monkeypatch.setattr(research, "web_search", _boom)
     assert main(["research", "search", "anything"]) == 2
+
+
+def test_research_fails_honestly_on_unreachable_db(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A well-formed but UNREACHABLE db raises inside the session (lazy connect),
+    # NOT in _engine_or_report — the CLI must still exit 2 with a DSN-free message
+    # (issue #74, decision 6), never a raw traceback, and touch no network.
+    monkeypatch.setenv("VOXINT_WEB_RESEARCH", "true")
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://searx.lan:8888")
+    import socket
+
+    from sqlalchemy.exc import OperationalError
+
+    import voxint.app_settings as app_settings
+    import voxint.research as research
+
+    def _boom(*_a: object, **_k: object) -> object:
+        raise AssertionError("no network/search when the DB is unreachable")
+
+    def _refused(_s: object) -> object:
+        raise OperationalError("SELECT 1", {}, Exception("connection refused"))
+
+    _stub_db_row(monkeypatch)  # fake engine + session scope
+    monkeypatch.setattr(app_settings, "get_app_settings", _refused)
+    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    monkeypatch.setattr(research, "web_search", _boom)
+    assert main(["research", "search", "anything"]) == 2
+    out = capsys.readouterr().out
+    assert "database unavailable" in out
+    assert "connection refused" not in out  # DSN/detail-free message
 
 
 def test_research_search_row_disable_wins_over_env_enable(

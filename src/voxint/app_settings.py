@@ -7,7 +7,7 @@ transaction — every function takes a live ``Session`` and never commits.
 """
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -141,7 +141,11 @@ def _resolve_str_flag(row: AppSettings | None, settings: Settings, name: str) ->
     if row is not None:
         value: str | None = getattr(row, name)
         if value is not None and value.strip():
-            return value
+            # Return the stripped row value (the ``resolve_effective_llm_api_key``
+            # precedent): a hand-entered override with surrounding whitespace must
+            # not be sent verbatim as a header / break the provider URL. The env
+            # branch is untouched, so all-NULL parity is unchanged.
+            return value.strip()
     env_value: str = getattr(settings, name)
     return env_value
 
@@ -216,7 +220,10 @@ class EffectiveWebResearch:
 
     enabled: bool
     base_url: str
-    api_key: str
+    # A credential (like ``llm_api_key``): kept OUT of the auto-generated repr so a
+    # stray ``%r``/f-string on the whole VO, a pytest assertion diff, or a
+    # traceback-locals dump cannot leak it (this VO is threaded worker→agent→tools).
+    api_key: str = field(repr=False)
 
 
 def resolve_effective_web_research(

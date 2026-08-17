@@ -170,6 +170,18 @@ def test_web_research_enable_row_wins_over_env_disable() -> None:
     assert effective.api_key == "k-row"
 
 
+def test_effective_web_research_repr_hides_api_key() -> None:
+    # The VO is threaded worker->agent->tools; its auto-repr must NOT expose the
+    # credential (field(repr=False)) — a stray %r/log/assertion diff can't leak it.
+    effective = resolve_effective_web_research(
+        AppSettings(id=1, voxint_web_research=True, web_search_api_key="k-super-secret"),
+        _settings(web_search_base_url=_BASE_URL),
+    )
+    assert effective.api_key == "k-super-secret"  # still resolves for real use
+    assert "k-super-secret" not in repr(effective)
+    assert "k-super-secret" not in str(effective)
+
+
 def test_web_research_none_row_is_pure_env() -> None:
     env = _settings(
         voxint_web_research=True,

@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from sqlalchemy import Engine
     from sqlalchemy.orm import Session, sessionmaker
 
+    from voxint.app_settings import EffectiveWebResearch
+    from voxint.config import Settings
+
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
 # touch — any of them.
@@ -60,6 +63,36 @@ def _engine_or_report(*, connect_timeout: int | None = None) -> "tuple[Engine | 
         # Never interpolate the exception — a SQLAlchemy URL error can carry the DSN.
         print("error: could not initialize the database engine (check DATABASE_URL)")
         return None, 2
+
+
+def _effective_web_or_report(
+    settings: "Settings",
+) -> "tuple[EffectiveWebResearch | None, int]":
+    """Resolve the effective (row-over-env) web-research config from the DB (#74).
+
+    Returns ``(effective_web, 0)`` or ``(None, 2)`` on any DB failure — decision 6:
+    the CLI participates in effective settings and FAILS HONESTLY on an unavailable
+    DB rather than silently falling back to env (which could bypass a UI disable).
+    ``_engine_or_report`` covers engine *construction*; the lazy connect first fails
+    inside ``session_scope``, so a well-formed-but-unreachable DB is caught here.
+    The message is DSN-free (a SQLAlchemy error can embed the connection string).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from voxint.app_settings import get_app_settings, resolve_effective_web_research
+    from voxint.db.session import build_session_factory, session_scope
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return None, code
+    try:
+        with session_scope(build_session_factory(engine)) as session:
+            return resolve_effective_web_research(get_app_settings(session), settings), 0
+    except SQLAlchemyError:
+        print("error: database unavailable — cannot resolve effective settings")
+        return None, 2
+    finally:
+        engine.dispose()
 
 
 def _publish_or_defer(run_id: uuid.UUID) -> bool:
@@ -348,6 +381,8 @@ def _fetch(args: argparse.Namespace) -> int:
     to the terminal. The download itself happens later in the worker's ACQUIRE
     stage — this only creates the durable QUEUED run.
     """
+    from sqlalchemy.exc import SQLAlchemyError
+
     from voxint.app_settings import get_app_settings, resolve_effective_ytdlp_enabled
     from voxint.config import get_settings
     from voxint.db.session import build_session_factory, session_scope
@@ -389,6 +424,14 @@ def _fetch(args: argparse.Namespace) -> int:
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
         return 2
+    except SQLAlchemyError:
+        # A well-formed but unreachable DB fails here (lazy connect), not in
+        # _engine_or_report — fail honestly (exit 2) with a DSN-free message
+        # rather than a raw traceback (issue #74, decision 6).
+        print("error: database unavailable — cannot resolve effective settings")
+        return 2
+    finally:
+        engine.dispose()
     # Print the id BEFORE publishing so a broker outage never costs the operator
     # the run id (the durable QUEUED run already exists); publish degrades cleanly.
     print(run_id)
@@ -521,9 +564,7 @@ def _research_search(args: argparse.Namespace) -> int:
     so an operator can verify the provider config and egress policy by hand
     before anything (issue #40) consumes the tools programmatically.
     """
-    from voxint.app_settings import get_app_settings, resolve_effective_web_research
     from voxint.config import SettingsError, get_settings
-    from voxint.db.session import build_session_factory, session_scope
     from voxint.research import Attribution, ResearchBudget, web_search
 
     try:
@@ -533,13 +574,11 @@ def _research_search(args: argparse.Namespace) -> int:
         return 2
     # Resolve the effective (row-over-env) web-research config from the DB before
     # any network I/O (issue #74) — a UI enable/endpoint must govern the CLI too,
-    # and a UI disable must not be bypassed. Fail honestly if the DB is
+    # and a UI disable must not be bypassed. Fails honestly (exit 2) if the DB is
     # unavailable rather than falling back to env.
-    engine, code = _engine_or_report()
-    if engine is None:
+    effective_web, code = _effective_web_or_report(settings)
+    if effective_web is None:
         return code
-    with session_scope(build_session_factory(engine)) as session:
-        effective_web = resolve_effective_web_research(get_app_settings(session), settings)
     if not effective_web.enabled:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
@@ -576,9 +615,7 @@ def _research_read(args: argparse.Namespace) -> int:
     """
     from urllib.parse import urlsplit, urlunsplit
 
-    from voxint.app_settings import get_app_settings, resolve_effective_web_research
     from voxint.config import SettingsError, get_settings
-    from voxint.db.session import build_session_factory, session_scope
     from voxint.research import Attribution, ResearchBudget, read_url
 
     try:
@@ -588,12 +625,11 @@ def _research_read(args: argparse.Namespace) -> int:
         return 2
     # Effective (row-over-env) web-research config resolved from the DB before any
     # network I/O (issue #74) — a UI enable/endpoint governs the CLI, a UI disable
-    # is honored, and an unavailable DB fails honestly rather than env-fallback.
-    engine, code = _engine_or_report()
-    if engine is None:
+    # is honored, and an unavailable DB fails honestly (exit 2) rather than
+    # env-fallback.
+    effective_web, code = _effective_web_or_report(settings)
+    if effective_web is None:
         return code
-    with session_scope(build_session_factory(engine)) as session:
-        effective_web = resolve_effective_web_research(get_app_settings(session), settings)
     if not effective_web.enabled:
         print("error: web research is disabled (voxint_web_research is off)")
         return 2
@@ -915,15 +951,18 @@ def _enrich_names(args: argparse.Namespace) -> int:
         names_llm_enabled = resolve_effective_enrichment_names_llm_enabled(gate_row, settings)
         llm_enabled = resolve_effective_llm_enabled(gate_row, settings)
     if not names_enabled:
+        # Field-style copy (not an env-var name): the gate is now the effective
+        # row-over-env value, so a console disable can be the cause too (#74).
         print(
-            "error: name enrichment is disabled (ENRICHMENT_NAMES_ENABLED=false)",
+            "error: name enrichment is disabled"
+            " (enrichment_names_enabled is off — env or console override)",
             file=sys.stderr,
         )
         return 2
     if args.llm and not (names_llm_enabled and llm_enabled):
         print(
-            "error: the LLM name pass requires ENRICHMENT_NAMES_LLM_ENABLED=true"
-            " and LLM_ENABLED=true",
+            "error: the LLM name pass requires enrichment_names_llm_enabled and"
+            " llm_enabled (env or console override)",
             file=sys.stderr,
         )
         return 2
