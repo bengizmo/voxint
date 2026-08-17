@@ -40,23 +40,34 @@ def set_verified(
 
 def set_correction(
     session: Session, *, segment: TranscriptSegment, text: str | None
-) -> SegmentReviewState:
+) -> SegmentReviewState | None:
     """Set or clear the operator correction for a segment.
 
-    Empty/whitespace-only text, or text identical to what the pipeline already
-    renders (``enhanced`` or ``raw``), stores NULL — a revert, never a badge on
-    unchanged text. Any correction write clears the verified mark: edited text
-    must be re-verified (both in the same transaction, so "verified" never sits
-    on since-changed text).
+    Whitespace-only text, or text identical to what the pipeline already renders
+    (``enhanced`` or ``raw``), means *no correction* (NULL) — a revert, never a
+    badge on unchanged text. Otherwise the submission is stored **verbatim**
+    (Whisper emits leading spaces; stripping meaningful input would both lose that
+    whitespace and badge an unchanged segment).
+
+    Only a genuine *change* to the effective correction clears the verified mark
+    and rewrites ``corrected_at`` — replaying the same text (a retry, or a second
+    tab saving identical text) is a true no-op, so it never silently unverifies a
+    segment. When it does change, verification is cleared in the same transaction,
+    so "verified" never sits on since-changed text.
     """
-    normalized = (text or "").strip()
-    is_revert = not normalized or normalized == effective_text(segment, None)
-    corrected = None if is_revert else normalized
+    submitted = text or ""
+    # A revert if empty/whitespace-only, or verbatim-equal to the pipeline text.
+    is_revert = not submitted.strip() or submitted == effective_text(segment, None)
+    desired = None if is_revert else submitted
+    row = session.get(SegmentReviewState, segment.id)
+    current = row.corrected_text if row is not None else None
+    if desired == current:
+        return row  # no change → leave verification (and corrected_at) untouched
     row = _get_or_create(session, segment)
     now = datetime.now(UTC)
-    row.corrected_text = corrected
-    row.corrected_at = now if corrected is not None else None
-    row.verified_at = None  # editing invalidates a prior verification
+    row.corrected_text = desired
+    row.corrected_at = now if desired is not None else None
+    row.verified_at = None  # the text changed → it must be re-verified
     session.flush()
     return row
 

@@ -174,5 +174,8 @@ def _resolve_body(
     if variant is TranscriptText.RAW:
         return seg.raw_text
     if variant is TranscriptText.ENHANCED:
-        return seg.enhanced_text or seg.raw_text
+        # IS NOT NULL (not truthiness), so an intentionally-emptied enhanced
+        # segment does not resurrect raw text here while the default view shows
+        # it empty — the two renderings must agree on the empty-enhanced edge.
+        return seg.enhanced_text if seg.enhanced_text is not None else seg.raw_text
     return effective_text(seg, corrected_text)

@@ -703,6 +703,16 @@ def test_correct_segment_precedence_and_clears_verification(
     assert "hello THERE (fixed)" not in raw_view  # raw is immutable ASR evidence
     assert "hello there" in raw_view
 
+    # Re-verify, then REPLAY the identical correction: an unchanged save is a true
+    # no-op and must NOT silently unverify the segment (idempotent state-setting).
+    client.post(f"/review/{run_id}/segments/{segs[0]}/verify", data={"token": token})
+    replay = client.post(
+        f"/review/{run_id}/segments/{segs[0]}/text",
+        data={"token": token, "text": "hello THERE (fixed)"},
+    )
+    assert replay.json()["verified"] is True  # unchanged text kept verification
+    assert replay.json()["corrected"] is True
+
     # Reverting: text equal to the pipeline rendering (or empty) clears it.
     revert = client.post(
         f"/review/{run_id}/segments/{segs[0]}/text",
