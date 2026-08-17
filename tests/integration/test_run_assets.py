@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.adjudication.review_state import set_correction
 from voxint.clients.llm import LLMError
 from voxint.config import Settings
 from voxint.db.models import (
@@ -153,6 +154,30 @@ class TestWriter:
             session.commit()
             assert asset.source_content_hash != source_content_hash(load_source(session, run_id))
             assert RunAssetKind.SUMMARY in kinds_needing_generation(session, run_id)
+
+    def test_operator_correction_marks_staleness(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # D2 (issue #58): assets render corrected text, so source_content_hash
+        # must cover it — a correction honestly marks the asset stale for regen.
+        with session_factory() as session:
+            run_id = seed_run(session)
+            asset = record_summary(session, run_id, key="k1")
+            session.commit()
+            before = source_content_hash(load_source(session, run_id))
+            assert asset.source_content_hash == before
+
+            segment = session.query(TranscriptSegment).filter_by(pipeline_run_id=run_id).one()
+            set_correction(session, segment=segment, text="Hello, I am Joan from Acme Corp.")
+            session.commit()
+            after = source_content_hash(load_source(session, run_id))
+            assert after != before
+            assert RunAssetKind.SUMMARY in kinds_needing_generation(session, run_id)
+
+            # Reverting the correction restores the original hash (no drift).
+            set_correction(session, segment=segment, text="")
+            session.commit()
+            assert source_content_hash(load_source(session, run_id)) == before
 
 
 class FakeLLM:

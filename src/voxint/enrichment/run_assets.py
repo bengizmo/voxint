@@ -41,8 +41,8 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import label_states
-from voxint.adjudication.transcript import display_name
+from voxint.adjudication.resolver import label_states, review_states
+from voxint.adjudication.transcript import display_name, effective_text
 from voxint.db.models import (
     MediaSourceMetadata,
     PipelineRun,
@@ -163,10 +163,11 @@ class RunAssetSource:
 def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
     """The exact inputs a generation may read, in deterministic order.
 
-    Segment text is the operator-facing best text (``enhanced_text`` falling
-    back to ``raw_text``) — the same pinning as ``names.llm``: enhancement
-    changing SHOULD make assets stale, because it changes what a regeneration
-    would read. Each segment's speaker is the *attributed* name resolved
+    Segment text is the operator-effective text via the shared
+    :func:`voxint.adjudication.transcript.effective_text` selector (corrected →
+    enhanced → raw) — the same pinning as ``names.llm``: a correction or an
+    enhancement change SHOULD make assets stale, because it changes what a
+    regeneration would read. Each segment's speaker is the *attributed* name resolved
     through :func:`voxint.adjudication.transcript.display_name` (the one
     attribution truth the console and export share), so an adjudication or a
     speaker rename/merge changes the snapshot and marks assets stale. Raises
@@ -202,6 +203,14 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
     # keyed by label; a segment whose label has no resolver state (e.g. no
     # diarization turn) falls back to the raw label inside ``display_name``.
     states = {state.label: state for state in label_states(session, pipeline_run_id)}
+    # Operator corrections overlay (issue #58, D2): assets render the same
+    # effective text (corrected → enhanced → raw) the console and export show —
+    # the invariant this builder exists to keep. source_content_hash then covers
+    # corrected text, so a correction honestly marks assets stale for regen.
+    corrected = {
+        sid: state.corrected_text
+        for sid, state in review_states(session, pipeline_run_id).items()
+    }
     metadata_row = session.execute(
         select(MediaSourceMetadata).where(MediaSourceMetadata.media_item_id == run.media_item_id)
     ).scalar_one_or_none()
@@ -231,7 +240,7 @@ def load_source(session: Session, pipeline_run_id: uuid.UUID) -> RunAssetSource:
                 speaker=sanitize_speaker(display_name(states.get(row.diarization_label or ""), row))
                 or row.diarization_label
                 or "(no speaker)",
-                text=row.enhanced_text or row.raw_text,
+                text=effective_text(row, corrected.get(row.id)),
             )
             for row in rows
         ),

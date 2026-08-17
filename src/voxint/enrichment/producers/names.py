@@ -35,6 +35,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import review_states
+from voxint.adjudication.transcript import effective_text
 from voxint.config import Settings
 from voxint.db.models import (
     ClaimField,
@@ -84,8 +86,14 @@ def _input_signature(
     name_seeds: tuple[str, ...],
     metadata: MediaSourceMetadata | None,
     segments: list[TranscriptSegment],
+    corrected: dict[uuid.UUID, str | None],
 ) -> str:
-    """Content hash of everything that determines this producer's output."""
+    """Content hash of everything that determines this producer's output.
+
+    ``corrected`` maps segment id → operator-corrected text (issue #58, D2), so
+    the hash covers the *effective* text the mining reads. Correcting a name
+    therefore honestly marks the name suggestions stale for re-mining, exactly as
+    the console/export precedence renders the correction (one shared selector)."""
     payload: dict[str, object] = {
         "producer": PRODUCER_NAME,
         "producer_version": PRODUCER_VERSION,
@@ -106,7 +114,7 @@ def _input_signature(
             {
                 "index": segment.segment_index,
                 "label": segment.diarization_label,
-                "text": segment.enhanced_text or segment.raw_text,
+                "text": effective_text(segment, corrected.get(segment.id)),
                 "suspect": segment.suspect,
                 "start": segment.start_seconds,
             }
@@ -213,6 +221,12 @@ def run_offline_name_producer(
             .order_by(TranscriptSegment.segment_index)
         ).scalars()
     )
+    # Operator corrections overlay (issue #58, D2): the mining reads the same
+    # effective text (corrected → enhanced → raw) the console and exports show,
+    # via the one shared selector, so the two can never disagree.
+    corrected = {
+        sid: state.corrected_text for sid, state in review_states(session, run_id).items()
+    }
 
     # Read the pack the run was TRANSCRIBED with (its frozen #11 snapshot), not the
     # mutable global env — so late enrichment can never diverge from transcription,
@@ -220,7 +234,11 @@ def run_offline_name_producer(
     # the pack on disk or DOMAIN_PACK_PATH later changes.
     pack = domain_pack_from_snapshot(run.domain_pack, settings)
     signature = _input_signature(
-        run_id=run_id, name_seeds=pack.name_seeds, metadata=metadata, segments=segments
+        run_id=run_id,
+        name_seeds=pack.name_seeds,
+        metadata=metadata,
+        segments=segments,
+        corrected=corrected,
     )
     idempotency_key = f"{PRODUCER_NAME}:{run_id}:{signature}"
     existing = session.execute(
@@ -246,7 +264,7 @@ def run_offline_name_producer(
             )
         )
     for segment in segments:
-        text = segment.enhanced_text or segment.raw_text
+        text = effective_text(segment, corrected.get(segment.id))
         mentions.extend(
             extract_from_segment(
                 text,

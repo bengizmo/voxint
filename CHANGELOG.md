@@ -21,8 +21,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   full-text-searchable** (#58): a word you fixed is findable from the `/runs`
   search alongside the raw and enhanced renderings — never coalesced, so a term
   is found in whichever rendering contains it, and the hit snippet shows the
-  corrected wording. *(The verify-and-advance keyboard loop UI and feeding
-  corrections to name enrichment land next.)*
+  corrected wording. **Name enrichment and generated summaries now read
+  corrections too** (#58): the offline/LLM name miners and the run-asset
+  generators consume the same effective text the console shows, so fixing a
+  proper name honestly re-mines names and marks the affected summaries stale for
+  regeneration (operator-triggered — no rerun storm). *(The verify-and-advance
+  keyboard loop UI lands next.)*
 - **Low-confidence highlight in the transcript** (#53, #47): faster-whisper
   already reports how sure it was of each segment, but Voxint used to throw that
   away. The transcript now flags segments the model was **uncertain** about — a

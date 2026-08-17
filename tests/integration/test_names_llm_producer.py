@@ -9,9 +9,11 @@ import uuid
 from collections.abc import Iterator
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.fakes import FailingLLM, FakeLLM
+from voxint.adjudication.review_state import set_correction
 from voxint.clients.base import SpeakerNameHint
 from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun, TranscriptSegment
@@ -75,6 +77,35 @@ def test_located_self_hint_becomes_run_label_candidate(session: Session, run_id:
     assert evidence.kind == "transcript_segment"
     assert evidence.detail is not None
     assert evidence.detail["pattern_id"] == "llm_extraction"
+
+
+def test_llm_pass_reads_operator_correction(session: Session, run_id: uuid.UUID) -> None:
+    # D2 (issue #58): the LLM is fed the operator's effective text, so a name
+    # introduced only in a correction reaches the model AND is locatable as
+    # evidence; the correction is a new source → re-queries (not a replay).
+    llm = FakeLLM(name_hints=(SpeakerNameHint("S0", "jane doe", "self"),))
+    first = run_llm_name_producer(session, run_id=run_id, settings=SETTINGS, client=llm)
+    session.commit()
+
+    segment = session.execute(
+        select(TranscriptSegment).where(
+            TranscriptSegment.pipeline_run_id == run_id,
+            TranscriptSegment.segment_index == 0,
+        )
+    ).scalar_one()
+    set_correction(session, segment=segment, text="well Bob Vance checking in as always")
+    session.commit()
+
+    llm2 = FakeLLM(name_hints=(SpeakerNameHint("S0", "bob vance", "self"),))
+    second = run_llm_name_producer(session, run_id=run_id, settings=SETTINGS, client=llm2)
+    session.commit()
+
+    assert second.id != first.id  # correction changed the signature → re-queried
+    assert len(llm2.calls) == 1
+    seen = " ".join(s.text for batch in llm2.calls for s in batch)
+    assert "Bob Vance" in seen  # the model saw the corrected wording
+    names = {view.candidate.value for view in candidates_for_run(session, run_id)}
+    assert "Bob Vance" in names  # corrected-only name located → candidate
 
 
 def test_unlocatable_hint_is_dropped(session: Session, run_id: uuid.UUID) -> None:

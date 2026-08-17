@@ -15,6 +15,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from voxint.adjudication.review_state import set_correction
 from voxint.config import Settings
 from voxint.db.models import (
     EnrichmentCandidate,
@@ -141,6 +142,29 @@ def test_persists_run_and_run_label_candidates_with_real_evidence(
     assert bob_evidence.timestamp_seconds == segment.start_seconds
     assert bob.candidate.score is not None
     assert bob.candidate.score_components["base"] == 0.9
+
+
+def test_offline_miner_reads_operator_correction(
+    session: Session, run_id: uuid.UUID
+) -> None:
+    # D2 (issue #58): the miner reads the operator's effective text, so a name
+    # the operator introduced in a correction is mined, and the correction is a
+    # new source → a fresh generation (honest re-mine), never a silent no-op.
+    segment = _add_segment(
+        session, run_id, index=0, text="hi my name is bib smith", label="SPEAKER_01"
+    )
+    before = _produce(session, run_id)
+    names_before = {view.candidate.value for view in candidates_for_run(session, run_id)}
+    assert "Bob Smith" not in names_before
+
+    set_correction(session, segment=segment, text="hi my name is Bob Smith")
+    session.commit()
+    after = _produce(session, run_id)
+
+    assert after.id != before.id
+    assert after.generation == before.generation + 1
+    names_after = {view.candidate.value for view in candidates_for_run(session, run_id)}
+    assert "Bob Smith" in names_after
 
 
 def test_empty_run_records_authoritative_none(session: Session, run_id: uuid.UUID) -> None:

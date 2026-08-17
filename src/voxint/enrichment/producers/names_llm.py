@@ -33,6 +33,8 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import review_states
+from voxint.adjudication.transcript import effective_text
 from voxint.app_settings import (
     get_app_settings,
     resolve_effective_llm_api_key,
@@ -67,11 +69,17 @@ LLM_CANDIDATE_SCORE = 0.5
 
 
 def _input_signature(
-    *, run_id: uuid.UUID, settings: Settings, segments: list[TranscriptSegment]
+    *,
+    run_id: uuid.UUID,
+    settings: Settings,
+    segments: list[TranscriptSegment],
+    corrected: dict[uuid.UUID, str | None],
 ) -> str:
     # Batching shapes the LLM's per-request context (and therefore its hints),
     # and the same model name can front different endpoints — both belong in
-    # the replay identity alongside the exact transcript content.
+    # the replay identity alongside the exact transcript content. ``corrected``
+    # folds operator corrections (issue #58, D2) into that content via the shared
+    # effective_text selector, so a correction honestly re-mines names.
     payload: dict[str, object] = {
         "producer": LLM_PRODUCER_NAME,
         "producer_version": LLM_PRODUCER_VERSION,
@@ -84,7 +92,7 @@ def _input_signature(
             {
                 "index": segment.segment_index,
                 "label": segment.diarization_label,
-                "text": segment.enhanced_text or segment.raw_text,
+                "text": effective_text(segment, corrected.get(segment.id)),
             }
             for segment in segments
         ],
@@ -94,20 +102,25 @@ def _input_signature(
 
 
 def _batches(
-    segments: list[TranscriptSegment], *, max_segments: int, max_chars: int
+    segments: list[TranscriptSegment],
+    *,
+    max_segments: int,
+    max_chars: int,
+    corrected: dict[uuid.UUID, str | None],
 ) -> list[tuple[EnhancementRequestSegment, ...]]:
     """Contiguous batches bounded by count and characters.
 
     A single segment longer than ``max_chars`` travels alone rather than
     being split or dropped — deliberate parity with ``enhance_match``'s
     ``_build_batches`` (splitting mid-segment would break the label-scoped
-    evidence mapping the location check depends on).
+    evidence mapping the location check depends on). The LLM sees the operator's
+    effective text (issue #58, D2), the same rendering hashed and located below.
     """
     batches: list[tuple[EnhancementRequestSegment, ...]] = []
     current: list[EnhancementRequestSegment] = []
     chars = 0
     for segment in segments:
-        text = segment.enhanced_text or segment.raw_text
+        text = effective_text(segment, corrected.get(segment.id))
         if current and (len(current) >= max_segments or chars + len(text) > max_chars):
             batches.append(tuple(current))
             current, chars = [], 0
@@ -130,14 +143,20 @@ _LETTER = r"[^\W\d_]"
 
 
 def _locate(
-    name: str, segments: list[TranscriptSegment], *, label: str | None
+    name: str,
+    segments: list[TranscriptSegment],
+    *,
+    label: str | None,
+    corrected: dict[uuid.UUID, str | None],
 ) -> TranscriptSegment | None:
     """First segment containing the name as whole words (NFKC + casefolded).
 
     ``label`` restricts the search to that diarization label's own segments —
     the requirement for a self-hint to become a cluster-level claim. The
     match requires non-letter boundaries on both sides: a substring hit
-    inside a longer word is not verbatim evidence.
+    inside a longer word is not verbatim evidence. Searches the same effective
+    text (issue #58, D2) the LLM was fed, so a name the operator introduced in a
+    correction is locatable as evidence.
     """
     needle = unicodedata.normalize("NFKC", name).casefold()
     pattern = re.compile(rf"(?<!{_LETTER}){re.escape(needle)}(?!{_LETTER})", re.UNICODE)
@@ -145,7 +164,7 @@ def _locate(
         if label is not None and segment.diarization_label != label:
             continue
         haystack = unicodedata.normalize(
-            "NFKC", segment.enhanced_text or segment.raw_text
+            "NFKC", effective_text(segment, corrected.get(segment.id))
         ).casefold()
         if pattern.search(haystack):
             return segment
@@ -195,8 +214,16 @@ def run_llm_name_producer(
             .order_by(TranscriptSegment.segment_index)
         ).scalars()
     )
+    # Operator corrections overlay (issue #58, D2): the LLM reads, the signature
+    # hashes, and _locate searches the same effective text the console/export
+    # render — one shared selector, so the four can never disagree.
+    corrected = {
+        sid: state.corrected_text for sid, state in review_states(session, run_id).items()
+    }
 
-    signature = _input_signature(run_id=run_id, settings=exec_settings, segments=segments)
+    signature = _input_signature(
+        run_id=run_id, settings=exec_settings, segments=segments, corrected=corrected
+    )
     idempotency_key = f"{LLM_PRODUCER_NAME}:{run_id}:{signature}"
     existing = session.execute(
         select(EnrichmentProducerRun).where(
@@ -223,6 +250,7 @@ def run_llm_name_producer(
                 segments,
                 max_segments=settings.llm_batch_max_segments,
                 max_chars=settings.llm_batch_max_chars,
+                corrected=corrected,
             ):
                 try:
                     hints.extend(llm.enhance_segments(batch, "").name_hints)
@@ -241,13 +269,13 @@ def run_llm_name_producer(
         if name is None:
             continue
         label = hint.diarization_label if hint.kind == "self" else None
-        located = _locate(name, segments, label=label)
+        located = _locate(name, segments, label=label, corrected=corrected)
         if located is None:
             continue  # unlocatable model output is dropped, not persisted
         evidence = TranscriptEvidence(
             transcript_segment_id=located.id,
             timestamp_seconds=located.start_seconds,
-            snippet=(located.enhanced_text or located.raw_text)[:200],
+            snippet=effective_text(located, corrected.get(located.id))[:200],
             detail={
                 "pattern_id": "llm_extraction",
                 "kind": hint.kind,
