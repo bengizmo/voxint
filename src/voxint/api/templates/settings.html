@@ -55,14 +55,14 @@
       Enable LLM enhancement</label>
   </div>
   <div class="field">
-    <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = default)</span></label>
+    <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = use the installation setting)</span></label>
     <input type="url" id="llm_base_url" name="llm_base_url" value="{{ llm_base_url }}"
-           placeholder="https://api.openai.com/v1">
+           placeholder="{{ llm_base_url_default }}">
   </div>
   <div class="field">
-    <label for="llm_model">Model <span class="muted">(blank = default)</span></label>
+    <label for="llm_model">Model <span class="muted">(blank = use the installation setting)</span></label>
     <input type="text" id="llm_model" name="llm_model" value="{{ llm_model }}"
-           placeholder="gpt-4o-mini">
+           placeholder="{{ llm_model_default }}">
   </div>
   <div class="field">
     <label for="llm_api_key">API key

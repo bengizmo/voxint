@@ -48,6 +48,28 @@ def resolve_effective_llm_endpoint(
     return base_url, model
 
 
+def llm_endpoint_form_fields(
+    row: AppSettings | None, settings: Settings
+) -> tuple[str, str, str, str]:
+    """``(base_value, base_default, model_value, model_default)`` for the LLM forms.
+
+    ``*_value`` is the ROW override, or ``""`` when it is ``NULL`` — so the input
+    renders BLANK and the operator sees they are inheriting the installation
+    setting, rather than an env-sourced value silently prefilled into the field.
+    ``*_default`` is the env default, shown as the placeholder.
+
+    This deliberately does NOT collapse ``NULL`` into the effective value the way
+    :func:`resolve_effective_llm_endpoint` does for reads: the form must
+    distinguish "pinned row override" from "inheriting env" so that saving an
+    untouched form leaves the column ``NULL`` (issue #46) instead of pinning the
+    env value onto the row. The tri-state "revert to installation setting"
+    semantics mirror the ``remove_llm_api_key`` checkbox for the key.
+    """
+    base_value = row.llm_base_url if row is not None and row.llm_base_url else ""
+    model_value = row.llm_model if row is not None and row.llm_model else ""
+    return base_value, settings.llm_base_url, model_value, settings.llm_model
+
+
 def resolve_effective_llm_enabled(row: AppSettings | None, settings: Settings) -> bool:
     """Effective LLM enablement: the ROW value wins, else env ``LLM_ENABLED``.
 

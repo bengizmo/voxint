@@ -152,10 +152,10 @@ from voxint.app_settings import (
     get_app_settings,
     get_or_create,
     is_onboarded,
+    llm_endpoint_form_fields,
     mark_tutorial_complete,
     ready_tutorial_run_id,
     resolve_effective_llm_api_key,
-    resolve_effective_llm_endpoint,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -1075,7 +1075,9 @@ def _setup_context(
     row = get_app_settings(session)
     media_folders = list(row.media_folders) if row and row.media_folders else []
     vocabulary = list(row.vocabulary) if row and row.vocabulary else []
-    _llm_base_url, _llm_model = resolve_effective_llm_endpoint(row, settings)
+    _base_value, _base_default, _model_value, _model_default = llm_endpoint_form_fields(
+        row, settings
+    )
     context: dict[str, Any] = {
         "request": request,
         "step": step,
@@ -1089,12 +1091,15 @@ def _setup_context(
         "media_folders_text": "\n".join(media_folders),
         "vocabulary": vocabulary,
         "vocabulary_text": "\n".join(vocabulary),
-        # LLM step: the row's enablement over env, its (non-secret) effective
-        # endpoint, and whether an EFFECTIVE key (UI-stored row value winning over
-        # env) is present and where it comes from — never the key value itself.
+        # LLM step: the row's enablement over env, its (non-secret) endpoint OVERRIDE
+        # (blank when inheriting env; env default shown as placeholder — issue #46),
+        # and whether an EFFECTIVE key (UI-stored row value winning over env) is
+        # present and where it comes from — never the key value itself.
         "llm_enabled": bool(row.llm_enabled) if row is not None else settings.llm_enabled,
-        "llm_base_url": _llm_base_url,
-        "llm_model": _llm_model,
+        "llm_base_url": _base_value,
+        "llm_base_url_default": _base_default,
+        "llm_model": _model_value,
+        "llm_model_default": _model_default,
         "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
         "llm_key_source": effective_llm_key_source(row, settings),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
@@ -1143,6 +1148,16 @@ def _persist_llm_settings(
     """
     base_url = normalize_llm_base_url(raw_base_url)
     model = normalize_llm_model(raw_model)
+    # Tri-state "revert to installation setting" (issue #46): a blank field already
+    # normalizes to None, but a submission that merely echoes the env default (the
+    # forms render blank with that default as placeholder, yet an operator may still
+    # type it) must ALSO store NULL so the row keeps inheriting env — otherwise
+    # saving any LLM change silently pins the env value onto the row and a later
+    # LLM_BASE_URL/LLM_MODEL change stops applying with no cue.
+    if base_url is not None and base_url == settings.llm_base_url:
+        base_url = None
+    if model is not None and model == settings.llm_model:
+        model = None
     new_key = normalize_llm_api_key(raw_key)
     if remove_key and new_key is not None:
         # Contradictory: the operator both typed a replacement and asked to remove.
@@ -3111,15 +3126,22 @@ def _register_routes(app: FastAPI) -> None:
         settings: Settings = request.app.state.settings
         tutorial_run = ready_tutorial_run_id(session)
         row = get_app_settings(session)
-        llm_base_url, llm_model = resolve_effective_llm_endpoint(row, settings)
+        base_value, base_default, model_value, model_default = llm_endpoint_form_fields(
+            row, settings
+        )
         context: dict[str, Any] = {
             "request": request,
             "tutorial_available": tutorial_run is not None,
             "tutorial_run_id": tutorial_run,
             "tutorial_completed_at": row.tutorial_completed_at if row else None,
             "llm_enabled": bool(row.llm_enabled) if row is not None else settings.llm_enabled,
-            "llm_base_url": llm_base_url,
-            "llm_model": llm_model,
+            # Endpoint OVERRIDE (blank when inheriting env), env default as
+            # placeholder — the tri-state render that keeps an untouched save from
+            # pinning the env value onto the row (issue #46).
+            "llm_base_url": base_value,
+            "llm_base_url_default": base_default,
+            "llm_model": model_value,
+            "llm_model_default": model_default,
             "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
             "llm_key_source": effective_llm_key_source(row, settings),
             "llm_budget_ok": llm_budget_fits_stage_lease(settings),

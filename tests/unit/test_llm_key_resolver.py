@@ -8,6 +8,7 @@ precedence + canonical-stripping contract the rest of the feature relies on.
 
 from voxint.app_settings import (
     effective_llm_key_source,
+    llm_endpoint_form_fields,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
@@ -85,6 +86,43 @@ def test_endpoint_null_row_fields_fall_back_per_field() -> None:
     base, model = resolve_effective_llm_endpoint(row, _settings())
     assert base == "https://row.example/v1"
     assert model == "env-model"  # NULL model falls back independently
+
+
+# ------------------------------------------------- llm_endpoint_form_fields
+# Tri-state render for the LLM forms (issue #46): the input value is the ROW
+# override (blank when NULL), NOT the effective value; the placeholder is the env
+# default. This is what keeps an untouched save from pinning the env value.
+
+
+def test_form_fields_null_row_renders_blank_with_env_placeholder() -> None:
+    base_value, base_default, model_value, model_default = llm_endpoint_form_fields(
+        None, _settings()
+    )
+    assert base_value == ""  # blank input → operator sees they inherit
+    assert model_value == ""
+    assert base_default == "https://env.example/v1"  # placeholder = env default
+    assert model_default == "env-model"
+
+
+def test_form_fields_override_row_renders_override() -> None:
+    row = AppSettings(id=1, llm_base_url="https://row.example/v1", llm_model="row-model")
+    base_value, base_default, model_value, model_default = llm_endpoint_form_fields(
+        row, _settings()
+    )
+    assert base_value == "https://row.example/v1"
+    assert model_value == "row-model"
+    assert base_default == "https://env.example/v1"  # placeholder still the env default
+    assert model_default == "env-model"
+
+
+def test_form_fields_null_fields_render_blank_per_field() -> None:
+    # A row with only base_url pinned renders base as override, model as blank.
+    row = AppSettings(id=1, llm_base_url="https://row.example/v1", llm_model=None)
+    base_value, _base_default, model_value, _model_default = llm_endpoint_form_fields(
+        row, _settings()
+    )
+    assert base_value == "https://row.example/v1"
+    assert model_value == ""
 
 
 # ---------------------------------------------- resolve_effective_llm_enabled

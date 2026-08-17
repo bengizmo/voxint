@@ -256,3 +256,143 @@ def test_settings_html_never_echoes_stored_key(
     body = client.get("/settings").text
     assert STORED_SENTINEL not in body
     assert "stored" in body
+
+
+# ---------------------------- endpoint env-fallback (issue #46) ----------------
+# The base_url/model inputs must render the ROW OVERRIDE (blank when inheriting
+# env, env default as placeholder), and a save must store NULL — not pin the env
+# value — when the submitted value is blank or merely equals the env default.
+
+ENV_BASE = "https://env.example/v1"
+ENV_MODEL = "env-model"
+
+
+def test_settings_untouched_endpoint_stays_null(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Saving the LLM form without touching base_url/model (blank fields, as the
+    # forms now render for an inheriting row) leaves both columns NULL.
+    client = make_client(
+        session_factory, media_root, onboarded=True,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    resp = client.post(
+        "/settings/llm", data=_settings_form(enabled="true"), follow_redirects=False
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_base_url is None
+    assert row.llm_model is None
+
+
+def test_settings_endpoint_equal_to_env_default_stores_null(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # An operator who re-submits the env default (e.g. copied from the placeholder)
+    # keeps inheriting: the column stays NULL rather than pinning the env value.
+    client = make_client(
+        session_factory, media_root, onboarded=True,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    resp = client.post(
+        "/settings/llm",
+        data=_settings_form(enabled="true", llm_base_url=ENV_BASE, llm_model=ENV_MODEL),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_base_url is None
+    assert row.llm_model is None
+
+
+def test_settings_endpoint_override_stores_value(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A genuinely different value is a deliberate override and is stored verbatim.
+    client = make_client(
+        session_factory, media_root, onboarded=True,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    resp = client.post(
+        "/settings/llm",
+        data=_settings_form(
+            enabled="true",
+            llm_base_url="https://row.example/v1",
+            llm_model="row-model",
+        ),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_base_url == "https://row.example/v1"
+    assert row.llm_model == "row-model"
+
+
+def test_settings_endpoint_inputs_blank_when_inheriting_env(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # NULL row endpoint + env set → the input value is NOT the env value (that was
+    # the bug: prefilling the effective value pins it on the next save); the env
+    # default is offered as the placeholder instead.
+    client = make_client(
+        session_factory, media_root, onboarded=True,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    _seed_stored_key(session_factory, STORED_SENTINEL)  # row exists, endpoint NULL
+    body = client.get("/settings").text
+    assert f'value="{ENV_BASE}"' not in body  # env value never pinned into the input
+    assert f'value="{ENV_MODEL}"' not in body
+    assert f'placeholder="{ENV_BASE}"' in body  # shown as the default hint
+    assert f'placeholder="{ENV_MODEL}"' in body
+
+
+def test_settings_endpoint_inputs_show_override(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client = make_client(
+        session_factory, media_root, onboarded=True,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.llm_base_url = "https://row.example/v1"
+        row.llm_model = "row-model"
+        session.commit()
+    body = client.get("/settings").text
+    assert 'value="https://row.example/v1"' in body
+    assert 'value="row-model"' in body
+
+
+def test_setup_endpoint_equal_to_env_default_stores_null(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Same tri-state on the wizard's LLM step.
+    client = make_client(
+        session_factory, media_root,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    resp = client.post(
+        "/setup/llm",
+        data=_setup_form(enabled="true", llm_base_url=ENV_BASE, llm_model=ENV_MODEL),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_base_url is None
+    assert row.llm_model is None
+
+
+def test_setup_endpoint_inputs_blank_when_inheriting_env(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client = make_client(
+        session_factory, media_root,
+        llm_api_key=ENV_SENTINEL, llm_base_url=ENV_BASE, llm_model=ENV_MODEL,
+    )
+    body = client.get("/setup?step=llm").text
+    assert f'value="{ENV_BASE}"' not in body
+    assert f'placeholder="{ENV_BASE}"' in body

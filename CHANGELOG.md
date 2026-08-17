@@ -126,6 +126,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   untouched.
 
 ### Fixed
+- **Saving LLM settings no longer silently pins the endpoint** (#46): the setup
+  and settings LLM forms used to prefill the base-URL/model inputs with the
+  *effective* value, which is the environment default when no override is stored
+  — so saving any LLM change (even just adding a key) re-submitted that value and
+  quietly converted the `LLM_BASE_URL`/`LLM_MODEL` fallback into a pinned
+  database override, after which later environment changes stopped applying with
+  no visible cue. The inputs now render **blank when inheriting** (the
+  environment default is shown as the placeholder), and a save stores **NULL**
+  when the field is blank *or* merely equals the environment default, so the row
+  keeps inheriting; a genuinely different value is stored as a deliberate
+  override. Same "revert to the installation setting" behaviour the *remove saved
+  key* checkbox already gives for the API key.
 - **Enrichment jobs no longer strand on a malformed LLM endpoint** (#46): the
   LLM client is now built *inside* each enrichment worker's failure boundary, so
   a malformed `LLM_BASE_URL` set only in the environment (never validated by the
