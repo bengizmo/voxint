@@ -21,6 +21,7 @@ from voxint.clients.base import (
     EnhancementRequestSegment,
     SpeakerNameHint,
 )
+from voxint.media.redaction import redact
 
 CONNECT_TIMEOUT_SECONDS = 10.0
 HINT_KINDS = frozenset({"self", "other"})
@@ -116,6 +117,10 @@ class HttpLLMClient:
     ) -> None:
         self._model = model
         self._owns_client = client is None
+        # Kept only to scrub it from error bodies (see _http_error): an endpoint
+        # that echoes the Authorization header back in a 4xx/5xx body must not
+        # leak the key into worker logs (the enrichment jobs log LLMError text).
+        self._api_key = api_key
         # Per-request auth (not client-level) so injected clients get it too.
         self._headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self._client = client or httpx.Client(
@@ -127,6 +132,19 @@ class HttpLLMClient:
                 pool=timeout_seconds,
             ),
         )
+
+    def _http_error(self, response: httpx.Response) -> LLMError:
+        """Build an :class:`LLMError` for a 4xx/5xx reply with the body redacted.
+
+        The body is untrusted remote text that the enrichment jobs log verbatim.
+        An endpoint that echoes the request's ``Authorization`` header back would
+        otherwise leak the key, so scrub the known key (``redact`` handles the
+        empty-key case) BEFORE bounding — truncating first could split the secret
+        across the cut and defeat the scrub. This guards the realistic literal
+        echo; it does not chase a key transformed by the endpoint's own encoding.
+        """
+        body = redact(response.text, extra_secrets=(self._api_key,))
+        return LLMError(f"HTTP {response.status_code}: {body[:500]}")
 
     def enhance_segments(
         self,
@@ -165,8 +183,16 @@ class HttpLLMClient:
         except httpx.HTTPError as exc:
             raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
-            raise LLMError(f"HTTP {response.status_code}: {response.text[:500]}")
-        return _parse_batch(response, segments)
+            raise self._http_error(response)
+        try:
+            return _parse_batch(response, segments)
+        except LLMError as exc:
+            # A 200 reply is still untrusted: _parse_batch reflects offending
+            # reply fragments into its message, and the enrichment jobs log that
+            # text. Scrub the key here too so a body that echoes the Authorization
+            # header inside otherwise-valid JSON cannot leak it — the same guard
+            # _http_error applies to the 4xx/5xx path.
+            raise LLMError(redact(str(exc), extra_secrets=(self._api_key,))) from exc
 
     def chat_json(self, messages: Sequence[ChatMessage]) -> dict[str, object]:
         """One temperature-0 chat call whose reply must be a JSON object.
@@ -188,7 +214,7 @@ class HttpLLMClient:
         except httpx.HTTPError as exc:
             raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
-            raise LLMError(f"HTTP {response.status_code}: {response.text[:500]}")
+            raise self._http_error(response)
         try:
             content = response.json()["choices"][0]["message"]["content"]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
@@ -289,7 +315,7 @@ def _parse_batch(
         if not isinstance(label, str) or not isinstance(name, str) or kind not in HINT_KINDS:
             raise LLMError(f"name_hints entry has wrong shape: {item!r:.200}")
         if label not in known_labels:
-            raise LLMError(f"name_hints entry references unknown label {label!r}")
+            raise LLMError(f"name_hints entry references unknown label {label!r:.200}")
         if not name.strip():
             raise LLMError("name_hints entry has a blank name")
         if "\x00" in name:

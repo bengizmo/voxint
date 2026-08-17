@@ -297,6 +297,63 @@ def test_chat_json_surfaces_http_and_transport_failures() -> None:
         transport.chat_json([ChatMessage(role="user", content="go")])
 
 
+def test_http_error_body_redacts_the_api_key() -> None:
+    # An endpoint that echoes the request's Authorization header back in its
+    # error body must not leak the key: the enrichment jobs log the LLMError
+    # text verbatim. The key is scrubbed from both enhance_segments and chat_json
+    # HTTP-error paths, while the status and a redacted body remain for debugging.
+    key = "sk-unit-test-do-not-log"
+
+    def echo_auth(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401, text=f'{{"error":"bad key: {request.headers["authorization"]}"}}'
+        )
+
+    enhance = make_client(echo_auth, api_key=key)
+    with pytest.raises(LLMError) as enhance_exc:
+        enhance.enhance_segments(SEGMENTS, "")
+    assert "HTTP 401" in str(enhance_exc.value)
+    assert key not in str(enhance_exc.value)
+
+    chat = make_client(echo_auth, api_key=key)
+    with pytest.raises(LLMError) as chat_exc:
+        chat.chat_json([ChatMessage(role="user", content="go")])
+    assert "HTTP 401" in str(chat_exc.value)
+    assert key not in str(chat_exc.value)
+
+
+def test_http_error_without_key_still_surfaces_body() -> None:
+    # No configured key (empty) must not break redaction — the body still surfaces.
+    client = make_client(lambda r: httpx.Response(500, text="upstream boom"), api_key="")
+    with pytest.raises(LLMError, match="HTTP 500: upstream boom"):
+        client.chat_json([ChatMessage(role="user", content="go")])
+
+
+def test_http_error_redacts_key_straddling_the_500_char_cut() -> None:
+    # redact runs BEFORE the [:500] slice, so a key straddling the cut cannot
+    # survive as a partial fragment. Pad so the key spans char 500.
+    key = "sk-unit-test-do-not-log"
+    body = "x" * 490 + key + "y" * 100
+    client = make_client(lambda r: httpx.Response(500, text=body), api_key=key)
+    with pytest.raises(LLMError) as exc:
+        client.chat_json([ChatMessage(role="user", content="go")])
+    assert key not in str(exc.value)
+    # No partial-key fragment either: no run of the key's distinctive prefix.
+    assert "sk-unit-test" not in str(exc.value)
+
+
+def test_parse_batch_error_redacts_echoed_key() -> None:
+    # A 200 reply whose (contract-violating) content echoes the key must not leak
+    # it: _parse_batch reflects offending fragments into LLMError, and the jobs
+    # log that text. The enhance_segments path scrubs it like the 4xx path does.
+    key = "sk-unit-test-do-not-log"
+    bad = completion({"segments": [{"index": 0, "text": 123, "echo": f"Bearer {key}"}]})
+    client = make_client(lambda r: bad, api_key=key)
+    with pytest.raises(LLMError) as exc:
+        client.enhance_segments(SEGMENTS, "")
+    assert key not in str(exc.value)
+
+
 def test_chat_message_rejects_unknown_role() -> None:
     with pytest.raises(ValueError, match="unknown chat role"):
         ChatMessage(role="tool", content="x")

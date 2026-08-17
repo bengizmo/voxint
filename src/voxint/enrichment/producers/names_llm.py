@@ -239,12 +239,31 @@ def run_llm_name_producer(
     hints: list[SpeakerNameHint] = []
     if segments:
         owned = client is None
-        llm: LLMClient = client or HttpLLMClient(
-            exec_settings.llm_base_url,
-            exec_settings.llm_model,
-            effective_key,
-            exec_settings.llm_timeout_seconds,
-        )
+        llm: LLMClient
+        if client is None:
+            try:
+                llm = HttpLLMClient(
+                    exec_settings.llm_base_url,
+                    exec_settings.llm_model,
+                    effective_key,
+                    exec_settings.llm_timeout_seconds,
+                )
+            except Exception as exc:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # builds the SSL context eagerly, so a broken environment raises a
+                # non-httpx error here too. The try wraps construction ONLY (the
+                # batch loop below is a separate try), so this broad catch maps
+                # every init failure — and nothing else — to the producer's own
+                # error. That lets the CLI batch (`enrich names --llm`, which
+                # catches NameProducerError per run) isolate the bad run instead
+                # of aborting. Message carries no URL — it may hold unwanted detail.
+                raise NameProducerError(
+                    "LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)"
+                ) from exc
+        else:
+            llm = client
         try:
             for batch in _batches(
                 segments,

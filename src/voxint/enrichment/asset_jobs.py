@@ -354,12 +354,33 @@ def execute_job(
             # key wins over env and is never snapshotted into job.config, so a key
             # rotated after enqueue takes effect on execution with no restart.
             effective_key = resolve_effective_llm_api_key(get_app_settings(session), settings)
-            owned_client = HttpLLMClient(
-                exec_settings.llm_base_url,
-                exec_settings.llm_model,
-                effective_key,
-                exec_settings.llm_timeout_seconds,
-            )
+            try:
+                owned_client = HttpLLMClient(
+                    exec_settings.llm_base_url,
+                    exec_settings.llm_model,
+                    effective_key,
+                    exec_settings.llm_timeout_seconds,
+                )
+            except Exception:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # also builds the SSL context eagerly, so a broken environment
+                # (e.g. SSL_CERT_FILE pointing nowhere) raises a non-httpx error
+                # here too. Construction sits OUTSIDE the generation try below, so
+                # any escape strands the job RUNNING forever (there is no recovery
+                # sweep). The try wraps construction ONLY, so this broad catch
+                # cannot mislabel a generation error — it maps every init failure
+                # to an honest terminal row. Closed-vocabulary message; the key
+                # never appears in it, and the detail goes to the log.
+                logger.exception("run-asset job %s LLM client init failed", job_id)
+                _finish(
+                    session,
+                    job_id,
+                    status=RunAssetJobStatus.FAILED,
+                    error="LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)",
+                )
+                return
             client = owned_client
         else:
             client = llm

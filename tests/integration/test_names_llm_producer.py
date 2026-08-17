@@ -175,6 +175,17 @@ def test_disabled_flags_refuse(session: Session, run_id: uuid.UUID) -> None:
         run_llm_name_producer(session, run_id=run_id, settings=DISABLED, client=FakeLLM())
 
 
+def test_malformed_base_url_raises_producer_error(session: Session, run_id: uuid.UUID) -> None:
+    # With no injected client, a malformed env-only LLM_BASE_URL raises
+    # httpx.InvalidURL while httpx builds the client. Mapping it to
+    # NameProducerError lets the CLI batch (`enrich names --llm`, which catches
+    # NameProducerError per run) isolate the bad run instead of aborting on an
+    # uncaught exception. The message names no URL.
+    bad = SETTINGS.model_copy(update={"llm_base_url": "http://[::1"})
+    with pytest.raises(NameProducerError, match="could not be initialized"):
+        run_llm_name_producer(session, run_id=run_id, settings=bad, client=None)
+
+
 def test_identical_rerun_replays_without_requerying(session: Session, run_id: uuid.UUID) -> None:
     llm = FakeLLM(name_hints=(SpeakerNameHint("S0", "jane doe", "self"),))
     first = run_llm_name_producer(session, run_id=run_id, settings=SETTINGS, client=llm)

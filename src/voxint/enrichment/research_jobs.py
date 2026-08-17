@@ -103,7 +103,9 @@ def _settings_from_snapshot(settings: Settings, budget: dict[str, object]) -> Se
     update_fields = {
         field: budget[key]
         for key, field in _BUDGET_FIELDS.items()
-        if isinstance(budget.get(key), (int, float))
+        # bool is an int subclass — a corrupted snapshot must not smuggle
+        # True into a numeric budget field (mirrors asset_jobs._settings_from_snapshot).
+        if isinstance(budget.get(key), (int, float)) and not isinstance(budget.get(key), bool)
     }
     return settings.model_copy(update=update_fields) if update_fields else settings
 
@@ -371,12 +373,33 @@ def execute_job(
             # stale-RUNNING bound is computed from the snapshot, so the client
             # must run under the same value or a settings change between
             # enqueue and execution could force-cancel a still-live request.
-            owned_client = HttpLLMClient(
-                live_base_url,
-                live_model,
-                effective_key,
-                _snapshot_llm_timeout(job.budget),
-            )
+            try:
+                owned_client = HttpLLMClient(
+                    live_base_url,
+                    live_model,
+                    effective_key,
+                    _snapshot_llm_timeout(job.budget),
+                )
+            except Exception:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # also builds the SSL context eagerly, so a broken environment
+                # (e.g. SSL_CERT_FILE pointing nowhere) raises a non-httpx error
+                # here too. Construction sits OUTSIDE the research try below, so
+                # any escape strands the job RUNNING forever (there is no recovery
+                # sweep). Crucially the try wraps construction ONLY — the research
+                # loop (which also drives httpx for web search/read) is a separate
+                # try below — so this broad catch cannot relabel a loop error as
+                # "endpoint misconfigured". Closed-vocabulary message, no key.
+                logger.exception("research job %s LLM client init failed", job_id)
+                _finish(
+                    session,
+                    job_id,
+                    status=ResearchJobStatus.FAILED,
+                    error="LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)",
+                )
+                return
             client = owned_client
         else:
             client = llm
