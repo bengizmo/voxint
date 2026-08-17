@@ -101,4 +101,6 @@ def test_single_alembic_head() -> None:
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert list(heads) == ["0016"]
+    # One linear head, no branches. Bump this to the newest revision whenever a
+    # migration is added (0017 = adjudication segment scope, issue #54).
+    assert list(heads) == ["0017"]
