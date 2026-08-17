@@ -488,10 +488,12 @@ be split rather than guessing at boundaries. Splitting and inline editing are
 **mutually exclusive**: a segment that has been split cannot then be edited (and a
 segment with an operator correction cannot be split) — the box is disabled with a
 short note, because a split's text is word-derived and a free-form edit would have
-nowhere faithful to live. There is no un-split control in this release; a mis-split
-is cleared by re-transcribing the run. Like inline editing, splitting needs the
-browser island — with JavaScript off the transcript still lists any already-derived
-child lines, but no new split can be made.
+nowhere faithful to live. A segment can be cut once (into two children); splitting
+an already-split segment into more parts is refused in this release, and there is
+no un-split control — a mis-split is cleared by re-transcribing the run. Like
+inline editing, splitting needs the browser island — with JavaScript off the
+transcript still lists any already-derived child lines, but no new split can be
+made.
 
 **Reassign a split child to the right speaker.** A split's two halves start out
 sharing the parent segment's single resolved speaker, which is rarely what you

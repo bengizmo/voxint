@@ -54,6 +54,12 @@ export interface Segment {
   // unsplit lines and synthetic/blank lines (no partitionable range).
   wordStart: number | null;
   wordEnd: number | null;
+  // The child's OWN active word-range override speaker id (issue #59 slice 3), or
+  // null when the child merely inherits the segment's whole-segment/label speaker.
+  // The reassign picker binds its <select> to this, so the control shows a
+  // child-scoped assignment only when one truly exists (never an inherited speaker
+  // mislabeled as a child ruling), and "inherit" is selected exactly when null.
+  wordRangeSpeakerId: string | null;
 }
 
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The
@@ -423,7 +429,13 @@ export const TranscriptPlayer = forwardRef<
           if (active) classes.push("bg-sky-500/20", "px-1");
           return (
             <p
-              key={`${seg.start}-${i}`}
+              // Keyed by parent + word-range (falling back to start time) so a
+              // whole-run reconcile after a split/reassign re-associates each line
+              // with its own DOM node — a split parent's children share a start
+              // time, so a start-only key could otherwise remount the wrong <select>
+              // and drop its focus. Index keeps unsplit lines with equal starts
+              // distinct.
+              key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
               ref={active ? activeLineRef : undefined}
               data-seg-index={i}
               className={classes.join(" ")}
@@ -500,24 +512,23 @@ export const TranscriptPlayer = forwardRef<
                 reassignSpeakers != null &&
                 seg.wordStart != null &&
                 seg.wordEnd != null && (
-                  <label className="tp-reassign ml-2 text-xs opacity-80">
+                  <label
+                    className="tp-reassign ml-2 text-xs opacity-80"
+                    // Keep the whole control — label text included — off the line's
+                    // seek handler, not just the <select>.
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {" · "}speaker:{" "}
                     <select
-                      // Best-effort current selection: match the child's resolved
-                      // speaker string to a roster identity. A child with no
-                      // word-range override of its own shows its inherited speaker
-                      // (a broader override, or the raw label); when that is not a
-                      // roster name it falls to the "inherit" option. The WRITE is
-                      // by id, never by this display match, so a duplicate name can
-                      // only mis-preselect, never mis-assign.
-                      value={
-                        reassignSpeakers.find((s) => s.displayName === seg.speaker)
-                          ?.id ?? ""
-                      }
+                      // Bound to the child's OWN range-override id: "" (inherit) is
+                      // selected exactly when the child has no child-scoped ruling,
+                      // so an inherited speaker is never shown as a child assignment.
+                      // Server truth, so a failed write (no reconcile) re-imposes the
+                      // prior value on the next render rather than leaving the picked
+                      // option showing. WRITE is by id regardless.
+                      value={seg.wordRangeSpeakerId ?? ""}
                       disabled={reassignBusy}
                       aria-label={`Reassign speaker for “${seg.text}”`}
-                      // Keep the picker's clicks off the line's seek handler.
-                      onClick={(e) => e.stopPropagation()}
                       onChange={(e) => {
                         e.stopPropagation();
                         onReassign(seg, e.target.value === "" ? null : e.target.value);

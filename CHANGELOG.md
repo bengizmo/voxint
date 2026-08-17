@@ -99,8 +99,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   label. The picker POSTs the range to `/relabel` (which gains a JSON-Accept
   response path returning the whole-run reconcile, leaving the htmx labels
   workbench's HTML fragment byte-identical) and the console adopts server truth
-  wholesale. (Un-split/re-split of an already-reassigned range, and ranged
-  *correction* of a split child, remain later work.)
+  wholesale. Splitting an already-split segment into more than two parts is now
+  refused server-side (it would re-derive the children and orphan a reassignment
+  keyed on the old coordinates); the existing cut still replays idempotently.
+  (Un-split/re-split of an already-reassigned range, and ranged *correction* of a
+  split child, remain later work.)
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

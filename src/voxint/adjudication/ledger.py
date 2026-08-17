@@ -86,7 +86,11 @@ def record_decision(
     upper bound lives here because the CHECK cannot count a segment's words.
     """
     _validate_word_range(
-        session, transcript_segment_id, start_word_index, end_word_index
+        session,
+        pipeline_run_id,
+        transcript_segment_id,
+        start_word_index,
+        end_word_index,
     )
     existing = session.execute(
         select(AdjudicationDecision).where(
@@ -143,6 +147,7 @@ def record_decision(
 
 def _validate_word_range(
     session: Session,
+    pipeline_run_id: uuid.UUID,
     transcript_segment_id: uuid.UUID | None,
     start_word_index: int | None,
     end_word_index: int | None,
@@ -152,6 +157,13 @@ def _validate_word_range(
     Both-or-neither, a segment to scope, and a non-empty half-open interval whose
     ``end`` is within the parent's derivable word count. A no-range call is a
     no-op, so whole-segment and label scopes are untouched.
+
+    The scoped segment must also belong to ``pipeline_run_id``: a ranged row keyed
+    on a foreign run's segment would be permanently unreadable (``word_range_states``
+    loads it under this run, but ``attributed_transcript`` only ever looks up this
+    run's own segment ids) AND, being append-only, uncleanable — so the sole writer
+    (the documented invariant home) refuses it here rather than trust every caller
+    to have checked ownership.
     """
     if start_word_index is None and end_word_index is None:
         return
@@ -170,6 +182,10 @@ def _validate_word_range(
     parent = session.get(TranscriptSegment, transcript_segment_id)
     if parent is None:
         raise WordRangeError(f"no such transcript segment {transcript_segment_id}")
+    if parent.pipeline_run_id != pipeline_run_id:
+        raise WordRangeError(
+            f"segment {transcript_segment_id} does not belong to run {pipeline_run_id}"
+        )
     count = word_count(parent)
     if count is None:
         raise WordRangeError(

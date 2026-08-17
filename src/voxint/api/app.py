@@ -1039,6 +1039,14 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept and "application/json" not in accept
 
 
+# Response header marking a 409 as a lost/again-taken claim (issue #59), so the
+# island can distinguish it from a segment-STATE 409 the same route raises (a
+# non-child range, an already-split parent). A claim loss must stop the review
+# loop and prompt a re-claim; a state conflict shows an inline reason and keeps
+# the claim. The value is opaque; only presence + "claim" matters to the client.
+_CLAIM_CONFLICT_HEADERS = {"X-Voxint-Conflict": "claim"}
+
+
 def _wants_island_json(request: Request) -> bool:
     """True only when the caller explicitly asks for JSON (the island's ``apiFetch``
     sets ``Accept: application/json``). Unlike ``not _wants_html``, this is a
@@ -1163,6 +1171,12 @@ def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, An
         # child. Both None on unsplit and synthetic lines.
         "wordStart": ln.word_start,
         "wordEnd": ln.word_end,
+        # The child's OWN range-override speaker id (None ⇒ inheriting): the picker
+        # binds its <select> to this so it shows a child-scoped assignment only when
+        # one exists, never an inherited speaker mislabeled as a child ruling.
+        "wordRangeSpeakerId": (
+            str(ln.word_range_speaker_id) if ln.word_range_speaker_id is not None else None
+        ),
     }
 
 
@@ -3086,7 +3100,12 @@ def _register_routes(app: FastAPI) -> None:
         try:
             run = verify_claim(session, run_id, token, for_update=True)
         except ClaimMismatchError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # Marked so the island can tell a lost claim from the segment-STATE 409
+            # this route also raises (a non-child range): the picker treats a plain
+            # 409 as a state conflict, but a claim loss must stop the loop.
+            raise HTTPException(
+                status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+            ) from exc
         try:
             decision = Decision(action)
         except ValueError as exc:
@@ -3120,7 +3139,8 @@ def _register_routes(app: FastAPI) -> None:
                     status_code=409,
                     detail=(
                         f"word-range [{start_word_index}, {end_word_index}) is not a "
-                        "current split child of this segment; re-split first"
+                        "current split child of this segment; split it at that "
+                        "boundary first"
                     ),
                 )
         if speaker_id is not None:
@@ -3263,7 +3283,12 @@ def _register_routes(app: FastAPI) -> None:
         try:
             verify_claim(session, run_id, token, for_update=True)
         except ClaimMismatchError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # Marked so the island distinguishes a lost claim from the segment-STATE
+            # 409 this route also raises (already-split / corrected): the split
+            # handler treats a plain 409 as a state conflict, a claim loss must stop.
+            raise HTTPException(
+                status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+            ) from exc
         segment = session.get(TranscriptSegment, segment_id)
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -3272,6 +3297,30 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=409,
                 detail="cannot split a corrected segment; clear the correction first",
+            )
+        # This release supports a SINGLE cut per parent (two children). A second,
+        # DISTINCT cut would re-derive the children and orphan any word-range
+        # reassignment keyed on the old child coordinates — a written ruling the
+        # read path then silently ignores (issue #59 slice 3). The UI already
+        # disables further splits, but a second tab sharing the claim could still
+        # POST one; refuse it server-side. A replay of the EXISTING cut still falls
+        # through to record_split's idempotent no-op (same word_index), so /split
+        # stays idempotent.
+        existing_cuts = {
+            wi
+            for (wi,) in session.execute(
+                select(SegmentSplitBoundary.word_index).where(
+                    SegmentSplitBoundary.parent_segment_id == segment_id
+                )
+            )
+        }
+        if existing_cuts and word_index not in existing_cuts:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "segment is already split; splitting into more than two parts is "
+                    "not supported in this release — re-transcribe to clear the split"
+                ),
             )
         try:
             record_split(

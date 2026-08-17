@@ -245,7 +245,12 @@ export function ReviewStepper({
         return (await res.json()) as T;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          if (opts?.claimLostOnConflict === false) {
+          if (err.conflictKind === "claim") {
+            // The server explicitly marked this 409 as a lost/taken claim (even on
+            // a route whose OTHER 409s are state conflicts): stop the loop and
+            // prompt a re-claim, regardless of claimLostOnConflict.
+            setClaimLost(true);
+          } else if (opts?.claimLostOnConflict === false) {
             // Segment-state conflict, not a claim loss: show the server reason
             // (e.g. "cannot split a corrected segment") and keep the claim.
             setError(err.detail);

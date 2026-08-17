@@ -312,3 +312,30 @@ def test_range_without_segment_is_rejected(
                 end_word_index=1,
             )
         session.rollback()
+
+
+def test_ranged_ruling_on_a_foreign_run_segment_is_rejected(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The sole writer refuses a ranged ruling whose segment belongs to a different
+    run: such a row would be permanently unreadable (loaded under run A, but the
+    read path only looks up run A's own segment ids) AND append-only-uncleanable —
+    so the invariant home rejects it rather than trust the caller checked ownership.
+    """
+    with session_factory() as session:
+        run_a, _seg_a, speaker_id = seed_splittable_segment(session)
+        _run_b, seg_b, _speaker_b = seed_splittable_segment(session)
+        with pytest.raises(WordRangeError, match="does not belong to run"):
+            record_decision(
+                session,
+                pipeline_run_id=run_a,  # run A ...
+                diarization_label="SPEAKER_00",
+                decision=Decision.ASSIGN,
+                speaker_id=speaker_id,
+                operator="ben",
+                idempotency_key="range-foreign",
+                transcript_segment_id=seg_b,  # ... but run B's segment
+                start_word_index=0,
+                end_word_index=1,
+            )
+        session.rollback()

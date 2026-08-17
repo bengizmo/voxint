@@ -328,6 +328,121 @@ def test_review_page_hydrates_active_roster_for_picker(
     assert all(set(sp) == {"id", "displayName"} for sp in props["speakers"])
 
 
+def test_second_distinct_cut_is_rejected_and_preserves_reassignment(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A second, DISTINCT split of an already-split parent is refused (409) so it
+    cannot re-derive the children and orphan a word-range reassignment keyed on the
+    old coordinates. The existing cut still replays idempotently (200), and the
+    reassigned child keeps its speaker in the export."""
+    run_id, seg_id, other = _seed(session_factory)
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)  # children [0,2) and [2,4)
+    _reassign(client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4)
+    # A DISTINCT second cut is refused ...
+    second = client.post(
+        f"/review/{run_id}/segments/{seg_id}/split",
+        data={"token": token, "word_index": 1},
+    )
+    assert second.status_code == 409, second.text
+    # ... while a replay of the EXISTING cut is still an idempotent no-op.
+    replay = client.post(
+        f"/review/{run_id}/segments/{seg_id}/split",
+        data={"token": token, "word_index": 2},
+    )
+    assert replay.status_code == 200, replay.text
+    rows = _export(client, run_id)
+    assert [r["text"] for r in rows] == ["Hello there", "big world"]
+    assert [r["speaker"] for r in rows] == ["S0", "Other Person"]
+
+
+def test_same_range_newest_assign_wins(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Two assigns on the SAME child range: the newest wins (the reduction's core
+    promise), not the first."""
+    run_id, seg_id, first_spk = _seed(session_factory)
+    with session_factory() as session:
+        second = Speaker(display_name="Second Speaker")
+        session.add(second)
+        session.commit()
+        second_id = second.id
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    _reassign(client, run_id, seg_id, token, action="assign", speaker_id=first_spk, start=2, end=4)
+    _reassign(client, run_id, seg_id, token, action="assign", speaker_id=second_id, start=2, end=4)
+    rows = _export(client, run_id)
+    assert rows[1]["speaker"] == "Second Speaker"
+
+
+def test_ranged_inherit_falls_back_to_whole_segment_not_label(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Inherit on a child range clears only the CHILD override; the child then
+    follows the next-broader scope — a whole-segment override if one exists, NOT the
+    raw label. This is exactly what the picker's "inherit (follow the segment)"
+    copy promises."""
+    run_id, seg_id, other = _seed(session_factory)
+    with session_factory() as session:
+        whole = Speaker(display_name="Whole Segment Speaker")
+        session.add(whole)
+        session.commit()
+        whole_id = whole.id
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    _reassign(client, run_id, seg_id, token, action="assign", speaker_id=whole_id)  # whole-seg
+    _reassign(client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4)
+    # Inherit the child range: it must fall back to the WHOLE-SEGMENT speaker.
+    _reassign(client, run_id, seg_id, token, action="inherit", start=2, end=4)
+    rows = _export(client, run_id)
+    assert [r["speaker"] for r in rows] == ["Whole Segment Speaker", "Whole Segment Speaker"]
+
+
+def test_island_emits_word_range_speaker_id_only_for_child_own_override(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The island carries each child's OWN range-override speaker id (None when the
+    child inherits), so the picker binds its <select> honestly — a child-scoped
+    assignment shows only when one truly exists."""
+    run_id, seg_id, other = _seed(session_factory)
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    body = _reassign_island(
+        client, run_id, seg_id, token, action="assign", speaker_id=other, start=2, end=4
+    ).json()
+    segments = body["segments"]
+    # Child [0,2) inherits → None; child [2,4) has its own override → that speaker id.
+    assert segments[0]["wordRangeSpeakerId"] is None
+    assert segments[1]["wordRangeSpeakerId"] == str(other)
+
+
+def test_stale_claim_relabel_is_marked_as_claim_conflict(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A relabel on a stale (rotated) claim returns 409 carrying the X-Voxint-Conflict
+    'claim' marker, so the island can tell a lost claim from a segment-STATE 409 the
+    same route raises and stop the loop instead of showing a misleading inline error."""
+    run_id, seg_id, other = _seed(session_factory)
+    token = _claim(client, run_id)
+    _split(client, run_id, seg_id, token, at=2)
+    stale = token
+    _claim(client, run_id)  # takeover rotates the token, invalidating `stale`
+    resp = client.post(
+        f"/review/{run_id}/segments/{seg_id}/relabel",
+        data={
+            "token": stale,
+            "nonce": uuid.uuid4().hex,
+            "action": "assign",
+            "speaker_id": str(other),
+            "start_word_index": "2",
+            "end_word_index": "4",
+        },
+        headers={"Accept": "application/json"},
+    )
+    assert resp.status_code == 409, resp.text
+    assert resp.headers.get("X-Voxint-Conflict") == "claim"
+
+
 def test_ranged_reassign_replays_idempotently(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

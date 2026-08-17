@@ -79,6 +79,13 @@ class TranscriptLine:
     # on unsplit lines and synthetic/export lines (no partitionable range).
     word_start: int | None = None
     word_end: int | None = None
+    # The canonical speaker id of the child's OWN active word-range override, if
+    # any (issue #59 slice 3). ``None`` when the child has no range-scoped ruling
+    # and merely inherits the segment's whole-segment/label speaker. The reassign
+    # picker binds its ``<select>`` to this — so the control shows a child-scoped
+    # assignment ONLY when one truly exists, never an inherited speaker dressed up
+    # as a child ruling, and "inherit" is selected exactly when this is ``None``.
+    word_range_speaker_id: uuid.UUID | None = None
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -217,6 +224,14 @@ def attributed_transcript(
                         # reassign picker posts to scope a ruling to this child.
                         word_start=child.word_start,
                         word_end=child.word_end,
+                        # The child's OWN range override id (None ⇒ inheriting) —
+                        # what the picker's <select> binds to, so it reflects true
+                        # child-scope, not the resolved (possibly inherited) speaker.
+                        word_range_speaker_id=(
+                            child_override.speaker_id
+                            if child_override is not None
+                            else None
+                        ),
                     )
                 )
         else:

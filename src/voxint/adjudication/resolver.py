@@ -378,6 +378,10 @@ def word_range_states(
         select(AdjudicationDecision)
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
+            # A ranged row always carries a segment (the DB CHECK enforces it);
+            # asserting it here too — as segment_states does — keeps the key
+            # non-null and defends the reduction against any future CHECK relaxation.
+            AdjudicationDecision.transcript_segment_id.is_not(None),
             AdjudicationDecision.start_word_index.is_not(None),
         )
         .order_by(
