@@ -21,8 +21,9 @@ Point it at a local file (`voxint submit`), upload one through the browser, or
 hand it a URL (`voxint fetch` / `POST /fetch`), which runs a yt-dlp download as
 the pipeline's first stage. URL ingestion is authenticated admin egress, not a
 sandbox. Fetch only trusted URLs unless you run the worker with restricted
-egress (no route to private, link-local, or metadata addresses). See
-[docs/operations.md](docs/operations.md#url-ingestion--egress-security).
+egress — the opt-in `compose.ytdlp-egress.yaml` overlay ships that (a filtering
+proxy that pins yt-dlp to vetted public addresses), or use a host egress firewall.
+See [docs/operations.md](docs/operations.md#url-ingestion--egress-security).
 
 ## What it does that a bare pipeline doesn't
 

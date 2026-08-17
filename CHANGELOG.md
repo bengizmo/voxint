@@ -6,6 +6,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Restricted URL-download egress overlay** (#16): a new opt-in
+  `compose.ytdlp-egress.yaml` productizes the previously docs-only "run the worker
+  with restricted egress" guidance for the URL-ingestion SSRF residual. It routes
+  yt-dlp's always-passed `--proxy` through a small filtering forward proxy
+  (`voxint.media.egress_proxy`, shipped in the same image — no extra download)
+  that re-applies the **same** public-address policy the worker gate uses
+  (`ip_is_public`) **at the connection boundary** and connects only to the vetted
+  public IP. Because the proxy makes the outbound connection, this closes the
+  DNS-rebind window and refuses redirect / extractor destinations that resolve to
+  a private address — the part yt-dlp's independent re-resolution reopens. The
+  worker keeps its normal network (Postgres/Redis/model-services/LLM unaffected).
+  Stated honestly, it is **not** a sandbox: a helper yt-dlp spawns that ignores
+  the proxy, or the worker's own routable network, still wants a host egress
+  firewall (`docs/operations.md`, "Restricted URL-download overlay"). A passive
+  notice beside the URL-fetch form points operators to it — no config knob, no
+  status badge. Default deployments are unchanged.
 - **Per-segment verify + transcript text correction** (#53 #58, #47): the
   review console can now record that a segment has been **checked** and let the
   operator **fix the words** the model got wrong — the two halves of "adjudicate
@@ -69,6 +85,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   back (including the `Authorization` header), the key is now scrubbed from the
   error before it is raised and logged. Status and a redacted body are still
   surfaced for debugging.
+- **Optional in-product close for the URL-ingestion SSRF residual** (#16): the
+  `compose.ytdlp-egress.yaml` overlay (see Added) lets an operator constrain
+  yt-dlp's egress — including its redirects and extractor-constructed URLs — to
+  vetted public addresses without any external firewalling, closing the
+  rebind/redirect residual for yt-dlp's own HTTP(S) traffic.
 
 ## [0.16.0] - 2026-08-17
 

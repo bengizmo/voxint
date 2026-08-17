@@ -511,6 +511,37 @@ to RFC1918 / link-local / `169.254.169.254` (egress firewall or dedicated egress
 network). A blocked/refused download is a clean FAILED @ acquire the operator
 **Requeues**; it never loops.
 
+#### Restricted URL-download overlay (opt-in, recommended for untrusted URLs)
+
+The `compose.ytdlp-egress.yaml` overlay ships this restricted egress so you don't
+have to build it by hand. Stack it after the base file (and after any GPU/CPU
+tier):
+
+```bash
+docker compose -f compose.yaml -f compose.ytdlp-egress.yaml up -d
+# with a GPU tier, for example:
+docker compose -f compose.yaml -f compose.gpu.yaml -f compose.ytdlp-egress.yaml up -d
+```
+
+It runs a small filtering forward proxy (the same Voxint image, no extra
+download) on an internal network, points yt-dlp's always-passed `--proxy` at it
+(`YTDLP_PROXY`), and applies the **same** public-address policy the worker gate
+uses (`voxint.media.netcheck.ip_is_public`) **at the connection boundary**,
+connecting only to the vetted public IP. Because the proxy — not yt-dlp — makes
+the outbound connection, this closes the rebind window and refuses redirect /
+extractor destinations that resolve to a private address. The worker keeps its
+normal network, so Postgres, Redis, the model services, and the LLM/research/
+notify endpoints are unaffected.
+
+**What it does and does not cover** (state it honestly): it constrains the
+HTTP(S) traffic that honours yt-dlp's `--proxy`, *including* its redirects and
+extractor-constructed URLs. It is **not** a kernel-level route removal and **not**
+a sandbox — a helper yt-dlp spawns that ignores the proxy (e.g. ffmpeg for some
+streaming formats), or the worker container's own routable network, is beyond it.
+For that last mile, additionally deny the worker a route to RFC1918 / link-local /
+`169.254.169.254` with a host-level egress firewall. A refused destination is the
+same clean FAILED @ acquire you **Requeue**.
+
 ### Web research retrieval (issue #39; off by default)
 
 `voxint research search "<query>"` and `voxint research read <url>` are the
