@@ -184,7 +184,15 @@ class HttpLLMClient:
             raise LLMError(f"transport failure: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
             raise self._http_error(response)
-        return _parse_batch(response, segments)
+        try:
+            return _parse_batch(response, segments)
+        except LLMError as exc:
+            # A 200 reply is still untrusted: _parse_batch reflects offending
+            # reply fragments into its message, and the enrichment jobs log that
+            # text. Scrub the key here too so a body that echoes the Authorization
+            # header inside otherwise-valid JSON cannot leak it — the same guard
+            # _http_error applies to the 4xx/5xx path.
+            raise LLMError(redact(str(exc), extra_secrets=(self._api_key,))) from exc
 
     def chat_json(self, messages: Sequence[ChatMessage]) -> dict[str, object]:
         """One temperature-0 chat call whose reply must be a JSON object.
@@ -307,7 +315,7 @@ def _parse_batch(
         if not isinstance(label, str) or not isinstance(name, str) or kind not in HINT_KINDS:
             raise LLMError(f"name_hints entry has wrong shape: {item!r:.200}")
         if label not in known_labels:
-            raise LLMError(f"name_hints entry references unknown label {label!r}")
+            raise LLMError(f"name_hints entry references unknown label {label!r:.200}")
         if not name.strip():
             raise LLMError("name_hints entry has a blank name")
         if "\x00" in name:

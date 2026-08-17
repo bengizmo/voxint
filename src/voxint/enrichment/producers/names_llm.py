@@ -30,7 +30,6 @@ import unicodedata
 import uuid
 from datetime import UTC, datetime
 
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -249,15 +248,19 @@ def run_llm_name_producer(
                     effective_key,
                     exec_settings.llm_timeout_seconds,
                 )
-            except (httpx.InvalidURL, httpx.HTTPError) as exc:
-                # A malformed base_url — an env-only LLM_BASE_URL the wizard
-                # normalizer never validated — raises while httpx builds the
-                # client. Map it to the producer's own failure so the CLI batch
-                # (`enrich names --llm`, which catches NameProducerError per run)
-                # isolates the bad run instead of aborting on an uncaught
-                # InvalidURL. Message names no URL — it may carry unwanted detail.
+            except Exception as exc:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # builds the SSL context eagerly, so a broken environment raises a
+                # non-httpx error here too. The try wraps construction ONLY (the
+                # batch loop below is a separate try), so this broad catch maps
+                # every init failure — and nothing else — to the producer's own
+                # error. That lets the CLI batch (`enrich names --llm`, which
+                # catches NameProducerError per run) isolate the bad run instead
+                # of aborting. Message carries no URL — it may hold unwanted detail.
                 raise NameProducerError(
-                    "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+                    "LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)"
                 ) from exc
         else:
             llm = client

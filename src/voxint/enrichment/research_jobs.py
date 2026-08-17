@@ -19,7 +19,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, cast
 
-import httpx
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -104,7 +103,9 @@ def _settings_from_snapshot(settings: Settings, budget: dict[str, object]) -> Se
     update_fields = {
         field: budget[key]
         for key, field in _BUDGET_FIELDS.items()
-        if isinstance(budget.get(key), (int, float))
+        # bool is an int subclass — a corrupted snapshot must not smuggle
+        # True into a numeric budget field (mirrors asset_jobs._settings_from_snapshot).
+        if isinstance(budget.get(key), (int, float)) and not isinstance(budget.get(key), bool)
     }
     return settings.model_copy(update=update_fields) if update_fields else settings
 
@@ -379,21 +380,24 @@ def execute_job(
                     effective_key,
                     _snapshot_llm_timeout(job.budget),
                 )
-            except (httpx.InvalidURL, httpx.HTTPError) as exc:
-                # A malformed base_url — an env-only LLM_BASE_URL the wizard
-                # normalizer never validated — raises while httpx builds the
-                # client. Construction sits OUTSIDE the research try below, so
-                # without this the job would strand RUNNING forever (there is no
-                # recovery sweep). Catch narrowly around construction ONLY: the
-                # research loop also drives httpx (web search/read), and a raw
-                # HTTP error from there must NOT be relabeled "endpoint
-                # misconfigured". Closed-vocabulary error, key never in the text.
-                logger.warning("research job %s LLM client init failed: %s", job_id, exc)
+            except Exception:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # also builds the SSL context eagerly, so a broken environment
+                # (e.g. SSL_CERT_FILE pointing nowhere) raises a non-httpx error
+                # here too. Construction sits OUTSIDE the research try below, so
+                # any escape strands the job RUNNING forever (there is no recovery
+                # sweep). Crucially the try wraps construction ONLY — the research
+                # loop (which also drives httpx for web search/read) is a separate
+                # try below — so this broad catch cannot relabel a loop error as
+                # "endpoint misconfigured". Closed-vocabulary message, no key.
+                logger.exception("research job %s LLM client init failed", job_id)
                 _finish(
                     session,
                     job_id,
                     status=ResearchJobStatus.FAILED,
-                    error="LLM endpoint could not be initialized (check LLM_BASE_URL)",
+                    error="LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)",
                 )
                 return
             client = owned_client

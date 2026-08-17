@@ -154,7 +154,10 @@ def test_malformed_base_url_fails_not_stuck_running(
     execute_job(session_factory, job_id, settings=settings, llm=None)
     job = get_job(session_factory, job_id)
     assert job.status == ResearchJobStatus.FAILED.value
-    assert job.error == "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+    assert job.error == (
+        "LLM endpoint could not be initialized"
+        " (check the LLM endpoint setting or LLM_BASE_URL)"
+    )
     assert job.producer_run_id is None
 
 

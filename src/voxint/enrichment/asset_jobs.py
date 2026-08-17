@@ -20,7 +20,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
-import httpx
 from sqlalchemy import CursorResult, case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -362,20 +361,24 @@ def execute_job(
                     effective_key,
                     exec_settings.llm_timeout_seconds,
                 )
-            except (httpx.InvalidURL, httpx.HTTPError) as exc:
-                # A malformed base_url — an env-only LLM_BASE_URL the wizard
-                # normalizer never validated — raises while httpx builds the
-                # client. Construction sits OUTSIDE the generation try below, so
-                # without this the job would strand RUNNING forever (there is no
-                # recovery sweep). Catch narrowly around construction ONLY: a raw
-                # httpx error from generation must not be relabeled "endpoint
-                # misconfigured". Closed-vocabulary error, key never in the text.
-                logger.warning("run-asset job %s LLM client init failed: %s", job_id, exc)
+            except Exception:
+                # Building the client can fail before any request: a malformed
+                # base_url raises httpx.InvalidURL, and httpx.Client(trust_env=True)
+                # also builds the SSL context eagerly, so a broken environment
+                # (e.g. SSL_CERT_FILE pointing nowhere) raises a non-httpx error
+                # here too. Construction sits OUTSIDE the generation try below, so
+                # any escape strands the job RUNNING forever (there is no recovery
+                # sweep). The try wraps construction ONLY, so this broad catch
+                # cannot mislabel a generation error — it maps every init failure
+                # to an honest terminal row. Closed-vocabulary message; the key
+                # never appears in it, and the detail goes to the log.
+                logger.exception("run-asset job %s LLM client init failed", job_id)
                 _finish(
                     session,
                     job_id,
                     status=RunAssetJobStatus.FAILED,
-                    error="LLM endpoint could not be initialized (check LLM_BASE_URL)",
+                    error="LLM endpoint could not be initialized"
+                    " (check the LLM endpoint setting or LLM_BASE_URL)",
                 )
                 return
             client = owned_client

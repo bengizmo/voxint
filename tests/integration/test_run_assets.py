@@ -441,7 +441,32 @@ class TestJobs:
         with session_factory() as session:
             job = session.get(RunAssetJob, job_id)
             assert job.status == RunAssetJobStatus.FAILED.value
-            assert job.error == "LLM endpoint could not be initialized (check LLM_BASE_URL)"
+            assert job.error == (
+                "LLM endpoint could not be initialized"
+                " (check the LLM endpoint setting or LLM_BASE_URL)"
+            )
+            assert job.asset_id is None
+
+    def test_execute_job_non_httpx_client_init_failure_fails_not_running(
+        self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Building the client can fail with a NON-httpx error too (e.g. a broken
+        # SSL_CERT_FILE surfaces as OSError from httpx.Client's eager SSL-context
+        # build). The construction guard is `except Exception`, so this still lands
+        # the job FAILED rather than stranding it RUNNING — the try wraps only
+        # construction, so widening the clause cannot mislabel a generation error.
+        def boom(*args: object, **kwargs: object) -> None:
+            raise OSError("SSL_CERT_FILE points nowhere")
+
+        monkeypatch.setattr("voxint.enrichment.asset_jobs.HttpLLMClient", boom)
+        with session_factory() as session:
+            run_id = seed_run(session)
+        job_id = self._one_job(session_factory, run_id, RunAssetKind.SUMMARY)
+        execute_job(session_factory, job_id, settings=make_settings(), llm=None)
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.FAILED.value
+            assert "could not be initialized" in job.error
             assert job.asset_id is None
 
     def test_execute_job_gates_recheck(self, session_factory: sessionmaker[Session]) -> None:
