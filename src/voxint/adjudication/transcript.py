@@ -21,6 +21,7 @@ from voxint.adjudication.resolver import (
     review_states,
     segment_states,
 )
+from voxint.adjudication.splits import boundaries_for_run, derive_children
 from voxint.db.models import TranscriptSegment
 
 
@@ -61,6 +62,15 @@ class TranscriptLine:
     # "edited" badge). Both default to the unreviewed state.
     verified: bool = False
     corrected: bool = False
+    # Word-boundary split provenance (issue #59). A split parent expands into
+    # several derived child lines: every child carries the immutable PARENT id as
+    # ``source_segment_id`` (the verify/correct/split write target — a split's
+    # verification stays PARENT-scoped, never per child), while exactly one child
+    # per parent has ``review_target=True`` so the N-of-M queue counts one target
+    # per parent and no child is double-counted. An unsplit line is its own source
+    # and its own review target. ``None``/``False`` on a synthetic export line.
+    source_segment_id: uuid.UUID | None = None
+    review_target: bool = False
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -131,6 +141,9 @@ def attributed_transcript(
     states = {s.label: s for s in label_states(session, run_id)}
     overrides = segment_states(session, run_id)
     review = review_states(session, run_id)
+    # Every split boundary of the run, grouped by parent id, in one query — so the
+    # child expansion below adds no per-segment round-trip (issue #59).
+    boundaries = boundaries_for_run(session, run_id)
     segments = session.execute(
         select(TranscriptSegment)
         .where(TranscriptSegment.pipeline_run_id == run_id)
@@ -146,22 +159,56 @@ def attributed_transcript(
             speaker = segment_speaker(override, seg)
         else:
             speaker = display_name(states.get(seg.diarization_label or ""), seg)
-        lines.append(
-            TranscriptLine(
-                start_seconds=seg.start_seconds,
-                end_seconds=seg.end_seconds,
-                speaker=speaker,
-                text=body,
-                diarization_label=seg.diarization_label,
-                confidence=seg.confidence,
-                segment_id=seg.id,
-                verified=rs is not None and rs.verified_at is not None,
-                # Reflects whether a correction EXISTS, independent of which
-                # variant is being rendered — so a ?text=raw view can still badge
-                # "this segment was corrected" while showing the raw evidence.
-                corrected=corrected_text is not None,
+        verified = rs is not None and rs.verified_at is not None
+        # Reflects whether a correction EXISTS, independent of which variant is
+        # rendered — so a ?text=raw view still badges "this segment was corrected"
+        # while showing the raw evidence.
+        corrected = corrected_text is not None
+        cuts = boundaries.get(seg.id)
+        # A split parent (>= 2 derived children) expands into per-child lines that
+        # inherit the parent's resolved speaker and review state; every other
+        # segment stays a single line. ``derive_children`` returns None for an
+        # unsplittable parent — fail closed by rendering it whole (never invent
+        # child offsets), which cannot happen for a boundary the writer accepted
+        # (segments are immutable, so splittability is stable once checked).
+        children = derive_children(seg, cuts) if cuts else None
+        if children is not None and len(children) > 1:
+            for child_i, child in enumerate(children):
+                lines.append(
+                    TranscriptLine(
+                        start_seconds=child.start_seconds,
+                        end_seconds=child.end_seconds,
+                        speaker=speaker,
+                        text=child.text,
+                        diarization_label=seg.diarization_label,
+                        confidence=seg.confidence,
+                        # Verify/correct/split all target the immutable parent;
+                        # segment_id stays the parent id so a child's write lands
+                        # on the parent, and review state is parent-scoped.
+                        segment_id=seg.id,
+                        verified=verified,
+                        corrected=corrected,
+                        source_segment_id=seg.id,
+                        # One queue entry per parent: only the first child counts.
+                        review_target=child_i == 0,
+                    )
+                )
+        else:
+            lines.append(
+                TranscriptLine(
+                    start_seconds=seg.start_seconds,
+                    end_seconds=seg.end_seconds,
+                    speaker=speaker,
+                    text=body,
+                    diarization_label=seg.diarization_label,
+                    confidence=seg.confidence,
+                    segment_id=seg.id,
+                    verified=verified,
+                    corrected=corrected,
+                    source_segment_id=seg.id,
+                    review_target=True,
+                )
             )
-        )
     return lines
 
 

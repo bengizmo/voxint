@@ -788,6 +788,56 @@ class SegmentReviewState(Base):
     corrected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class SegmentSplitBoundary(Base):
+    """One operator word-boundary split of a transcript segment (issue #59).
+
+    A split is stored as an append-only CUT — ``word_index`` = "split before word
+    i" on the immutable parent segment — NOT as a new ``transcript_segments`` row
+    and NOT as a mutable overlay the append-only ledger would point at. Children
+    are DERIVED at read time from the cut set ``{0, cuts…, word_count}``; the
+    parent row is never mutated (``raw_text``/interval/``words`` stay the ASR
+    evidence of record). See docs/plans + the #59 memory for why real child rows
+    and an overlay-id FK were both rejected.
+
+    ``pipeline_run_id`` is denormalized (the one writer derives it from the
+    parent) so ``attributed_transcript`` batch-loads a run's boundaries in one
+    indexed query — mirroring how ``adjudication_decisions`` carries it. The FK to
+    the parent is ON DELETE CASCADE so re-transcription (new segment ids) does not
+    leak orphan boundaries.
+    """
+
+    __tablename__ = "segment_split_boundaries"
+    __table_args__ = (
+        # "split before word i" is INTERIOR: i == 0 (segment start) is not a cut.
+        # The upper bound (i < word_count) is cross-table (parent word count), so
+        # it is validated in the writer, not a CHECK.
+        CheckConstraint(
+            "word_index >= 1",
+            name="segment_split_boundaries_word_index_interior_check",
+        ),
+        # A split is STRUCTURALLY idempotent: "before word i" exists at most once,
+        # so a replayed / double-clicked split is a no-op (writer: ON CONFLICT DO
+        # NOTHING) — no client nonce needed, unlike the relabel ledger.
+        UniqueConstraint(
+            "parent_segment_id",
+            "word_index",
+            name="segment_split_boundaries_parent_word_key",
+        ),
+        Index("ix_segment_split_boundaries_run", "pipeline_run_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"))
+    parent_segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE")
+    )
+    # "Split before word i" (1 <= i < word_count): the cut falls between word i-1
+    # and word i of the parent's immutable ``words`` list.
+    word_index: Mapped[int] = mapped_column(Integer)
+    operator: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class EnrichmentProducerRun(Base):
     """One **completed** enrichment-producer invocation (issue #37).
 

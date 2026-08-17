@@ -23,6 +23,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and its command/port parity with compose and the metal launcher. Technical
   preview, **not** the signed non-technical release (#73); on the metal tier
   long recordings take real compute time. See `docs/native-macos-preview.md`.
+- **Word-boundary segment splits — backend** (#59, slice 2): an operator can
+  split a mis-split diarization segment at a word boundary. A split is stored as
+  an append-only *cut* ("split before word i") in a new `segment_split_boundaries`
+  table (migration 0023) — never a new transcript row and never a mutable overlay
+  the append-only ledger points at; the parent segment row stays immutable ASR
+  evidence. Children are *derived* at read time from the parent's word tokens
+  through the one shared read path (`attributed_transcript`), so the transcript
+  export now reflects splits too, and each child inherits the parent's resolved
+  speaker (per-child reassignment is a later slice). Verification stays
+  parent-scoped (children never double-count the N-of-M queue). A split is
+  claim-gated and structurally idempotent (the cut's UNIQUE key makes a replay a
+  no-op — no nonce). Conservative by doctrine: a segment is splittable only when
+  its stored words exactly reconcatenate to `raw_text` and its text was not
+  materially enhanced — otherwise the console shows an honest "unsplittable"
+  affordance rather than inventing offsets. Splitting a corrected segment (and
+  correcting a split one) are mutually refused. New routes:
+  `POST /review/{run}/segments/{seg}/split` and a lazy
+  `GET /review/{run}/segments/{seg}/words` (words are fetched only when split mode
+  engages — never bloating the shared read payload). *(Frontend split UI lands
+  next.)*
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

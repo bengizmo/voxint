@@ -65,6 +65,11 @@ from voxint.adjudication.slots import (
     release_run,
     verify_claim,
 )
+from voxint.adjudication.splits import (
+    UnsplittableError,
+    record_split,
+    splittable_words,
+)
 from voxint.adjudication.transcript import (
     TranscriptLine,
     TranscriptText,
@@ -174,6 +179,7 @@ from voxint.db.models import (
     RunAssetKind,
     RunStatus,
     SegmentReviewState,
+    SegmentSplitBoundary,
     Speaker,
     SpeakerAssignment,
     StageRun,
@@ -1086,32 +1092,74 @@ def _transcript_island_props(
         # fallback compare against the SAME server setting, so they flag
         # identically. A segment with confidence None is never flagged.
         "lowConfidenceThreshold": settings.review_low_confidence_threshold,
-        "segments": [
-            {
-                "start": ln.start_seconds,
-                "end": ln.end_seconds,
-                "speaker": ln.speaker,
-                "text": ln.text,
-                "label": ln.diarization_label,
-                "confidence": ln.confidence,
-                # None short-circuits (palette is keyed on real labels only);
-                # keeps mypy happy without changing the value (get(None) → None).
-                "paletteIndex": (
-                    palette.get(ln.diarization_label)
-                    if ln.diarization_label is not None
-                    else None
-                ),
-                # Per-segment review state (issues #53/#58). segmentId is the write
-                # target for verify/correct; verified/corrected drive the
-                # verify-and-advance loop and the "edited" badge. None segmentId (a
-                # synthetic/blank line) is simply never a review target.
-                "segmentId": (str(ln.segment_id) if ln.segment_id is not None else None),
-                "verified": ln.verified,
-                "corrected": ln.corrected,
-            }
-            for ln in lines
-        ],
+        "segments": [_island_segment(ln, palette) for ln in lines],
     }
+
+
+def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, Any]:
+    """One transcript line as the island's per-segment shape — the ONE builder the
+    hydrated props and the split-route response share, so a page reload and a live
+    split can never disagree on a segment's fields.
+
+    ``sourceSegmentId`` is the immutable PARENT id (issue #59): the verify / correct
+    / split write target, identical to ``segmentId`` for an unsplit line and shared
+    across a split parent's derived children. ``reviewTarget`` is true on exactly
+    one line per parent — the queue entry — so the N-of-M loop counts one target
+    per parent and never double-counts children.
+    """
+    return {
+        "start": ln.start_seconds,
+        "end": ln.end_seconds,
+        "speaker": ln.speaker,
+        "text": ln.text,
+        "label": ln.diarization_label,
+        "confidence": ln.confidence,
+        # None short-circuits (palette is keyed on real labels only); keeps mypy
+        # happy without changing the value (get(None) → None).
+        "paletteIndex": (
+            palette.get(ln.diarization_label) if ln.diarization_label is not None else None
+        ),
+        # Per-segment review state (issues #53/#58). segmentId is the write target
+        # for verify/correct; verified/corrected drive the verify-and-advance loop
+        # and the "edited" badge. None segmentId (a synthetic/blank line) is simply
+        # never a review target.
+        "segmentId": (str(ln.segment_id) if ln.segment_id is not None else None),
+        "verified": ln.verified,
+        "corrected": ln.corrected,
+        # Split provenance (issue #59): the parent write target + the single
+        # queue-entry flag. sourceSegmentId == segmentId for an unsplit line.
+        "sourceSegmentId": (
+            str(ln.source_segment_id) if ln.source_segment_id is not None else None
+        ),
+        "reviewTarget": ln.review_target,
+    }
+
+
+def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, Any]]:
+    """The run's island segment payload (issue #59) — CORRECTED variant, split
+    parents expanded — for a live write to reconcile the console against server
+    truth. Same builder as hydration, so a split response and a page reload agree."""
+    palette = speaker_palette(_run_label_universe(session, run_id))
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    return [_island_segment(ln, palette) for ln in lines]
+
+
+def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
+    """Whether a segment carries at least one operator split boundary (issue #59)."""
+    return (
+        session.execute(
+            select(SegmentSplitBoundary.id)
+            .where(SegmentSplitBoundary.parent_segment_id == segment_id)
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
+def _segment_is_corrected(session: Session, segment_id: uuid.UUID) -> bool:
+    """Whether a segment has operator-corrected text (issues #58/#59)."""
+    row = session.get(SegmentReviewState, segment_id)
+    return row is not None and row.corrected_text is not None
 
 
 def _setup_context(
@@ -2915,8 +2963,108 @@ def _register_routes(app: FastAPI) -> None:
         segment = session.get(TranscriptSegment, segment_id)
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
+        # A split parent renders as word-derived children, which free-form
+        # corrected text cannot be partitioned across (issue #59, deferred). Refuse
+        # correcting a split segment — the mirror of forbidding a split on an
+        # already-corrected segment, so the two never coexist.
+        if _segment_is_split(session, segment_id):
+            raise HTTPException(
+                status_code=409,
+                detail="cannot correct a split segment; remove the split first",
+            )
         set_correction(session, segment=segment, text=text)
         return _segment_review_json(session, run_id, segment)
+
+    @protected.post("/review/{run_id}/segments/{segment_id}/split")
+    def split_segment(
+        run_id: uuid.UUID,
+        segment_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        token: Annotated[uuid.UUID, Form()],
+        word_index: Annotated[int, Form()],
+    ) -> JSONResponse:
+        """Split a segment at a word boundary (issue #59), inserting one cut
+        "before word ``word_index``". Claim-gated and structurally idempotent (the
+        boundary's UNIQUE key makes a replayed split a no-op — no nonce needed).
+
+        Refuses a corrected segment (mutually exclusive with correction) and an
+        unsplittable one (no aligned word timings, or materially-enhanced text) with
+        the operator-facing reason. Returns the run's re-rendered island segments so
+        the console reconciles against server truth — the same shape as hydration,
+        with the parent now expanded into its derived children."""
+        try:
+            verify_claim(session, run_id, token, for_update=True)
+        except ClaimMismatchError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        segment = session.get(TranscriptSegment, segment_id)
+        if segment is None or segment.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+        row = session.get(SegmentReviewState, segment_id)
+        if row is not None and row.corrected_text is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="cannot split a corrected segment; clear the correction first",
+            )
+        try:
+            record_split(
+                session, parent=segment, word_index=word_index, operator=operator
+            )
+        except UnsplittableError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        verified_n, total = verified_progress(session, run_id)
+        return JSONResponse(
+            {
+                "segments": _run_island_segments(session, run_id),
+                "progress": {"verified": verified_n, "total": total},
+            }
+        )
+
+    @protected.get("/review/{run_id}/segments/{segment_id}/words")
+    def segment_words(
+        run_id: uuid.UUID,
+        segment_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+    ) -> JSONResponse:
+        """The active segment's word tokens for the split UI (issue #59), fetched
+        LAZILY only when the operator enters split mode — never bloating the shared
+        read payload with every run's words. Reports ``splittable`` (+ a reason when
+        not) so the console shows an honest disabled affordance rather than a
+        split that would fail."""
+        segment = session.get(TranscriptSegment, segment_id)
+        if segment is None or segment.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such segment in this run")
+        words = splittable_words(segment)
+        if words is None:
+            corrected = _segment_is_corrected(session, segment_id)
+            reason = (
+                "this segment has an operator correction; clear it to split"
+                if corrected
+                else "no aligned word timings for this segment (or its text was enhanced)"
+            )
+            return JSONResponse(
+                {"segmentId": str(segment_id), "splittable": False, "reason": reason, "words": []}
+            )
+        if _segment_is_corrected(session, segment_id):
+            return JSONResponse(
+                {
+                    "segmentId": str(segment_id),
+                    "splittable": False,
+                    "reason": "this segment has an operator correction; clear it to split",
+                    "words": [],
+                }
+            )
+        return JSONResponse(
+            {
+                "segmentId": str(segment_id),
+                "splittable": True,
+                "reason": None,
+                "words": [
+                    {"start": w.start, "end": w.end, "word": w.text} for w in words
+                ],
+            }
+        )
 
     @protected.post("/review/{run_id}/labels/{label}/enroll")
     def enroll(
