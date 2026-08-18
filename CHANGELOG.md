@@ -162,6 +162,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and the table pages); no Python, no new dependency.
 
 ### Changed
+- **Docs: non-NVIDIA install-path audit remediation (docs pass)**: closed the
+  documentation findings from the 2026-08-18 audit of the CPU / Apple-Silicon
+  metal / docker-free native paths
+  ([`docs/reports/native-cpu-mac-audit-2026-08-18.md`](docs/reports/native-cpu-mac-audit-2026-08-18.md)).
+  [`docs/setup.md`](docs/setup.md): honest prerequisites (the metal tier needs
+  Homebrew + `uv`; not everything is "just Docker"), a hardware→tier decision aid
+  that separates deployment path from compute tier, the CPU-tier memory floor and
+  its opaque-OOM footgun (16 GB comfortable), the Docker-Desktop-only caveat for
+  metal, a `status` verification step, and a clearer metal-vs-native signpost.
+  [`docs/operations.md`](docs/operations.md): the same metal `uv`/Docker-Desktop
+  prerequisites. [`docs/native-macos-preview.md`](docs/native-macos-preview.md): a
+  "next: first-run walkthrough" bridge into onboarding/how-to, and `doctor`
+  port-reachability wording. The terminal `docker compose exec … voxint` recipes in
+  the how-to and onboarding guides are now labelled Docker-only (they don't apply to
+  the native preview). No behaviour change.
 - **Docs: accessible README, a Setup guide, and a how-to series**: the README
   was rewritten for a non-technical audience — a plain-language intro, an honest
   "local by default" privacy note (URL fetch and remote LLM enhancement are

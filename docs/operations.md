@@ -154,6 +154,11 @@ the `-cpu` images. What that buys you, and its constraints:
 
 ### Running on Apple Silicon (metal tier)
 
+Prerequisites beyond Docker Desktop: **[Homebrew](https://brew.sh)** and
+**[`uv`](https://docs.astral.sh/uv/)** (`brew install uv`) — `voxint-metal.sh setup`
+hard-fails without `uv`. Docker Desktop is required specifically (Colima/OrbStack/
+plain `dockerd` break the `host.docker.internal` loopback the overlay depends on).
+
 ```bash
 ./scripts/install.sh                 # choose [M]; starts the Docker core stack
 ./scripts/metal/voxint-metal.sh setup   # venvs + sha-verified weights (~3.2 GB)

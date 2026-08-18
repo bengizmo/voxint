@@ -108,7 +108,9 @@ setup & start tutorial →"**, or from the Settings page click **"Set up & start
 the guided tutorial →"**. Either one stages the sample (idempotent — an existing
 tutorial run is reused) and drops you straight into it.
 
-The equivalent CLI seed still exists for scripted/maintainer setups:
+The equivalent CLI seed still exists for scripted/maintainer setups (Docker
+install only — it `exec`s into the `api` container; on the docker-free native
+preview use the browser button above):
 
 ```bash
 docker compose exec api voxint tutorial seed

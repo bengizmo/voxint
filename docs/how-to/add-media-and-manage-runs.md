@@ -129,8 +129,10 @@ Two things are worth knowing so it behaves the way you expect:
   again.
 
 **Submit a single file (for people comfortable with the terminal).** If you would
-rather kick off one file by hand, Voxint has a command line. These run inside the
-running containers:
+rather kick off one file by hand, Voxint has a command line. These commands are
+for the **Docker install** — they run inside the running `api` container. (On the
+docker-free [native macOS preview](../native-macos-preview.md) there is no
+container to `exec` into; use the browser upload, which does the same thing.)
 
 ```bash
 # Submit one file already sitting in the media area (path is relative to MEDIA_ROOT):

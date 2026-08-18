@@ -12,7 +12,8 @@ is the two-command version. This page is the full reference.
 ## Before you start
 
 Voxint is **self-hosted**: it runs as a small set of containers on a computer you
-control (your laptop, a home server, a workstation). The one hard requirement is:
+control (your laptop, a home server, a workstation). For the **standard install**
+(every tier below except the native preview) the one hard requirement is:
 
 - **[Docker](https://docs.docker.com/get-started/get-docker/) Engine with the
   Compose plugin, version ≥ 2.24.** Check with `docker compose version`. The old
@@ -21,6 +22,10 @@ control (your laptop, a home server, a workstation). The one hard requirement is
 
 Everything else — the database, the AI models, all their weights — is installed
 for you. There is **no Hugging Face account or token** to create.
+
+> Two Apple-Silicon paths need a little more: the **metal tier** additionally
+> needs Homebrew and `uv` (see §3), and the separate docker-free
+> **[native macOS preview](native-macos-preview.md)** has its own prerequisites.
 
 ## 1. Install Docker on your operating system
 
@@ -47,8 +52,9 @@ git clone https://github.com/bengizmo/voxint.git && cd voxint
 ./scripts/install.sh
 ```
 
-The installer (a plain Bash script — nothing to install beyond Docker) checks
-your Docker setup, then asks for three things:
+The installer (a plain Bash script — nothing extra to install for the Docker
+tiers; the metal tier adds Homebrew + `uv`, see §3) checks your Docker setup,
+then asks for three things:
 
 - an **admin password** for the console,
 - a **media folder** for your recordings, and
@@ -89,6 +95,20 @@ in whichever tier fits your hardware. Layer the matching overlay on top of the
 core stack. Per-service details and tunables live in each
 `services/*/README.md`.
 
+**Which one is mine?** Match your hardware to a compute tier:
+
+| Your hardware | Compute tier | Overlay / guide |
+|---|---|---|
+| No GPU, or any Mac via Docker | **CPU** (the default) | `compose.cpu.yaml` — below |
+| NVIDIA GPU | **NVIDIA** | `compose.gpu.yaml` — below |
+| AMD GPU | **AMD / ROCm** | `compose.rocm.yaml` — below |
+| Apple Silicon Mac (fastest on a Mac) | **metal** | `voxint-metal.sh` — below |
+
+All four run the **core stack in Docker**. Separately, Apple-Silicon users who
+can't or won't run Docker Desktop can use the docker-free
+**[native preview](native-macos-preview.md)** — that's a *deployment mode*, not a
+fifth compute tier (it still runs the metal model services under the hood).
+
 ### CPU — runs anywhere (the default)
 
 No graphics card, no special drivers. Works on ordinary servers and Apple Silicon
@@ -98,11 +118,14 @@ Macs (via Docker Desktop).
 docker compose -f compose.yaml -f compose.cpu.yaml up -d
 ```
 
+(`up -d` pulls the images on first run — no separate `pull` step needed.)
+
 Expect it to be **much slower** than a GPU — a long recording can take hours
-rather than minutes — but the results are identical. The container host needs
-about **8 GB of memory** free (on Docker Desktop that's the *VM* memory limit,
-not your machine's total). More:
-[operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier).
+rather than minutes — but the results are identical. **8 GB of memory is the
+tight floor** (on Docker Desktop that's the *VM* memory limit, not your machine's
+total) — below it the services are OOM-killed with an opaque exit, not a clear
+message, so a long recording can fail with no diagnosis. **16 GB is comfortable.**
+More: [operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier).
 
 ### NVIDIA GPU — the fast path
 
@@ -137,19 +160,27 @@ Some AMD consumer GPUs still hit a known convolution issue
 
 Docker Desktop can't pass the Apple GPU into a container, so on a Mac the metal
 tier keeps the core stack in Docker but runs the model services **natively** so
-speaker separation can use the Apple GPU:
+speaker separation can use the Apple GPU. This tier needs **Docker Desktop**
+specifically — Colima, OrbStack, and plain `dockerd` can't route the containers to
+the native services (they break the `host.docker.internal` loopback). It also needs
+**[Homebrew](https://brew.sh) and [`uv`](https://docs.astral.sh/uv/)**
+(`brew install uv`) for the native model environments.
 
 ```bash
-./scripts/install.sh                  # choose the [M]etal tier
-./scripts/metal/voxint-metal.sh setup # native environments + verified model weights
-./scripts/metal/voxint-metal.sh up    # start the services
+./scripts/install.sh                   # choose the [M]etal tier
+./scripts/metal/voxint-metal.sh setup  # native environments + verified model weights
+./scripts/metal/voxint-metal.sh up     # start the services
+./scripts/metal/voxint-metal.sh status # confirm: whisper cpu / pyannote mps / titanet cpu
 ```
 
 Weights come from the same verified release assets the images use — still no
 Hugging Face account. Details:
-[operations.md](operations.md#running-on-apple-silicon-metal-tier). There is also
-a docker-free **native** preview for the whole stack:
-[native-macos-preview.md](native-macos-preview.md).
+[operations.md](operations.md#running-on-apple-silicon-metal-tier).
+
+**Most Mac users want the metal tier.** There is also a docker-free
+**[native preview](native-macos-preview.md)** that runs the *whole* stack without
+Docker — choose it only if you can't or won't run Docker Desktop; it's a hands-on
+technical preview, not the packaged release.
 
 ### Optional: bundled local LLM (no API key)
 
