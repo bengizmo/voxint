@@ -202,7 +202,8 @@ It is built in lanes; **landed so far:**
   at 192 dims, and zero operator-enrollment rows). Finally it checks `backup` +
   **restart-survival** persistence (down → up → re-verify), and — in the opt-in
   **`--with-restore`** rung (Part C) — an honest destructive-recovery gate:
-  `voxint-native.sh restore --fresh <dump>` drops the DB, proves it empty
+  `voxint-native.sh restore --fresh <dump>` takes an automatic pre-drop safety
+  backup (prints `SAFETY_BACKUP <path>`), drops the DB, proves it empty
   (`EMPTY_DB PASS`), rebuilds it from a backup as the sole schema source, then
   re-verifies the same run. Unlike every other lane it runs against the launcher's
   **live** `voxint` database (the native install is throwaway), so the verifier is

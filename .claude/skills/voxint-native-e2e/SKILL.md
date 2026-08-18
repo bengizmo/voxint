@@ -127,7 +127,8 @@ The unchanged Python `verify` then proves the same run survived a full rebuild.
 scripts/native/voxint-native.sh backup     # capture the EXACT printed dump path
 scripts/native/voxint-native.sh down        # services down (required for --fresh)
 scripts/native/voxint-native.sh restore --fresh "<that-dump-path>"
-#   → prints `EMPTY_DB PASS (old_oid=… new_oid=…, 0 public tables)` then rebuilds
+#   → prints `SAFETY_BACKUP <path>` (automatic pre-drop 0600 backup) then
+#     `EMPTY_DB PASS (old_oid=… new_oid=…, 0 public tables)` then rebuilds
 scripts/native/voxint-native.sh up          # alembic no-ops at head; app starts
 uv run python tools/native_e2e_lifecycle.py env      # wait /healthz 200
 uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"
@@ -142,7 +143,10 @@ scripts/native/voxint-native.sh down
   anything** it validates the archive (`pg_restore --list`), requires it to *be* a
   voxint dump (an `alembic_version` table entry in the TOC — a valid dump of some
   other database is refused, not restored over your data), and confirms the
-  postmaster on the port is the managed cluster (`SHOW data_directory`). On a
+  postmaster on the port is the managed cluster (`SHOW data_directory`). It then
+  takes an automatic pre-drop **safety backup** (a `0600` dump, printed as
+  `SAFETY_BACKUP <path>`) and aborts before dropping anything if that dump fails,
+  so a failed restore is always recoverable. On a
   restore failure the single transaction rolls back and the dump is left untouched;
   it prints the exact retry command (the prior DB is already dropped by then, so
   the message says so).
