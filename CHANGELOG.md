@@ -199,10 +199,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `require_macos` — so on the Linux CI runner they failed at the OS gate before
   reaching the portable logic they assert (green on maintainer macOS, red on CI
   since the slice-2b landing). `require_macos` now no-ops under the existing
-  `VOXINT_NATIVE_LIB=1` library/test seam, so the portable command logic stays
+  `VOXINT_NATIVE_LIB=1` library/test seam, so the 16 portable-logic tests are
   exercisable on Linux while a real (non-library) invocation on a non-macOS host
-  still gets the clean "macOS-only" error. Verified by reproducing the failures
-  under a Linux `uname` shim and confirming they pass after the change, with the
+  still gets the clean "macOS-only" error. The one end-to-end rung
+  (`test_upgrade_happy_path`) brings the cluster up and `plutil`-lints the generated
+  plists, a macOS-only step, so it now carries the same `plutil` skipif the file's
+  other plist tests use. Verified by reproducing the failures under a Linux `uname`
+  shim (and a plutil-less runner) and confirming green after the change, with the
   guard still firing for a real non-macOS user.
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
   `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made

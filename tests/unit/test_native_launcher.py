@@ -1814,7 +1814,12 @@ def _prime_upgrade(tmp_path: Path, cluster_major: str = "17") -> tuple[Path, Pat
     return newbin, logdir, env
 
 
+@pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_upgrade_happy_path(tmp_path: Path) -> None:
+    # The full happy path brings the new cluster up, which generates + plutil-lints
+    # the launchd plists -- a macOS-only step, so this end-to-end rung is macOS-gated
+    # (the version-gate / arg-parse / rollback tests above stay portable and run on
+    # Linux CI). See the require_macos VOXINT_NATIVE_LIB seam.
     _newbin, logdir, env = _prime_upgrade(tmp_path)
     proc = _upg_run(tmp_path, "", extra_env=env)
     assert proc.returncode == 0, proc.stderr
