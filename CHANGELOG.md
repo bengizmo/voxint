@@ -5,6 +5,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
+  `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made
+  hatchling's VCS-ignore drop the built island bundles, so `uv build` produced a
+  wheel containing only `static/app/.gitkeep` — a PyPI install could not hydrate
+  the review-console islands (v0.16.0's wheel, built before that rule, included
+  them). A global `[tool.hatch.build] artifacts` entry now re-includes
+  `static/app/{assets,.vite}` in both the sdist and the wheel. Docker images were
+  never affected (the Node stage COPYs `dist` into the image directly).
+
 ## [0.17.0] - 2026-08-18
 
 ### Added

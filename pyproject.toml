@@ -92,14 +92,22 @@ Documentation = "https://github.com/bengizmo/voxint/tree/main/docs"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# The prebuilt frontend island bundles (issue #48) that the Dockerfile's Node
+# stage writes into src/voxint/api/static/app ARE git-ignored (kept out of commits
+# for a clean tree; see .gitignore's static/app rule, added with #69). `artifacts`
+# here — set globally so it applies to BOTH the sdist and the wheel (uv builds the
+# wheel from the sdist, so a wheel-only artifacts entry is dropped) — explicitly
+# re-includes them; otherwise hatchling's VCS-ignore drops them and the wheel
+# ships only static/app/.gitkeep, leaving the review console unable to hydrate its
+# islands. This is NOT force-include (which would double-add files already inside
+# the packaged tree and abort the build); `artifacts` only un-ignores.
+[tool.hatch.build]
+artifacts = [
+    "src/voxint/api/static/app/assets/**/*",
+    "src/voxint/api/static/app/.vite/**/*",
+]
+
 [tool.hatch.build.targets.wheel]
-# `packages = ["src/voxint"]` ships every file under the package, including the
-# prebuilt frontend island bundles (issue #48) the Dockerfile's Node stage
-# writes into src/voxint/api/static/app — so app_asset resolves them in the
-# installed site-packages layout. (No force-include: static/app is *inside* the
-# packaged tree, so a force-include of it double-adds every file and aborts the
-# non-editable wheel build. static/app is not gitignored — only dist/ is — so
-# the standard package glob includes it in both host and Docker builds.)
 packages = ["src/voxint"]
 
 [tool.ruff]
