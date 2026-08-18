@@ -387,14 +387,14 @@ def test_llm_bundled_active_needs_flag_and_url_and_model() -> None:
     # the client never POSTs "model": "" to a single-model llama-server (#67).
     model = "qwen3-4b-instruct-2507"
     url = "http://voxint-llm:8080/v1"
-    on_no_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url="", llm_bundled_model=model)
-    assert llm_bundled_active(None, on_no_url) is False
-    on_no_model = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model="")
-    assert llm_bundled_active(None, on_no_model) is False
+    no_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url="", llm_bundled_model=model)
+    assert llm_bundled_active(None, no_url) is False
+    no_model = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model="")
+    assert llm_bundled_active(None, no_model) is False
     on_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(None, on_url) is True
-    off_url = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
-    assert llm_bundled_active(None, off_url) is False
+    off = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
+    assert llm_bundled_active(None, off) is False
 
 
 def test_llm_bundled_active_row_wins_over_env() -> None:
@@ -403,8 +403,8 @@ def test_llm_bundled_active_row_wins_over_env() -> None:
     # env on.
     url = "http://voxint-llm:8080/v1"
     model = "qwen3-4b-instruct-2507"
-    env_off = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
-    assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=True), env_off) is True
+    eoff = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
+    assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=True), eoff) is True
     env_on = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=False), env_on) is False
 
