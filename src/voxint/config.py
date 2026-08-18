@@ -336,6 +336,29 @@ class Settings(BaseSettings):
     # operator acts on them; only the fully-resolved, no-longer-actionable rows
     # are reaped. Floor 3600 (1 h).
     notify_retention_seconds: int = Field(default=604800, ge=3600)
+
+    # Watch-folder ingest (issue #60). A beat sweep auto-submits new media that
+    # appears in the operator's registered folders (app_settings.media_folders),
+    # skipping files already known (a MediaItem already claims the source_path).
+    # OFF by default: this env value is the INSTALLATION default, overridable at
+    # runtime per-installation by the nullable app_settings.watch_folder_enabled
+    # column (NULL there = inherit this). The beat entry is registered
+    # unconditionally (like the recovery sweep) and the task re-checks the
+    # EFFECTIVE gate each run, so a UI toggle applies with no restart and a
+    # disabled installation only pays one DB read per sweep.
+    watch_folder_enabled: bool = False
+    # How often the watch sweep re-walks the registered folders. Wall-clock
+    # pickup latency for a dropped file, not a compute-tier budget — deliberately
+    # NOT tier-scaled (absent from TIER_SCALED_TIMING_FIELDS). Floor 30 s.
+    watch_folder_sweep_seconds: int = Field(default=300, ge=30)
+    # Quiescence age a candidate file must reach (max of its mtime/ctime) before
+    # the sweep submits it, so a file still being copied into the folder is not
+    # ingested mid-write. A too-fresh file is left for a later sweep. mtime alone
+    # is only a heuristic (some copy tools preserve timestamps); the reliable
+    # producer workflow is an atomic rename into the watched folder. 0 disables
+    # the wait (accept files immediately).
+    watch_folder_settle_seconds: int = Field(default=60, ge=0)
+
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With

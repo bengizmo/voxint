@@ -1383,3 +1383,506 @@ def test_plain_restore_reports_rollback_on_pg_restore_failure(tmp_path: Path) ->
     # No restore temp files leaked (the EXIT trap + explicit rm cover the failure).
     leaked = list(tmpdir.glob("voxint-restore-*"))
     assert leaked == [], f"leaked restore temp files: {leaked}"
+
+
+# --------------------------------------------------------------------------- #
+# #71 slice 2b — `upgrade-db` (dump/restore major-version upgrade)
+# --------------------------------------------------------------------------- #
+# The destructive major-version upgrade: dump the OLD server with the NEW pg_dump
+# over a private socket, prove the archive restorable BEFORE touching pgdata,
+# atomically rename the old cluster aside as a rollback, initdb the new major, and
+# rebuild via fresh_restore in a subshell. These offline tests drive the whole
+# orchestration over stub binaries with an event log, plus the pure helpers
+# (version gate, resolve_old_pg_bindir, rollback shape) in isolation.
+
+
+def _upg_run(
+    home: Path, args: str, extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return run_lib(home, f"cmd_upgrade_db {args}", extra_env=extra_env)
+
+
+# --- pure version gate ----------------------------------------------------- #
+def test_upgrade_same_major_is_a_noop(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.5")
+    proc = _upg_run(tmp_path, "", extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)})
+    assert proc.returncode == 0, proc.stderr
+    assert "already on Postgres 17 -- nothing to do" in proc.stderr
+
+
+def test_upgrade_rejects_downgrade(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "18\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.5")
+    proc = _upg_run(tmp_path, "", extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)})
+    assert proc.returncode != 0
+    assert "downgrades are not supported" in proc.stderr
+
+
+def test_upgrade_rejects_skipped_major(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 19.0")
+    proc = _upg_run(tmp_path, "", extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)})
+    assert proc.returncode != 0
+    assert "only one-major-forward upgrades are supported" in proc.stderr
+
+
+def test_upgrade_fails_closed_on_damaged_cluster(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "garbage\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 18.1")
+    proc = _upg_run(tmp_path, "", extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)})
+    assert proc.returncode != 0
+    assert "damaged" in proc.stderr
+
+
+def test_upgrade_no_managed_cluster(tmp_path: Path) -> None:
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 18.1")
+    proc = _upg_run(tmp_path, "", extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)})
+    assert proc.returncode != 0
+    assert "no managed cluster to upgrade" in proc.stderr
+
+
+# --- argument parsing ------------------------------------------------------ #
+def test_upgrade_rejects_unknown_option(tmp_path: Path) -> None:
+    proc = _upg_run(tmp_path, "--bogus")
+    assert proc.returncode != 0
+    assert "unknown upgrade-db option: --bogus" in proc.stderr
+
+
+def test_upgrade_rejects_positional(tmp_path: Path) -> None:
+    proc = _upg_run(tmp_path, "somefile")
+    assert proc.returncode != 0
+    assert "takes no positional arguments" in proc.stderr
+
+
+def test_upgrade_rehearse_and_rollback_mutually_exclusive(tmp_path: Path) -> None:
+    proc = _upg_run(tmp_path, "--rehearse --rollback")
+    assert proc.returncode != 0
+    assert "mutually exclusive" in proc.stderr
+
+
+# --- resolve_old_pg_bindir ------------------------------------------------- #
+def _no_brew_env(tmp_path: Path) -> dict[str, str]:
+    """Prepend a `brew` stub that fails, so the brew-keg branch of
+    resolve_old_pg_bindir cannot resolve — without clobbering PATH (which would
+    hide `bash` itself). The real PATH stays after it."""
+    binp = tmp_path / "nobrew"
+    binp.mkdir(exist_ok=True)
+    (binp / "brew").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (binp / "brew").chmod(0o755)
+    return {"PATH": f"{binp}:{os.environ.get('PATH', '')}"}
+
+
+def test_resolve_old_bindir_override_wins(tmp_path: Path) -> None:
+    old = _make_pg_bindir(tmp_path / "old", "postgres (PostgreSQL) 17.5")
+    proc = run_lib(
+        tmp_path,
+        "resolve_old_pg_bindir 17 0",
+        extra_env={"VOXINT_NATIVE_OLD_PG_BINDIR": str(old)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(old)
+
+
+def test_resolve_old_bindir_override_wrong_major_fails(tmp_path: Path) -> None:
+    # An override pointing at the WRONG major must fail closed, not be trusted.
+    old = _make_pg_bindir(tmp_path / "old", "postgres (PostgreSQL) 16.9")
+    proc = run_lib(
+        tmp_path,
+        "resolve_old_pg_bindir 17 0",
+        extra_env={"VOXINT_NATIVE_OLD_PG_BINDIR": str(old)},
+    )
+    assert proc.returncode != 0
+    assert "is Postgres v16, not the cluster's v17" in proc.stderr
+
+
+def test_resolve_old_bindir_rehearse_uses_current(tmp_path: Path) -> None:
+    # In --rehearse the current bindir may serve as the "old" one iff same major.
+    cur = _make_pg_bindir(tmp_path / "cur", "postgres (PostgreSQL) 17.5")
+    proc = run_lib(
+        tmp_path,
+        "resolve_old_pg_bindir 17 1",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(cur), **_no_brew_env(tmp_path)},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(cur)
+
+
+def test_resolve_old_bindir_current_not_used_without_rehearse(tmp_path: Path) -> None:
+    # Outside rehearsal the current (new-major) bindir must NOT be accepted as old;
+    # with no override and no brew keg, it fails closed with the install hint.
+    cur = _make_pg_bindir(tmp_path / "cur", "postgres (PostgreSQL) 17.5")
+    proc = run_lib(
+        tmp_path,
+        "resolve_old_pg_bindir 17 0",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(cur), **_no_brew_env(tmp_path)},
+    )
+    assert proc.returncode != 0
+    assert "brew install postgresql@17" in proc.stderr
+
+
+# --- require_stack_fully_down ---------------------------------------------- #
+def test_stack_down_refuses_when_core_service_running(tmp_path: Path) -> None:
+    bindir = _make_stub_bindir(tmp_path, running_labels=("com.voxint.native.worker",))
+    proc = run_lib(tmp_path, "require_stack_fully_down", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "worker" in proc.stderr
+
+
+def test_stack_down_refuses_when_datastore_supervised(tmp_path: Path) -> None:
+    bindir = _make_stub_bindir(tmp_path, running_labels=("com.voxint.native.postgres",))
+    proc = run_lib(tmp_path, "require_stack_fully_down", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "managed datastores still supervised" in proc.stderr
+    assert "postgres" in proc.stderr
+
+
+# --- rollback shape (idempotent, never deletes) ---------------------------- #
+def _hermetic_launchctl_env(tmp_path: Path) -> dict[str, str]:
+    """A PATH whose launchctl always reports 'not loaded' (so _stop_managed_postgres
+    is a hermetic no-op) without a full stub bindir."""
+    binp = tmp_path / "lc"
+    binp.mkdir()
+    (binp / "launchctl").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (binp / "launchctl").chmod(0o755)
+    return {"PATH": f"{binp}:{os.environ.get('PATH', '')}"}
+
+
+def test_rollback_preserves_partial_and_restores_old(tmp_path: Path) -> None:
+    # Auto-rollback shape: a partial NEW pgdata + the retained OLD cluster. The
+    # partial must be preserved as pgdata.failed-<stamp> (NEVER deleted) and the
+    # retained old cluster renamed back to pgdata.
+    (tmp_path / "pgdata").mkdir()
+    (tmp_path / "pgdata" / "marker").write_text("PARTIAL")
+    retained = tmp_path / "pgdata.pg17-2026-08-18-10-30-00"
+    retained.mkdir()
+    (retained / "PG_VERSION").write_text("17\n")
+    proc = run_lib(
+        tmp_path,
+        "_upgrade_rollback 17 2026-08-18-10-30-00",
+        extra_env=_hermetic_launchctl_env(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "17\n"  # old restored
+    failed = tmp_path / "pgdata.failed-2026-08-18-10-30-00"
+    assert failed.is_dir() and (failed / "marker").read_text() == "PARTIAL"  # kept
+    assert not retained.exists()  # moved back to pgdata
+
+
+def test_rollback_is_idempotent(tmp_path: Path) -> None:
+    # A second rollback with the retained dir already gone must be a safe no-op —
+    # it must NOT set aside the good restored pgdata again.
+    (tmp_path / "pgdata").mkdir()
+    (tmp_path / "pgdata" / "PG_VERSION").write_text("17\n")  # already restored
+    proc = run_lib(
+        tmp_path,
+        "_upgrade_rollback 17 2026-08-18-10-30-00",
+        extra_env=_hermetic_launchctl_env(tmp_path),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "nothing to restore" in proc.stderr
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "17\n"
+    assert not list(tmp_path.glob("pgdata.failed-*"))  # the good cluster untouched
+
+
+def _down_stack_env(tmp_path: Path) -> dict[str, str]:
+    """A hermetic env where require_stack_fully_down passes: launchctl reports
+    nothing loaded and the PG port is a free high port nothing listens on."""
+    return {**_hermetic_launchctl_env(tmp_path), "VOXINT_NATIVE_PG_PORT": "59998"}
+
+
+def test_rollback_refuses_to_move_if_postgres_wont_stop(tmp_path: Path) -> None:
+    # If the managed Postgres cannot be stopped (launchctl keeps reporting it
+    # loaded), rollback must NOT rename any data directory -- moving a live cluster
+    # would corrupt it. The retained + partial dirs must be left exactly as they are.
+    (tmp_path / "pgdata").mkdir()
+    (tmp_path / "pgdata" / "marker").write_text("PARTIAL")
+    retained = tmp_path / "pgdata.pg17-2026-08-18-10-30-00"
+    retained.mkdir()
+    (retained / "PG_VERSION").write_text("17\n")
+    # A launchctl whose `print` always succeeds => the label never unloads =>
+    # _stop_managed_postgres times out and returns non-zero.
+    binp = tmp_path / "stuck"
+    binp.mkdir()
+    (binp / "launchctl").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (binp / "launchctl").chmod(0o755)
+    env = {"PATH": f"{binp}:{os.environ.get('PATH', '')}"}
+    proc = run_lib(tmp_path, "_upgrade_rollback 17 2026-08-18-10-30-00", extra_env=env)
+    assert proc.returncode == 0, proc.stderr  # trap-safe: never fail/exit
+    assert "could not stop the managed Postgres" in proc.stderr
+    # Nothing was moved: both dirs are intact and unchanged.
+    assert (tmp_path / "pgdata" / "marker").read_text() == "PARTIAL"
+    assert (retained / "PG_VERSION").read_text() == "17\n"
+    assert not list(tmp_path.glob("pgdata.failed-*"))
+
+
+def test_manual_rollback_refuses_multiple_retained(tmp_path: Path) -> None:
+    (tmp_path / "pgdata.pg17-2026-08-18-11-00-00").mkdir()
+    (tmp_path / "pgdata.pg17-2026-08-18-12-00-00").mkdir()
+    proc = _upg_run(tmp_path, "--rollback", extra_env=_down_stack_env(tmp_path))
+    assert proc.returncode != 0
+    assert "found 2 retained clusters" in proc.stderr
+
+
+def test_manual_rollback_no_retained_is_noop(tmp_path: Path) -> None:
+    proc = _upg_run(tmp_path, "--rollback", extra_env=_down_stack_env(tmp_path))
+    assert proc.returncode == 0, proc.stderr
+    assert "nothing to roll back" in proc.stderr
+
+
+def test_manual_rollback_refuses_when_stack_up(tmp_path: Path) -> None:
+    # A manual rollback swaps the data directory, so it must refuse while a core
+    # service is still supervised (guards against app writes during the swap).
+    (tmp_path / "pgdata.pg17-2026-08-18-11-00-00").mkdir()
+    bindir = _make_stub_bindir(tmp_path, running_labels=("com.voxint.native.api",))
+    proc = _upg_run(tmp_path, "--rollback", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "core services still running" in proc.stderr
+
+
+# --- cmd_up interrupted-upgrade guard -------------------------------------- #
+def test_up_refuses_interrupted_upgrade_shape(tmp_path: Path) -> None:
+    # No live pgdata, but a retained old cluster from a half-done upgrade: `up`
+    # must refuse and point at --rollback rather than silently using operator DBs.
+    (tmp_path / "pgdata.pg17-2026-08-18-11-00-00").mkdir()
+    venvbin = tmp_path / "venv" / "bin"
+    venvbin.mkdir(parents=True)
+    (venvbin / "voxint").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (venvbin / "voxint").chmod(0o755)
+    proc = run_lib(tmp_path, "cmd_up", extra_env={"VOXINT_NATIVE_WITH_MODELS": "0"})
+    assert proc.returncode != 0
+    assert "an upgrade did not finish" in proc.stderr
+    assert "upgrade-db --rollback" in proc.stderr
+
+
+# --- full orchestration over stubs ----------------------------------------- #
+def _make_upgrade_bindir(
+    bindir: Path,
+    major: str,
+    logdir: Path,
+    *,
+    dump_rc: int = 0,
+    restore_rc: int = 0,
+    toc: tuple[str, ...] = _STUB_TOC_VOXINT,
+    inv_db: str = "",
+    inv_ext: str = "",
+) -> Path:
+    """A stub Postgres bindir for the upgrade orchestration.
+
+    ``postgres --version`` reports ``major``; pg_ctl start/stop toggle a
+    postmaster.pid under -D and log to pg_ctl.log; initdb writes PG_VERSION
+    (``major``) into the new -D and logs; pg_dump/pg_restore/createdb/psql are
+    stubbed and log to ``logdir``. pg_isready + the hermetic launchctl share a
+    ``pg_up`` marker so the datastore reads DOWN before bootstrap and UP after,
+    letting require_stack_fully_down pass and wait_for_postgres succeed.
+    ``inv_db``/``inv_ext`` drive the source-inventory gate.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    up = logdir / "pg_up"
+
+    (bindir / "postgres").write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--version" ]; then printf "postgres (PostgreSQL) %s\\n" '
+        f"{shlex.quote(major)}; exit 0; fi\nexit 0\n"
+    )
+    (bindir / "pg_ctl").write_text(
+        "#!/usr/bin/env bash\n"
+        f'LOG="{logdir}/pg_ctl.log"\n'
+        "datadir=\"\"; action=\"\"\n"
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in\n'
+        "    -D) shift; datadir=$1 ;;\n"
+        "    start|stop|restart|status) action=$1 ;;\n"
+        "  esac\n"
+        "  shift\n"
+        "done\n"
+        'printf "%s %s\\n" "$action" "$datadir" >> "$LOG"\n'
+        'case "$action" in\n'
+        '  start) : > "$datadir/postmaster.pid" ;;\n'
+        '  stop)  rm -f "$datadir/postmaster.pid" ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    (bindir / "initdb").write_text(
+        "#!/usr/bin/env bash\n"
+        f'LOG="{logdir}/initdb.log"\n'
+        "datadir=\"\"\n"
+        'while [ $# -gt 0 ]; do case "$1" in -D) shift; datadir=$1 ;; esac; shift; done\n'
+        'printf "initdb %s\\n" "$datadir" >> "$LOG"\n'
+        'mkdir -p "$datadir"\n'
+        f'printf "%s\\n" {shlex.quote(major)} > "$datadir/PG_VERSION"\n'
+        "exit 0\n"
+    )
+    (bindir / "pg_isready").write_text(
+        "#!/usr/bin/env bash\n"
+        f'[ -f "{up}" ] && exit 0\nexit 1\n'
+    )
+    # The verify query is `current_setting('server_version_num')::int / 10000`, so
+    # the RESULT the stub returns is the bare major, not the raw setting.
+    svnum = major
+    (bindir / "psql").write_text(
+        "#!/usr/bin/env bash\n"
+        f'LOG="{logdir}/psql.log"\n'
+        f'MARK="{logdir}/dropped"\n'
+        'sql=""\n'
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in -tAc|-c) shift; sql=$1 ;; esac\n'
+        "  shift\n"
+        "done\n"
+        'printf "%s\\n" "$sql" >> "$LOG"\n'
+        'case "$sql" in\n'
+        f'  *server_version_num*) echo {svnum}; exit 0 ;;\n'
+        '  *"<->"*) echo 1.414; exit 0 ;;\n'
+        f'  *datistemplate*) printf "%s" {shlex.quote(inv_db)}; echo; exit 0 ;;\n'
+        f'  *pg_extension*) printf "%s" {shlex.quote(inv_ext)}; echo; exit 0 ;;\n'
+        '  *data_directory*) echo "$VOXINT_NATIVE_HOME/pgdata"; exit 0 ;;\n'
+        '  *"DROP DATABASE"*) : > "$MARK"; exit 0 ;;\n'
+        '  *"count(*)"*) echo 0; exit 0 ;;\n'
+        '  *information_schema*) echo 1; exit 0 ;;\n'
+        '  *"oid FROM pg_database"*) [ -f "$MARK" ] && echo 20000 || echo 16386; exit 0 ;;\n'
+        '  *"SELECT 1 FROM pg_database"*) exit 0 ;;\n'
+        '  *pg_roles*) exit 0 ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    toc_args = " ".join(f'"{line}"' for line in toc)
+    (bindir / "pg_restore").write_text(
+        "#!/usr/bin/env bash\n"
+        f'LOG="{logdir}/pg_restore.log"\n'
+        'if [ "$1" = "--list" ]; then\n'
+        f'  printf "%s\\n" {toc_args}\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "%s\\n" "$*" >> "$LOG"\n'
+        f"exit {restore_rc}\n"
+    )
+    (bindir / "pg_dump").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{logdir}/pg_dump.log"\n'
+        f"[ {dump_rc} -eq 0 ] || exit {dump_rc}\n"
+        'printf "PGDMP-stub\\n"\n'
+        "exit 0\n"
+    )
+    (bindir / "createdb").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{logdir}/createdb.log"\nexit 0\n'
+    )
+    (bindir / "launchctl").write_text(
+        "#!/usr/bin/env bash\n"
+        f'UP="{up}"\n'
+        'cmd=$1\n'
+        'case "$cmd" in\n'
+        '  print) exit 1 ;;\n'  # nothing supervised in these hermetic tests
+        f'  bootstrap) : > "$UP"; exit 0 ;;\n'  # new cluster comes UP
+        f'  bootout) rm -f "$UP"; exit 0 ;;\n'  # maintenance PG goes down
+        "esac\n"
+        "exit 0\n"
+    )
+    for name in (
+        "postgres", "pg_ctl", "initdb", "pg_isready", "psql",
+        "pg_restore", "pg_dump", "createdb", "launchctl",
+    ):
+        (bindir / name).chmod(0o755)
+    return bindir
+
+
+def _prime_upgrade(tmp_path: Path, cluster_major: str = "17") -> tuple[Path, Path, dict]:
+    """A primed install for the upgrade orchestration: a managed cluster at
+    ``cluster_major``, a NEW-major bindir (18) as NATIVE_PG_BINDIR, and an OLD-major
+    bindir (``cluster_major``) as the explicit VOXINT_NATIVE_OLD_PG_BINDIR override
+    (so the test never depends on a real brew keg). Returns (newbin, logdir, env)."""
+    pgdata = tmp_path / "pgdata"
+    pgdata.mkdir()
+    (pgdata / "PG_VERSION").write_text(f"{cluster_major}\n")
+    venvbin = tmp_path / "venv" / "bin"
+    venvbin.mkdir(parents=True)
+    for tool in ("alembic",):
+        (venvbin / tool).write_text("#!/usr/bin/env bash\nexit 0\n")
+        (venvbin / tool).chmod(0o755)
+    (venvbin / "voxint").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (venvbin / "voxint").chmod(0o755)
+    logdir = tmp_path / "stublog"
+    logdir.mkdir()
+    newbin = _make_upgrade_bindir(tmp_path / "newbin", "18", logdir)
+    oldbin = _make_upgrade_bindir(tmp_path / "oldbin", cluster_major, logdir)
+    env = {
+        "VOXINT_NATIVE_PG_BINDIR": str(newbin),
+        "VOXINT_NATIVE_OLD_PG_BINDIR": str(oldbin),
+        "VOXINT_NATIVE_WITH_MODELS": "0",
+        "PATH": f"{newbin}:{os.environ.get('PATH', '')}",
+    }
+    return newbin, logdir, env
+
+
+def test_upgrade_happy_path(tmp_path: Path) -> None:
+    _newbin, logdir, env = _prime_upgrade(tmp_path)
+    proc = _upg_run(tmp_path, "", extra_env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "Upgrade complete: Postgres 17 -> 18" in proc.stderr
+    # The old cluster is retained as a rollback; a NEW cluster is live at pgdata.
+    retained = list(tmp_path.glob("pgdata.pg17-*"))
+    assert len(retained) == 1, f"expected one retained cluster, got {retained}"
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "18\n"  # initdb NEW
+    # The dump was taken with the NEW pg_dump and the cross-version-safe flags.
+    dump_log = (logdir / "pg_dump.log").read_text()
+    assert "--exclude-extension=vector" in dump_log
+    assert "--quote-all-identifiers" in dump_log
+    # A pre-upgrade dump landed in backups/ (finalized, not left as .partial).
+    dumps = list((tmp_path / "backups").glob("voxint-pre-upgrade-17-to-18-*.dump"))
+    assert len(dumps) == 1
+    assert not list((tmp_path / "backups").glob("*.partial"))
+
+
+def test_upgrade_no_mv_if_dump_fails(tmp_path: Path) -> None:
+    # If pg_dump fails, NOTHING destructive happens: pgdata stays put, no retained
+    # dir is created, and the old server is stopped (pre-swap cleanup ran).
+    newbin, logdir, env = _prime_upgrade(tmp_path)
+    # Rebuild the NEW bindir with a failing pg_dump.
+    _make_upgrade_bindir(newbin, "18", logdir, dump_rc=1)
+    proc = _upg_run(tmp_path, "", extra_env=env)
+    assert proc.returncode != 0
+    assert "pg_dump failed" in proc.stderr
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "17\n"  # untouched
+    assert not list(tmp_path.glob("pgdata.pg17-*"))  # never renamed
+    assert not list((tmp_path / "backups").glob("*.partial"))  # partial cleaned up
+
+
+def test_upgrade_rolls_back_when_restore_fails(tmp_path: Path) -> None:
+    # A failure AFTER the cutover (fresh_restore's pg_restore errors) must trigger
+    # the rollback trap: the retained old cluster is restored to pgdata and the
+    # partial new one preserved as pgdata.failed-*. This also proves fresh_restore's
+    # subshell trap-clear did not erase the upgrade's own rollback trap.
+    newbin, logdir, env = _prime_upgrade(tmp_path)
+    _make_upgrade_bindir(newbin, "18", logdir, restore_rc=1)
+    proc = _upg_run(tmp_path, "", extra_env=env)
+    assert proc.returncode != 0
+    # Rolled back: pgdata is the OLD cluster again (v17), retained dir consumed.
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "17\n"
+    assert not list(tmp_path.glob("pgdata.pg17-*"))
+    # The partial new cluster was preserved, never deleted.
+    assert list(tmp_path.glob("pgdata.failed-*"))
+
+
+def test_upgrade_source_inventory_refuses_extra_db(tmp_path: Path) -> None:
+    # An extra non-template database a single-db dump cannot carry must be refused
+    # BEFORE any dump or rename.
+    _newbin, logdir, env = _prime_upgrade(tmp_path)
+    oldbin = tmp_path / "oldbin"
+    _make_upgrade_bindir(oldbin, "17", logdir, inv_db="analytics")
+    proc = _upg_run(tmp_path, "", extra_env=env)
+    assert proc.returncode != 0
+    assert "extra databases" in proc.stderr
+    assert "analytics" in proc.stderr
+    assert (tmp_path / "pgdata" / "PG_VERSION").read_text() == "17\n"  # untouched
+    assert not list(tmp_path.glob("pgdata.pg17-*"))
+
+
+def test_upgrade_source_inventory_refuses_extra_extension(tmp_path: Path) -> None:
+    _newbin, logdir, env = _prime_upgrade(tmp_path)
+    oldbin = tmp_path / "oldbin"
+    _make_upgrade_bindir(oldbin, "17", logdir, inv_ext="postgis")
+    proc = _upg_run(tmp_path, "", extra_env=env)
+    assert proc.returncode != 0
+    assert "unexpected extensions" in proc.stderr
+    assert "postgis" in proc.stderr
+    assert not list(tmp_path.glob("pgdata.pg17-*"))

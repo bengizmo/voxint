@@ -1,12 +1,13 @@
-"""Migration 0026 (app_settings.llm_bundled_enabled), up/down.
+"""Migration 0026 (app_settings watch-folder columns), up/down.
 
 Real alembic up/down against the shared test database (head restored in
-teardown): the one nullable column appears/disappears, a row that predates the
-migration reads NULL (the NULL-parity invariant — env still governs the bundle
-toggle, no behavior change on upgrade), and a stored override round-trips.
-Issue #67.
+teardown): the two nullable columns appear/disappear, a row that predates the
+migration reads NULL for both (the NULL-parity invariant — env still governs the
+gate, no sweep summary yet), and a JSON summary + tri-state flag round-trip.
+Issue #60.
 """
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from sqlalchemy import Engine, inspect, text
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_NEW_COLUMN = "llm_bundled_enabled"
+_NEW_COLUMNS = ("watch_folder_enabled", "watch_folder_last_sweep")
 
 
 @pytest.fixture()
@@ -38,43 +39,56 @@ def _app_settings_columns(engine: Engine) -> set[str]:
     return {c["name"] for c in inspect(engine).get_columns("app_settings")}
 
 
-def test_migration_0026_column_null_parity_and_roundtrip(
+def test_migration_0026_columns_null_parity_and_roundtrip(
     alembic_cfg: Config, engine: Engine
 ) -> None:
-    # Before: at 0025 the column does not exist.
+    # Before: at 0025 neither new column exists.
     command.downgrade(alembic_cfg, "0025")
-    assert _NEW_COLUMN not in _app_settings_columns(engine)
+    before = _app_settings_columns(engine)
+    for name in _NEW_COLUMNS:
+        assert name not in before, name
 
-    # A row that predates the migration (only the server-defaulted columns set).
+    # A row that predates the migration.
     with engine.connect() as conn:
         conn.execute(text("INSERT INTO app_settings (id) VALUES (1)"))
         conn.commit()
 
     command.upgrade(alembic_cfg, "0026")
 
-    # The nullable column now exists...
-    assert _NEW_COLUMN in _app_settings_columns(engine)
+    after = _app_settings_columns(engine)
+    for name in _NEW_COLUMNS:
+        assert name in after, name
 
     with engine.connect() as conn:
-        # ...and the pre-existing row reads NULL (NULL-parity: env LLM_BUNDLED_ENABLED
-        # still governs, the upgrade changed no behavior).
-        value = conn.execute(
-            text(f"SELECT {_NEW_COLUMN} FROM app_settings WHERE id = 1")
-        ).scalar_one()
-        assert value is None
+        # NULL-parity: the pre-existing row reads NULL for both (env still governs
+        # the gate; the sweep has never run).
+        _select = (
+            "SELECT watch_folder_enabled, watch_folder_last_sweep FROM app_settings WHERE id = 1"
+        )
+        vals = conn.execute(text(_select)).one()
+        assert vals == (None, None)
 
-        # A stored override round-trips (tri-state: non-NULL wins).
+        # A stored override + last-sweep summary round-trips.
+        summary = {
+            "picked_up": 3,
+            "already_known": 12,
+            "settling": 2,
+            "completed_at": "2026-08-18T10:42:00+00:00",
+        }
         conn.execute(
-            text(f"UPDATE app_settings SET {_NEW_COLUMN} = true WHERE id = 1")
+            text(
+                "UPDATE app_settings SET watch_folder_enabled = true,"
+                " watch_folder_last_sweep = CAST(:s AS jsonb) WHERE id = 1"
+            ),
+            {"s": json.dumps(summary)},
         )
         conn.commit()
-        assert (
-            conn.execute(
-                text(f"SELECT {_NEW_COLUMN} FROM app_settings WHERE id = 1")
-            ).scalar_one()
-            is True
-        )
+        row = conn.execute(text(_select)).one()
+        assert row[0] is True
+        assert row[1] == summary
 
-    # Downgrade drops the column again.
+    # Downgrade drops the columns again.
     command.downgrade(alembic_cfg, "0025")
-    assert _NEW_COLUMN not in _app_settings_columns(engine)
+    reverted = _app_settings_columns(engine)
+    for name in _NEW_COLUMNS:
+        assert name not in reverted, name

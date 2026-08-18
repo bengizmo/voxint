@@ -16,12 +16,22 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
     the run-webhook delivery sweep (issue #12) are opt-in — only scheduled when
     the operator has enabled each (both tasks re-check their gate as a backstop,
     so a stale entry can never act).
+
+    The watch-folder sweep (issue #60) is registered UNCONDITIONALLY, because its
+    enable gate is a runtime DB override (app_settings.watch_folder_enabled) that
+    the startup env config cannot see; the task re-checks the effective gate and
+    no-ops (one DB read, no walk) when disabled, so a UI toggle applies with no
+    restart. Its cadence stays an env setting.
     """
     schedule: dict[str, dict[str, Any]] = {
         "recovery-sweep": {
             "task": "voxint.recovery_sweep",
             "schedule": settings.recovery_sweep_seconds,
-        }
+        },
+        "watch-sweep": {
+            "task": "voxint.watch_sweep",
+            "schedule": settings.watch_folder_sweep_seconds,
+        },
     }
     if settings.media_retention_enabled:
         schedule["gc-sweep"] = {

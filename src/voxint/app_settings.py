@@ -274,6 +274,15 @@ def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":
     )
 
 
+def resolve_effective_watch_folder_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    """Effective watch-folder ingest gate (issue #60): the runtime override on the
+    row wins when non-NULL, else the installation default ``settings.watch_folder_enabled``.
+    """
+    return _resolve_bool_flag(row, settings, "watch_folder_enabled")
+
+
 def resolve_effective_source_authority_domains(
     row: AppSettings | None, settings: Settings
 ) -> str:

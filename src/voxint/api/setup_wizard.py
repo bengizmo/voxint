@@ -332,6 +332,10 @@ class ScanResult:
     hit_entry_cap: bool  # walk stopped at setup_scan_max_entries
     hit_file_cap: bool  # candidate list stopped at setup_scan_max_files
     root_missing: bool  # MEDIA_ROOT is absent / not a directory
+    # Matching files whose source_path already has a MediaItem (skipped as already
+    # ingested), independent of the file cap. The wizard preview ignores it; the
+    # watch-folder sweep (issue #60) surfaces it as the "already known" status count.
+    already_known: int = 0
 
 
 def _under_reserved(path: Path, reserved: set[Path]) -> bool:
@@ -412,6 +416,7 @@ def scan_media_folders(
 
     candidates = list(found)
     hit_file_cap = False
+    already_known = 0
     if candidates:
         existing = set(
             session.execute(
@@ -421,6 +426,9 @@ def scan_media_folders(
             ).scalars()
         )
         net_new = [c for c in candidates if c not in existing]
+        # Files skipped because a MediaItem already claims them — the "already
+        # known" count, taken before the file cap (which only bounds net-new).
+        already_known = len(candidates) - len(net_new)
         # Apply the file cap to NET-NEW results (after the existence filter), so an
         # already-ingested first batch never fills the cap and hides new media.
         if len(net_new) > max_files:
@@ -433,6 +441,7 @@ def scan_media_folders(
         hit_entry_cap=hit_entry_cap,
         hit_file_cap=hit_file_cap,
         root_missing=False,
+        already_known=already_known,
     )
 
 

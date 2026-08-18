@@ -95,14 +95,38 @@ disk.
 
 There are two ways to use the media area.
 
-**Register a watched folder (set it up once, in the browser).** In **Settings →
-Media folders** you can browse the folders inside your media area and register
-the ones Voxint should keep an eye on. You can also give each folder a
+**Register a folder (set it up once, in the browser).** In **Settings → Media
+folders** you can browse the folders inside your media area and register the ones
+Voxint should work with. You can also give each folder a
 [domain pack](../domain-packs.md), which tunes the vocabulary for that kind of
-recording. Drop files into a watched folder and Voxint picks them up. The folder
-browser is also part of first-run setup — see the
+recording. The folder browser is also part of first-run setup — see the
 [onboarding walkthrough](../onboarding.md) and
 [settings and troubleshooting](settings-and-troubleshooting.md).
+
+**Turn on automatic ingest (optional).** Registering a folder does not, on its
+own, start anything — it tells Voxint where your media lives and (with the
+setup wizard's scan) lets you queue what is already there. To have Voxint keep
+watching and **pick up new recordings on its own**, turn on **Automatic ingest**,
+the toggle just below the folder list in **Settings → Media folders**. It is
+**off by default**. Once it is on, Voxint checks your registered folders on a
+schedule and starts a run for each new recording it finds — files it has already
+picked up are skipped, so you can drop a whole batch of interviews in and let them
+queue themselves. The toggle applies immediately, no restart. A status line right
+there shows the last check ("Last checked … — picked up 3 new files; 12 already
+known; 2 waiting to settle").
+
+Two things are worth knowing so it behaves the way you expect:
+
+- **Copy files in with a move/rename when you can.** Voxint waits until a file has
+  stopped changing before it ingests it, so a recording that is still being copied
+  in is not picked up half-written. The most reliable way to add files is to copy
+  them somewhere else first and then **move** (rename) them into the watched
+  folder in one step.
+- **"Already known" means already added, not necessarily finished.** A file is
+  skipped once Voxint has a record of it — including one whose earlier run
+  **failed**. The watcher will not retry a failed run; requeue it yourself from the
+  run's detail page. A file you **rename or move** looks new and will be picked up
+  again.
 
 **Submit a single file (for people comfortable with the terminal).** If you would
 rather kick off one file by hand, Voxint has a command line. These run inside the
@@ -116,10 +140,11 @@ docker compose exec api voxint submit path/to/file.mp3
 docker compose exec api voxint fetch <url>
 ```
 
-`voxint submit` is a **one-off** — it processes that single file once. A
-**watched folder** is standing: register it once and everything you drop in gets
-picked up. Most non-technical operators will never need the command line; the
-browser upload and watched folders cover the same ground.
+`voxint submit` is a **one-off** — it processes that single file once. With
+**Automatic ingest** turned on, a registered folder is standing: set it up once
+and everything you drop in gets picked up. Most non-technical operators will never
+need the command line; the browser upload and automatic ingest cover the same
+ground.
 
 ---
 

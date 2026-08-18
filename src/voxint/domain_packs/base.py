@@ -15,12 +15,17 @@ snapshot's round-trip; ``from_mapping`` is strict because a corrupt persisted
 snapshot is a deterministic run/enrichment error, never a silent fallback.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
+
+if TYPE_CHECKING:
+    from voxint.domain_packs.corrections import CorrectionRule
 
 
 class DomainPackError(Exception):
@@ -70,9 +75,10 @@ class DomainPack:
     vocabulary: tuple[str, ...] = ()
     name_seeds: tuple[str, ...] = ()
     prompt_fragments: dict[str, str] = field(default_factory=dict)
+    corrections: tuple[CorrectionRule, ...] = ()
 
     @classmethod
-    def load(cls, pack_dir: Path) -> "DomainPack":
+    def load(cls, pack_dir: Path) -> DomainPack:
         """Load a pack from ``<pack_dir>/manifest.yaml`` (raises on a bad manifest)."""
         manifest_path = pack_dir / "manifest.yaml"
         try:
@@ -88,25 +94,39 @@ class DomainPack:
         return cls.from_mapping(raw)
 
     @classmethod
-    def from_mapping(cls, data: Mapping[str, Any]) -> "DomainPack":
+    def from_mapping(cls, data: Mapping[str, Any]) -> DomainPack:
         """Reconstruct a pack from a manifest/snapshot mapping (strict).
 
         Shared by :meth:`load` (manifest.yaml) and the per-run snapshot restore
         (``pipeline_runs.domain_pack``). A missing or non-string ``name`` — the
         one required field — is a hard error; every other field defaults empty.
+        A non-mapping input (a tampered snapshot holding a JSON array or scalar)
+        is rejected as :class:`DomainPackError` here too, so the single
+        validation point never leaks a raw ``AttributeError`` past the tolerant
+        snapshot-restore path.
         """
+        if not isinstance(data, Mapping):
+            raise DomainPackError(
+                f"domain pack must be a mapping, got {type(data).__name__}"
+            )
         name = data.get("name")
         if not isinstance(name, str) or not name.strip():
             raise DomainPackError("domain pack 'name' is required and must be a non-empty string")
         description = data.get("description", "")
         if not isinstance(description, str):
             raise DomainPackError("domain pack 'description' must be a string")
+        # Local import breaks the module cycle: corrections.py imports
+        # DomainPackError from this module at top level, so this module must not
+        # import corrections at top level. By call time `base` is fully loaded.
+        from voxint.domain_packs.corrections import parse_corrections
+
         return cls(
             name=name,
             description=description,
             vocabulary=_str_tuple(data.get("vocabulary"), "vocabulary"),
             name_seeds=_str_tuple(data.get("name_seeds"), "name_seeds"),
             prompt_fragments=_str_map(data.get("prompt_fragments"), "prompt_fragments"),
+            corrections=parse_corrections(data.get("corrections")),
         )
 
     def to_mapping(self) -> dict[str, Any]:
@@ -122,6 +142,7 @@ class DomainPack:
             "vocabulary": list(self.vocabulary),
             "name_seeds": list(self.name_seeds),
             "prompt_fragments": dict(self.prompt_fragments),
+            "corrections": [rule.to_mapping() for rule in self.corrections],
         }
 
 

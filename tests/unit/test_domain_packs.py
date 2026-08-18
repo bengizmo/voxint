@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,16 @@ import yaml
 
 from voxint.config import Settings
 from voxint.domain_packs.base import DomainPack, DomainPackError, load_default
+from voxint.domain_packs.corrections import (
+    MAX_CORRECTIONS_MANIFEST_BYTES,
+    MAX_MATCH_CHARS,
+    MAX_REPLACEMENT_CHARS,
+    MAX_RULES_PER_PACK,
+    CorrectionRule,
+    find_first,
+    iter_matches,
+    validate_corrections,
+)
 from voxint.domain_packs.registry import (
     available_domain_packs,
     default_domain_pack,
@@ -262,3 +273,341 @@ def test_run_pack_snapshot_round_trips_to_pack(tmp_path: Path) -> None:
     restored = DomainPack.from_mapping(snap)
     assert restored.name == "podcast"
     assert restored.name_seeds == ("Jane",)
+
+
+# --- corrections (issue #80) -------------------------------------------------
+#
+# The corrections: field declares deterministic literal-substitution rules,
+# frozen per run. #80 owns the rule type, all validation, and the single-rule
+# matcher; the multi-rule apply engine is #81.
+
+
+def test_generic_pack_has_no_corrections() -> None:
+    # generic must stay a byte-preserving no-op (declares no corrections).
+    assert load_default().corrections == ()
+
+
+def test_corrections_round_trip_with_defaults() -> None:
+    pack = DomainPack(
+        name="newsroom",
+        corrections=(
+            CorrectionRule("zoning-board", "zoom board", "Zoning Board"),
+            CorrectionRule("cdbg", "C D B G", "CDBG", case_sensitive=False, whole_word=False),
+        ),
+    )
+    restored = DomainPack.from_mapping(pack.to_mapping())
+    assert restored == pack
+    # Defaults resolved on the first rule (constructed without the flags).
+    assert restored.corrections[0].case_sensitive is True
+    assert restored.corrections[0].whole_word is True
+
+
+def test_corrections_defaults_applied_on_read() -> None:
+    pack = DomainPack.from_mapping(
+        {"name": "p", "corrections": [{"id": "a", "match": "x", "replace": "y"}]}
+    )
+    assert pack.corrections[0].case_sensitive is True
+    assert pack.corrections[0].whole_word is True
+
+
+def test_corrections_snapshot_emits_explicit_bools() -> None:
+    pack = DomainPack(name="p", corrections=(CorrectionRule("a", "x", "y"),))
+    snap_rule = pack.to_mapping()["corrections"][0]
+    assert snap_rule == {
+        "id": "a",
+        "match": "x",
+        "replace": "y",
+        "case_sensitive": True,
+        "whole_word": True,
+    }
+
+
+def test_corrections_snapshot_is_json_safe_list() -> None:
+    pack = DomainPack(name="p", corrections=(CorrectionRule("a", "x", "y"),))
+    data = pack.to_mapping()
+    assert isinstance(data["corrections"], list)
+    assert isinstance(data["corrections"][0], dict)
+
+
+def test_pack_without_corrections_key_round_trips() -> None:
+    # A legacy snapshot (pre-#80) has no corrections key and must restore to ().
+    pack = DomainPack.from_mapping({"name": "p", "vocabulary": ["a"]})
+    assert pack.corrections == ()
+
+
+@pytest.mark.parametrize(
+    "bad_corrections",
+    [
+        "notalist",  # corrections not a list
+        [["not", "a", "mapping"]],  # a rule entry is not a mapping
+        [{"id": "a", "match": "x", "replace": "y", "extra": 1}],  # unknown key
+        [{"match": "x", "replace": "y"}],  # missing id
+        [{"id": "a", "replace": "y"}],  # missing match
+        [{"id": "a", "match": "x"}],  # missing replace
+        [{"id": 5, "match": "x", "replace": "y"}],  # non-string id
+        [{"id": "a", "match": 5, "replace": "y"}],  # non-string match
+        [{"id": "a", "match": "x", "replace": 5}],  # non-string replace
+        [{"id": "  ", "match": "x", "replace": "y"}],  # whitespace-only id
+        [{"id": "a", "match": "", "replace": "y"}],  # empty match
+        [{"id": "a", "match": "x", "replace": ""}],  # empty replace
+        [{"id": "a\x00b", "match": "x", "replace": "y"}],  # NUL in id
+        [{"id": "a", "match": "x\x00", "replace": "y"}],  # NUL in match
+        [{"id": "a", "match": "x", "replace": "y\x00"}],  # NUL in replace
+        [{"id": "a", "match": "x", "replace": "y", "case_sensitive": 1}],  # int flag
+        [{"id": "a", "match": "x", "replace": "y", "whole_word": "yes"}],  # str flag
+        [  # duplicate id
+            {"id": "dup", "match": "x", "replace": "y"},
+            {"id": "dup", "match": "p", "replace": "q"},
+        ],
+    ],
+)
+def test_from_mapping_rejects_corrupt_corrections(bad_corrections: object) -> None:
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": bad_corrections})
+
+
+def test_corrections_reject_too_many_rules() -> None:
+    rules = [
+        {"id": f"r{i}", "match": f"m{i}", "replace": f"v{i}"}
+        for i in range(MAX_RULES_PER_PACK + 1)
+    ]
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": rules})
+
+
+def test_validate_corrections_count_bound_holds_for_direct_callers() -> None:
+    # parse_corrections bounds the count early, so validate_corrections' own count
+    # check only fires for a direct caller (e.g. the #81 engine) — keep it robust.
+    rules = tuple(
+        CorrectionRule(f"r{i}", f"m{i}", f"v{i}") for i in range(MAX_RULES_PER_PACK + 1)
+    )
+    with pytest.raises(DomainPackError):
+        validate_corrections(rules)
+
+
+def test_corrections_reject_overlong_match() -> None:
+    rule = {"id": "a", "match": "x" * (MAX_MATCH_CHARS + 1), "replace": "y"}
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": [rule]})
+
+
+def test_corrections_reject_overlong_replacement() -> None:
+    rule = {"id": "a", "match": "x", "replace": "y" * (MAX_REPLACEMENT_CHARS + 1)}
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": [rule]})
+
+
+def test_corrections_reject_oversize_manifest() -> None:
+    # Many rules that each pass the per-field bounds, no cross-replacement match,
+    # whose canonical JSON exceeds the byte cap. ~200-char unique payloads * 256
+    # rules ≈ 60 KB; widen match/replace to clear 128 KiB while staying ≤ the
+    # per-field limits.
+    rules = [
+        {
+            "id": f"r{i}",
+            "match": f"m{i}-" + "q" * 240,
+            "replace": f"v{i}-" + "w" * 240,
+        }
+        for i in range(MAX_RULES_PER_PACK)
+    ]
+    encoded_len = len(
+        json.dumps(
+            [{**r, "case_sensitive": True, "whole_word": True} for r in rules],
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    assert encoded_len > MAX_CORRECTIONS_MANIFEST_BYTES  # guard the fixture itself
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": rules})
+
+
+# --- idempotence (boundary-aware, R-own-flags) -------------------------------
+
+
+def test_corrections_reject_chain_not_idempotent() -> None:
+    # [a→b, b→c]: applying twice would cascade a→b→c. Rejected at load.
+    rules = [
+        {"id": "a", "match": "a", "replace": "b"},
+        {"id": "b", "match": "b", "replace": "c"},
+    ]
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": rules})
+
+
+def test_corrections_reject_self_chain_when_not_whole_word() -> None:
+    # aa→aaa with whole_word=False: "aa" re-fires inside "aaa". Rejected.
+    rule = {"id": "s", "match": "aa", "replace": "aaa", "whole_word": False}
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": [rule]})
+
+
+def test_corrections_accept_self_chain_when_whole_word() -> None:
+    # aa→aaa with whole_word=True (the default): "aa" is not a whole-word match
+    # inside "aaa", so it never re-fires — genuinely idempotent, accepted.
+    pack = DomainPack.from_mapping(
+        {"name": "p", "corrections": [{"id": "s", "match": "aa", "replace": "aaa"}]}
+    )
+    assert pack.corrections[0].match == "aa"
+
+
+def test_corrections_accept_whole_word_substring_replacement() -> None:
+    # cat→category: "cat" is a substring of "category" but not a whole-word match,
+    # so it cannot re-fire — accepted under the default whole_word=True.
+    pack = DomainPack.from_mapping(
+        {"name": "p", "corrections": [{"id": "c", "match": "cat", "replace": "category"}]}
+    )
+    assert len(pack.corrections) == 1
+
+
+def test_corrections_reject_case_insensitive_chain() -> None:
+    # A case-insensitive rule whose match appears in another case inside another
+    # rule's replacement re-fires (case-folded) and is rejected. The lowercase
+    # "ab" is a standalone word in the replacement, so the default whole-word
+    # firer matches it under IGNORECASE.
+    rules = [
+        {"id": "ab", "match": "AB", "replace": "Z", "case_sensitive": False},
+        {"id": "other", "match": "q", "replace": "say ab now"},
+    ]
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": rules})
+
+
+def test_corrections_accept_real_disjoint_set() -> None:
+    rules = [
+        {"id": "zoning-board", "match": "zoom board", "replace": "Zoning Board"},
+        {"id": "cdbg", "match": "C D B G", "replace": "CDBG"},
+    ]
+    pack = DomainPack.from_mapping({"name": "p", "corrections": rules})
+    assert [r.id for r in pack.corrections] == ["zoning-board", "cdbg"]
+
+
+# --- single-rule matcher ------------------------------------------------------
+
+
+def test_matcher_possessive_is_intra_word() -> None:
+    rule = CorrectionRule("i", "it", "IT")
+    assert find_first(rule, "it's here") is None  # apostrophe joins the word
+    assert find_first(rule, "it is") == (0, 2)  # standalone fires
+
+
+def test_matcher_hyphen_is_intra_word() -> None:
+    assert find_first(CorrectionRule("c", "co", "CO"), "co-op") is None
+
+
+def test_matcher_nfd_combining_mark_not_split() -> None:
+    # "Zoë" decomposed = Z o e U+0308: "Zoe" must not match (combining mark after).
+    decomposed = "Zoë"
+    assert find_first(CorrectionRule("z", "Zoe", "ZOE"), decomposed) is None
+    assert find_first(CorrectionRule("z", "Zoe", "ZOE"), "Zoe said") == (0, 3)
+
+
+def test_matcher_regex_metachars_are_literal() -> None:
+    rule = CorrectionRule("c", "C.D.B.G.", "CDBG")
+    assert find_first(rule, "the C.D.B.G. grant") == (4, 12)
+    assert find_first(rule, "CXDXBXGX here") is None  # '.' is not a wildcard
+
+
+def test_matcher_case_insensitive_finds_uppercase() -> None:
+    rule = CorrectionRule("s", "selectboard", "Selectboard", case_sensitive=False)
+    assert find_first(rule, "the SELECTBOARD met") == (4, 15)
+
+
+def test_matcher_collision_skips_substring_and_finds_standalone() -> None:
+    rule = CorrectionRule("c", "cat", "CAT")
+    assert find_first(rule, "catalog") is None  # substring, not whole word
+    assert find_first(rule, "the cat sat") == (4, 7)
+    # The boundary-invalid first occurrence (in "catalog") is skipped; the
+    # standalone "cat" is found.
+    assert list(iter_matches(rule, "catalog cat")) == [(8, 11)]
+
+
+# --- matcher/guard hardening (code review) -----------------------------------
+
+
+def test_matcher_boundary_invalid_does_not_hide_overlapping_valid() -> None:
+    # A boundary-invalid candidate must not consume a later OVERLAPPING valid one.
+    # "ha ha" in "aha ha ha": (1,6) is invalid (before='a'); (4,9) is valid.
+    rule = CorrectionRule("h", "ha ha", "X")
+    assert find_first(rule, "aha ha ha") == (4, 9)
+    # Self-overlapping doubled word: "a a" in "xa a a ".
+    assert find_first(CorrectionRule("a", "a a", "X"), "xa a a ") == (3, 6)
+
+
+def test_corrections_guard_rejects_hidden_refire() -> None:
+    # The overlap fix tightens the idempotence guard: a firer whose match is only
+    # reachable via an overlapping occurrence inside a replacement is now rejected.
+    rules = [
+        {"id": "f", "match": "ha ha", "replace": "X"},
+        {"id": "t", "match": "q", "replace": "aha ha ha"},
+    ]
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": rules})
+
+
+def test_matcher_ignorecase_folds_are_one_to_one() -> None:
+    # The offset-stable design relies on re.IGNORECASE being length-preserving.
+    # Kelvin sign (U+212A) folds 1:1 to 'k'; 'ß' must NOT match "ss".
+    assert find_first(
+        CorrectionRule("k", "k", "K", case_sensitive=False), "\u212a"
+    ) == (0, 1)
+    assert (
+        find_first(CorrectionRule("s", "ss", "S", case_sensitive=False), "ß")
+        is None
+    )
+
+
+def test_matcher_non_bmp_char_is_a_boundary() -> None:
+    # A non-BMP emoji is a boundary character (not alphanumeric/intra-word/mark).
+    assert find_first(CorrectionRule("c", "cat", "C"), "\U0001f642cat") == (1, 4)
+
+
+@pytest.mark.parametrize(
+    "bad_corrections",
+    [
+        [{"id": "a", "match": "x​", "replace": "y"}],  # zero-width space (Cf)
+        [{"id": "a", "match": "x", "replace": "y﻿"}],  # BOM (Cf) in replace
+        [{"id": "a", "match": "zoom board\n", "replace": "Y"}],  # trailing newline (Cc)
+        [{"id": "a", "match": "   ", "replace": "y"}],  # whitespace-only match
+        [{"id": "a", "match": "x", "replace": "  "}],  # whitespace-only replace
+        [{"id": " a ", "match": "x", "replace": "y"}],  # id with surrounding space
+        [{"id": "a", "match": "x", "replace": "y", 1: "q", "zzz": "w"}],  # mixed keys
+    ],
+)
+def test_from_mapping_rejects_hardened_corrections(bad_corrections: object) -> None:
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping({"name": "p", "corrections": bad_corrections})
+
+
+def test_corrections_reject_lone_surrogate() -> None:
+    # A lone surrogate (e.g. from a tampered JSON snapshot) must raise
+    # DomainPackError, never a raw UnicodeEncodeError that escapes the degrade path.
+    surrogate = json.loads('"\\ud800"')
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping(
+            {"name": "p", "corrections": [{"id": "a", "match": surrogate, "replace": "y"}]}
+        )
+
+
+def test_corrections_allow_combining_mark_and_curly_apostrophe() -> None:
+    # Combining marks (Mn) and the curly apostrophe (Po) are NOT non-printing and
+    # must round-trip (they are load-bearing for the boundary predicate).
+    pack = DomainPack.from_mapping(
+        {
+            "name": "p",
+            "corrections": [
+                {"id": "z", "match": "Zoe", "replace": "Zoë"},
+                {"id": "i", "match": "it's", "replace": "IT\u2019S"},
+            ],
+        }
+    )
+    assert pack.corrections[0].replace == "Zoë"
+
+
+@pytest.mark.parametrize("bad", [["not", "a", "mapping"], "a string", 5, 3.5])
+def test_from_mapping_rejects_non_mapping(bad: object) -> None:
+    # The single validation point rejects a tampered non-mapping snapshot as
+    # DomainPackError, not a raw AttributeError.
+    with pytest.raises(DomainPackError):
+        DomainPack.from_mapping(bad)  # type: ignore[arg-type]

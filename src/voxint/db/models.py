@@ -1309,6 +1309,20 @@ class AppSettings(Base):
     # summary/entities route to the keyless bundled endpoint; names + research
     # stay BYO. Resolve only via resolve_effective_llm_bundled_enabled.
     llm_bundled_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # Watch-folder ingest runtime override (issue #60). Tri-state like the flags
+    # above: NULL inherits the env default (config.watch_folder_enabled, off), a
+    # non-NULL value overrides it — so the operator can enable/disable from the
+    # Settings folders panel with no restart, and revert to the installation
+    # setting by clearing it. Resolved via resolve_effective_watch_folder_enabled.
+    watch_folder_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # Latest watch-sweep summary (issue #60) for the plain-language Settings status
+    # line — the ONLY sweep state persisted (no history/per-file ledger). Keys:
+    # picked_up, already_known, settling, deferred, stat_errors, hit_entry_cap,
+    # hit_file_cap, root_missing, completed_at (ISO-8601). NULL means the sweep has
+    # never run.
+    watch_folder_last_sweep: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
     # External-sources config (issue #74). NULL/blank -> inherit the env default; a
     # non-blank value overrides it (the llm_base_url/llm_api_key precedent).
     source_authority_domains: Mapped[str | None] = mapped_column(Text)

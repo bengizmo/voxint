@@ -10,4 +10,66 @@
    and choose a domain pack per folder to tune transcription and enrichment. Browsing
    stays inside your media root. Changes apply to the next job you submit.</p>
 {% include "fragments/folder_panel.html" %}
+
+{# Watch-folder ingest (issue #60): a tri-state toggle + a plain-language status line
+   for the latest automatic sweep. When on, Voxint checks the registered folders on a
+   schedule and starts a run for each new recording, skipping files it already knows. #}
+<div id="watch-folder" class="watch-folder">
+  <h3>Automatic ingest</h3>
+  <p class="muted">When this is on, Voxint checks the folders above on a schedule and
+     starts a job for each <strong>new</strong> recording it finds — files it has
+     already picked up are skipped. Drop a batch of recordings into a registered
+     folder and they’ll be queued automatically, no manual submitting.</p>
+  {% if watch_folder_error %}
+    <p class="notice" role="alert">{{ watch_folder_error }}</p>
+  {% endif %}
+  <form method="post" action="/settings/watch-folder">
+    <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+    <fieldset class="field feature-flag">
+      <legend>Watch registered folders for new recordings</legend>
+      <label><input type="radio" name="watch_folder_enabled" value="on"{% if watch_folder_state == "on" %} checked{% endif %}>
+        On</label>
+      <label><input type="radio" name="watch_folder_enabled" value="off"{% if watch_folder_state == "off" %} checked{% endif %}>
+        Off</label>
+      <label><input type="radio" name="watch_folder_enabled" value="inherit"{% if watch_folder_state == "inherit" %} checked{% endif %}>
+        Use installation setting <span class="muted">(currently {{ "On" if watch_folder_env_default else "Off" }})</span></label>
+    </fieldset>
+    <button type="submit">Save automatic-ingest setting</button>
+  </form>
+  <p class="muted watch-folder-status">
+    {% if watch_folder_effective %}Watching is <strong>on</strong>.{% else %}Watching is <strong>off</strong>.{% endif %}
+    {% if watch_folder_checked_at %}
+      Last checked {{ watch_folder_checked_at.strftime("%Y-%m-%d %H:%M UTC") }} —
+      picked up {{ watch_folder_last_sweep.picked_up }} new file{{ "" if watch_folder_last_sweep.picked_up == 1 else "s" }};
+      {{ watch_folder_last_sweep.already_known }} already known;
+      {{ watch_folder_last_sweep.settling }} waiting to settle.
+      {% if watch_folder_last_sweep.root_missing %}
+        <span class="notice">The media folder could not be found during the check —
+        is the drive or share mounted?</span>
+      {% endif %}
+      {% if watch_folder_last_sweep.deferred %}
+        {{ watch_folder_last_sweep.deferred }} {{ "was" if watch_folder_last_sweep.deferred == 1 else "were" }}
+        queued but could not be handed to a worker yet (the job broker was
+        unavailable) — they’ll start automatically when it recovers.
+      {% endif %}
+      {% if watch_folder_last_sweep.stat_errors %}
+        {{ watch_folder_last_sweep.stat_errors }} file{{ "" if watch_folder_last_sweep.stat_errors == 1 else "s" }}
+        disappeared or could not be read during the check.
+      {% endif %}
+      {% if watch_folder_last_sweep.hit_file_cap %}
+        <span class="notice">A lot of new recordings appeared at once, so
+        only the first batch was queued this pass — the rest is
+        picked up over the next few checks.</span>
+      {% endif %}
+      {% if watch_folder_last_sweep.hit_entry_cap %}
+        <span class="notice">This folder is very large, so only the first part is
+        checked each pass, and files beyond it
+        may not be picked up automatically —
+        split it into smaller folders, or submit those files by hand.</span>
+      {% endif %}
+    {% elif watch_folder_effective %}
+      No automatic check has run yet.
+    {% endif %}
+  </p>
+</div>
 </section>

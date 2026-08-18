@@ -26,6 +26,34 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   vendored models (`services/llama-cpp/provenance.json`). The bundled image is
   built and verified but not yet published — the GitHub asset release + registry
   image land at the next release cut.
+- **Domain-pack `corrections:` schema (#80, epic #78)**: a new frozen, per-run
+  domain-pack field declaring deterministic **literal** substitution rules
+  (`id`/`match`/`replace`/`case_sensitive`/`whole_word`) that fix recurring
+  domain mis-hears offline, with no model or prompt. Strict load-time validation —
+  literal-only, unique ids, an explicit whole-word boundary predicate (apostrophes,
+  hyphens, and combining marks are intra-word, so `it→IT` never breaks `it's` and
+  a rule never splits `Zoë`), a boundary-aware replacement-contains-match
+  idempotence check, and hard bounds (256 rules / 256 match / 512 replace / 128 KiB)
+  — surfaces a malformed pack loudly before a run is submitted. Ships the pure
+  single-rule matcher the apply engine (#81) will reuse. **Schema + validation
+  only; no runtime text change** — the `generic` pack declares none, so the
+  default pipeline stays byte-preserving.
+- **Design recommendation: deterministic, non-LLM transcript correction (#79,
+  epic #78)**: a research-spike report
+  (`docs/reports/nonllm-transcript-correction-design-2026-08-18.md`) recommending a
+  deliberately narrow v1 — a pure-`stdlib`, versioned, per-segment
+  **literal-substitution** engine driven only by a new frozen domain-pack
+  `corrections:` field, refusing general homophone/casing/number/disfluency rules
+  and executable regex, and gated by a stricter-than-LLM faithfulness corpus. Built
+  by one AI panel and then **adversarially reviewed by a second 3-model panel**
+  whose convergent findings hardened the design (§12): a **raw-gated dual-pass**
+  composition with the optional LLM path (so a hallucinated term can't be entrenched
+  as operator-authored), an explicit whole-word boundary predicate, a
+  replacement-contains-match idempotence validation, a persisted
+  `correction_trace`/`corrector_version`, and a required console
+  authoring surface. Sequences the follow-up issues (#80 schema → #81 engine → #82
+  composition+migration → #83 provenance → #84 authoring). **No runtime change** —
+  analysis only.
 - **Local-LLM qualification harness + frozen corpus (#66)**: a maintainer tool
   (`tools/qualify_local_llm.py`) and a hand-annotated, clean-room fixture corpus
   (`tests/fixtures/llm_qual/`, 19 fixtures + a frozen six-gate manifest) that
@@ -38,6 +66,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   unrestricted bundled default (Granite obeys prompt injection; both are weak at
   the agentic research loop). The corpus + harness are reused as #67's acceptance
   gate. No change to shipped runtime behaviour.
+- **Watch-folder ingest (#60, console-UX arc #47)**: drop a batch of recordings
+  into a registered media folder and Voxint picks them up on its own — no per-file
+  submitting. An opt-in beat sweep walks the operator's registered folders
+  (Settings → Media folders), starts a run for each **new** recording, and **skips
+  files it already knows** (dedupe on the media `source_path`, the same predicate
+  the setup-wizard scan uses). It reuses the existing bounded, containment-safe
+  scan (registered folders only, `incoming`/`artifacts` pruned, symlinks never
+  followed, entry/file caps) and the race-safe submit primitive, so a re-scan or an
+  overlapping sweep can never duplicate a run. A **settle window** (a file must sit
+  unchanged, by newest of mtime/ctime, for `WATCH_FOLDER_SETTLE_SECONDS`, default
+  60 s) keeps a file that is still being copied in from being ingested mid-write —
+  the reliable way to add files is an atomic move/rename into the folder.
+  **Off by default**, toggled from a tri-state control beside the folders panel
+  (On / Off / use the installation setting) that applies with **no restart**; a
+  plain-language status line shows the last check ("picked up 3 new files;
+  12 already known; 2 waiting to settle", with a warning when a very large folder
+  was only partially scanned). New settings `WATCH_FOLDER_ENABLED`,
+  `WATCH_FOLDER_SWEEP_SECONDS` (cadence, default 5 min), `WATCH_FOLDER_SETTLE_SECONDS`;
+  migration `0026` adds the runtime-override + last-sweep columns to `app_settings`.
+  Skipping is honest — a file whose earlier run *failed* is "already known", not
+  re-tried by the watcher (requeue it from the run detail); a renamed/moved file is
+  treated as new.
 - **Keyboard shortcuts + in-app cheat-sheet (#51, console-UX arc #47)**: the
   review-stepper island extends its verify-and-advance keymap so a solo operator
   can drive the whole adjudication loop from the keyboard. Beyond the shipped
@@ -53,6 +103,27 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   cheat-sheet is open; **Space** (play/pause) and the **arrow keys** (scroll) stay
   with the native audio player as before. Digit-assign reuses the existing
   whole-segment `/relabel` scope (no new backend); a React island change only.
+- **Native tier: guided Postgres major-version upgrade (`upgrade-db`, #71)**: the
+  native macOS launcher can now move real data forward one Postgres major at a
+  time (first certified edge 17 → 18) with a **dump/restore** upgrade. It runs the
+  old cluster briefly on a private Unix socket (needs the old `postgresql@NN`
+  binaries, or `VOXINT_NATIVE_OLD_PG_BINDIR`), dumps `voxint` with the **new**
+  `pg_dump` (`--exclude-extension=vector --quote-all-identifiers`), and **proves
+  the dump restorable before touching the data directory**, then renames the old
+  cluster aside as a rollback (`pgdata.pg<old>-<stamp>`), `initdb`s the new major,
+  and rebuilds via the tested `restore --fresh` path (pgvector-safe,
+  single-transaction, `alembic upgrade head`). Fail-closed throughout: same-major
+  is a no-op, downgrades and skipped majors are refused, and the stack must be
+  fully down (no api/worker/beat, no supervised datastores, nothing on the PG
+  port). A source-inventory gate refuses a cluster carrying extra databases or
+  unexpected extensions a single-database dump can't preserve; a disk-headroom
+  gate refuses if there isn't room for a second cluster + the dump. On any failure
+  after the cutover it **auto-rolls-back** — the partial new cluster is set aside
+  as `pgdata.failed-<stamp>` (never deleted) and the old cluster restored — and
+  the same recovery is exposed as `upgrade-db --rollback`; `up` refuses (pointing
+  at `--rollback`) if it finds a set-aside cluster but no live one. A maintainer
+  `--rehearse` flag forces the full cycle at the same major for a mechanical
+  proof. The old cluster is kept for you to delete once a good run is confirmed.
 - **Responsive + accessibility polish (#64, console-UX arc #47)**: the
   server-rendered console gets a baseline of responsive and accessible behaviour
   so it's usable beyond a desktop developer's screen. A **skip-link** to a real
