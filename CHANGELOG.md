@@ -33,6 +33,27 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   cheat-sheet is open; **Space** (play/pause) and the **arrow keys** (scroll) stay
   with the native audio player as before. Digit-assign reuses the existing
   whole-segment `/relabel` scope (no new backend); a React island change only.
+- **Native tier: guided Postgres major-version upgrade (`upgrade-db`, #71)**: the
+  native macOS launcher can now move real data forward one Postgres major at a
+  time (first certified edge 17 → 18) with a **dump/restore** upgrade. It runs the
+  old cluster briefly on a private Unix socket (needs the old `postgresql@NN`
+  binaries, or `VOXINT_NATIVE_OLD_PG_BINDIR`), dumps `voxint` with the **new**
+  `pg_dump` (`--exclude-extension=vector --quote-all-identifiers`), and **proves
+  the dump restorable before touching the data directory**, then renames the old
+  cluster aside as a rollback (`pgdata.pg<old>-<stamp>`), `initdb`s the new major,
+  and rebuilds via the tested `restore --fresh` path (pgvector-safe,
+  single-transaction, `alembic upgrade head`). Fail-closed throughout: same-major
+  is a no-op, downgrades and skipped majors are refused, and the stack must be
+  fully down (no api/worker/beat, no supervised datastores, nothing on the PG
+  port). A source-inventory gate refuses a cluster carrying extra databases or
+  unexpected extensions a single-database dump can't preserve; a disk-headroom
+  gate refuses if there isn't room for a second cluster + the dump. On any failure
+  after the cutover it **auto-rolls-back** — the partial new cluster is set aside
+  as `pgdata.failed-<stamp>` (never deleted) and the old cluster restored — and
+  the same recovery is exposed as `upgrade-db --rollback`; `up` refuses (pointing
+  at `--rollback`) if it finds a set-aside cluster but no live one. A maintainer
+  `--rehearse` flag forces the full cycle at the same major for a mechanical
+  proof. The old cluster is kept for you to delete once a good run is confirmed.
 - **Responsive + accessibility polish (#64, console-UX arc #47)**: the
   server-rendered console gets a baseline of responsive and accessible behaviour
   so it's usable beyond a desktop developer's screen. A **skip-link** to a real

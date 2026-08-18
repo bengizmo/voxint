@@ -26,6 +26,8 @@
 #                         ffmpeg/ffprobe, cluster + pgvector, ports
 #   backup                pg_dump -Fc the voxint database into backups/
 #   restore <file>        pg_restore a dump into the voxint database
+#   upgrade-db            dump/restore Postgres major upgrade (one forward),
+#                         preserving data; the old cluster is kept as a rollback
 #   run <svc> --foreground  run one service in the foreground for debugging
 #   rotate-logs           copytruncate-rotate oversized logs (also daily via launchd)
 #
@@ -874,7 +876,7 @@ require_cluster_binary_major_match() {
   bmaj=$(bindir_pg_major "$NATIVE_PG_BINDIR") \
     || fail "cannot determine the Postgres major of $NATIVE_PG_BINDIR/postgres -- see: $0 doctor"
   [ "$cmaj" = "$bmaj" ] \
-    || fail "Postgres major mismatch: the managed cluster at $NATIVE_PGDATA is v$cmaj but the binaries at $NATIVE_PG_BINDIR are v$bmaj -- the server would refuse to start against it. To run your existing data, point the launcher back at the matching major: install it if needed (brew install postgresql@$cmaj) and set VOXINT_NATIVE_PG_BINDIR=\"\$(brew --prefix postgresql@$cmaj)/bin\", then retry. (See: $0 doctor.)"
+    || fail "Postgres major mismatch: the managed cluster at $NATIVE_PGDATA is v$cmaj but the binaries at $NATIVE_PG_BINDIR are v$bmaj -- the server would refuse to start against it. To run your existing data, point the launcher back at the matching major: install it if needed (brew install postgresql@$cmaj) and set VOXINT_NATIVE_PG_BINDIR=\"\$(brew --prefix postgresql@$cmaj)/bin\", then retry. To UPGRADE your existing data to v$bmaj instead, run: $0 upgrade-db. (See: $0 doctor.)"
 }
 
 cmd_up() {
@@ -883,6 +885,12 @@ cmd_up() {
   local media_root svc managed=0 metal_up_rc=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
   managed_cluster && managed=1
+  # An interrupted upgrade can leave a set-aside cluster but no live one at
+  # $NATIVE_PGDATA; without this, `up` would silently fall through to the
+  # operator-provided-datastores path instead of surfacing the half-done upgrade.
+  if [ "$managed" != 1 ] && _interrupted_upgrade_present; then
+    fail "an upgrade did not finish: a set-aside cluster exists but there is no live one at $NATIVE_PGDATA -- recover the old data with: $0 upgrade-db --rollback"
+  fi
   # Offline major-skew gate BEFORE any launchd bootstrap: a v-mismatched cluster
   # would only fail cryptically once the postmaster tried to start. (Operator-
   # provided clusters are the operator's to version-manage, so guard managed only.)
@@ -1350,6 +1358,376 @@ fresh_restore() {
 }
 
 # ---------------------------------------------------------------------------
+# Postgres major-version upgrade (#71 slice 2b): `upgrade-db`
+# ---------------------------------------------------------------------------
+# A dump/restore major upgrade that PRESERVES real data. It dumps the OLD running
+# cluster with the NEW pg_dump over a private Unix socket, proves the archive
+# restorable BEFORE touching pgdata, atomically renames the old cluster aside as a
+# rollback, initdbs the new major, and rebuilds via the tested `fresh_restore`.
+# One-major-forward only (new == old + 1). Reuses the restore machinery so the
+# pgvector TOC filtering, superuser extension preinstall, single-transaction, and
+# alembic gate all apply unchanged. Audience: non-technical single operators, so
+# correctness + data-preservation + honest UX outrank speed. See the plan and
+# docs/native-macos-preview.md for the full contract.
+
+# Stop the managed Postgres launchd job (idempotent; bounded wait). Shared by the
+# rollback paths, which may run while the new maintenance postmaster is up.
+_stop_managed_postgres() {
+  local label i
+  label=$(plist_label postgres)
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  i=0
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -le 50 ] || return 1     # still loaded after ~10s: the caller must NOT move data
+    sleep 0.2
+  done
+  return 0
+}
+
+# upgrade-db must own the ONLY postmaster on our port: refuse if any core service
+# (api/worker/beat) is supervised, if the managed datastores are still loaded, or
+# if anything is already listening on :$NATIVE_PG_PORT. Extends the restore gate.
+require_stack_fully_down() {
+  require_core_services_stopped
+  local svc label loaded=
+  for svc in $NATIVE_DATASTORES; do
+    label=$(plist_label "$svc")
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      loaded="$loaded $svc"
+    fi
+  done
+  [ -z "$loaded" ] \
+    || fail "refusing upgrade: managed datastores still supervised:$loaded (run: $0 down)"
+  ! postgres_reachable \
+    || fail "refusing upgrade: something is already listening on Postgres :$NATIVE_PG_PORT -- stop it (run: $0 down) so upgrade-db owns the only server"
+}
+
+# Locate the OLD-major postgres binaries needed to RUN the old cluster for the
+# dump. Precedence: an explicit VOXINT_NATIVE_OLD_PG_BINDIR override (validated to
+# actually be the old major) -> brew's keg for postgresql@<old> -> the CURRENT
+# bindir but ONLY in --rehearse (same-major cycle) -> else fail-closed with the
+# install hint. Prints the bindir on stdout.
+resolve_old_pg_bindir() {
+  local old=$1 rehearse=$2 cand maj prefix
+  if [ -n "${VOXINT_NATIVE_OLD_PG_BINDIR:-}" ]; then
+    cand=$VOXINT_NATIVE_OLD_PG_BINDIR
+    maj=$(bindir_pg_major "$cand") \
+      || fail "VOXINT_NATIVE_OLD_PG_BINDIR=$cand has no usable postgres binary"
+    [ "$maj" = "$old" ] \
+      || fail "VOXINT_NATIVE_OLD_PG_BINDIR=$cand is Postgres v$maj, not the cluster's v$old"
+    printf '%s\n' "$cand"; return 0
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    prefix=$(brew --prefix "postgresql@$old" 2>/dev/null) || prefix=""
+    if [ -n "$prefix" ] && [ -x "$prefix/bin/postgres" ]; then
+      maj=$(bindir_pg_major "$prefix/bin") || maj=""
+      [ "$maj" = "$old" ] && { printf '%s\n' "$prefix/bin"; return 0; }
+    fi
+  fi
+  if [ "$rehearse" = 1 ]; then
+    maj=$(bindir_pg_major "$NATIVE_PG_BINDIR") || maj=""
+    [ "$maj" = "$old" ] && { printf '%s\n' "$NATIVE_PG_BINDIR"; return 0; }
+  fi
+  fail "cannot locate the Postgres $old binaries needed to read the old cluster -- install them (brew install postgresql@$old) or set VOXINT_NATIVE_OLD_PG_BINDIR to their bin dir"
+}
+
+# One scalar SQL value as the cluster superuser (the OS user) over a PRIVATE Unix
+# socket dir ($2). Mirrors super_psql_scalar but for the transient old server:
+# non-zero exit on any probe/SQL error (ON_ERROR_STOP), empty stdout on no rows.
+sock_psql_scalar() {
+  "$1/psql" -h "$2" -p "$NATIVE_PG_PORT" -U "$(id -un)" \
+    -d "$3" -v ON_ERROR_STOP=1 -w -tAc "$4"
+}
+
+# Refuse (over the running old server) if the managed cluster carries state a
+# single-database dump cannot preserve: any non-template, non-system database
+# other than $NATIVE_DB_NAME, or any extension in $NATIVE_DB_NAME beyond the
+# expected plpgsql + vector. Fail-closed on a probe error.
+source_inventory_gate() {
+  local bindir=$1 sock=$2 extradb extraext
+  extradb=$(sock_psql_scalar "$bindir" "$sock" postgres \
+    "SELECT string_agg(datname, ', ') FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres', '$NATIVE_DB_NAME')") \
+    || fail "could not inventory databases on the old server"
+  [ -z "$extradb" ] \
+    || fail "refusing upgrade: the managed cluster carries extra databases a single-database dump cannot preserve: $extradb. This path upgrades only the '$NATIVE_DB_NAME' database -- back the others up separately and drop them, then retry."
+  extraext=$(sock_psql_scalar "$bindir" "$sock" "$NATIVE_DB_NAME" \
+    "SELECT string_agg(extname, ', ') FROM pg_extension WHERE extname NOT IN ('plpgsql', 'vector')") \
+    || fail "could not inventory extensions on the old server"
+  [ -z "$extraext" ] \
+    || fail "refusing upgrade: the '$NATIVE_DB_NAME' database has unexpected extensions this path does not handle: $extraext. Only plpgsql + vector are supported -- remove them (or migrate manually) and retry."
+}
+
+# Conservative disk headroom check before the destructive cutover: the upgrade
+# holds the old cluster + a full new cluster + the dump concurrently. Require room
+# for a second full copy of the cluster plus ~100 MB slack. A missing/odd df/du
+# WARNS and proceeds (a tool absence must not block a legitimate upgrade); a
+# measured shortfall FAILS closed.
+upgrade_disk_space_gate() {
+  local used_kb avail_kb need_kb
+  used_kb=$(du -sk "$NATIVE_PGDATA" 2>/dev/null | awk 'NR==1 {print $1}') || used_kb=""
+  avail_kb=$(df -k "$VOXINT_NATIVE_HOME" 2>/dev/null | awk 'NR==2 {print $4}') || avail_kb=""
+  case $used_kb in '' | *[!0-9]*)
+    say "disk-space gate: could not measure $NATIVE_PGDATA -- skipping (proceed with care)"; return 0 ;;
+  esac
+  case $avail_kb in '' | *[!0-9]*)
+    say "disk-space gate: could not measure free space under $VOXINT_NATIVE_HOME -- skipping"; return 0 ;;
+  esac
+  need_kb=$((used_kb * 2 + 102400))
+  [ "$avail_kb" -ge "$need_kb" ] \
+    || fail "refusing upgrade: not enough free space. The old cluster is ~$((used_kb / 1024)) MB; the upgrade needs ~$((need_kb / 1024)) MB free under $VOXINT_NATIVE_HOME but only ~$((avail_kb / 1024)) MB is available. Free some space and retry."
+  say "disk-space gate OK: ~$((avail_kb / 1024)) MB free, ~$((need_kb / 1024)) MB needed"
+}
+
+# Print each retained pre-upgrade cluster dir ($NATIVE_PGDATA.pg<old>-<stamp>),
+# one per line; return non-zero if there are none. (Bash 3.2: a non-matching glob
+# stays literal, so guard every candidate with a -d test.)
+_retained_upgrade_dirs() {
+  local d found=1
+  for d in "$NATIVE_PGDATA".pg*-*; do
+    [ -d "$d" ] || continue
+    printf '%s\n' "$d"; found=0
+  done
+  return "$found"
+}
+
+# True if an upgrade was interrupted and left a set-aside cluster (retained old or
+# a preserved partial new) but no live one -- the shape `up` must refuse on.
+_interrupted_upgrade_present() {
+  local d
+  for d in "$NATIVE_PGDATA".pg*-* "$NATIVE_PGDATA".failed-*; do
+    [ -d "$d" ] && return 0
+  done
+  return 1
+}
+
+# Idempotent, filesystem-shape-driven rollback (auto via the EXIT trap, and the
+# manual `upgrade-db --rollback`). Keyed on the retained dir's existence, so a
+# second call is a no-op. NEVER deletes: a partial/current cluster is set aside as
+# pgdata.failed-<stamp>. Runs inside a trap on the failure path, so it must never
+# call fail()/exit (that would re-enter the EXIT trap); it reports via say().
+_upgrade_rollback() {
+  local old=$1 stamp=$2
+  local retained=$NATIVE_PGDATA.pg$old-$stamp
+  local setaside=$NATIVE_PGDATA.failed-$stamp
+  if [ ! -d "$retained" ]; then
+    say "rollback: no retained cluster at $retained -- nothing to restore (already rolled back?)"
+    return 0
+  fi
+  # Never move a live data directory. If the managed Postgres will not stop within
+  # the timeout, or a postmaster.pid lingers on the current cluster, refuse to
+  # rename anything and tell the operator to stop it and retry.
+  if ! _stop_managed_postgres; then
+    say "rollback: WARNING could not stop the managed Postgres within the timeout -- NOT moving any data directory (a live server would corrupt it). Stop it (run: $0 down), then retry: $0 upgrade-db --rollback"
+    return 0
+  fi
+  if [ -e "$NATIVE_PGDATA" ]; then
+    if [ -f "$NATIVE_PGDATA/postmaster.pid" ]; then
+      say "rollback: WARNING $NATIVE_PGDATA still has a postmaster.pid (a server may be running) -- NOT moving it. Stop it (run: $0 down), then retry: $0 upgrade-db --rollback"
+      return 0
+    fi
+    if [ -e "$setaside" ]; then
+      say "rollback: WARNING $setaside already exists; leaving $NATIVE_PGDATA in place -- resolve manually"
+      return 0
+    fi
+    if mv "$NATIVE_PGDATA" "$setaside"; then
+      say "rollback: set aside the current cluster at $setaside (kept, never deleted)"
+    else
+      say "rollback: WARNING could not set aside $NATIVE_PGDATA -- resolve manually"
+      return 0
+    fi
+  fi
+  if [ ! -e "$NATIVE_PGDATA" ]; then
+    if mv "$retained" "$NATIVE_PGDATA"; then
+      say "rollback: restored the pre-upgrade cluster (Postgres $old) to $NATIVE_PGDATA"
+    else
+      say "rollback: WARNING could not restore $retained -> $NATIVE_PGDATA -- resolve manually"
+    fi
+  fi
+  say "rollback: to RUN it, install the Postgres $old binaries and point VOXINT_NATIVE_PG_BINDIR at them (brew install postgresql@$old), then: $0 up"
+  return 0
+}
+
+# Manual `upgrade-db --rollback`: discover the retained cluster from the on-disk
+# shape (refusing if there are several to disambiguate), then roll back.
+_upgrade_manual_rollback() {
+  local dirs n d name rest old stamp
+  # A manual rollback replaces the database's data directory, so the app must not
+  # be live against it: refuse unless api/worker/beat and the managed datastores
+  # are all stopped (run: $0 down). The auto-rollback path does not gate on this --
+  # it owns the maintenance Postgres it started and stops it itself.
+  require_stack_fully_down
+  dirs=$(_retained_upgrade_dirs) \
+    || { say "no retained pre-upgrade cluster found -- nothing to roll back"; return 0; }
+  n=$(printf '%s\n' "$dirs" | grep -c .)
+  [ "$n" -eq 1 ] \
+    || fail "found $n retained clusters; remove all but the one you want restored, then retry:
+$dirs"
+  d=$dirs
+  name=${d##*/}                 # pgdata.pg<old>-<stamp>
+  rest=${name#pgdata.pg}        # <old>-<stamp>
+  old=${rest%%-*}               # <old>
+  stamp=${rest#*-}              # <stamp> (contains '-' separators)
+  _upgrade_rollback "$old" "$stamp"
+}
+
+# Pre-swap cleanup (EXIT trap for phase A, before anything destructive): stop the
+# transient old server and remove the private socket + partial dump. Must NOT
+# touch pgdata and must never exit.
+_upgrade_preswap_cleanup() {
+  local old_bindir=$1 sock=$2 partial=$3
+  "$old_bindir/pg_ctl" -D "$NATIVE_PGDATA" -m fast -w stop >/dev/null 2>&1 || true
+  [ -n "$sock" ] && rm -rf "$sock" 2>/dev/null
+  [ -n "$partial" ] && rm -f "$partial" 2>/dev/null
+  return 0
+}
+
+_upgrade_run() {
+  local rehearse=$1 old new old_bindir sock log stamp partial final smaj datadir vio next
+  managed_cluster || fail "no managed cluster to upgrade (see: $0 setup)"
+  old=$(cluster_pg_major) \
+    || fail "the managed cluster at $NATIVE_PGDATA looks damaged (unreadable/invalid PG_VERSION) -- see: $0 doctor"
+  new=$(bindir_pg_major "$NATIVE_PG_BINDIR") \
+    || fail "cannot determine the Postgres major of $NATIVE_PG_BINDIR/postgres -- see: $0 doctor"
+  if [ "$old" = "$new" ]; then
+    if [ "$rehearse" != 1 ]; then
+      say "already on Postgres $new -- nothing to do"
+      return 0
+    fi
+    say "rehearsal: forcing a same-major (v$old) upgrade cycle (mechanical proof only, not a real cross-major upgrade)"
+  elif [ "$new" -lt "$old" ]; then
+    fail "downgrades are not supported (cluster v$old -> binaries v$new): unsupported. To run your existing v$old data, reinstall postgresql@$old and point VOXINT_NATIVE_PG_BINDIR at it."
+  else
+    next=$((old + 1))
+    [ "$new" -eq "$next" ] \
+      || fail "only one-major-forward upgrades are supported (cluster v$old -> binaries v$new): unsupported. Upgrade one major at a time (install postgresql@$next first)."
+  fi
+  require_stack_fully_down
+  old_bindir=$(resolve_old_pg_bindir "$old" "$rehearse")
+  upgrade_disk_space_gate
+
+  stamp=$(date +%Y-%m-%d-%H-%M-%S)
+  mkdir -p "$VOXINT_NATIVE_HOME/logs" "$VOXINT_NATIVE_HOME/backups" "$VOXINT_NATIVE_HOME/run"
+  sock=$(mktemp -d "${TMPDIR:-/tmp}/voxint-upgrade-sock.XXXXXX") || fail "mktemp -d failed"
+  log=$VOXINT_NATIVE_HOME/logs/upgrade-old-pg-$stamp.log
+  partial=$VOXINT_NATIVE_HOME/backups/voxint-pre-upgrade-$old-to-$new-$stamp.dump.partial
+  final=${partial%.partial}
+
+  # Darwin multithread-at-startup guard for the transient old postmaster + tools.
+  export LC_ALL=C LANG=C
+
+  # --- phase A: run the OLD server on a PRIVATE socket, prove it dumpable -------
+  # Pre-swap cleanup trap: on ANY failure here, stop the old server and drop the
+  # socket + partial. Nothing destructive has happened, so it must NOT touch pgdata.
+  # The trap body reads globals rather than interpolating paths, so a path
+  # containing a single quote can neither break the trap nor inject a command.
+  _UPG_OLD_BINDIR=$old_bindir _UPG_SOCK=$sock _UPG_PARTIAL=$partial
+  _UPG_OLD=$old _UPG_STAMP=$stamp
+  trap '_upgrade_preswap_cleanup "$_UPG_OLD_BINDIR" "$_UPG_SOCK" "$_UPG_PARTIAL"' EXIT
+
+  step "Starting the Postgres $old server on a private socket (direct pg_ctl, not launchd)"
+  "$old_bindir/pg_ctl" -D "$NATIVE_PGDATA" \
+    -o "-k $sock -c listen_addresses='' -p $NATIVE_PG_PORT" -w -l "$log" start \
+    || fail "could not start the old Postgres $old server (see $log). A stale $NATIVE_PGDATA/postmaster.pid from an unclean shutdown can block this -- if no postgres is running, remove it and retry."
+
+  datadir=$(sock_psql_scalar "$old_bindir" "$sock" postgres "SHOW data_directory") \
+    || fail "could not query the old server over its private socket"
+  [ "$datadir" = "$NATIVE_PGDATA" ] \
+    || fail "the old server's data_directory ($datadir) is not the managed cluster ($NATIVE_PGDATA) -- refusing"
+  smaj=$(sock_psql_scalar "$old_bindir" "$sock" postgres \
+    "SELECT current_setting('server_version_num')::int / 10000") \
+    || fail "could not read the running old server's version"
+  [ "$smaj" = "$old" ] \
+    || fail "the running old server reports v$smaj but PG_VERSION says v$old -- refusing (inconsistent cluster)"
+  source_inventory_gate "$old_bindir" "$sock"
+  vio=$(sock_psql_scalar "$old_bindir" "$sock" "$NATIVE_DB_NAME" \
+    "SELECT round(('[1,0,0]'::vector <-> '[0,1,0]'::vector)::numeric, 3)") \
+    || fail "pgvector I/O round-trip failed on the old '$NATIVE_DB_NAME' database -- is pgvector present there? refusing before any dump"
+  say "old server OK: v$old at $NATIVE_PGDATA, pgvector round-trip = $vio"
+
+  step "Dumping '$NATIVE_DB_NAME' with the Postgres $new pg_dump over the private socket"
+  "$NATIVE_PG_BINDIR/pg_dump" -Fc --exclude-extension=vector --quote-all-identifiers \
+    -h "$sock" -p "$NATIVE_PG_PORT" -U "$(id -un)" "$NATIVE_DB_NAME" > "$partial" \
+    || fail "pg_dump failed -- pgdata is untouched (nothing renamed); the old server is stopped and the partial dump removed."
+  mv "$partial" "$final" || fail "could not finalize the pre-upgrade dump at $final"
+  chmod 600 "$final" 2>/dev/null || true
+
+  # Prove the dump is a restorable voxint archive BEFORE touching pgdata.
+  local toc
+  toc=$(mktemp "${TMPDIR:-/tmp}/voxint-upgrade-toc.XXXXXX") || fail "mktemp failed"
+  "$NATIVE_PG_BINDIR/pg_restore" --list "$final" > "$toc" 2>/dev/null \
+    || { rm -f "$toc"; fail "the pre-upgrade dump is not a valid pg_restore archive: $final"; }
+  grep -qE 'TABLE .* alembic_version( |$)' "$toc" \
+    || { rm -f "$toc"; fail "the pre-upgrade dump has no alembic_version table -- refusing (dump looks incomplete)"; }
+  grep -qE 'TABLE .* pipeline_runs( |$)' "$toc" \
+    || { rm -f "$toc"; fail "the pre-upgrade dump has no pipeline_runs table -- refusing (dump looks incomplete)"; }
+  rm -f "$toc"
+  say "pre-upgrade dump verified restorable: $final"
+
+  step "Stopping the old Postgres $old server before the cutover"
+  "$old_bindir/pg_ctl" -D "$NATIVE_PGDATA" -m fast -w stop \
+    || fail "could not cleanly stop the old server -- refusing to rename a live data directory"
+  [ ! -f "$NATIVE_PGDATA/postmaster.pid" ] \
+    || fail "old server postmaster.pid still present after stop -- refusing to rename a live data directory"
+  rm -rf "$sock"
+
+  # --- phase B: atomic cutover; swap the pre-swap trap for the rollback trap ----
+  local retained=$NATIVE_PGDATA.pg$old-$stamp
+  [ ! -e "$retained" ] \
+    || fail "rollback destination $retained already exists -- refusing to overwrite it"
+  # Arm the rollback trap BEFORE the destructive rename, not after: the old server
+  # is already stopped and the socket gone, and _upgrade_rollback is keyed on the
+  # retained dir -- which does not exist yet -- so a failure/termination in the
+  # gap before the mv makes it a safe no-op (pgdata untouched). This leaves no
+  # window where a crash between the two traps has NO recovery trap armed.
+  trap '_upgrade_rollback "$_UPG_OLD" "$_UPG_STAMP"' EXIT
+  mv "$NATIVE_PGDATA" "$retained" || fail "could not rename $NATIVE_PGDATA -> $retained"
+
+  step "Initializing the new Postgres $new cluster"
+  init_cluster
+  local media_root
+  media_root=$(resolved_media_root_or_fail) \
+    || fail "could not resolve MEDIA_ROOT for the new cluster"
+  bootstrap_service postgres "$media_root"
+  wait_for_postgres || fail "the new Postgres $new cluster did not come up (see $(service_log postgres))"
+  ensure_database                   # voxint role + empty db + vector ext (fresh_restore needs the role)
+
+  step "Restoring the dump into the new Postgres $new cluster"
+  # SUBSHELL: fresh_restore clears the EXIT trap on success (trap - EXIT); scoping
+  # it here keeps that from clearing OUR rollback trap.
+  ( fresh_restore "$final" ) \
+    || fail "restore into the new cluster failed -- rolling back to Postgres $old"
+
+  trap - EXIT                       # success: disarm the rollback
+  step "Upgrade complete: Postgres $old -> $new"
+  say "run: $0 up"
+  say "the pre-upgrade cluster is retained at $retained"
+  say "  (delete it once you have confirmed a good run: rm -rf \"$retained\")"
+}
+
+cmd_upgrade_db() {
+  require_macos
+  load_state
+  local rehearse=0 rollback=0
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --rehearse) rehearse=1 ;;
+      --rollback) rollback=1 ;;
+      -*) fail "unknown upgrade-db option: $1 (usage: $0 upgrade-db [--rehearse | --rollback])" ;;
+      *)  fail "upgrade-db takes no positional arguments (got: $1)" ;;
+    esac
+    shift
+  done
+  { [ "$rehearse" = 1 ] && [ "$rollback" = 1 ]; } \
+    && fail "--rehearse and --rollback are mutually exclusive"
+  if [ "$rollback" = 1 ]; then
+    _upgrade_manual_rollback
+    return
+  fi
+  _upgrade_run "$rehearse"
+}
+
+# ---------------------------------------------------------------------------
 # Doctor
 # ---------------------------------------------------------------------------
 doctor_report() {
@@ -1424,7 +1802,7 @@ cmd_doctor() {
     elif [ "$cmaj" = "$bmaj" ]; then
       doctor_report PASS "cluster major (v$cmaj) matches the installed binaries"
     else
-      doctor_report FAIL "cluster is v$cmaj but the installed binaries are v$bmaj -- $0 up will refuse; reinstall postgresql@$cmaj to run the existing data"
+      doctor_report FAIL "cluster is v$cmaj but the installed binaries are v$bmaj -- $0 up will refuse; reinstall postgresql@$cmaj to run the existing data, or upgrade the cluster with: $0 upgrade-db"
     fi
   else
     doctor_report SKIP "no managed cluster -- $0 up will expect operator-provided datastores"
@@ -1583,11 +1961,12 @@ main() {
     doctor)  cmd_doctor "$@" ;;
     backup)  cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;
+    upgrade-db) cmd_upgrade_db "$@" ;;
     run)     cmd_run "$@" ;;
     rotate-logs) cmd_rotate_logs "$@" ;;
     *)
       say "voxint-native.sh -- native (no-Docker) core control plane for macOS/arm64"
-      say "usage: $0 <setup|up|down|status|logs|doctor|backup|restore|run|rotate-logs> [--no-models]"
+      say "usage: $0 <setup|up|down|status|logs|doctor|backup|restore|upgrade-db|run|rotate-logs> [--no-models]"
       say "  setup                 brew datastores + core venv + islands + cluster + secrets"
       say "  up / down             start/stop Postgres+Redis+api/worker/beat under launchd"
       say "                        (up provisions the db and runs alembic upgrade head first)"
@@ -1598,6 +1977,9 @@ main() {
       say "  restore <file>        pg_restore a dump (replace-in-place)"
       say "  restore --fresh <file>  DESTRUCTIVE: drop+rebuild the db from a dump"
       say "                        (services must be down; the dump is the schema source)"
+      say "  upgrade-db            major-version upgrade (one forward, e.g. 17->18):"
+      say "                        dump/restore preserving data; old cluster kept as rollback"
+      say "  upgrade-db --rollback   restore the retained pre-upgrade cluster"
       say "  run <svc> --foreground  debug api|worker|beat in the foreground"
       say "  rotate-logs           copytruncate-rotate oversized service logs"
       say "                        (also runs daily via launchd once 'up' has run)"

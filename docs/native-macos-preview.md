@@ -128,12 +128,62 @@ disk — for example after a launcher release that targets a newer
 `postgresql@NN`, or when `VOXINT_NATIVE_PG_BINDIR` is pointed at a different
 major. The server would then refuse to start against the old data directory.
 `up` now catches this **before** starting anything and stops with a plain
-message, and `doctor` reports it as a failure naming both versions. To run your
-existing data, point the launcher back at the matching major — install it if
-needed (`brew install postgresql@17`) and set
-`VOXINT_NATIVE_PG_BINDIR="$(brew --prefix postgresql@17)/bin"`. A guided,
-data-preserving *migration* to a newer major is tracked as follow-up work under
-the bundled-Postgres child (#71).
+message, and `doctor` reports it as a failure naming both versions. You then have
+two choices:
+
+- **Stay on your current data** — point the launcher back at the matching major:
+  install it if needed (`brew install postgresql@17`) and set
+  `VOXINT_NATIVE_PG_BINDIR="$(brew --prefix postgresql@17)/bin"`, then `up`.
+- **Move your data forward one major** (e.g. 17 → 18) — run `upgrade-db` (below).
+
+### Upgrading the Postgres major (`upgrade-db`)
+
+`upgrade-db` performs a **dump/restore** upgrade that preserves your real data,
+one major forward at a time (the first certified edge is 17 → 18):
+
+```bash
+scripts/native/voxint-native.sh down        # the whole stack must be stopped
+scripts/native/voxint-native.sh upgrade-db   # dump old -> initdb new -> restore
+scripts/native/voxint-native.sh up
+```
+
+What it does, fail-closed and validate-before-destroy:
+
+1. Confirms the move is exactly one major forward (same-major is a no-op;
+   downgrades and skipped majors are refused).
+2. Runs your **old** cluster briefly on a private socket (it needs the old
+   `postgresql@NN` binaries present — install them with `brew install
+   postgresql@NN`, or point `VOXINT_NATIVE_OLD_PG_BINDIR` at their `bin`), dumps
+   the `voxint` database with the **new** `pg_dump`, and **proves the dump is
+   restorable before touching your data directory**.
+3. Renames the old cluster aside as a rollback (`pgdata.pg<old>-<stamp>`),
+   `initdb`s the new major, and rebuilds from the dump (the same tested
+   `restore --fresh` machinery: pgvector-safe, single-transaction, `alembic
+   upgrade head`).
+
+The old cluster is **kept** at `pgdata.pg<old>-<stamp>` — delete it (`rm -rf`)
+only once you have confirmed a good run. It is a cleanly-stopped, logically
+intact copy (starting and stopping it writes WAL/control state, so it is not
+byte-for-byte identical to before), and running it again needs the old
+`postgresql@<old>` binaries.
+
+**If anything goes wrong** the command auto-rolls-back: it sets the partial new
+cluster aside as `pgdata.failed-<stamp>` (never deleted) and restores the old
+cluster to `pgdata`. You can also trigger this yourself:
+
+```bash
+scripts/native/voxint-native.sh upgrade-db --rollback
+```
+
+After a rollback the old data is live again, but you must repoint
+`VOXINT_NATIVE_PG_BINDIR` at the old `postgresql@<old>` binaries (rolling data
+back without the matching binaries just re-creates the skew). If `up` finds a
+set-aside cluster but no live one — an upgrade interrupted mid-cutover — it
+refuses and points you at `upgrade-db --rollback`.
+
+> Bundling the Postgres distribution itself (so no `brew install postgresql@NN`
+> is needed) remains the other, still-deferred half of the bundled-Postgres
+> child (#71).
 
 ## Backup and restore
 
@@ -162,9 +212,11 @@ entirely; older dumps are still filtered at restore time.
   source. Use this for disaster recovery when you want the database to match the
   dump exactly.
 
-Postgres major-version **skew is now detected** at `up`/`doctor` (see above).
-Bundling the Postgres distribution and a guided, data-preserving major-version
-*migration* remain deferred to the bundled-Postgres child (#71).
+Postgres major-version **skew is detected** at `up`/`doctor`, and a guided,
+data-preserving major-version **upgrade** is available via `upgrade-db` (see
+[Upgrading the Postgres major](#upgrading-the-postgres-major-upgrade-db) above).
+Bundling the Postgres distribution itself remains deferred to the
+bundled-Postgres child (#71).
 
 ## Verifying the install (E2E)
 
