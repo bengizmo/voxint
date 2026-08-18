@@ -956,6 +956,25 @@ class TestCpuImageProvenance:
         )
         assert match.group(1) == provenance["onnx_sha256"]
 
+    def test_llm_gguf_sha_matches_provenance(self) -> None:
+        # The bundled-LLM image bakes a vendored, sha-pinned Qwen GGUF (#67).
+        # Drift between the Dockerfile's build-time hash gate and the committed
+        # provenance would let a differently-quantized weight ship silently and
+        # invalidate the #66 qualification the serving profile was measured on.
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        llm_dir = REPO_ROOT / "services" / "llama-cpp"
+        dockerfile = (llm_dir / "Dockerfile").read_text()
+        match = re.search(r"ARG QWEN_GGUF_SHA256=([0-9a-f]{64})", dockerfile)
+        assert match is not None, "Dockerfile lost its QWEN_GGUF_SHA256 default"
+        provenance = json.loads((llm_dir / "provenance.json").read_text())
+        assert match.group(1) == provenance["sha256"], (
+            "services/llama-cpp/Dockerfile QWEN_GGUF_SHA256 drifted from provenance.json"
+        )
+
     @pytest.mark.parametrize("dockerfile_name", ["Dockerfile", "Dockerfile.cpu"])
     def test_pyannote_dockerfile_shas_match_provenance(self, dockerfile_name: str) -> None:
         import json
@@ -1096,7 +1115,7 @@ class TestCpuImageProvenance:
         # silently ignores it. Globbed so a new overlay is checked the day it
         # appears: files with zero pins are exempt (rewiring-only overlays
         # like compose.metal.yaml and the :dev build overlays carry no
-        # published-image pins by design), but the four image-bearing files
+        # published-image pins by design), but the image-bearing files
         # must each keep exactly one — a glob that stopped finding those
         # would make this test vacuously green.
         import re
@@ -1105,6 +1124,7 @@ class TestCpuImageProvenance:
 
         image_bearing = {
             "compose.yaml", "compose.gpu.yaml", "compose.cpu.yaml", "compose.rocm.yaml",
+            "compose.llm.yaml",
         }
         pins: dict[str, set[str]] = {}
         seen = set()
@@ -1166,6 +1186,7 @@ class TestCpuImageProvenance:
             "compose.rocm.yaml",
             "compose.metal.yaml",
             "compose.ytdlp-egress.yaml",
+            "compose.llm.yaml",
         ):
             services = yaml.safe_load((REPO_ROOT / name).read_text())["services"]
             for svc_name, svc in services.items():

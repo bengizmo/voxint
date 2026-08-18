@@ -1,0 +1,21 @@
+{
+  "asset_release": "qwen3-4b-instruct-2507-q5-v1",
+  "vendored": "2026-08-18",
+  "model": "Qwen3-4B-Instruct-2507",
+  "quantization": "Q5_K_M",
+  "file": "Qwen3-4B-Instruct-2507-Q5_K_M.gguf",
+  "sha256": "5bde5e9d883622acb02bf77fe7dcbc56a8b9a9ad4be78a72ca23a532658b4ecb",
+  "size_bytes": 2889514080,
+  "upstream_repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+  "upstream_revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
+  "license": "apache-2.0",
+  "license_note": "Qwen3-4B-Instruct-2507 is released by Alibaba/Qwen under Apache-2.0; the unsloth GGUF re-quantization is likewise Apache-2.0. Redistribution with attribution is permitted; the GGUF is kept out of git for repo-size reasons and fetched as a checksummed release asset. The attribution text (NOTICE) ships inside the image.",
+  "asset_committed": false,
+  "base_image": "ghcr.io/ggml-org/llama.cpp:server",
+  "base_image_digest": "sha256:092d1291f2bcf59ff727fa3af855fb9bd4759d6bff860f6fbfd5e3e377e12625",
+  "model_alias": "qwen3-4b-instruct-2507",
+  "serving_profile": "-c 32768 -np 1 -fa on -ctk q8_0 -ctv q8_0 --jinja --reasoning off",
+  "sampling": "greedy (temperature 0) — enforced client-side (SamplingProfile), not a server flag",
+  "scope": "transcript enhancement + run-asset summary/entity_mentions ONLY; NOT web research or LLM speaker-name attribution (issues #66/#67)",
+  "qualification": "measured against the #66 frozen corpus (tests/fixtures/llm_qual/) under the shipped enhancement prompt; see docs/gpu-contracts.md for the pinned serving profile"
+}

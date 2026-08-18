@@ -1,0 +1,30 @@
+Voxint bundled local-LLM service — third-party model attribution
+=================================================================
+
+This image bundles a vendored large-language-model weight file so that a
+single-operator Voxint install can run transcript enhancement and run-asset
+summary/entity extraction with no external API key.
+
+Model
+-----
+  Qwen3-4B-Instruct-2507
+  Copyright (c) Alibaba Cloud / Qwen Team.
+  Licensed under the Apache License, Version 2.0.
+  Upstream model card: https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
+
+Vendored GGUF quantization
+--------------------------
+  Qwen3-4B-Instruct-2507-Q5_K_M.gguf
+  Re-quantized to GGUF (Q5_K_M) by the Unsloth project.
+  Licensed under the Apache License, Version 2.0.
+  Source: https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF
+  Revision: a06e946bb6b655725eafa393f4a9745d460374c9
+  sha256:  5bde5e9d883622acb02bf77fe7dcbc56a8b9a9ad4be78a72ca23a532658b4ecb
+
+Serving engine
+--------------
+  llama.cpp server (ggml-org/llama.cpp), also Apache-2.0 / MIT licensed.
+  https://github.com/ggml-org/llama.cpp
+
+A full copy of the Apache License, Version 2.0 is available at
+https://www.apache.org/licenses/LICENSE-2.0. Voxint itself is Apache-2.0.

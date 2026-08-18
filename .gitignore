@@ -48,6 +48,10 @@ services/titanet/models/
 # release; sha256s in services/pyannote/models/provenance.json — the config
 # and provenance files ARE tracked, only the checkpoints stay out of git)
 services/pyannote/models/*.bin
+# Vendored bundled-LLM GGUF (fetched from the qwen3-4b-instruct-2507-q5-v1
+# asset release; sha256 in services/llama-cpp/provenance.json — the Dockerfile,
+# provenance, and NOTICE ARE tracked, only the 2.89 GB weight stays out of git)
+services/llama-cpp/models/*.gguf
 
 # Maintainer-internal notes: a SEPARATE private repo nested here (never part
 # of this public repo; see CLAUDE.md "Internal notes").

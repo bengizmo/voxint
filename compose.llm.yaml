@@ -1,0 +1,59 @@
+# Voxint bundled local LLM — OPT-IN overlay, layered on top of a running stack:
+#   docker compose -f compose.yaml -f compose.cpu.yaml -f compose.llm.yaml up -d
+# (swap compose.cpu.yaml for compose.gpu.yaml/compose.rocm.yaml to match your
+#  transcription tier — this overlay is independent of that choice.)
+#
+# Ships Qwen3-4B-Instruct-2507 (Q5_K_M, Apache-2.0, ~2.9 GB) so an operator with
+# NO external API key gets working transcript ENHANCEMENT and run-asset
+# SUMMARY/ENTITIES out of the box. Turn it on in Settings -> Features
+# ("Use the bundled local model"), or set LLM_BUNDLED_ENABLED=true.
+#
+# It deliberately does NOT power web research or LLM speaker-name attribution:
+# a 4B local model is not reliable at those (see #66), so they still require a
+# BYO endpoint (LLM_BASE_URL / LLM_MODEL / LLM_API_KEY) and never fall back to
+# the bundle. Nothing here is claimed that the model cannot actually do.
+#
+# ⚠ CPU is a SLOW backstop for a dense 4B model. Enhancement (~20 s) and
+# small/medium run-assets (~40-55 s) are fine; large transcripts are not, which
+# is why the bundled run-asset input is clamped to 16k chars
+# (LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS). A GPU is strongly recommended —
+# uncomment the `command:` + `deploy:` block below to offload to an NVIDIA GPU.
+services:
+  # Point the worker at the bundled endpoint. These two constants feed
+  # config.llm_bundled_base_url / llm_bundled_model; the Phase B routing reads
+  # them and, when the flag is on, sends enhancement + summary/entities here.
+  worker:
+    environment:
+      LLM_BUNDLED_BASE_URL: http://voxint-llm:8080/v1
+      LLM_BUNDLED_MODEL: qwen3-4b-instruct-2507
+
+  voxint-llm:
+    image: ghcr.io/bengizmo/voxint-llm:${VOXINT_IMAGE_TAG:-0.17.0}
+    pull_policy: missing
+    # Self-heal after a transient crash, like the other model services (#23).
+    restart: unless-stopped
+    # No host port publish: only the worker reaches it, by service DNS name.
+    # The pinned serving profile ships baked into the image's default command.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+    # ── GPU offload (recommended) ─────────────────────────────────────────────
+    # Uncomment BOTH blocks to serve on an NVIDIA GPU. `command:` repeats the
+    # baked serving profile and adds `-ngl 99`; `deploy:` reserves the device.
+    # command: ["-m", "/models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf",
+    #           "--host", "0.0.0.0", "--port", "8080",
+    #           "--alias", "qwen3-4b-instruct-2507",
+    #           "-c", "32768", "-np", "1",
+    #           "-fa", "on", "-ctk", "q8_0", "-ctv", "q8_0",
+    #           "--jinja", "--reasoning", "off",
+    #           "-ngl", "99"]
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
