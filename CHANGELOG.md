@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Design recommendation: deterministic, non-LLM transcript correction (#79,
+  epic #78)**: a research-spike report
+  (`docs/reports/nonllm-transcript-correction-design-2026-08-18.md`, reviewed by
+  two external panels) recommending a deliberately narrow v1 — a pure-`stdlib`,
+  versioned, per-segment **literal-substitution** engine driven only by a new
+  frozen domain-pack `corrections:` field, refusing general homophone/casing/
+  number/disfluency rules and executable regex, composing **after** the optional
+  LLM path, and gated by a stricter-than-LLM faithfulness corpus. Sequences the
+  follow-up implementation issues (refined #80 + three new). **No runtime change**
+  — analysis only.
 - **Local-LLM qualification harness + frozen corpus (#66)**: a maintainer tool
   (`tools/qualify_local_llm.py`) and a hand-annotated, clean-room fixture corpus
   (`tests/fixtures/llm_qual/`, 19 fixtures + a frozen six-gate manifest) that
