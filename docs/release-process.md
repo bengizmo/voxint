@@ -216,7 +216,12 @@ model assets) voids it for the gate it feeds.
    (`grep -rn "VOXINT_IMAGE_TAG:-<old>" compose*.yaml`); the pin-parity contract
    test globs `compose*.yaml`, so a missed flavor fails `pytest`. Run the gates
    (`ruff` / `mypy` / `pytest` with the pgvector test DB) and both gitleaks scans
-   (`gitleaks dir .` and `gitleaks git .` with `.gitleaks.toml`).
+   (`gitleaks dir .` and `gitleaks git .` with `.gitleaks.toml`; the `git` history
+   scan is the authoritative clean-room check — a `dir` scan also flags gitignored
+   local `.env` / `internal/` files, which is expected, not a leak). As a
+   security-posture checkpoint, glance at
+   [`security/audit-2026-08-18.md`](security/audit-2026-08-18.md) for the standing
+   findings still open (web console, research, supply chain, media) before cutting.
 2. Push to both remotes; wait for `ci` to go green on GitHub.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`
    (push the tag to the private origin too). The tag must point at the release

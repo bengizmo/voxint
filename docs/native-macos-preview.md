@@ -54,9 +54,17 @@ scripts/native/voxint-native.sh down
 ```
 
 Everything the launcher owns lives under `~/.voxint-native/`
-(`venv`, `pgdata`, `logs`, `run`, `backups`, and `state.env` with the generated
-secrets at mode `0600`). Uninstalling is `down` followed by
-`rm -rf ~/.voxint-native`.
+(`venv`, `pgdata`, `logs`, `run`, `backups`, and `state.env`). Uninstalling is
+`down` followed by `rm -rf ~/.voxint-native`.
+
+**Secret hygiene.** The `~/.voxint-native` tree is created mode `0700`, and every
+file that carries a secret is `0600`: `state.env` (the generated `DB_PASSWORD` /
+`VOXINT_PASSWORD` / `CSRF_SECRET`), the launchd plists under `run/` (they bake the
+`DATABASE_URL` — password included — plus `VOXINT_PASSWORD` and `CSRF_SECRET` into
+their env), and the `pg_dump` archives under `backups/` (a full copy of the
+database in the clear). So credentials and data stay readable only by your own
+account, not by other local users. This hardening is tracked in
+[the 2026-08-18 security audit](security/audit-2026-08-18.md).
 
 ### Ports and isolation
 
@@ -78,6 +86,16 @@ fail until the model services are reachable**, whichever way you run them.
 
 Both the flag and any URL override are read on every `up`, so re-run `up` after
 changing them.
+
+The launcher validates the operator-settable `VOXINT_NATIVE_*` values on every
+subcommand and **fails closed with a clear message** on an unsafe one: ports must
+be `1..65535`, `VOXINT_NATIVE_DB_USER` / `VOXINT_NATIVE_DB_NAME` must be plain SQL
+identifiers (`[A-Za-z_][A-Za-z0-9_]*`), the log-rotation sizes must be positive
+integers, and no override that is written into a plist (the model URLs, the DB
+password, `VOXINT_NATIVE_HOME`, the brew prefix / PG bindir) may contain a
+newline. This keeps a stray or malformed value from reaching a shell, the
+database, or a launchd env record — you will get an `ERROR:` line instead of a
+surprising failure deep in `up`.
 
 ### MEDIA_ROOT
 
@@ -207,10 +225,15 @@ entirely; older dumps are still filtered at restore time.
 - **`restore <file>`** — *replacement in place*. Runs `pg_restore --clean
   --if-exists`, so objects the archive carries are replaced; objects present in
   the current database but **absent from the archive survive**.
-- **`restore --fresh <file>`** — *exact rebuild*. Drops the database, proves it
-  empty (`EMPTY_DB PASS`), and rebuilds it from the dump as the sole schema
-  source. Use this for disaster recovery when you want the database to match the
-  dump exactly.
+- **`restore --fresh <file>`** — *exact rebuild*. Because this one is destructive,
+  it first takes an **automatic pre-drop safety backup** of the current database
+  (a `0600` dump under `backups/`) and prints a `SAFETY_BACKUP <path>` line; if
+  that dump fails it **aborts before dropping anything**, so you are never left
+  without a fallback. It then drops the database, proves it empty
+  (`EMPTY_DB PASS`), and rebuilds it from `<file>` as the sole schema source. Use
+  this for disaster recovery when you want the database to match the dump exactly —
+  and if a restore ever goes wrong, recover with `restore --fresh` on the
+  `SAFETY_BACKUP` path it printed.
 
 Postgres major-version **skew is detected** at `up`/`doctor`, and a guided,
 data-preserving major-version **upgrade** is available via `upgrade-db` (see

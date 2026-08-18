@@ -74,6 +74,12 @@ NATIVE_DATASTORES="postgres redis"
 NATIVE_SERVICES="api worker beat"
 LAUNCHD_PREFIX=com.voxint.native
 
+# Bare CR/LF, used by validate_native_inputs to reject values that would forge a
+# second launchd plist env record or corrupt state.env. (NUL cannot survive a
+# shell variable, so CR/LF are the reachable control characters.)
+_CR=$'\r'
+_NL=$'\n'
+
 # Core-service connection config. All overridable; the defaults match the app's
 # own config.py fallbacks with the host/port made explicit. `setup` may move the
 # ports off a collision and persists the chosen values to state.env.
@@ -198,6 +204,69 @@ generate_secret() {
   printf '%s' "$s"
 }
 
+# Reject a CR/LF (or the exotic single quote, for the socket path) in a value
+# that is otherwise passed through unquoted. $1 = label for the error message,
+# $2 = value, $3 = extra reject set ("" or "quote").
+_reject_control_chars() {
+  case $2 in
+    *"$_NL"*|*"$_CR"*) fail "$1 must not contain a newline" ;;
+  esac
+  if [ "${3:-}" = "quote" ]; then
+    case $2 in *"'"*) fail "$1 must not contain a single quote" ;; esac
+  fi
+}
+
+# Validate the operator-settable VOXINT_NATIVE_* knobs BEFORE they reach a shell
+# (pg_ctl -o), superuser SQL identifiers (CREATE ROLE / DROP DATABASE), a launchd
+# plist env record (a newline forges a second KEY=VALUE, e.g. PYTHONPATH), or
+# bash arithmetic (log sizes -- bash evaluates command-substitution syntax there).
+# These env overrides are the only externally-influenced inputs; state.env is
+# script-written at mode 0600 from values that already passed here.
+validate_native_inputs() {
+  local name val
+  # Ports: decimal 1..65535. NATIVE_PG_PORT is interpolated into `pg_ctl -o
+  # "... -p $PORT"`, which pg_ctl re-parses through /bin/sh.
+  for name in NATIVE_PG_PORT NATIVE_REDIS_PORT NATIVE_API_PORT; do
+    eval "val=\$$name"
+    case $val in ''|*[!0-9]*) fail "$name must be a decimal port 1..65535 (got: $val)" ;; esac
+    { [ "$val" -ge 1 ] && [ "$val" -le 65535 ]; } \
+      || fail "$name out of range 1..65535 (got: $val)"
+  done
+  # DB role/database identifiers: interpolated into superuser SQL. Restrict to a
+  # safe identifier grammar so they cannot break out and inject a statement.
+  case $NATIVE_DB_USER in
+    ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+      fail "VOXINT_NATIVE_DB_USER must match [A-Za-z_][A-Za-z0-9_]* (got: $NATIVE_DB_USER)" ;;
+  esac
+  case $NATIVE_DB_NAME in
+    ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*)
+      fail "VOXINT_NATIVE_DB_NAME must match [A-Za-z_][A-Za-z0-9_]* (got: $NATIVE_DB_NAME)" ;;
+  esac
+  # Log-rotation sizes reach `$((max_mb * 1024 * 1024))`; require positive decimals.
+  for name in VOXINT_NATIVE_LOG_MAX_MB VOXINT_NATIVE_LOG_ARCHIVES; do
+    eval "val=\$$name"
+    case $val in ''|*[!0-9]*) fail "$name must be a positive integer (got: $val)" ;; esac
+    # Reject 0: a 0 MB threshold rotates on every run and 0 archives keeps none.
+    [ "$val" -ge 1 ] || fail "$name must be >= 1 (got: $val)"
+  done
+  # Values that become launchd plist env records or state.env lines: a newline
+  # would forge a second record. The DB password is additionally handed to psql
+  # as a quoted variable (see ensure_database), so quotes there are safe -- only
+  # newlines must be rejected.
+  _reject_control_chars VOXINT_NATIVE_HOME "$VOXINT_NATIVE_HOME"
+  _reject_control_chars VOXINT_NATIVE_DB_PASSWORD "$NATIVE_DB_PASSWORD"
+  _reject_control_chars VOXINT_NATIVE_PASSWORD "$VOXINT_NATIVE_PASSWORD"
+  _reject_control_chars VOXINT_NATIVE_CSRF_SECRET "$VOXINT_NATIVE_CSRF_SECRET"
+  _reject_control_chars VOXINT_NATIVE_ASR_URL "$NATIVE_ASR_URL"
+  _reject_control_chars VOXINT_NATIVE_DIARIZER_URL "$NATIVE_DIARIZER_URL"
+  _reject_control_chars VOXINT_NATIVE_EMBEDDER_URL "$NATIVE_EMBEDDER_URL"
+  # These also become plist env records (API_HOST directly; the brew prefix and
+  # pg bindir via PATH), so a newline in any of them would forge a second record.
+  _reject_control_chars VOXINT_NATIVE_API_HOST "$NATIVE_API_HOST"
+  _reject_control_chars VOXINT_NATIVE_BREW_PREFIX "$NATIVE_BREW_PREFIX"
+  _reject_control_chars VOXINT_NATIVE_PG_BINDIR "$NATIVE_PG_BINDIR"
+}
+
 # True if something on 127.0.0.1:$1 accepts a TCP connection or leaves it
 # hanging. Same watchdog probe as the metal launcher / scripts/install.sh --
 # macOS drops the SYN silently on a full accept queue, so a plain /dev/tcp
@@ -296,6 +365,10 @@ load_state() {
   fi
   v=$(env_value_from_file VOXINT_PASSWORD "$sf"); [ -n "$v" ] && VOXINT_NATIVE_PASSWORD=$v
   v=$(env_value_from_file CSRF_SECRET "$sf"); [ -n "$v" ] && VOXINT_NATIVE_CSRF_SECRET=$v
+  # Re-validate: values just loaded from state.env must clear the same gate as
+  # env overrides before they reach pg_ctl -o / SQL / a plist (main() validated
+  # the pre-load values; a hand-edited state.env would otherwise slip through).
+  validate_native_inputs
   return 0
 }
 
@@ -364,6 +437,10 @@ native_service_env() {
     api|worker|beat) : ;;
     *) return 1 ;;
   esac
+  # MEDIA_ROOT is resolved from a dotenv value / directory name, so guard it here
+  # (the last serialized value not already checked in validate_native_inputs): a
+  # newline would forge a second plist env record.
+  _reject_control_chars MEDIA_ROOT "$media_root"
   printf 'DATABASE_URL=%s\n' "$(native_database_url)"
   printf 'REDIS_URL=%s\n' "$(native_redis_url)"
   printf 'MEDIA_ROOT=%s\n' "$media_root"
@@ -440,6 +517,9 @@ render_plist() {
       "$(xml_escape "$(service_log "$svc")")"
     printf '</dict>\n</plist>\n'
   } > "$out"
+  # The plist embeds DATABASE_URL (with the DB password), VOXINT_PASSWORD, and
+  # CSRF_SECRET; keep it operator-only rather than the umask-default 0644.
+  chmod 600 "$out" || fail "could not secure $out"
 }
 
 # ---------------------------------------------------------------------------
@@ -595,6 +675,8 @@ render_logrotate_plist() {
       "$(xml_escape "$(service_log logrotate)")"
     printf '</dict>\n</plist>\n'
   } > "$out"
+  # Consistency with render_plist: keep launchd plists operator-only (0600).
+  chmod 600 "$out" || fail "could not secure $out"
 }
 
 install_logrotate() {
@@ -623,6 +705,12 @@ install_logrotate() {
 # Setup
 # ---------------------------------------------------------------------------
 require_macos() {
+  # Library/test mode (VOXINT_NATIVE_LIB=1): skip the OS gate so the portable
+  # command logic (version gate, arg parsing, rollback shape) stays exercisable on
+  # a Linux CI runner. A real invocation never sets this, so an actual non-macOS
+  # user still gets the clean early error below. Mirrors scripts/install.sh's
+  # VOXINT_INSTALL_LIB seam.
+  [ "${VOXINT_NATIVE_LIB:-}" = "1" ] && return 0
   [ "$(uname -s)" = "Darwin" ] || fail "the native tier is macOS-only (this is $(uname -s))"
   [ "$(uname -m)" = "arm64" ] || fail "the native tier needs Apple Silicon (this is $(uname -m))"
 }
@@ -675,8 +763,9 @@ ensure_database() {
   su=$(id -un)
   "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -tAc \
     "SELECT 1 FROM pg_roles WHERE rolname='$NATIVE_DB_USER'" | grep -q 1 \
-    || "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -c \
-       "CREATE ROLE \"$NATIVE_DB_USER\" LOGIN PASSWORD '$NATIVE_DB_PASSWORD'" >&2
+    || printf '%s\n' "CREATE ROLE \"$NATIVE_DB_USER\" LOGIN PASSWORD :'pw'" \
+       | "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres \
+           -v ON_ERROR_STOP=1 -v pw="$NATIVE_DB_PASSWORD" >&2
   "$psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -v ON_ERROR_STOP=1 -tAc \
     "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'" | grep -q 1 \
     || "$NATIVE_PG_BINDIR/createdb" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" \
@@ -692,6 +781,11 @@ cmd_setup() {
   local venv fresh=0 metal_setup_rc=0
   step "Directories under $VOXINT_NATIVE_HOME"
   mkdir -p "$VOXINT_NATIVE_HOME/logs" "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/backups"
+  # Secrets live here (state.env, plists, DB dumps). Keep the tree operator-only
+  # so a permissive umask cannot leave credentials group/world-readable.
+  chmod 700 "$VOXINT_NATIVE_HOME" "$VOXINT_NATIVE_HOME/logs" \
+    "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/backups" \
+    || fail "could not secure $VOXINT_NATIVE_HOME (0700)"
 
   step "Datastore binaries (Homebrew)"
   brew_install_datastores
@@ -1066,6 +1160,8 @@ cmd_backup() {
     -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$out.partial" \
     || { rm -f "$out.partial"; fail "pg_dump failed"; }
   mv "$out.partial" "$out" || fail "could not finalize backup at $out"
+  # A dump is the whole database in the clear; keep it operator-only (0600).
+  chmod 600 "$out" || fail "could not secure $out"
   say "backup complete: $out"
 }
 
@@ -1299,8 +1395,31 @@ fresh_restore() {
   # no-ops at head). On FAILURE after maintenance Postgres has started, it is left
   # supervised (running) for inspection/retry -- `$0 down` stops it; the dump file
   # is never mutated. See docs + the voxint-native-e2e skill's --with-restore rung.
-  local file=$1 old_oid new_oid ntables absent
+  local file=$1 old_oid new_oid ntables absent safety
   restore_preflight "$file"
+
+  # --- safety backup BEFORE the irreversible drop (C1) -------------------------
+  # If the target database already exists, dump it to a private 0600 archive so a
+  # failed or incomplete restore is recoverable. A dump failure ABORTS the whole
+  # operation before anything is destroyed -- refusing is safer than dropping with
+  # no fallback. (A brand-new install has no database yet; nothing to back up.)
+  # Fail-closed like the drop gates below: a probe ERROR must never be read as
+  # "database absent" and silently skip the safety backup on the way to the DROP.
+  local db_present
+  db_present=$(super_psql_scalar postgres \
+    "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
+    || fail "could not check whether $NATIVE_DB_NAME exists before the safety backup"
+  if [ -n "$db_present" ]; then
+    safety=$VOXINT_NATIVE_HOME/backups/pre-fresh-restore-$(date +%Y-%m-%d-%H-%M-%S).dump
+    step "Safety backup of the current $NATIVE_DB_NAME before the destructive drop"
+    "$NATIVE_PG_BINDIR/pg_dump" -Fc --exclude-extension=vector -h 127.0.0.1 \
+      -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$safety.partial" \
+      || { rm -f "$safety.partial"; \
+           fail "pre-restore safety backup failed -- refusing to drop $NATIVE_DB_NAME (nothing destroyed)"; }
+    mv "$safety.partial" "$safety" || fail "could not finalize safety backup at $safety"
+    chmod 600 "$safety" || fail "could not secure $safety"
+    say "SAFETY_BACKUP $safety (recover with: $0 restore --fresh $safety)"
+  fi
 
   # --- destroy + prove empty (fail-closed gate, as the cluster superuser) ------
   # Every scalar probe below is captured into a plain assignment and status-checked
@@ -1626,8 +1745,12 @@ _upgrade_run() {
   trap '_upgrade_preswap_cleanup "$_UPG_OLD_BINDIR" "$_UPG_SOCK" "$_UPG_PARTIAL"' EXIT
 
   step "Starting the Postgres $old server on a private socket (direct pg_ctl, not launchd)"
+  # pg_ctl re-parses -o through /bin/sh: $NATIVE_PG_PORT is validated numeric
+  # (validate_native_inputs) and $sock is single-quoted so a stray metacharacter
+  # in the mktemp socket dir cannot inject.
+  _reject_control_chars "the upgrade socket path" "$sock" quote
   "$old_bindir/pg_ctl" -D "$NATIVE_PGDATA" \
-    -o "-k $sock -c listen_addresses='' -p $NATIVE_PG_PORT" -w -l "$log" start \
+    -o "-k '$sock' -c listen_addresses='' -p $NATIVE_PG_PORT" -w -l "$log" start \
     || fail "could not start the old Postgres $old server (see $log). A stale $NATIVE_PGDATA/postmaster.pid from an unclean shutdown can block this -- if no postgres is running, remove it and retry."
 
   datadir=$(sock_psql_scalar "$old_bindir" "$sock" postgres "SHOW data_directory") \
@@ -1952,6 +2075,9 @@ main() {
     set +f
     IFS=$oldifs
   fi
+  # Fail closed on any unsafe operator-settable value before it reaches a shell,
+  # SQL, a plist, or bash arithmetic. Runs for every subcommand.
+  validate_native_inputs
   case $cmd in
     setup)   cmd_setup "$@" ;;
     up)      cmd_up "$@" ;;

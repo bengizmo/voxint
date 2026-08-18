@@ -158,6 +158,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   two prior images predated. Docs only; no code change.
 
 ### Fixed
+- **CI: the native `upgrade-db` launcher tests now run on Linux (#71)**: 17 tests
+  in `tests/unit/test_native_launcher.py` (the `upgrade-db` version-gate, arg-parse,
+  and rollback-shape tests) invoke `cmd_upgrade_db`/`cmd_up`, which start with
+  `require_macos` — so on the Linux CI runner they failed at the OS gate before
+  reaching the portable logic they assert (green on maintainer macOS, red on CI
+  since the slice-2b landing). `require_macos` now no-ops under the existing
+  `VOXINT_NATIVE_LIB=1` library/test seam, so the portable command logic stays
+  exercisable on Linux while a real (non-library) invocation on a non-macOS host
+  still gets the clean "macOS-only" error. Verified by reproducing the failures
+  under a Linux `uname` shim and confirming they pass after the change, with the
+  guard still firing for a real non-macOS user.
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
   `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made
   hatchling's VCS-ignore drop the built island bundles, so `uv build` produced a
@@ -166,6 +177,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   them). A global `[tool.hatch.build] artifacts` entry now re-includes
   `static/app/{assets,.vite}` in both the sdist and the wheel. Docker images were
   never affected (the Node stage COPYs `dist` into the image directly).
+
+### Security
+- **Native launcher hardening (#71)**: closes findings from the 2026-08-18
+  repo security audit (`docs/security/audit-2026-08-18.md`), calibrated to the
+  single-operator threat model. The launchd plists (which embed `DATABASE_URL`
+  with the DB password, `VOXINT_PASSWORD`, and `CSRF_SECRET`) and `pg_dump`
+  backups are now created mode `0600` and the `~/.voxint-native` tree `0700`,
+  instead of the umask-default `0644`/`0755` that exposed credentials to other
+  local accounts. A new `validate_native_inputs` gate (run for every subcommand
+  and after `load_state`) fails closed on any unsafe operator-settable
+  `VOXINT_NATIVE_*` value before it can reach a shell (`pg_ctl -o` — ports
+  restricted to `1..65535`), superuser SQL (DB role/name restricted to a safe
+  identifier grammar; the `CREATE ROLE` password now passed as a psql variable
+  rather than an inline literal), a launchd plist env record (CR/LF rejected in
+  every serialized value, so a newline cannot forge a second `PYTHONPATH` entry),
+  or bash arithmetic (log sizes must be positive integers). `restore --fresh`
+  now takes an automatic pre-drop safety backup (mode `0600`) and aborts before
+  any destruction if it fails, so an incomplete restore can be recovered. No
+  change to the normal happy path; verified live end-to-end (setup + backup +
+  `restore --fresh`) on the native macOS lane.
 
 ## [0.17.0] - 2026-08-18
 
