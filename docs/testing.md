@@ -148,7 +148,9 @@ It is built in lanes; **landed so far:**
   `duration_seconds` populated by the real PREPARE stage. Assertions are on
   *ranges and shape*, never exact transcript text (real ASR is not
   bit-deterministic). Two serial runs are checked for clean repetition with no
-  cross-run leakage.
+  cross-run leakage. **This lane is AMD-only**: `EXPECTED_SERVICES` hardcodes
+  whisper `device: rocm` (fail-not-skip, no env override), so run it on an
+  AMD/ROCm box.
 
 - **Real LLM — enrichment summary** (`test_enrich_assets_real_llm.py`) — the one
   lane that drives a real `HttpLLMClient` against a real OpenAI-compatible
@@ -240,8 +242,10 @@ is a named signal rather than an invisible change in the summary text.
 
 Bring up the model services on a lane your host supports (host-specific
 bring-up — compose overlays, CPU limits, the AMD render gid — lives outside this
-public repo). Then, against a **disposable** database (its schema is dropped and
-rebuilt from the alembic chain — never the live `voxint` DB):
+public repo). The real-pipeline lane needs whisper on **ROCm** (see the AMD-only
+note above); the real-LLM and browser lanes are hardware-agnostic. Then, against
+a **disposable** database (its schema is dropped and rebuilt from the alembic
+chain — never the live `voxint` DB):
 
 ```bash
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"

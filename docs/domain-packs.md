@@ -77,7 +77,7 @@ pack unless an explicit name is given. An explicit or mapped name that does not
 resolve is a configuration error the operator sees — the pipeline never silently
 substitutes `generic`, which would produce plausible-but-inconsistent output.
 
-### Operator surface today (0.15.0)
+### Operator surface
 
 The **default pack** (`DOMAIN_PACK_PATH`) and the **named-pack library**
 (`DOMAIN_PACKS_DIR`) are the shipped operator controls: with a default pack set,

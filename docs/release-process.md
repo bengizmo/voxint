@@ -133,7 +133,10 @@ weights), so it runs on maintainer hardware BEFORE tagging.
 Before tagging a release that touches `services/` or the pipeline stages, bring
 up the three model services on a lane the host supports (the maintainer's
 host-specific bring-up — compose overlays and CPU limits — lives outside this
-public repo) and run the real-pipeline lane against a disposable database:
+public repo) and run the real-pipeline lane against a disposable database. Note
+`test_real_pipeline.py`'s `EXPECTED_SERVICES` **hardcodes whisper `device: rocm`**
+(fail-not-skip, no env override), so the pipeline lane is **AMD-only** — run it on
+an AMD/ROCm box; the browser review lane below is hardware-agnostic:
 
 ```bash
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_e2e"
@@ -205,11 +208,14 @@ model assets) voids it for the gate it feeds.
 
 1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
-   `compose.yaml` + `compose.gpu.yaml` + `compose.cpu.yaml` +
-   `compose.rocm.yaml` (and its
-   `.env.example` comment) to the new version, so the default stack always runs
-   the release this checkout documents. Run the gates (`ruff` / `mypy` /
-   `pytest` with the pgvector test DB) and both gitleaks scans
+   **all five image-bearing compose files** — `compose.yaml` + `compose.gpu.yaml`
+   + `compose.cpu.yaml` + `compose.rocm.yaml` + `compose.ytdlp-egress.yaml` (the
+   #16 egress overlay carries the base `voxint` tag too) — plus the `.env.example`
+   comment, so the default stack always runs the release this checkout documents.
+   Grep the old version rather than trusting a hand-list
+   (`grep -rn "VOXINT_IMAGE_TAG:-<old>" compose*.yaml`); the pin-parity contract
+   test globs `compose*.yaml`, so a missed flavor fails `pytest`. Run the gates
+   (`ruff` / `mypy` / `pytest` with the pgvector test DB) and both gitleaks scans
    (`gitleaks dir .` and `gitleaks git .` with `.gitleaks.toml`).
 2. Push to both remotes; wait for `ci` to go green on GitHub.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`
@@ -234,8 +240,25 @@ model assets) voids it for the gate it feeds.
    and the transcript-player island hydrates over its server-rendered fallback;
    `docker run --rm ghcr.io/bengizmo/voxint:X.Y.Z sh -c 'command -v node || echo NO-NODE'`
    prints `NO-NODE`, proving no Node ships in the runtime image.
-6. **PyPI**: `rm -rf dist && uv build && uv publish --token <pypi-token> dist/*`,
-   then check `https://pypi.org/pypi/voxint/json` reports the new version.
+6. **PyPI**: first **build and stage the frontend islands** into
+   `src/voxint/api/static/app/` — the wheel serves them at runtime, but
+   `static/app/*` is git-ignored (clean-tree hygiene, added with #69), so
+   hatchling's VCS-ignore drops them unless they are re-included. `pyproject.toml`
+   does that with a **global** `[tool.hatch.build] artifacts` entry (global, not
+   wheel-target-only: `uv build` builds the wheel *from the sdist*, so a
+   wheel-only entry is dropped); the files must still exist on disk at build time:
+   ```bash
+   (cd frontend && npm ci && npm run build)      # produces frontend/dist/{.vite,assets}
+   cp -r frontend/dist/. src/voxint/api/static/app/
+   rm -rf dist && uv build
+   python -m zipfile -l dist/voxint-*.whl | grep static/app/.vite/manifest.json  # MUST be present
+   uv publish --token <pypi-token> dist/*
+   ```
+   A wheel that ships only `static/app/.gitkeep` cannot hydrate the review-console
+   islands from a `pip install` — verify the manifest is in the wheel before
+   publishing. Then check `https://pypi.org/pypi/voxint/json` reports the new
+   version. (The token also lives in `~/.pypirc` `[pypi]`; export it as
+   `UV_PUBLISH_TOKEN` if not passing `--token`.)
 7. **GitHub Release**: `gh release create vX.Y.Z --title "Voxint vX.Y.Z" --notes …`
    and update `CHANGELOG.md` in the next commit if it wasn't part of the
    release commit.
