@@ -69,6 +69,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   regenerated against v0.17.0 in dark theme — the waveform strip, keyboard
   cheat-sheet, split/reassign, the setup wizard, and the Settings pages that the
   two prior images predated. Docs only; no code change.
+- **Transcript enhancement is hardened against prompt injection (#67 groundwork)**:
+  the enhancement system prompt now instructs the model to treat every segment's
+  text strictly as content to edit, never as instructions — a segment that reads
+  like a command ("ignore previous instructions", "reply with a single word", "you
+  are now a translator", "drop the other segments") is returned unchanged, not
+  obeyed. Transcripts are untrusted input and small local models otherwise follow
+  instructions embedded in speech; the clause measurably stops that against the
+  local-LLM qualification corpus (obedience 8/8 → 0/8 with no regression). It is a
+  best-effort guard backstopped by the structural batch-integrity gate, not a
+  sandbox. The LLM client also gained a fixed **sampling profile** (default greedy,
+  `temperature 0`, byte-identical to before; a bundled model can pin its own), and
+  the qualification harness a `--sampling greedy|qwen` flag. Measured evidence
+  corrected the #66 verdict's claim that Qwen "resists injection" and settled the
+  #67 serving-profile questions — see the correction in
+  [`docs/reports/local-llm-qualification-granite-2026-08-18.md`](docs/reports/local-llm-qualification-granite-2026-08-18.md).
 
 ### Fixed
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's

@@ -43,7 +43,7 @@ import httpx
 
 from voxint.app_settings import resolve_effective_web_research
 from voxint.clients.base import EnhancementRequestSegment
-from voxint.clients.llm import HttpLLMClient, LLMError
+from voxint.clients.llm import HttpLLMClient, LLMError, SamplingProfile
 from voxint.config import Settings
 from voxint.db.models import RunAssetKind
 from voxint.enrichment.producers.name_patterns import normalize_name
@@ -67,16 +67,33 @@ KIND_BY_NAME = {
     "entity_mentions": RunAssetKind.ENTITY_MENTIONS,
 }
 
+# Named sampling profiles for the qualification sweep (#67). ``greedy`` is the
+# reproducible default the #66 verdict measured (temperature=0); ``qwen`` is the
+# profile Qwen's model card recommends. The chosen profile is recorded in the
+# results so the pinned #67 serving profile is measured, not assumed.
+SAMPLING_PROFILES = {
+    "greedy": SamplingProfile(),
+    "qwen": SamplingProfile(temperature=0.7, top_p=0.8, top_k=20, min_p=0.0),
+}
+
 
 # --------------------------------------------------------------------------- #
 # Endpoint config + raw-response capture
 # --------------------------------------------------------------------------- #
 class EndpointConfig:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        api_key: str,
+        timeout: float,
+        sampling: SamplingProfile | None = None,
+    ) -> None:
         self.base_url = base_url
         self.model = model
         self.api_key = api_key
         self.timeout = timeout
+        self.sampling = sampling or SamplingProfile()
 
 
 class Capture:
@@ -123,7 +140,9 @@ def build_client(cfg: EndpointConfig, cap: Capture) -> tuple[HttpLLMClient, http
         timeout=httpx.Timeout(connect=10.0, read=cfg.timeout, write=cfg.timeout, pool=cfg.timeout),
         event_hooks={"response": [cap.hook]},
     )
-    client = HttpLLMClient(cfg.base_url, cfg.model, cfg.api_key, cfg.timeout, client=raw)
+    client = HttpLLMClient(
+        cfg.base_url, cfg.model, cfg.api_key, cfg.timeout, client=raw, sampling=cfg.sampling
+    )
     return client, raw
 
 
@@ -661,6 +680,12 @@ def main() -> None:
     parser.add_argument("--api-key-file", default=str(Path.home() / "voxint-qual" / ".api_key"))
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--profile", choices=["unguarded", "guarded"], default="unguarded")
+    parser.add_argument(
+        "--sampling",
+        choices=sorted(SAMPLING_PROFILES),
+        default="greedy",
+        help="sampling profile sent on every request (greedy=temp0, qwen=card-recommended)",
+    )
     parser.add_argument("--reps", type=int, default=3)
     parser.add_argument("--jobs", default="enhancement,names,run_assets,research")
     parser.add_argument("--fixtures", default="", help="comma-separated fixture ids to filter")
@@ -671,7 +696,9 @@ def main() -> None:
     api_key = args.api_key
     if api_key is None and Path(args.api_key_file).is_file():
         api_key = Path(args.api_key_file).read_text().strip()
-    cfg = EndpointConfig(args.base_url, args.model, api_key or "", args.timeout)
+    cfg = EndpointConfig(
+        args.base_url, args.model, api_key or "", args.timeout, SAMPLING_PROFILES[args.sampling]
+    )
     cap = Capture()
     client, raw = build_client(cfg, cap)
     settings = build_settings(cfg)
@@ -683,6 +710,8 @@ def main() -> None:
         only = {f for f in args.fixtures.split(",") if f}
         results: dict[str, Any] = {
             "profile": args.profile,
+            "sampling": args.sampling,
+            "sampling_params": SAMPLING_PROFILES[args.sampling].as_payload(),
             "reps": args.reps,
             "model": args.model,
             "base_url": args.base_url,
@@ -712,7 +741,7 @@ def main() -> None:
             results["jobs"][job] = job_out
 
         out_path = Path(args.out) if args.out else (
-            Path("/tmp") / f"voxint-qual-{args.profile}.json"
+            Path("/tmp") / f"voxint-qual-{args.profile}-{args.sampling}.json"
         )
         out_path.write_text(json.dumps(results, indent=2, default=str))
         total = sum(len(j["fixtures"]) for j in results["jobs"].values())

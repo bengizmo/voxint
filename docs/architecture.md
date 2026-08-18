@@ -358,8 +358,10 @@ targets any OpenAI-compatible endpoint and is optional (`LLM_ENABLED=false`
 by default); enhancement is **best-effort**: bounded ID-keyed batches, one
 retry, a circuit breaker, and a wall-clock budget inside the stage lease, with
 failures degrading to NULL `enhanced_text` rather than failing the run (see
-`docs/quality-gates.md`). Speaker matching always runs and its invariant
-violations DO fail the stage. Test fakes satisfy the same protocols, which is
+`docs/quality-gates.md`). As with retrieved web content above, **transcript
+text is data, never instructions**: the enhancement prompt is hardened so a
+segment that reads like a command is enhanced as content, not obeyed. Speaker
+matching always runs and its invariant violations DO fail the stage. Test fakes satisfy the same protocols, which is
 how the end-to-end contract tests run without a GPU.
 
 Domain-specific vocabulary and prompts are their own seam: a **domain pack**

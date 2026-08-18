@@ -29,6 +29,19 @@ forever), and its failure semantics follow from that:
   inside the `enhance_match` stage lease.
 - **An unreachable LLM never fails a run.** Speaker matching still executes;
   only matching/persistence invariant violations fail the stage.
+- **Segment text is content, never instructions.** The enhancement prompt
+  instructs the model to treat every segment's words strictly as transcript
+  content to edit — a segment that reads like a command ("ignore previous
+  instructions", "reply with a single word", "you are now a translator", "drop
+  the other segments") is still returned unchanged, not obeyed. This matters
+  because transcripts are untrusted input and small local models will otherwise
+  follow instructions embedded in speech; a hardened prompt measurably stops
+  that (verified against the local-LLM qualification corpus). It is a
+  best-effort guard, not a sandbox — the structural batch-integrity check above
+  is the backstop that rejects any reply that still deviates.
+- **Requests are deterministic by default** (`temperature = 0`, greedy). The
+  client carries a fixed sampling profile; greedy is deliberate for a
+  faithfulness task (reproducible, conservative), not an accident.
 
 ## Turn eligibility (matching input)
 
