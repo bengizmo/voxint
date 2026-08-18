@@ -211,6 +211,10 @@ It is built in lanes; **landed so far:**
   destructive DDL is launcher-owned, behind the explicit `--fresh` flag), and the
   generated `DB_PASSWORD`/`CSRF_SECRET` are read from `state.env` internally, never
   passed on argv. macOS/Apple-Silicon only; serial (issue #23).
+  - *Maintainer self-test:* `voxint-native.sh upgrade-db --rehearse` forces a
+    same-major dump/restore cycle to exercise the `upgrade-db` machinery
+    mechanically (no real version change). It is a maintainer aid, deliberately
+    kept out of the operator preview guide.
 
 ### Gate semantics
 

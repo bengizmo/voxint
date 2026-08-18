@@ -29,7 +29,7 @@ whisper/pyannote/titanet.
   build the frontend and re-run `setup`.
 
 Run `scripts/native/voxint-native.sh doctor` at any time; it checks all of the
-above (plus the cluster, the pgvector extension, port collisions, staged
+above (plus the cluster, the pgvector extension, port reachability, staged
 islands, and MEDIA_ROOT) and exits non-zero if anything is wrong.
 
 ## Install and run
@@ -56,6 +56,11 @@ scripts/native/voxint-native.sh down
 Everything the launcher owns lives under `~/.voxint-native/`
 (`venv`, `pgdata`, `logs`, `run`, `backups`, and `state.env`). Uninstalling is
 `down` followed by `rm -rf ~/.voxint-native`.
+
+**Next: the first-run walkthrough.** Once the console is up, the in-browser
+onboarding is the same for every deployment: follow the setup wizard and guided
+tutorial in [onboarding.md](onboarding.md), then the day-to-day operator guides in
+[how-to/README.md](how-to/README.md).
 
 **Secret hygiene.** The `~/.voxint-native` tree is created mode `0700`, and every
 file that carries a secret is `0600`: `state.env` (the generated `DB_PASSWORD` /
@@ -248,9 +253,9 @@ skill driving `tools/native_e2e_lifecycle.py`. It has two rungs:
 
 - **Smoke inner gate** (`--no-models`, fast): after `up --no-models`,
   `doctor` reports PASS and
-  `uv run python tools/native_e2e_lifecycle.py smoke` confirms `/healthz` plus every
-  hashed island bundle in the Vite manifest serves 200 — proof the install stood up
-  and the frontend staged, no model tier required.
+  `uv run python tools/native_e2e_lifecycle.py smoke` confirms `/healthz` plus
+  `/setup` and every hashed island bundle in the Vite manifest serves 200 — proof
+  the install stood up and the frontend staged, no model tier required.
 - **Full usage lane** (with models): `drive --file media/diarize-3speaker.wav`
   submits over the real HTTP surface (CSRF minted from `state.env`), drives the
   launchd-supervised Celery worker through the real Metal pipeline, and
