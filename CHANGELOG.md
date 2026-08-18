@@ -5,6 +5,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Responsive + accessibility polish (#64, console-UX arc #47)**: the
+  server-rendered console gets a baseline of responsive and accessible behaviour
+  so it's usable beyond a desktop developer's screen. A **skip-link** to a real
+  `<main>` landmark (focusable via `tabindex="-1"`, so it moves focus rather than
+  only scrolling) and a visible, theme-aware **`:focus-visible` ring** (with a
+  forced-colors/high-contrast fallback) make keyboard and assistive-tech
+  navigation coherent. The wide data tables — the runs list, the 8-column stage
+  ledger, and the review queue — now scroll inside their own **keyboard-reachable,
+  labelled `role="region"` container** instead of forcing horizontal *page*
+  overflow on a phone, and their column headers carry `scope="col"`; the small
+  dashboard metric tables get a plain scroll container (no needless focus stop).
+  Long unbroken **source paths and URLs** rendered outside a table (run detail,
+  run summary) now **break instead of forcing page overflow** (`overflow-wrap`),
+  closing the last horizontal-scroll gap at phone widths. The primary nav wraps,
+  and a single `max-width: 40rem` breakpoint tightens the layout on narrow
+  screens. Status is confirmed **never conveyed by colour alone** — every status
+  pill already renders its state word as text, now locked by a test — and the
+  light/dark theming is preserved, with a darker-legible error colour added for
+  the dark scheme. Pure CSS + template markup (the inline `base.html` stylesheet
+  and the table pages); no Python, no new dependency.
+
 ### Fixed
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
   `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made
@@ -18,23 +40,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.17.0] - 2026-08-18
 
 ### Added
-- **Responsive + accessibility polish (#64, console-UX arc #47)**: the
-  server-rendered console gets a baseline of responsive and accessible behaviour
-  so it's usable beyond a desktop developer's screen. A **skip-link** to a real
-  `<main>` landmark (focusable via `tabindex="-1"`, so it moves focus rather than
-  only scrolling) and a visible, theme-aware **`:focus-visible` ring** (with a
-  forced-colors/high-contrast fallback) make keyboard and assistive-tech
-  navigation coherent. The wide data tables — the runs list, the 8-column stage
-  ledger, and the review queue — now scroll inside their own **keyboard-reachable,
-  labelled `role="region"` container** instead of forcing horizontal *page*
-  overflow on a phone, and their column headers carry `scope="col"`; the small
-  dashboard metric tables get a plain scroll container (no needless focus stop).
-  The primary nav wraps, and a single `max-width: 40rem` breakpoint tightens the
-  layout on narrow screens. Status is confirmed **never conveyed by colour alone**
-  — every status pill already renders its state word as text, now locked by a
-  test — and the light/dark theming is preserved, with a darker-legible error
-  colour added for the dark scheme. Pure CSS + template markup (the inline
-  `base.html` stylesheet and the table pages); no Python, no new dependency.
 - **Setup wizard: honest first-run readiness checks (#61, settings-overhaul arc
   #47)**: the wizard's model-services step now surfaces the full `voxint doctor`
   readiness checks in the browser — **Postgres, Redis, the three model services,

@@ -128,11 +128,15 @@ def test_dashboard_renders_aggregated_numbers(
     # pill span across the enum-backed rows, not just one.
     for status in RunStatus:
         label = humanize_status(status.value)
+        # Guard against humanize_status regressing to "" — an empty label would let
+        # the pill go colour-only and the regex below would still match (review).
+        assert label.strip(), f"humanize_status({status.value}) returned empty"
         assert re.search(
             rf'class="pill {re.escape(status.value)}">{re.escape(label)}</span>', body
         ), f"status pill for {status.value} missing its adjacent text label"
-    # The metrics tables scroll inside their own container on narrow screens.
-    assert 'class="table-wrap"' in body
+    # All three metrics tables (statuses, timing, failures — all seeded here) each
+    # scroll inside their own container on narrow screens.
+    assert body.count('class="table-wrap"') == 3
     # Stage timing binds the seeded values, not just the stage names: transcribe
     # ran 30s, the failed diarize_embed attempt 5s (finished attempts count for
     # duration regardless of terminal status). Stage names render humanized.

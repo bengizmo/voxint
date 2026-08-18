@@ -197,6 +197,9 @@ def test_queue_renders_operator_ergonomics(
     # keyboard-reachable, labelled region, with scoped column headers.
     assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
     assert '<th scope="col">Media</th>' in body
+    # The otherwise-empty action column header carries a visually-hidden label so
+    # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
+    assert '<th scope="col"><span class="visually-hidden">Action</span></th>' in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text

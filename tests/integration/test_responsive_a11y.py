@@ -13,6 +13,7 @@ runs list + stage ledger in ``test_runs_api``, review queue in ``test_review_api
 metrics tables in ``test_dashboard_api``.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -52,13 +53,21 @@ def test_skip_link_and_main_landmark(client: TestClient) -> None:
 
 def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     """The inline stylesheet carries the new focus-visible ring, the table scroll
-    container, the wrap-enabled nav, and the single small-screen breakpoint."""
+    container, the page-overflow guard, the wrap-enabled nav, and the small-screen
+    breakpoint. Property checks are whitespace-tolerant (a harmless reformat must
+    not false-fail) but still assert the actual declaration, not just a selector
+    name — a gutted ``:focus-visible {}`` must NOT satisfy the ring check
+    (multi-model review: token-only assertions were vacuous)."""
     body = client.get("/dashboard").text
-    assert ":focus-visible" in body
-    assert "--focus-ring" in body
-    assert ".table-wrap { overflow-x: auto; }" in body
-    assert "nav.top { display: flex; flex-wrap: wrap;" in body
-    assert "@media (max-width: 40rem)" in body
+    # The focus ring actually draws an outline from a defined var, not nothing.
+    assert re.search(r":focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus-ring\)", body)
+    assert re.search(r"--focus-ring:\s*#", body)  # the var is defined, not merely named
+    assert re.search(r"\.table-wrap\s*\{[^}]*overflow-x:\s*auto", body)
+    # AC1 belt-and-braces: long unbroken paths/URLs outside a table-wrap can't
+    # force horizontal PAGE overflow (they break instead).
+    assert re.search(r"body\s*\{[^}]*overflow-wrap:\s*break-word", body)
+    assert re.search(r"nav\.top\s*\{[^}]*flex-wrap:\s*wrap", body)
+    assert "max-width: 40rem" in body
     # Utility for visually-hidden-but-announced labels (e.g. the queue action col).
     assert ".visually-hidden" in body
 
@@ -69,5 +78,7 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
     body = client.get("/dashboard").text
     assert "color-scheme: light dark;" in body
     # Focus ring has a dark-scheme value and a forced-colors fallback.
-    assert "@media (prefers-color-scheme: dark) { :root { --focus-ring:" in body
+    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--focus-ring:\s*#58a6ff", body)
     assert "@media (forced-colors: active)" in body
+    # Dark-scheme error colour keeps error text legible on a dark canvas (AC4).
+    assert "#ff7b72" in body

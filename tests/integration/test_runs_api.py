@@ -456,6 +456,10 @@ def test_run_detail_shows_stage_ledger(
     # the app — scrolls inside its own keyboard-reachable, labelled region.
     assert 'class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0"' in body
     assert '<th scope="col">Stage</th>' in body
+    # Status is never colour-only on the detail page: the run-status pill and each
+    # stage-status pill carry their state word as text inside the span.
+    assert 'class="pill completed">completed</span>' in body
+    assert 'class="pill failed">failed</span>' in body
 
 
 def test_run_detail_unknown_run_404(client: TestClient) -> None:
@@ -531,6 +535,9 @@ def test_runs_list_links_to_detail(
     # keyboard-reachable region, with scoped column headers.
     assert 'class="table-wrap" role="region" aria-label="Runs" tabindex="0"' in body
     assert '<th scope="col">Run</th>' in body
+    # Status is never colour-only here either: the humanized label sits inside the
+    # status pill span (the run is COMPLETED by default).
+    assert 'class="pill completed">Completed</span>' in body
 
 
 # --- transcript (shared resolver-attributed presenter) ------------------------

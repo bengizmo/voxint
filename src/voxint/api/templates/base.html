@@ -12,7 +12,7 @@
   <style>
     :root { color-scheme: light dark; }
     body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem;
-           padding: 0 1rem; line-height: 1.45; }
+           padding: 0 1rem; line-height: 1.45; overflow-wrap: break-word; }
     h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; }
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8884; }
@@ -33,7 +33,7 @@
     .error { color: #c33; }
     .notice { border: 1px solid #b80; background: #fb02; border-radius: .5rem;
               padding: .6rem .9rem; margin: 1rem 0; }
-    form.requeue { display: flex; gap: .6rem; align-items: center; margin: 1rem 0; }
+    form.requeue { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
     nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;
               padding-bottom: .6rem; border-bottom: 1px solid #8884; font-size: .95rem; }
     nav.top a[aria-current="page"] { font-weight: 600; }
@@ -143,7 +143,7 @@
                      border-radius: 2px; }
     @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
     @media (prefers-color-scheme: dark) { .error { color: #ff7b72; } }
-    .table-wrap { overflow-x: auto; }
+    .table-wrap { overflow-x: auto; max-width: 100%; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
                        margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
                        white-space: nowrap; border: 0; }
