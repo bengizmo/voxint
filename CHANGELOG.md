@@ -312,6 +312,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   console disable. No change when no override is stored.
 
 ### Fixed
+- **Native plain `restore` no longer trips the pgvector ownership footgun** (#71,
+  epic #68): `scripts/native/voxint-native.sh restore <file>` (the non-`--fresh`
+  path) used to run `pg_restore --clean --if-exists` as the unprivileged `voxint`
+  role against a dump whose TOC carries the `EXTENSION vector` entry — so `--clean`
+  tried to drop and recreate the non-trusted extension as `voxint` and failed
+  (the same footgun `restore --fresh` was built to avoid). The plain path now
+  reuses the fresh path's fail-closed preflight — services-down gate, archive
+  integrity + `alembic_version` identity gate, managed-postmaster (`data_directory`)
+  check, and vector-TOC filtering — preinstalls `vector` as the superuser, and
+  restores inside a single transaction (`-L <filtered> --clean --if-exists
+  --no-owner --single-transaction --exit-on-error`), so a failure rolls back and
+  leaves the database unchanged and the dump untouched. It remains *replacement in
+  place* (objects absent from the archive survive); `restore --fresh` stays the
+  *exact rebuild* / disaster-recovery path. `backup` now takes new dumps with
+  `pg_dump --exclude-extension=vector`, so fresh archives omit the extension
+  entirely (legacy archives are still filtered at restore time). The two restore
+  paths now share a `restore_preflight`/`restore_postmigrate` helper pair; the
+  fresh path's destructive core is unchanged.
 - **Saving LLM settings no longer silently pins the endpoint** (#46): the setup
   and settings LLM forms used to prefill the base-URL/model inputs with the
   *effective* value, which is the environment default when no override is stored

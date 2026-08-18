@@ -148,6 +148,13 @@ scripts/native/voxint-native.sh down
   the message says so).
 - **Recovery scope is DB-only.** `pg_dump`/`restore --fresh` cover database state,
   **not** external media files or model weights.
+- **Plain `restore <file>` (non-`--fresh`) now shares the same fail-closed
+  preflight** (#71): services-down gate, archive + `alembic_version` identity,
+  managed-postmaster `data_directory` check, and vector-TOC filtering — but it
+  *replaces in place* (`--clean --if-exists` in one transaction) rather than
+  dropping the database, so objects absent from the archive survive. `--fresh`
+  remains the exact-rebuild path this Part C exercises. New `backup` dumps are
+  taken with `--exclude-extension=vector`.
 
 ## Cleanup
 

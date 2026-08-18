@@ -981,9 +981,17 @@ cmd_backup() {
   stamp=$(date +%Y-%m-%d-%H-%M-%S)
   out=$VOXINT_NATIVE_HOME/backups/voxint-$stamp.dump
   say "pg_dump -> $out"
-  "$NATIVE_PG_BINDIR/pg_dump" -Fc -h 127.0.0.1 -p "$NATIVE_PG_PORT" \
-    -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$out" \
-    || fail "pg_dump failed"
+  # --exclude-extension=vector (PG14+) keeps new dumps free of the pgvector
+  # EXTENSION and its COMMENT TOC entries, so a later `restore`/`restore --fresh`
+  # never has to strip them (legacy dumps are still filtered at restore time).
+  # vector-typed COLUMNS are unaffected: the extension is a cluster prerequisite
+  # installed by the superuser (ensure_database), not carried by the dump.
+  # Dump to a .partial and rename only on success, so a failed pg_dump never
+  # leaves a truncated, good-looking archive in backups/.
+  "$NATIVE_PG_BINDIR/pg_dump" -Fc --exclude-extension=vector -h 127.0.0.1 -p "$NATIVE_PG_PORT" \
+    -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$out.partial" \
+    || { rm -f "$out.partial"; fail "pg_dump failed"; }
+  mv "$out.partial" "$out" || fail "could not finalize backup at $out"
   say "backup complete: $out"
 }
 
@@ -1051,6 +1059,110 @@ require_core_services_stopped() {
     || fail "refusing destructive restore: core services still running:$running (run: $0 down)"
 }
 
+# --- shared restore preflight (both `restore` and `restore --fresh`) ---------
+# Validate the archive AND the target cluster BEFORE any mutation, bring up
+# maintenance Postgres if the port is not answering, and leave a vector-filtered
+# TOC ready for `pg_restore -L`. Sets globals RESTORE_TOC and RESTORE_FILTERED
+# (temp files the CALLER must `rm -f` once the restore is done, then `trap - EXIT`
+# to disarm the safety-net cleanup this arms). On any gate failure it removes its
+# own temp files and `fail`s (exits). Non-destructive: it only reads the
+# archive/cluster and (if needed) starts Postgres.
+restore_preflight() {
+  local file=$1 datadir media_root
+  managed_cluster || fail "no managed cluster to restore into (see: $0 setup)"
+  require_core_services_stopped
+  # Capture the TOC once (integrity gate) and keep it: it is both the identity
+  # gate and the -L filter source, so the archive is never re-listed after this
+  # point (closes the double-list TOCTOU window). Explicit templates: BSD/macOS
+  # mktemp requires one (matches the state.env convention above).
+  RESTORE_TOC=$(mktemp "${TMPDIR:-/tmp}/voxint-restore-toc.XXXXXX") || fail "mktemp failed"
+  RESTORE_FILTERED=$(mktemp "${TMPDIR:-/tmp}/voxint-restore-filtered.XXXXXX") \
+    || { rm -f "$RESTORE_TOC"; fail "mktemp failed"; }
+  # Safety net: remove the two temp files on ANY exit after this point (an
+  # unexpected error, or SIGINT/SIGTERM mid-restore) that the explicit per-gate
+  # `rm -f` below would miss. Removes ONLY the temp files -- it never stops
+  # Postgres, so the "leave maintenance PG up on an alembic failure" contract in
+  # restore_postmigrate is unaffected. Callers `trap - EXIT` after their final rm.
+  trap 'rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"' EXIT
+  if ! "$NATIVE_PG_BINDIR/pg_restore" --list "$file" > "$RESTORE_TOC" 2>/dev/null; then
+    fail "not a valid pg_restore archive: $file"
+  fi
+  # Identity gate BEFORE any mutation: a structurally valid pg_restore archive of
+  # some *other* database must not be restored over the live voxint DB. Require
+  # BOTH the alembic_version table (every alembic project has one) AND a
+  # voxint-specific table (pipeline_runs, a core table every voxint dump carries)
+  # so a dump from an unrelated alembic project cannot false-pass. (Corrupt data
+  # blocks inside an otherwise-valid archive can still only surface during the
+  # restore itself, where --single-transaction rolls back safely.)
+  grep -qE 'TABLE .* alembic_version( |$)' "$RESTORE_TOC" \
+    || fail "$file is not a voxint dump (no alembic_version table in its TOC) -- refusing to restore into $NATIVE_DB_NAME"
+  grep -qE 'TABLE .* pipeline_runs( |$)' "$RESTORE_TOC" \
+    || fail "$file is not a voxint dump (no pipeline_runs table in its TOC) -- refusing to restore into $NATIVE_DB_NAME"
+
+  # Maintenance mode: bring up ONLY Postgres (not api/worker/beat) if the port is
+  # not already answering. Resolve MEDIA_ROOT in the parent shell (a command
+  # substitution would swallow its fail() and pass an empty root) so a bad
+  # MEDIA_ROOT fails closed like every other gate.
+  if ! postgres_reachable; then
+    step "Starting Postgres for maintenance restore (services stay down)"
+    media_root=$(resolved_media_root_or_fail) \
+      || fail "could not resolve MEDIA_ROOT for maintenance restore"
+    bootstrap_service postgres "$media_root"
+    wait_for_postgres || fail "Postgres did not come up for maintenance restore"
+  fi
+  # Prove the reachable postmaster is OUR managed cluster before any mutation --
+  # managed_cluster only checks $NATIVE_PGDATA exists on disk, not that the
+  # listener on :$NATIVE_PG_PORT is that cluster. Guards against mutating a
+  # foreign (e.g. default-Homebrew) trust-auth postmaster that happens to hold
+  # the port.
+  datadir=$(super_psql_scalar postgres "SHOW data_directory") \
+    || fail "could not query the postmaster on :$NATIVE_PG_PORT"
+  [ "$datadir" = "$NATIVE_PGDATA" ] \
+    || fail "the postmaster on :$NATIVE_PG_PORT is not the managed cluster (data_directory=$datadir, expected $NATIVE_PGDATA)"
+
+  # Filter out the pgvector EXTENSION/COMMENT TOC entries so the unprivileged
+  # voxint role never tries to (re)create the privileged, superuser-owned
+  # extension (it is preinstalled by the superuser instead).
+  filter_vector_toc_entries < "$RESTORE_TOC" > "$RESTORE_FILTERED"
+  # Fail-closed insurance against future filter-regex drift: the -L list handed to
+  # pg_restore must carry NO vector EXTENSION/COMMENT entry, or --clean could try
+  # to recreate the privileged extension as the voxint role. Never restore if one
+  # survived the filter.
+  ! grep -qE 'EXTENSION - vector([^A-Za-z0-9_]|$)|COMMENT - EXTENSION vector([^A-Za-z0-9_]|$)' \
+      "$RESTORE_FILTERED" \
+    || fail "internal error: vector TOC entries survived filtering -- refusing to restore"
+}
+
+# --- shared post-restore migrate + teardown (both restore paths) -------------
+# Confirm the restored DB carries alembic_version, forward-migrate it to head
+# (the dump is the schema source; a following `up` no-ops at head), then stop the
+# maintenance Postgres so the whole stack is left down. On an alembic failure the
+# maintenance Postgres is deliberately LEFT UP for inspection -- `$0 down` stops
+# it; the restored data is intact at the dump's revision. (The temp-file EXIT
+# trap armed by restore_preflight removes only the two temp files, never Postgres,
+# so it does not disturb this leave-up-on-failure contract.)
+restore_postmigrate() {
+  # Capture into a plain assignment and status-check (super_psql_scalar's
+  # contract): a probe ERROR must not be reported as "dump incomplete".
+  local present
+  present=$(super_psql_scalar "$NATIVE_DB_NAME" \
+    "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='alembic_version'") \
+    || fail "could not verify alembic_version after restore (probe failed)"
+  [ -n "$present" ] \
+    || fail "restored database has no alembic_version table -- dump may be incomplete"
+  step "alembic upgrade head (forward-compat gate)"
+  run_alembic upgrade head \
+    || fail "alembic upgrade head failed after restore -- $NATIVE_DB_NAME now holds the dump's data at the dump's revision (maintenance Postgres left up for inspection; stop with: $0 down). Is the dump's revision newer than this checkout?"
+  step "Stopping maintenance Postgres (app services remain down)"
+  local label i
+  label=$(plist_label postgres)
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+  i=0
+  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
+    i=$((i + 1)); [ "$i" -le 50 ] || break; sleep 0.2
+  done
+}
+
 cmd_restore() {
   load_state
   local fresh=0 file=
@@ -1067,15 +1179,42 @@ cmd_restore() {
   if [ "$fresh" = 1 ]; then
     fresh_restore "$file"
   else
-    managed_cluster || fail "no managed cluster to restore into (see: $0 setup)"
-    wait_for_postgres || fail "Postgres not reachable on :$NATIVE_PG_PORT -- is the stack up?"
-    say "pg_restore <- $file (into $NATIVE_DB_NAME)"
-    # --clean --if-exists so a restore over an existing schema replaces it.
-    "$NATIVE_PG_BINDIR/pg_restore" --clean --if-exists --no-owner \
-      -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" -d "$NATIVE_DB_NAME" "$file" \
-      || fail "pg_restore reported errors (see above)"
-    say "restore complete"
+    plain_restore "$file"
   fi
+}
+
+plain_restore() {
+  # In-place replacement restore (no drop): runs with the app services DOWN and
+  # only managed Postgres up (maintenance mode). `pg_restore --clean --if-exists`
+  # replaces the schema objects the (filtered) archive carries; objects present
+  # in the target but ABSENT from the archive SURVIVE -- this is replacement-in-
+  # place, NOT an exact rebuild. Use `restore --fresh` for an exact rebuild /
+  # disaster recovery. The pgvector EXTENSION/COMMENT TOC entries are filtered out
+  # (restore_preflight) so `--clean` neither drops nor recreates the privileged,
+  # superuser-owned extension -- it is preinstalled (idempotently) below. The
+  # restore runs in a single transaction, so any error rolls the whole thing back
+  # and leaves the pre-restore database intact; the dump file is never mutated.
+  local file=$1
+  restore_preflight "$file"
+
+  # Preinstall the privileged extension as the superuser -- idempotent, because
+  # an in-place target usually already has it (a bare CREATE would error if so).
+  # (The restore_preflight EXIT trap cleans the temp files on any fail below.)
+  super_psql "$NATIVE_DB_NAME" "CREATE EXTENSION IF NOT EXISTS vector" >&2 \
+    || fail "CREATE EXTENSION vector failed -- is pgvector built against postgresql@17? (brew reinstall pgvector)"
+
+  step "Restoring $file into $NATIVE_DB_NAME in place (vector extension excluded)"
+  # Single transaction ⇒ any error rolls back: the pre-restore database is intact
+  # (nothing was dropped up front) and the dump file is untouched.
+  "$NATIVE_PG_BINDIR/pg_restore" -L "$RESTORE_FILTERED" \
+    --clean --if-exists --no-owner --single-transaction --exit-on-error \
+    -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" -d "$NATIVE_DB_NAME" "$file" \
+    || fail "pg_restore failed -- the database was left unchanged (single transaction rolled back); the dump file is untouched. Retry with: $(printf '%q ' "$0" restore "$file")"
+  rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"
+
+  restore_postmigrate
+  say "restore complete: $NATIVE_DB_NAME restored in place from $file (run: $0 up)"
+  trap - EXIT
 }
 
 fresh_restore() {
@@ -1086,41 +1225,8 @@ fresh_restore() {
   # no-ops at head). On FAILURE after maintenance Postgres has started, it is left
   # supervised (running) for inspection/retry -- `$0 down` stops it; the dump file
   # is never mutated. See docs + the voxint-native-e2e skill's --with-restore rung.
-  local file=$1 toc filtered old_oid new_oid ntables datadir label i
-
-  # --- preflight: validate everything BEFORE destroying anything --------------
-  # Capture the TOC once (integrity gate) and keep it: it is both the identity
-  # gate below and the -L filter source at restore time, so the archive is never
-  # re-listed after the drop (closes the double-list TOCTOU window).
-  managed_cluster || fail "no managed cluster to restore into (see: $0 setup)"
-  require_core_services_stopped
-  toc=$(mktemp) || fail "mktemp failed"
-  filtered=$(mktemp) || { rm -f "$toc"; fail "mktemp failed"; }
-  if ! "$NATIVE_PG_BINDIR/pg_restore" --list "$file" > "$toc" 2>/dev/null; then
-    rm -f "$toc" "$filtered"; fail "not a valid pg_restore archive: $file"
-  fi
-  # Identity gate BEFORE the irreversible drop: a structurally valid pg_restore
-  # archive of some *other* database must not destroy the live voxint DB. Require
-  # the alembic_version table entry that every voxint dump carries. (Corrupt data
-  # blocks inside an otherwise-valid archive can still only surface during the
-  # restore itself, where --single-transaction rolls back safely.)
-  grep -qE 'TABLE .* alembic_version( |$)' "$toc" \
-    || { rm -f "$toc" "$filtered"; fail "$file is not a voxint dump (no alembic_version table in its TOC) -- refusing to drop $NATIVE_DB_NAME"; }
-
-  # --- maintenance mode: bring up ONLY Postgres (not api/worker/beat) ---------
-  if ! postgres_reachable; then
-    step "Starting Postgres for maintenance restore (services stay down)"
-    bootstrap_service postgres "$(resolved_media_root_or_fail)"
-    wait_for_postgres || { rm -f "$toc" "$filtered"; fail "Postgres did not come up for maintenance restore"; }
-  fi
-  # Prove the reachable postmaster is OUR managed cluster before any destructive
-  # DDL -- managed_cluster only checks $NATIVE_PGDATA exists on disk, not that the
-  # listener on :$NATIVE_PG_PORT is that cluster. Guards against dropping a foreign
-  # (e.g. default-Homebrew) trust-auth postmaster that happens to hold the port.
-  datadir=$(super_psql_scalar postgres "SHOW data_directory") \
-    || { rm -f "$toc" "$filtered"; fail "could not query the postmaster on :$NATIVE_PG_PORT"; }
-  [ "$datadir" = "$NATIVE_PGDATA" ] \
-    || { rm -f "$toc" "$filtered"; fail "the postmaster on :$NATIVE_PG_PORT is not the managed cluster (data_directory=$datadir, expected $NATIVE_PGDATA)"; }
+  local file=$1 old_oid new_oid ntables absent
+  restore_preflight "$file"
 
   # --- destroy + prove empty (fail-closed gate, as the cluster superuser) ------
   # Every scalar probe below is captured into a plain assignment and status-checked
@@ -1129,69 +1235,52 @@ fresh_restore() {
   step "Rebuilding $NATIVE_DB_NAME from template0"
   old_oid=$(super_psql_scalar postgres \
     "SELECT oid FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
-    || { rm -f "$toc" "$filtered"; fail "could not read current OID of $NATIVE_DB_NAME"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not read current OID of $NATIVE_DB_NAME"; }
   super_psql postgres "DROP DATABASE IF EXISTS \"$NATIVE_DB_NAME\" WITH (FORCE)" >&2 \
-    || { rm -f "$toc" "$filtered"; fail "could not drop database $NATIVE_DB_NAME"; }
-  local absent
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not drop database $NATIVE_DB_NAME"; }
   absent=$(super_psql_scalar postgres \
     "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
-    || { rm -f "$toc" "$filtered"; fail "could not verify drop of $NATIVE_DB_NAME (probe failed)"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not verify drop of $NATIVE_DB_NAME (probe failed)"; }
   [ -z "$absent" ] \
-    || { rm -f "$toc" "$filtered"; fail "database $NATIVE_DB_NAME still present after drop"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "database $NATIVE_DB_NAME still present after drop"; }
   super_psql postgres \
     "CREATE DATABASE \"$NATIVE_DB_NAME\" OWNER \"$NATIVE_DB_USER\" TEMPLATE template0" >&2 \
-    || { rm -f "$toc" "$filtered"; fail "could not recreate database $NATIVE_DB_NAME"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not recreate database $NATIVE_DB_NAME (does role '$NATIVE_DB_USER' exist? on a brand-new install run '$0 up' once first to provision the role, then retry)"; }
   new_oid=$(super_psql_scalar postgres \
     "SELECT oid FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
-    || { rm -f "$toc" "$filtered"; fail "could not read new OID of $NATIVE_DB_NAME"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not read new OID of $NATIVE_DB_NAME"; }
   { [ -n "$new_oid" ] && [ "$new_oid" != "$old_oid" ]; } \
-    || { rm -f "$toc" "$filtered"; fail "recreated database OID did not change (old=$old_oid new=$new_oid)"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "recreated database OID did not change (old=$old_oid new=$new_oid)"; }
   ntables=$(super_psql_scalar "$NATIVE_DB_NAME" \
     "SELECT count(*) FROM pg_tables WHERE schemaname='public'") \
-    || { rm -f "$toc" "$filtered"; fail "could not count public tables in $NATIVE_DB_NAME"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "could not count public tables in $NATIVE_DB_NAME"; }
   [ "$ntables" = "0" ] \
-    || { rm -f "$toc" "$filtered"; fail "fresh database is not empty ($ntables public tables) -- aborting before restore"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "fresh database is not empty ($ntables public tables) -- aborting before restore"; }
   say "EMPTY_DB PASS (old_oid=${old_oid:-none} new_oid=$new_oid, 0 public tables)"
 
   # --- preinstall the privileged extension as the superuser -------------------
+  # (The destroy-core guards above keep their explicit temp `rm` for a minimal
+  # diff to the proven slice-2 core; restore_preflight's EXIT trap backstops them.)
   super_psql "$NATIVE_DB_NAME" "CREATE EXTENSION vector" >&2 \
-    || { rm -f "$toc" "$filtered"; fail "CREATE EXTENSION vector failed -- is pgvector built against postgresql@17? (brew reinstall pgvector)"; }
+    || { rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"; fail "CREATE EXTENSION vector failed -- is pgvector built against postgresql@17? (brew reinstall pgvector)"; }
 
-  # --- restore as the voxint role, excluding the vector TOC entries -----------
-  # Reuse the preflight TOC (no re-list); filter out the pgvector EXTENSION/COMMENT
-  # entries so the unprivileged voxint role never tries to recreate the extension.
+  # --- restore as the voxint role, using the preflight's filtered TOC ---------
+  # No --clean: the DB is freshly created empty, so a bare restore is the honest,
+  # ownership-correct rebuild. The vector TOC entries were already filtered out by
+  # restore_preflight so the unprivileged voxint role never recreates the extension.
+  # The restore ran in a single transaction, so on failure it rolled back:
+  # $NATIVE_DB_NAME is now empty (schema-less, vector extension present), the
+  # previous database is already gone, and the dump file is untouched.
   step "Restoring $file into $NATIVE_DB_NAME (vector extension excluded)"
-  filter_vector_toc_entries < "$toc" > "$filtered"
-  if "$NATIVE_PG_BINDIR/pg_restore" -L "$filtered" \
-       --no-owner --single-transaction --exit-on-error \
-       -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" -d "$NATIVE_DB_NAME" "$file"; then
-    rm -f "$toc" "$filtered"
-  else
-    rm -f "$toc" "$filtered"
-    # The restore ran in a single transaction, so it rolled back: $NATIVE_DB_NAME
-    # is now empty (schema-less, vector extension present), the previous database
-    # is already gone, and the dump file is untouched. Re-running rebuilds from it.
-    fail "pg_restore failed -- prior database already dropped; the dump file is untouched. Retry with: $(printf '%q ' "$0" restore --fresh "$file")"
-  fi
+  "$NATIVE_PG_BINDIR/pg_restore" -L "$RESTORE_FILTERED" \
+    --no-owner --single-transaction --exit-on-error \
+    -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" -d "$NATIVE_DB_NAME" "$file" \
+    || fail "pg_restore failed -- prior database already dropped; the dump file is untouched. Retry with: $(printf '%q ' "$0" restore --fresh "$file")"
+  rm -f "$RESTORE_TOC" "$RESTORE_FILTERED"
 
-  # --- confirm + forward-migrate (dump is the schema source; up() will no-op) --
-  super_psql_scalar "$NATIVE_DB_NAME" \
-    "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='alembic_version'" \
-    | grep -q 1 \
-    || fail "restored database has no alembic_version table -- dump may be incomplete"
-  step "alembic upgrade head (forward-compat gate)"
-  run_alembic upgrade head \
-    || fail "alembic upgrade head failed after restore -- $NATIVE_DB_NAME now holds the dump's data at the dump's revision (maintenance Postgres left up for inspection; stop with: $0 down). Is the dump's revision newer than this checkout?"
-
-  # --- leave the stack down; a following `up` starts it clean -----------------
-  step "Stopping maintenance Postgres (app services remain down)"
-  label=$(plist_label postgres)
-  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
-  i=0
-  while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do
-    i=$((i + 1)); [ "$i" -le 50 ] || break; sleep 0.2
-  done
+  restore_postmigrate
   say "restore --fresh complete: $NATIVE_DB_NAME rebuilt from $file (run: $0 up)"
+  trap - EXIT
 }
 
 # ---------------------------------------------------------------------------

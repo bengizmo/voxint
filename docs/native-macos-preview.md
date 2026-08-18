@@ -122,12 +122,31 @@ ever points at the current build.)
 ## Backup and restore
 
 ```bash
-scripts/native/voxint-native.sh backup           # pg_dump -Fc -> backups/voxint-<stamp>.dump
-scripts/native/voxint-native.sh restore <file>   # pg_restore --clean --if-exists
+scripts/native/voxint-native.sh backup           # pg_dump -Fc (vector-free) -> backups/voxint-<stamp>.dump
+scripts/native/voxint-native.sh restore <file>   # in-place replace (services down)
+scripts/native/voxint-native.sh restore --fresh <file>   # exact rebuild / disaster recovery
 ```
 
-This is acceptance-lite: a single-operator `pg_dump`/`pg_restore` of the `voxint`
-database. Hardened backup/restore and Postgres major-version upgrades are
+Single-operator `pg_dump`/`pg_restore` of the `voxint` database. Both restore
+paths run with the **app services down** (only maintenance Postgres up) and are
+pgvector-safe: the privileged `vector` extension is preinstalled by the cluster
+superuser and its dump entries are filtered out, so the unprivileged `voxint`
+role never tries to (re)create it. Before touching the database each path proves
+the archive is a real voxint dump (its `alembic_version` table entry) and that
+the listener on the port is the managed cluster, then restores inside a single
+transaction (any error rolls back and leaves the dump untouched). New backups are
+taken with `--exclude-extension=vector`, so fresh dumps omit the extension
+entirely; older dumps are still filtered at restore time.
+
+- **`restore <file>`** — *replacement in place*. Runs `pg_restore --clean
+  --if-exists`, so objects the archive carries are replaced; objects present in
+  the current database but **absent from the archive survive**.
+- **`restore --fresh <file>`** — *exact rebuild*. Drops the database, proves it
+  empty (`EMPTY_DB PASS`), and rebuilds it from the dump as the sole schema
+  source. Use this for disaster recovery when you want the database to match the
+  dump exactly.
+
+Bundling the Postgres distribution and Postgres major-version upgrades remain
 deferred to the bundled-Postgres child (#71).
 
 ## Verifying the install (E2E)

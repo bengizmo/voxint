@@ -724,8 +724,9 @@ def test_restore_fresh_parses_flag_and_validates_dump_exists(tmp_path: Path) -> 
 _STUB_TOC_VOXINT = (
     "2; 3079 16386 EXTENSION - vector ",
     "218; 1259 16714 TABLE public alembic_version voxint",
+    "300; 1259 20000 TABLE public pipeline_runs voxint",
 )
-#: A structurally valid but NON-voxint dump: no alembic_version table entry.
+#: A structurally valid but NON-voxint dump: no alembic_version / pipeline_runs.
 _STUB_TOC_FOREIGN = (
     "2; 3079 16386 EXTENSION - vector ",
     "300; 1259 20000 TABLE public some_other_table postgres",
@@ -736,6 +737,7 @@ def _make_stub_bindir(
     tmp_path: Path,
     *,
     list_rc: int = 0,
+    restore_rc: int = 0,
     toc: tuple[str, ...] = _STUB_TOC_VOXINT,
     running_labels: tuple[str, ...] = (),
 ) -> Path:
@@ -789,12 +791,26 @@ def _make_stub_bindir(
     (bindir / "pg_restore").write_text(
         "#!/usr/bin/env bash\n"
         f'LOG="{logdir}/pg_restore.log"\n'
+        f'LFILE="{logdir}/restore_L.toc"\n'
         'if [ "$1" = "--list" ]; then\n'
         f"  [ {list_rc} -eq 0 ] || exit {list_rc}\n"
         f'  printf "%s\\n" {toc_args}\n'
         "  exit 0\n"
         "fi\n"
+        # A real restore invocation: log the argv AND copy the actual -L file so a
+        # test can assert the filtered TOC handed to pg_restore is vector-free.
         'printf "%s\\n" "$*" >> "$LOG"\n'
+        'prev=""\n'
+        'for a in "$@"; do\n'
+        '  if [ "$prev" = "-L" ]; then cp "$a" "$LFILE" 2>/dev/null || true; fi\n'
+        '  prev=$a\n'
+        "done\n"
+        f"exit {restore_rc}\n"
+    )
+    (bindir / "pg_dump").write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s\\n" "$*" >> "{logdir}/pg_dump.log"\n'
+        'printf "PGDMP-stub\\n"\n'  # bytes on stdout for cmd_backup's `> "$out"`
         "exit 0\n"
     )
     (bindir / "launchctl").write_text(
@@ -814,7 +830,7 @@ def _make_stub_bindir(
         "fi\n"
         "exit 0\n"
     )
-    for name in ("pg_isready", "psql", "pg_restore", "launchctl"):
+    for name in ("pg_isready", "psql", "pg_restore", "pg_dump", "launchctl"):
         (bindir / name).chmod(0o755)
     return bindir
 
@@ -970,3 +986,188 @@ def test_restore_rejects_extra_positional_dump(tmp_path: Path) -> None:
     proc = run_lib(tmp_path, "cmd_restore --fresh /tmp/a.dump /tmp/b.dump")
     assert proc.returncode != 0
     assert "exactly one dump file" in proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# #71 slice 1: plain `restore` (in-place, vector-safe) + vector-free backups
+# --------------------------------------------------------------------------- #
+def test_plain_restore_uses_safe_clean_flags(tmp_path: Path) -> None:
+    # Happy path over stubs: the plain (non-fresh) restore must run the
+    # ownership-correct, atomic in-place command -- a FILTERED TOC (`-L`),
+    # `--clean --if-exists` for replacement, and `--single-transaction
+    # --exit-on-error` for rollback -- and it must NOT drop/recreate the database
+    # (that is `--fresh`'s job). The pgvector extension is (idempotently)
+    # preinstalled by the superuser, never recreated by the voxint role.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, list_rc=0)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    assert "restore complete" in proc.stderr
+    assert "restored in place" in proc.stderr
+    restore_argv = (tmp_path / "stublog" / "pg_restore.log").read_text()
+    assert "-L " in restore_argv
+    assert "--clean" in restore_argv
+    assert "--if-exists" in restore_argv
+    assert "--no-owner" in restore_argv
+    assert "--single-transaction" in restore_argv
+    assert "--exit-on-error" in restore_argv
+    # In-place: the DB was NOT dropped and NOT recreated from template0.
+    assert not (tmp_path / "stublog" / "dropped").exists()
+    psql_calls = (tmp_path / "stublog" / "psql.log").read_text()
+    assert "TEMPLATE template0" not in psql_calls
+    # The extension is preinstalled idempotently (IF NOT EXISTS -- the target
+    # usually already has it), so a bare CREATE never errors on a present ext.
+    assert "CREATE EXTENSION IF NOT EXISTS vector" in psql_calls
+
+
+def test_plain_restore_refuses_when_core_service_running(tmp_path: Path) -> None:
+    # `--clean` against a live app is a data-corruption footgun: the plain path
+    # must carry the SAME services-down gate as `--fresh` and refuse BEFORE any
+    # restore runs.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, running_labels=("com.voxint.native.worker",))
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "refusing destructive restore" in proc.stderr
+    assert "worker" in proc.stderr
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+
+
+def test_plain_restore_refuses_non_voxint_dump(tmp_path: Path) -> None:
+    # A valid pg_restore archive of some OTHER database must not `--clean`-mutate
+    # the live voxint DB: the archive-identity gate (alembic_version in the TOC)
+    # refuses it BEFORE any restore.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, toc=_STUB_TOC_FOREIGN)
+    dump = tmp_path / "foreign.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "not a voxint dump" in proc.stderr
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+
+
+def test_plain_restore_refuses_foreign_alembic_project(tmp_path: Path) -> None:
+    # A dump from a DIFFERENT alembic project (has alembic_version but none of
+    # voxint's tables) must not `--clean`-mutate the voxint DB: the identity gate
+    # also requires a voxint-specific table (pipeline_runs).
+    _prime_install(tmp_path)
+    foreign_alembic = (
+        "2; 3079 16386 EXTENSION - vector ",
+        "218; 1259 16714 TABLE public alembic_version someapp",
+        "300; 1259 20000 TABLE public widgets someapp",
+    )
+    bindir = _make_stub_bindir(tmp_path, toc=foreign_alembic)
+    dump = tmp_path / "otherapp.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "no pipeline_runs table" in proc.stderr
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+
+
+def test_plain_restore_refuses_foreign_postmaster(tmp_path: Path) -> None:
+    # The listener on the port must be proven to be the managed cluster before any
+    # `--clean` mutation: a mismatched SHOW data_directory is refused.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path)
+    (bindir / "psql").write_text(
+        "#!/usr/bin/env bash\n"
+        "sql=\"\"\n"
+        "while [ $# -gt 0 ]; do\n"
+        '  case "$1" in -tAc|-c) shift; sql=$1 ;; esac\n'
+        "  shift\n"
+        "done\n"
+        'case "$sql" in *data_directory*) echo /some/foreign/pgdata; exit 0 ;; esac\n'
+        "exit 0\n"
+    )
+    (bindir / "psql").chmod(0o755)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "not the managed cluster" in proc.stderr
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+
+
+def test_plain_restore_rejects_invalid_archive(tmp_path: Path) -> None:
+    # A non-archive must be rejected BEFORE any restore runs.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, list_rc=1)
+    dump = tmp_path / "bad.dump"
+    dump.write_text("not a real archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "not a valid pg_restore archive" in proc.stderr
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+
+
+def test_backup_excludes_vector_extension(tmp_path: Path) -> None:
+    # New dumps must omit the pgvector EXTENSION (+ its COMMENT) so a later
+    # restore never has to strip them: pg_dump is invoked with
+    # --exclude-extension=vector AND the custom format (-Fc) restore expects.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path)
+    (tmp_path / "backups").mkdir()
+    proc = run_lib(tmp_path, "cmd_backup", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    pg_dump_argv = (tmp_path / "stublog" / "pg_dump.log").read_text()
+    assert "--exclude-extension=vector" in pg_dump_argv
+    assert "-Fc" in pg_dump_argv  # custom format -- plain SQL would break restore
+
+
+def test_plain_restore_L_file_is_vector_free(tmp_path: Path) -> None:
+    # The safety-critical property end-to-end: the actual -L list handed to
+    # pg_restore (not just the presence of `-L`) must carry NO vector EXTENSION/
+    # COMMENT entry, or --clean could recreate the privileged extension as voxint.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, toc=SAMPLE_TOC.splitlines())
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    lfile = (tmp_path / "stublog" / "restore_L.toc").read_text()
+    assert "EXTENSION - vector" not in lfile
+    assert "COMMENT - EXTENSION vector" not in lfile
+    # ...and it is a real, non-empty list with the app entries preserved.
+    assert "alembic_version" in lfile
+    assert "pipeline_runs" in lfile
+
+
+def test_fresh_restore_L_file_is_vector_free(tmp_path: Path) -> None:
+    # Same end-to-end filter proof for the destructive path.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, toc=SAMPLE_TOC.splitlines())
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore --fresh {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    lfile = (tmp_path / "stublog" / "restore_L.toc").read_text()
+    assert "EXTENSION - vector" not in lfile
+    assert "alembic_version" in lfile
+
+
+def test_plain_restore_reports_rollback_on_pg_restore_failure(tmp_path: Path) -> None:
+    # A failed pg_restore must fail-closed with the honest "left unchanged"
+    # rollback message and leave no temp files behind.
+    _prime_install(tmp_path)
+    bindir = _make_stub_bindir(tmp_path, restore_rc=1)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    # Isolate TMPDIR so the leaked-temp assertion sees only this test's temps.
+    tmpdir = tmp_path / "tmp"
+    tmpdir.mkdir()
+    env = {**_stub_env(bindir), "TMPDIR": str(tmpdir)}
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=env)
+    assert proc.returncode != 0
+    assert "left unchanged" in proc.stderr
+    assert "dump file is untouched" in proc.stderr
+    # The plain path never drops the DB, so no drop marker either.
+    assert not (tmp_path / "stublog" / "dropped").exists()
+    # No restore temp files leaked (the EXIT trap + explicit rm cover the failure).
+    leaked = list(tmpdir.glob("voxint-restore-*"))
+    assert leaked == [], f"leaked restore temp files: {leaked}"
