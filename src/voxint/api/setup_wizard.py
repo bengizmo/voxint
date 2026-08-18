@@ -44,6 +44,13 @@ MAX_LLM_URL_CHARS = 2048
 MAX_LLM_MODEL_CHARS = 200
 MAX_LLM_KEY_CHARS = 512
 
+# Immediate child directories listed per level by the folder browser (issue #63).
+# A shape bound like MAX_MEDIA_FOLDERS, not an operational tunable: it caps one
+# directory's rendered children so a pathologically wide folder cannot balloon a
+# single fragment. Deeper folders beyond the cap stay reachable via the browser's
+# server-canonicalized "go to folder" jump, so the cap never makes one unreachable.
+MAX_BROWSE_ENTRIES = 500
+
 # Top-level trees under MEDIA_ROOT that Voxint writes itself — uploaded/acquired
 # sources (incoming) and normalized audio (artifacts). Never scanned, even when the
 # operator registers the media root itself (".") as a folder.
@@ -404,5 +411,141 @@ def scan_media_folders(
         inspected=inspected,
         hit_entry_cap=hit_entry_cap,
         hit_file_cap=hit_file_cap,
+        root_missing=False,
+    )
+
+
+@dataclass(frozen=True)
+class DirEntry:
+    """One browsable child directory in the folder browser (issue #63)."""
+
+    name: str  # leaf display name (the directory's own name)
+    rel: str  # MEDIA_ROOT-relative POSIX path (what an Add would register)
+    registered: bool  # already in media_folders
+
+
+@dataclass(frozen=True)
+class BrowseListing:
+    """A single directory's browsable contents for the folder browser (issue #63).
+
+    Only immediate CHILD directories are listed — the browser registers folders,
+    not files, so files never appear. Every field is derived under a containment
+    check against MEDIA_ROOT; a client path that escapes, is reserved, or is not a
+    directory recovers to the root listing with ``invalid_path=True`` (an honest
+    "that folder isn't available" signal, never a silent snap and never echoing the
+    submitted path). ``root_missing`` is reserved for MEDIA_ROOT itself being absent.
+    """
+
+    current: str  # "." at the root, else the browsed dir's relative POSIX path
+    current_registered: bool  # the browsed dir itself is in media_folders
+    parent: str | None  # parent's relative POSIX path; None at the root
+    breadcrumbs: list[tuple[str, str]]  # (label, rel) from root → current
+    entries: list[DirEntry]  # child dirs, sorted by name, ≤ MAX_BROWSE_ENTRIES
+    truncated: bool  # more children existed than the cap shows
+    invalid_path: bool  # the submitted path was bad → recovered to a valid dir
+    root_missing: bool  # MEDIA_ROOT itself is absent / not a directory
+
+
+def _breadcrumbs(rel: str) -> list[tuple[str, str]]:
+    """(label, rel) crumbs from the media root to ``rel`` (a normalized POSIX path).
+
+    ``"."`` yields a single root crumb; ``"a/b"`` yields root, ``a``, ``a/b``.
+    """
+    crumbs: list[tuple[str, str]] = [("media root", ".")]
+    if rel == ".":
+        return crumbs
+    parts = rel.split("/")
+    for i, part in enumerate(parts):
+        crumbs.append((part, "/".join(parts[: i + 1])))
+    return crumbs
+
+
+def list_media_subdirs(
+    media_root: Path, rel_path: str, registered: set[str]
+) -> BrowseListing:
+    """List the immediate child directories of one folder under ``media_root``.
+
+    Backs the issue #63 folder browser. ``rel_path`` is an operator-navigated,
+    UNTRUSTED MEDIA_ROOT-relative path: it is resolved and containment-checked on
+    every call (``resolve()`` + :meth:`Path.is_relative_to`), and a path that
+    escapes the root, lands on a reserved Voxint tree (``incoming``/``artifacts``),
+    or is not an existing directory recovers to the root listing with
+    ``invalid_path=True`` rather than raising or disclosing anything outside the
+    root. Only immediate child directories are returned (sorted by name, capped at
+    :data:`MAX_BROWSE_ENTRIES`); symlinks — files and dirs — are never followed or
+    listed, matching :func:`scan_media_folders`. A missing media root yields
+    ``root_missing=True``. ``registered`` is the set of already-watched folders
+    (MEDIA_ROOT-relative POSIX) used to mark each entry and the current directory.
+    """
+    root = media_root.resolve()
+    if not root.is_dir():
+        return BrowseListing(
+            current=".",
+            current_registered="." in registered,
+            parent=None,
+            breadcrumbs=_breadcrumbs("."),
+            entries=[],
+            truncated=False,
+            invalid_path=False,
+            root_missing=True,
+        )
+
+    reserved = {(root / name).resolve() for name in _RESERVED_TREES}
+    invalid_path = False
+    target = (root / rel_path).resolve() if rel_path else root
+    # Recover (not raise) to the root on any bad client path — a traversal attempt,
+    # a stale/removed folder, a reserved tree, or a non-directory — so navigation
+    # stays safe and honest without echoing the untrusted submitted value.
+    if (
+        not target.is_relative_to(root)
+        or _under_reserved(target, reserved)
+        or not target.is_dir()
+    ):
+        invalid_path = rel_path not in ("", ".")
+        target = root
+
+    rel = target.relative_to(root).as_posix()  # "." when target IS the root
+    parent = target.parent.relative_to(root).as_posix() if rel != "." else None
+
+    entries: list[DirEntry] = []
+    truncated = False
+    try:
+        scanner = os.scandir(target)
+    except OSError:
+        scanner = None  # unreadable/vanished after the containment check — empty
+    if scanner is not None:
+        with scanner:
+            collected: list[DirEntry] = []
+            for entry in scanner:
+                try:
+                    if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                        continue
+                    child = Path(entry.path).resolve()
+                except OSError:
+                    continue  # a single flaky entry never fails the whole listing
+                if not child.is_relative_to(root) or child in reserved:
+                    continue
+                child_rel = child.relative_to(root).as_posix()
+                collected.append(
+                    DirEntry(
+                        name=entry.name,
+                        rel=child_rel,
+                        registered=child_rel in registered,
+                    )
+                )
+        collected.sort(key=lambda e: e.name)
+        if len(collected) > MAX_BROWSE_ENTRIES:
+            truncated = True
+            collected = collected[:MAX_BROWSE_ENTRIES]
+        entries = collected
+
+    return BrowseListing(
+        current=rel,
+        current_registered=rel in registered,
+        parent=parent,
+        breadcrumbs=_breadcrumbs(rel),
+        entries=entries,
+        truncated=truncated,
+        invalid_path=invalid_path,
         root_missing=False,
     )

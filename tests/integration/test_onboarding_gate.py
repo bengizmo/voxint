@@ -37,7 +37,8 @@ EXEMPT_PATHS = {
     # Still auth-gated by the route's own OperatorDep, not open like /healthz.
     "/static/app/{asset_path:path}",
     "/setup",
-    "/setup/media",
+    "/setup/folders/browse",
+    "/setup/folders",
     "/setup/scan",
     "/setup/scan/confirm",
     "/setup/vocabulary",

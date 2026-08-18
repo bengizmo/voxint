@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Folder browser + per-folder domain-pack picker (#63, settings-overhaul arc
+  #47)**: the setup wizard's media step and a new **Settings → Media folders**
+  section replace the raw newline-path textarea with an **htmx directory browser**
+  confined to `MEDIA_ROOT`. Click into sub-folders, register the ones Voxint should
+  watch, and assign each a **domain pack** via a `<select>` (a "Default" leaves it
+  unmapped) — completing the in-UI half of #11. The server re-validates containment
+  on every request and never trusts a client-supplied path (traversal, symlinks,
+  and the reserved `incoming`/`artifacts` trees are all rejected; a bad path
+  recovers to the media root with an honest notice, never disclosing what was
+  attempted). Every mutation serialises on the singleton `app_settings` row, so
+  overlapping edits cannot lose an update or leave a `folder_domain_packs` mapping
+  whose folder is no longer registered; removing a folder prunes its mapping. A
+  stored pack the registry no longer offers renders as **"(unavailable)"** rather
+  than a false "Default", and a registry that cannot be listed disables pack
+  selection with a plain-language message instead of failing the page. No schema
+  change (reuses the `media_folders` and `folder_domain_packs` columns). The old
+  `POST /setup/media` textarea route was removed.
 - **Settings → Sources & research: in-UI web-research config (#76, settings-overhaul
   arc #47)**: a new **Sources & research** section on the Settings page lets a
   non-technical operator configure web research entirely from the browser — the

@@ -22,7 +22,17 @@ from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -134,10 +144,12 @@ from voxint.api.runs_query import (
     runs_url,
 )
 from voxint.api.setup_wizard import (
+    MAX_MEDIA_FOLDERS,
     STEP_ORDER,
     ScanResult,
     SetupValidationError,
     WizardStep,
+    list_media_subdirs,
     next_step,
     normalize_llm_api_key,
     normalize_llm_base_url,
@@ -156,6 +168,7 @@ from voxint.api.stats_query import (
     parse_since,
     render_prometheus,
 )
+from voxint.app_settings import SINGLETON_ID as APP_SETTINGS_SINGLETON_ID
 from voxint.app_settings import (
     EffectiveFlags,
     clear_tutorial_completion,
@@ -210,6 +223,8 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.domain_packs.base import DomainPackError
+from voxint.domain_packs.registry import available_domain_packs
 from voxint.enrichment.asset_jobs import (
     RunAssetJobError,
     active_or_last_jobs,
@@ -1337,9 +1352,9 @@ def _setup_context(
         "next_step": next_step(step),
         "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
         "media_root": str(settings.media_root),
+        # The finish-step summary counts registered folders; the media step itself
+        # now renders them through the folder panel (issue #63), not a textarea.
         "media_folders": media_folders,
-        # Newline-joined text prefills the folder/vocab textareas on a plain GET.
-        "media_folders_text": "\n".join(media_folders),
         "vocabulary": vocabulary,
         "vocabulary_text": "\n".join(vocabulary),
         # LLM step: the row's enablement over env, its (non-secret) endpoint OVERRIDE
@@ -1363,6 +1378,19 @@ def _setup_context(
         # Bounded, non-secret message when a seed-on-finish fails (issue #75).
         "tutorial_error": None,
     }
+    # The folder browser (issue #63) is built only for the MEDIA step, so the
+    # other five wizard screens never pay for a MEDIA_ROOT walk or a domain-pack
+    # load. The untrusted ?path= is revalidated inside list_media_subdirs.
+    if step is WizardStep.MEDIA:
+        context.update(
+            _folder_panel_context(
+                session,
+                settings,
+                action_prefix="/setup/folders",
+                csrf=context["csrf_setup"],
+                path=request.query_params.get("path") or ".",
+            )
+        )
     context.update(overrides)
     return context
 
@@ -1459,6 +1487,204 @@ def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> st
         f" — {needs} the LLM. You can turn features off in the Features and Sources &"
         " research sections."
     )
+
+
+# ---- Media folders + per-folder domain packs (issue #63) --------------------
+# The folder browser and the Settings "Media folders" section share these
+# helpers. Every mutation serializes on the singleton app_settings row so
+# overlapping htmx requests (double-clicks, multiple tabs) cannot lose an update
+# or leave a folder_domain_packs mapping whose key is not a registered folder —
+# the feature's core invariant: set(folder_domain_packs) ⊆ set(media_folders).
+# ARRAY/JSON columns are not Mutable-tracked, so every write reassigns a fresh
+# object to flag the column dirty.
+
+
+def _locked_app_settings(session: Session, settings: Settings) -> AppSettings:
+    """The singleton app_settings row, created if absent and locked FOR UPDATE.
+
+    ``get_or_create`` handles the first-insert race; the follow-up
+    ``SELECT … FOR UPDATE`` then locks and rereads so two overlapping folder
+    mutations serialize (the second blocks until the first commits, then sees its
+    result). On PostgreSQL this is a real row lock; on SQLite SQLAlchemy renders no
+    locking clause (single-writer anyway), so the tests that assert serialization
+    run against the production database.
+    """
+    get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    return session.execute(
+        select(AppSettings)
+        .where(AppSettings.id == APP_SETTINGS_SINGLETON_ID)
+        .with_for_update()
+    ).scalar_one()
+
+
+def _add_media_folder(session: Session, settings: Settings, raw_path: str) -> str | None:
+    """Register one folder under MEDIA_ROOT. Returns an error message, else ``None``.
+
+    Only the SUBMITTED path is validated (via ``normalize_media_folders`` — resolve
+    + containment + reserved-tree + existing-dir), so a stale/removed *existing*
+    folder can never block a new add. The canonical result is merged into the
+    locked row's ``media_folders`` (dedup, ``MAX_MEDIA_FOLDERS`` cap). Re-adding a
+    folder already registered is an idempotent no-op.
+    """
+    row = _locked_app_settings(session, settings)
+    try:
+        normalized = normalize_media_folders([raw_path], settings.media_root)
+    except SetupValidationError as exc:
+        return str(exc)
+    if not normalized:
+        return "Choose a folder to add."
+    folder = normalized[0]
+    existing = list(row.media_folders or [])
+    if folder in existing:
+        return None  # idempotent
+    if len(existing) + 1 > MAX_MEDIA_FOLDERS:
+        return f"You can register at most {MAX_MEDIA_FOLDERS} folders."
+    row.media_folders = [*existing, folder]
+    return None
+
+
+def _remove_media_folder(session: Session, settings: Settings, folder: str) -> str | None:
+    """Unregister a folder and prune its domain-pack mapping. Idempotent.
+
+    Operates only on stored identities (never touches the filesystem): a ``folder``
+    not currently registered is a no-op. Removal also drops
+    ``folder_domain_packs[folder]`` so no orphan mapping survives.
+    """
+    row = _locked_app_settings(session, settings)
+    existing = list(row.media_folders or [])
+    if folder not in existing:
+        return None  # already gone — idempotent
+    row.media_folders = [f for f in existing if f != folder]
+    mapping = dict(row.folder_domain_packs or {})
+    if mapping.pop(folder, None) is not None:
+        row.folder_domain_packs = mapping
+    return None
+
+
+def _set_folder_pack(
+    session: Session, settings: Settings, folder: str, pack: str
+) -> str | None:
+    """Assign (or clear) a registered folder's domain pack. Last write wins.
+
+    ``pack == ""`` is the sole "Default" sentinel and removes the mapping. A
+    non-empty pack must resolve in ``available_domain_packs`` (an unknown name or a
+    registry-wide ``DomainPackError`` writes nothing and surfaces the message). The
+    folder must already be registered — enforcing the mapping-key ⊆ media_folders
+    invariant on write.
+    """
+    row = _locked_app_settings(session, settings)
+    if folder not in (row.media_folders or []):
+        return "That folder is not registered."
+    mapping = dict(row.folder_domain_packs or {})
+    if pack == "":
+        if mapping.pop(folder, None) is not None:
+            row.folder_domain_packs = mapping
+        return None
+    try:
+        available = available_domain_packs(settings)
+    except DomainPackError:
+        return (
+            "Domain packs can't be listed right now — check your DOMAIN_PACKS_DIR / "
+            "DOMAIN_PACK_PATH configuration."
+        )
+    if pack not in available:
+        return f"Unknown domain pack: {pack}."
+    mapping[folder] = pack
+    row.folder_domain_packs = mapping
+    return None
+
+
+def _apply_folder_mutation(
+    session: Session,
+    settings: Settings,
+    *,
+    action: str,
+    folder: str,
+    pack: str,
+) -> str | None:
+    """Dispatch a folder-panel mutation to the right persist helper.
+
+    ``action`` is the consolidated route's verb (one POST per mount instead of
+    three) — an unknown value is a client error (422), never a silent no-op.
+    """
+    if action == "add":
+        return _add_media_folder(session, settings, folder)
+    if action == "remove":
+        return _remove_media_folder(session, settings, folder)
+    if action == "pack":
+        return _set_folder_pack(session, settings, folder, pack)
+    raise HTTPException(status_code=422, detail=f"unknown folder action {action!r}")
+
+
+def _folder_panel_context(
+    session: Session,
+    settings: Settings,
+    *,
+    action_prefix: str,
+    csrf: str,
+    path: str,
+) -> dict[str, Any]:
+    """Template context for the shared folder-panel fragment (issue #63).
+
+    ``action_prefix`` is ``/setup/folders`` or ``/settings/folders`` and ``csrf``
+    the matching token, so one fragment serves both the wizard (CSRF_SETUP) and the
+    Settings page (CSRF_SETTINGS). ``path`` is the untrusted current browse
+    location, revalidated by ``list_media_subdirs``. ``available_domain_packs`` is
+    loaded once; a registry-wide ``DomainPackError`` disables the pack selects with
+    an honest message rather than crashing the page, and a stored pack no longer
+    available is flagged so the select can show it as "(unavailable)" instead of a
+    false "Default".
+    """
+    row = get_app_settings(session)
+    registered = list(row.media_folders) if row and row.media_folders else []
+    mapping = dict(row.folder_domain_packs) if row and row.folder_domain_packs else {}
+    listing = list_media_subdirs(settings.media_root, path, set(registered))
+    packs_available = True
+    pack_names: list[str] = []
+    try:
+        pack_names = sorted(available_domain_packs(settings))
+    except DomainPackError:
+        packs_available = False
+    # Full-page navigation base for the no-JS fallback (htmx enhances these into
+    # #folder-panel swaps). Exactly two mounts, so deriving the prefix here keeps
+    # the call sites clean.
+    is_setup = action_prefix == "/setup/folders"
+    if is_setup:
+        nav_prefix, nav_suffix, nav_base = "/setup?step=media&path=", "", "/setup"
+    else:
+        nav_prefix, nav_suffix, nav_base = "/settings?path=", "#folders", "/settings"
+    root = settings.media_root
+    folder_rows: list[dict[str, Any]] = []
+    for folder in registered:
+        current_pack = mapping.get(folder, "")
+        folder_rows.append(
+            {
+                "rel": folder,
+                "pack": current_pack,
+                # A stored pack the current registry doesn't offer (absent from a
+                # healthy registry, or a registry that can't be listed at all) is
+                # shown explicitly as its own selected "(unavailable)" option — never
+                # a false "Default".
+                "pack_unavailable": bool(current_pack) and current_pack not in pack_names,
+                # A registered folder that has since vanished on disk is flagged
+                # (still removable) — honest state, not a silent drop.
+                "missing": not (root / folder).is_dir(),
+            }
+        )
+    return {
+        "folders_browse_action": f"{action_prefix}/browse",
+        "folders_mutate_action": action_prefix,
+        "folders_nav_prefix": nav_prefix,
+        "folders_nav_suffix": nav_suffix,
+        "folders_nav_base": nav_base,
+        "folders_wizard": is_setup,
+        "folders_csrf": csrf,
+        "folder_listing": listing,
+        "folder_rows": folder_rows,
+        "folder_pack_names": pack_names,
+        "folder_packs_available": packs_available,
+        "folder_error": None,
+    }
 
 
 def _persist_llm_settings(
@@ -2212,37 +2438,9 @@ def _register_routes(app: FastAPI) -> None:
     def _setup_redirect(step: WizardStep) -> RedirectResponse:
         return RedirectResponse(f"/setup?step={step.value}", status_code=303)
 
-    @app.post("/setup/media", include_in_schema=False)
-    def setup_media(
-        request: Request,
-        operator: OperatorDep,
-        session: SessionDep,
-        media_folders: Annotated[str, Form()] = "",
-        csrf_token: Annotated[str | None, Form()] = None,
-    ) -> Response:
-        _require_csrf(request, CSRF_SETUP, csrf_token)
-        settings: Settings = request.app.state.settings
-        try:
-            folders = normalize_media_folders(media_folders.splitlines(), settings.media_root)
-        except SetupValidationError as exc:
-            # Validation runs BEFORE any get_or_create, so a rejected save writes
-            # nothing; re-render the step with the message and the raw input intact.
-            return templates.TemplateResponse(
-                request,
-                "setup.html",
-                _setup_context(
-                    request,
-                    session,
-                    WizardStep.MEDIA,
-                    error=str(exc),
-                    media_folders_text=media_folders,
-                ),
-            )
-        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
-        row.media_folders = folders
-        # Back to the media step (not the next one) so the optional "scan for
-        # existing media" stays discoverable; the template offers a Continue link.
-        return _setup_redirect(WizardStep.MEDIA)
+    # Folder registration on the media step is the browser panel (issue #63):
+    # POST /setup/folders, not a bulk textarea. The old POST /setup/media route
+    # was removed with the textarea.
 
     def _scan_response(request: Request, session: Session, result: ScanResult) -> Response:
         """htmx → the scan preview/result fragment; a plain POST → back to the step.
@@ -2324,6 +2522,90 @@ def _register_routes(app: FastAPI) -> None:
                 },
             )
         return _setup_redirect(WizardStep.MEDIA)
+
+    # ---- Folder browser + per-folder domain packs (issue #63) --------------
+    # Two routes per mount: a read-only browse GET (no CSRF — authenticated,
+    # bounded, never creates the row) and one mutate POST carrying an action verb.
+    # An HX request gets the panel fragment back; a plain request degrades to a
+    # full-page redirect that preserves the current browse location via ?path=.
+
+    def _folder_panel_response(
+        request: Request,
+        session: Session,
+        settings: Settings,
+        *,
+        action_prefix: str,
+        csrf_action: str,
+        path: str,
+        error: str | None,
+        redirect_url: str,
+    ) -> Response:
+        if not request.headers.get("HX-Request"):
+            return RedirectResponse(redirect_url, status_code=303)
+        csrf = mint_csrf_token(request.app.state.csrf_secret, csrf_action)
+        context = _folder_panel_context(
+            session, settings, action_prefix=action_prefix, csrf=csrf, path=path
+        )
+        context["folder_error"] = error
+        response = templates.TemplateResponse(
+            request, "fragments/folder_panel.html", {"request": request, **context}
+        )
+        # Authenticated fragment: keep it out of any shared/browser cache.
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/setup/folders/browse", include_in_schema=False)
+    def setup_folders_browse(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        path: Annotated[str, Query(max_length=4096)] = ".",
+    ) -> Response:
+        settings: Settings = request.app.state.settings
+        csrf = mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP)
+        context = _folder_panel_context(
+            session, settings, action_prefix="/setup/folders", csrf=csrf, path=path
+        )
+        response = templates.TemplateResponse(
+            request, "fragments/folder_panel.html", {"request": request, **context}
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/setup/folders", include_in_schema=False)
+    def setup_folders(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        action: Annotated[str, Form()] = "",
+        folder: Annotated[str, Form(max_length=4096)] = "",
+        pack: Annotated[str, Form(max_length=200)] = "",
+        path: Annotated[str, Form(max_length=4096)] = ".",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETUP, csrf_token)
+        settings: Settings = request.app.state.settings
+        error = _apply_folder_mutation(
+            session, settings, action=action, folder=folder, pack=pack
+        )
+        if error is None:
+            session.commit()
+        else:
+            # A 200 re-render would otherwise commit the get_or_create insert /
+            # the FOR UPDATE lock's transaction — roll back so a failed mutation
+            # writes nothing (mirrors the wizard's other error re-renders).
+            session.rollback()
+        redirect = "/setup?" + urlencode({"step": "media", "path": path})
+        return _folder_panel_response(
+            request,
+            session,
+            settings,
+            action_prefix="/setup/folders",
+            csrf_action=CSRF_SETUP,
+            path=path,
+            error=error,
+            redirect_url=redirect,
+        )
 
     @app.post("/setup/vocabulary", include_in_schema=False)
     def setup_vocabulary(
@@ -4129,6 +4411,17 @@ def _register_routes(app: FastAPI) -> None:
             "source_authority_domains_default": wr_domains_default,
             "web_research_errors": [],
         }
+        # Media folders + per-folder domain packs (issue #63). Always present on the
+        # Settings page; the untrusted ?path= is revalidated in list_media_subdirs.
+        context.update(
+            _folder_panel_context(
+                session,
+                settings,
+                action_prefix="/settings/folders",
+                csrf=context["csrf_settings"],
+                path=request.query_params.get("path") or ".",
+            )
+        )
         context.update(overrides)
         return context
 
@@ -4260,6 +4553,60 @@ def _register_routes(app: FastAPI) -> None:
             )
         session.commit()
         return RedirectResponse("/settings", status_code=303)
+
+    # ---- Settings → Media folders + domain packs (issue #63) ---------------
+    # The same folder browser as the wizard, mounted on the protected router with
+    # CSRF_SETTINGS. Shares _folder_panel_response / _folder_panel_context.
+
+    @protected.get("/settings/folders/browse")
+    def settings_folders_browse(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        path: Annotated[str, Query(max_length=4096)] = ".",
+    ) -> Response:
+        settings: Settings = request.app.state.settings
+        csrf = mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS)
+        context = _folder_panel_context(
+            session, settings, action_prefix="/settings/folders", csrf=csrf, path=path
+        )
+        response = templates.TemplateResponse(
+            request, "fragments/folder_panel.html", {"request": request, **context}
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @protected.post("/settings/folders")
+    def settings_folders(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        action: Annotated[str, Form()] = "",
+        folder: Annotated[str, Form(max_length=4096)] = "",
+        pack: Annotated[str, Form(max_length=200)] = "",
+        path: Annotated[str, Form(max_length=4096)] = ".",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        error = _apply_folder_mutation(
+            session, settings, action=action, folder=folder, pack=pack
+        )
+        if error is None:
+            session.commit()
+        else:
+            session.rollback()
+        redirect = "/settings?" + urlencode({"path": path}) + "#folders"
+        return _folder_panel_response(
+            request,
+            session,
+            settings,
+            action_prefix="/settings/folders",
+            csrf_action=CSRF_SETTINGS,
+            path=path,
+            error=error,
+            redirect_url=redirect,
+        )
 
     @protected.post("/settings/tutorial/seed")
     def tutorial_seed(

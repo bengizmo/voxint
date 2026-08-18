@@ -376,7 +376,13 @@ URL takes the default pack (`DOMAIN_PACK_PATH`, else the bundled `generic`).
 Several named packs may live under `DOMAIN_PACKS_DIR` (one child folder per
 pack, resolved by manifest `name`); `voxint.domain_packs.registry` is the
 shared resolver, and a `NULL` snapshot (a run predating revision 0017) falls
-back to the current default at execution time.
+back to the current default at execution time. The map is edited in the UI
+(#63) through the folder browser on the setup wizard's media step and under
+**Settings → Media folders**: a per-folder `<select>` (its options come from
+`available_domain_packs`) writes `folder_domain_packs`, and the write path
+holds the invariant that every key is a currently-registered `media_folders`
+entry (removing a folder prunes its mapping; the mutation serialises on the
+singleton row so overlapping edits cannot orphan a mapping).
 
 ## Review console (P5)
 

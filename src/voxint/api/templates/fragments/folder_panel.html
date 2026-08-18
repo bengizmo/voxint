@@ -1,0 +1,148 @@
+{# Shared folder browser + registered-folder manager (issue #63). One panel serves
+   the setup wizard (CSRF_SETUP) and the Settings page (CSRF_SETTINGS); it is swapped
+   into #folder-panel with hx-swap="outerHTML", so the root element below carries the
+   id and a re-render never nests duplicate ids. Every server path re-validates the
+   MEDIA_ROOT containment — the client path is never trusted. Non-JS: the forms/links
+   are ordinary POST/GET to the same routes (mutations redirect to the full page,
+   navigation reloads with ?path=); htmx enhances them into in-place panel swaps. #}
+<div id="folder-panel" class="folder-panel">
+  {% if folder_error %}
+  <p class="notice" role="alert">{{ folder_error }}</p>
+  {% endif %}
+
+  <h3>Watched folders</h3>
+  {% if not folder_rows %}
+    <p class="muted">No folders are registered yet — browse below and add one.</p>
+  {% else %}
+    <ul class="registered-folders">
+      {% for f in folder_rows %}
+      <li>
+        <code>{{ "your media root" if f.rel == "." else f.rel }}</code>
+        {% if f.missing %}<span class="muted">(no longer on disk)</span>{% endif %}
+
+        <form method="post" action="{{ folders_mutate_action }}"
+              hx-post="{{ folders_mutate_action }}" hx-target="#folder-panel"
+              hx-swap="outerHTML" hx-trigger="change, submit" class="pack-picker">
+          <input type="hidden" name="csrf_token" value="{{ folders_csrf }}">
+          <input type="hidden" name="action" value="pack">
+          <input type="hidden" name="folder" value="{{ f.rel }}">
+          <input type="hidden" name="path" value="{{ folder_listing.current }}">
+          <label>Domain pack:
+            <select name="pack"{% if not folder_packs_available %} disabled{% endif %}>
+              <option value=""{% if not f.pack %} selected{% endif %}>Default</option>
+              {% for name in folder_pack_names %}
+              <option value="{{ name }}"{% if f.pack == name %} selected{% endif %}>{{ name }}</option>
+              {% endfor %}
+              {% if f.pack_unavailable %}
+              {# A stored pack the registry no longer offers — shown honestly, not as Default. #}
+              <option value="{{ f.pack }}" selected>{{ f.pack }} (unavailable)</option>
+              {% endif %}
+            </select>
+          </label>
+          <button type="submit">Set</button>
+        </form>
+
+        <form method="post" action="{{ folders_mutate_action }}"
+              hx-post="{{ folders_mutate_action }}" hx-target="#folder-panel"
+              hx-swap="outerHTML" class="remove-folder">
+          <input type="hidden" name="csrf_token" value="{{ folders_csrf }}">
+          <input type="hidden" name="action" value="remove">
+          <input type="hidden" name="folder" value="{{ f.rel }}">
+          <input type="hidden" name="path" value="{{ folder_listing.current }}">
+          <button type="submit">Remove</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% if not folder_packs_available %}
+    <p class="muted">Domain packs can't be listed right now, so pack selection is
+       disabled — check your <code>DOMAIN_PACKS_DIR</code> / <code>DOMAIN_PACK_PATH</code>
+       configuration.</p>
+    {% endif %}
+  {% endif %}
+
+  <h3>Add a folder</h3>
+  {% set L = folder_listing %}
+  {% if L.root_missing %}
+    <p class="notice">Your media root doesn't exist yet — create it, then reload.</p>
+  {% else %}
+    {% if L.invalid_path %}
+    <p class="notice" role="status">That folder isn't available — showing your media root instead.</p>
+    {% endif %}
+
+    <nav class="breadcrumbs" aria-label="Folder path">
+      {% for label, rel in L.breadcrumbs %}
+        {%- if not loop.last %}
+        <a href="{{ folders_nav_prefix }}{{ rel | urlencode }}{{ folders_nav_suffix }}"
+           hx-get="{{ folders_browse_action }}?path={{ rel | urlencode }}"
+           hx-target="#folder-panel" hx-swap="outerHTML">{{ label }}</a> /
+        {%- else %}
+        <span aria-current="page">{{ label }}</span>
+        {%- endif %}
+      {% endfor %}
+    </nav>
+
+    {% if L.current_registered %}
+      <p class="muted">This folder is registered. ✓</p>
+    {% else %}
+      <form method="post" action="{{ folders_mutate_action }}"
+            hx-post="{{ folders_mutate_action }}" hx-target="#folder-panel" hx-swap="outerHTML">
+        <input type="hidden" name="csrf_token" value="{{ folders_csrf }}">
+        <input type="hidden" name="action" value="add">
+        <input type="hidden" name="folder" value="{{ L.current }}">
+        <input type="hidden" name="path" value="{{ L.current }}">
+        <button type="submit">Add this folder</button>
+      </form>
+    {% endif %}
+
+    {% if L.parent is not none %}
+    <p><a href="{{ folders_nav_prefix }}{{ L.parent | urlencode }}{{ folders_nav_suffix }}"
+          hx-get="{{ folders_browse_action }}?path={{ L.parent | urlencode }}"
+          hx-target="#folder-panel" hx-swap="outerHTML">↑ up one level</a></p>
+    {% endif %}
+
+    {% if L.entries %}
+    <ul class="dir-list">
+      {% for e in L.entries %}
+      <li>
+        <a href="{{ folders_nav_prefix }}{{ e.rel | urlencode }}{{ folders_nav_suffix }}"
+           hx-get="{{ folders_browse_action }}?path={{ e.rel | urlencode }}"
+           hx-target="#folder-panel" hx-swap="outerHTML">{{ e.name }}/</a>
+        {% if e.registered %}
+          <span class="muted">registered ✓</span>
+        {% else %}
+          <form method="post" action="{{ folders_mutate_action }}"
+                hx-post="{{ folders_mutate_action }}" hx-target="#folder-panel"
+                hx-swap="outerHTML" class="add-folder">
+            <input type="hidden" name="csrf_token" value="{{ folders_csrf }}">
+            <input type="hidden" name="action" value="add">
+            <input type="hidden" name="folder" value="{{ e.rel }}">
+            <input type="hidden" name="path" value="{{ L.current }}">
+            <button type="submit">Add</button>
+          </form>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">No sub-folders here.</p>
+    {% endif %}
+
+    {% if L.truncated %}
+    <p class="muted">Showing the first {{ L.entries|length }} sub-folders — this
+       directory has more. Use “go to folder” below to jump straight to one.</p>
+    {% endif %}
+
+    {# Server-canonicalized jump — also the recovery path when a directory holds
+       more sub-folders than the browser lists, so no folder is ever unreachable. #}
+    <form method="get" action="{{ folders_nav_base }}"
+          hx-get="{{ folders_browse_action }}" hx-target="#folder-panel"
+          hx-swap="outerHTML" class="folder-jump">
+      {% if folders_wizard %}<input type="hidden" name="step" value="media">{% endif %}
+      <label for="folder-jump-input">Go to folder <span class="muted">(path under your media root)</span></label>
+      <input id="folder-jump-input" type="text" name="path" value=""
+             placeholder="interviews/2026" maxlength="4096">
+      <button type="submit">Go</button>
+    </form>
+  {% endif %}
+</div>

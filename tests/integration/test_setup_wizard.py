@@ -68,6 +68,17 @@ def _form(**fields: str) -> dict[str, str]:
     return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETUP), **fields}
 
 
+def _register_folder(client: TestClient, folder: str) -> None:
+    """Register a media folder through the issue #63 browser route (replaces the
+    old bulk /setup/media textarea)."""
+    resp = client.post(
+        "/setup/folders",
+        data=_form(action="add", folder=folder, path="."),
+        headers=_HTMX,
+    )
+    assert resp.status_code == 200
+
+
 def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
     with session_factory() as session:
         return get_app_settings(session)
@@ -90,10 +101,23 @@ def test_get_setup_unknown_step_falls_back_to_welcome(client: TestClient) -> Non
     assert "Welcome to Voxint" in resp.text
 
 
-def test_get_setup_media_step_renders_form(client: TestClient) -> None:
+def test_get_setup_media_step_renders_folder_panel(client: TestClient) -> None:
     body = client.get("/setup?step=media").text
-    assert 'action="/setup/media"' in body
-    assert 'name="media_folders"' in body
+    # The bulk textarea is gone (issue #63); the folder browser panel renders instead.
+    assert 'name="media_folders"' not in body
+    assert 'id="folder-panel"' in body
+    assert 'action="/setup/folders"' in body
+
+
+def test_setup_folders_browse_is_readonly_and_creates_no_row(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # On the pre-onboarding wizard the app_settings row does not exist yet; a
+    # browse GET must render the panel without creating it (issue #63).
+    resp = client.get("/setup/folders/browse")
+    assert resp.status_code == 200
+    assert 'id="folder-panel"' in resp.text
+    assert _row(session_factory) is None
 
 
 def test_setup_requires_auth(client: TestClient) -> None:
@@ -109,47 +133,61 @@ def test_setup_is_reachable_before_onboarding(client: TestClient) -> None:
 # ------------------------------------------------------------------ media step
 
 
-def test_post_media_persists_folders(
+def test_add_folder_persists(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     (media_root / "podcasts").mkdir()
     resp = client.post(
-        "/setup/media", data=_form(media_folders="podcasts\n"), follow_redirects=False
+        "/setup/folders",
+        data=_form(action="add", folder="podcasts", path="."),
+        follow_redirects=False,
     )
+    # Plain (non-HX) POST degrades to a full-page redirect that keeps the location.
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/setup?step=media"
+    assert resp.headers["location"].startswith("/setup?")
+    assert "step=media" in resp.headers["location"]
     row = _row(session_factory)
     assert row is not None and row.media_folders == ["podcasts"]
 
 
-def test_post_media_without_csrf_is_403(
-    client: TestClient, session_factory: sessionmaker[Session]
+def test_add_folder_without_csrf_is_403(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    resp = client.post("/setup/media", data={"media_folders": "x"}, follow_redirects=False)
+    (media_root / "podcasts").mkdir()
+    resp = client.post(
+        "/setup/folders",
+        data={"action": "add", "folder": "podcasts", "path": "."},
+        follow_redirects=False,
+    )
     assert resp.status_code == 403
     assert _row(session_factory) is None  # nothing written
 
 
-def test_post_media_bad_folder_rerenders_without_writing(
+def test_add_folder_bad_path_rerenders_without_writing(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
-    resp = client.post("/setup/media", data=_form(media_folders="/etc"))
+    resp = client.post(
+        "/setup/folders",
+        data=_form(action="add", folder="/etc", path="."),
+        headers=_HTMX,
+    )
     assert resp.status_code == 200
     assert "media folder" in resp.text  # visible validation error
-    assert _row(session_factory) is None  # validation ran before any get_or_create
+    # The failed add rolled back — the get_or_create insert never committed.
+    assert _row(session_factory) is None
 
 
-def test_post_media_does_not_disable_env_enabled_llm(
+def test_add_folder_does_not_disable_env_enabled_llm(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Deferred finding 1: the FIRST row write (here, saving media folders) must seed
-    # llm_enabled from env, not the model default False — otherwise an env-enabled
-    # LLM would be silently switched off the moment the wizard touches the DB.
+    # The FIRST row write (here, registering a folder) must seed llm_enabled from
+    # env, not the model default False — otherwise an env-enabled LLM would be
+    # silently switched off the moment the wizard touches the DB.
     (media_root / "m").mkdir()
     client = make_client(
         session_factory, media_root, llm_enabled=True, llm_api_key="sk-test"
     )
-    client.post("/setup/media", data=_form(media_folders="m"))
+    _register_folder(client, "m")
     row = _row(session_factory)
     assert row is not None and row.llm_enabled is True
 
@@ -472,7 +510,7 @@ def test_scan_preview_then_confirm_queues_and_publishes(
     client = make_client(session_factory, media_root)
     # Register the folder first (the scan walks only registered folders).
     (media_root / "pods").mkdir(exist_ok=True)
-    client.post("/setup/media", data=_form(media_folders="pods"))
+    _register_folder(client, "pods")
 
     preview = client.post("/setup/scan", data=_form(), headers=_HTMX)
     assert preview.status_code == 200
@@ -501,7 +539,7 @@ def test_scan_confirm_is_idempotent(
     _write_media(media_root, "pods/a.wav")
     client = make_client(session_factory, media_root)
     (media_root / "pods").mkdir(exist_ok=True)
-    client.post("/setup/media", data=_form(media_folders="pods"))
+    _register_folder(client, "pods")
 
     first = client.post("/setup/scan/confirm", data=_form(), headers=_HTMX)
     assert "Queued 1 run" in first.text

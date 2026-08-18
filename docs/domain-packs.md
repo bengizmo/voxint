@@ -84,12 +84,14 @@ The **default pack** (`DOMAIN_PACK_PATH`) and the **named-pack library**
 every run picks it up and the pack now shapes more of the pipeline than before
 (see "What a pack shapes"), and each run **freezes** the pack it used (below).
 
-Per-**folder** assignment (`{media_folder → pack_name}`) and a per-**submission**
-pack override are fully implemented in the backend, but the **operator UI to
-manage them ships with the review-console overhaul** (issue #63, media-folder
-picker + single-screen submit). Until then, treat per-folder / per-submission
-selection as a backend capability, not a console feature — the default pack is
-the operator-facing knob.
+Per-**folder** assignment (`{media_folder → pack_name}`) is editable in the
+console (issue #63): the setup wizard's media step and **Settings → Media
+folders** both host a folder browser where each registered folder gets a domain-
+pack `<select>` (a "Default" leaves it unmapped). The options come from
+`available_domain_packs` — the bundled `generic`, any `DOMAIN_PACK_PATH`, and each
+named pack under `DOMAIN_PACKS_DIR` — so populate those to give the picker
+choices. A per-**submission** pack override remains a backend capability
+(`submit_media_item(..., domain_pack_name=...)`), not yet a console control.
 
 ## The frozen snapshot (why editing a manifest never rewrites history)
 
