@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Keyboard shortcuts + in-app cheat-sheet (#51, console-UX arc #47)**: the
+  review-stepper island extends its verify-and-advance keymap so a solo operator
+  can drive the whole adjudication loop from the keyboard. Beyond the shipped
+  `v`/`n`/`p`/`e` (verify+advance / skip / replay / edit), **`j`/`k`** walk to the
+  next/previous segment (the "go back" the forward-only skip lacked), **`1`–`9`**
+  assign the focused segment to the Nth roster speaker and **`0`** resets it to its
+  detected label, and **`?`** opens a cheat-sheet listing every shortcut. The
+  cheat-sheet is a focus-trapped, theme-aware modal dialog reachable by mouse too
+  (a **"⌨ Shortcuts"** button), and digit-assign has a visible **whole-segment
+  speaker picker** as its clickable twin — so every shortcut stays clickable and
+  none is the sole path to its action. Unmodified keys only (no browser-shortcut
+  collisions), never firing while a text box or menu is focused or while the
+  cheat-sheet is open; **Space** (play/pause) and the **arrow keys** (scroll) stay
+  with the native audio player as before. Digit-assign reuses the existing
+  whole-segment `/relabel` scope (no new backend); a React island change only.
 - **Responsive + accessibility polish (#64, console-UX arc #47)**: the
   server-rendered console gets a baseline of responsive and accessible behaviour
   so it's usable beyond a desktop developer's screen. A **skip-link** to a real

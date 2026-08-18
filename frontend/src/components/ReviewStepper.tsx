@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../lib/api-client";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
+import { KeymapHelp } from "./KeymapHelp";
 import {
   type Segment,
   type SplitWord,
@@ -129,6 +130,9 @@ export function ReviewStepper({
     reason: string | null;
     words: SplitWord[];
   } | null>(null);
+  // The `?` cheat-sheet overlay (issue #51). Opened by the `?` key or the visible
+  // "⌨ Shortcuts" button; closed by Escape, its close button, or a backdrop click.
+  const [helpOpen, setHelpOpen] = useState<boolean>(false);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -513,18 +517,69 @@ export function ReviewStepper({
     [postForm, runId],
   );
 
+  // Assign the WHOLE focused segment to a roster speaker — or reset it to inherit
+  // its label (issue #51): the clickable/keyboard twin of the per-child reassign
+  // above. Posts to /relabel WITHOUT word indices, so the two-scope route
+  // (app.py) rules on the whole segment. Refused on a split parent — its children
+  // carry their own word-scoped rulings and a whole-segment ruling must not
+  // attract new attribution there (the same reason its edit/re-split are gated).
+  // Like reassignChild the response is a whole-run reconcile adopted WITHOUT
+  // moving the cursor or restarting audio — attribution, not navigation — and a
+  // 409 is a segment-STATE conflict (keep the claim), not a claim loss.
+  const reassignSegment = useCallback(
+    async (speakerId: string | null) => {
+      if (busyRef.current) return;
+      if (focusParentId === null || isSplitParent) return;
+      busyRef.current = true;
+      setBusy(true);
+      setError(null);
+      try {
+        const body: Record<string, string> = {
+          nonce: makeNonce(),
+          action: speakerId === null ? "inherit" : "assign",
+        };
+        if (speakerId !== null) body.speaker_id = speakerId;
+        const result = await postForm<{
+          segments: Segment[];
+          progress: { verified: number; total: number };
+        }>(
+          `/review/${runId}/segments/${focusParentId}/relabel`,
+          body,
+          { claimLostOnConflict: false },
+        );
+        if (!result) return;
+        setSegments(result.segments);
+        setProgress(result.progress);
+      } finally {
+        busyRef.current = false;
+        setBusy(false);
+      }
+    },
+    [postForm, runId, focusParentId, isSplitParent],
+  );
+
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the
   // native <audio> and the player's own scroll handling (never rebound here).
+  // Unmodified keys only (Shift is allowed, so `?` and the digits pass): v/n/p/e
+  // drive verify/skip/replay/edit (issue #53); j/k walk to the next/previous
+  // segment; 1–9 assign the focused segment to the Nth roster speaker and 0 resets
+  // it to inherit; `?` opens the cheat-sheet (issue #51). Every one of these has a
+  // clickable equivalent on the page.
   useEffect(() => {
     if (!writable) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.ctrlKey || event.metaKey || event.altKey) return;
+      // While the cheat-sheet dialog is open its close button holds focus — a
+      // <button>, which the typing-guard below does NOT block — so suppress the
+      // global loop here, or `v`/digits would fire behind the modal. The dialog
+      // owns its own Escape/Tab handling.
+      if (helpOpen) return;
       const el = event.target as HTMLElement | null;
       const tag = el?.tagName;
       // Never steal a key from a form control the operator is using — the
-      // textarea, but also the player's playback-speed <select> (a focused
-      // <select> must not let `v` fire a verify write).
+      // textarea, but also the player's playback-speed <select> and the speaker
+      // pickers (a focused <select> must not let `v` fire a verify write).
       if (
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
@@ -549,7 +604,38 @@ export function ReviewStepper({
           event.preventDefault();
           editRef.current?.focus();
           break;
+        case "j":
+          // Next segment (plays on move, like clicking a line). Clamped so the
+          // last segment stays put rather than blanking the cursor.
+          event.preventDefault();
+          goTo(Math.min(cursor + 1, segments.length - 1));
+          break;
+        case "k":
+          // Previous segment — the "go back" the forward-only n/jumpNext lacks.
+          event.preventDefault();
+          goTo(Math.max(cursor - 1, 0));
+          break;
+        case "0":
+          // Reset the focused segment to inherit its label (no-op on a split
+          // parent or a roster-less run; reassignSegment guards both).
+          event.preventDefault();
+          void reassignSegment(null);
+          break;
+        case "?":
+          event.preventDefault();
+          setHelpOpen(true);
+          break;
         default:
+          // Digit-assign (issue #51): 1–9 → the Nth roster speaker. Only fires on
+          // a real roster slot, so a run with fewer speakers never writes a
+          // phantom ruling; reassignSegment additionally refuses a split parent.
+          if (event.key >= "1" && event.key <= "9") {
+            const speaker = speakers[Number(event.key) - 1];
+            if (speaker) {
+              event.preventDefault();
+              void reassignSegment(speaker.id);
+            }
+          }
           break;
       }
     };
@@ -557,7 +643,18 @@ export function ReviewStepper({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [writable, verifyAndAdvance, jumpNext, play, cursor]);
+  }, [
+    writable,
+    helpOpen,
+    verifyAndAdvance,
+    jumpNext,
+    play,
+    goTo,
+    cursor,
+    segments,
+    reassignSegment,
+    speakers,
+  ]);
 
   const done = remaining === 0;
 
@@ -592,6 +689,14 @@ export function ReviewStepper({
             className="text-sm my-1"
           >
             {splitMode ? "Exit split mode" : "⎇ Split at a word"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setHelpOpen(true)}
+            aria-haspopup="dialog"
+            className="text-sm my-1 ml-2"
+          >
+            ⌨ Shortcuts
           </button>
           {current && current.segmentId !== null && (
             <div>
@@ -687,6 +792,39 @@ export function ReviewStepper({
                   Replay <kbd>p</kbd>
                 </button>
               </div>
+              {!isSplitParent && (
+                // The clickable twin of the 1–9 / 0 digit-assign keys (issue #51):
+                // an action <select> that assigns the WHOLE segment to a roster
+                // speaker, or resets it to its detected label. Value is pinned to
+                // "" so it always returns to the placeholder after a pick (it fires
+                // an action, it does not reflect the segment's current speaker).
+                // Hidden on a split parent, whose children carry their own scoped
+                // pickers. The keymap's SELECT guard keeps digits from firing while
+                // this control is focused.
+                <label className="tp-reassign text-sm my-1 block">
+                  Assign speaker:{" "}
+                  <select
+                    className="text-sm"
+                    value=""
+                    disabled={busy}
+                    aria-label="Assign a speaker to this whole segment"
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === "") return;
+                      void reassignSegment(val === "__inherit__" ? null : val);
+                    }}
+                  >
+                    <option value="">Assign speaker…</option>
+                    {speakers.map((sp, i) => (
+                      <option key={sp.id} value={sp.id}>
+                        {i < 9 ? `${i + 1}. ` : ""}
+                        {sp.displayName}
+                      </option>
+                    ))}
+                    <option value="__inherit__">Reset to detected speaker</option>
+                  </select>
+                </label>
+              )}
               {confirmDiscard && (
                 <p role="alert" className="text-sm">
                   You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save
@@ -701,6 +839,11 @@ export function ReviewStepper({
               )}
             </div>
           )}
+          <KeymapHelp
+            open={helpOpen}
+            onClose={() => setHelpOpen(false)}
+            hasRoster={speakers.length > 0}
+          />
         </div>
       )}
       <TranscriptPlayer
