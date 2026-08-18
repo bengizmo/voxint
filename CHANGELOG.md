@@ -6,6 +6,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Optional bundled local LLM — no API key required (#67)**: a new opt-in
+  overlay [`compose.llm.yaml`](compose.llm.yaml) ships a vendored, Apache-2.0
+  **Qwen3-4B-Instruct-2507** (Q5_K_M, ~2.9 GB) served by llama.cpp, so a
+  single-operator install gets working enrichment with **no external API key**.
+  Turn it on in **Settings → Features → "Use the bundled local model"** (or
+  `LLM_BUNDLED_ENABLED=true`). Deliberately **scoped**: the bundle powers **only
+  transcript enhancement and run-asset summaries + entity mentions**. Web
+  research, LLM speaker-name suggestions, and run-asset *topics* are **not** run
+  on it — #66 measured that a small local model isn't reliable at those — and
+  they never silently fall back to it; they still need a bring-your-own endpoint
+  and key. The bundled model's own name suggestions are dropped so enhancement
+  can't attribute speakers through the back door, and its run-asset input is
+  clamped to 16k chars (`LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS`) since a dense
+  4B model is a slow backstop on CPU — a GPU is recommended for anything but
+  short clips (see [`compose.llm.yaml`](compose.llm.yaml) and
+  [`docs/gpu-contracts.md`](docs/gpu-contracts.md) for the pinned serving
+  profile). The weight is sha-pinned + provenance-tracked like the other
+  vendored models (`services/llama-cpp/provenance.json`). The bundled image is
+  built and verified but not yet published — the GitHub asset release + registry
+  image land at the next release cut.
 - **Local-LLM qualification harness + frozen corpus (#66)**: a maintainer tool
   (`tools/qualify_local_llm.py`) and a hand-annotated, clean-room fixture corpus
   (`tests/fixtures/llm_qual/`, 19 fixtures + a frozen six-gate manifest) that

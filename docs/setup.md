@@ -151,6 +151,24 @@ Hugging Face account. Details:
 a docker-free **native** preview for the whole stack:
 [native-macos-preview.md](native-macos-preview.md).
 
+### Optional: bundled local LLM (no API key)
+
+Voxint's transcript enhancement and run-asset summaries can call a language
+model. You can point them at your own OpenAI-compatible endpoint (Settings →
+LLM), **or** run the opt-in bundled model — a vendored, Apache-2.0
+Qwen3-4B-Instruct served locally, so those features work with **no external
+key**. It layers on top of *any* tier above:
+
+```bash
+docker compose -f compose.yaml -f compose.cpu.yaml -f compose.llm.yaml up -d
+```
+
+Then turn on **Settings → Features → "Use the bundled local model"**. It powers
+**only** enhancement and run-asset summaries + entities — web research and LLM
+speaker-name suggestions still need your own endpoint. On CPU it is slow for a
+4B model, so a GPU is recommended (see the note in `compose.llm.yaml`). Details:
+[operations.md](operations.md#bundled-local-llm-issue-67-optional-no-api-key).
+
 ## 4. Build from source (developers)
 
 To run the code you checked out instead of the pinned release images, layer the

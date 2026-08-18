@@ -58,6 +58,12 @@ The optional features are:
   suggestions to be on.
 - **Run assets (summary, topics, entities)** — generates a summary, a topic
   list, and grounded entity mentions for each run. Needs LLM enhancement.
+- **Use the bundled local model** — routes transcript enhancement and run-asset
+  summaries + entities to a local model that ships with Voxint, so they work
+  with **no external API key**. It powers only those — topics, web research, and
+  LLM name suggestions still need your own endpoint. Needs LLM enhancement on and
+  the bundled model service running (the `compose.llm.yaml` overlay; see
+  [setup.md](../setup.md#optional-bundled-local-llm-no-api-key)).
 - **Auto-generate run assets** — starts that run-asset generation automatically
   the moment a run is finalized, instead of you asking for it. Needs Run assets
   to be on.
@@ -108,6 +114,11 @@ and want to fall back to the environment key, tick **Remove saved key**.
 Before enhancement can be enabled you need a key configured (either saved here or
 in the environment), and the LLM time budget has to fit within the transcription
 stage's lease — the page tells you if it does not.
+
+If you would rather not run an external endpoint at all, turn on **Use the
+bundled local model** (above) instead: it needs no endpoint URL and no key. It
+covers enhancement and run-asset summaries + entities only; keep a configured
+endpoint here if you also want the LLM name pass or web research.
 
 ### Sources and research *(optional, off by default)*
 

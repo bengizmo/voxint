@@ -695,6 +695,37 @@ automatic retries: a failed job shows its error on the card, so fix the cause
 protocol) and start a fresh job. If the broker is down at start, the job
 stays queued; cancel it and retry once the broker is back.
 
+### Bundled local LLM (issue #67; optional, no API key)
+
+By default, transcript enhancement and run-asset generation call a
+bring-your-own OpenAI-compatible endpoint (`LLM_BASE_URL` / `LLM_MODEL` /
+`LLM_API_KEY`). The opt-in `compose.llm.yaml` overlay instead ships a vendored,
+Apache-2.0 **Qwen3-4B-Instruct-2507** served locally by llama.cpp, so an
+operator gets working enrichment with **no external key**. Layer it on top of
+your compute tier:
+
+```bash
+docker compose -f compose.yaml -f compose.cpu.yaml -f compose.llm.yaml up -d
+```
+
+Then enable it in **Settings → Features → "Use the bundled local model"** (or
+`LLM_BUNDLED_ENABLED=true`); `LLM_ENABLED` must also be on (it is the master
+enhancement gate). The bundle is **scoped**: it powers **only transcript
+enhancement and run-asset summaries + entity mentions**. Web research, LLM
+speaker-name suggestions, and run-asset **topics** stay on the BYO endpoint and
+never fall back to the bundle — #66 measured that a small local model isn't
+reliable at those. When the bundle is active for a run-asset job, topics is
+silently skipped rather than generated badly. The overlay publishes **no host
+port**: only the worker reaches `voxint-llm` by service DNS.
+
+⚠ CPU is a slow backstop for a dense 4B model — enhancement (~20 s) and
+small/medium run-assets are fine, but large transcripts are not, so the bundled
+run-asset input is clamped to `LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS`
+(16k, vs the BYO `RUN_ASSETS_MAX_INPUT_CHARS=48000`). A GPU is strongly
+recommended: uncomment the `-ngl 99` + device-reservation block in
+`compose.llm.yaml`. The pinned serving profile and provenance are in
+[gpu-contracts.md](gpu-contracts.md).
+
 ### Run-level assets (issue #41; off by default)
 
 The run detail page can carry three machine-generated assets: a **summary**,

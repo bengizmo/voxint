@@ -47,6 +47,25 @@ ARG defaults to the provenance file). A weights refresh publishes a **new**
 asset release (`pyannote-models-v2`, …), updates the provenance file and both
 Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
 
+### The bundled-LLM model asset (issue #67 — NOT YET PUBLISHED)
+
+The optional bundled-LLM image (`ghcr.io/bengizmo/voxint-llm`, `compose.llm.yaml`,
+`services/llama-cpp/`) is built and locally verified but **its weight asset and
+CI publish are deliberately deferred** — the app-side routing, image, and
+contract tests landed unreleased ahead of the supply-chain step. To publish it
+at a release cut, mirror the titanet/pyannote pattern:
+
+1. `gh release create qwen3-4b-instruct-2507-q5-v1` with the vendored GGUF
+   (~2.89 GB, `sha256` in `services/llama-cpp/provenance.json`).
+2. Add a `QWEN3_4B_RELEASE: qwen3-4b-instruct-2507-q5-v1` env + a `gh release
+   download` + sha-verify step and a `voxint-llm` build target to
+   `release.yml` (the titanet download/verify step is the template).
+3. Publish and anonymous-pull-verify `ghcr.io/bengizmo/voxint-llm:X.Y.Z`.
+
+Until that cut, `compose.llm.yaml` requires a locally built `voxint-llm` image
+(build it from `services/llama-cpp/Dockerfile` with the GGUF staged under
+`services/llama-cpp/models/`).
+
 ### Release gates wired into the workflow
 
 - **`frontend`** (CI, issue #48) runs `npm ci` → lint → typecheck → `npm run
@@ -208,10 +227,12 @@ model assets) voids it for the gate it feeds.
 
 1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
-   **all five image-bearing compose files** — `compose.yaml` + `compose.gpu.yaml`
+   **all six image-bearing compose files** — `compose.yaml` + `compose.gpu.yaml`
    + `compose.cpu.yaml` + `compose.rocm.yaml` + `compose.ytdlp-egress.yaml` (the
-   #16 egress overlay carries the base `voxint` tag too) — plus the `.env.example`
-   comment, so the default stack always runs the release this checkout documents.
+   #16 egress overlay carries the base `voxint` tag too) + `compose.llm.yaml`
+   (the #67 bundled-LLM overlay carries the `voxint-llm` tag) — plus the
+   `.env.example` comment, so the default stack always runs the release this
+   checkout documents.
    Grep the old version rather than trusting a hand-list
    (`grep -rn "VOXINT_IMAGE_TAG:-<old>" compose*.yaml`); the pin-parity contract
    test globs `compose*.yaml`, so a missed flavor fails `pytest`. Run the gates

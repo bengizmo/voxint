@@ -774,6 +774,41 @@ With mlx and whisper.cpp both measured-ineligible and CT2-MPS deferred
 upstream, no Metal `WHISPER_ENGINE` candidate is currently eligible; `ct2`
 remains the default and only shipped engine.
 
+## Bundled local LLM: llama.cpp server (optional; issue #67)
+
+Unlike the three model services above, this is **not** part of the transcription
+pipeline and has **no numerics parity gate** — it is an optional, opt-in
+enrichment endpoint an operator can turn on to get transcript enhancement and
+run-asset summaries/entities with no external API key (`compose.llm.yaml`; see
+`docs/operations.md`). It is documented here because it, too, is a vendored,
+sha-pinned, digest-pinned model whose serving profile is fixed by measurement.
+
+- **Image**: `services/llama-cpp/Dockerfile`, `FROM
+  ghcr.io/ggml-org/llama.cpp:server@sha256:092d1291…e12625` (digest-pinned),
+  baking the vendored GGUF with a build-time `sha256sum -c -` gate against
+  `services/llama-cpp/provenance.json` (contract-tested, mirroring titanet).
+- **Weight**: Qwen3-4B-Instruct-2507, Q5_K_M GGUF (~2.89 GB, Apache-2.0),
+  `sha256 5bde5e9d…658b4ecb`, from `unsloth/Qwen3-4B-Instruct-2507-GGUF`.
+- **Endpoint**: OpenAI-compatible `POST /v1/chat/completions` + `GET /health`
+  on port 8080 (worker-reachable by service DNS; **no host port published**).
+  Model alias `qwen3-4b-instruct-2507`.
+- **Pinned serving profile** (baked as the image's default command):
+  `-c 32768 -np 1 -fa on -ctk q8_0 -ctv q8_0 --jinja --reasoning off`.
+  `--reasoning off` is load-bearing: the client ignores `reasoning_content`, so
+  reasoning must not leak into `message.content`.
+- **Sampling** is pinned to **greedy** (`temperature 0`) **client-side**
+  (`SamplingProfile`, `src/voxint/clients/llm.py`), not as a server flag — so the
+  BYO path's bytes are unchanged and the bundled path is deterministic.
+- **Scope** (enforced by the Phase B routing, not by prose): enhancement +
+  run-asset summary/entity_mentions only. Web research, LLM name attribution,
+  and run-asset topics stay on the BYO endpoint and never fall back here.
+- **Device**: CPU by default (a slow backstop for a dense 4B model — the bundled
+  run-asset input is clamped to 16k chars for this reason); GPU strongly
+  recommended (uncomment the `-ngl 99` + device-reservation block in
+  `compose.llm.yaml`). Qualified against the #66 frozen corpus under the shipped
+  enhancement prompt; see
+  `docs/reports/local-llm-qualification-granite-2026-08-18.md`.
+
 ## Contract tests
 
 `tests/contracts/` validates (CPU-only, no model deps) that:
