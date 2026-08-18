@@ -1,0 +1,24 @@
+{
+  "description": "negative_collision_substring",
+  "rules": [
+    {
+      "id": "cat",
+      "match": "cat",
+      "replace": "DOG",
+      "whole_word": true
+    }
+  ],
+  "input": "the catalog category is a cat problem",
+  "expected_text": "the catalog category is a DOG problem",
+  "expected_trace": [
+    {
+      "id": "cat",
+      "from": "cat",
+      "to": "DOG",
+      "span": [
+        26,
+        29
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "description": "nfd_grapheme_preserved",
+  "rules": [
+    {
+      "id": "e",
+      "match": "e",
+      "replace": "3",
+      "whole_word": true
+    }
+  ],
+  "input": "Zoë and e stand apart",
+  "expected_text": "Zoë and 3 stand apart",
+  "expected_trace": [
+    {
+      "id": "e",
+      "from": "e",
+      "to": "3",
+      "span": [
+        8,
+        9
+      ]
+    }
+  ]
+}

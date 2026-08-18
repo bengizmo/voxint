@@ -1,0 +1,10 @@
+{
+  "description": "A transformation whose projected length exceeds max_output_chars is rejected whole and atomically: the input is returned unchanged with an empty trace and growth_rejected=True. Two winners, each small, together blow the budget.",
+  "rules": [
+    {"id": "one", "match": "one", "replace": "FIRST", "whole_word": true},
+    {"id": "two", "match": "two", "replace": "SECOND", "whole_word": true}
+  ],
+  "input": "one and two",
+  "max_output_chars": 12,
+  "expect_growth_rejected": true
+}

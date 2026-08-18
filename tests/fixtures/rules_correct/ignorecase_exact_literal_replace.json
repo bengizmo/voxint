@@ -1,0 +1,34 @@
+{
+  "description": "ignorecase_exact_literal_replace",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoombord",
+      "replace": "Zoning Board",
+      "case_sensitive": false,
+      "whole_word": true
+    }
+  ],
+  "input": "The ZOOMBORD and the zoombord agree",
+  "expected_text": "The Zoning Board and the Zoning Board agree",
+  "expected_trace": [
+    {
+      "id": "zb",
+      "from": "ZOOMBORD",
+      "to": "Zoning Board",
+      "span": [
+        4,
+        16
+      ]
+    },
+    {
+      "id": "zb",
+      "from": "zoombord",
+      "to": "Zoning Board",
+      "span": [
+        25,
+        37
+      ]
+    }
+  ]
+}
