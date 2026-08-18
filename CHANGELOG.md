@@ -297,6 +297,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   untouched.
 
 ### Changed
+- **The LLM settings form refuses a disable that would strand a dependent feature
+  (#77, settings-overhaul arc #47)**: turning LLM enhancement off from the LLM
+  section (setup wizard or Settings) while a feature that needs it is still on —
+  run assets, the LLM name pass, or web-research enrichment — is now rejected with
+  a plain-language message naming the blocker(s), and **nothing is written**, so
+  LLM stays on. Previously the disable saved a combination the boot validator
+  (`config.py`) would reject on restart (runtime stayed safe because the gates
+  already fail closed). The form never auto-disables the dependent (that would
+  silently flip an unrelated setting — #62); the operator turns the dependent off
+  in the Features or Sources & research section first. The decision reuses the
+  single shared `validate_effective_flags` and acts only on the invariants that
+  *disabling LLM* newly introduces, so an unrelated pre-existing issue never blocks
+  an LLM save. (One narrow edge remains by design: the fail-closed *enable* path —
+  requested-on but no usable key/budget — still forces LLM off and can leave a
+  dependent stranded; it returns the primary key error and is out of #77 scope.)
 - **Gated-feature panels remediate in plain language, not env vars (#62)**: the
   "run assets are off" and "web research is off" blocks on the run and speaker
   pages no longer instruct a non-technical operator to set raw environment

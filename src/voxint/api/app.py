@@ -188,6 +188,7 @@ from voxint.app_settings import (
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
     MAX_CORRECTED_TEXT_CHARS,
+    AppSettings,
     AssignmentMethod,
     ClaimField,
     Decision,
@@ -1366,6 +1367,100 @@ def _setup_context(
     return context
 
 
+# Issue #77: when the LLM settings form turns LLM enhancement OFF, any feature that
+# ``validate_effective_flags`` requires ``llm_enabled=true`` for would be stranded on
+# — a combination the boot validator (config.py) rejects on restart. The LLM form
+# refuses such a disable (writes nothing) rather than auto-disabling the dependent
+# (#62's "never flip an unrelated setting"). The rejection copy is directed at THIS
+# page and names the blocker, unlike ``_FEATURE_INVARIANT_COPY`` whose "turn it on in
+# the LLM section below, or turn <feature> off" wording is written for the Features
+# form and points the wrong way here. Keyed on the exact validator messages for the
+# three llm-dependency invariants → the blocking feature's operator label; a drift
+# test locks the keys against ``validate_effective_flags``.
+_LLM_DEPENDENCY_LABELS: dict[str, str] = {
+    "enrichment_names_llm_enabled requires llm_enabled=true — the "
+    "LLM name pass reuses the configured enhancement endpoint": "the LLM name pass",
+    "enrichment_run_assets_enabled requires llm_enabled=true — the"
+    " asset generators reuse the configured enhancement endpoint": "run assets",
+    "enrichment_web_research_enabled requires llm_enabled=true — the"
+    " producer reuses the configured enhancement endpoint": "web-research enrichment",
+}
+
+
+def _join_operator_labels(labels: list[str]) -> str:
+    """Grammatical, order-preserving join of one to three labels for operator copy."""
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
+def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> str | None:
+    """Refuse to turn LLM enhancement OFF while a feature that needs it is on (#77).
+
+    ``validate_effective_flags`` stays the single source of the invariant decision:
+    the current effective flag combination is validated at its present LLM state and
+    again with ``llm_enabled`` forced ``False``, and we act ONLY on the *delta* — the
+    violations disabling LLM would newly introduce. So an unrelated pre-existing
+    violation (e.g. a malformed web-search endpoint the fail-closed enable path left
+    behind, or a dependent already stranded) never blocks an LLM save and never
+    mislabels the cause; only the LLM-dependency invariants can flip here because the
+    other flags are held at their current effective values. Returns an LLM-page plain
+    message naming the blocker(s), or ``None`` when disabling is safe.
+    """
+    others: dict[str, object] = {
+        "enrichment_names_enabled": resolve_effective_enrichment_names_enabled(row, settings),
+        "enrichment_names_llm_enabled": resolve_effective_enrichment_names_llm_enabled(
+            row, settings
+        ),
+        "enrichment_run_assets_enabled": resolve_effective_enrichment_run_assets_enabled(
+            row, settings
+        ),
+        "enrichment_run_assets_autogenerate": resolve_effective_enrichment_run_assets_autogenerate(
+            row, settings
+        ),
+        "voxint_web_research": resolve_effective_voxint_web_research(row, settings),
+        "enrichment_web_research_enabled": resolve_effective_enrichment_web_research_enabled(
+            row, settings
+        ),
+        "web_search_base_url": resolve_effective_web_search_base_url(row, settings),
+    }
+    before = set(
+        validate_effective_flags(
+            EffectiveFlags(llm_enabled=resolve_effective_llm_enabled(row, settings), **others)  # type: ignore[arg-type]
+        )
+    )
+    new_violations = [
+        message
+        for message in validate_effective_flags(
+            EffectiveFlags(llm_enabled=False, **others)  # type: ignore[arg-type]
+        )
+        if message not in before
+    ]
+    if not new_violations:
+        return None
+    labels = [
+        _LLM_DEPENDENCY_LABELS[message]
+        for message in new_violations
+        if message in _LLM_DEPENDENCY_LABELS
+    ]
+    if not labels:
+        # Defensive: a newly-introduced violation with no label (unreachable — only
+        # the three llm-dependency invariants change when llm_enabled flips). Still
+        # refuse, without naming a feature we can't identify.
+        return (
+            "Another feature still needs LLM enhancement. Turn it off in the Features"
+            " or Sources & research section before turning LLM enhancement off."
+        )
+    needs = "it needs" if len(labels) == 1 else "they need"
+    return (
+        f"Turn off {_join_operator_labels(labels)} before turning LLM enhancement off"
+        f" — {needs} the LLM. You can turn features off in the Features and Sources &"
+        " research sections."
+    )
+
+
 def _persist_llm_settings(
     session: Session,
     settings: Settings,
@@ -1387,6 +1482,10 @@ def _persist_llm_settings(
       remove+replacement combination) raise :class:`SetupValidationError` *before*
       ``get_or_create`` — nothing is created or mutated, a prior valid config stays
       intact. The caller re-renders with the fixed message.
+    * **Stranded-dependent disable** (issue #77 — turning LLM off while a feature that
+      needs it is effectively on) returns a plain message and writes NOTHING (no
+      ``get_or_create``), so LLM stays on rather than the form auto-disabling an
+      unrelated feature (#62). See :func:`_llm_disable_strand_error`.
     * **Validation failure** (enable requested but no effective key / budget doesn't
       fit) still persists the valid non-secret overrides and the valid candidate key
       (a good key the operator typed is not thrown away) but forces
@@ -1418,6 +1517,15 @@ def _persist_llm_settings(
         raise SetupValidationError(
             "Choose either a new LLM API key or “remove saved key”, not both."
         )
+    # Issue #77: refuse a deliberate disable that would strand a feature depending on
+    # LLM, BEFORE any mutation — write nothing (no get_or_create), keep LLM on rather
+    # than auto-disabling the dependent (#62). The fail-closed *enable* path below is
+    # deliberately not guarded here: it already returns the primary key/budget error,
+    # and re-signalling a stranded dependent there would be confusing double-signal.
+    if not enabled:
+        strand_error = _llm_disable_strand_error(get_app_settings(session), settings)
+        if strand_error is not None:
+            return strand_error
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     if remove_key:
         candidate_key: str | None = None
