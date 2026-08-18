@@ -23,6 +23,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   violation re-renders with a plain-language message and the operator's non-secret
   choices preserved, **writing nothing**. This delivers the standing
   `source_authority_domains` "move to the settings UI" promise.
+- **Start the guided tutorial from the UI (#75, settings-overhaul arc #47)**: the
+  bundled three-speaker walkthrough no longer needs the `voxint tutorial seed` CLI
+  step — a non-technical operator can stage and start it entirely from the browser.
+  The setup wizard's Finish step now offers **"Finish setup & start tutorial →"**
+  (alongside a plain **"Finish setup →"**), and the Settings page offers **"Set up
+  & start the guided tutorial →"** when it has not been staged yet; both seed the
+  sample idempotently and drop the operator straight into the run. The `start_tutorial`
+  intent — not mere availability — drives the launch, so a plain finish never starts
+  a tutorial and the button label never lies. A concurrency-safe advisory lock inside
+  the shared seeder serialises seeds (CLI and web) so no duplicate tutorial run can
+  be built, and a failed seed (media folder not writable, or missing/unreadable
+  bundled data) rolls back and re-renders **bounded, non-secret** guidance without
+  completing onboarding — never a stack trace or a path. The CLI seed still exists
+  for scripted/maintainer setups.
 - **Settings → Features: in-UI runtime toggles (#62, settings-overhaul arc #47)**:
   a new **Features** section on the Settings page exposes the live-read capability
   flags as real **tri-state** controls — **On / Off / use installation setting** —

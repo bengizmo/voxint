@@ -320,6 +320,7 @@ from voxint.speakers.roster import (
     voiceprint_bars,
 )
 from voxint.speakers.roster import is_active as roster_is_active
+from voxint.tutorial.seed import seed_tutorial_run
 from voxint.tutorial.steps import (
     STEP_COPY,
     STEP_PAGE,
@@ -331,6 +332,56 @@ from voxint.tutorial.steps import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Bounded, non-secret operator guidance for a failed UI-triggered tutorial seed
+# (issue #75). At most two messages: a storage failure vs. broken/missing bundled
+# data. The real exception is logged server-side; the operator never sees a path
+# or traceback.
+_TUTORIAL_SEED_STORAGE_ERROR = (
+    "Could not set up the tutorial: the media folder is not writable. "
+    "Check that the app can write to its media directory, then try again."
+)
+_TUTORIAL_SEED_ASSET_ERROR = (
+    "Could not set up the tutorial: its bundled sample data is missing or "
+    "unreadable. This is likely a broken installation — reinstall or reach out "
+    "for help."
+)
+
+
+def _try_seed_tutorial(
+    session: Session, settings: Settings
+) -> tuple[uuid.UUID | None, str | None]:
+    """Seed the tutorial, mapping known environment/asset failures to bounded copy.
+
+    Returns ``(run_id, None)`` on success or ``(None, message)`` on a classified
+    failure. Only filesystem-storage and bundled-resource failures are caught —
+    programmer/DB/builder defects (SQLAlchemy errors, ``TutorialSeedError`` from a
+    fixture-invariant bug) propagate so they are never masked as tutorial copy
+    (issue #75): a builder bug is not fixed by "reinstalling", so it must surface
+    loudly, not be dressed up as missing data. The real exception is logged
+    server-side; the message is path-free and traceback-free. The CALLER must
+    ``session.rollback()`` before re-rendering — the request session commits on any
+    successful response.
+
+    Classification is by exception *type*, not origin — a v1 approximation. In the
+    rare cross case (e.g. a ``PermissionError`` reading bundled resources) the
+    operator gets the storage message; acceptable for a single-operator install and
+    the true exception is always in the server log.
+    """
+    try:
+        run_id = seed_tutorial_run(
+            session, media_root=settings.media_root, settings=settings
+        )
+    # FileNotFoundError MUST precede the OSError clause below — it is an OSError
+    # subclass, and a missing bundled asset is a data problem, not a storage one.
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+        logger.exception("Tutorial seed failed: bundled sample data missing/unreadable")
+        return None, _TUTORIAL_SEED_ASSET_ERROR
+    except OSError:
+        logger.exception("Tutorial seed failed: media folder not writable")
+        return None, _TUTORIAL_SEED_STORAGE_ERROR
+    return run_id, None
+
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -1302,11 +1353,14 @@ def _setup_context(
         "llm_key_present": bool(resolve_effective_llm_api_key(row, settings)),
         "llm_key_source": effective_llm_key_source(row, settings),
         "llm_budget_ok": llm_budget_fits_stage_lease(settings),
-        # The finish step launches the tutorial iff it has been seeded; otherwise
-        # it prints the `voxint tutorial seed` note and does a plain /review finish.
+        # The finish step offers "Finish setup & start tutorial" (seeds if needed,
+        # issue #75) alongside a plain "Finish setup"; this flag only selects the
+        # already-seeded vs. seed-on-finish copy, never the redirect.
         "tutorial_available": ready_tutorial_run_id(session) is not None,
         "active_nav": "setup",
         "error": None,
+        # Bounded, non-secret message when a seed-on-finish fails (issue #75).
+        "tutorial_error": None,
     }
     context.update(overrides)
     return context
@@ -2253,19 +2307,44 @@ def _register_routes(app: FastAPI) -> None:
         operator: OperatorDep,
         session: SessionDep,
         csrf_token: Annotated[str | None, Form()] = None,
-    ) -> RedirectResponse:
+        start_tutorial: Annotated[str | None, Form()] = None,
+    ) -> Response:
         _require_csrf(request, CSRF_SETUP, csrf_token)
         settings: Settings = request.app.state.settings
+        # ``start_tutorial`` is the operator's explicit intent (the primary Finish
+        # button), NOT the seed mechanism: it both seeds-if-needed and drives the
+        # redirect, so a plain "Finish setup" never launches a tutorial and its
+        # label never lies (issue #75). Seed BEFORE completing onboarding so a
+        # storage/asset failure aborts the whole request with nothing committed.
+        # Exact "1" (the button's value) — a crafted start_tutorial=0/false is not
+        # an intent to start.
+        wants_tutorial = start_tutorial == "1"
+        seeded_run_id: uuid.UUID | None = None
+        if wants_tutorial:
+            seeded_run_id, error = _try_seed_tutorial(session, settings)
+            if error is not None:
+                session.rollback()
+                return templates.TemplateResponse(
+                    request,
+                    "setup.html",
+                    _setup_context(
+                        request, session, WizardStep.FINISH, tutorial_error=error
+                    ),
+                )
         complete_onboarding(session, llm_enabled_default=settings.llm_enabled)
         # Commit explicitly before the redirect so the request that follows cannot
         # observe stale onboarding state (the gate re-reads per request).
         session.commit()
-        # Launch the guided tutorial only AFTER onboarding commits: a pre-onboarding
-        # link to /runs/{id}?tutorial=run would hit the protected gate and bounce
-        # back to /setup. Fall back to the queue when the tutorial is unseeded.
-        tutorial_run = ready_tutorial_run_id(session)
-        if tutorial_run is not None:
-            return RedirectResponse(f"/runs/{tutorial_run}?tutorial=run", status_code=303)
+        # Launch the guided tutorial only when the operator asked for it and only
+        # AFTER onboarding commits: a pre-onboarding link to /runs/{id}?tutorial=run
+        # would hit the protected gate and bounce back to /setup. Redirect off the
+        # seeder's own returned id (idempotent — the existing run when already
+        # seeded) rather than a re-read, so a successful seed can never silently
+        # fall through to /review.
+        if wants_tutorial and seeded_run_id is not None:
+            return RedirectResponse(
+                f"/runs/{seeded_run_id}?tutorial=run", status_code=303
+            )
         return RedirectResponse("/review", status_code=303)
 
     @protected.get("/", include_in_schema=False)
@@ -3901,6 +3980,9 @@ def _register_routes(app: FastAPI) -> None:
             "csrf_settings": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETTINGS),
             "active_nav": "settings",
             "llm_error": None,
+            # Bounded, non-secret message when a UI-triggered tutorial seed fails
+            # (issue #75); None on a normal render. Overridable via ``overrides``.
+            "tutorial_error": None,
             "feature_flags": feature_flags,
             "features_errors": [],
             # Sources & research (issue #76): the two web-research toggles (raw
@@ -4066,6 +4148,30 @@ def _register_routes(app: FastAPI) -> None:
             )
         session.commit()
         return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/tutorial/seed")
+    def tutorial_seed(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        # Idempotent seed from the UI so a non-technical operator never needs the
+        # CLI (issue #75). On a classified storage/asset failure, roll back the
+        # flushed partial rows (the request session commits on any 200) and
+        # re-render the page with bounded, non-secret guidance — writing nothing.
+        settings: Settings = request.app.state.settings
+        run_id, error = _try_seed_tutorial(session, settings)
+        if error is not None:
+            session.rollback()
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, tutorial_error=error),
+            )
+        session.commit()
+        return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
 
     @protected.post("/settings/tutorial/complete")
     def tutorial_complete(

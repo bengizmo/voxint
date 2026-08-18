@@ -80,7 +80,7 @@ The wizard is six steps, each optional and revisitable:
 | Vocabulary | `/setup/vocabulary` | Names, jargon, acronyms, preferred spellings, one per line. Fed to both the Whisper `initial_prompt` and the LLM name-attribution context, so unusual terms transcribe and attribute correctly. |
 | LLM enhancement | `/setup/llm` | Toggle optional transcript enhancement and set an OpenAI-compatible endpoint/model **and API key**. Best-effort by design: a slow or failing model never blocks a run, and enhancement is skipped. |
 | Model services | `/setup/services` | Live reachability check of the ASR / diarizer / embedder model services (GPU or CPU tier). Advisory only; you can finish regardless. A run submitted while a needed service is down retries with backoff and eventually **fails**; requeue it from the run's page once services are up. |
-| Finish | `/setup/finish` | Commits onboarding, releases the gate, and (if the tutorial is seeded) launches the guided tutorial. |
+| Finish | `/setup/finish` | Commits onboarding and releases the gate. Two buttons: **"Finish setup & start tutorial →"** sets up (if needed) and launches the guided tutorial; **"Finish setup →"** goes straight to the console. The launch follows which button you press, not whether a tutorial already exists. |
 
 Two behaviors worth knowing:
 
@@ -103,14 +103,19 @@ Two behaviors worth knowing:
 
 Voxint bundles a synthetic **three-speaker sample** and can stage it as a
 ready-to-adjudicate run, so you learn the review loop before using your own
-audio. Seed it once (idempotent; an existing tutorial run is returned untouched):
+audio. **No command line needed:** on the wizard's Finish step choose **"Finish
+setup & start tutorial →"**, or from the Settings page click **"Set up & start
+the guided tutorial →"**. Either one stages the sample (idempotent — an existing
+tutorial run is reused) and drops you straight into it.
+
+The equivalent CLI seed still exists for scripted/maintainer setups:
 
 ```bash
 docker compose exec api voxint tutorial seed
 ```
 
-Finishing the wizard launches the tutorial automatically when it has been seeded;
-otherwise the Finish step prints the command above.
+A plain **"Finish setup →"** completes onboarding without starting the tutorial;
+you can always start it later from Settings.
 
 The tutorial is a set of **server-rendered banners** injected above existing
 console pages via a `?tutorial=<step>` query parameter, not client-side
@@ -144,11 +149,13 @@ nav) is the durable entry point for both flows:
   step, available any time after onboarding. A saved key wins over env
   `LLM_API_KEY`; leave the key field blank to keep the saved one, or tick **"Remove
   saved key"** to revert to the environment. The form carries its own CSRF token.
-- **Start, replay, or complete the tutorial.** Replay
-  (`POST /settings/tutorial/replay`) is **non-destructive**: it walks the sample
-  again but preserves your previous rulings on the tutorial run. Completion
-  (`POST /settings/tutorial/complete`) records `tutorial_completed_at`. Both
-  mutations carry their own CSRF token.
+- **Set up, start, replay, or complete the tutorial.** When it has not been
+  staged yet, **"Set up & start the guided tutorial →"**
+  (`POST /settings/tutorial/seed`) stages the bundled sample and enters it — no
+  CLI needed. Replay (`POST /settings/tutorial/replay`) is **non-destructive**: it
+  walks the sample again but preserves your previous rulings on the tutorial run.
+  Completion (`POST /settings/tutorial/complete`) records `tutorial_completed_at`.
+  All three mutations carry their own CSRF token.
 
 ## Troubleshooting
 
