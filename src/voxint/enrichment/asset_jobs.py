@@ -26,12 +26,13 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.app_settings import (
     get_app_settings,
+    llm_bundled_active,
     resolve_effective_enrichment_run_assets_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
-from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError
+from voxint.clients.llm import ChatMessage, HttpLLMClient, LLMError, SamplingProfile
 from voxint.config import DEFAULT_LLM_TIMEOUT_SECONDS, Settings
 from voxint.db.models import (
     AppSettings,
@@ -133,7 +134,8 @@ def create_jobs(
     index itself: each insert runs in a savepoint and an IntegrityError maps
     to the skip (check-then-insert would race).
     """
-    if not run_asset_gates_open(settings, get_app_settings(session)):
+    row = get_app_settings(session)
+    if not run_asset_gates_open(settings, row):
         raise RunAssetJobError(
             "run assets are disabled — they need ENRICHMENT_RUN_ASSETS_ENABLED"
             " and LLM enablement (env LLM_ENABLED or the in-UI toggle)"
@@ -142,6 +144,18 @@ def create_jobs(
         raise RunAssetJobError("no asset kinds requested")
     if len(set(kinds)) != len(kinds):
         raise RunAssetJobError(f"duplicate asset kinds: {[k.value for k in kinds]}")
+    # Scoped bundle (issue #67): the bundled local model powers summary +
+    # entity_mentions only, never topics (#66 measured: it fails topic
+    # extraction). This is the SINGLE chokepoint every request funnels through —
+    # autogenerate, the API's "generate all", the CLI, and an explicit topics
+    # request all reach create_jobs — so dropping TOPICS here, and only here, is
+    # what guarantees the bundle never enqueues a kind it can't do. Topics stays
+    # available on a BYO endpoint. Silent skip (not an error): "generate all"
+    # degrades to summary+entities, exactly as an already-active kind is skipped.
+    if llm_bundled_active(row, settings):
+        kinds = tuple(k for k in kinds if k is not RunAssetKind.TOPICS)
+        if not kinds:
+            return [], []
     try:
         load_source(session, pipeline_run_id)  # validates run + transcript exist
     except RunAssetError as exc:
@@ -150,7 +164,7 @@ def create_jobs(
     # model are the enqueue contract, so an env change between enqueue and execution
     # can't silently redirect the call (the #40 snapshot-executes doctrine). The API
     # KEY is never snapshotted — it is resolved live at execution from the row.
-    base_url, model = resolve_effective_llm_endpoint(get_app_settings(session), settings)
+    base_url, model = resolve_effective_llm_endpoint(row, settings)
     snapshot = job_config_snapshot(
         settings.model_copy(update={"llm_base_url": base_url, "llm_model": model})
     )
@@ -318,7 +332,8 @@ def execute_job(
         job = claim_job(session, job_id)
         if job is None:
             return
-        if not run_asset_gates_open(settings, get_app_settings(session)):
+        app_row = get_app_settings(session)
+        if not run_asset_gates_open(settings, app_row):
             _finish(
                 session,
                 job_id,
@@ -330,6 +345,29 @@ def execute_job(
         # The snapshot the operator saw at enqueue is the contract — never
         # settings changed since.
         exec_settings = _settings_from_snapshot(settings, job.config)
+        # Scoped bundled local model (issue #67): when active, run-asset
+        # summary/entities route to the keyless bundled endpoint instead of the
+        # snapshotted BYO one. Resolved LIVE from the row (like the effective key)
+        # — the bundled URL/model are compose-injected env constants, never
+        # snapshotted. Overriding exec_settings here means both the built client
+        # AND the provenance (model=/config_snapshot below, which read
+        # exec_settings) reflect the bundled endpoint with no extra plumbing. The
+        # dense bundled model is slow on CPU, so clamp the input-char cap down to
+        # the bundled backstop to keep a large transcript's job under the stage
+        # deadline (topics is suppressed separately in create_jobs, so no topics
+        # job reaches here under the bundle).
+        bundled = llm_bundled_active(app_row, settings)
+        if bundled:
+            exec_settings = exec_settings.model_copy(
+                update={
+                    "llm_base_url": settings.llm_bundled_base_url,
+                    "llm_model": settings.llm_bundled_model,
+                    "run_assets_max_input_chars": min(
+                        exec_settings.run_assets_max_input_chars,
+                        settings.llm_bundled_run_assets_max_input_chars,
+                    ),
+                }
+            )
         try:
             source = load_source(session, job.pipeline_run_id)
         except RunAssetError as exc:
@@ -353,14 +391,18 @@ def execute_job(
         if llm is None:
             # Resolve the effective key LIVE from the row (issue #10): a UI-stored
             # key wins over env and is never snapshotted into job.config, so a key
-            # rotated after enqueue takes effect on execution with no restart.
-            effective_key = resolve_effective_llm_api_key(get_app_settings(session), settings)
+            # rotated after enqueue takes effect on execution with no restart. The
+            # bundled endpoint (issue #67) is keyless and sends the pinned greedy
+            # SamplingProfile; the BYO endpoint keeps today's default (None ⇒
+            # byte-identical to before).
+            effective_key = "" if bundled else resolve_effective_llm_api_key(app_row, settings)
             try:
                 owned_client = HttpLLMClient(
                     exec_settings.llm_base_url,
                     exec_settings.llm_model,
                     effective_key,
                     exec_settings.llm_timeout_seconds,
+                    sampling=SamplingProfile() if bundled else None,
                 )
             except Exception:
                 # Building the client can fail before any request: a malformed

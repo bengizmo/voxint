@@ -154,11 +154,18 @@ def run_pipeline(self: object, run_id_str: str) -> str:
         # session, so it reaches the per-run HttpLLMClient the same no-restart way as
         # base_url/model. Kept off RunPreferences (which has a repr); passed as a str.
         llm_api_key = app_settings.resolve_effective_llm_api_key(row, settings)
+        # Whether the scoped bundled local model is the active enhancement endpoint
+        # (issue #67): resolved in-session like the key so it lands on the next run
+        # with no restart. When active, enhancement routes to the keyless bundled
+        # endpoint and its name_hints are dropped.
+        bundled = app_settings.llm_bundled_active(row, settings)
         # The run's frozen domain-pack snapshot (issue #11); NULL for a legacy run.
         run_row = session.get(PipelineRun, run_id)
         pack_snapshot = run_row.domain_pack if run_row is not None else None
     pack = domain_pack_from_snapshot(pack_snapshot, settings)
-    ctx = apply_run_preferences(base_ctx, settings, prefs, pack, llm_api_key=llm_api_key)
+    ctx = apply_run_preferences(
+        base_ctx, settings, prefs, pack, llm_api_key=llm_api_key, bundled=bundled
+    )
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings)

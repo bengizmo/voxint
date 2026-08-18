@@ -9,6 +9,7 @@ transaction — every function takes a live ``Session`` and never commits.
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from sqlalchemy.exc import IntegrityError
@@ -16,6 +17,9 @@ from sqlalchemy.orm import Session
 
 from voxint.config import Settings
 from voxint.db.models import AppSettings, PipelineRun
+
+if TYPE_CHECKING:
+    from voxint.clients.llm import HttpLLMClient
 
 SINGLETON_ID = 1
 
@@ -218,6 +222,53 @@ def resolve_effective_enrichment_web_research_enabled(
 
 def resolve_effective_ytdlp_enabled(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "ytdlp_enabled")
+
+
+def resolve_effective_llm_bundled_enabled(row: AppSettings | None, settings: Settings) -> bool:
+    """Effective enablement of the optional bundled local LLM (issue #67).
+
+    Tri-state like the other feature flags: the ROW column wins when non-NULL, else
+    env ``LLM_BUNDLED_ENABLED``. This is only the operator *intent* — whether the
+    bundle actually powers a job also requires a configured bundled base URL; use
+    :func:`llm_bundled_active` at the routing sites, never this alone.
+    """
+    return _resolve_bool_flag(row, settings, "llm_bundled_enabled")
+
+
+def llm_bundled_active(row: AppSettings | None, settings: Settings) -> bool:
+    """Whether the bundled local LLM is the active endpoint for the two in-scope
+    jobs (transcript enhancement + run-asset summary/entities) — issue #67.
+
+    The SINGLE predicate the routing sites resolve through, so enhancement
+    (``pipeline.stages.context``) and run-assets (``enrichment.asset_jobs``) can
+    never drift apart. Active iff the operator enabled the bundle AND a bundled
+    base URL is compose-injected (``""`` ⇒ no bundled endpoint exists, so the flag
+    is inert and the BYO path governs). Names + research NEVER consult this — they
+    are structurally BYO-only (#66: Qwen fails those jobs).
+    """
+    return resolve_effective_llm_bundled_enabled(row, settings) and bool(
+        settings.llm_bundled_base_url
+    )
+
+
+def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":
+    """Construct the keyless client for the bundled local endpoint (issue #67).
+
+    Shared by the two in-scope routing sites so the endpoint/model/sampling are
+    resolved in exactly one place. The bundled endpoint takes NO API key (it is a
+    product-owned local service), and sends the measured, pinned greedy
+    :class:`SamplingProfile` default. Callers must gate on
+    :func:`llm_bundled_active` first.
+    """
+    from voxint.clients.llm import HttpLLMClient, SamplingProfile
+
+    return HttpLLMClient(
+        settings.llm_bundled_base_url,
+        settings.llm_bundled_model,
+        "",
+        settings.llm_timeout_seconds,
+        sampling=SamplingProfile(),
+    )
 
 
 def resolve_effective_source_authority_domains(

@@ -122,10 +122,20 @@ def _capturing_factory(
 
     class _CapturingClient(HttpLLMClient):
         def __init__(
-            self, base_url: str, model: str, api_key: str, timeout: float, client: object = None
+            self,
+            base_url: str,
+            model: str,
+            api_key: str,
+            timeout: float,
+            client: object = None,
+            *,
+            sampling: object = None,
         ) -> None:
+            # Mirror the real HttpLLMClient signature: run-asset routing (#67) now
+            # always passes sampling= (None on the BYO path), so the stand-in must
+            # accept and forward it.
             http = httpx.Client(base_url=base_url, transport=httpx.MockTransport(handler))
-            super().__init__(base_url, model, api_key, timeout, client=http)
+            super().__init__(base_url, model, api_key, timeout, client=http, sampling=sampling)  # type: ignore[arg-type]
 
     return _CapturingClient
 

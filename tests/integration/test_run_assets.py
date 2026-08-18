@@ -52,6 +52,20 @@ def make_settings(**overrides: object) -> Settings:
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
+_BUNDLED_URL = "http://voxint-llm:8080/v1"
+_BUNDLED_MODEL = "qwen3-4b-instruct-2507"
+
+
+def _bundled_settings(**overrides: object) -> Settings:
+    """make_settings with the scoped bundle (#67) active via env (no row needed)."""
+    return make_settings(
+        llm_bundled_enabled=True,
+        llm_bundled_base_url=_BUNDLED_URL,
+        llm_bundled_model=_BUNDLED_MODEL,
+        **overrides,
+    )
+
+
 def seed_run(session: Session, *, text: str = "Hello, I am Joanne from Acme Corp.") -> uuid.UUID:
     media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
     session.add(media)
@@ -291,6 +305,83 @@ class TestJobs:
             session.commit()
             assert sorted(j.asset_kind for j in created) == ["entity_mentions", "topics"]
             assert skipped == [RunAssetKind.SUMMARY]
+
+    def test_create_jobs_bundle_suppresses_topics(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Under the scoped bundle (#67) "generate all" degrades to summary +
+        # entities; topics (which the bundle fails, #66) is silently dropped and
+        # never enqueued. create_jobs is the single chokepoint every path funnels
+        # through, so the drop here covers autogenerate, the API, and the CLI.
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, skipped = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=tuple(RunAssetKind),
+                settings=_bundled_settings(),
+            )
+            session.commit()
+            assert sorted(j.asset_kind for j in created) == ["entity_mentions", "summary"]
+            assert skipped == []
+
+    def test_create_jobs_bundle_topics_only_is_noop(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Explicitly requesting only topics under the bundle creates nothing — an
+        # honest no-op (empty created), not a "no asset kinds requested" error.
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, skipped = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.TOPICS,),
+                settings=_bundled_settings(),
+            )
+            assert created == []
+            assert skipped == []
+
+    def test_create_jobs_byo_keeps_topics(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # The suppression is scoped to the bundle: a BYO endpoint still generates
+        # topics (the #67 change must not regress the normal path).
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.TOPICS,),
+                settings=make_settings(),
+            )
+            session.commit()
+            assert [j.asset_kind for j in created] == ["topics"]
+
+    def test_execute_job_bundle_records_endpoint_and_caps_input(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Bundled routing rewrites the execution endpoint and clamps the input cap;
+        # the asset's config provenance must reflect the bundled model + URL and the
+        # 16k CPU backstop cap, not the 48k BYO default.
+        settings = _bundled_settings()
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, _ = create_jobs(
+                session,
+                pipeline_run_id=run_id,
+                kinds=(RunAssetKind.SUMMARY,),
+                settings=settings,
+            )
+            session.commit()
+            job_id = created[0].id
+        execute_job(session_factory, job_id, settings=settings, llm=FakeLLM([SUMMARY_BODY]))
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.SUCCEEDED.value
+            asset = session.get(RunEnrichmentAsset, job.asset_id)
+            assert asset.config["model"] == _BUNDLED_MODEL
+            assert asset.config["base_url"] == _BUNDLED_URL
+            assert asset.config["max_input_chars"] == 16_000
 
     def test_claim_is_exactly_once_and_cancel_queued_wins(
         self, session_factory: sessionmaker[Session]

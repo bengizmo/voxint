@@ -70,6 +70,13 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
             name_attribution_context=name_attribution_context,
         )
 
+    if ctx.llm_bundled:
+        # Scoped bundled local model (issue #67): it powers enhancement text ONLY,
+        # never speaker attribution (#66: it misattributes names). Drop the pass's
+        # name_hints so they can't reach proposals through the back door —
+        # attribution stays exclusively on the BYO names producer.
+        hints = []
+
     proposals = match_speakers(session, run_id, ctx.matching_gates)
     replace_run_proposals(session, run_id, proposals, _select_hints(hints))
 

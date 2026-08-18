@@ -1303,6 +1303,12 @@ class AppSettings(Base):
     voxint_web_research: Mapped[bool | None] = mapped_column(Boolean)
     enrichment_web_research_enabled: Mapped[bool | None] = mapped_column(Boolean)
     ytdlp_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # Optional bundled local LLM (issue #67). Same tri-state as the flags above:
+    # NULL inherits env LLM_BUNDLED_ENABLED, non-NULL overrides. When effective
+    # AND a bundled base URL is configured, enhancement + run-asset
+    # summary/entities route to the keyless bundled endpoint; names + research
+    # stay BYO. Resolve only via resolve_effective_llm_bundled_enabled.
+    llm_bundled_enabled: Mapped[bool | None] = mapped_column(Boolean)
     # External-sources config (issue #74). NULL/blank -> inherit the env default; a
     # non-blank value overrides it (the llm_base_url/llm_api_key precedent).
     source_authority_domains: Mapped[str | None] = mapped_column(Text)

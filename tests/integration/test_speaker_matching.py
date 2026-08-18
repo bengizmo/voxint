@@ -260,6 +260,108 @@ def test_enhance_stage_omits_attribution_context_when_pack_declares_none(session
     assert llm.attribution_contexts == [""]
 
 
+def test_enhance_stage_bundled_drops_name_hints(session: Session) -> None:
+    """The scoped bundled model (#67) powers enhancement text ONLY — its
+    name_hints must never reach proposals, so the bundle can't drive speaker
+    attribution through the back door (it stays on the BYO names producer)."""
+    from pathlib import Path
+
+    from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+    from voxint.clients.base import SpeakerNameHint
+
+    run_id = make_run(session)
+    seed_label(session, run_id)  # a real SPEAKER_00 turn a hint could attach to
+    session.add(
+        TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=0,
+            start_seconds=0.0,
+            end_seconds=1.0,
+            raw_text="hi",
+            diarization_label="SPEAKER_00",
+        )
+    )
+    session.flush()
+
+    llm = FakeLLM(
+        name_hints=(SpeakerNameHint(diarization_label="SPEAKER_00", name="Jane", kind="self"),)
+    )
+    ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=llm,
+        media_root=Path("/data/media"),
+        domain_pack=DomainPack(name="generic"),
+        llm_bundled=True,
+    )
+
+    enhance_match.run(ctx, session, run_id)
+    session.flush()
+
+    hint_rows = (
+        session.execute(
+            select(SpeakerAssignment).where(
+                SpeakerAssignment.method == AssignmentMethod.LLM_HINT.value
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert hint_rows == []
+
+
+def test_enhance_stage_byo_keeps_name_hints(session: Session) -> None:
+    """The BYO path (not bundled) still persists the LLM name hint as an LLM_HINT
+    proposal — the #67 drop is scoped to the bundle and must not regress it."""
+    from pathlib import Path
+
+    from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+    from voxint.clients.base import SpeakerNameHint
+
+    run_id = make_run(session)
+    seed_label(session, run_id)
+    session.add(
+        TranscriptSegment(
+            pipeline_run_id=run_id,
+            segment_index=0,
+            start_seconds=0.0,
+            end_seconds=1.0,
+            raw_text="hi",
+            diarization_label="SPEAKER_00",
+        )
+    )
+    session.flush()
+
+    llm = FakeLLM(
+        name_hints=(SpeakerNameHint(diarization_label="SPEAKER_00", name="Jane", kind="self"),)
+    )
+    ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=llm,
+        media_root=Path("/data/media"),
+        domain_pack=DomainPack(name="generic"),
+        # llm_bundled defaults False — the ordinary BYO endpoint.
+    )
+
+    enhance_match.run(ctx, session, run_id)
+    session.flush()
+
+    hint_rows = (
+        session.execute(
+            select(SpeakerAssignment).where(
+                SpeakerAssignment.method == AssignmentMethod.LLM_HINT.value
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(hint_rows) == 1
+    assert hint_rows[0].proposed_name == "Jane"
+
+
 def test_label_spanning_embedding_spaces_is_dropped(session: Session) -> None:
     run_id = make_run(session)
     add_speaker(session, "Alice", [E0])

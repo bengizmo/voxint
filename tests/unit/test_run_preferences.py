@@ -15,6 +15,7 @@ import pytest
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
 from voxint.app_settings import resolve_effective_llm_api_key
+from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
 from voxint.db.models import AppSettings
 from voxint.domain_packs.base import DomainPack
@@ -249,6 +250,60 @@ def test_apply_preserves_transport_clients() -> None:
     assert ctx.asr is base.asr
     assert ctx.diarizer is base.diarizer
     assert ctx.embedder is base.embedder
+
+
+# -------------------------------------------------------- bundled local LLM (#67)
+
+
+def _bundled_settings(**overrides: object) -> Settings:
+    return Settings(
+        _env_file=None,
+        llm_enabled=False,  # keep the env-time validator quiet at construction
+        llm_bundled_base_url="http://voxint-llm:8080/v1",
+        llm_bundled_model="qwen3-4b-instruct-2507",
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
+def test_apply_bundled_builds_keyless_client_and_flags_it() -> None:
+    # The scoped bundle (#67) needs NO api key: enhancement builds a client on the
+    # keyless bundled endpoint and marks the context bundled so enhance_match drops
+    # its name_hints. The bundled model — not the env BYO model — is used.
+    base = make_base_ctx()
+    settings = _bundled_settings()
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), settings)
+    ctx = apply_run_preferences(
+        base, settings, prefs, base.domain_pack, llm_api_key="", bundled=True
+    )
+    assert isinstance(ctx.llm, HttpLLMClient)
+    assert ctx.llm_bundled is True
+    assert ctx.llm._model == "qwen3-4b-instruct-2507"
+    assert ctx.llm._api_key == ""
+    ctx.llm.close()
+
+
+def test_apply_byo_path_is_not_flagged_bundled() -> None:
+    base = make_base_ctx()
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=True), make_settings())
+    ctx = apply_run_preferences(
+        base, make_settings(), prefs, base.domain_pack, llm_api_key="sk-test"
+    )
+    assert isinstance(ctx.llm, HttpLLMClient)
+    assert ctx.llm_bundled is False
+    ctx.llm.close()
+
+
+def test_apply_bundled_still_gated_by_llm_enabled() -> None:
+    # Bundled-on but LLM enhancement off ⇒ nothing builds. llm_enabled is the master
+    # gate (the toggle's help copy tells the operator to enable enhancement).
+    base = make_base_ctx()
+    settings = _bundled_settings()
+    prefs = resolve_run_preferences(AppSettings(id=1, llm_enabled=False), settings)
+    ctx = apply_run_preferences(
+        base, settings, prefs, base.domain_pack, llm_api_key="", bundled=True
+    )
+    assert ctx.llm is None
+    assert ctx.llm_bundled is False
 
 
 # --------------------------------------------------------- transcribe initial_prompt

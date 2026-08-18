@@ -9,13 +9,16 @@ invariants live in exactly one validator shared with ``config.py``.
 
 from voxint.app_settings import (
     EffectiveFlags,
+    build_bundled_llm_client,
     effective_web_search_key_source,
     feature_flag_state,
+    llm_bundled_active,
     resolve_effective_enrichment_names_enabled,
     resolve_effective_enrichment_names_llm_enabled,
     resolve_effective_enrichment_run_assets_autogenerate,
     resolve_effective_enrichment_run_assets_enabled,
     resolve_effective_enrichment_web_research_enabled,
+    resolve_effective_llm_bundled_enabled,
     resolve_effective_source_authority_domains,
     resolve_effective_voxint_web_research,
     resolve_effective_web_research,
@@ -39,6 +42,7 @@ _BOOL_RESOLVERS = (
     (resolve_effective_voxint_web_research, "voxint_web_research"),
     (resolve_effective_enrichment_web_research_enabled, "enrichment_web_research_enabled"),
     (resolve_effective_ytdlp_enabled, "ytdlp_enabled"),
+    (resolve_effective_llm_bundled_enabled, "llm_bundled_enabled"),
 )
 
 
@@ -57,6 +61,7 @@ def _env_all_on() -> Settings:
         voxint_web_research=True,
         enrichment_web_research_enabled=True,
         ytdlp_enabled=True,
+        llm_bundled_enabled=True,
         web_search_base_url=_BASE_URL,
     )
 
@@ -73,6 +78,7 @@ def _env_all_off() -> Settings:
         voxint_web_research=False,
         enrichment_web_research_enabled=False,
         ytdlp_enabled=False,
+        llm_bundled_enabled=False,
     )
 
 
@@ -368,6 +374,52 @@ def test_str_flag_form_field_renders_raw_column(monkeypatch) -> None:
         "http://row.lan",
         "http://env.example",
     )
+
+
+# ---------------------------------------------------- bundled local LLM (#67)
+
+
+def test_llm_bundled_active_needs_flag_and_url() -> None:
+    # The routing predicate is AND(effective flag, a configured bundled URL): the
+    # compose-injected URL is what makes the bundle exist, so the flag is inert
+    # without it (a fresh install with the toggle on but no compose.llm.yaml).
+    on_no_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url="")
+    assert llm_bundled_active(None, on_no_url) is False
+    on_url = _settings(
+        llm_bundled_enabled=True, llm_bundled_base_url="http://voxint-llm:8080/v1"
+    )
+    assert llm_bundled_active(None, on_url) is True
+    off_url = _settings(
+        llm_bundled_enabled=False, llm_bundled_base_url="http://voxint-llm:8080/v1"
+    )
+    assert llm_bundled_active(None, off_url) is False
+
+
+def test_llm_bundled_active_row_wins_over_env() -> None:
+    # Tri-state: a UI enable (row True) activates the bundle even when the env
+    # default is off, provided a bundled URL exists; a UI disable wins over env on.
+    url = "http://voxint-llm:8080/v1"
+    env_off = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url)
+    assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=True), env_off) is True
+    env_on = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url)
+    assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=False), env_on) is False
+
+
+def test_build_bundled_llm_client_keyless_greedy() -> None:
+    # The bundled endpoint is product-owned and local: NO api key, and the pinned
+    # greedy SamplingProfile (byte-identical default) — never a leaked BYO key or
+    # a Qwen-specific sampler on an arbitrary endpoint.
+    settings = _settings(
+        llm_bundled_base_url="http://voxint-llm:8080/v1",
+        llm_bundled_model="qwen3-4b-instruct-2507",
+    )
+    client = build_bundled_llm_client(settings)
+    try:
+        assert client._model == "qwen3-4b-instruct-2507"
+        assert client._api_key == ""
+        assert client._sampling.as_payload() == {"temperature": 0}
+    finally:
+        client.close()
 
 
 def test_effective_web_search_key_source(monkeypatch) -> None:

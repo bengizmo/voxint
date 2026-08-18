@@ -1867,6 +1867,15 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
         " run assets to be on.",
     ),
     (
+        "llm_bundled_enabled",
+        "Use the bundled local model",
+        "Route transcript enhancement and run-asset summaries + entities to the"
+        " bundled local model, so they work with no external API key. It powers"
+        " ONLY those — topics, web research, and LLM name suggestions still need a"
+        " BYO endpoint and key. Requires LLM enhancement to be on, and the bundled"
+        " model service to be running (compose.llm.yaml).",
+    ),
+    (
         "ytdlp_enabled",
         "Download media from a URL",
         "Allow submitting media by URL, fetched with yt-dlp. Independent of the LLM"

@@ -108,5 +108,6 @@ def test_single_alembic_head() -> None:
     # waveform_peaks artifact kind, issue #57; 0022 = transcript_segments word
     # timings JSONB, issue #59; 0023 = segment_split_boundaries, issue #59 slice 2;
     # 0024 = app_settings feature-flag columns, issue #74; 0025 =
-    # adjudication_decisions word-range scope, issue #59 slice 3).
-    assert list(heads) == ["0025"]
+    # adjudication_decisions word-range scope, issue #59 slice 3; 0026 =
+    # app_settings.llm_bundled_enabled, issue #67).
+    assert list(heads) == ["0026"]

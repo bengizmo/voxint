@@ -20,7 +20,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.app_settings import resolve_effective_llm_endpoint
+from voxint.app_settings import build_bundled_llm_client, resolve_effective_llm_endpoint
 from voxint.clients.asr import HttpASRClient
 from voxint.clients.base import ASRClient, DiarizerClient, EmbedderClient, LLMClient
 from voxint.clients.diarize import HttpDiarizerClient
@@ -83,6 +83,11 @@ class StageContext:
     ffmpeg_bin: str = "ffmpeg"
     ffprobe_bin: str = "ffprobe"
     llm_policy: LLMPolicy = LLMPolicy()
+    # True when ``llm`` is the scoped bundled local model (issue #67), not a BYO
+    # endpoint. enhance_match reads this to DROP the enhancement pass's own
+    # name_hints so the bundled model can never power speaker attribution through
+    # the back door — attribution stays exclusively on the BYO names producer.
+    llm_bundled: bool = False
     # The run's resolved domain pack (issue #11). On the process-cached base this is
     # the DEFAULT pack; apply_run_preferences swaps in the run's frozen snapshot so a
     # stage can read any fragment via ctx.domain_pack.prompt_fragments.get(key, "").
@@ -216,6 +221,7 @@ def apply_run_preferences(
     pack: DomainPack,
     *,
     llm_api_key: str,
+    bundled: bool = False,
 ) -> StageContext:
     """Layer ``prefs`` and the run's ``pack`` onto the cached ``base`` for one run.
 
@@ -238,6 +244,14 @@ def apply_run_preferences(
     When enabled, the returned ``llm`` is a freshly built ``HttpLLMClient`` that
     OWNS its ``httpx.Client``; the caller (``run_pipeline``) must ``close()`` it
     after the run so a long-lived worker does not leak a connection pool per run.
+
+    ``bundled`` (issue #67): when True, the run routes enhancement to the scoped
+    bundled local model — a fixed, product-owned, KEYLESS endpoint — instead of the
+    BYO ``llm_*`` one. The key precondition is then satisfied without a key (the
+    bundle needs none), the client is built from ``settings.llm_bundled_*`` via the
+    shared factory, and the returned context carries ``llm_bundled=True`` so
+    enhance_match drops the pass's name_hints. Resolved by the caller through
+    :func:`voxint.app_settings.llm_bundled_active`.
     """
     vocabulary = _dedup_order_preserving((*pack.vocabulary, *prefs.vocabulary))
     enhancement_context = _augment_enhancement_context(
@@ -258,14 +272,21 @@ def apply_run_preferences(
     # wizard's own check (setup_wizard.validate_llm_enable), so the two never
     # disagree on whether a key is set.
     key_present = bool(llm_api_key)
+    # The bundled endpoint needs no key (issue #67), so it satisfies the key
+    # precondition on its own; the BYO path still requires a key.
+    key_ok = key_present or bundled
     llm: LLMClient | None = None
-    if prefs.llm_enabled and key_present and budget_ok:
+    if prefs.llm_enabled and key_ok and budget_ok:
         try:
-            llm = HttpLLMClient(
-                prefs.llm_base_url,
-                prefs.llm_model,
-                llm_api_key,
-                settings.llm_timeout_seconds,
+            llm = (
+                build_bundled_llm_client(settings)
+                if bundled
+                else HttpLLMClient(
+                    prefs.llm_base_url,
+                    prefs.llm_model,
+                    llm_api_key,
+                    settings.llm_timeout_seconds,
+                )
             )
         except (httpx.InvalidURL, httpx.HTTPError) as exc:
             # A malformed base_url raises while httpx builds the client. This runs in
@@ -281,7 +302,9 @@ def apply_run_preferences(
                 exc,
             )
             llm = None
-    elif prefs.llm_enabled and not key_present:
+    elif prefs.llm_enabled and not key_ok:
+        # Only reachable on the BYO path (bundled makes key_ok True); the bundled
+        # endpoint never emits this no-key warning.
         logger.warning(
             "LLM enhancement is enabled but no API key is configured (neither a "
             "UI-stored key nor env LLM_API_KEY); proceeding with enhancement "
@@ -298,6 +321,7 @@ def apply_run_preferences(
     return dataclasses.replace(
         base,
         llm=llm,
+        llm_bundled=bundled and llm is not None,
         domain_pack=pack,
         enhancement_context=enhancement_context,
         vocabulary=vocabulary,

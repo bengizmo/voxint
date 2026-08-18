@@ -212,6 +212,25 @@ class Settings(BaseSettings):
     # this run (remaining segments stay NULL; matching still runs).
     llm_consecutive_failure_limit: int = Field(default=3, ge=1)
 
+    # Optional bundled local LLM (issue #67, SCOPED). When enabled AND a bundled
+    # base URL is compose-injected, transcript enhancement + run-asset
+    # summary/entity_mentions route to this fixed, product-owned, keyless
+    # endpoint (Qwen3-4B-Instruct-2507); agentic research + the LLM
+    # name-attribution pass ALWAYS stay on the BYO llm_* endpoint and never fall
+    # back to the bundle (#66 measured: Qwen fails those jobs). The URL/model are
+    # env constants set by compose.llm.yaml, NOT UI knobs; only the enablement
+    # toggle is operator-facing (tri-state, DB row overrides this env default).
+    llm_bundled_enabled: bool = False
+    llm_bundled_base_url: str = ""  # "" ⇒ bundle inactive regardless of the flag
+    llm_bundled_model: str = ""
+    # CPU backstop: the dense bundled model is markedly slower than the BYO
+    # default, so a large run-asset transcript can blow the 300 s stage deadline
+    # on CPU (Phase A measured 48k chars over the deadline; ≤~16k safe). When the
+    # bundle is the active run-asset endpoint, run_assets_max_input_chars is
+    # clamped down to this. Primary guidance is still GPU-for-bundle; this is a
+    # backstop so a CPU operator degrades to truncation, not a hung job.
+    llm_bundled_run_assets_max_input_chars: int = Field(default=16_000, ge=1_000)
+
     # Speaker matching gates (see docs/quality-gates.md). Similarities are raw
     # cosine in [-1, 1]; stored confidence is (cosine + 1) / 2 — a transformed
     # similarity, NOT a calibrated probability. Defaults are conservative
