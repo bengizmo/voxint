@@ -308,10 +308,11 @@ With `DOMAIN_PACK_PATH` unset, only the bundled `generic` pack is used. Each run
 0017), so editing a manifest on disk never changes a past run's transcription or
 enrichment — a manifest change takes effect on the *next* run.
 
-> Per-**folder** assignment (`{media_folder → pack_name}`) and a per-**submission**
-> pack override are implemented in the backend, but the operator UI to manage them
-> ships with the review-console overhaul (issue #63). For 0.15.0 the default pack
-> (`DOMAIN_PACK_PATH`) is the operator-facing control.
+> Per-**folder** assignment (`{media_folder → pack_name}`) is editable in the
+> console (issue #63): the setup wizard's media step and **Settings → Media
+> folders** host a folder browser with a per-folder domain-pack picker. A
+> per-**submission** pack override remains a backend-only capability. The default
+> pack (`DOMAIN_PACK_PATH`) stays the installation-wide fallback.
 
 ### Metrics & monitoring
 

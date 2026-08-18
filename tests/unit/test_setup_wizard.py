@@ -10,12 +10,14 @@ from pathlib import Path
 import pytest
 
 from voxint.api.setup_wizard import (
+    MAX_BROWSE_ENTRIES,
     MAX_LLM_KEY_CHARS,
     MAX_MEDIA_FOLDERS,
     MAX_VOCABULARY_TERM_CHARS,
     MAX_VOCABULARY_TERMS,
     SetupValidationError,
     WizardStep,
+    list_media_subdirs,
     next_step,
     normalize_llm_api_key,
     normalize_llm_base_url,
@@ -278,3 +280,137 @@ def test_validate_llm_enable_rejects_budget_over_lease() -> None:
     )
     with pytest.raises(SetupValidationError, match="lease"):
         validate_llm_enable("sk-effective", settings)
+
+
+# ------------------------------------------------ folder browser (list_media_subdirs)
+
+
+def test_list_media_subdirs_lists_child_dirs_sorted_and_marks_registered(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "podcasts").mkdir()
+    (tmp_path / "interviews").mkdir()
+    (tmp_path / "archive").mkdir()
+    (tmp_path / "notes.txt").write_bytes(b"x")  # files are never listed
+    listing = list_media_subdirs(tmp_path, ".", {"podcasts"})
+    assert listing.current == "."
+    assert listing.parent is None
+    assert [e.name for e in listing.entries] == ["archive", "interviews", "podcasts"]
+    assert [e.rel for e in listing.entries] == ["archive", "interviews", "podcasts"]
+    registered = {e.name: e.registered for e in listing.entries}
+    assert registered == {"archive": False, "interviews": False, "podcasts": True}
+    assert not listing.invalid_path and not listing.root_missing and not listing.truncated
+
+
+def test_list_media_subdirs_nested_has_parent_and_breadcrumbs(tmp_path: Path) -> None:
+    (tmp_path / "interviews" / "2026").mkdir(parents=True)
+    listing = list_media_subdirs(tmp_path, "interviews", set())
+    assert listing.current == "interviews"
+    assert listing.parent == "."
+    assert listing.breadcrumbs == [("media root", "."), ("interviews", "interviews")]
+    assert [e.rel for e in listing.entries] == ["interviews/2026"]
+
+    deeper = list_media_subdirs(tmp_path, "interviews/2026", set())
+    assert deeper.parent == "interviews"
+    assert deeper.breadcrumbs == [
+        ("media root", "."),
+        ("interviews", "interviews"),
+        ("2026", "interviews/2026"),
+    ]
+
+
+def test_list_media_subdirs_current_registered_reflects_membership(tmp_path: Path) -> None:
+    (tmp_path / "podcasts").mkdir()
+    assert list_media_subdirs(tmp_path, "podcasts", {"podcasts"}).current_registered
+    assert not list_media_subdirs(tmp_path, "podcasts", set()).current_registered
+    # The media root itself (".") is registerable and reflects membership.
+    assert list_media_subdirs(tmp_path, ".", {"."}).current_registered
+
+
+@pytest.mark.parametrize("bad", ["/etc", "../escape", "does-not-exist", "a.txt"])
+def test_list_media_subdirs_bad_path_recovers_to_root_without_disclosing(
+    tmp_path: Path, bad: str
+) -> None:
+    (tmp_path / "safe").mkdir()
+    (tmp_path / "a.txt").write_bytes(b"x")
+    listing = list_media_subdirs(tmp_path, bad, set())
+    # Recovered to the root listing (never raised, never escaped) with an honest flag.
+    assert listing.current == "."
+    assert listing.invalid_path
+    assert [e.rel for e in listing.entries] == ["safe"]
+    # Nothing outside the root is ever disclosed.
+    assert all(not e.rel.startswith("..") and not e.rel.startswith("/") for e in listing.entries)
+
+
+def test_list_media_subdirs_reserved_target_recovers_to_root(tmp_path: Path) -> None:
+    (tmp_path / "incoming").mkdir()
+    listing = list_media_subdirs(tmp_path, "incoming", set())
+    assert listing.current == "." and listing.invalid_path
+
+
+def test_list_media_subdirs_prunes_reserved_trees_from_listing(tmp_path: Path) -> None:
+    (tmp_path / "incoming").mkdir()
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / "podcasts").mkdir()
+    listing = list_media_subdirs(tmp_path, ".", set())
+    assert [e.name for e in listing.entries] == ["podcasts"]
+
+
+def test_list_media_subdirs_skips_symlinked_dirs(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real, target_is_directory=True)
+    listing = list_media_subdirs(tmp_path, ".", set())
+    assert [e.name for e in listing.entries] == ["real"]  # the symlink is skipped
+
+
+def test_list_media_subdirs_missing_root(tmp_path: Path) -> None:
+    listing = list_media_subdirs(tmp_path / "nope", ".", set())
+    assert listing.root_missing
+    assert listing.entries == [] and not listing.invalid_path
+
+
+def test_list_media_subdirs_truncates_at_cap(tmp_path: Path) -> None:
+    for i in range(MAX_BROWSE_ENTRIES + 5):
+        # Zero-pad so lexical sort == numeric order for a stable, deterministic head.
+        (tmp_path / f"d{i:04d}").mkdir()
+    listing = list_media_subdirs(tmp_path, ".", set())
+    assert listing.truncated
+    assert len(listing.entries) == MAX_BROWSE_ENTRIES
+    assert listing.entries[0].name == "d0000"  # sorted before truncation
+
+
+def test_list_media_subdirs_handles_special_char_names(tmp_path: Path) -> None:
+    (tmp_path / "a b & c").mkdir()
+    (tmp_path / "café").mkdir()
+    listing = list_media_subdirs(tmp_path, ".", set())
+    names = {e.name for e in listing.entries}
+    assert names == {"a b & c", "café"}
+    # The rel path round-trips the literal name (URL-encoding is the template's job).
+    by_name = {e.name: e.rel for e in listing.entries}
+    assert by_name["a b & c"] == "a b & c"
+
+
+def test_list_media_subdirs_embedded_nul_recovers_not_raises(tmp_path: Path) -> None:
+    # An embedded NUL makes Path.resolve() raise ValueError; the browser must recover
+    # to the root (its "never raises" contract), not 500. It is a bad submitted path,
+    # so invalid_path is flagged — the honest signal, without echoing the value.
+    (tmp_path / "safe").mkdir()
+    listing = list_media_subdirs(tmp_path, "a\x00b", set())
+    assert listing.current == "." and listing.invalid_path
+    assert [e.name for e in listing.entries] == ["safe"]
+
+
+def test_list_media_subdirs_sorts_case_insensitively(tmp_path: Path) -> None:
+    for name in ("Zebra", "apple", "Banana"):
+        (tmp_path / name).mkdir()
+    listing = list_media_subdirs(tmp_path, ".", set())
+    # Case-folded order, so "apple" is not stranded after the capitals.
+    assert [e.name for e in listing.entries] == ["apple", "Banana", "Zebra"]
+
+
+def test_normalize_media_folders_embedded_nul_is_validation_error(tmp_path: Path) -> None:
+    # The add path's counterpart: a NUL byte is a SetupValidationError the route
+    # re-renders, never an uncaught ValueError/500.
+    with pytest.raises(SetupValidationError):
+        normalize_media_folders(["a\x00b"], tmp_path)

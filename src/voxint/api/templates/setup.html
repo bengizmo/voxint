@@ -36,21 +36,11 @@
 
 {% elif step.value == "media" %}
   <h1>Media folders</h1>
-  <p>Voxint reads media from under <code>{{ media_root }}</code>. Register one folder per
-     line (paths relative to that root); leave blank to skip.</p>
-  <form method="post" action="/setup/media">
-    <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
-    <div class="field">
-      <label for="media_folders">Folders (one per line)</label>
-      <textarea id="media_folders" name="media_folders"
-                placeholder="podcasts&#10;interviews/2026">{{ media_folders_text }}</textarea>
-    </div>
-    <button type="submit">Save folders</button>
-  </form>
-
-  {% if media_folders %}
-  <p class="muted">Registered: {% for f in media_folders %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}</p>
-  {% endif %}
+  <p>Voxint reads media from under <code>{{ media_root }}</code>. Browse to the folders
+     you want it to watch and add them; optionally choose a domain pack per folder to
+     tune transcription and enrichment. You can skip this and submit files individually
+     later.</p>
+  {% include "fragments/folder_panel.html" %}
 
   <h2>Scan for existing media</h2>
   <p class="muted">Optionally look through your registered folders for audio/video that

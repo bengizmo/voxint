@@ -1,0 +1,13 @@
+{# Settings → Media folders (issue #63): the folder browser + per-folder domain-pack
+   picker, the same panel the setup wizard's media step uses, mounted here on the
+   protected router (CSRF_SETTINGS). Self-contained: renders from _settings_context,
+   which threads the folder-panel context via _folder_panel_context. The panel owns
+   its own CSRF-guarded routes (/settings/folders, /settings/folders/browse), so it
+   slots in beside the other sections without touching their saves. #}
+<section id="folders" aria-labelledby="folders-heading">
+<h2 id="folders-heading">Media folders</h2>
+<p class="muted">Register the folders under your media root that Voxint should watch,
+   and choose a domain pack per folder to tune transcription and enrichment. Browsing
+   stays inside your media root. Changes apply to the next job you submit.</p>
+{% include "fragments/folder_panel.html" %}
+</section>
