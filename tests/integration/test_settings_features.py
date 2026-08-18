@@ -302,6 +302,68 @@ def test_ytdlp_toggles_independently_of_llm(
     assert _row(session_factory).ytdlp_enabled is False  # type: ignore[union-attr]
 
 
+def test_features_route_accepts_every_rendered_flag(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Behavioral drift guard (#67 regression): every flag the Features section
+    # RENDERS (_FEATURE_FLAG_META → the template radios) MUST round-trip through
+    # POST /settings/features. A rendered radio whose name the route does not
+    # declare as a Form param is silently dropped by Starlette and reverts to
+    # inherit (NULL) — exactly how llm_bundled_enabled shipped broken. Submitting
+    # an explicit Off for every flag (which violates no cross-flag invariant) and
+    # asserting each column stored False catches any flag the route fails to accept.
+    from voxint.api.app import _FEATURE_FLAG_NAMES
+
+    client, _ = make_client(session_factory, media_root)
+    resp = client.post(
+        "/settings/features",
+        data=_form(**{name: "off" for name in _FEATURE_FLAG_NAMES}),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303, resp.text
+    row = _row(session_factory)
+    assert row is not None
+    for name in _FEATURE_FLAG_NAMES:
+        assert getattr(row, name) is False, f"{name} did not round-trip through the route"
+
+
+def test_enable_bundled_local_model_persists(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Regression (#67): the Features form renders the bundled radio, so its POST
+    # must persist. Before the fix the route did not declare the field, Starlette
+    # dropped it, and it read back NULL no matter what the operator chose.
+    client, _ = make_client(session_factory, media_root)
+    resp = client.post(
+        "/settings/features",
+        data=_form(llm_bundled_enabled="on"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _row(session_factory).llm_bundled_enabled is True  # type: ignore[union-attr]
+
+    # And an explicit Off persists False (not NULL/inherit).
+    resp = client.post(
+        "/settings/features",
+        data=_form(llm_bundled_enabled="off"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert _row(session_factory).llm_bundled_enabled is False  # type: ignore[union-attr]
+
+
+def test_bundled_override_round_trips_in_the_rendered_form(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # The Features form is a full-form replace, so the render must re-check the
+    # stored bundled state — otherwise the browser would resubmit "inherit" and
+    # quietly clear the override on the next unrelated save.
+    client, _ = make_client(session_factory, media_root)
+    _seed_flags(session_factory, llm_bundled_enabled=True)
+    body = client.get("/settings").text
+    assert 'name="llm_bundled_enabled" value="on" checked' in body
+
+
 def test_features_requires_csrf(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

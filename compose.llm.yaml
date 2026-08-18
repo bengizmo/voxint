@@ -19,9 +19,22 @@
 # (LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS). A GPU is strongly recommended —
 # uncomment the `command:` + `deploy:` block below to offload to an NVIDIA GPU.
 services:
-  # Point the worker at the bundled endpoint. These two constants feed
+  # Point BOTH app processes at the bundled endpoint. These two constants feed
   # config.llm_bundled_base_url / llm_bundled_model; the Phase B routing reads
   # them and, when the flag is on, sends enhancement + summary/entities here.
+  #
+  # ⚠ The API process needs them too, not just the worker: the console's
+  # "Generate" / "generate all" action runs create_jobs IN THE API, and the
+  # scoped-bundle topics suppression there keys on llm_bundled_active(settings).
+  # If only the worker saw the endpoint, the API would enqueue a topics job the
+  # worker then routed to the bundle (which cannot do topics) — a split-brain the
+  # autogenerate path (worker-side create_jobs) would not hit. Keep the two blocks
+  # identical so enqueue-time scope decisions match execution-time routing.
+  api:
+    environment:
+      LLM_BUNDLED_BASE_URL: http://voxint-llm:8080/v1
+      LLM_BUNDLED_MODEL: qwen3-4b-instruct-2507
+
   worker:
     environment:
       LLM_BUNDLED_BASE_URL: http://voxint-llm:8080/v1

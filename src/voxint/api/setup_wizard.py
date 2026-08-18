@@ -282,7 +282,9 @@ def normalize_web_search_api_key(raw: str) -> str | None:
     return normalize_api_key(raw, label="Web-search API key", max_chars=MAX_LLM_KEY_CHARS)
 
 
-def validate_llm_enable(effective_api_key: str, settings: Settings) -> None:
+def validate_llm_enable(
+    effective_api_key: str, settings: Settings, *, bundled_active: bool = False
+) -> None:
     """Guard the two preconditions for turning LLM enhancement on.
 
     Raises :class:`SetupValidationError` (the route persists ``llm_enabled=False``
@@ -297,11 +299,21 @@ def validate_llm_enable(effective_api_key: str, settings: Settings) -> None:
     ``""`` means "no key anywhere"). It is passed in rather than read from
     ``settings`` because the key may now be UI-stored on the ``app_settings`` row,
     not env-only; the value is used only for a presence check and is never rendered.
+
+    ``bundled_active`` (issue #67): the scoped bundled local model is a keyless,
+    product-owned endpoint, so when it is the active enhancement endpoint the
+    no-key precondition is satisfied without a BYO key — otherwise the exact
+    keyless operator the bundle exists for could never turn the master LLM switch
+    on (enhancement + run-assets both gate on ``llm_enabled``). The BUDGET check
+    still applies. The caller resolves it via
+    :func:`voxint.app_settings.llm_bundled_active`; BYO-only jobs (names, topics,
+    research) remain key-gated by their own paths, which never consult the bundle.
     """
-    if not effective_api_key:
+    if not effective_api_key and not bundled_active:
         raise SetupValidationError(
             "No LLM API key is configured. Enter one here (or set LLM_API_KEY in the "
-            "environment) before enabling LLM enhancement."
+            "environment), or turn on the bundled local model (Settings → Features) "
+            "if you are running it, before enabling LLM enhancement."
         )
     if not llm_budget_fits_stage_lease(settings):
         raise SetupValidationError(

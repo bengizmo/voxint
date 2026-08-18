@@ -155,7 +155,16 @@ def create_jobs(
     if llm_bundled_active(row, settings):
         kinds = tuple(k for k in kinds if k is not RunAssetKind.TOPICS)
         if not kinds:
-            return [], []
+            # The request was non-empty (validated just above) but was ALL topics:
+            # an explicit "generate topics" while the bundle is the active endpoint.
+            # "Generate all" never lands here — it keeps summary+entities and only
+            # drops topics silently, the intended per-kind degrade. A topics-only
+            # request has nothing left to do, so say why instead of a silent no-op.
+            raise RunAssetJobError(
+                "Topics need a bring-your-own LLM endpoint — the bundled local"
+                " model can't generate topics. Turn the bundled model off"
+                " (Settings → Features) or configure a BYO endpoint to make topics."
+            )
     try:
         load_source(session, pipeline_run_id)  # validates run + transcript exist
     except RunAssetError as exc:
@@ -354,9 +363,17 @@ def execute_job(
         # exec_settings) reflect the bundled endpoint with no extra plumbing. The
         # dense bundled model is slow on CPU, so clamp the input-char cap down to
         # the bundled backstop to keep a large transcript's job under the stage
-        # deadline (topics is suppressed separately in create_jobs, so no topics
-        # job reaches here under the bundle).
-        bundled = llm_bundled_active(app_row, settings)
+        # deadline.
+        #
+        # TOPICS is excluded HERE as well as in create_jobs, not only there: the
+        # #66 measurement disqualifies the bundle for topics, and create_jobs'
+        # suppression is evaluated at ENQUEUE — it cannot cover a job queued before
+        # the bundle was activated (or, historically, one enqueued by a process
+        # that did not see the bundle env). A topics job that reaches execution
+        # therefore runs on its snapshotted BYO endpoint (with the live BYO key),
+        # failing honestly if no key is configured, rather than being silently sent
+        # to a model that cannot do the job.
+        bundled = llm_bundled_active(app_row, settings) and kind is not RunAssetKind.TOPICS
         if bundled:
             exec_settings = exec_settings.model_copy(
                 update={

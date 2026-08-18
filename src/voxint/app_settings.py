@@ -241,13 +241,16 @@ def llm_bundled_active(row: AppSettings | None, settings: Settings) -> bool:
 
     The SINGLE predicate the routing sites resolve through, so enhancement
     (``pipeline.stages.context``) and run-assets (``enrichment.asset_jobs``) can
-    never drift apart. Active iff the operator enabled the bundle AND a bundled
-    base URL is compose-injected (``""`` ⇒ no bundled endpoint exists, so the flag
-    is inert and the BYO path governs). Names + research NEVER consult this — they
-    are structurally BYO-only (#66: Qwen fails those jobs).
+    never drift apart. Active iff the operator enabled the bundle AND both bundled
+    endpoint constants are compose-injected (an empty base URL or model ⇒ no usable
+    bundled endpoint exists, so the flag is inert and the BYO path governs — never
+    build a client that would POST ``"model": ""``). Names + research NEVER consult
+    this — they are structurally BYO-only (#66: Qwen fails those jobs).
     """
-    return resolve_effective_llm_bundled_enabled(row, settings) and bool(
-        settings.llm_bundled_base_url
+    return (
+        resolve_effective_llm_bundled_enabled(row, settings)
+        and bool(settings.llm_bundled_base_url)
+        and bool(settings.llm_bundled_model)
     )
 
 

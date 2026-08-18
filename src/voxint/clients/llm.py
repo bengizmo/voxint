@@ -114,7 +114,10 @@ class SamplingProfile:
     pre-#67 request body, so BYO requests are unchanged. Optional
     ``top_p``/``top_k``/``min_p`` are emitted ONLY when set, so no
     provider-specific parameter leaks to an arbitrary BYO endpoint that might
-    reject it. The bundled local model (#67) selects a measured, pinned profile.
+    reject it. The bundled local model (#67) also runs on this greedy default —
+    the profile the #66 harness measured and qualified for its in-scope jobs — and
+    passes it explicitly at its build site; the optional knobs are the seam for a
+    future measured per-model profile, not a claim that one is set today.
     """
 
     temperature: float = 0

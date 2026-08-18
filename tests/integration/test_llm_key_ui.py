@@ -419,3 +419,53 @@ def test_setup_validation_rerender_preserves_blank_endpoints(
     row = _row(session_factory)
     assert row is not None
     assert row.llm_base_url is None and row.llm_model is None
+
+
+def test_settings_enable_without_key_succeeds_when_bundle_active(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Issue #67: the keyless operator the bundle exists for must be able to turn the
+    # master LLM switch on with NO BYO key once the bundled model is active
+    # (compose-injected endpoint + the Features toggle on). The same POST fails
+    # closed without the bundle (test_setup_enable_without_any_key_...).
+    client = make_client(
+        session_factory,
+        media_root,
+        onboarded=True,
+        llm_api_key="",  # no env key
+        llm_bundled_base_url="http://voxint-llm:8080/v1",
+        llm_bundled_model="qwen3-4b-instruct-2507",
+    )
+    with session_factory() as session:  # operator turned the bundle on first
+        row = get_or_create(session, llm_enabled_default=False)
+        row.llm_bundled_enabled = True
+        session.commit()
+    resp = client.post(
+        "/settings/llm",
+        data=_settings_form(enabled="true"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    row = _row(session_factory)
+    assert row is not None and row.llm_enabled is True  # keyless enable took
+
+
+def test_settings_enable_without_key_still_fails_closed_without_active_bundle(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # The keyless allowance is SCOPED to an ACTIVE bundle: the flag on but no
+    # compose-injected endpoint (llm_bundled_base_url="") leaves the bundle inert,
+    # so a no-key enable still fails closed exactly as before #67.
+    client = make_client(session_factory, media_root, onboarded=True, llm_api_key="")
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.llm_bundled_enabled = True  # flag on, but no bundled base_url ⇒ inactive
+        session.commit()
+    resp = client.post(
+        "/settings/llm",
+        data=_settings_form(enabled="true"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200  # re-render with the no-key message, no commit
+    row = _row(session_factory)
+    assert row is not None and row.llm_enabled is False

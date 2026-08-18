@@ -179,6 +179,7 @@ from voxint.app_settings import (
     get_app_settings,
     get_or_create,
     is_onboarded,
+    llm_bundled_active,
     llm_endpoint_form_fields,
     mark_tutorial_complete,
     ready_tutorial_run_id,
@@ -1822,8 +1823,13 @@ def _persist_llm_settings(
     effective_key = (candidate_key or "").strip() or settings.llm_api_key.strip()
     error: str | None = None
     if enabled:
+        # Issue #67: a keyless enable is legitimate when the bundled local model is
+        # the active endpoint — resolve it from the just-created row (the operator
+        # may have turned the bundle on in Features first) so the keyless audience
+        # can actually flip the master LLM switch. BYO-only jobs stay key-gated.
+        bundled_active = llm_bundled_active(row, settings)
         try:
-            validate_llm_enable(effective_key, settings)
+            validate_llm_enable(effective_key, settings, bundled_active=bundled_active)
         except SetupValidationError as exc:
             error = str(exc)
     # Single deliberate mutation. On a validation failure we fail closed
@@ -2091,7 +2097,9 @@ def _persist_feature_flags(
     shipped radios) is REJECTED rather than silently coerced: mapping it to "off"
     would quietly disable a feature, and to "inherit" would quietly drop an
     override. Missing fields still default to ``"inherit"`` — this is a full-form
-    replace, and the real form always submits all five radios.
+    replace, and the real form always submits every radio in ``_FEATURE_FLAG_META``
+    (the POST route must declare a matching ``Form`` param for each, or Starlette
+    drops the field and this loop silently reverts it — see ``settings_features``).
 
     The flags NOT edited here (``llm_enabled`` and the web-research provider trio)
     are resolved at their CURRENT effective value so a dependency invariant fires
@@ -4691,16 +4699,23 @@ def _register_routes(app: FastAPI) -> None:
         enrichment_names_llm_enabled: Annotated[str, Form()] = "inherit",
         enrichment_run_assets_enabled: Annotated[str, Form()] = "inherit",
         enrichment_run_assets_autogenerate: Annotated[str, Form()] = "inherit",
+        llm_bundled_enabled: Annotated[str, Form()] = "inherit",
         ytdlp_enabled: Annotated[str, Form()] = "inherit",
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
         _require_csrf(request, CSRF_SETTINGS, csrf_token)
         settings: Settings = request.app.state.settings
+        # Every flag the Features section RENDERS (_FEATURE_FLAG_META) must have a
+        # matching Form param here and a key in `submitted`: a rendered radio whose
+        # name is not declared is silently dropped by Starlette, and
+        # _persist_feature_flags then reads it as "inherit" and clears any stored
+        # override. test_features_route_declares_every_flag guards this pairing.
         submitted = {
             "enrichment_names_enabled": enrichment_names_enabled,
             "enrichment_names_llm_enabled": enrichment_names_llm_enabled,
             "enrichment_run_assets_enabled": enrichment_run_assets_enabled,
             "enrichment_run_assets_autogenerate": enrichment_run_assets_autogenerate,
+            "llm_bundled_enabled": llm_bundled_enabled,
             "ytdlp_enabled": ytdlp_enabled,
         }
         # Candidate → validate (shared invariants) → ONE mutation. On an invariant

@@ -379,29 +379,33 @@ def test_str_flag_form_field_renders_raw_column(monkeypatch) -> None:
 # ---------------------------------------------------- bundled local LLM (#67)
 
 
-def test_llm_bundled_active_needs_flag_and_url() -> None:
-    # The routing predicate is AND(effective flag, a configured bundled URL): the
-    # compose-injected URL is what makes the bundle exist, so the flag is inert
-    # without it (a fresh install with the toggle on but no compose.llm.yaml).
-    on_no_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url="")
+def test_llm_bundled_active_needs_flag_and_url_and_model() -> None:
+    # The routing predicate is AND(effective flag, a configured bundled URL, a
+    # configured bundled model): the compose-injected URL+model are what make the
+    # bundle exist, so the flag is inert without them (a fresh install with the
+    # toggle on but no compose.llm.yaml). Both endpoint constants are required so
+    # the client never POSTs "model": "" to a single-model llama-server (#67).
+    model = "qwen3-4b-instruct-2507"
+    url = "http://voxint-llm:8080/v1"
+    on_no_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url="", llm_bundled_model=model)
     assert llm_bundled_active(None, on_no_url) is False
-    on_url = _settings(
-        llm_bundled_enabled=True, llm_bundled_base_url="http://voxint-llm:8080/v1"
-    )
+    on_no_model = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model="")
+    assert llm_bundled_active(None, on_no_model) is False
+    on_url = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(None, on_url) is True
-    off_url = _settings(
-        llm_bundled_enabled=False, llm_bundled_base_url="http://voxint-llm:8080/v1"
-    )
+    off_url = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(None, off_url) is False
 
 
 def test_llm_bundled_active_row_wins_over_env() -> None:
     # Tri-state: a UI enable (row True) activates the bundle even when the env
-    # default is off, provided a bundled URL exists; a UI disable wins over env on.
+    # default is off, provided the bundled URL+model exist; a UI disable wins over
+    # env on.
     url = "http://voxint-llm:8080/v1"
-    env_off = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url)
+    model = "qwen3-4b-instruct-2507"
+    env_off = _settings(llm_bundled_enabled=False, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=True), env_off) is True
-    env_on = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url)
+    env_on = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=False), env_on) is False
 
 

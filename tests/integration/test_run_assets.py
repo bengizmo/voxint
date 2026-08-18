@@ -325,21 +325,54 @@ class TestJobs:
             assert sorted(j.asset_kind for j in created) == ["entity_mentions", "summary"]
             assert skipped == []
 
-    def test_create_jobs_bundle_topics_only_is_noop(
+    def test_create_jobs_bundle_topics_only_raises(
         self, session_factory: sessionmaker[Session]
     ) -> None:
-        # Explicitly requesting only topics under the bundle creates nothing — an
-        # honest no-op (empty created), not a "no asset kinds requested" error.
+        # Explicitly requesting ONLY topics under the bundle has nothing left to do
+        # once topics is dropped (#67): say why (an operator-plain RunAssetJobError)
+        # instead of a silent no-op that renders an empty card with no explanation.
+        # "Generate all" is unaffected — it keeps summary+entities and drops topics.
         with session_factory() as session:
             run_id = seed_run(session)
-            created, skipped = create_jobs(
+            with pytest.raises(RunAssetJobError, match="Topics need a bring-your-own"):
+                create_jobs(
+                    session,
+                    pipeline_run_id=run_id,
+                    kinds=(RunAssetKind.TOPICS,),
+                    settings=_bundled_settings(),
+                )
+
+    def test_execute_job_bundle_never_routes_topics(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Defense in depth (#67): create_jobs' topics suppression is evaluated at
+        # ENQUEUE, so it cannot cover a topics job queued under BYO and then run
+        # after the operator activates the bundle. execute_job must still refuse to
+        # route topics to the bundle (it can't do topics, #66) — the job runs on its
+        # snapshotted BYO endpoint, NOT the bundled model / 16k clamp.
+        byo = make_settings()
+        with session_factory() as session:
+            run_id = seed_run(session)
+            created, _ = create_jobs(
                 session,
                 pipeline_run_id=run_id,
                 kinds=(RunAssetKind.TOPICS,),
-                settings=_bundled_settings(),
+                settings=byo,  # BYO enqueue: topics is allowed and snapshotted
             )
-            assert created == []
-            assert skipped == []
+            session.commit()
+            job_id = created[0].id
+        # The operator flips the bundle on between enqueue and execution.
+        execute_job(
+            session_factory, job_id, settings=_bundled_settings(), llm=FakeLLM([TOPICS_BODY])
+        )
+        with session_factory() as session:
+            job = session.get(RunAssetJob, job_id)
+            assert job.status == RunAssetJobStatus.SUCCEEDED.value
+            asset = session.get(RunEnrichmentAsset, job.asset_id)
+            # Ran on the snapshotted BYO endpoint, not the bundle.
+            assert asset.config["model"] != _BUNDLED_MODEL
+            assert asset.config["base_url"] != _BUNDLED_URL
+            assert asset.config["max_input_chars"] != 16_000
 
     def test_create_jobs_byo_keeps_topics(
         self, session_factory: sessionmaker[Session]
