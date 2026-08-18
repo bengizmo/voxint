@@ -13,9 +13,10 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_CLAIM, CSRF_SETUP, mint_csrf_token
 from voxint.api.setup_wizard import scan_media_folders
@@ -357,6 +358,42 @@ def test_services_step_returns_200_with_dependencies_down(
     )
     resp = client.get("/setup?step=services")
     assert resp.status_code == 200
+
+
+def test_services_step_renders_when_database_is_down(media_root: Path) -> None:
+    # The wizard's whole point is to SHOW a down dependency. If Postgres itself is
+    # unreachable, the SERVICES step must still render (200) with the failed postgres
+    # row, not 500 because the page's own app_settings read raised. Bind the app to a
+    # dead DB port (connection refused, fast).
+    dead_factory = sessionmaker(
+        create_engine("postgresql+psycopg://voxint:voxint@127.0.0.1:1/voxint_test")
+    )
+    client = _services_down_client(dead_factory, media_root)
+    resp = client.get("/setup?step=services")
+    assert resp.status_code == 200
+    assert "postgres" in resp.text
+    assert '<span class="pill failed">failed</span>' in resp.text
+
+
+def test_services_step_llm_row_follows_row_over_env_on(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Row wins over env (#74): env LLM off, but the app_settings row enables it →
+    # the LLM readiness row appears. Guards against the doctor gate drifting from a run.
+    seed_onboarded(session_factory, llm_enabled=True)
+    client = _services_down_client(session_factory, media_root)  # env llm_enabled=False
+    body = client.get("/setup?step=services").text
+    assert "llm endpoint" in body
+
+
+def test_services_step_llm_row_follows_row_over_env_off(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Reverse: env LLM on, but the row disables it → no LLM row (the row wins).
+    seed_onboarded(session_factory, llm_enabled=False)
+    client = _services_down_client(session_factory, media_root, llm_enabled=True)
+    body = client.get("/setup?step=services").text
+    assert "llm endpoint" not in body
 
 
 # ------------------------------------------------------------------ finish step

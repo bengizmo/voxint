@@ -33,7 +33,7 @@ from fastapi.responses import (
 )
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import Engine, exists, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -1689,25 +1689,97 @@ _DOCTOR_REMEDIATION: dict[str, str] = {
         " moment."
     ),
     "llm": (
-        "LLM transcript enhancement is on but the endpoint didn't answer — check the"
-        " LLM section in Settings. Transcription and diarization still run;"
-        " enhancement is simply skipped until the endpoint is reachable."
+        "LLM transcript enhancement is on but the endpoint didn't answer (or rejected"
+        " the check) — check the LLM section in Settings. Transcription and diarization"
+        " still run; enhancement is simply skipped until the endpoint is reachable."
+    ),
+    # Fallback for any diagnostics check not explicitly categorized below — a neutral
+    # "look at this dependency" rather than wrongly steering the operator at the model
+    # services. No current check lands here (see _doctor_category), but a future one
+    # gets honest generic copy instead of an empty string or a misleading fix.
+    "other": (
+        "This dependency isn't ready — check its configuration in Settings or the"
+        " README, then re-check."
     ),
 }
 
 
 def _doctor_category(name: str) -> str:
     """Map a diagnostics :class:`~voxint.diagnostics.CheckResult` name to a
-    ``_DOCTOR_REMEDIATION`` category. Total by construction — any unrecognized name
-    (a new hard service) falls through to the model-services copy rather than
-    rendering an empty remediation."""
+    ``_DOCTOR_REMEDIATION`` category. Total by construction — an unrecognized name (a
+    future check) falls through to the neutral ``other`` copy, never a KeyError and
+    never the wrong (model-services) remediation."""
     if name == "postgres":
         return "database"
     if name == "redis":
         return "redis"
+    if name in {"transcription", "diarization", "speaker embedding"}:
+        return "models"
     if name == "llm endpoint":
         return "llm"
-    return "models"
+    return "other"
+
+
+def _doctor_checks(request: Request, session: Session) -> list[dict[str, Any]]:
+    """Run the wizard SERVICES readiness checks (issue #61) and shape them for the
+    template. Self-contains every dependency failure (DB / redis / model / LLM), so
+    it never raises into the request — the caller can render a 200 regardless."""
+    settings: Settings = request.app.state.settings
+    engine = cast(Engine, session.get_bind())
+    with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
+        results = run_diagnostics(
+            settings, engine, http_client=client, include_hf_token=False
+        )
+    return [
+        {
+            "name": r.name,
+            "state": check_state(r),
+            "detail": r.detail,
+            "remediation": _DOCTOR_REMEDIATION[_doctor_category(r.name)],
+        }
+        for r in results
+    ]
+
+
+def _minimal_services_context(request: Request, settings: Settings) -> dict[str, Any]:
+    """DB-free context for the SERVICES step when the ``app_settings`` read itself
+    fails — a down or unmigrated Postgres makes ``_setup_context``'s row + tutorial
+    queries raise. Showing that (a failed ``postgres`` readiness row) is the whole
+    point of this step, so it must still render rather than 500. Carries only the keys
+    the SERVICES branch + the shared nav/layout touch; the other steps' DB-derived
+    fields are absent (the Jinja env uses lenient ``Undefined`` and those fields are
+    referenced only inside other steps' branches). The caller attaches the checks."""
+    return {
+        "request": request,
+        "step": WizardStep.SERVICES,
+        "steps": STEP_ORDER,
+        "step_index": STEP_ORDER.index(WizardStep.SERVICES),
+        "next_step": next_step(WizardStep.SERVICES),
+        "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
+        "media_root": str(settings.media_root),
+        "active_nav": "setup",
+        "error": None,
+    }
+
+
+def _services_step_response(request: Request, session: Session) -> Response:
+    """Render the wizard SERVICES step with the full doctor readiness checks (#61).
+
+    The checks run first — they self-contain every failure, so this GET is a 200 even
+    with every dependency down — then the page context is built, falling back to a
+    DB-free context when the ``app_settings`` read raises (Postgres down/unmigrated) so
+    the operator still sees the failed-postgres row instead of a 500."""
+    settings: Settings = request.app.state.settings
+    checks = _doctor_checks(request, session)
+    try:
+        context = _setup_context(request, session, WizardStep.SERVICES)
+    except SQLAlchemyError:
+        # The poisoned session must be rolled back so the trailing commit in
+        # _get_session is a harmless no-op rather than re-raising.
+        session.rollback()
+        context = _minimal_services_context(request, settings)
+    context["doctor_checks"] = checks
+    return templates.TemplateResponse(request, "setup.html", context)
 
 
 def _persist_feature_flags(
@@ -2246,35 +2318,15 @@ def _register_routes(app: FastAPI) -> None:
     @app.get("/setup", include_in_schema=False)
     def setup(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         step = parse_step(request.query_params.get("step"))
-        context = _setup_context(request, session, step)
         if step is WizardStep.SERVICES:
-            # Run the full `voxint doctor` readiness checks only on the services step —
-            # a few-second network op we don't want to pay on every wizard GET (issue
-            # #61). include_hf_token=False drops the Hugging Face check: the default
-            # install runs on vendored weights, so it's noise for this operator AND a
-            # live huggingface.co call this step has no reason to make. run_diagnostics
-            # never raises into the request (its DB read suppresses SQLAlchemyError; the
-            # HTTP checks normalize every transport/URL failure), so this GET stays a
-            # 200 even with every dependency down. The engine is the request session's
-            # own pooled Engine — check_database borrows a separate pooled connection
-            # for its SELECT 1, no conflict with this read-only GET.
-            settings: Settings = request.app.state.settings
-            engine = cast(Engine, session.get_bind())
-            with httpx.Client(
-                timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
-            ) as client:
-                results = run_diagnostics(
-                    settings, engine, http_client=client, include_hf_token=False
-                )
-            context["doctor_checks"] = [
-                {
-                    "name": r.name,
-                    "state": check_state(r),
-                    "detail": r.detail,
-                    "remediation": _DOCTOR_REMEDIATION[_doctor_category(r.name)],
-                }
-                for r in results
-            ]
+            # The services step surfaces the full `voxint doctor` readiness checks
+            # (issue #61) — a few-second network op we don't pay on other steps.
+            # include_hf_token=False drops the Hugging Face check: the default install
+            # runs on vendored weights, so it's noise AND a live huggingface.co call
+            # this step has no reason to make. _services_step_response renders a 200
+            # even when Postgres itself is down (that's exactly what it must show).
+            return _services_step_response(request, session)
+        context = _setup_context(request, session, step)
         return templates.TemplateResponse(request, "setup.html", context)
 
     def _setup_redirect(step: WizardStep) -> RedirectResponse:

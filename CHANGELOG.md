@@ -19,11 +19,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Hugging Face token check is deliberately **cut** from the wizard — the default
   install runs on vendored weights, so it's noise (and skipping it also avoids a
   live huggingface.co call the step has no reason to make). No secrets, endpoints,
-  or DSNs are ever rendered. Pure app + template; the checks reuse the existing
-  `diagnostics.py` functions with no logic fork. *(Known behaviour: enhancement
-  also needs a key and a fitting budget to actually run, so the LLM row can read
-  "enabled but unreachable" when the master toggle is on without a usable key —
-  this matches `voxint doctor` and is surfaced honestly rather than hidden.)*
+  or DSNs are ever rendered, and the step renders even when Postgres itself is down
+  (the failed-database row is exactly what it must show, never a 500). Pure app +
+  template; the checks reuse the existing `diagnostics.py` functions with no logic
+  fork. *(Known behaviour: enhancement also needs a key and a fitting budget to
+  actually run, so the LLM row can read "enabled but unreachable" when the master
+  toggle is on without a usable key — surfaced honestly rather than hidden.)*
+
+### Changed
+- **`voxint doctor` LLM check now distinguishes reachable from ready**: a `/models`
+  response is only reported healthy on a **2xx**; a 4xx/5xx (a wrong key → 401, a
+  wrong endpoint path → 404, a broken provider → 5xx) is reported as an advisory
+  miss rather than "reachable", because a real enhancement call would be rejected
+  the same way. Still advisory — the LLM endpoint's state never changes the doctor
+  exit code — and the base URL and key are never printed. This makes both `voxint
+  doctor` and the new setup-wizard readiness step (#61) refuse to paint a bad key
+  green.
 - **Settings → Sources & research: in-UI web-research config (#76, settings-overhaul
   arc #47)**: a new **Sources & research** section on the Settings page lets a
   non-technical operator configure web research entirely from the browser — the

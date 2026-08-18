@@ -175,14 +175,44 @@ def test_check_llm_none_when_disabled() -> None:
     )
 
 
-def test_check_llm_reachable_on_any_http_answer() -> None:
-    client = _http(lambda r: httpx.Response(404))  # host answered ⇒ reachable
+def test_check_llm_ready_on_2xx() -> None:
+    client = _http(lambda r: httpx.Response(200, json={"data": []}))
     result = check_llm(
         enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=client
     )
     assert result is not None
     assert result.ok is True and result.hard is False
-    assert "reachable" in result.detail
+    assert result.detail == "reachable (HTTP 200)"
+
+
+def test_check_llm_rejected_non_2xx_is_advisory_miss() -> None:
+    # A wrong key (401) or wrong path (404) means the host is reachable but rejected the
+    # probe — a real enhancement call would be rejected the same way, so this is an
+    # advisory miss (→ "unverified" in the wizard), never a green "ready" (issue #61).
+    for status in (401, 404, 500):
+        client = _http(lambda r, s=status: httpx.Response(s))
+        result = check_llm(
+            enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=client
+        )
+        assert result is not None
+        assert result.ok is False and result.hard is False
+        assert result.detail == f"rejected (HTTP {status})"
+
+
+def test_check_llm_unexpected_exception_does_not_raise() -> None:
+    # The "never raises into the caller" contract must hold for ANY error building or
+    # sending the request, not only httpx.HTTPError — e.g. a non-ASCII env api_key that
+    # httpx can't encode into the Authorization header raises UnicodeEncodeError. Any
+    # such error must normalize to a redacted advisory miss (the wizard GET stays 200).
+    def handler(_r: httpx.Request) -> httpx.Response:
+        raise UnicodeEncodeError("ascii", "clé", 2, 3, "ordinal not in range")
+
+    result = check_llm(
+        enabled=True, base_url="http://localhost:8000/v1", api_key="sk-x", client=_http(handler)
+    )
+    assert result is not None
+    assert result.ok is False and result.hard is False
+    assert result.detail == "unreachable (UnicodeEncodeError)"
 
 
 def test_check_llm_transport_error_is_advisory_failure() -> None:

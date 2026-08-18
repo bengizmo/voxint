@@ -31,6 +31,7 @@ from voxint.api.health_probe import probe_services
 from voxint.app_settings import (
     get_app_settings,
     resolve_effective_llm_api_key,
+    resolve_effective_llm_enabled,
     resolve_effective_llm_endpoint,
 )
 from voxint.config import Settings
@@ -131,14 +132,24 @@ def check_hf_token(token: str | None, *, client: httpx.Client) -> CheckResult:
 def check_llm(
     *, enabled: bool, base_url: str, api_key: str, client: httpx.Client
 ) -> CheckResult | None:
-    """Advisory: reachability of the LLM endpoint, only when enhancement is on.
+    """Advisory: does the LLM endpoint answer ``/models`` with a 2xx, when on.
 
     Takes the EFFECTIVE LLM configuration (issue #10): ``enabled`` is the row's
     enablement over env, and ``base_url``/``api_key`` are row-wins-over-env resolved
     by :func:`run_diagnostics` — so ``doctor`` reflects a UI-stored key/endpoint, not
     just env. Returns ``None`` when enhancement is off — an unconfigured, unused LLM
-    is not a fault. Any HTTP answer (even 401/404) proves the host is reachable; only
-    a transport failure is a miss. The base URL and key are never printed.
+    is not a fault.
+
+    A 2xx is the only *ready* answer. A 4xx/5xx means the host is reachable but
+    *rejected* the probe — a wrong key returns 401, a wrong endpoint path returns 404,
+    a broken provider returns 5xx — and a real enhancement call would be rejected the
+    same way (the LLM client treats >=400 as an error), so it is reported as an
+    advisory miss, never as ready: an honest first-run screen must not paint a bad key
+    green (issue #61). Everything is advisory (``hard=False``) — the endpoint's state
+    never blocks the pipeline. The base URL and key are never printed, and this check
+    never raises into its caller: a transport failure, a malformed URL, or any other
+    error building/sending the request (e.g. a non-encodable ``api_key``) all normalize
+    to a redacted, type-only advisory miss.
     """
     if not enabled:
         return None
@@ -150,9 +161,15 @@ def check_llm(
         # InvalidURL is NOT an httpx.HTTPError; a malformed llm_base_url would
         # otherwise escape this advisory check and abort the whole doctor run.
         return CheckResult("llm endpoint", False, False, "invalid url")
-    except httpx.HTTPError as exc:
+    except Exception as exc:
+        # Best-effort boundary: httpx.HTTPError (transport) but ALSO anything else the
+        # request construction/send can raise — e.g. a non-ASCII env ``api_key`` httpx
+        # cannot encode into the Authorization header (UnicodeEncodeError). All become a
+        # redacted advisory miss so this diagnostic never 500s its caller (the wizard).
         return CheckResult("llm endpoint", False, False, f"unreachable ({_safe(exc)})")
-    return CheckResult("llm endpoint", True, False, f"reachable (HTTP {resp.status_code})")
+    if resp.is_success:
+        return CheckResult("llm endpoint", True, False, f"reachable (HTTP {resp.status_code})")
+    return CheckResult("llm endpoint", False, False, f"rejected (HTTP {resp.status_code})")
 
 
 def run_diagnostics(
@@ -191,7 +208,9 @@ def run_diagnostics(
     base_url, api_key = settings.llm_base_url, settings.llm_api_key.strip()
     with contextlib.suppress(SQLAlchemyError), Session(engine) as session:
         row = get_app_settings(session)
-        llm_enabled = row.llm_enabled if row is not None else settings.llm_enabled
+        # Enablement resolves through the SAME canonical row-over-env helper the
+        # pipeline and enrichment gates use, so doctor can't drift from a run.
+        llm_enabled = resolve_effective_llm_enabled(row, settings)
         base_url, _model = resolve_effective_llm_endpoint(row, settings)
         api_key = resolve_effective_llm_api_key(row, settings)
     llm = check_llm(
