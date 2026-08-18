@@ -193,6 +193,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   [`docs/reports/local-llm-qualification-granite-2026-08-18.md`](docs/reports/local-llm-qualification-granite-2026-08-18.md).
 
 ### Fixed
+- **CI: the native `upgrade-db` launcher tests now run on Linux (#71)**: 17 tests
+  in `tests/unit/test_native_launcher.py` (the `upgrade-db` version-gate, arg-parse,
+  and rollback-shape tests) invoke `cmd_upgrade_db`/`cmd_up`, which start with
+  `require_macos` — so on the Linux CI runner they failed at the OS gate before
+  reaching the portable logic they assert (green on maintainer macOS, red on CI
+  since the slice-2b landing). `require_macos` now no-ops under the existing
+  `VOXINT_NATIVE_LIB=1` library/test seam, so the portable command logic stays
+  exercisable on Linux while a real (non-library) invocation on a non-macOS host
+  still gets the clean "macOS-only" error. Verified by reproducing the failures
+  under a Linux `uname` shim and confirming they pass after the change, with the
+  guard still firing for a real non-macOS user.
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
   `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made
   hatchling's VCS-ignore drop the built island bundles, so `uv build` produced a
