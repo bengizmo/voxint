@@ -34,12 +34,21 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  // True only when the press that may become a dismissing click STARTED on the
+  // backdrop — so a text selection begun inside the panel and released outside
+  // never closes the dialog.
+  const backdropDownRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
     closeRef.current?.focus();
+    // Lock background scroll for the dialog's lifetime; restore the prior value
+    // (not a hard-coded "") so we never clobber a style set elsewhere.
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     return () => {
+      document.body.style.overflow = prevOverflow;
       restoreRef.current?.focus();
     };
   }, [open]);
@@ -60,10 +69,19 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
     if (!focusable || focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    const active = document.activeElement;
+    // If focus has slipped outside the dialog — e.g. onto the scrollable panel
+    // itself, which is click-focusable in Firefox — pull it back to the first
+    // control rather than letting Tab escape to the page behind.
+    if (active == null || !dialogRef.current?.contains(active)) {
+      event.preventDefault();
+      first.focus();
+      return;
+    }
+    if (event.shiftKey && active === first) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && active === last) {
       event.preventDefault();
       first.focus();
     }
@@ -71,9 +89,15 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
 
   return (
     <div
-      // Backdrop: a click outside the panel dismisses. It is purely
+      // Backdrop: a click that both starts and ends on it dismisses. It is purely
       // presentational — the dialog role and labelling live on the panel below.
-      onClick={onClose}
+      onMouseDown={(e) => {
+        backdropDownRef.current = e.target === e.currentTarget;
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && backdropDownRef.current) onClose();
+        backdropDownRef.current = false;
+      }}
       style={{
         position: "fixed",
         inset: 0,
@@ -90,6 +114,7 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
         role="dialog"
         aria-modal="true"
         aria-labelledby="keymap-help-title"
+        tabIndex={-1}
         onKeyDown={onKeyDown}
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -137,7 +162,7 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
           <Row keys="n" desc="Skip to the next unreviewed segment" />
           <Row keys="p" desc="Replay the current segment" />
           <Row keys="e" desc="Edit the current segment’s text" />
-          <Row keys="j / k" desc="Go to the next / previous segment" />
+          <Row keys="j / k" desc="Go to and play the next / previous segment" />
           <Row
             keys="1 – 9"
             desc={

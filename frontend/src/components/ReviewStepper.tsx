@@ -133,6 +133,19 @@ export function ReviewStepper({
   // The `?` cheat-sheet overlay (issue #51). Opened by the `?` key or the visible
   // "⌨ Shortcuts" button; closed by Escape, its close button, or a backdrop click.
   const [helpOpen, setHelpOpen] = useState<boolean>(false);
+  // A synchronous mirror of helpOpen for the global keydown handler. State flips a
+  // render too late (the same reason busyRef exists): between opening the dialog
+  // and the effect re-subscribing, the still-registered listener would see the old
+  // `false` and let `v`/a digit fire behind the just-opened modal. The ref, written
+  // during render, is always current when a key arrives.
+  const helpOpenRef = useRef<boolean>(false);
+  helpOpenRef.current = helpOpen;
+  // A polite status line for the whole-segment speaker actions (issue #51): a
+  // fire-and-reset control and the digit keys otherwise change only the inline
+  // speaker name — not in any live region — so a keyboard/screen-reader operator
+  // gets no confirmation. Errors already speak (role="alert"); this makes success
+  // speak too. Cleared as soon as the operator navigates or edits.
+  const [assignStatus, setAssignStatus] = useState<string | null>(null);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -155,6 +168,9 @@ export function ReviewStepper({
   useEffect(() => {
     setEditText(current?.text ?? "");
     setConfirmDiscard(false);
+    // A speaker-assignment announcement belongs to the segment it was made on;
+    // drop it as soon as the operator moves so it never trails onto another line.
+    setAssignStatus(null);
   }, [current?.segmentId, current?.text]);
 
   const play = useCallback((index: number) => {
@@ -529,7 +545,16 @@ export function ReviewStepper({
   const reassignSegment = useCallback(
     async (speakerId: string | null) => {
       if (busyRef.current) return;
-      if (focusParentId === null || isSplitParent) return;
+      if (focusParentId === null) return;
+      if (isSplitParent) {
+        // The 1–9 / 0 keys stay live on a split parent (its clickable <select> is
+        // hidden there), so refusing silently would be a promised key that quietly
+        // does nothing. Say why — each split part carries its own speaker picker.
+        setError(
+          "This segment is split — assign speakers on each part with its own picker.",
+        );
+        return;
+      }
       busyRef.current = true;
       setBusy(true);
       setError(null);
@@ -548,14 +573,30 @@ export function ReviewStepper({
           { claimLostOnConflict: false },
         );
         if (!result) return;
+        // A relabel is attribution-only: it never rewrites a segment's text,
+        // identity, or document order, so the edit-resync effect (keyed on
+        // segmentId + text) does NOT fire and a pending textarea edit survives it.
+        // That is why — unlike splitAt, whose reconcile can rewrite the focused
+        // text — this path needs no confirmDiscard guard.
         setSegments(result.segments);
         setProgress(result.progress);
+        // Announce the outcome (issue #51): the inline speaker name changes but is
+        // not in a live region, so a screen-reader operator would otherwise hear
+        // nothing on success while failures already speak via role="alert".
+        const name = speakers.find((s) => s.id === speakerId)?.displayName;
+        setAssignStatus(
+          speakerId === null
+            ? "Reset to the detected speaker."
+            : name != null
+              ? `Assigned to ${name}.`
+              : "Speaker assigned.",
+        );
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [postForm, runId, focusParentId, isSplitParent],
+    [postForm, runId, focusParentId, isSplitParent, speakers],
   );
 
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
@@ -572,9 +613,10 @@ export function ReviewStepper({
       if (event.ctrlKey || event.metaKey || event.altKey) return;
       // While the cheat-sheet dialog is open its close button holds focus — a
       // <button>, which the typing-guard below does NOT block — so suppress the
-      // global loop here, or `v`/digits would fire behind the modal. The dialog
-      // owns its own Escape/Tab handling.
-      if (helpOpen) return;
+      // global loop here, or `v`/digits would fire behind the modal. Read the ref,
+      // not the state closure, so a key arriving in the render-gap right after the
+      // dialog opens is still suppressed. The dialog owns its own Escape/Tab.
+      if (helpOpenRef.current) return;
       const el = event.target as HTMLElement | null;
       const tag = el?.tagName;
       // Never steal a key from a form control the operator is using — the
@@ -587,7 +629,9 @@ export function ReviewStepper({
         el?.isContentEditable
       )
         return;
-      switch (event.key) {
+      // Lower-case the letter keys so Caps Lock doesn't silently disable the
+      // shortcuts; `?` and the digit branch below read the raw key unaffected.
+      switch (event.key.toLowerCase()) {
         case "v":
           event.preventDefault();
           void verifyAndAdvance();
@@ -604,20 +648,25 @@ export function ReviewStepper({
           event.preventDefault();
           editRef.current?.focus();
           break;
-        case "j":
-          // Next segment (plays on move, like clicking a line). Clamped so the
-          // last segment stays put rather than blanking the cursor.
+        case "j": {
+          // Next segment (plays on move, like clicking a line). Clamped, and a
+          // no-op at the last segment — no needless replay of the current one.
           event.preventDefault();
-          goTo(Math.min(cursor + 1, segments.length - 1));
+          const next = Math.min(cursor + 1, segments.length - 1);
+          if (next !== cursor) goTo(next);
           break;
-        case "k":
+        }
+        case "k": {
           // Previous segment — the "go back" the forward-only n/jumpNext lacks.
           event.preventDefault();
-          goTo(Math.max(cursor - 1, 0));
+          const prev = Math.max(cursor - 1, 0);
+          if (prev !== cursor) goTo(prev);
           break;
+        }
         case "0":
-          // Reset the focused segment to inherit its label (no-op on a split
-          // parent or a roster-less run; reassignSegment guards both).
+          // Reset the focused segment to inherit its detected label. Fires
+          // regardless of roster (inherit needs no speaker); reassignSegment
+          // refuses only a split parent (with an inline reason).
           event.preventDefault();
           void reassignSegment(null);
           break;
@@ -645,7 +694,6 @@ export function ReviewStepper({
     };
   }, [
     writable,
-    helpOpen,
     verifyAndAdvance,
     jumpNext,
     play,
@@ -810,6 +858,10 @@ export function ReviewStepper({
                     aria-label="Assign a speaker to this whole segment"
                     onChange={(e) => {
                       const val = e.target.value;
+                      // Blur back to the document so the global keymap (suppressed
+                      // while a <select> holds focus) is live again right after a
+                      // mouse pick — otherwise v/j/digits would silently do nothing.
+                      e.currentTarget.blur();
                       if (val === "") return;
                       void reassignSegment(val === "__inherit__" ? null : val);
                     }}
@@ -837,6 +889,11 @@ export function ReviewStepper({
                   {error}
                 </p>
               )}
+              {/* Speaker-assignment success, spoken politely for a screen-reader
+                  operator (the inline name change is not in a live region). */}
+              <p role="status" aria-live="polite" className="visually-hidden">
+                {assignStatus ?? ""}
+              </p>
             </div>
           )}
           <KeymapHelp
