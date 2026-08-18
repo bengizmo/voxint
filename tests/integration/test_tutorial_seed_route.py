@@ -14,11 +14,13 @@ The advisory lock inside ``seed_tutorial_run`` that serialises concurrent seeds
 (so no duplicate tutorial run can be built) is exercised directly.
 """
 
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
@@ -29,7 +31,11 @@ from voxint.config import Settings
 from voxint.db.models import MediaItem, PipelineRun
 from voxint.db.session import session_scope
 from voxint.tutorial import seed as seed_module
-from voxint.tutorial.seed import _SEED_ADVISORY_LOCK_KEY, seed_tutorial_run
+from voxint.tutorial.seed import (
+    _SEED_ADVISORY_LOCK_KEY,
+    TutorialSeedError,
+    seed_tutorial_run,
+)
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "tutorial-seed-route-test-csrf-key"
@@ -190,7 +196,47 @@ def test_seed_asset_failure_shows_asset_message(
     assert _count(session_factory, MediaItem) == 0
 
 
+def test_unclassified_seed_error_propagates_not_masked(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A builder-invariant failure (TutorialSeedError) is a programmer defect, NOT a
+    # storage/asset problem: it must surface loudly (500, session_scope rolls back),
+    # never dressed up as "reinstall your bundled data" tutorial copy.
+    app = create_app(settings=settings, session_factory=session_factory)
+    client = TestClient(app, raise_server_exceptions=False)
+    client.auth = CREDS
+    seed_onboarded(session_factory)
+    monkeypatch.setattr(
+        "voxint.api.app.seed_tutorial_run",
+        _seed_raises(TutorialSeedError("grounded label drifted")),
+    )
+    resp = client.post(
+        "/settings/tutorial/seed", data=_settings_form(), follow_redirects=False
+    )
+    assert resp.status_code == 500
+    assert "bundled sample data" not in resp.text
+    # Nothing committed — the flushed partial row rolled back with the request.
+    assert _count(session_factory, MediaItem) == 0
+    assert _tutorial_run_id(session_factory) is None
+
+
 # ------------------------------------------------ setup wizard seed-on-finish
+
+
+def test_setup_finish_requires_csrf(
+    session_factory: sessionmaker[Session], settings: Settings
+) -> None:
+    client = _client(session_factory, settings, onboarded=False)
+    resp = client.post(
+        "/setup/finish", data={"start_tutorial": "1"}, follow_redirects=False
+    )
+    assert resp.status_code == 403
+    # CSRF is checked before any seed or onboarding write.
+    assert _tutorial_run_id(session_factory) is None
+    with session_factory() as session:
+        assert not is_onboarded(session)
 
 
 def test_setup_finish_seeds_and_launches_when_requested(
@@ -228,6 +274,11 @@ def test_setup_finish_seed_failure_aborts_onboarding(
     assert resp.status_code == 200
     assert "media folder is not writable" in resp.text
     assert _tutorial_run_id(session_factory) is None
+    # Rollback ran: the fake's flushed partial row is gone. Without the route's
+    # session.rollback() the commit-on-200 would leak it (and, in a real late-stage
+    # failure, a whole COMPLETED run into the review queue).
+    assert _count(session_factory, MediaItem) == 0
+    assert _count(session_factory, PipelineRun) == 0
     with session_factory() as session:
         assert not is_onboarded(session)
 
@@ -249,6 +300,58 @@ def test_seed_holds_transaction_advisory_lock(
                 select(func.pg_try_advisory_xact_lock(_SEED_ADVISORY_LOCK_KEY))
             ).scalar()
         assert got is False
+
+
+def _advisory_waiters(session_factory: sessionmaker[Session]) -> int:
+    # Sessions blocked waiting on any advisory lock. In an otherwise-idle test DB
+    # this is exactly the concurrent seeder blocked on _SEED_ADVISORY_LOCK_KEY.
+    with session_factory() as watcher:
+        return watcher.execute(
+            text(
+                "SELECT count(*) FROM pg_locks "
+                "WHERE locktype = 'advisory' AND NOT granted"
+            )
+        ).scalar_one()
+
+
+def test_concurrent_seeds_build_exactly_one_run(
+    session_factory: sessionmaker[Session], settings: Settings
+) -> None:
+    # The real duplicate-prevention proof (and a placement guard): while seeder A
+    # holds the lock mid-build in an open transaction, a second seeder B must block
+    # on the lock, and once A commits, B adopts A's run instead of building a second.
+    # This FAILS if the advisory lock is ever moved below the idempotency read (B
+    # would pass its read before blocking and then build a duplicate run).
+    result: dict[str, object] = {}
+    error: dict[str, BaseException] = {}
+
+    def _seed_b() -> None:
+        try:
+            with session_scope(session_factory) as sb:
+                result["b"] = seed_tutorial_run(
+                    sb, media_root=settings.media_root, settings=settings
+                )
+        except BaseException as exc:  # surface any thread failure to the assertion
+            error["b"] = exc
+
+    with session_scope(session_factory) as sa:
+        a_id = seed_tutorial_run(sa, media_root=settings.media_root, settings=settings)
+        thread = threading.Thread(target=_seed_b)
+        thread.start()
+        # Wait until B is genuinely blocked on the advisory lock before releasing A.
+        for _ in range(500):
+            if _advisory_waiters(session_factory) >= 1:
+                break
+            time.sleep(0.01)
+        else:
+            thread.join(timeout=5)
+            pytest.fail("second seeder never blocked on the advisory lock")
+        # Exiting the `with` commits A and releases the lock; B is then admitted.
+
+    thread.join(timeout=10)
+    assert not error, f"concurrent seeder raised: {error.get('b')!r}"
+    assert result["b"] == a_id
+    assert _count(session_factory, PipelineRun) == 1
 
 
 def test_seed_lock_constant_is_stable() -> None:

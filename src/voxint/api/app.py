@@ -311,7 +311,7 @@ from voxint.speakers.roster import (
     voiceprint_bars,
 )
 from voxint.speakers.roster import is_active as roster_is_active
-from voxint.tutorial.seed import TutorialSeedError, seed_tutorial_run
+from voxint.tutorial.seed import seed_tutorial_run
 from voxint.tutorial.steps import (
     STEP_COPY,
     STEP_PAGE,
@@ -346,22 +346,33 @@ def _try_seed_tutorial(
 
     Returns ``(run_id, None)`` on success or ``(None, message)`` on a classified
     failure. Only filesystem-storage and bundled-resource failures are caught —
-    programmer/DB defects propagate so they are never masked as tutorial copy
-    (issue #75). The real exception is logged server-side; the message is
-    path-free and traceback-free. The CALLER must ``session.rollback()`` before
-    re-rendering — the request session commits on any successful response.
+    programmer/DB/builder defects (SQLAlchemy errors, ``TutorialSeedError`` from a
+    fixture-invariant bug) propagate so they are never masked as tutorial copy
+    (issue #75): a builder bug is not fixed by "reinstalling", so it must surface
+    loudly, not be dressed up as missing data. The real exception is logged
+    server-side; the message is path-free and traceback-free. The CALLER must
+    ``session.rollback()`` before re-rendering — the request session commits on any
+    successful response.
+
+    Classification is by exception *type*, not origin — a v1 approximation. In the
+    rare cross case (e.g. a ``PermissionError`` reading bundled resources) the
+    operator gets the storage message; acceptable for a single-operator install and
+    the true exception is always in the server log.
     """
     try:
         run_id = seed_tutorial_run(
             session, media_root=settings.media_root, settings=settings
         )
-    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError, TutorialSeedError):
+    # FileNotFoundError MUST precede the OSError clause below — it is an OSError
+    # subclass, and a missing bundled asset is a data problem, not a storage one.
+    except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
         logger.exception("Tutorial seed failed: bundled sample data missing/unreadable")
         return None, _TUTORIAL_SEED_ASSET_ERROR
-    except (PermissionError, OSError):
+    except OSError:
         logger.exception("Tutorial seed failed: media folder not writable")
         return None, _TUTORIAL_SEED_STORAGE_ERROR
     return run_id, None
+
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
@@ -2110,9 +2121,12 @@ def _register_routes(app: FastAPI) -> None:
         # redirect, so a plain "Finish setup" never launches a tutorial and its
         # label never lies (issue #75). Seed BEFORE completing onboarding so a
         # storage/asset failure aborts the whole request with nothing committed.
-        wants_tutorial = bool(start_tutorial)
+        # Exact "1" (the button's value) — a crafted start_tutorial=0/false is not
+        # an intent to start.
+        wants_tutorial = start_tutorial == "1"
+        seeded_run_id: uuid.UUID | None = None
         if wants_tutorial:
-            _run_id, error = _try_seed_tutorial(session, settings)
+            seeded_run_id, error = _try_seed_tutorial(session, settings)
             if error is not None:
                 session.rollback()
                 return templates.TemplateResponse(
@@ -2128,13 +2142,14 @@ def _register_routes(app: FastAPI) -> None:
         session.commit()
         # Launch the guided tutorial only when the operator asked for it and only
         # AFTER onboarding commits: a pre-onboarding link to /runs/{id}?tutorial=run
-        # would hit the protected gate and bounce back to /setup.
-        if wants_tutorial:
-            tutorial_run = ready_tutorial_run_id(session)
-            if tutorial_run is not None:
-                return RedirectResponse(
-                    f"/runs/{tutorial_run}?tutorial=run", status_code=303
-                )
+        # would hit the protected gate and bounce back to /setup. Redirect off the
+        # seeder's own returned id (idempotent — the existing run when already
+        # seeded) rather than a re-read, so a successful seed can never silently
+        # fall through to /review.
+        if wants_tutorial and seeded_run_id is not None:
+            return RedirectResponse(
+                f"/runs/{seeded_run_id}?tutorial=run", status_code=303
+            )
         return RedirectResponse("/review", status_code=303)
 
     @protected.get("/", include_in_schema=False)

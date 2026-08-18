@@ -80,7 +80,7 @@ The wizard is six steps, each optional and revisitable:
 | Vocabulary | `/setup/vocabulary` | Names, jargon, acronyms, preferred spellings, one per line. Fed to both the Whisper `initial_prompt` and the LLM name-attribution context, so unusual terms transcribe and attribute correctly. |
 | LLM enhancement | `/setup/llm` | Toggle optional transcript enhancement and set an OpenAI-compatible endpoint/model **and API key**. Best-effort by design: a slow or failing model never blocks a run, and enhancement is skipped. |
 | Model services | `/setup/services` | Live reachability check of the ASR / diarizer / embedder model services (GPU or CPU tier). Advisory only; you can finish regardless. A run submitted while a needed service is down retries with backoff and eventually **fails**; requeue it from the run's page once services are up. |
-| Finish | `/setup/finish` | Commits onboarding, releases the gate, and (if the tutorial is seeded) launches the guided tutorial. |
+| Finish | `/setup/finish` | Commits onboarding and releases the gate. Two buttons: **"Finish setup & start tutorial →"** sets up (if needed) and launches the guided tutorial; **"Finish setup →"** goes straight to the console. The launch follows which button you press, not whether a tutorial already exists. |
 
 Two behaviors worth knowing:
 

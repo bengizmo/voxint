@@ -423,6 +423,10 @@ def seed_tutorial_run(
     # Serialize concurrent seeds so the idempotency read below is a genuine
     # post-lock re-check (see _SEED_ADVISORY_LOCK_KEY). No-op on any non-Postgres
     # harness — the production/test app is Postgres-only by doctrine (pgvector).
+    # Correctness of the re-check assumes READ COMMITTED (the Postgres default):
+    # the admitted waiter takes a fresh snapshot and sees the winner's committed
+    # tutorial_run_id. Under REPEATABLE READ the loser would instead attempt a
+    # rebuild — we do not run that isolation level.
     if session.get_bind().dialect.name == "postgresql":
         session.execute(select(func.pg_advisory_xact_lock(_SEED_ADVISORY_LOCK_KEY)))
 

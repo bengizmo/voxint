@@ -3,8 +3,11 @@
    CSRF token. #}
 <section id="tutorial" aria-labelledby="tutorial-heading">
 <h2 id="tutorial-heading">Guided tutorial</h2>
+{# Rendered above the state chain so a seed failure surfaces in every state,
+   including when a tutorial run is already configured (e.g. a media-root repair
+   failing). Mirrors the unconditional render on the setup Finish step. #}
+{% if tutorial_error %}<p class="notice error" role="alert">{{ tutorial_error }}</p>{% endif %}
 {% if not tutorial_available %}
-  {% if tutorial_error %}<p class="notice" role="alert">{{ tutorial_error }}</p>{% endif %}
   <p class="muted">A short, hands-on walkthrough of one full run on a bundled
      three-speaker sample. Setting it up takes a moment — no command line needed.</p>
   <form method="post" action="/settings/tutorial/seed" class="inline">
