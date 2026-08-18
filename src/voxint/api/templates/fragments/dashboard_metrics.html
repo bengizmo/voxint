@@ -20,8 +20,9 @@
 </dl>
 
 <h2>Runs by status</h2>
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Status</th><th>Runs</th></tr></thead>
+  <thead><tr><th scope="col">Status</th><th scope="col">Runs</th></tr></thead>
   <tbody>
     {% for status in run_statuses %}
     <tr>
@@ -33,11 +34,13 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 
 <h2>Stage timing</h2>
 {% if stats.stage_durations %}
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Stage</th><th>Avg duration</th><th>Finished attempts</th></tr></thead>
+  <thead><tr><th scope="col">Stage</th><th scope="col">Avg duration</th><th scope="col">Finished attempts</th></tr></thead>
   <tbody>
     {% for d in stats.stage_durations %}
     <tr>
@@ -48,20 +51,23 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">No finished stage attempts yet.</p>
 {% endif %}
 
 <h2>Stage failures</h2>
 {% if stats.stage_failure_counts %}
+<div class="table-wrap">
 <table>
-  <thead><tr><th>Stage</th><th>Failed attempts</th></tr></thead>
+  <thead><tr><th scope="col">Stage</th><th scope="col">Failed attempts</th></tr></thead>
   <tbody>
     {% for f in stats.stage_failure_counts %}
     <tr><td>{{ humanize_stage(f.stage) }}</td><td>{{ f.attempt_count }}</td></tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% else %}
 <p class="muted">No stage failures recorded.</p>
 {% endif %}

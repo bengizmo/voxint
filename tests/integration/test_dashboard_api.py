@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
+from voxint.api.presentation import humanize_status
 from voxint.config import Settings
 from voxint.db.models import (
     MediaItem,
@@ -121,6 +122,17 @@ def test_dashboard_renders_aggregated_numbers(
     # the load-bearing invariant of the humanization.
     assert re.search(r"Queued</span></td>\s*<td>0</td>", body)
     assert 'class="pill queued"' in body
+    # Status is never conveyed by colour ALONE (issue #64): every rendered status
+    # pill carries its state word as text inside the span, so a colour-blind or
+    # AT user still reads the status. Assert the humanized label sits inside each
+    # pill span across the enum-backed rows, not just one.
+    for status in RunStatus:
+        label = humanize_status(status.value)
+        assert re.search(
+            rf'class="pill {re.escape(status.value)}">{re.escape(label)}</span>', body
+        ), f"status pill for {status.value} missing its adjacent text label"
+    # The metrics tables scroll inside their own container on narrow screens.
+    assert 'class="table-wrap"' in body
     # Stage timing binds the seeded values, not just the stage names: transcribe
     # ran 30s, the failed diarize_embed attempt 5s (finished attempts count for
     # duration regardless of terminal status). Stage names render humanized.

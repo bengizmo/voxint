@@ -178,11 +178,12 @@ up, then requeue.</p>
 {% if not stage_runs %}
 <p class="muted">No stage attempts recorded yet.</p>
 {% else %}
+<div class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0">
 <table>
   <thead>
     <tr>
-      <th>Stage</th><th>Attempt</th><th>Status</th><th>Worker</th>
-      <th>Started</th><th>Finished</th><th>Lease expires</th><th>Error</th>
+      <th scope="col">Stage</th><th scope="col">Attempt</th><th scope="col">Status</th><th scope="col">Worker</th>
+      <th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Lease expires</th><th scope="col">Error</th>
     </tr>
   </thead>
   <tbody>
@@ -200,5 +201,6 @@ up, then requeue.</p>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 {% endblock %}

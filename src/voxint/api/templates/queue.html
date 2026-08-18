@@ -14,9 +14,10 @@
   <a href="/review"{% if sort == "oldest" %} aria-current="true"{% endif %}>Oldest first</a> ·
   <a href="/review?sort=unresolved"{% if sort == "unresolved" %} aria-current="true"{% endif %}>Most voices to resolve</a>
 </p>
+<div class="table-wrap" role="region" aria-label="Review queue" tabindex="0">
 <table>
   <thead>
-    <tr><th>Media</th><th>Duration</th><th>Age</th><th>Progress</th><th>Claimed by</th><th></th></tr>
+    <tr><th scope="col">Media</th><th scope="col">Duration</th><th scope="col">Age</th><th scope="col">Progress</th><th scope="col">Claimed by</th><th scope="col"><span class="visually-hidden">Action</span></th></tr>
   </thead>
   <tbody>
     {% for e in entries %}
@@ -51,5 +52,6 @@
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 {% endblock %}

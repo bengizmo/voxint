@@ -34,8 +34,8 @@
     .notice { border: 1px solid #b80; background: #fb02; border-radius: .5rem;
               padding: .6rem .9rem; margin: 1rem 0; }
     form.requeue { display: flex; gap: .6rem; align-items: center; margin: 1rem 0; }
-    nav.top { display: flex; gap: 1rem; margin-bottom: 1.5rem; padding-bottom: .6rem;
-              border-bottom: 1px solid #8884; font-size: .95rem; }
+    nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;
+              padding-bottom: .6rem; border-bottom: 1px solid #8884; font-size: .95rem; }
     nav.top a[aria-current="page"] { font-weight: 600; }
     form.upload { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
                   margin: 1rem 0; padding: .8rem 1rem; border: 1px solid #8886;
@@ -129,9 +129,29 @@
     .progress-fill { position: absolute; inset: 0 auto 0 0; background: #2a2; opacity: .35; }
     .progress-label { position: relative; display: block; text-align: center;
                       font-size: .75rem; line-height: 1.2rem; white-space: nowrap; }
+    /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
+       desktop screen for the single operator: a keyboard skip-link + main landmark,
+       a visible focus ring, wide tables that scroll inside their own container
+       (no horizontal PAGE overflow), and one small-screen breakpoint. */
+    .skip-link { position: absolute; left: -999px; top: .5rem; background: Canvas;
+                 color: CanvasText; padding: .5rem .8rem; border: 1px solid;
+                 border-radius: .4rem; z-index: 10; }
+    .skip-link:focus { left: .5rem; }
+    :root { --focus-ring: #0969da; }
+    @media (prefers-color-scheme: dark) { :root { --focus-ring: #58a6ff; } }
+    :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px;
+                     border-radius: 2px; }
+    @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
+    @media (prefers-color-scheme: dark) { .error { color: #ff7b72; } }
+    .table-wrap { overflow-x: auto; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
+                       margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
+                       white-space: nowrap; border: 0; }
+    @media (max-width: 40rem) { body { margin: 1rem auto; } h1 { font-size: 1.25rem; } }
   </style>
 </head>
 <body>
+  <a class="skip-link" href="#main">Skip to main content</a>
   {% block nav %}
   <nav class="top">
     <a href="/dashboard"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
@@ -141,12 +161,14 @@
     <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>
   {% endblock %}
+  <main id="main" tabindex="-1">
   {# Guided-tutorial banner: present only when the API layer resolved a real
      tutorial-run/step for this page. Injected here (outside every page's body
      block, and outside the workbench htmx swap target) so fragment swaps never
      remove it. #}
   {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
   {% block body %}{% endblock %}
+  </main>
   {# Shared island loader (issue #48): the ONLY script every page pulls in. It
      no-ops when a page has no [data-island] nodes and dynamically imports only
      the island bundles present, so adding an island never touches base.html.

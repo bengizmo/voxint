@@ -452,6 +452,10 @@ def test_run_detail_shows_stage_ledger(
     assert "worker-a" in body and "worker-b" in body  # both attempts' workers
     # Chronological by started_at — prepare precedes the transcribe attempts.
     assert body.index("prepare") < body.index("transcribe")
+    # Responsive + a11y (issue #64): the 8-column ledger — the widest table in
+    # the app — scrolls inside its own keyboard-reachable, labelled region.
+    assert 'class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0"' in body
+    assert '<th scope="col">Stage</th>' in body
 
 
 def test_run_detail_unknown_run_404(client: TestClient) -> None:
@@ -521,7 +525,12 @@ def test_runs_list_links_to_detail(
 ) -> None:
     with session_factory() as session:
         run_id = make_run(session, labels=["S0"], grounded=["S0"])
-    assert f'href="/runs/{run_id}"' in client.get("/runs").text
+    body = client.get("/runs").text
+    assert f'href="/runs/{run_id}"' in body
+    # Responsive + a11y (issue #64): the runs table scrolls inside a labelled,
+    # keyboard-reachable region, with scoped column headers.
+    assert 'class="table-wrap" role="region" aria-label="Runs" tabindex="0"' in body
+    assert '<th scope="col">Run</th>' in body
 
 
 # --- transcript (shared resolver-attributed presenter) ------------------------

@@ -92,9 +92,10 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 {% if not page.items %}
 <p>No runs match these filters{% if filters.q %} and search{% endif %}.</p>
 {% else %}
+<div class="table-wrap" role="region" aria-label="Runs" tabindex="0">
 <table>
   <thead>
-    <tr><th>Run</th><th>Status</th><th>Review</th><th>Media</th><th>Created</th></tr>
+    <tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Review</th><th scope="col">Media</th><th scope="col">Created</th></tr>
   </thead>
   <tbody>
     {% for it in page.items %}
@@ -137,6 +138,7 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
     {% endfor %}
   </tbody>
 </table>
+</div>
 {% endif %}
 
 {% if next_url %}

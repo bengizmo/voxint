@@ -193,6 +193,10 @@ def test_queue_renders_operator_ergonomics(
     assert 'aria-valuenow="1"' in body
     assert 'aria-valuemax="2"' in body
     assert "1 of 2 resolved" in body
+    # Responsive + a11y (issue #64): the wide queue table scrolls inside a
+    # keyboard-reachable, labelled region, with scoped column headers.
+    assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
+    assert '<th scope="col">Media</th>' in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text
