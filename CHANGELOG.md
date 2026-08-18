@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-08-18
+
 ### Added
 - **Setup wizard: honest first-run readiness checks (#61, settings-overhaul arc
   #47)**: the wizard's model-services step now surfaces the full `voxint doctor`

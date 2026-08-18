@@ -511,6 +511,35 @@ reference)** and **Gate R (ROCm / RX 9060 XT, `device: rocm` + correct
 transcription at GPU speed)**, all three maintainer GPU gates PASS at `dee0f65`
 for the v0.16.0 tag.
 
+#### Verdict: v0.17.0 — Gate A/R/M carry from `dee0f65`; Gate E run fresh (2026-08-18)
+
+Cut at `d91eadc` (72 commits after v0.16.0 — the #47 settings/setup arc plus the
+review-console epic). **`services/`, `tests/parity/`, all `Dockerfile*`, and every
+`provenance.json` are unchanged since v0.16.0** (`git diff v0.16.0..d91eadc` over
+that scope is empty), so the model-service numerics gates **carry**: Gate A (CUDA
+byte-parity), Gate R (ROCm / RX 9060 XT), Gate M (Metal tier) all carry their
+`dee0f65` verdicts unchanged — no maintainer GPU re-run. CI's parity + smoke jobs
+still run unconditionally on the release digests.
+
+**Gate E (whole-pipeline E2E) does NOT carry** and was **run fresh** — its
+carry-over scope is pipeline-aware (`services/`, `src/voxint/{pipeline,clients,
+enrichment,db,api}`, `frontend/`, `tests/e2e/`, `tools/e2e_browser_lifecycle.py`),
+all heavily touched this range, and the `tests/e2e/` suite is itself new since
+v0.16.0 (first release with a Gate E suite). Both lanes PASS at `d91eadc`:
+- **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
+  + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT, render
+  gid 990): `2 passed` — COMPLETED runs, all stages, real `titanet-large-v1`
+  embeddings, no restarts.
+- **Browser review lane** (#53/#57/#58 islands via `tools/e2e_browser_lifecycle.py` +
+  Playwright on maintainer hardware): all island behaviours asserted (verify/skip/replay,
+  click-to-edit, unsaved-edit discard warning, keymap suppression on focused controls,
+  the low-confidence chips, and the #57 waveform strip — single peaks fetch, region
+  click → selection+seek, keymap↔strip playhead sync), then `RECONCILE PASS` against
+  `segment_review_states`.
+
+The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
+run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the

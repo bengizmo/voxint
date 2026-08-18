@@ -41,8 +41,14 @@ paths = [
 # Deliberately secret-SHAPED fake tokens in the installer test suite: the tests
 # assert these values never reach stdout/stderr/argv, so they must look like
 # real hf_ tokens. Named individually — never allowlist a broad hf_ pattern.
+#
+# WHISPER_AHEADS_LARGE_V2 is the public whisper.cpp DTW alignment-heads preset
+# macro name (a documented upstream constant, not a credential); the
+# generic-api-key rule flags its length/shape. Named individually — never
+# allowlist a broad WHISPER_* pattern.
 regexes = [
     '''hf_(TESTSECRETTOKEN123|NEWSECRET456|PREFLIGHTSECRET789)''',
+    '''WHISPER_AHEADS_LARGE_V2''',
 ]
 # 29ce5b5a: parity doc/test comments named the measurement host (a bare machine
 # nickname — no address or credential). Scrubbed from the worktree in the v0.4.0
