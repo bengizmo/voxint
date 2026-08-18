@@ -160,6 +160,63 @@ jobs:
           cache-from: type=gha,scope=voxint-whisper-rocm
           cache-to: type=gha,scope=voxint-whisper-rocm,mode=max
 
+  # Optional bundled local-LLM image (#67) — a single llama.cpp server image
+  # with a sha-pinned Qwen3-4B GGUF baked in. amd64 only and, like the -rocm
+  # whisper image, BUILD-ONLY here: it ships a measured SERVING PROFILE, not a
+  # numerics contract (no parity gate — docs/gpu-contracts.md), and GPU offload
+  # is a compose runtime concern (device reservation in compose.llm.yaml), so
+  # there is no separate -cpu/-rocm image. The ~2.9 GB GGUF is NOT in git: it is
+  # fetched from Hugging Face at the sha-pinned upstream revision recorded in
+  # services/llama-cpp/provenance.json and verified against that file's sha256
+  # before the build — exactly the whisper large-v2 pattern (Dockerfile fetches
+  # a pinned HF revision and bakes it). The Dockerfile re-verifies via
+  # `sha256sum -c` at build time, so a wrong or mutated file cannot ship.
+  publish-llm:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Fetch the Qwen GGUF from the pinned HF revision
+        run: |
+          mkdir -p services/llama-cpp/models
+          read -r repo revision file expected <<<"$(python3 -c "import json; p=json.load(open('services/llama-cpp/provenance.json')); print(p['upstream_repo'], p['upstream_revision'], p['file'], p['sha256'])")"
+          curl -fSL --retry 3 --retry-delay 5 \
+            "https://huggingface.co/${repo}/resolve/${revision}/${file}" \
+            -o "services/llama-cpp/models/${file}"
+          # The Dockerfile re-verifies against its baked provenance sha; this
+          # early check just fails faster with a clearer message.
+          echo "${expected}  services/llama-cpp/models/${file}" | sha256sum -c -
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/voxint-llm
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v6
+        with:
+          context: services/llama-cpp
+          file: services/llama-cpp/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=voxint-llm
+          cache-to: type=gha,scope=voxint-llm,mode=max
+
   # Strict titanet ONNX parity on both arches. Blocks every multi-arch build:
   # shipping a -cpu titanet whose engine drifted from the CUDA embedding space
   # is the one unrecoverable failure mode (silent space drift).

@@ -47,24 +47,31 @@ ARG defaults to the provenance file). A weights refresh publishes a **new**
 asset release (`pyannote-models-v2`, …), updates the provenance file and both
 Dockerfiles' sha ARGs, and bumps `PYANNOTE_MODELS_RELEASE` in `release.yml`.
 
-### The bundled-LLM model asset (issue #67 — NOT YET PUBLISHED)
+### The bundled-LLM model weight (issue #67)
 
 The optional bundled-LLM image (`ghcr.io/bengizmo/voxint-llm`, `compose.llm.yaml`,
-`services/llama-cpp/`) is built and locally verified but **its weight asset and
-CI publish are deliberately deferred** — the app-side routing, image, and
-contract tests landed unreleased ahead of the supply-chain step. To publish it
-at a release cut, mirror the titanet/pyannote pattern:
+`services/llama-cpp/`) bakes in a sha-pinned Qwen3-4B-Instruct-2507 GGUF (Q5_K_M,
+Apache-2.0). Unlike the titanet/pyannote checkpoints, the GGUF is **not** a
+vendored GitHub asset: at ~2.89 GB it exceeds GitHub's 2 GiB release-asset limit,
+and a smaller quant would invalidate the #66 qualification (measured on Q5_K_M).
+So it follows the **whisper large-v2 pattern instead** — the image build fetches
+the weight from Hugging Face at the sha-pinned `upstream_revision` in
+`services/llama-cpp/provenance.json`, verifies its `sha256`, and bakes it in. The
+weight is baked, so **end users pull the image with no Hugging Face account,
+token, or network access** (the `HF_HUB_OFFLINE`-equivalent property).
 
-1. `gh release create qwen3-4b-instruct-2507-q5-v1` with the vendored GGUF
-   (~2.89 GB, `sha256` in `services/llama-cpp/provenance.json`).
-2. Add a `QWEN3_4B_RELEASE: qwen3-4b-instruct-2507-q5-v1` env + a `gh release
-   download` + sha-verify step and a `voxint-llm` build target to
-   `release.yml` (the titanet download/verify step is the template).
-3. Publish and anonymous-pull-verify `ghcr.io/bengizmo/voxint-llm:X.Y.Z`.
+The `publish-llm` job in `release.yml` does this on a version tag: `curl` the
+pinned `resolve/<revision>/<file>` URL → `sha256sum -c` against provenance →
+build + push `ghcr.io/bengizmo/voxint-llm:X.Y.Z` (+ floating `X.Y`), amd64 only.
+It is BUILD-ONLY (no parity gate — the image ships a serving profile, not a
+numerics contract) and has no `-cpu`/`-rocm` split (GPU is a `compose.llm.yaml`
+device-reservation concern). A weight refresh bumps `upstream_revision` + the
+`sha256` in provenance and the `QWEN_GGUF_SHA256` ARG default in the Dockerfile
+together (a contract test pins the ARG to provenance).
 
-Until that cut, `compose.llm.yaml` requires a locally built `voxint-llm` image
-(build it from `services/llama-cpp/Dockerfile` with the GGUF staged under
-`services/llama-cpp/models/`).
+For a local build, stage the GGUF under `services/llama-cpp/models/` (fetch the
+same pinned revision from Hugging Face, or use a maintainer-staged copy); the
+Dockerfile's `sha256sum -c` gate rejects any mismatch.
 
 ### Release gates wired into the workflow
 

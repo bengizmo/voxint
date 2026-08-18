@@ -1,5 +1,5 @@
 {
-  "asset_release": "qwen3-4b-instruct-2507-q5-v1",
+  "source": "huggingface",
   "vendored": "2026-08-18",
   "model": "Qwen3-4B-Instruct-2507",
   "quantization": "Q5_K_M",
@@ -9,8 +9,8 @@
   "upstream_repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
   "upstream_revision": "a06e946bb6b655725eafa393f4a9745d460374c9",
   "license": "apache-2.0",
-  "license_note": "Qwen3-4B-Instruct-2507 is released by Alibaba/Qwen under Apache-2.0; the unsloth GGUF re-quantization is likewise Apache-2.0. Redistribution with attribution is permitted; the GGUF is kept out of git for repo-size reasons and fetched as a checksummed release asset. The attribution text (NOTICE) ships inside the image.",
-  "asset_committed": false,
+  "license_note": "Qwen3-4B-Instruct-2507 is released by Alibaba/Qwen under Apache-2.0; the unsloth GGUF re-quantization is likewise Apache-2.0. Redistribution with attribution is permitted; the GGUF is kept out of git for repo-size reasons and fetched from the pinned upstream Hugging Face revision, then checksum-verified against sha256 before it is baked into the image. The attribution text (NOTICE) ships inside the image.",
+  "source_note": "The ~2.9 GB GGUF exceeds GitHub's 2 GiB release-asset limit, so — like whisper large-v2 — the image build fetches it from Hugging Face at the sha-pinned upstream_revision and verifies sha256; the weight is baked in, so end users pull ghcr.io/bengizmo/voxint-llm with no Hugging Face account, token, or network access needed.",
   "base_image": "ghcr.io/ggml-org/llama.cpp:server",
   "base_image_digest": "sha256:092d1291f2bcf59ff727fa3af855fb9bd4759d6bff860f6fbfd5e3e377e12625",
   "model_alias": "qwen3-4b-instruct-2507",

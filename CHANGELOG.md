@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-08-18
+
 ### Added
 - **Optional bundled local LLM — no API key required (#67)**: a new opt-in
   overlay [`compose.llm.yaml`](compose.llm.yaml) ships a vendored, Apache-2.0
@@ -22,10 +24,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   4B model is a slow backstop on CPU — a GPU is recommended for anything but
   short clips (see [`compose.llm.yaml`](compose.llm.yaml) and
   [`docs/gpu-contracts.md`](docs/gpu-contracts.md) for the pinned serving
-  profile). The weight is sha-pinned + provenance-tracked like the other
-  vendored models (`services/llama-cpp/provenance.json`). The bundled image is
-  built and verified but not yet published — the GitHub asset release + registry
-  image land at the next release cut.
+  profile). The weight is sha-pinned + provenance-tracked
+  (`services/llama-cpp/provenance.json`); because the ~2.9 GB GGUF exceeds
+  GitHub's 2 GiB release-asset limit, the image build fetches it from Hugging
+  Face at the sha-pinned upstream revision and verifies its sha256 before baking
+  it in — the whisper large-v2 pattern — so end users pull
+  `ghcr.io/bengizmo/voxint-llm` with the weight baked in and need no Hugging Face
+  account, token, or network access.
 - **Deterministic corrector engine + faithfulness gate (#81, epic #78)**: the pure,
   `stdlib`-only, versioned engine (`CORRECTOR_VERSION`) that **applies** a pack's
   `corrections:` rules to a segment — a single left-to-right, non-cascading pass with

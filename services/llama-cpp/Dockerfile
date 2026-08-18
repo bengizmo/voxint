@@ -5,13 +5,16 @@
 # speaker-name attribution — those stay on a BYO endpoint (see #66 for why a
 # small local model is not safe as an unrestricted default).
 #
-# Weights are NOT in git. Before building, place the vendored GGUF at
-# services/llama-cpp/models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf — either from the
-# checksummed release asset (CI path: gh release download
-# qwen3-4b-instruct-2507-q5-v1) or a maintainer-staged copy. The build FAILS
-# unless its sha256 matches QWEN_GGUF_SHA256, which must equal "sha256" in
-# services/llama-cpp/provenance.json (a contract test pins the two together,
-# mirroring the titanet/pyannote vendoring precedent).
+# Weights are NOT in git (the ~2.9 GB GGUF exceeds GitHub's 2 GiB release-asset
+# limit). Before building, place the GGUF at
+# services/llama-cpp/models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf — the CI build
+# fetches it from Hugging Face at the sha-pinned upstream_revision recorded in
+# services/llama-cpp/provenance.json (the whisper large-v2 pattern), and a
+# maintainer can stage a local copy the same way. The build FAILS unless its
+# sha256 matches QWEN_GGUF_SHA256, which must equal "sha256" in
+# services/llama-cpp/provenance.json (a contract test pins the two together).
+# The weight is baked in, so end users pull the image with no Hugging Face
+# account, token, or network access.
 #
 # The base image is digest-pinned: the serving engine is part of the numerics
 # contract, so it may not float. Regenerate/refresh only via a new asset
@@ -28,7 +31,7 @@ ARG QWEN_GGUF_SHA256=5bde5e9d883622acb02bf77fe7dcbc56a8b9a9ad4be78a72ca23a532658
 COPY models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf /models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf
 RUN echo "${QWEN_GGUF_SHA256}  /models/Qwen3-4B-Instruct-2507-Q5_K_M.gguf" | sha256sum -c - \
     || { echo "Qwen3-4B-Instruct-2507-Q5_K_M.gguf does not match the committed provenance \
-sha256 — fetch the matching qwen3-4b-instruct-2507-q5-v1 release asset" >&2; exit 1; }
+sha256 — re-fetch it from the pinned upstream_revision in provenance.json" >&2; exit 1; }
 
 # The pinned serving profile (measured under #67 Phase A) ships WITH the weights
 # as the default command, so a single-operator `up` needs no serving knobs and
