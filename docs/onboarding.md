@@ -103,14 +103,19 @@ Two behaviors worth knowing:
 
 Voxint bundles a synthetic **three-speaker sample** and can stage it as a
 ready-to-adjudicate run, so you learn the review loop before using your own
-audio. Seed it once (idempotent; an existing tutorial run is returned untouched):
+audio. **No command line needed:** on the wizard's Finish step choose **"Finish
+setup & start tutorial →"**, or from the Settings page click **"Set up & start
+the guided tutorial →"**. Either one stages the sample (idempotent — an existing
+tutorial run is reused) and drops you straight into it.
+
+The equivalent CLI seed still exists for scripted/maintainer setups:
 
 ```bash
 docker compose exec api voxint tutorial seed
 ```
 
-Finishing the wizard launches the tutorial automatically when it has been seeded;
-otherwise the Finish step prints the command above.
+A plain **"Finish setup →"** completes onboarding without starting the tutorial;
+you can always start it later from Settings.
 
 The tutorial is a set of **server-rendered banners** injected above existing
 console pages via a `?tutorial=<step>` query parameter, not client-side
@@ -144,11 +149,13 @@ nav) is the durable entry point for both flows:
   step, available any time after onboarding. A saved key wins over env
   `LLM_API_KEY`; leave the key field blank to keep the saved one, or tick **"Remove
   saved key"** to revert to the environment. The form carries its own CSRF token.
-- **Start, replay, or complete the tutorial.** Replay
-  (`POST /settings/tutorial/replay`) is **non-destructive**: it walks the sample
-  again but preserves your previous rulings on the tutorial run. Completion
-  (`POST /settings/tutorial/complete`) records `tutorial_completed_at`. Both
-  mutations carry their own CSRF token.
+- **Set up, start, replay, or complete the tutorial.** When it has not been
+  staged yet, **"Set up & start the guided tutorial →"**
+  (`POST /settings/tutorial/seed`) stages the bundled sample and enters it — no
+  CLI needed. Replay (`POST /settings/tutorial/replay`) is **non-destructive**: it
+  walks the sample again but preserves your previous rulings on the tutorial run.
+  Completion (`POST /settings/tutorial/complete`) records `tutorial_completed_at`.
+  All three mutations carry their own CSRF token.
 
 ## Troubleshooting
 

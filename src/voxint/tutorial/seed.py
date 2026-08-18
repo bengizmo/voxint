@@ -46,7 +46,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -96,6 +96,15 @@ _GROUNDED_SIMILARITY = 0.95
 # Nominal terminal revision — a completed run has advanced well past 0; the tutorial
 # run never re-runs the pipeline, and review-claim CAS only needs a consistent start.
 _TERMINAL_REVISION = 2 * len(STAGE_ORDER)
+# Stable, arbitrary 64-bit key for the transaction advisory lock that serializes
+# concurrent seeds (fits signed bigint). Every seed entry point — the CLI and both
+# web routes (#75) — funnels through seed_tutorial_run, so this one lock closes the
+# CLI-vs-web race too: without it two concurrent seeds each build a separate
+# PipelineRun (the loser is a completed run with unresolved labels that pollutes the
+# review queue). The lock is held for the caller's transaction and released on
+# commit/rollback; a second waiter, once admitted, reads the winner's committed
+# tutorial_run_id and returns it idempotently.
+_SEED_ADVISORY_LOCK_KEY = 0x766F78696E747574
 
 
 class TutorialSeedError(RuntimeError):
@@ -411,6 +420,12 @@ def seed_tutorial_run(
 
     Returns the run id referenced by ``app_settings.tutorial_run_id``.
     """
+    # Serialize concurrent seeds so the idempotency read below is a genuine
+    # post-lock re-check (see _SEED_ADVISORY_LOCK_KEY). No-op on any non-Postgres
+    # harness — the production/test app is Postgres-only by doctrine (pgvector).
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(select(func.pg_advisory_xact_lock(_SEED_ADVISORY_LOCK_KEY)))
+
     layout = resources.load_layout()
     provenance = resources.load_provenance()
 

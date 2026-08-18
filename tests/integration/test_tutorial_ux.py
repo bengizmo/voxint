@@ -312,10 +312,14 @@ def test_htmx_decision_fragment_excludes_banner(
 # --------------------------------------------------------------- settings states
 
 
-def test_settings_unseeded_shows_seed_hint(client: TestClient) -> None:
+def test_settings_unseeded_offers_seed_button(client: TestClient) -> None:
+    # #75: the CLI-only "voxint tutorial seed" instruction is replaced by a real
+    # in-UI seed button so a non-technical operator never needs the command line.
     resp = client.get("/settings")
     assert resp.status_code == 200
-    assert "voxint tutorial seed" in resp.text
+    assert "voxint tutorial seed" not in resp.text
+    assert 'action="/settings/tutorial/seed"' in resp.text
+    assert "Set up" in resp.text
 
 
 def test_settings_seeded_offers_start(
@@ -356,7 +360,8 @@ def test_settings_done_spoof_hidden_when_unseeded(client: TestClient) -> None:
     resp = client.get("/settings?tutorial=done")
     assert resp.status_code == 200
     assert "You finished the tutorial" not in resp.text
-    assert "voxint tutorial seed" in resp.text
+    # #75: unseeded now shows the seed button, not a CLI instruction.
+    assert 'action="/settings/tutorial/seed"' in resp.text
 
 
 # --------------------------------------------------------- completion + replay
@@ -466,11 +471,31 @@ def test_replay_409_when_unseeded(client: TestClient) -> None:
 # ----------------------------------------------------- launch after onboarding
 
 
-def test_finish_launches_tutorial_when_seeded(
+def test_finish_launches_tutorial_when_requested_and_seeded(
     session_factory: sessionmaker[Session],
     settings: Settings,
     tutorial_run_id: uuid.UUID,
 ) -> None:
+    # #75: the "Finish setup & start tutorial" button posts start_tutorial=1, which
+    # drives the launch — a seeded run is entered directly.
+    client = _client(session_factory, settings, onboarded=False)
+    resp = client.post(
+        "/setup/finish",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETUP), "start_tutorial": "1"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == f"/runs/{tutorial_run_id}?tutorial=run"
+
+
+def test_finish_plain_does_not_launch_seeded_tutorial(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    tutorial_run_id: uuid.UUID,
+) -> None:
+    # #75 (label-never-lies): a plain "Finish setup" must NOT launch a tutorial even
+    # when one is already seeded — the redirect follows the operator's intent
+    # (start_tutorial), never mere availability.
     client = _client(session_factory, settings, onboarded=False)
     resp = client.post(
         "/setup/finish",
@@ -478,10 +503,10 @@ def test_finish_launches_tutorial_when_seeded(
         follow_redirects=False,
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == f"/runs/{tutorial_run_id}?tutorial=run"
+    assert resp.headers["location"] == "/review"
 
 
-def test_finish_falls_back_to_review_when_unseeded(
+def test_finish_plain_falls_back_to_review_when_unseeded(
     session_factory: sessionmaker[Session], settings: Settings
 ) -> None:
     client = _client(session_factory, settings, onboarded=False)
