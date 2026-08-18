@@ -18,6 +18,7 @@ from voxint.enrichment.triage import (
     normalize_authority_domain,
     parse_authority_domains,
     registrable_domain,
+    validate_authority_domains,
 )
 
 
@@ -114,6 +115,49 @@ def test_parse_authority_domains_splits_and_drops_bad() -> None:
 
 def test_parse_authority_domains_empty() -> None:
     assert parse_authority_domains("   ") == frozenset()
+
+
+def test_validate_authority_domains_blank_is_valid() -> None:
+    # Blank = inherit the env default (issue #76) — not an error.
+    assert validate_authority_domains("") == []
+    assert validate_authority_domains("   \n ") == []
+
+
+def test_validate_authority_domains_accepts_bare_domains() -> None:
+    assert validate_authority_domains("example.com, news.bbc.co.uk\nfoo.org") == []
+
+
+def test_validate_authority_domains_rejects_each_bad_token() -> None:
+    errors = validate_authority_domains("example.com https://bad.com localhost")
+    # One message per bad token (the good one is silent), each naming the token.
+    assert len(errors) == 2
+    assert any("https://bad.com" in e for e in errors)
+    assert any("localhost" in e for e in errors)
+    assert all("is not a plain domain" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "example.com",
+        "WWW.Example.COM",
+        "sub.foo.co.uk",
+        "https://example.com",
+        "example.com/path",
+        "example.com:8080",
+        "*.example.com",
+        "user@example.com",
+        "localhost",
+        "a..b.com",
+    ],
+)
+def test_validate_rejects_exactly_what_parse_drops(token: str) -> None:
+    # The strict form validator and the permissive runtime parser share
+    # normalize_authority_domain as the oracle: a token is rejected by the form iff
+    # the runtime parser would drop it.
+    rejected = bool(validate_authority_domains(token))
+    dropped = normalize_authority_domain(token) is None
+    assert rejected == dropped
 
 
 # --- NAME family ----------------------------------------------------------

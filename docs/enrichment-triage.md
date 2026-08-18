@@ -71,8 +71,17 @@ subdomain matches its registrable domain (`news.example.org` → `example.org`).
 Entries carrying a scheme, path, port, credentials, or wildcard are rejected.
 There is deliberately **no built-in list** — what counts as authoritative differs
 by deployment. Empty (the default) leaves `source_authority` at 0.0 for every
-draft, and ordering falls to the other signals. It is env-only today (edit and
-restart); it moves to the settings UI when that console lands.
+draft, and ordering falls to the other signals. This list only **raises review
+priority** for drafts citing those domains — it never blocks or excludes any
+site; every domain is still researched normally.
+
+Edit it live from **Settings → Sources & research** (issue #76): the operator
+saves a trusted-domains list from the browser and it applies to the next triage
+computation with no restart (DB-row-wins-over-env; the `SOURCE_AUTHORITY_DOMAINS`
+env value is the fallback when the row is blank). The settings form rejects a
+non-bare entry (scheme/path/port/`@`/wildcard) with a plain-language message; the
+runtime parser stays permissive and silently drops such tokens from whatever value
+is in force.
 
 ## The registrable-domain heuristic
 

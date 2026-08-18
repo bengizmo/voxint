@@ -28,13 +28,27 @@ def _flags(**overrides: object) -> EffectiveFlags:
 
 
 def test_every_reachable_features_invariant_has_plain_copy() -> None:
-    # The four invariants the Features form (names / names_llm / run_assets /
-    # autogenerate) can trigger — each crafted to violate exactly one.
+    # Every invariant the settings forms can trigger — Features (names / names_llm /
+    # run_assets / autogenerate) and Sources & research (producer ⇒ master, producer
+    # ⇒ llm, master ⇒ endpoint present + valid) — each crafted to violate exactly one.
     reachable = [
         _flags(enrichment_names_enabled=True, enrichment_names_llm_enabled=True),  # names_llm ⇒ llm
         _flags(llm_enabled=True, enrichment_names_llm_enabled=True),  # names_llm ⇒ names
         _flags(enrichment_run_assets_enabled=True),  # run_assets ⇒ llm
         _flags(llm_enabled=True, enrichment_run_assets_autogenerate=True),  # autogen ⇒ run_assets
+        # Sources & research (#76):
+        _flags(
+            llm_enabled=True, enrichment_web_research_enabled=True
+        ),  # producer ⇒ master
+        _flags(
+            voxint_web_research=True,
+            web_search_base_url="https://searx.example",
+            enrichment_web_research_enabled=True,
+        ),  # producer ⇒ llm
+        _flags(voxint_web_research=True, web_search_base_url=""),  # master ⇒ endpoint present
+        _flags(
+            voxint_web_research=True, web_search_base_url="example.org/search"
+        ),  # master ⇒ valid endpoint (non-http)
     ]
     for flags in reachable:
         messages = validate_effective_flags(flags)
@@ -48,3 +62,6 @@ def test_plain_copy_drops_the_flag_identifiers() -> None:
     for plain in _FEATURE_INVARIANT_COPY.values():
         assert "enrichment_" not in plain
         assert "llm_enabled=true" not in plain
+        assert "voxint_web_research" not in plain
+        assert "web_search_base_url" not in plain
+        assert "web_search_api_key" not in plain

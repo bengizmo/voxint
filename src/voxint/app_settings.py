@@ -72,6 +72,26 @@ def llm_endpoint_form_fields(
     return base_value, settings.llm_base_url, model_value, settings.llm_model
 
 
+def str_flag_form_field(
+    row: AppSettings | None, settings: Settings, name: str
+) -> tuple[str, str]:
+    """``(value, default)`` for a tri-state STRING settings field (issue #76).
+
+    ``value`` is the ROW override, or ``""`` when the column is ``NULL``/blank — so
+    the input renders BLANK and the operator sees they are inheriting the
+    installation setting; ``default`` is the env default, shown as the placeholder.
+    The string counterpart to :func:`feature_flag_state` (and the generic form of
+    :func:`llm_endpoint_form_fields`): it renders the RAW column, NOT the resolved
+    effective value, so saving an untouched field leaves the column ``NULL``
+    (keeps inheriting env) instead of pinning the env default onto the row. Serves
+    the web-search endpoint and the authority-domains editor. Not for secrets — a
+    key is never rendered back (see :func:`effective_web_search_key_source`).
+    """
+    stored: str | None = getattr(row, name) if row is not None else None
+    value = stored if stored else ""
+    return value, getattr(settings, name)
+
+
 def resolve_effective_llm_enabled(row: AppSettings | None, settings: Settings) -> bool:
     """Effective LLM enablement: the ROW value wins, else env ``LLM_ENABLED``.
 
@@ -89,19 +109,31 @@ def resolve_effective_llm_enabled(row: AppSettings | None, settings: Settings) -
     return settings.llm_enabled
 
 
-def effective_llm_key_source(row: AppSettings | None, settings: Settings) -> str:
-    """Where the effective key comes from, for honest UI copy — never its value.
-
-    ``"stored"`` iff the ROW value is non-blank (so the operator sees that a
-    UI-saved key is in force); else ``"environment"`` when env ``LLM_API_KEY`` is
-    set; else ``"none"``. Mirrors :func:`resolve_effective_llm_api_key`'s precedence
-    so the status shown and the key actually used never disagree.
+def _effective_key_source(row: AppSettings | None, settings: Settings, name: str) -> str:
+    """Where the effective value of credential column ``name`` comes from, for honest
+    UI copy — never its value. ``"stored"`` iff the ROW value is non-blank; else
+    ``"environment"`` when the env default is set; else ``"none"``. Shared by the
+    per-credential public helpers so their precedence matches ``_resolve_str_flag``
+    (row-wins-over-env) exactly and the status shown can never disagree with the
+    value actually used.
     """
-    if row is not None and (row.llm_api_key or "").strip():
+    if row is not None and (getattr(row, name) or "").strip():
         return "stored"
-    if settings.llm_api_key.strip():
+    if getattr(settings, name).strip():
         return "environment"
     return "none"
+
+
+def effective_llm_key_source(row: AppSettings | None, settings: Settings) -> str:
+    """Source of the effective LLM API key, for honest UI copy (never its value).
+    Mirrors :func:`resolve_effective_llm_api_key`'s precedence."""
+    return _effective_key_source(row, settings, "llm_api_key")
+
+
+def effective_web_search_key_source(row: AppSettings | None, settings: Settings) -> str:
+    """Source of the effective web-search API key, for honest UI copy (never its
+    value) — issue #76. Mirrors :func:`resolve_effective_web_search_api_key`."""
+    return _effective_key_source(row, settings, "web_search_api_key")
 
 
 # ---------------------------------------------------------------------------

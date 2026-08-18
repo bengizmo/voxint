@@ -1,0 +1,93 @@
+{# Settings → Sources & research (issue #76): the operator-facing web-research
+   config — the master + producer runtime toggles (tri-state On / Off / use the
+   installation setting), the search-provider endpoint + API key, and the trusted-
+   domains editor that boosts draft review priority. The POST validates the whole
+   candidate server-side through the shared validate_effective_flags (+ endpoint and
+   domain format checks) and re-renders with plain-language message(s) on any
+   violation, writing nothing. Self-contained: renders from _settings_context. #}
+<section id="sources" aria-labelledby="sources-heading">
+<h2 id="sources-heading">Sources &amp; research</h2>
+<p class="muted">Voxint can research the people in your recordings on the web to
+   suggest names and background. This is optional and off unless you turn it on.
+   Changes apply to your next job, no restart needed.</p>
+{% for error in web_research_errors %}
+  <p class="notice" role="alert">{{ error }}</p>
+{% endfor %}
+{% if not llm_enabled %}
+  <p class="muted">LLM transcript enhancement is currently off, so web-research
+     enrichment stays inactive even when turned on here — enable it in the LLM
+     section to use it.</p>
+{% endif %}
+<form method="post" action="/settings/web-research" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+
+  <fieldset class="field feature-flag">
+    <legend>Web research</legend>
+    <p class="muted">When on, Voxint makes outbound web requests to the search
+       provider you configure below to research speakers. When off, Voxint never
+       reaches the network for research.</p>
+    <label><input type="radio" name="voxint_web_research" value="on"{% if web_research_master_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="voxint_web_research" value="off"{% if web_research_master_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="voxint_web_research" value="inherit"{% if web_research_master_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if web_research_master_env_default else "Off" }})</span></label>
+  </fieldset>
+
+  <fieldset class="field feature-flag">
+    <legend>Web-research enrichment producer</legend>
+    <p class="muted">Generate researched background for each run. Requires Web
+       research (above) and LLM transcript enhancement.</p>
+    <label><input type="radio" name="enrichment_web_research_enabled" value="on"{% if web_research_producer_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="enrichment_web_research_enabled" value="off"{% if web_research_producer_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="enrichment_web_research_enabled" value="inherit"{% if web_research_producer_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if web_research_producer_env_default else "Off" }})</span></label>
+  </fieldset>
+
+  <div class="field">
+    <label for="web_search_base_url">Search provider endpoint <span class="muted">(blank = use the installation setting)</span></label>
+    <input type="url" id="web_search_base_url" name="web_search_base_url" value="{{ web_search_base_url }}"
+           placeholder="{{ web_search_base_url_default or 'https://searxng.example.org' }}">
+    <p class="muted">The SearXNG instance Voxint queries. Enter the endpoint
+       address — no query, fragment, or embedded credentials.</p>
+  </div>
+
+  {% if web_search_key_present %}
+    {% if web_search_key_source == "stored" %}
+      <p class="muted">A search-provider API key is saved here. ✓ <span class="muted">(stored)</span></p>
+    {% else %}
+      <p class="muted">A <code>WEB_SEARCH_API_KEY</code> is set in the environment. ✓
+         <span class="muted">(environment)</span></p>
+    {% endif %}
+  {% endif %}
+  <div class="field">
+    <label for="web_search_api_key">Search provider API key
+      <span class="muted">(optional; blank = keep {{ "the saved key" if web_search_key_source == "stored" else "current setting" }})</span></label>
+    <input type="password" id="web_search_api_key" name="web_search_api_key" value=""
+           autocomplete="new-password" maxlength="512">
+    <p class="muted">Only needed if your search provider requires one. Stored in
+       Voxint's database; never shown again after saving.</p>
+  </div>
+  {% if web_search_key_source == "stored" %}
+  <div class="field">
+    <label><input type="checkbox" name="remove_web_search_api_key" value="true">
+      Remove saved key (revert to environment)</label>
+  </div>
+  {% endif %}
+
+  <div class="field">
+    <label for="source_authority_domains">Trusted domains <span class="muted">(optional)</span></label>
+    <textarea id="source_authority_domains" name="source_authority_domains" rows="3"
+              placeholder="{{ source_authority_domains_default }}">{{ source_authority_domains }}</textarea>
+    <p class="muted">Drafts citing these domains get more confidence in review; other
+       domains are still used and researched normally — this does not block anything.
+       Enter bare domains separated by commas, spaces, or new lines (a domain also
+       covers its subdomains). For an internationalized domain, enter its punycode
+       (<code>xn--…</code>) form.</p>
+  </div>
+
+  <button type="submit">Save sources settings</button>
+</form>
+</section>

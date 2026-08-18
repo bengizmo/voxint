@@ -405,8 +405,9 @@ class Settings(BaseSettings):
     # default) means `source_authority` reads 0.0 for every draft, leaving
     # triage ordering to the other signals. A plain string (not a list): the
     # app parses it into a domain set; pydantic-settings would JSON-parse a
-    # collection-typed env var. Env-only today (edit and restart); it moves to
-    # the AppSettings UI when the settings console (issue #47) lands.
+    # collection-typed env var. This is the fallback: Settings → Sources & research
+    # (issue #76) edits it live via resolve_effective_source_authority_domains
+    # (DB-row-wins-over-env, no restart); this env value applies when the row is blank.
     source_authority_domains: str = ""
 
     # Run-level enrichment assets (#41): on-demand LLM-generated summary,

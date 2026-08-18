@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Settings → Sources & research: in-UI web-research config (#76, settings-overhaul
+  arc #47)**: a new **Sources & research** section on the Settings page lets a
+  non-technical operator configure web research entirely from the browser — the
+  web-research **master** and **enrichment producer** toggles as **tri-state**
+  controls (On / Off / use installation setting), the search-provider **endpoint**
+  and **API key** (a secret, stored like the LLM key: never rendered back,
+  blank-keeps-stored, a remove-checkbox reverts to the environment), and a
+  **trusted-domains** editor that raises a draft's review priority for citing
+  those domains (it boosts scoring only — it never blocks any site). Backed by
+  #74's `resolve_effective_*` resolvers, so edits take effect on the next job with
+  **no `.env` edit and no restart** (DB-row-wins-over-env; blank writes `NULL` to
+  inherit the installation setting). `POST /settings/web-research` validates the
+  whole submission — the cross-flag invariants through the single shared
+  `validate_effective_flags`, plus the endpoint and each domain token — and on any
+  violation re-renders with a plain-language message and the operator's non-secret
+  choices preserved, **writing nothing**. This delivers the standing
+  `source_authority_domains` "move to the settings UI" promise.
 - **Settings → Features: in-UI runtime toggles (#62, settings-overhaul arc #47)**:
   a new **Features** section on the Settings page exposes the live-read capability
   flags as real **tri-state** controls — **On / Off / use installation setting** —

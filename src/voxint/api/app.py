@@ -139,6 +139,7 @@ from voxint.api.setup_wizard import (
     normalize_llm_model,
     normalize_media_folders,
     normalize_vocabulary,
+    normalize_web_search_api_key,
     parse_step,
     scan_media_folders,
     validate_llm_enable,
@@ -155,6 +156,7 @@ from voxint.app_settings import (
     clear_tutorial_completion,
     complete_onboarding,
     effective_llm_key_source,
+    effective_web_search_key_source,
     feature_flag_state,
     get_app_settings,
     get_or_create,
@@ -163,14 +165,20 @@ from voxint.app_settings import (
     mark_tutorial_complete,
     ready_tutorial_run_id,
     resolve_effective_enrichment_names_enabled,
+    resolve_effective_enrichment_names_llm_enabled,
+    resolve_effective_enrichment_run_assets_autogenerate,
+    resolve_effective_enrichment_run_assets_enabled,
     resolve_effective_enrichment_web_research_enabled,
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_source_authority_domains,
     resolve_effective_voxint_web_research,
+    resolve_effective_web_search_api_key,
     resolve_effective_web_search_base_url,
     resolve_effective_ytdlp_enabled,
+    str_flag_form_field,
     validate_effective_flags,
+    validate_web_search_base_url,
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
@@ -241,6 +249,7 @@ from voxint.enrichment.triage import (
     TriageScore,
     VoiceSignal,
     parse_authority_domains,
+    validate_authority_domains,
 )
 from voxint.enrichment.triage import (
     score as triage_score,
@@ -1348,16 +1357,16 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
 _FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
 
-# Operator-plain copy for the invariant violations this section can surface (#62).
-# validate_effective_flags is the SINGLE source of WHICH combinations are invalid,
-# but its messages name the flag identifiers (enrichment_run_assets_enabled, …) —
-# the exact jargon this arc exists to keep out of a non-technical operator's way.
-# So the Features boundary translates the reachable messages to plain language,
-# while the config boot validator keeps the identifier-bearing strings (a .env
-# editor wants the variable name). Keyed on the exact shared message; an
-# un-mapped message (e.g. a web-research invariant, unreachable from this form)
-# falls through to the original. A drift test locks the four reachable keys so a
-# reworded invariant can never silently fall back to jargon here.
+# Operator-plain copy for the invariant violations the settings sections surface
+# (Features #62 + Sources & research #76). validate_effective_flags is the SINGLE
+# source of WHICH combinations are invalid, but its messages name the flag
+# identifiers (enrichment_run_assets_enabled, web_search_base_url, …) — the exact
+# jargon this arc exists to keep out of a non-technical operator's way. So the
+# settings boundaries translate the reachable messages to plain language, while the
+# config boot validator keeps the identifier-bearing strings (a .env editor wants
+# the variable name). Keyed on the exact shared message; an un-mapped message falls
+# through to the original. A drift test locks every reachable key so a reworded
+# invariant can never silently fall back to jargon here.
 _FEATURE_INVARIANT_COPY: dict[str, str] = {
     "enrichment_names_llm_enabled requires llm_enabled=true — the "
     "LLM name pass reuses the configured enhancement endpoint": (
@@ -1378,6 +1387,41 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
     " enrichment_run_assets_enabled=true — the post-finalize step"
     " only enqueues the feature it rides on": (
         "Auto-generating run assets needs run assets turned on."
+    ),
+    # Sources & research section (issue #76). The producer + base-URL invariants.
+    "enrichment_web_research_enabled requires voxint_web_research=true"
+    " — the producer's only egress is the controlled retrieval tools": (
+        "Web-research enrichment needs Web research turned on above — the"
+        " producer's only way out to the network is through it."
+    ),
+    "enrichment_web_research_enabled requires llm_enabled=true — the"
+    " producer reuses the configured enhancement endpoint": (
+        "Web-research enrichment needs LLM transcript enhancement turned on. Turn"
+        " it on in the LLM section, or turn web-research enrichment off."
+    ),
+    "voxint_web_research=true requires web_search_base_url — the"
+    " searxng provider has no default endpoint": (
+        "Web research needs a search provider endpoint. Enter one below, or turn"
+        " Web research off."
+    ),
+    "web_search_base_url must not contain whitespace or backslashes": (
+        "The search provider endpoint can't contain spaces or backslashes — check"
+        " for a stray character."
+    ),
+    "web_search_base_url is malformed": (
+        "The search provider endpoint isn't a valid web address — check for a typo"
+        " (for example an invalid port)."
+    ),
+    "web_search_base_url must be an absolute http(s) URL": (
+        "The search provider endpoint must be a full web address starting with"
+        " http:// or https://."
+    ),
+    "web_search_base_url must not embed credentials — use web_search_api_key": (
+        "Don't put a username or password in the endpoint — use the API key field"
+        " below instead."
+    ),
+    "web_search_base_url must be a bare endpoint (no query/fragment)": (
+        "Enter just the endpoint address — no “?query” or “#fragment” at the end."
     ),
 }
 
@@ -1448,6 +1492,157 @@ def _persist_feature_flags(
     row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
     for name, value in candidates.items():
         setattr(row, name, value)
+    return []
+
+
+def _persist_web_research(
+    session: Session,
+    settings: Settings,
+    *,
+    submitted_master: str,
+    submitted_producer: str,
+    raw_base_url: str,
+    raw_key: str,
+    remove_key: bool,
+    raw_domains: str,
+) -> list[str]:
+    """Apply the Sources & research section as ONE deliberate mutation (issue #76).
+
+    The web-research capability's five operator controls — the master toggle
+    (``voxint_web_research``) + producer toggle (``enrichment_web_research_enabled``)
+    as tri-state on/off/inherit, the provider ``web_search_base_url`` (string
+    override) + ``web_search_api_key`` (secret), and the ``source_authority_domains``
+    editor — jointly configure one capability, so they save atomically: the whole
+    form is a candidate that is validated against EVERY error source before the row
+    is touched, and ANY violation (out-of-set choice, cross-flag invariant, a
+    malformed endpoint, a malformed domain, or the contradictory key remove+replace)
+    writes NOTHING (no ``get_or_create`` — the API session commits on the 200 error
+    re-render, so the absence of a write is the guarantee). Returns the list of
+    operator-plain error messages (empty ⇒ success); the caller commits on success.
+
+    The flags NOT edited here (``llm_enabled`` + the names/run-assets flags) are
+    resolved at their CURRENT effective value so a dependency invariant fires against
+    real system state (enabling the producer while LLM is off is rejected) and this
+    section never flips an unrelated setting. The API key is a credential: it never
+    leaves this function and no returned message interpolates it.
+    """
+    row = get_app_settings(session)
+    errors: list[str] = []
+
+    # Tri-state toggles → True / False / None (inherit). An unrecognized choice (a
+    # stale client / hand-crafted POST — never the shipped radios) is rejected, not
+    # coerced (coercing would silently disable or drop an override), mirroring
+    # _persist_feature_flags.
+    if (
+        submitted_master not in _FEATURE_FLAG_CHOICES
+        or submitted_producer not in _FEATURE_FLAG_CHOICES
+    ):
+        return ["Unrecognized setting — choose On, Off, or Use installation setting."]
+    cand_master = None if submitted_master == "inherit" else submitted_master == "on"
+    cand_producer = None if submitted_producer == "inherit" else submitted_producer == "on"
+
+    # String override candidates (base URL + domains): blank → NULL (inherit); a
+    # value that merely echoes the env default → NULL too, so saving never silently
+    # pins the env value onto the row (issue #46 tri-state precedent). Stored
+    # verbatim-stripped; the runtime parser/validator re-reads the effective value.
+    stripped_base = raw_base_url.strip()
+    if not stripped_base:
+        cand_base: str | None = None
+    elif stripped_base == settings.web_search_base_url:
+        cand_base = None
+    else:
+        cand_base = stripped_base
+    stripped_domains = raw_domains.strip()
+    if not stripped_domains:
+        cand_domains: str | None = None
+    elif stripped_domains == settings.source_authority_domains.strip():
+        cand_domains = None
+    else:
+        cand_domains = stripped_domains
+
+    # Secret candidate (the _persist_llm_settings precedent): blank = keep stored
+    # (never prefilled), remove = NULL (revert to env), typed = the new value. The
+    # contradictory remove+replacement combination is rejected.
+    typed_key = bool(raw_key.strip())
+    try:
+        new_key = normalize_web_search_api_key(raw_key)
+    except SetupValidationError as exc:
+        new_key = None
+        errors.append(str(exc))
+    # Detect the contradiction from the RAW submission, so remove + a *malformed*
+    # replacement still reports it in the same pass (a normalize failure nulls
+    # new_key, which would otherwise hide the contradiction until a second attempt).
+    if remove_key and typed_key:
+        errors.append(
+            "Choose either a new web-search API key or “remove saved key”, not both."
+        )
+    if remove_key:
+        cand_key: str | None = None
+    elif new_key is not None:
+        cand_key = new_key
+    else:
+        cand_key = row.web_search_api_key if row is not None else None
+
+    # Domain-format errors (strict — rejects exactly what the runtime parser drops).
+    # Validate only what would actually be STORED: a blank or env-echoed submission
+    # collapses to NULL (inherit env, permissive at runtime), so there is nothing to
+    # reject — an operator who leaves the field alone is never shown a domain error.
+    if cand_domains is not None:
+        errors.extend(validate_authority_domains(cand_domains))
+
+    # Cross-flag invariants over the effective (candidate-over-env) combination. The
+    # effective base URL is validated HERE by validate_effective_flags when the
+    # master toggle is effectively on (its voxint_web_research ⇒ valid-base-url rule).
+    effective_master = bool(settings.voxint_web_research) if cand_master is None else cand_master
+    effective_producer = (
+        bool(settings.enrichment_web_research_enabled) if cand_producer is None else cand_producer
+    )
+    effective_base = cand_base if cand_base is not None else settings.web_search_base_url
+    errors.extend(
+        validate_effective_flags(
+            EffectiveFlags(
+                # Not edited in this section — resolved at the current effective value
+                # so a dependency (producer ⇒ llm) fires against real state.
+                llm_enabled=resolve_effective_llm_enabled(row, settings),
+                enrichment_names_enabled=resolve_effective_enrichment_names_enabled(row, settings),
+                enrichment_names_llm_enabled=resolve_effective_enrichment_names_llm_enabled(
+                    row, settings
+                ),
+                enrichment_run_assets_enabled=resolve_effective_enrichment_run_assets_enabled(
+                    row, settings
+                ),
+                enrichment_run_assets_autogenerate=(
+                    resolve_effective_enrichment_run_assets_autogenerate(row, settings)
+                ),
+                # Edited here — the candidate over env default.
+                voxint_web_research=effective_master,
+                enrichment_web_research_enabled=effective_producer,
+                web_search_base_url=effective_base,
+            )
+        )
+    )
+    # Standalone base-URL validation covers the complementary case only: an explicit
+    # override saved WHILE the master toggle is off (validate_effective_flags checks
+    # the base URL only when master is on, so this catches a latent-malformed
+    # override that would break the instant master flips on). The two branches are
+    # mutually exclusive, so no message is ever produced twice.
+    if not effective_master and cand_base is not None:
+        url_error = validate_web_search_base_url(cand_base)
+        if url_error is not None:
+            errors.append(url_error)
+
+    if errors:
+        # Translate identifier-bearing invariant messages to operator-plain copy;
+        # nothing is written.
+        return [_FEATURE_INVARIANT_COPY.get(message, message) for message in errors]
+
+    # Valid → one mutation. get_or_create only now, so a rejected save writes nothing.
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    row.voxint_web_research = cand_master
+    row.enrichment_web_research_enabled = cand_producer
+    row.web_search_base_url = cand_base
+    row.web_search_api_key = cand_key
+    row.source_authority_domains = cand_domains
     return []
 
 
@@ -3520,6 +3715,15 @@ def _register_routes(app: FastAPI) -> None:
             }
             for name, label, help_text in _FEATURE_FLAG_META
         ]
+        # Sources & research section (issue #76). On an invariant/format-rejected
+        # save, render the operator's submitted choices back (``web_research_submitted``
+        # — the four non-secret fields only, never the key); otherwise the stored raw
+        # tri-state / override values.
+        wr_submitted: dict[str, str] | None = overrides.pop("web_research_submitted", None)
+        wr_base_value, wr_base_default = str_flag_form_field(row, settings, "web_search_base_url")
+        wr_domains_value, wr_domains_default = str_flag_form_field(
+            row, settings, "source_authority_domains"
+        )
         context: dict[str, Any] = {
             "request": request,
             "tutorial_available": tutorial_run is not None,
@@ -3550,6 +3754,37 @@ def _register_routes(app: FastAPI) -> None:
             "llm_error": None,
             "feature_flags": feature_flags,
             "features_errors": [],
+            # Sources & research (issue #76): the two web-research toggles (raw
+            # tri-state, or submitted choice on re-render), the endpoint override +
+            # env placeholder, the credential status (present + source, never the
+            # value), and the authority-domains override + env placeholder.
+            "web_research_master_state": (
+                wr_submitted.get("voxint_web_research", "inherit")
+                if wr_submitted is not None
+                else feature_flag_state(row, "voxint_web_research")
+            ),
+            "web_research_master_env_default": bool(settings.voxint_web_research),
+            "web_research_producer_state": (
+                wr_submitted.get("enrichment_web_research_enabled", "inherit")
+                if wr_submitted is not None
+                else feature_flag_state(row, "enrichment_web_research_enabled")
+            ),
+            "web_research_producer_env_default": bool(settings.enrichment_web_research_enabled),
+            "web_search_base_url": (
+                wr_submitted.get("web_search_base_url", "")
+                if wr_submitted is not None
+                else wr_base_value
+            ),
+            "web_search_base_url_default": wr_base_default,
+            "web_search_key_present": bool(resolve_effective_web_search_api_key(row, settings)),
+            "web_search_key_source": effective_web_search_key_source(row, settings),
+            "source_authority_domains": (
+                wr_submitted.get("source_authority_domains", "")
+                if wr_submitted is not None
+                else wr_domains_value
+            ),
+            "source_authority_domains_default": wr_domains_default,
+            "web_research_errors": [],
         }
         context.update(overrides)
         return context
@@ -3632,6 +3867,52 @@ def _register_routes(app: FastAPI) -> None:
                 "settings.html",
                 _settings_context(
                     request, session, features_errors=errors, features_submitted=submitted
+                ),
+            )
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/web-research")
+    def settings_web_research(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        voxint_web_research: Annotated[str, Form()] = "inherit",
+        enrichment_web_research_enabled: Annotated[str, Form()] = "inherit",
+        web_search_base_url: Annotated[str, Form()] = "",
+        web_search_api_key: Annotated[str, Form()] = "",
+        remove_web_search_api_key: Annotated[bool, Form()] = False,
+        source_authority_domains: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        # Candidate → validate (all error sources) → ONE mutation. On any violation
+        # nothing is written and the operator's choices are re-rendered with the
+        # plain-language message(s) (issue #76). The re-render dict carries the four
+        # NON-SECRET fields only — the API key is never echoed back.
+        errors = _persist_web_research(
+            session,
+            settings,
+            submitted_master=voxint_web_research,
+            submitted_producer=enrichment_web_research_enabled,
+            raw_base_url=web_search_base_url,
+            raw_key=web_search_api_key,
+            remove_key=remove_web_search_api_key,
+            raw_domains=source_authority_domains,
+        )
+        if errors:
+            submitted = {
+                "voxint_web_research": voxint_web_research,
+                "enrichment_web_research_enabled": enrichment_web_research_enabled,
+                "web_search_base_url": web_search_base_url,
+                "source_authority_domains": source_authority_domains,
+            }
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request, session, web_research_errors=errors, web_research_submitted=submitted
                 ),
             )
         session.commit()

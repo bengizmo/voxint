@@ -231,12 +231,46 @@ def normalize_authority_domain(raw: str) -> str | None:
     return _registrable_from_labels(labels)
 
 
+def _authority_tokens(raw: str) -> list[str]:
+    """Split an operator authority-domain string into tokens. ONE definition of the
+    comma/whitespace grammar, shared by :func:`parse_authority_domains` (runtime,
+    permissive) and :func:`validate_authority_domains` (form, strict) so the two can
+    never disagree on what a "token" is (issue #76)."""
+    return raw.replace(",", " ").split()
+
+
 def parse_authority_domains(raw: str) -> frozenset[str]:
-    """Parse a comma/whitespace-separated allowlist string into registrable
+    """Parse a comma/whitespace-separated authority-domain string into registrable
     domains, dropping malformed entries. Empty input -> empty set (the score
-    then reads 0.0 for every candidate: feature-neutral until configured)."""
-    tokens = raw.replace(",", " ").split()
-    return frozenset(d for token in tokens if (d := normalize_authority_domain(token)))
+    then reads 0.0 for every candidate: feature-neutral until configured).
+
+    Permissive by design — it runs at scoring time over whatever env/DB value is in
+    force, so a legacy or partially-bad list still yields its good domains rather
+    than failing a job. The settings form uses :func:`validate_authority_domains` to
+    REJECT the same malformed tokens up front."""
+    return frozenset(
+        d for token in _authority_tokens(raw) if (d := normalize_authority_domain(token))
+    )
+
+
+def validate_authority_domains(raw: str) -> list[str]:
+    """Operator-facing errors for authority-domain tokens that are not bare
+    registrable domains (issue #76). Empty input -> ``[]`` (blank = inherit the env
+    default, valid). Rejects exactly the tokens :func:`parse_authority_domains`
+    would silently drop — :func:`normalize_authority_domain` is the shared oracle —
+    so the strict form and the permissive runtime parser agree on the grammar. A
+    field-format check (like ``validate_web_search_base_url``), NOT a cross-flag
+    invariant. IDN note: a Unicode domain is accepted here but never matches the
+    punycode hosts of fetched pages, so the form help asks for the ``xn--`` form."""
+    errors: list[str] = []
+    for token in _authority_tokens(raw):
+        if normalize_authority_domain(token) is None:
+            errors.append(
+                f"“{token}” is not a plain domain. Enter just the domain — like"
+                " example.com or news.bbc.co.uk — with no https://, path, port,"
+                " “@”, or wildcard."
+            )
+    return errors
 
 
 def _agreement(peer_producer_count: int) -> float:

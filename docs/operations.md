@@ -603,6 +603,14 @@ WEB_SEARCH_BASE_URL=http://<your-searxng-host>:8888   # must serve format=json
 # WEB_SEARCH_API_KEY=...   # only if your instance sits behind an auth proxy
 ```
 
+These four settings — the web-research master toggle, the enrichment-producer
+toggle (below), the endpoint, and the API key — are also editable from
+**Settings → Sources & research** (issue #76): a saved value wins over the
+environment and takes effect on the next job with no restart. The env values above
+are the fallback when the settings row is blank. The `WEB_READ_*` /
+`WEB_SEARCH_MAX_RESULTS` / timeout caps stay env-only (they are per-job budget
+knobs, deliberately not runtime-editable).
+
 Verify the egress policy by hand after enabling:
 
 ```bash

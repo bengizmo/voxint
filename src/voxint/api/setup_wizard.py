@@ -220,34 +220,50 @@ def normalize_llm_model(raw: str) -> str | None:
     return value
 
 
-def normalize_llm_api_key(raw: str) -> str | None:
-    """Normalize the optional LLM API key field. Blank ⇒ ``None`` = **no change**.
+def normalize_api_key(raw: str, *, label: str, max_chars: int) -> str | None:
+    """Normalize an optional API-key field. Blank ⇒ ``None`` = **no change**.
 
-    The password field submits blank on almost every save (it is never prefilled,
-    so re-saving the LLM step without re-typing the key must LEAVE THE STORED KEY
-    UNTOUCHED — not wipe it). So blank returns ``None`` as a *no-change sentinel*,
-    distinct from an explicit removal (the separate ``remove_llm_api_key`` checkbox,
-    handled by the route). A non-blank value is stripped of surrounding whitespace,
-    then rejected if it still contains any whitespace, control character, or non-ASCII
-    character (a real API key has none — this catches paste accidents before the key
-    reaches an ``Authorization`` header, whose latin-1 encoding would otherwise crash
-    the outbound request at run/doctor time instead of failing closed here) or exceeds
-    :data:`MAX_LLM_KEY_CHARS`. The message is a fixed string and NEVER interpolates the
-    submitted value (it is a credential).
+    The provider-neutral core shared by every credential field (the LLM key, the
+    web-search key — issue #76): a password field submits blank on almost every
+    save (it is never prefilled, so re-saving without re-typing the key must LEAVE
+    THE STORED KEY UNTOUCHED — not wipe it). So blank returns ``None`` as a
+    *no-change sentinel*, distinct from an explicit removal (a separate remove
+    checkbox handled by the route). A non-blank value is stripped of surrounding
+    whitespace, then rejected if it still contains any whitespace, control
+    character, or non-ASCII character (a real API key has none — this catches paste
+    accidents before the key reaches an ``Authorization`` header, whose latin-1
+    encoding would otherwise crash the outbound request at run/doctor time instead
+    of failing closed here) or exceeds ``max_chars``. ``label`` names the field in
+    the message; the message is a fixed string and NEVER interpolates the submitted
+    value (it is a credential).
     """
     value = raw.strip()
     if not value:
         return None
-    if len(value) > MAX_LLM_KEY_CHARS:
-        raise SetupValidationError(f"LLM API key exceeds {MAX_LLM_KEY_CHARS} characters")
+    if len(value) > max_chars:
+        raise SetupValidationError(f"{label} exceeds {max_chars} characters")
     # Printable ASCII only (0x21-0x7E): rejects whitespace, control chars, and any
     # non-ASCII code point that httpx cannot encode into the Authorization header.
     if any(ord(ch) < 0x21 or ord(ch) > 0x7E for ch in value):
         raise SetupValidationError(
-            "LLM API key must contain only printable ASCII characters"
+            f"{label} must contain only printable ASCII characters"
             " (no whitespace or control characters)"
         )
     return value
+
+
+def normalize_llm_api_key(raw: str) -> str | None:
+    """Normalize the optional LLM API key field (see :func:`normalize_api_key`)."""
+    return normalize_api_key(raw, label="LLM API key", max_chars=MAX_LLM_KEY_CHARS)
+
+
+def normalize_web_search_api_key(raw: str) -> str | None:
+    """Normalize the optional web-search provider API key (issue #76). Same rules
+    and the same no-change/blank sentinel as :func:`normalize_llm_api_key`; only the
+    message label differs. Reuses ``MAX_LLM_KEY_CHARS`` as the shared length ceiling
+    (a generous bound for any provider key — a second knob would not earn its place).
+    """
+    return normalize_api_key(raw, label="Web-search API key", max_chars=MAX_LLM_KEY_CHARS)
 
 
 def validate_llm_enable(effective_api_key: str, settings: Settings) -> None:

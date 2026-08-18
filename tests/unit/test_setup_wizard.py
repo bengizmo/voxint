@@ -22,6 +22,7 @@ from voxint.api.setup_wizard import (
     normalize_llm_model,
     normalize_media_folders,
     normalize_vocabulary,
+    normalize_web_search_api_key,
     parse_step,
     validate_llm_enable,
 )
@@ -226,6 +227,28 @@ def test_normalize_llm_api_key_message_never_echoes_value() -> None:
         assert "sk-super-secret" not in str(exc)
     else:  # pragma: no cover - the value has a space, so it must raise
         raise AssertionError("expected rejection")
+
+
+def test_normalize_web_search_api_key_shares_llm_rules() -> None:
+    # The web-search key reuses the same normalizer core (issue #76): blank =
+    # no-change sentinel, strip, printable-ASCII-only, and the shared length cap.
+    assert normalize_web_search_api_key("") is None
+    assert normalize_web_search_api_key("   ") is None
+    assert normalize_web_search_api_key("  provider-key-123  ") == "provider-key-123"
+    with pytest.raises(SetupValidationError):
+        normalize_web_search_api_key("has a space")
+    with pytest.raises(SetupValidationError):
+        normalize_web_search_api_key("s" * (MAX_LLM_KEY_CHARS + 1))
+
+
+def test_normalize_web_search_api_key_message_labels_web_search() -> None:
+    # The label differs from the LLM key so the operator sees the right field, and
+    # the message still never echoes the submitted value.
+    secret = "provider-secret with a space"
+    with pytest.raises(SetupValidationError) as excinfo:
+        normalize_web_search_api_key(secret)
+    assert "Web-search API key" in str(excinfo.value)
+    assert "provider-secret" not in str(excinfo.value)
 
 
 # ------------------------------------------------------------- llm enable guard

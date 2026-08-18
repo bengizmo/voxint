@@ -9,6 +9,7 @@ invariants live in exactly one validator shared with ``config.py``.
 
 from voxint.app_settings import (
     EffectiveFlags,
+    effective_web_search_key_source,
     feature_flag_state,
     resolve_effective_enrichment_names_enabled,
     resolve_effective_enrichment_names_llm_enabled,
@@ -21,6 +22,7 @@ from voxint.app_settings import (
     resolve_effective_web_search_api_key,
     resolve_effective_web_search_base_url,
     resolve_effective_ytdlp_enabled,
+    str_flag_form_field,
     validate_effective_flags,
 )
 from voxint.config import Settings
@@ -347,3 +349,46 @@ def test_feature_flag_state_tristate() -> None:
     assert feature_flag_state(AppSettings(id=1), "ytdlp_enabled") == "inherit"
     assert feature_flag_state(AppSettings(id=1, ytdlp_enabled=True), "ytdlp_enabled") == "on"
     assert feature_flag_state(AppSettings(id=1, ytdlp_enabled=False), "ytdlp_enabled") == "off"
+
+
+def test_str_flag_form_field_renders_raw_column(monkeypatch) -> None:
+    # The string form helper renders the ROW override, or "" when NULL/blank (so an
+    # untouched save stays inheriting), with the env default as the placeholder —
+    # the string counterpart to feature_flag_state (issue #76).
+    monkeypatch.setenv("WEB_SEARCH_BASE_URL", "http://env.example")
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert str_flag_form_field(None, settings, "web_search_base_url") == ("", "http://env.example")
+    row_blank = AppSettings(id=1, web_search_base_url="")
+    assert str_flag_form_field(row_blank, settings, "web_search_base_url") == (
+        "",
+        "http://env.example",
+    )
+    row = AppSettings(id=1, web_search_base_url="http://row.lan")
+    assert str_flag_form_field(row, settings, "web_search_base_url") == (
+        "http://row.lan",
+        "http://env.example",
+    )
+
+
+def test_effective_web_search_key_source(monkeypatch) -> None:
+    # Honest UI status — never the value. Stored (row) wins, else environment, else
+    # none; mirrors resolve_effective_web_search_api_key's precedence (issue #76).
+    monkeypatch.delenv("WEB_SEARCH_API_KEY", raising=False)
+    settings_no_env = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert effective_web_search_key_source(None, settings_no_env) == "none"
+    assert (
+        effective_web_search_key_source(
+            AppSettings(id=1, web_search_api_key="k-row"), settings_no_env
+        )
+        == "stored"
+    )
+    monkeypatch.setenv("WEB_SEARCH_API_KEY", "k-env")
+    settings_env = Settings(_env_file=None)  # type: ignore[call-arg]
+    assert effective_web_search_key_source(None, settings_env) == "environment"
+    # A stored row key still wins the "stored" label over an env key.
+    assert (
+        effective_web_search_key_source(
+            AppSettings(id=1, web_search_api_key="k-row"), settings_env
+        )
+        == "stored"
+    )
