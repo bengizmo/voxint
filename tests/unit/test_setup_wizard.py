@@ -389,3 +389,28 @@ def test_list_media_subdirs_handles_special_char_names(tmp_path: Path) -> None:
     # The rel path round-trips the literal name (URL-encoding is the template's job).
     by_name = {e.name: e.rel for e in listing.entries}
     assert by_name["a b & c"] == "a b & c"
+
+
+def test_list_media_subdirs_embedded_nul_recovers_not_raises(tmp_path: Path) -> None:
+    # An embedded NUL makes Path.resolve() raise ValueError; the browser must recover
+    # to the root (its "never raises" contract), not 500. It is a bad submitted path,
+    # so invalid_path is flagged — the honest signal, without echoing the value.
+    (tmp_path / "safe").mkdir()
+    listing = list_media_subdirs(tmp_path, "a\x00b", set())
+    assert listing.current == "." and listing.invalid_path
+    assert [e.name for e in listing.entries] == ["safe"]
+
+
+def test_list_media_subdirs_sorts_case_insensitively(tmp_path: Path) -> None:
+    for name in ("Zebra", "apple", "Banana"):
+        (tmp_path / name).mkdir()
+    listing = list_media_subdirs(tmp_path, ".", set())
+    # Case-folded order, so "apple" is not stranded after the capitals.
+    assert [e.name for e in listing.entries] == ["apple", "Banana", "Zebra"]
+
+
+def test_normalize_media_folders_embedded_nul_is_validation_error(tmp_path: Path) -> None:
+    # The add path's counterpart: a NUL byte is a SetupValidationError the route
+    # re-renders, never an uncaught ValueError/500.
+    with pytest.raises(SetupValidationError):
+        normalize_media_folders(["a\x00b"], tmp_path)

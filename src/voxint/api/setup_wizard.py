@@ -137,7 +137,16 @@ def normalize_media_folders(raw_folders: Iterable[str], media_root: Path) -> lis
             raise SetupValidationError(
                 f"media folder must be relative to the media root: {folder!r}"
             )
-        resolved = (root / folder).resolve()
+        try:
+            resolved = (root / folder).resolve()
+        except (ValueError, OSError) as exc:
+            # ``resolve()`` rejects some inputs outright (e.g. an embedded NUL byte
+            # raises ``ValueError``). Fail as a validation error the route re-renders,
+            # never an uncaught 500 — the add path's counterpart to the browser's
+            # recover-to-root guard.
+            raise SetupValidationError(
+                f"media folder path is invalid: {folder!r}"
+            ) from exc
         if not resolved.is_relative_to(root):
             raise SetupValidationError(f"media folder is outside the media root: {folder!r}")
         if _under_reserved(resolved, reserved):
@@ -492,15 +501,21 @@ def list_media_subdirs(
 
     reserved = {(root / name).resolve() for name in _RESERVED_TREES}
     invalid_path = False
-    target = (root / rel_path).resolve() if rel_path else root
     # Recover (not raise) to the root on any bad client path — a traversal attempt,
-    # a stale/removed folder, a reserved tree, or a non-directory — so navigation
-    # stays safe and honest without echoing the untrusted submitted value.
-    if (
-        not target.is_relative_to(root)
-        or _under_reserved(target, reserved)
-        or not target.is_dir()
-    ):
+    # a stale/removed folder, a reserved tree, a non-directory, or a path that
+    # ``resolve()`` itself rejects (e.g. an embedded NUL byte raises ``ValueError``)
+    # — so navigation stays safe and honest without echoing the untrusted value or
+    # 500-ing against this function's "never raises" contract.
+    try:
+        target = (root / rel_path).resolve() if rel_path else root
+        bad = (
+            not target.is_relative_to(root)
+            or _under_reserved(target, reserved)
+            or not target.is_dir()
+        )
+    except (ValueError, OSError):
+        bad = True
+    if bad:
         invalid_path = rel_path not in ("", ".")
         target = root
 
@@ -514,26 +529,31 @@ def list_media_subdirs(
     except OSError:
         scanner = None  # unreadable/vanished after the containment check — empty
     if scanner is not None:
-        with scanner:
-            collected: list[DirEntry] = []
-            for entry in scanner:
-                try:
-                    if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+        collected: list[DirEntry] = []
+        try:
+            with scanner:
+                for entry in scanner:
+                    try:
+                        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                            continue
+                        child = Path(entry.path).resolve()
+                    except (OSError, ValueError):
+                        continue  # a single flaky entry never fails the whole listing
+                    if not child.is_relative_to(root) or child in reserved:
                         continue
-                    child = Path(entry.path).resolve()
-                except OSError:
-                    continue  # a single flaky entry never fails the whole listing
-                if not child.is_relative_to(root) or child in reserved:
-                    continue
-                child_rel = child.relative_to(root).as_posix()
-                collected.append(
-                    DirEntry(
-                        name=entry.name,
-                        rel=child_rel,
-                        registered=child_rel in registered,
+                    child_rel = child.relative_to(root).as_posix()
+                    collected.append(
+                        DirEntry(
+                            name=entry.name,
+                            rel=child_rel,
+                            registered=child_rel in registered,
+                        )
                     )
-                )
-        collected.sort(key=lambda e: e.name)
+        except OSError:
+            pass  # the directory vanished mid-scan — return what we collected
+        # Case-insensitive so "Zebra" doesn't sort before "apple"; the exact name is
+        # the tiebreak so the order stays deterministic across equal-fold names.
+        collected.sort(key=lambda e: (e.name.casefold(), e.name))
         if len(collected) > MAX_BROWSE_ENTRIES:
             truncated = True
             collected = collected[:MAX_BROWSE_ENTRIES]

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import (
+    _PACK_DEFAULT_SENTINEL,
     _add_media_folder,
     _folder_panel_context,
     create_app,
@@ -223,10 +224,10 @@ def test_pack_set_then_default_clears(
         headers=_HTMX,
     )
     assert (_row(session_factory) or AppSettings()).folder_domain_packs == {"pods": "generic"}
-    # "" is the sole Default sentinel — it removes the mapping.
+    # The "Default" option submits an explicit sentinel (not "") — it clears the map.
     client.post(
         "/settings/folders",
-        data=_form(action="pack", folder="pods", pack="", path="."),
+        data=_form(action="pack", folder="pods", pack=_PACK_DEFAULT_SENTINEL, path="."),
         headers=_HTMX,
     )
     assert (_row(session_factory) or AppSettings()).folder_domain_packs == {}
@@ -324,6 +325,61 @@ def test_registry_failure_disables_pack_selection(
     assert "disabled" in body  # the select is disabled
     # The stored pack is still shown honestly, not silently replaced by "Default".
     assert "somepack (unavailable)" in body
+
+
+def test_registry_down_pack_submit_preserves_mapping(
+    session_factory: sessionmaker[Session], media_root: Path, tmp_path: Path
+) -> None:
+    # With the registry down the panel disables the <select> AND the Set button, and
+    # a disabled select submits no `pack` field. A submit that still reaches the route
+    # (belt-and-braces / no-JS) must be a no-op, NEVER read as "select Default" and
+    # silently wipe the stored mapping — the honest-degradation contract.
+    not_a_dir = tmp_path / "not-a-dir"
+    not_a_dir.write_text("x")
+    (media_root / "pods").mkdir()
+    client, _ = make_client(session_factory, media_root, domain_packs_dir=not_a_dir)
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.media_folders = ["pods"]
+        row.folder_domain_packs = {"pods": "somepack"}
+        session.commit()
+    # action=pack with NO pack field (exactly what a disabled select submits).
+    resp = client.post(
+        "/settings/folders",
+        data=_form(action="pack", folder="pods", path="."),
+        headers=_HTMX,
+    )
+    assert resp.status_code == 200
+    row = _row(session_factory)
+    assert row is not None
+    assert row.folder_domain_packs == {"pods": "somepack"}  # mapping preserved
+    # The disabled control renders on the button too, not only the select.
+    assert "<button type=\"submit\" disabled>Set</button>" in resp.text
+
+
+def test_nonhtmx_pack_error_rerenders_page_with_message_and_path(
+    session_factory: sessionmaker[Session], media_root: Path, tmp_path: Path
+) -> None:
+    # A no-JS (non-HTMX) mutation failure must re-render the whole Settings page with
+    # the error inline — not a silent 303 that discards it and looks like success —
+    # and keep the operator's browse position instead of snapping back to the root.
+    packs = _make_packs_dir(tmp_path, "interview")
+    (media_root / "interviews").mkdir()
+    (media_root / "interviews" / "sub").mkdir()
+    client, _ = make_client(session_factory, media_root, domain_packs_dir=packs)
+    _add(client, "interviews")
+    resp = client.post(
+        "/settings/folders",
+        data=_form(action="pack", folder="interviews", pack="ghostpack", path="interviews"),
+        follow_redirects=False,
+    )
+    assert resp.status_code == 200  # full page, not a 303 redirect that drops the error
+    assert "Unknown domain pack: ghostpack." in resp.text
+    assert 'id="folders"' in resp.text  # the whole settings page rendered
+    assert ">sub/<" in resp.text  # panel is at path=interviews (its child), not root
+    # Nothing was written: the rejected pack never landed.
+    row = _row(session_factory)
+    assert row is not None and (row.folder_domain_packs or {}) == {}
 
 
 # --------------------------------------------------------- CSRF / gating / bounds

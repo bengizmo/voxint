@@ -29,7 +29,7 @@
           <input type="hidden" name="path" value="{{ folder_listing.current }}">
           <label>Domain pack:
             <select name="pack"{% if not folder_packs_available %} disabled{% endif %}>
-              <option value=""{% if not f.pack %} selected{% endif %}>Default</option>
+              <option value="{{ folder_pack_default_value }}"{% if not f.pack %} selected{% endif %}>Default</option>
               {% for name in folder_pack_names %}
               <option value="{{ name }}"{% if f.pack == name %} selected{% endif %}>{{ name }}</option>
               {% endfor %}
@@ -39,7 +39,11 @@
               {% endif %}
             </select>
           </label>
-          <button type="submit">Set</button>
+          {# Disable Set alongside the select when the registry is down: a disabled
+             select submits nothing, so an enabled Set would post an absent pack and
+             (server-side) must never be read as "select Default" and clear the
+             stored mapping. #}
+          <button type="submit"{% if not folder_packs_available %} disabled{% endif %}>Set</button>
         </form>
 
         <form method="post" action="{{ folders_mutate_action }}"

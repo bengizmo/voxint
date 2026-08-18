@@ -15,7 +15,7 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1327,6 +1327,7 @@ def _setup_context(
     request: Request,
     session: Session,
     step: WizardStep,
+    folder_path: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Template context for a setup-wizard step.
@@ -1336,6 +1337,11 @@ def _setup_context(
     over env defaults, matching how a run would resolve them; a POST that fails
     validation passes ``error=`` plus the raw submitted text via ``overrides`` so the
     operator's in-progress input survives the re-render.
+
+    ``folder_path`` overrides the MEDIA-step browse location (the folder panel); it
+    defaults to ``?path=`` from the query string. A non-HTMX folder mutation that
+    fails re-renders the full page and passes the submitted ``path`` here so the
+    browser stays put instead of snapping back to the root.
     """
     settings: Settings = request.app.state.settings
     row = get_app_settings(session)
@@ -1388,7 +1394,9 @@ def _setup_context(
                 settings,
                 action_prefix="/setup/folders",
                 csrf=context["csrf_setup"],
-                path=request.query_params.get("path") or ".",
+                path=folder_path if folder_path is not None else (
+                    request.query_params.get("path") or "."
+                ),
             )
         )
     context.update(overrides)
@@ -1490,6 +1498,14 @@ def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> st
 
 
 # ---- Media folders + per-folder domain packs (issue #63) --------------------
+# The pack <select>'s "Default" (= no mapping) option submits this explicit,
+# non-empty sentinel — NOT "". FastAPI collapses both an absent field and an empty
+# "" form value to None for an Optional[str] param, so "" cannot distinguish "the
+# operator chose Default (clear the mapping)" from "the field was absent because the
+# control was disabled (leave the mapping untouched)". A non-empty sentinel makes
+# that distinction unambiguous: None ⇒ no-op, sentinel ⇒ clear, a real name ⇒ set.
+_PACK_DEFAULT_SENTINEL = "__default__"
+
 # The folder browser and the Settings "Media folders" section share these
 # helpers. Every mutation serializes on the singleton app_settings row so
 # overlapping htmx requests (double-clicks, multiple tabs) cannot lose an update
@@ -1508,12 +1524,22 @@ def _locked_app_settings(session: Session, settings: Settings) -> AppSettings:
     result). On PostgreSQL this is a real row lock; on SQLite SQLAlchemy renders no
     locking clause (single-writer anyway), so the tests that assert serialization
     run against the production database.
+
+    ``populate_existing=True`` is load-bearing: ``get_or_create`` has already loaded
+    the singleton into this Session's identity map, so a plain ``FOR UPDATE`` reread
+    would take the lock but return the *cached* instance with its pre-lock attribute
+    values — silently defeating the reread and re-opening the lost-update window the
+    lock exists to close. The option forces the locked row's freshly-read columns to
+    overwrite the identity-mapped instance, so ``row.media_folders`` reflects the
+    post-lock committed state on every path (not only when the lock happened to
+    block on a concurrent writer).
     """
     get_or_create(session, llm_enabled_default=settings.llm_enabled)
     return session.execute(
         select(AppSettings)
         .where(AppSettings.id == APP_SETTINGS_SINGLETON_ID)
         .with_for_update()
+        .execution_options(populate_existing=True)
     ).scalar_one()
 
 
@@ -1562,21 +1588,27 @@ def _remove_media_folder(session: Session, settings: Settings, folder: str) -> s
 
 
 def _set_folder_pack(
-    session: Session, settings: Settings, folder: str, pack: str
+    session: Session, settings: Settings, folder: str, pack: str | None
 ) -> str | None:
     """Assign (or clear) a registered folder's domain pack. Last write wins.
 
-    ``pack == ""`` is the sole "Default" sentinel and removes the mapping. A
-    non-empty pack must resolve in ``available_domain_packs`` (an unknown name or a
-    registry-wide ``DomainPackError`` writes nothing and surfaces the message). The
-    folder must already be registered — enforcing the mapping-key ⊆ media_folders
-    invariant on write.
+    ``pack is None`` means the ``pack`` field was *absent* from the submission — a
+    no-op, never a clear. This matters when the registry is down: the panel disables
+    the ``<select>`` (and the Set button), and a disabled control submits nothing, so
+    an accidental submit must not be read as "select Default" and wipe the stored
+    mapping. ``pack == _PACK_DEFAULT_SENTINEL`` is the explicit "Default" choice and
+    removes the mapping. Any other non-empty pack must resolve in
+    ``available_domain_packs`` (an unknown name or a registry-wide ``DomainPackError``
+    writes nothing and surfaces the message). The folder must already be registered —
+    enforcing the mapping-key ⊆ media_folders invariant on write.
     """
+    if pack is None:
+        return None  # field absent (e.g. disabled select) — never touch the mapping
     row = _locked_app_settings(session, settings)
     if folder not in (row.media_folders or []):
         return "That folder is not registered."
     mapping = dict(row.folder_domain_packs or {})
-    if pack == "":
+    if pack == _PACK_DEFAULT_SENTINEL:
         if mapping.pop(folder, None) is not None:
             row.folder_domain_packs = mapping
         return None
@@ -1600,7 +1632,7 @@ def _apply_folder_mutation(
     *,
     action: str,
     folder: str,
-    pack: str,
+    pack: str | None,
 ) -> str | None:
     """Dispatch a folder-panel mutation to the right persist helper.
 
@@ -1614,6 +1646,21 @@ def _apply_folder_mutation(
     if action == "pack":
         return _set_folder_pack(session, settings, folder, pack)
     raise HTTPException(status_code=422, detail=f"unknown folder action {action!r}")
+
+
+def _folder_missing(root: Path, folder: str) -> bool:
+    """True if a registered ``folder`` no longer resolves to a directory in the root.
+
+    ``root`` is already ``resolve()``-d. Mirrors the browse/add containment posture:
+    a path that escapes the root (symlink swap), fails to resolve (embedded NUL), or
+    is not an existing directory reads as missing — never as a present directory
+    sitting outside MEDIA_ROOT.
+    """
+    try:
+        resolved = (root / folder).resolve()
+        return not (resolved.is_relative_to(root) and resolved.is_dir())
+    except (ValueError, OSError):
+        return True
 
 
 def _folder_panel_context(
@@ -1653,7 +1700,7 @@ def _folder_panel_context(
         nav_prefix, nav_suffix, nav_base = "/setup?step=media&path=", "", "/setup"
     else:
         nav_prefix, nav_suffix, nav_base = "/settings?path=", "#folders", "/settings"
-    root = settings.media_root
+    root = settings.media_root.resolve()
     folder_rows: list[dict[str, Any]] = []
     for folder in registered:
         current_pack = mapping.get(folder, "")
@@ -1667,8 +1714,11 @@ def _folder_panel_context(
                 # a false "Default".
                 "pack_unavailable": bool(current_pack) and current_pack not in pack_names,
                 # A registered folder that has since vanished on disk is flagged
-                # (still removable) — honest state, not a silent drop.
-                "missing": not (root / folder).is_dir(),
+                # (still removable) — honest state, not a silent drop. Resolve +
+                # contain (not a bare ``is_dir``) to match the browse/add posture: a
+                # symlink or path that now escapes the root reads as missing rather
+                # than as a present directory outside MEDIA_ROOT.
+                "missing": _folder_missing(root, folder),
             }
         )
     return {
@@ -1683,6 +1733,9 @@ def _folder_panel_context(
         "folder_rows": folder_rows,
         "folder_pack_names": pack_names,
         "folder_packs_available": packs_available,
+        # The "Default" <option> submits this explicit sentinel (see the constant) so
+        # a disabled/absent select is never misread as "clear the mapping".
+        "folder_pack_default_value": _PACK_DEFAULT_SENTINEL,
         "folder_error": None,
     }
 
@@ -2527,7 +2580,9 @@ def _register_routes(app: FastAPI) -> None:
     # Two routes per mount: a read-only browse GET (no CSRF — authenticated,
     # bounded, never creates the row) and one mutate POST carrying an action verb.
     # An HX request gets the panel fragment back; a plain request degrades to a
-    # full-page redirect that preserves the current browse location via ?path=.
+    # full-page redirect on success, or a full-page re-render carrying the error
+    # inline on failure (mirrors _roster_response) — never a silent reload that
+    # discards the message and looks like the mutation succeeded.
 
     def _folder_panel_response(
         request: Request,
@@ -2539,8 +2594,13 @@ def _register_routes(app: FastAPI) -> None:
         path: str,
         error: str | None,
         redirect_url: str,
+        error_page: Callable[[str], Response],
     ) -> Response:
         if not request.headers.get("HX-Request"):
+            if error is not None:
+                # No-JS failure: re-render the whole page with the message inline
+                # (and the browse position preserved), not a 303 that drops it.
+                return error_page(error)
             return RedirectResponse(redirect_url, status_code=303)
         csrf = mint_csrf_token(request.app.state.csrf_secret, csrf_action)
         context = _folder_panel_context(
@@ -2577,9 +2637,9 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         operator: OperatorDep,
         session: SessionDep,
-        action: Annotated[str, Form()] = "",
+        action: Annotated[str, Form(max_length=16)] = "",
         folder: Annotated[str, Form(max_length=4096)] = "",
-        pack: Annotated[str, Form(max_length=200)] = "",
+        pack: Annotated[str | None, Form(max_length=200)] = None,
         path: Annotated[str, Form(max_length=4096)] = ".",
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
@@ -2596,6 +2656,17 @@ def _register_routes(app: FastAPI) -> None:
             # writes nothing (mirrors the wizard's other error re-renders).
             session.rollback()
         redirect = "/setup?" + urlencode({"step": "media", "path": path})
+
+        def _error_page(message: str) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "setup.html",
+                _setup_context(
+                    request, session, WizardStep.MEDIA, folder_path=path,
+                    folder_error=message,
+                ),
+            )
+
         return _folder_panel_response(
             request,
             session,
@@ -2605,6 +2676,7 @@ def _register_routes(app: FastAPI) -> None:
             path=path,
             error=error,
             redirect_url=redirect,
+            error_page=_error_page,
         )
 
     @app.post("/setup/vocabulary", include_in_schema=False)
@@ -4302,7 +4374,10 @@ def _register_routes(app: FastAPI) -> None:
     # never "complete" or "replay" an unseeded tutorial.
 
     def _settings_context(
-        request: Request, session: Session, **overrides: Any
+        request: Request,
+        session: Session,
+        folder_path: str | None = None,
+        **overrides: Any,
     ) -> dict[str, Any]:
         """Shared context for the settings page (GET render + POST re-render).
 
@@ -4312,6 +4387,10 @@ def _register_routes(app: FastAPI) -> None:
         rows (issue #62). ``overrides`` lets a POST re-render carry a section
         ``*_error`` and (for Features) ``features_submitted``, the operator's
         submitted radio selections, so a rejected save re-renders their choices.
+
+        ``folder_path`` overrides the folder-panel browse location (defaults to
+        ``?path=`` from the query string) so a non-HTMX folder mutation that fails
+        can re-render the full page at the submitted path instead of the root.
         """
         settings: Settings = request.app.state.settings
         tutorial_run = ready_tutorial_run_id(session)
@@ -4419,7 +4498,9 @@ def _register_routes(app: FastAPI) -> None:
                 settings,
                 action_prefix="/settings/folders",
                 csrf=context["csrf_settings"],
-                path=request.query_params.get("path") or ".",
+                path=folder_path if folder_path is not None else (
+                    request.query_params.get("path") or "."
+                ),
             )
         )
         context.update(overrides)
@@ -4581,9 +4662,9 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         operator: OperatorDep,
         session: SessionDep,
-        action: Annotated[str, Form()] = "",
+        action: Annotated[str, Form(max_length=16)] = "",
         folder: Annotated[str, Form(max_length=4096)] = "",
-        pack: Annotated[str, Form(max_length=200)] = "",
+        pack: Annotated[str | None, Form(max_length=200)] = None,
         path: Annotated[str, Form(max_length=4096)] = ".",
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
@@ -4597,6 +4678,14 @@ def _register_routes(app: FastAPI) -> None:
         else:
             session.rollback()
         redirect = "/settings?" + urlencode({"path": path}) + "#folders"
+
+        def _error_page(message: str) -> Response:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, folder_path=path, folder_error=message),
+            )
+
         return _folder_panel_response(
             request,
             session,
@@ -4606,6 +4695,7 @@ def _register_routes(app: FastAPI) -> None:
             path=path,
             error=error,
             redirect_url=redirect,
+            error_page=_error_page,
         )
 
     @protected.post("/settings/tutorial/seed")
