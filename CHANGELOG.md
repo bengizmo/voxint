@@ -6,6 +6,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Setup wizard: honest first-run readiness checks (#61, settings-overhaul arc
+  #47)**: the wizard's model-services step now surfaces the full `voxint doctor`
+  readiness checks in the browser — **Postgres, Redis, the three model services,
+  and (when LLM enhancement is on) the LLM endpoint** — instead of probing the
+  model services alone. Each dependency renders in one of three honest states:
+  **ready**, **failed** (a required dependency is down — the pipeline can't run
+  until it's fixed), or **unverified** (an optional/advisory check couldn't be
+  confirmed), each failure paired with a plain-language fix, never a stack trace
+  and never a false all-good. The LLM check honours the **effective** (#74
+  row-over-env) endpoint/key and only appears when enhancement is enabled. The
+  Hugging Face token check is deliberately **cut** from the wizard — the default
+  install runs on vendored weights, so it's noise (and skipping it also avoids a
+  live huggingface.co call the step has no reason to make). No secrets, endpoints,
+  or DSNs are ever rendered. Pure app + template; the checks reuse the existing
+  `diagnostics.py` functions with no logic fork. *(Known behaviour: enhancement
+  also needs a key and a fitting budget to actually run, so the LLM row can read
+  "enabled but unreachable" when the master toggle is on without a usable key —
+  this matches `voxint doctor` and is surfaced honestly rather than hidden.)*
 - **Settings → Sources & research: in-UI web-research config (#76, settings-overhaul
   arc #47)**: a new **Sources & research** section on the Settings page lets a
   non-technical operator configure web research entirely from the browser — the

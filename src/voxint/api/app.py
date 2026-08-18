@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
@@ -31,7 +32,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import exists, func, select
+from sqlalchemy import Engine, exists, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -108,7 +109,6 @@ from voxint.api.csrf import (
     mint_csrf_token,
     verify_csrf_token,
 )
-from voxint.api.health_probe import probe_services
 from voxint.api.playback import (
     MediaResolutionError,
     PlaybackCapability,
@@ -210,6 +210,7 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.diagnostics import check_state, run_diagnostics
 from voxint.enrichment.asset_jobs import (
     RunAssetJobError,
     active_or_last_jobs,
@@ -1665,6 +1666,50 @@ _FEATURE_INVARIANT_COPY: dict[str, str] = {
 }
 
 
+# Issue #61: plain-language remediation for the wizard SERVICES step's readiness
+# checks (``voxint doctor`` surfaced in the browser). Keyed by a coarse CATEGORY, not
+# the raw diagnostics check name, because the three model services carry distinct
+# names (transcription / diarization / speaker embedding) that share one fix. Shown
+# only when a check is not ``ready``. The model copy is warm-up-aware: a reachable
+# service whose model is still loading reads as ``failed`` (the pipeline genuinely
+# can't run yet), so the text names "starting" so it isn't misread as a crash.
+_DOCTOR_REMEDIATION: dict[str, str] = {
+    "database": (
+        "Start Postgres, then re-check. Voxint keeps every run and its transcript"
+        " here — nothing can be submitted until it's up."
+    ),
+    "redis": (
+        "Start Redis, then re-check. It's the task queue — submissions wait here to"
+        " be picked up, so the pipeline can't run without it."
+    ),
+    "models": (
+        "Start the model services — the GPU overlay (compose.gpu.yaml) or, with no"
+        " NVIDIA GPU, the CPU overlay (compose.cpu.yaml); see the README quickstart."
+        " If one just started it may still be loading its model — re-check in a"
+        " moment."
+    ),
+    "llm": (
+        "LLM transcript enhancement is on but the endpoint didn't answer — check the"
+        " LLM section in Settings. Transcription and diarization still run;"
+        " enhancement is simply skipped until the endpoint is reachable."
+    ),
+}
+
+
+def _doctor_category(name: str) -> str:
+    """Map a diagnostics :class:`~voxint.diagnostics.CheckResult` name to a
+    ``_DOCTOR_REMEDIATION`` category. Total by construction — any unrecognized name
+    (a new hard service) falls through to the model-services copy rather than
+    rendering an empty remediation."""
+    if name == "postgres":
+        return "database"
+    if name == "redis":
+        return "redis"
+    if name == "llm endpoint":
+        return "llm"
+    return "models"
+
+
 def _persist_feature_flags(
     session: Session, settings: Settings, *, submitted: dict[str, str]
 ) -> list[str]:
@@ -2203,10 +2248,33 @@ def _register_routes(app: FastAPI) -> None:
         step = parse_step(request.query_params.get("step"))
         context = _setup_context(request, session, step)
         if step is WizardStep.SERVICES:
-            # Probe only on the services step — a few-second network op we don't want
-            # to pay on every wizard GET. Best-effort; probe_services never raises.
+            # Run the full `voxint doctor` readiness checks only on the services step —
+            # a few-second network op we don't want to pay on every wizard GET (issue
+            # #61). include_hf_token=False drops the Hugging Face check: the default
+            # install runs on vendored weights, so it's noise for this operator AND a
+            # live huggingface.co call this step has no reason to make. run_diagnostics
+            # never raises into the request (its DB read suppresses SQLAlchemyError; the
+            # HTTP checks normalize every transport/URL failure), so this GET stays a
+            # 200 even with every dependency down. The engine is the request session's
+            # own pooled Engine — check_database borrows a separate pooled connection
+            # for its SELECT 1, no conflict with this read-only GET.
             settings: Settings = request.app.state.settings
-            context["services"] = probe_services(settings)
+            engine = cast(Engine, session.get_bind())
+            with httpx.Client(
+                timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
+            ) as client:
+                results = run_diagnostics(
+                    settings, engine, http_client=client, include_hf_token=False
+                )
+            context["doctor_checks"] = [
+                {
+                    "name": r.name,
+                    "state": check_state(r),
+                    "detail": r.detail,
+                    "remediation": _DOCTOR_REMEDIATION[_doctor_category(r.name)],
+                }
+                for r in results
+            ]
         return templates.TemplateResponse(request, "setup.html", context)
 
     def _setup_redirect(step: WizardStep) -> RedirectResponse:

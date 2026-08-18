@@ -258,22 +258,41 @@ def test_post_llm_bad_base_url_rerenders_without_persisting(
 # --------------------------------------------------------------- services step
 
 
-def test_get_services_renders_probe_results(
-    session_factory: sessionmaker[Session], media_root: Path
-) -> None:
-    # Point the services at a definitely-closed port so each probe returns quickly
-    # (connection refused) and renders as down — the step must render regardless.
-    client = make_client(
+def _services_down_client(
+    session_factory: sessionmaker[Session], media_root: Path, **overrides: object
+) -> TestClient:
+    # Point the model services + redis at a definitely-closed port so each check
+    # returns quickly (connection refused) and renders as failed — the wizard step
+    # (issue #61) must render every dependency regardless. Postgres stays the real
+    # test DB, so it reports ready.
+    return make_client(
         session_factory,
         media_root,
         asr_url="http://127.0.0.1:1",
         diarizer_url="http://127.0.0.1:1",
         embedder_url="http://127.0.0.1:1",
+        redis_url="redis://127.0.0.1:1/0",
+        **overrides,
     )
+
+
+def test_get_services_renders_doctor_checks(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    client = _services_down_client(session_factory, media_root)
     body = client.get("/setup?step=services").text
+    # Every dependency the doctor covers is surfaced by name.
     assert "transcription" in body
     assert "diarization" in body
     assert "speaker embedding" in body
+    assert "postgres" in body
+    assert "redis" in body
+    # Real test DB is up → postgres ready; the closed-port deps → failed. Both pill
+    # states must appear (never a false all-good with a required dep down).
+    assert '<span class="pill ready">ready</span>' in body
+    assert '<span class="pill failed">failed</span>' in body
+    # Plain-language remediation for a down dependency, no stack trace.
+    assert "Start the model services" in body
 
 
 def test_services_step_has_no_hf_token_row(
@@ -285,19 +304,59 @@ def test_services_step_has_no_hf_token_row(
     # wizard must not steer users toward a Hugging Face account — with or
     # without a token in the environment.
     monkeypatch.setenv("HF_TOKEN", "hf_SECRETVALUE")
-    client = make_client(
-        session_factory,
-        media_root,
-        asr_url="http://127.0.0.1:1",
-        diarizer_url="http://127.0.0.1:1",
-        embedder_url="http://127.0.0.1:1",
-    )
+    client = _services_down_client(session_factory, media_root)
     body = client.get("/setup?step=services").text
     assert "Hugging Face" not in body
     assert "hf_SECRETVALUE" not in body
+    assert "hugging face" not in body.lower()
     # Truthful failure semantics replaced the old "simply waits" claim.
     assert "simply waits" not in body
     assert "requeue" in body
+
+
+def test_services_step_llm_enabled_unreachable_is_unverified(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # LLM enhancement on but the endpoint unreachable → the row shows as UNVERIFIED
+    # (advisory, best-effort), never ready and never a hard failure. The endpoint DSN
+    # and the API key must never appear in the rendered page.
+    client = _services_down_client(
+        session_factory,
+        media_root,
+        llm_enabled=True,
+        llm_base_url="http://127.0.0.1:1/v1",
+        llm_api_key="sk-SECRETKEY",
+    )
+    body = client.get("/setup?step=services").text
+    assert "llm endpoint" in body
+    assert '<span class="pill unverified">unverified</span>' in body
+    assert "sk-SECRETKEY" not in body
+    assert "127.0.0.1:1" not in body  # no DSN / endpoint leaked
+
+
+def test_services_step_llm_disabled_shows_no_llm_row(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Default llm_enabled=False → check_llm returns None → no LLM row at all.
+    client = _services_down_client(session_factory, media_root)
+    body = client.get("/setup?step=services").text
+    assert "llm endpoint" not in body
+
+
+def test_services_step_returns_200_with_dependencies_down(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # The readiness checks must never raise into the request: with redis + models down
+    # (and LLM enabled at a dead endpoint), the GET is still a clean 200, not a 500.
+    client = _services_down_client(
+        session_factory,
+        media_root,
+        llm_enabled=True,
+        llm_base_url="http://127.0.0.1:1/v1",
+        llm_api_key="sk-x",
+    )
+    resp = client.get("/setup?step=services")
+    assert resp.status_code == 200
 
 
 # ------------------------------------------------------------------ finish step

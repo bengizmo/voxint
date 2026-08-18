@@ -20,6 +20,7 @@ Two deliberate rules:
 import contextlib
 import os
 from dataclasses import dataclass
+from typing import Literal
 
 import httpx
 from sqlalchemy import Engine, text
@@ -161,16 +162,24 @@ def run_diagnostics(
     hf_token: str | None = None,
     http_client: httpx.Client,
     redis_client: object | None = None,
+    include_hf_token: bool = True,
 ) -> list[CheckResult]:
     """Run every check in dependency order and collect the results.
 
     ``hf_token`` defaults to reading ``HF_TOKEN`` from the environment (it is not a
     Setting); pass it explicitly in tests. The caller owns ``engine``/``http_client``.
+
+    ``include_hf_token=False`` drops the Hugging Face check entirely — this is both a
+    display choice and a network one: ``check_hf_token`` makes a live ``whoami`` GET to
+    huggingface.co, so skipping it keeps the caller (the setup wizard's SERVICES step,
+    issue #61) from making an external internet call it has no reason to — the default
+    install runs on vendored weights and needs no HF token.
     """
     token = hf_token if hf_token is not None else os.environ.get("HF_TOKEN")
     results = [check_database(engine), check_redis(settings.redis_url, client=redis_client)]
     results.extend(check_models(settings, client=http_client))
-    results.append(check_hf_token(token, client=http_client))
+    if include_hf_token:
+        results.append(check_hf_token(token, client=http_client))
     # Resolve the effective LLM config from the app_settings row (issue #10) in a
     # short read-only session on the caller's engine: a UI-stored key/endpoint and
     # the row's enablement win over env, so doctor reports what a run would actually
@@ -196,3 +205,16 @@ def run_diagnostics(
 def exit_code(results: list[CheckResult]) -> int:
     """0 when every hard check passed; 1 when any hard dependency is down."""
     return 1 if any(r.hard and not r.ok for r in results) else 0
+
+
+def check_state(result: CheckResult) -> Literal["ready", "failed", "unverified"]:
+    """Collapse a result's ``(ok, hard)`` into one of three honest display states.
+
+    Mirrors the CLI's ``ok``/``FAIL``/``warn`` tagging (``cli.py`` ``_doctor``) for the
+    setup wizard (issue #61): ``ready`` (passed), ``failed`` (a hard dependency is
+    down — the pipeline cannot run), or ``unverified`` (an advisory check that did not
+    pass — reported honestly rather than as healthy, never a false all-good).
+    """
+    if result.ok:
+        return "ready"
+    return "failed" if result.hard else "unverified"

@@ -140,15 +140,21 @@
   </div>
 
 {% elif step.value == "services" %}
-  <h1>Model services</h1>
+  <h1>Readiness checks</h1>
   <p>Voxint's transcription, diarization, and speaker-embedding run as separate model
-     services (GPU or CPU tier). Here's whether each is reachable right now:</p>
-  {% for svc in services %}
+     services (GPU or CPU tier), backed by Postgres and Redis. Here's whether each
+     dependency is reachable right now — <strong>ready</strong> means good to go,
+     <strong>failed</strong> means the pipeline can't run until you fix it, and
+     <strong>unverified</strong> means an optional feature couldn't be confirmed:</p>
+  {% for check in doctor_checks %}
   <div class="svc">
-    <span class="dot {{ 'up' if svc.up else 'down' }}"></span>
-    <strong>{{ svc.name }}</strong>
-    <span class="muted">{{ svc.detail }}{% if svc.latency_ms is not none %} · {{ "%.0f"|format(svc.latency_ms) }} ms{% endif %}</span>
+    <span class="pill {{ check.state }}">{{ check.state }}</span>
+    <strong>{{ check.name }}</strong>
+    <span class="muted">{{ check.detail }}</span>
   </div>
+  {% if check.state != "ready" %}
+  <p class="muted svc-fix">{{ check.remediation }}</p>
+  {% endif %}
   {% endfor %}
   <p class="muted">If a service is down, start the model services — the GPU overlay
      (<code>compose.gpu.yaml</code>) or, with no NVIDIA GPU, the CPU overlay

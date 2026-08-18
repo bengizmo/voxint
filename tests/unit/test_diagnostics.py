@@ -16,6 +16,7 @@ from voxint.diagnostics import (
     check_llm,
     check_models,
     check_redis,
+    check_state,
     exit_code,
     run_diagnostics,
 )
@@ -233,3 +234,44 @@ def test_run_diagnostics_collects_hard_and_advisory() -> None:
     assert "hugging face token" in names
     assert "llm endpoint" not in names  # disabled → not checked
     assert exit_code(results) == 0
+
+
+def test_run_diagnostics_include_hf_token_false_omits_hf_and_skips_whoami() -> None:
+    # The wizard SERVICES step (issue #61) passes include_hf_token=False: the HF row
+    # must be gone AND no whoami call may be made (the handler asserts it is never hit).
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "huggingface" not in request.url.host, "HF whoami must not be called"
+        return _healthz("cpu")
+
+    class _Ping:
+        def ping(self) -> bool:
+            return True
+
+    results = run_diagnostics(
+        _settings(llm_enabled=False),
+        create_engine("sqlite://"),
+        hf_token="hf_x",
+        http_client=_http(handler),
+        redis_client=_Ping(),
+        include_hf_token=False,
+    )
+    names = [r.name for r in results]
+    assert "hugging face token" not in names
+    assert "postgres" in names and "redis" in names and "transcription" in names
+
+
+# ---- check_state (three honest display states, issue #61) ------------------
+
+
+def test_check_state_ready_when_ok() -> None:
+    assert check_state(CheckResult("postgres", True, True, "connected")) == "ready"
+    # An advisory pass is still "ready" — an ok result is ready regardless of hardness.
+    assert check_state(CheckResult("llm endpoint", True, False, "reachable")) == "ready"
+
+
+def test_check_state_failed_when_hard_and_down() -> None:
+    assert check_state(CheckResult("redis", False, True, "unreachable")) == "failed"
+
+
+def test_check_state_unverified_when_advisory_and_down() -> None:
+    assert check_state(CheckResult("llm endpoint", False, False, "invalid url")) == "unverified"
