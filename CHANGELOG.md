@@ -42,6 +42,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the dark scheme. Pure CSS + template markup (the inline `base.html` stylesheet
   and the table pages); no Python, no new dependency.
 
+### Changed
+- **Docs: accessible README, a Setup guide, and a how-to series**: the README
+  was rewritten for a non-technical audience — a plain-language intro, an honest
+  "local by default" privacy note (URL fetch and remote LLM enhancement are
+  called out as opt-in network features), a short maturity notice, a fresh
+  dark-theme screenshot gallery of the current console, and a Quickstart that
+  leads with the guided installer and links the deeper material. A new
+  [`docs/setup.md`](docs/setup.md) consolidates per-OS Docker install pointers
+  and every compute tier (CPU / NVIDIA / AMD ROCm / Apple metal), and a new
+  [`docs/how-to/`](docs/how-to/README.md) series covers the day-to-day tasks
+  (add media & manage runs, review & adjudicate, manage speakers & export,
+  settings & troubleshooting). The console screenshots (`docs/images/`) were
+  regenerated against v0.17.0 in dark theme — the waveform strip, keyboard
+  cheat-sheet, split/reassign, the setup wizard, and the Settings pages that the
+  two prior images predated. Docs only; no code change.
+
 ### Fixed
 - **PyPI wheel/sdist re-include the prebuilt frontend island bundles**: #69's
   `.gitignore` rule for `src/voxint/api/static/app/*` (clean-tree hygiene) made

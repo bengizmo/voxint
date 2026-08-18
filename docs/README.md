@@ -1,8 +1,17 @@
 # Voxint documentation
 
+New to Voxint? Start here:
+
 | Doc | Contents |
 |---|---|
-| `onboarding.md` | First-run path: guided installer, setup wizard, and the bundled guided tutorial |
+| [`setup.md`](setup.md) | **Install Voxint** on your operating system and hardware: prerequisites, guided vs. manual install, and every compute tier (CPU / NVIDIA / AMD / Apple) |
+| [`onboarding.md`](onboarding.md) | First-run path once it's installed: guided installer, setup wizard, and the bundled guided tutorial |
+| [`how-to/`](how-to/README.md) | **Day-to-day task guides** for non-technical operators: add media & manage runs, review & adjudicate, manage speakers & export, settings & troubleshooting |
+
+Reference & internals:
+
+| Doc | Contents |
+|---|---|
 | `architecture.md` | Pipeline stages, state machine, data model |
 | `domain-packs.md` | Domain packs: manifest, resolution, the per-run frozen snapshot, and which fields shape which stages |
 | `gpu-contracts.md` | Versioned HTTP contracts for the ASR / diarizer / embedder services |

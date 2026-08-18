@@ -1,229 +1,122 @@
 # Voxint
 
-**Self-hosted audio intelligence: turn any recording into a speaker-attributed
-transcript, then review it by hand.** Transcription, diarization, and speaker
-identity, running entirely on your own hardware.
+**Turn any recording into a speaker-labelled transcript — on your own
+computer.** Voxint transcribes your audio or video, works out who spoke when,
+and gives you a simple review screen to confirm the speakers and fix the wording
+before you export.
 
-Built for individuals and small teams (researchers, journalists, educators) who
-need audio work to stay local: no cloud account, no per-minute fees, no
-recordings leaving the room.
+It is built for individuals and small teams — researchers, journalists,
+educators — who need their recordings to stay local. **Your audio is transcribed
+on your own hardware by default:** no cloud account, no per-minute fees, nothing
+uploaded. (Two optional features *do* reach the network when you turn them on:
+fetching a recording from a URL, and sending transcript text to an outside AI
+model to polish it. Both are off or opt-in, and clearly labelled.)
 
-Voxint takes an audio or video file and produces an enhanced transcript with
-speakers attributed:
+> **Early days (pre-alpha).** Voxint works end to end, but it is young software.
+> The interface, database, and settings can still change between releases through
+> the 0.x series. Great for hands-on use and feedback; not yet for
+> mission-critical archives.
 
-```
-local file · upload · URL → acquire → preprocess
-    → transcribe (Whisper) + diarize (pyannote) + embed (TitaNet)
-    → LLM transcript enhancement → speaker matching → human adjudication
-```
+![Reviewing a transcript in Voxint: a waveform strip showing who spoke when, above the transcript with a verify-and-advance review loop](docs/images/transcript-review.png)
 
-Point it at a local file (`voxint submit`), upload one through the browser, or
-hand it a URL (`voxint fetch` / `POST /fetch`), which runs a yt-dlp download as
-the pipeline's first stage. URL ingestion is authenticated admin egress, not a
-sandbox. Fetch only trusted URLs unless you run the worker with restricted
-egress — the opt-in `compose.ytdlp-egress.yaml` overlay ships that (a filtering
-proxy that pins yt-dlp to vetted public addresses), or use a host egress firewall.
-See [docs/operations.md](docs/operations.md#url-ingestion--egress-security).
+## See it in action
 
-## What it does that a bare pipeline doesn't
+*(All screenshots use a small synthetic three-speaker sample that ships with
+Voxint.)*
 
-Most of Voxint is the orchestration around the models, the part that usually
-gets left as an exercise for the reader.
+| | |
+|---|---|
+| ![The adjudication queue: completed runs with voices still needing a decision](docs/images/review-queue.png) | ![The workbench: each voice shows its evidence — a confident match to accept, a heard name that is only a guess, or no name at all](docs/images/review-workbench.png) |
+| **Your review queue** — completed recordings waiting for your decisions. | **Attribute each voice** — accept a confident match, judge a heard name, or leave a voice unknown. |
+| ![The guided setup wizard's readiness checks, each dependency shown as ready, failed, or unverified](docs/images/setup-wizard.png) | ![The dashboard: run health, throughput, roster size, and per-stage timing](docs/images/dashboard.png) |
+| **Guided setup in the browser** — honest readiness checks, plain-language fixes. | **A dashboard** for run health and throughput at a glance. |
 
-- **Quality gates.** Non-speech and digital-silence triage before you spend GPU
-  time, hallucination soft-tagging and stripping, chunk-completeness checks, and
-  an outage-vs-data-defect taxonomy with explicit retry budgets.
-- **Durable state.** A compare-and-swap run/stage state machine in Postgres. A
-  crash at any stage is recoverable, and a human pause is a database row, not a
-  held task.
-- **Speaker identity with a paper trail.** pgvector cosine matching against a
-  speaker roster that grows as you use it, a strict *named ≠ grounded*
-  invariant, and machine proposals kept separate from human rulings.
-- **A built-in review console.** Review queue, guarded slot workbench, and an
-  immutable decision ledger, served as Jinja + htmx from the same FastAPI app.
-  No Node toolchain.
-- **Operable from the browser.** A keyset-paged `/runs` history browser (with a
-  per-stage attempt ledger), bounded file upload, and yt-dlp URL ingestion, all
-  from the same app. Submission is durable-first: a broker outage leaves the run
-  queued for the recovery sweep rather than dropping it. You can cancel a live
-  run (cooperative, exact-revision CAS), soft-archive a terminal one (reversibly
-  hidden, ledger intact), and delete its derived audio to reclaim disk without
-  touching the shared original.
-- **Measurement harnesses.** Speaker-attribution scoring you can run as CLIs:
-  name-accuracy against ground truth (McNemar / bootstrap / Wilson), acoustic
-  agreement verdicts, and verdict-level ensemble fusion (worked example under
-  [`examples/`](examples/README.md)). These score *who spoke*, not *what was
-  transcribed*. ASR accuracy and WER measurement are out of scope for now.
+## What it does
 
-## The review console
+Voxint takes a recording and walks it through four steps:
 
-Machine proposals stay separate from human rulings. The review queue lists
-completed runs with voices still needing a decision, and the slot workbench
-shows each voice's evidence (grounded cosine matches, unverified LLM-heard
-names, transcript previews) with assign / enroll / exclude / unknown actions.
-Synthetic demo data pictured.
+1. **Add your recording** — upload it in the browser, paste a URL, or point
+   Voxint at a file it can already see.
+2. **Voxint does the heavy lifting** — it transcribes the words and works out
+   who spoke when, then suggests who each voice is.
+3. **You review** — confirm each speaker, and fix any wording, in a screen built
+   for exactly this. Machine guesses stay separate from your decisions; you
+   always have the final say.
+4. **Export** — download a clean, speaker-labelled transcript (plain text,
+   subtitles, or structured data).
 
-![Adjudication queue](docs/images/review-queue.png)
-
-![Slot workbench](docs/images/slot-workbench.png)
-
-## Status
-
-**Pre-alpha.** APIs, schema, and layout may change without notice through the
-0.x series.
+The models all run **locally** — transcription (Whisper), speaker separation
+(pyannote), and voice identity (TitaNet). Everything they need is bundled into
+Voxint, so there is **no Hugging Face account or token** to set up.
 
 ## Quickstart
 
-Requires Docker Engine with the Compose plugin ≥ 2.24 (`docker compose version`;
-the legacy v1 `docker-compose` binary cannot parse this stack).
-
-> **No NVIDIA GPU? Start here too.** Voxint does not need one. The CPU tier runs
-> the full pipeline on plain amd64/arm64 servers and Apple Silicon with zero GPU
-> configuration. Follow the same quickstart, then use the `compose.cpu.yaml`
-> overlay wherever the GPU one appears (see
-> [No NVIDIA GPU? (CPU tier)](#no-nvidia-gpu-cpu-tier)). **AMD GPU?** The ROCm
-> tier accelerates transcription on it (4.8x the CPU baseline; the amdgpu kernel
-> driver is the only host requirement) via `compose.rocm.yaml` (see
-> [AMD GPU? (ROCm tier)](#amd-gpu-rocm-tier)). **Apple Silicon Mac?** The metal
-> tier runs the model services natively so diarization uses the Apple GPU (see
-> [Apple Silicon Mac? (metal tier)](#apple-silicon-mac-metal-tier)).
+You need **[Docker](https://docs.docker.com/get-started/get-docker/) with the
+Compose plugin (≥ 2.24)**. One command takes a fresh copy to a running console:
 
 ```bash
 git clone https://github.com/bengizmo/voxint.git && cd voxint
-```
-
-**Guided install (recommended for a first run):**
-
-```bash
 ./scripts/install.sh
 ```
 
-It asks for an admin password, a media folder, and a compute tier for the model
-services (GPU / CPU / none for now). That's the whole interview. All model
-weights, diarization included, are vendored into the images, so no Hugging Face
-account or token is involved. The installer generates everything else (including
-a random `CSRF_SECRET`), pulls the pinned release images, starts the core stack
-plus your chosen tier's model services, waits for the API to report healthy, and
-prints the console URL. Re-running it is safe: an existing `.env` is kept unless
-you ask to regenerate it (which backs the old one up first), and your tier
-choice is remembered (`VOXINT_COMPOSE_TIER`).
+The installer asks only for what it can't invent — an admin password, a folder
+for your media, and which hardware runs the models — then generates everything
+else, starts Voxint, waits until it is healthy, and prints the console address.
 
-**Or configure by hand:**
+> **No graphics card? That's fine.** Voxint runs the whole pipeline on an
+> ordinary computer's CPU (needs roughly **8 GB of memory** free). It is slower —
+> a long recording can take hours rather than minutes — but it works anywhere. A
+> GPU (NVIDIA, AMD, or an Apple Silicon Mac) just makes it faster.
 
-```bash
-cp .env.example .env          # then edit at least VOXINT_PASSWORD
-mkdir -p media                # media mount; pre-create so it isn't root-owned
-docker compose pull           # prebuilt release images from GHCR
-docker compose up -d          # Postgres+pgvector, Redis, migrate, API + review UI, worker, beat
-curl http://127.0.0.1:8080/healthz   # default port; matches API_PORT if you changed it
-```
+When it finishes, open the console at **`http://127.0.0.1:8080/`** and sign in
+with the username and password you set. On a fresh install Voxint walks you
+through a short in-browser **setup wizard** and an optional **guided tutorial**
+on the bundled sample, so you see the whole review loop before pointing it at
+your own audio.
 
-The default compose files run the pinned release images even from a `main`
-checkout (set `VOXINT_IMAGE_TAG` in `.env` to run a different release). A
-one-shot `migrate` service brings the schema to head before the API and worker
-start. Seeing it report `Exited (0)` in `docker compose ps -a` is success, not a
-crash. If a default port is already in use on your host, override the published
-side in `.env` (`POSTGRES_PORT`, `REDIS_PORT`, `API_PORT`). Details and day-2
-operations live in [docs/operations.md](docs/operations.md).
+**Full setup for your operating system and hardware → [docs/setup.md](docs/setup.md).**
+First-run walkthrough → [docs/onboarding.md](docs/onboarding.md).
 
-Open the console at `http://127.0.0.1:8080/` (HTTP Basic, the `VOXINT_USER` /
-`VOXINT_PASSWORD` you set). On a fresh install the console holds you at a
-first-run setup wizard (`/setup`): configure media folders, vocabulary, and
-optional LLM enhancement in the browser, then finish into a short guided
-tutorial on a bundled three-speaker sample. Full walkthrough:
-[docs/onboarding.md](docs/onboarding.md).
+## Using Voxint
 
-Once onboarding is complete, browse runs at `/runs` and adjudicate at `/review`.
-Feed it work by uploading a file, pointing it at a URL (`docker compose exec api
-voxint fetch <url>`), or submitting a local path (`docker compose exec api
-voxint submit path/to/file.mp3`, relative to `MEDIA_ROOT`).
+Once it is running, these short guides cover the day-to-day tasks:
 
-To run the GPU model services too (one NVIDIA GPU assumed), bring up the GPU
-overlay. The diarization weights are vendored into the pyannote image
-(sha256-pinned from the `pyannote-models-v1` asset release), so no Hugging Face
-token is needed (see `services/pyannote/README.md`).
+- **[Add media & manage runs](docs/how-to/add-media-and-manage-runs.md)** —
+  upload a file, paste a URL, or watch a folder; follow a run and requeue,
+  cancel, or archive it.
+- **[Review & adjudicate](docs/how-to/reviewing-and-adjudicating.md)** —
+  confirm speakers, correct the transcript, keyboard shortcuts, the waveform,
+  splitting and reassigning segments.
+- **[Manage speakers & export](docs/how-to/managing-speakers-and-exporting.md)** —
+  the speaker roster and the export formats.
+- **[Settings & troubleshooting](docs/how-to/settings-and-troubleshooting.md)** —
+  configure everything from the browser, and fix common problems.
 
-All three services share the one GPU. Their loaded weights total roughly 3.5-4.5
-GB of VRAM (whisper large-v2 int8 ~1.5 GB, pyannote ~1-2 GB, TitaNet ~1 GB);
-budget ~6-8 GB in practice for Whisper's batch/decode headroom and three
-separate CUDA contexts. An 8 GB card is comfortable. Per-service figures live in
-each `services/*/README.md`.
+## A little more depth
 
-Then:
+You don't need any of this to use Voxint, but if you're curious or evaluating it:
 
-```bash
-docker compose -f compose.yaml -f compose.gpu.yaml pull
-docker compose -f compose.yaml -f compose.gpu.yaml up -d
-```
+- **Nothing is lost to a crash.** Every run's progress lives in a database, so a
+  restart resumes where it left off, and pausing for review is just a saved row.
+- **Speaker identity keeps a paper trail.** Voxint matches voices against a
+  roster that grows as you use it, and keeps machine proposals strictly separate
+  from your rulings.
+- **Optional AI polish.** Voxint can send transcript text to any
+  OpenAI-compatible model to tidy it up and suggest names — off by default, and
+  a slow or failing model never blocks a run.
+- **Swappable vocabulary.** Names, jargon, and prompts load from a *domain pack*
+  you can pick per folder, so specialist terms transcribe correctly. See
+  [docs/domain-packs.md](docs/domain-packs.md).
+- **Measured, not asserted.** The models are pinned and their outputs are held to
+  measured-equivalence gates, so an upgrade can't quietly change results. See
+  [docs/gpu-contracts.md](docs/gpu-contracts.md).
 
-Per-service details, env tunables, and image matrices are in
-`services/*/README.md`; wire contracts are in
-[docs/gpu-contracts.md](docs/gpu-contracts.md).
+## For developers
 
-### No NVIDIA GPU? (CPU tier)
-
-The same three model services ship as multi-arch (amd64 + arm64) `-cpu` images:
-no GPU, no NVIDIA toolkit, runs on plain servers and Apple Silicon via Docker
-Desktop.
-
-```bash
-docker compose -f compose.yaml -f compose.cpu.yaml up -d
-```
-
-Set your expectations accordingly: CPU inference is orders of magnitude slower.
-A long recording that takes minutes on a GPU takes hours on CPU. The overlay
-sets `COMPUTE_TIER=cpu`, which scales the pipeline's timeouts and stage leases so
-slow-but-healthy runs aren't reclaimed as hung. Same contracts, same embedding
-space (TitaNet runs on ONNX Runtime under a measured-equivalence parity gate).
-Details:
-[docs/operations.md](docs/operations.md#running-without-an-nvidia-gpu-cpu-tier).
-
-### AMD GPU? (ROCm tier)
-
-A hybrid tier for amd64 hosts with an AMD GPU. Transcription (whisper) runs on
-the GPU via the CTranslate2 ROCm build (same engine, same code path, measured
-4.8x the CPU baseline on RDNA4), while diarization and speaker embedding run the
-`-cpu` images. MIOpen convolutions currently fail on AMD consumer GPUs, tracked
-in [#4](https://github.com/bengizmo/voxint/issues/4):
-
-```bash
-docker compose -f compose.yaml -f compose.rocm.yaml up -d
-```
-
-The host needs only the amdgpu kernel driver: no ROCm install, no container
-toolkit, since the `-rocm` image carries its own ROCm runtime. The overlay sets
-`COMPUTE_TIER=rocm` (GPU-speed ASR, CPU-scaled leases for the rest). Details:
-[docs/operations.md](docs/operations.md#running-on-an-amd-gpu-rocm-tier).
-
-### Apple Silicon Mac? (metal tier)
-
-Docker Desktop has no GPU passthrough, so on a Mac the containerized tiers are
-CPU-only. The metal tier keeps the core stack in Docker but runs the three model
-services natively so diarization uses the Apple GPU (torch-MPS, measured ~5x
-native-CPU diarization on an M1 Pro, identical outputs). Transcription stays on
-the host CPU in v1, so runs remain transcribe-bound: faster than the Docker CPU
-tier, not GPU-stack fast.
-
-```bash
-./scripts/install.sh                  # choose [M]
-./scripts/metal/voxint-metal.sh setup # native venvs + sha-verified weights
-./scripts/metal/voxint-metal.sh up    # services under launchd
-```
-
-Weights come from the same sha-pinned release assets the images use, so still no
-Hugging Face account or token. Details:
-[docs/operations.md](docs/operations.md#running-on-apple-silicon-metal-tier).
-
-To run the source you checked out instead of the release images, layer the build
-overlays (exactly one service owns each build; see
-[docs/operations.md](docs/operations.md)):
-
-```bash
-docker compose -f compose.yaml -f compose.build.yaml build api
-docker compose -f compose.yaml -f compose.build.yaml up -d
-```
-
-For development without Docker:
+The console is server-rendered (FastAPI + Jinja + htmx) with a few small React
+"islands"; the model services are separate containers behind versioned HTTP
+contracts. To run the code you checked out instead of the release images, layer
+the build overlays; to work without Docker at all:
 
 ```bash
 uv sync --extra dev
@@ -231,38 +124,14 @@ uv run pytest tests/unit
 uv run uvicorn voxint.api.app:app --reload
 ```
 
-The scoring harness needs none of the stack. `pip install voxint` gives you the
-`voxint score` CLI (pure file-in/file-out, no database or GPU services;
-speaker-attribution metrics only, no ASR/WER). See
-[`examples/`](examples/README.md).
-
-## Deployment model
-
-Docker-compose-first on a single Linux machine with one NVIDIA GPU:
-
-- `compose.yaml`: Postgres (+pgvector), Redis, one-shot `migrate`, API (+ review
-  UI), Celery worker, Celery beat (crash-recovery sweep scheduler)
-- `compose.gpu.yaml`: the GPU model services (faster-whisper, pyannote, TitaNet)
-- `compose.build.yaml` / `compose.gpu.build.yaml`: build-from-source overlays for
-  development
-
-Kubernetes is not required. It may become an optional enhancement later.
-
-## Modularity
-
-ASR, diarizer, embedder, and LLM providers sit behind typed protocols with
-versioned HTTP contracts (`/v1/transcribe`, `/v1/diarize`, `/v1/embed`). The LLM
-enhancement stage speaks to any OpenAI-compatible endpoint and is optional
-(`LLM_ENABLED=false` by default). Domain-specific vocabulary, name seeds, and
-prompt fragments load from a swappable **domain pack**: point `DOMAIN_PACK_PATH`
-at a default pack, or drop several named packs under `DOMAIN_PACKS_DIR` and select
-per run/folder. Each run **freezes** the pack it used, so editing a pack never
-rewrites a past run's results. A neutral meeting/podcast pack ships as the
-default. See [`docs/domain-packs.md`](docs/domain-packs.md).
+There is also a standalone, database-free scoring harness — `pip install voxint`
+gives you the `voxint score` CLI for speaker-attribution metrics (see
+[`examples/`](examples/README.md)). Architecture, contracts, operations, and the
+release process are documented under **[docs/](docs/README.md)**.
 
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Vendored model weights
 are redistributed under their own licenses with attribution (titanet:
-CC-BY-4.0; pyannote segmentation: MIT; WeSpeaker embedding: CC-BY-4.0). See the
+CC-BY-4.0; pyannote segmentation: MIT; WeSpeaker embedding: CC-BY-4.0) — see the
 provenance files under `services/*/models/` and the model-asset releases.
