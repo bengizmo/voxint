@@ -21,6 +21,7 @@ import random
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -34,6 +35,7 @@ from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment import asset_jobs
 from voxint.enrichment.research_jobs import execute_job
+from voxint.ingest.watch import sweep_watch_folders
 from voxint.media.reclaim import (
     ReclaimSummary,
     configured_tutorial_run_id,
@@ -283,6 +285,46 @@ def notify_sweep() -> dict[str, int]:
     result = {**summary.as_dict(), "purged": purged}
     logger.info("notify_sweep %s", result)
     return result
+
+
+def _publish_watch_run(run_id: uuid.UUID) -> bool:
+    """Publish a committed watch-sweep run, returning ``False`` (never raising) on a
+    broker outage so the durable QUEUED row is simply left for ``recovery_sweep``.
+
+    The worker must not import the API's ``_publish_or_defer``; this mirrors its
+    intent inline. Only kombu's ``OperationalError`` (every transport/connection
+    failure, re-exported by celery) is swallowed — a genuine publish bug still raises.
+    """
+    from celery.exceptions import OperationalError
+
+    try:
+        run_pipeline.apply_async((str(run_id),), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "watch_sweep enqueue deferred (broker unavailable); run %s stays QUEUED "
+            "for the recovery sweep",
+            run_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+@app.task(name="voxint.watch_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
+def watch_sweep() -> dict[str, Any]:
+    """Auto-ingest new media from the operator's registered folders (issue #60).
+
+    Thin wrapper: :func:`voxint.ingest.watch.sweep_watch_folders` owns the pass
+    (effective-gate recheck, bounded scan, settle-filter, race-safe submit,
+    commit-before-publish, status persistence). ``_publish_watch_run`` is injected so
+    the broker-defer path stays here and the sweep logic stays broker-free and
+    directly testable.
+    """
+    settings = get_settings()
+    factory, _ = _runtime()
+    summary = sweep_watch_folders(factory, settings, publish=_publish_watch_run)
+    logger.info("watch_sweep %s", summary.as_dict())
+    return summary.as_dict()
 
 
 @app.task(name="voxint.generate_run_asset", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

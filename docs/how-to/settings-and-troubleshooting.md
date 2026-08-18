@@ -71,15 +71,23 @@ first.
 
 ### Media folders
 
-Voxint watches folders **inside your media root** and processes what you put in
-them. In this section you register those watched folders and pick a **domain
-pack** for each one.
+Voxint works with folders **inside your media root**. In this section you register
+those folders and pick a **domain pack** for each one.
 
 A domain pack tunes transcription and enrichment for a particular kind of
 recording (for example, a pack with the right vocabulary and prompts for your
 subject area). Assigning packs per folder lets you keep, say, interviews and
 lectures tuned differently. Browsing stays inside your media root — you cannot
 wander off into the rest of the disk. Changes apply to the next job you submit.
+
+**Automatic ingest** *(optional, off by default)* — the toggle below the folder
+list. When it is on, Voxint checks your registered folders on a schedule and
+starts a run for each **new** recording, skipping files it already knows, so you
+can drop a batch in and let it queue itself. A status line shows the last check.
+It waits until a file has stopped changing before ingesting it, so add files with
+a move/rename rather than a slow copy; a file whose earlier run failed counts as
+"already known" and is not retried by the watcher. See
+[Add media and manage runs → automatic ingest](add-media-and-manage-runs.md).
 
 To learn what domain packs are and how to choose one, see
 [domain-packs.md](../domain-packs.md).

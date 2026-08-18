@@ -191,6 +191,7 @@ from voxint.app_settings import (
     resolve_effective_llm_enabled,
     resolve_effective_source_authority_domains,
     resolve_effective_voxint_web_research,
+    resolve_effective_watch_folder_enabled,
     resolve_effective_web_search_api_key,
     resolve_effective_web_search_base_url,
     resolve_effective_ytdlp_enabled,
@@ -4623,6 +4624,24 @@ def _register_routes(app: FastAPI) -> None:
                 ),
             )
         )
+        # Watch-folder ingest (issue #60): the tri-state toggle beside the folder
+        # panel, its env default (for the "inherit" label), the EFFECTIVE gate (drives
+        # the on/off wording), and the latest sweep summary for the status line.
+        context["watch_folder_state"] = feature_flag_state(row, "watch_folder_enabled")
+        context["watch_folder_env_default"] = bool(settings.watch_folder_enabled)
+        context["watch_folder_effective"] = resolve_effective_watch_folder_enabled(row, settings)
+        last_sweep = row.watch_folder_last_sweep if row is not None else None
+        context["watch_folder_last_sweep"] = last_sweep
+        # Parse the stored ISO timestamp into a datetime so the template can format it
+        # (the JSON column holds a string); None if never run or malformed.
+        checked_at: datetime | None = None
+        if isinstance(last_sweep, dict) and last_sweep.get("completed_at"):
+            try:
+                checked_at = datetime.fromisoformat(str(last_sweep["completed_at"]))
+            except ValueError:
+                checked_at = None
+        context["watch_folder_checked_at"] = checked_at
+        context["watch_folder_error"] = None
         context.update(overrides)
         return context
 
@@ -4706,6 +4725,45 @@ def _register_routes(app: FastAPI) -> None:
                     request, session, features_errors=errors, features_submitted=submitted
                 ),
             )
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/watch-folder")
+    def settings_watch_folder(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        watch_folder_enabled: Annotated[str, Form()] = "inherit",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Set the watch-folder ingest runtime override (issue #60).
+
+        A single tri-state toggle beside the media-folders panel: On/Off/inherit map
+        to the nullable ``app_settings.watch_folder_enabled`` column as
+        True/False/None (None = inherit the installation default). There is no
+        cross-flag invariant, so a valid choice writes the one column and redirects;
+        an unrecognized value (a stale client / hand-crafted POST) is rejected rather
+        than silently coerced, mirroring ``_persist_feature_flags``.
+        """
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        if watch_folder_enabled not in _FEATURE_FLAG_CHOICES:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request,
+                    session,
+                    watch_folder_error=(
+                        "Unrecognized watch-folder setting — choose On, Off, or Use "
+                        "installation setting."
+                    ),
+                ),
+            )
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.watch_folder_enabled = (
+            None if watch_folder_enabled == "inherit" else (watch_folder_enabled == "on")
+        )
         session.commit()
         return RedirectResponse("/settings", status_code=303)
 

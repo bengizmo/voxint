@@ -556,6 +556,21 @@ therefore automatic **as long as `beat` is running**. A bare-host deployment
 without a beat process has no automatic recovery; a run is then stranded
 until a beat/sweep runs, not just on deterministic failures.
 
+The same `beat` schedule carries the opt-in sweeps: the media-retention GC
+(when `MEDIA_RETENTION_ENABLED`), the webhook delivery sweep (when
+`NOTIFY_ENABLED`), and the **watch-folder ingest sweep** `voxint.watch_sweep`
+(issue #60). The watch sweep is registered unconditionally at
+`WATCH_FOLDER_SWEEP_SECONDS` but re-checks its **effective** gate each run —
+the env `WATCH_FOLDER_ENABLED` default overridden by the runtime
+`app_settings.watch_folder_enabled` toggle (Settings → Media folders) — so a
+disabled installation only pays one DB read per sweep and enabling it needs no
+restart. When on, it walks the operator's registered `media_folders`, submits
+each new file (skipping ones already ingested), waits out
+`WATCH_FOLDER_SETTLE_SECONDS` so a file still being copied in is not read
+mid-write, and records a one-line status summary shown in Settings. Like the
+other sweeps it needs `beat` running; a bare-host deployment without a beat
+process never ingests automatically.
+
 ### URL ingestion & egress security
 
 `voxint fetch <url>` / `POST /fetch` download a URL with yt-dlp on the worker

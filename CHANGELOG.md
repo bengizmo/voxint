@@ -18,6 +18,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   unrestricted bundled default (Granite obeys prompt injection; both are weak at
   the agentic research loop). The corpus + harness are reused as #67's acceptance
   gate. No change to shipped runtime behaviour.
+- **Watch-folder ingest (#60, console-UX arc #47)**: drop a batch of recordings
+  into a registered media folder and Voxint picks them up on its own — no per-file
+  submitting. An opt-in beat sweep walks the operator's registered folders
+  (Settings → Media folders), starts a run for each **new** recording, and **skips
+  files it already knows** (dedupe on the media `source_path`, the same predicate
+  the setup-wizard scan uses). It reuses the existing bounded, containment-safe
+  scan (registered folders only, `incoming`/`artifacts` pruned, symlinks never
+  followed, entry/file caps) and the race-safe submit primitive, so a re-scan or an
+  overlapping sweep can never duplicate a run. A **settle window** (a file must sit
+  unchanged, by newest of mtime/ctime, for `WATCH_FOLDER_SETTLE_SECONDS`, default
+  60 s) keeps a file that is still being copied in from being ingested mid-write —
+  the reliable way to add files is an atomic move/rename into the folder.
+  **Off by default**, toggled from a tri-state control beside the folders panel
+  (On / Off / use the installation setting) that applies with **no restart**; a
+  plain-language status line shows the last check ("picked up 3 new files;
+  12 already known; 2 waiting to settle", with a warning when a very large folder
+  was only partially scanned). New settings `WATCH_FOLDER_ENABLED`,
+  `WATCH_FOLDER_SWEEP_SECONDS` (cadence, default 5 min), `WATCH_FOLDER_SETTLE_SECONDS`;
+  migration `0026` adds the runtime-override + last-sweep columns to `app_settings`.
+  Skipping is honest — a file whose earlier run *failed* is "already known", not
+  re-tried by the watcher (requeue it from the run detail); a renamed/moved file is
+  treated as new.
 - **Keyboard shortcuts + in-app cheat-sheet (#51, console-UX arc #47)**: the
   review-stepper island extends its verify-and-advance keymap so a solo operator
   can drive the whole adjudication loop from the keyboard. Beyond the shipped
