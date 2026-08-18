@@ -85,6 +85,7 @@ from voxint.adjudication.splits import (
     derive_children,
     record_split,
     splittable_words,
+    trace_has_entries,
 )
 from voxint.adjudication.transcript import (
     TranscriptLine,
@@ -4225,12 +4226,12 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=404, detail="no such segment in this run")
         words = splittable_words(segment)
         if words is None:
-            corrected = _segment_is_corrected(session, segment_id)
-            reason = (
-                "this segment has an operator correction; clear it to split"
-                if corrected
-                else "no aligned word timings for this segment (or its text was enhanced)"
-            )
+            if _segment_is_corrected(session, segment_id):
+                reason = "this segment has an operator correction; clear it to split"
+            elif trace_has_entries(segment.correction_trace):
+                reason = "a domain-pack correction was applied here; splitting is disabled"
+            else:
+                reason = "no aligned word timings for this segment (or its text was enhanced)"
             return JSONResponse(
                 {"segmentId": str(segment_id), "splittable": False, "reason": reason, "words": []}
             )

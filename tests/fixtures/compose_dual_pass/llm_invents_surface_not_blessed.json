@@ -1,0 +1,17 @@
+{
+  "description": "Rule has no raw basis; LLM invents the matchable surface -> NOT corrected (not blessed).",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "the meeting happened",
+  "enhanced": "The zoom board meeting happened.",
+  "expected_final_text": "The zoom board meeting happened.",
+  "expected_input_base": "llm",
+  "expected_trace": [],
+  "expected_changed": true
+}

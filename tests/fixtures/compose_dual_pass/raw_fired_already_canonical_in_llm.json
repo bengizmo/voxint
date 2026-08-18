@@ -1,0 +1,17 @@
+{
+  "description": "Rule fired on raw, but the LLM already produced the canonical form -> enforcement no-op.",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "the zoom board met",
+  "enhanced": "The Zoning Board met.",
+  "expected_final_text": "The Zoning Board met.",
+  "expected_input_base": "llm",
+  "expected_trace": [],
+  "expected_changed": true
+}

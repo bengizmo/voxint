@@ -1,0 +1,17 @@
+{
+  "description": "LLM enhanced, no rule fired -> llm base, entries=[], changed (LLM's own edit).",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "hello world",
+  "enhanced": "Hello world.",
+  "expected_final_text": "Hello world.",
+  "expected_input_base": "llm",
+  "expected_trace": [],
+  "expected_changed": true
+}

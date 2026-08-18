@@ -110,5 +110,6 @@ def test_single_alembic_head() -> None:
     # 0024 = app_settings feature-flag columns, issue #74; 0025 =
     # adjudication_decisions word-range scope, issue #59 slice 3; 0026 =
     # app_settings watch-folder columns, issue #60; 0027 =
-    # app_settings.llm_bundled_enabled, issue #67).
-    assert list(heads) == ["0027"]
+    # app_settings.llm_bundled_enabled, issue #67; 0028 = transcript_segments
+    # correction trace + version, issue #82).
+    assert list(heads) == ["0028"]

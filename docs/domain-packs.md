@@ -223,9 +223,55 @@ behavior is frozen:
   rejected whole** — the segment falls back to its pre-correction text rather than
   applying a partial or truncated result.
 
-Applying the engine inside the enhancement stage and persisting the trace + version
-column follow in #82. The bundled `generic` pack declares no corrections, so the
-default pipeline stays byte-preserving until you author or select a pack with them.
+The bundled `generic` pack declares no corrections, so the default pipeline stays
+byte-preserving until you author or select a pack with them.
+
+### How corrections compose with enhancement (the dual pass, #82)
+
+Corrections run **inside** the `enhance_match` stage, composed with the optional
+LLM enhancement through a **raw-gated dual pass** — designed so the operator's
+canonical form wins on terms genuinely spoken, without ever letting the LLM's
+output launder a term the recording never contained:
+
+1. **Rules run on the raw ASR text first**, for every segment, fixing the
+   authoritative set of rule ids that matched *in the evidence*.
+2. **LLM enhancement runs as usual** (if enabled) — punctuation, casing, filler.
+3. **Only the rules that matched raw are re-enforced on the LLM output.** A rule
+   with no raw basis can never fire, so a surface the LLM *invents* is never
+   corrected into a domain term and mistaken for operator-authored. If the LLM is
+   off or its batch failed, this step is a no-op and the raw-pass result stands.
+
+A matched rule applies to **all** its occurrences in the LLM output (including any
+the LLM introduced by rephrasing) — the amplified term is still the operator's own
+declared canonical form; those spans are marked LLM-coordinate, not evidence.
+
+**What is persisted (provenance).** Enhanced text and a correction trail are
+written **only when the final text materially differs from the raw text** — a
+no-op segment stores nothing and reads back byte-identical to raw. When it does
+differ, three things are written to the segment:
+
+- `enhanced_text` — the final composed text (also what exports and search read);
+- `correction_trace` — either `[]` (no material correction) or the envelope
+  `{"version", "input_base", "entries"}`, where `input_base` is `"raw"` (LLM
+  off/failed) or `"llm"` (enforced on the LLM output) and `entries` is the
+  `{id, from, to, span}` list from the engine above (empty when only the LLM
+  changed the text);
+- `corrector_version` — the `CORRECTOR_VERSION` the engine stamped. **`NULL`**
+  marks a legacy pre-#82 `enhanced_text` (shown as "enhanced (unversioned)") or a
+  segment with no persisted enhanced output; it is **never recomputed at read
+  time**.
+
+**Atomic and idempotent.** On every (re-)enhance the three columns are reset
+together first, so a stale trace can never outlive the `enhanced_text` it
+described; re-running with the rule removed clears the correction wholesale.
+
+**Splitting is disabled on a materially-corrected segment.** Word-boundary
+splitting (#59) reads the **stored** trace: a non-empty `entries` list means a
+rule fired, so the segment renders whole rather than deriving children at offsets
+that no longer match the corrected surface. (A purely LLM-enhanced segment —
+empty `entries`, changed text — is likewise unsplittable, via the enhanced-text
+check.) This is the authoritative stored signal, not a re-diff of text, so it also
+catches a correction that alters only outer whitespace.
 
 ## Vocabulary precedence: pack vs. custom vocabulary
 
