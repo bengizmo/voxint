@@ -1,0 +1,22 @@
+{
+  "id": "no_names_falsepos",
+  "job": "names",
+  "description": "A discussion that MENTIONS a third party (an author) but contains no self/other introduction of a labelled speaker. The engine must emit no surviving hint. False-positive control.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "I've been rereading Hemingway lately, mostly the early short stories."},
+    {"index": 1, "label": "SPEAKER_01", "text": "The prose really does hold up. There's nothing wasted in it."},
+    {"index": 2, "label": "SPEAKER_00", "text": "Exactly. Every sentence earns its place on the page."}
+  ],
+  "gold": {
+    "segments": {
+      "0": {"mode": "lexical_identical", "protected_tokens": ["Hemingway"]},
+      "1": {"mode": "lexical_identical"},
+      "2": {"mode": "lexical_identical"}
+    },
+    "reply_size_max_chars": 1500,
+    "expected_name_hints": [],
+    "forbidden_name_hints": [{"name": "Hemingway", "why": "a mentioned author is neither a self nor an other introduction of a labelled speaker"}]
+  }
+}

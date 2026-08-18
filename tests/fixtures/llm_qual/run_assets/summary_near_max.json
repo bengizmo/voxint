@@ -1,0 +1,31 @@
+{
+  "id": "summary_near_max",
+  "kind": "summary",
+  "description": "The headline latency fixture: a transcript large enough to force head+tail truncation at RUN_ASSETS_MAX_INPUT_CHARS (48000) and drive worst-case prefill on a CPU host. The harness SYNTHESIZES the body from this compact spec (no 50KB blob in git). Anchor sentences are planted in the FIRST and LAST segments so a faithful summary can still surface them after the middle is truncated away.",
+  "source": {
+    "synthesize": {
+      "target_text_chars": 52000,
+      "speakers": ["Moderator", "Delegate"],
+      "head_anchor": "This is the opening session of the Marisol Vega Coastal Resilience Forum, and today's focus is managed retreat.",
+      "tail_anchor": "To close, the Marisol Vega Forum will reconvene next spring to review progress on managed retreat.",
+      "sentence_pool": [
+        "The panel discussed how rising sea levels are reshaping planning decisions along low-lying coastlines.",
+        "Several delegates argued that early investment in wetlands buffers pays for itself within a decade.",
+        "One recurring theme was the difficulty of funding relocation for communities that do not want to move.",
+        "The moderator noted that insurance markets are already repricing risk faster than local budgets can adapt.",
+        "A delegate described a pilot program that raised roads and rebuilt culverts ahead of the next storm season.",
+        "The conversation turned to data sharing between municipalities and the gaps in current monitoring networks.",
+        "Participants agreed that public communication remains the hardest part of any managed retreat proposal.",
+        "The session ended with a call for clearer national guidance and more predictable long-term funding."
+      ]
+    },
+    "metadata": null,
+    "operator_notes": null
+  },
+  "gold": {
+    "expect_success": true,
+    "required_facts": ["Marisol Vega"],
+    "forbidden_hallucinations": ["earthquake", "wildfire", "hurricane category"],
+    "latency_threshold_seconds": 300
+  }
+}

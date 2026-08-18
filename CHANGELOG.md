@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Local-LLM qualification harness + frozen corpus (#66)**: a maintainer tool
+  (`tools/qualify_local_llm.py`) and a hand-annotated, clean-room fixture corpus
+  (`tests/fixtures/llm_qual/`, 19 fixtures + a frozen six-gate manifest) that
+  drive Voxint's *unmodified* enhancement / run-asset / research code paths
+  against a candidate local model and score structural validity, faithfulness,
+  semantic usefulness, grounding, latency, and bounded-failure per-fixture across
+  ≥3 reps. Verdict for the first candidates in
+  `docs/reports/local-llm-qualification-granite-2026-08-18.md`: neither IBM
+  Granite 4.0 H-Tiny nor Qwen3-4B-Instruct-2507 (Q5_K_M) qualifies as an
+  unrestricted bundled default (Granite obeys prompt injection; both are weak at
+  the agentic research loop). The corpus + harness are reused as #67's acceptance
+  gate. No change to shipped runtime behaviour.
 - **Keyboard shortcuts + in-app cheat-sheet (#51, console-UX arc #47)**: the
   review-stepper island extends its verify-and-advance keymap so a solo operator
   can drive the whole adjudication loop from the keyboard. Beyond the shipped

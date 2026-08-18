@@ -1,0 +1,23 @@
+{
+  "id": "summary_basic",
+  "kind": "summary",
+  "description": "A short interview. The summary must reflect the central subject and invent nothing. Required facts are central proper nouns; forbidden strings are plausible-but-absent claims.",
+  "source": {
+    "segments": [
+      {"segment_index": 0, "speaker": "Host", "text": "Today we're joined by an engineer from Acme Corporation to talk about their new solar inverter, Helios."},
+      {"segment_index": 1, "speaker": "Guest", "text": "Thanks. Helios is our first inverter designed for residential rooftops, and it ships next quarter."},
+      {"segment_index": 2, "speaker": "Host", "text": "What sets it apart from what's already on the market?"},
+      {"segment_index": 3, "speaker": "Guest", "text": "It runs cooler and it's about thirty percent lighter, which makes installation faster."},
+      {"segment_index": 4, "speaker": "Host", "text": "And the pricing is in line with existing units, is that right?"},
+      {"segment_index": 5, "speaker": "Guest", "text": "Roughly, yes. We didn't want the efficiency gains to come with a premium price."}
+    ],
+    "metadata": null,
+    "operator_notes": null
+  },
+  "gold": {
+    "expect_success": true,
+    "required_facts": ["Acme", "Helios"],
+    "forbidden_hallucinations": ["lawsuit", "bankruptcy", "recall", "billion"],
+    "latency_threshold_seconds": 120
+  }
+}

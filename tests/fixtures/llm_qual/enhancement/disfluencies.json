@@ -1,0 +1,20 @@
+{
+  "id": "disfluencies",
+  "job": "enhancement",
+  "description": "Filler words the engine must PRESERVE (the prompt forbids dropping words). Punctuation/casing may change; every lexical token must survive. A model that strips 'um'/'uh' fails faithfulness.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "so um i think the the main issue is uh funding you know"},
+    {"index": 1, "label": "SPEAKER_01", "text": "right yeah i mean like we basically ran out of uh runway"}
+  ],
+  "gold": {
+    "segments": {
+      "0": {"mode": "lexical_identical"},
+      "1": {"mode": "lexical_identical"}
+    },
+    "reply_size_max_chars": 1500,
+    "expected_name_hints": [],
+    "forbidden_name_hints": [{"name": "any", "why": "no names present"}]
+  }
+}

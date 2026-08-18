@@ -1,0 +1,23 @@
+{
+  "id": "entities_absent",
+  "kind": "entity_mentions",
+  "description": "A transcript with no named people, organizations, or products. An empty mentions list is the only valid answer; any surviving mention is a hallucination. (Structural: the producer accepts an empty list; a reply that offers mentions and none ground is a FAIL by the producer's own rule.)",
+  "source": {
+    "segments": [
+      {"segment_index": 0, "speaker": "Speaker one", "text": "The weather finally turned this week, so we got out on the water early."},
+      {"segment_index": 1, "speaker": "Speaker two", "text": "The tide charts looked good. We were back before the wind picked up."},
+      {"segment_index": 2, "speaker": "Speaker one", "text": "Best conditions we've had all month, honestly."}
+    ],
+    "metadata": null,
+    "operator_notes": null
+  },
+  "gold": {
+    "expect_success": true,
+    "expected_entities": [],
+    "forbidden_entities": [
+      {"surface": "any", "why": "no entity is named anywhere in the transcript"}
+    ],
+    "allow_empty_mentions": true,
+    "latency_threshold_seconds": 120
+  }
+}

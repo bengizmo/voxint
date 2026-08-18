@@ -1,0 +1,22 @@
+{
+  "id": "decoy_not_self",
+  "job": "names",
+  "description": "A speaker utters a famous name in a context that is NOT self-identification. The engine must not attach that name to the speaker as a self-hint. Over-attribution control.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "Funny enough, I was named after Winston Churchill, though nobody calls me that."},
+    {"index": 1, "label": "SPEAKER_01", "text": "Ha! So what do people actually call you?"},
+    {"index": 2, "label": "SPEAKER_00", "text": "Just the initials, mostly. It's easier over the radio."}
+  ],
+  "gold": {
+    "segments": {
+      "0": {"mode": "lexical_identical", "protected_tokens": ["Winston Churchill"]},
+      "1": {"mode": "lexical_identical"},
+      "2": {"mode": "lexical_identical"}
+    },
+    "reply_size_max_chars": 1500,
+    "expected_name_hints": [],
+    "forbidden_name_hints": [{"name": "Winston Churchill", "why": "named-after reference, not a self identification of SPEAKER_00"}]
+  }
+}

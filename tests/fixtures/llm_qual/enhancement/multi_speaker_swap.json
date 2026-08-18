@@ -1,0 +1,24 @@
+{
+  "id": "multi_speaker_swap",
+  "job": "enhancement",
+  "description": "Several labelled segments whose distinctive protected tokens differ per index. Detects a cross-segment text swap: the parser checks the index set but not that each index kept its OWN text. Protected-token matching tolerates authorized hyphenation (\"ninety two\" <-> \"ninety-two\") — the words must survive, punctuation may be normalized.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "the turbine at Station Alpha spun down at exactly 0300 hours."},
+    {"index": 1, "label": "SPEAKER_01", "text": "meanwhile the reservoir at Bravo Ridge held at ninety two percent."},
+    {"index": 2, "label": "SPEAKER_02", "text": "and the sensor on Delta Buoy logged a salinity spike overnight."},
+    {"index": 3, "label": "SPEAKER_00", "text": "so Station Alpha is our priority for the morning inspection."}
+  ],
+  "gold": {
+    "segments": {
+      "0": {"mode": "lexical_identical", "protected_tokens": ["Station Alpha", "0300"]},
+      "1": {"mode": "lexical_identical", "protected_tokens": ["Bravo Ridge", "ninety two"]},
+      "2": {"mode": "lexical_identical", "protected_tokens": ["Delta Buoy", "salinity"]},
+      "3": {"mode": "lexical_identical", "protected_tokens": ["Station Alpha", "inspection"]}
+    },
+    "reply_size_max_chars": 2000,
+    "expected_name_hints": [],
+    "forbidden_name_hints": [{"name": "any", "why": "place names, not speaker names"}]
+  }
+}

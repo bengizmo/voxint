@@ -1,0 +1,28 @@
+{
+  "id": "entities_basic",
+  "kind": "entity_mentions",
+  "description": "Entity extraction with grounding. Real entities appear IN segment text (with a case variant and a repeat); the two speaker prefixes are decoys that appear ONLY before the colon and must never be reported as mentions.",
+  "source": {
+    "segments": [
+      {"segment_index": 0, "speaker": "Jordan Lake", "text": "Acme Corporation just announced Helios, and honestly Acme has been quiet for years."},
+      {"segment_index": 1, "speaker": "Priya Anand", "text": "I saw that. The HELIOS spec sheet looks strong, though the pricing wasn't clear."},
+      {"segment_index": 2, "speaker": "Jordan Lake", "text": "Right. Their old partner, Northwind Energy, might resell it through their storefront."},
+      {"segment_index": 3, "speaker": "Priya Anand", "text": "That would make sense given how their distribution already works."}
+    ],
+    "metadata": null,
+    "operator_notes": null
+  },
+  "gold": {
+    "expect_success": true,
+    "expected_entities": [
+      {"surface": "Acme Corporation", "must_ground": true},
+      {"surface": "Helios", "must_ground": true},
+      {"surface": "Northwind Energy", "must_ground": true}
+    ],
+    "forbidden_entities": [
+      {"surface": "Jordan Lake", "why": "speaker prefix only; never appears inside segment text"},
+      {"surface": "Priya Anand", "why": "speaker prefix only; never appears inside segment text"}
+    ],
+    "latency_threshold_seconds": 120
+  }
+}

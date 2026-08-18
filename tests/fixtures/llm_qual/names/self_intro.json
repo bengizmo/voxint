@@ -1,0 +1,22 @@
+{
+  "id": "self_intro",
+  "job": "names",
+  "description": "A speaker states their own name. Expected a located self-hint on that speaker's label. Recall + correct self/other kind.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "Hi everyone, I'm Dana Whitfield, and I run the field station here."},
+    {"index": 1, "label": "SPEAKER_01", "text": "Great to meet you. Can you tell us what a typical day looks like?"},
+    {"index": 2, "label": "SPEAKER_00", "text": "Sure. Most mornings I check the instruments before the tide comes in."}
+  ],
+  "gold": {
+    "segments": {
+      "0": {"mode": "lexical_identical", "protected_tokens": ["Dana Whitfield"]},
+      "1": {"mode": "lexical_identical"},
+      "2": {"mode": "lexical_identical"}
+    },
+    "reply_size_max_chars": 1500,
+    "expected_name_hints": [{"label": "SPEAKER_00", "name": "Dana Whitfield", "kind": "self"}],
+    "forbidden_name_hints": []
+  }
+}

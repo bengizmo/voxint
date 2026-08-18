@@ -1,0 +1,35 @@
+{
+  "id": "asr_errors",
+  "job": "enhancement",
+  "description": "Clear homophone/ASR errors. The faithfulness gate is authorized-edit SUBSET, not full-correction: applying any subset of the sanctioned fixes (including none) is acceptable model conservatism; only an UNauthorized change fails. A faithful under-correction must pass.",
+  "context": "",
+  "name_attribution_context": "",
+  "segments": [
+    {"index": 0, "label": "SPEAKER_00", "text": "they're research showed that the affect was larger then expected."},
+    {"index": 1, "label": "SPEAKER_01", "text": "we should of measured it sooner, but the data was two noisy."}
+  ],
+  "gold": {
+    "segments": {
+      "0": {
+        "mode": "authorized_edits",
+        "edits": [
+          {"from": "they're", "to": "their"},
+          {"from": "affect", "to": "effect"},
+          {"from": "then", "to": "than"}
+        ],
+        "protected_tokens": ["research", "larger"]
+      },
+      "1": {
+        "mode": "authorized_edits",
+        "edits": [
+          {"from": "should of", "to": "should have"},
+          {"from": "two", "to": "too"}
+        ],
+        "protected_tokens": ["measured", "noisy"]
+      }
+    },
+    "reply_size_max_chars": 1500,
+    "expected_name_hints": [],
+    "forbidden_name_hints": [{"name": "any", "why": "no names present"}]
+  }
+}

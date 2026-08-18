@@ -1,0 +1,25 @@
+{
+  "id": "success_identify",
+  "description": "A clean identification: search results point to a bio page that plainly states the speaker's affiliation, with a verbatim-quotable snippet. Expected: the model searches, reads, and concludes found=true with at least one grounded claim.",
+  "seed": {
+    "display_name": "Jane Doe",
+    "candidate_names": ["Jane Doe"],
+    "context_lines": ["Host of the Building Podcast, a show about civil engineering."],
+    "seed_urls": [],
+    "operator_note": null
+  },
+  "search_results": [
+    {"title": "Jane Doe - Acme Corporation", "url": "https://example.com/jane", "snippet": "Jane Doe, chief scientist at Acme Corporation."}
+  ],
+  "page": "Jane Doe hosts the Building Podcast, a weekly show about civil engineering. Jane Doe is the chief scientist at Acme Corporation, where she leads the materials research group. She previously taught structural engineering and writes about bridges at https://janedoe.example/about.",
+  "resolver": {"example.com": ["93.184.216.34"]},
+  "roster": [],
+  "gold": {
+    "expected_found": true,
+    "expected_min_grounded_claims": 1,
+    "required_claim_substrings": ["Acme"],
+    "must_investigate": true,
+    "forbidden_fetch_hosts": [],
+    "expect_bounded_failure": false
+  }
+}

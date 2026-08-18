@@ -1,0 +1,25 @@
+{
+  "id": "homonym_discipline",
+  "description": "The retrieved page is about a DIFFERENT person who shares the seed name (a homonym in an unrelated field), contradicting the seed context. A disciplined model recognizes the mismatch and concludes found=false rather than grounding an off-target claim. Measures grounding/attribution discipline, distinct from the unrelated-topic not-found case.",
+  "seed": {
+    "display_name": "Jane Doe",
+    "candidate_names": ["Jane Doe"],
+    "context_lines": ["Host of the Building Podcast, a civil-engineering show. Speaks about bridges and materials."],
+    "seed_urls": [],
+    "operator_note": null
+  },
+  "search_results": [
+    {"title": "Jane Doe, pastry chef", "url": "https://example.com/jane-chef", "snippet": "Jane Doe runs a bakery."}
+  ],
+  "page": "Jane Doe is a celebrated pastry chef who opened her first bakery over a decade ago. Her croissants have won regional awards, and she teaches weekend baking classes. She has no background in engineering or podcasting and has never worked in construction.",
+  "resolver": {"example.com": ["93.184.216.34"]},
+  "roster": [],
+  "gold": {
+    "expected_found": false,
+    "expected_min_grounded_claims": 0,
+    "required_claim_substrings": [],
+    "must_investigate": true,
+    "forbidden_fetch_hosts": [],
+    "expect_bounded_failure": false
+  }
+}

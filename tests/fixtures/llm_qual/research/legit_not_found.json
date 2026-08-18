@@ -1,0 +1,25 @@
+{
+  "id": "legit_not_found",
+  "description": "The target is genuinely not identifiable: the retrieved page is about an unrelated subject. Expected: the model actually investigates (>=1 successful action) and then concludes found=false with an empty claims list. A zero-work found=false is rejected by the loop and counts as not investigating.",
+  "seed": {
+    "display_name": "Aldous Renner",
+    "candidate_names": ["Aldous Renner"],
+    "context_lines": ["A caller on a live radio segment; no other details known."],
+    "seed_urls": [],
+    "operator_note": null
+  },
+  "search_results": [
+    {"title": "Community garden reopens for spring", "url": "https://example.com/garden", "snippet": "The riverside community garden reopens this weekend."}
+  ],
+  "page": "The riverside community garden reopens this weekend after winter maintenance. Volunteers rebuilt the raised beds and repaired the irrigation lines. The garden committee thanked local businesses for donating soil and seedlings for the new season.",
+  "resolver": {"example.com": ["93.184.216.34"]},
+  "roster": [],
+  "gold": {
+    "expected_found": false,
+    "expected_min_grounded_claims": 0,
+    "required_claim_substrings": [],
+    "must_investigate": true,
+    "forbidden_fetch_hosts": [],
+    "expect_bounded_failure": false
+  }
+}
