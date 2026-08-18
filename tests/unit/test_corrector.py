@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import unicodedata
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +75,11 @@ def _assert_trace_faithful(result: CorrectionResult, source: str) -> None:
     out_cursor = 0
     for entry in result.trace:
         out_start, out_end = entry.span
+        # A real edit replaces a non-empty original surface: an empty from_text
+        # would be a pure insertion the walker could not attribute to any matched
+        # span, so reject it here (the engine never emits one — matches are
+        # non-empty — but this keeps the "zero unauthorized edits" oracle honest).
+        assert entry.from_text, "trace entry has an empty from_text (unattributable insertion)"
         # unchanged gap before this edit is byte-identical on both sides.
         gap = result.text[out_cursor:out_start]
         assert source[src_cursor : src_cursor + len(gap)] == gap
@@ -130,6 +136,61 @@ def test_manifest_order_breaks_identical_span_tie() -> None:
     # same start, same length -> earliest rule in the sequence wins.
     assert apply_corrections("cat", [first, second]).text == "1"
     assert apply_corrections("cat", [second, first]).text == "2"
+
+
+def test_three_way_identical_span_tie_pins_full_key() -> None:
+    # Three rules matching the exact same span: only the earliest in manifest order
+    # may fire, pinning the full (start, -end, index) tie-break.
+    rules = [
+        _rule("a", "cat", "A", whole_word=False),
+        _rule("b", "cat", "B", whole_word=False),
+        _rule("c", "cat", "C", whole_word=False),
+    ]
+    assert apply_corrections("cat", rules).text == "A"
+    assert apply_corrections("cat", list(reversed(rules))).text == "C"
+
+
+def test_multi_rule_boundary_resume_through_engine() -> None:
+    # The boundary-invalid resume (#80 iter_matches resumes at start+1) must hold
+    # through the multi-rule cursor loop, not only in the single-rule matcher:
+    # "ha ha" fails its left boundary at offset 1 of "aha ha ha" but matches at
+    # [1, 6) once the leading "a" is passed. A second unrelated rule must not
+    # perturb that.
+    ha = _rule("ha", "ha ha", "X", whole_word=False)
+    noise = _rule("noise", "zzz", "Z", whole_word=False)
+    result = apply_corrections("aha ha ha", [ha, noise])
+    assert result.text == "aX ha"
+    _assert_trace_faithful(result, "aha ha ha")
+
+
+def test_ignorecase_from_text_is_original_surface() -> None:
+    # Under IGNORECASE the trace's from_text is the ORIGINAL surface (upper-cased
+    # here), while the span addresses the exact authored replacement in the result.
+    r = _rule("sb", "selectboard", "Selectboard", case_sensitive=False, whole_word=False)
+    result = apply_corrections("The SELECTBOARD met", [r])
+    assert result.text == "The Selectboard met"
+    assert result.trace[0].from_text == "SELECTBOARD"
+    assert result.trace[0].to_text == "Selectboard"
+    start, end = result.trace[0].span
+    assert result.text[start:end] == "Selectboard"
+
+
+def test_generator_rules_are_materialized() -> None:
+    # A one-shot iterator must not be exhausted after the first cursor step (which
+    # would silently drop every later rule). Both rules fire.
+    def _gen() -> Iterator[CorrectionRule]:
+        yield _rule("a", "foo", "X", whole_word=False)
+        yield _rule("b", "bar", "Y", whole_word=False)
+
+    assert apply_corrections("foo bar", _gen()).text == "X Y"
+
+
+def test_zero_width_match_raises_not_hangs() -> None:
+    # #80 rejects an empty match at load; a caller that bypasses validation with a
+    # zero-width-matching rule must get a loud ValueError, never an infinite loop.
+    bad = _rule("empty", "", "X", whole_word=False)
+    with pytest.raises(ValueError, match="zero-width"):
+        apply_corrections("abc", [bad])
 
 
 def test_adjacent_winners() -> None:

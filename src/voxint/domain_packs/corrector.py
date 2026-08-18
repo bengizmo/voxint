@@ -57,8 +57,7 @@ from typing import Any
 
 from voxint.domain_packs.corrections import (
     CorrectionRule,
-    _boundary_ok,
-    compile_match,
+    first_match_from,
 )
 
 # Bumped on any change to the apply rules, trace shape, or default behavior — a
@@ -100,33 +99,15 @@ class CorrectionResult:
     ``text`` is the corrected string (identical to the input on a no-op or a
     growth rejection); ``trace`` lists the applied rules in output order; and
     ``growth_rejected`` is ``True`` only when a would-be transformation was
-    rejected whole for exceeding ``max_output_chars`` (in which case ``text`` is
-    the untouched input and ``trace`` is empty).
+    rejected whole because its projected **output length** exceeded
+    ``max_output_chars`` (in which case ``text`` is the untouched input and
+    ``trace`` is empty). The bound is on final size, not net growth: a rule set
+    that net-shrinks a segment but still lands above the cap is rejected too.
     """
 
     text: str
     trace: tuple[AppliedCorrection, ...]
     growth_rejected: bool
-
-
-def _first_match_from(
-    rule: CorrectionRule, text: str, pos: int
-) -> tuple[int, int] | None:
-    """First boundary-valid match span of ``rule`` in ``text`` at or after ``pos``.
-
-    Mirrors :func:`~voxint.domain_packs.corrections.iter_matches` semantics — a
-    boundary-invalid candidate resumes one code point past its start, so it can't
-    hide a later overlapping valid match — but is **seeded at a live cursor** so
-    the multi-rule engine can rediscover an occurrence a previous winner exposed.
-    Reuses #80's ``compile_match`` and ``_boundary_ok`` unchanged.
-    """
-    pattern = compile_match(rule)
-    p = pos
-    while (m := pattern.search(text, p)) is not None:
-        if _boundary_ok(text, m.start(), m.end(), rule.whole_word):
-            return (m.start(), m.end())
-        p = m.start() + 1
-    return None
 
 
 def _validate_max_output_chars(max_output_chars: int | None) -> None:
@@ -160,21 +141,28 @@ def apply_corrections(
 
     The caller is expected to pass a rule set that already passed #80's
     :func:`~voxint.domain_packs.corrections.validate_corrections` (the normal path
-    through :meth:`DomainPack.from_mapping`); the engine does not re-validate.
+    through :meth:`DomainPack.from_mapping`); the engine does not re-validate — but
+    it fails loud rather than misbehaving on the two shapes validation would have
+    caught: a one-shot iterator (materialized to a tuple so every cursor step sees
+    the full set) and a zero-width match (``ValueError``, never a silent hang).
     """
     _validate_max_output_chars(max_output_chars)
+    # Materialize once: the cursor loop re-enumerates `rules` every step, so a
+    # generator would be exhausted after the first winner and silently drop the
+    # rest. This also snapshots the sequence against mutation mid-apply.
+    rules = tuple(rules)
 
     # 1-2-3-4: rediscover each rule's earliest eligible match from the live cursor,
     # pick the leftmost-longest-earliest-rule winner, advance, repeat.
     winners: list[tuple[int, int, CorrectionRule]] = []
     pos = 0
     text_len = len(text)
-    while pos <= text_len:
+    while pos < text_len:
         best: tuple[int, int, int] | None = None  # (start, -end, manifest_index)
         best_rule: CorrectionRule | None = None
         best_span: tuple[int, int] | None = None
         for index, rule in enumerate(rules):
-            span = _first_match_from(rule, text, pos)
+            span = first_match_from(rule, text, pos)
             if span is None:
                 continue
             start, end = span
@@ -184,12 +172,19 @@ def apply_corrections(
                 best = key
                 best_rule = rule
                 best_span = span
-        if best_rule is None or best_span is None:
+        if best_span is None or best_rule is None:
             break
-        winners.append((best_span[0], best_span[1], best_rule))
-        # Advance past the winner. A zero-width match is impossible (match is a
-        # non-empty literal), so end > start and the cursor always progresses.
-        pos = best_span[1]
+        start, end = best_span
+        if end <= start:
+            # #80 rejects empty/whitespace matches, so this only fires when a caller
+            # bypasses validation with a zero-width-matching rule. Fail loud: a
+            # zero-width winner would never advance the cursor (infinite loop).
+            raise ValueError(
+                f"correction rule {best_rule.id!r} produced a zero-width match at "
+                f"offset {start}; rules must pass validate_corrections before apply"
+            )
+        winners.append((start, end, best_rule))
+        pos = end
 
     if not winners:
         # Pure no-op: never a growth rejection, even if `text` already exceeds the
