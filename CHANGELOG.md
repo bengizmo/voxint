@@ -186,6 +186,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `static/app/{assets,.vite}` in both the sdist and the wheel. Docker images were
   never affected (the Node stage COPYs `dist` into the image directly).
 
+### Security
+- **Native launcher hardening (#71)**: closes findings from the 2026-08-18
+  repo security audit (`docs/security/audit-2026-08-18.md`), calibrated to the
+  single-operator threat model. The launchd plists (which embed `DATABASE_URL`
+  with the DB password, `VOXINT_PASSWORD`, and `CSRF_SECRET`) and `pg_dump`
+  backups are now created mode `0600` and the `~/.voxint-native` tree `0700`,
+  instead of the umask-default `0644`/`0755` that exposed credentials to other
+  local accounts. A new `validate_native_inputs` gate (run for every subcommand
+  and after `load_state`) fails closed on any unsafe operator-settable
+  `VOXINT_NATIVE_*` value before it can reach a shell (`pg_ctl -o` — ports
+  restricted to `1..65535`), superuser SQL (DB role/name restricted to a safe
+  identifier grammar; the `CREATE ROLE` password now passed as a psql variable
+  rather than an inline literal), a launchd plist env record (CR/LF rejected in
+  every serialized value, so a newline cannot forge a second `PYTHONPATH` entry),
+  or bash arithmetic (log sizes must be positive integers). `restore --fresh`
+  now takes an automatic pre-drop safety backup (mode `0600`) and aborts before
+  any destruction if it fails, so an incomplete restore can be recovered. No
+  change to the normal happy path; verified live end-to-end (setup + backup +
+  `restore --fresh`) on the native macOS lane.
+
 ## [0.17.0] - 2026-08-18
 
 ### Added
