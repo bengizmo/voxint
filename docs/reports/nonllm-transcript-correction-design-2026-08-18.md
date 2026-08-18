@@ -171,17 +171,50 @@ corrections:
 
 ### Apply semantics (freeze these in #80)
 
+> **The 3-model review (§12) found two spec-level defects here — a false
+> idempotence claim and under-specified whole-word/case matching that corrupts
+> real inputs. Both are corrected below; the pre-review wording is superseded.**
+
 - **Literal phrases only.** No executable regex in v1 (see §9-D4 and §5's future
   gate). `match` and `replace` are non-empty; NUL rejected in config and output.
-- **Per-segment only** — never match across a segment or speaker boundary.
-- **Single, non-cascading pass** — replacements are not re-processed, so a
-  replacement can never trigger another rule (no ordering surprises, guaranteed
-  idempotence: `correct(correct(t)) == correct(t)`).
+- **Per-segment only** — never match across a segment or speaker boundary (this is
+  a real capability limit, not just a safety rule; see "Declared-rule
+  reconciliation" below and §12-F5).
+- **Single, non-cascading pass** — within one apply, matching scans the input text
+  once left-to-right and a replacement's own characters are never re-examined.
+- **Idempotence is *conditional*, not free.** A single non-cascading pass does
+  **not** by itself give `correct(correct(t)) == correct(t)`: rule set
+  `[a→b, b→c]` yields `correct("a")=="b"` but `correct(correct("a"))=="c"`.
+  Idempotence holds **only for a validated rule set**, so #80 must add a
+  **load-time validation that rejects any rule set where a `replace` value
+  contains any rule's `match`** (including its own, e.g. `aa→aaa`), evaluated
+  case-/boundary-aware. O(n²) over ≤256 rules is trivial. The gate (§7) asserts
+  idempotence *only over validated sets*.
 - **Overlap resolution: leftmost-longest**, with manifest order only as the final
   tie-breaker.
-- **Case-sensitive, whole-word by default**; exceptions must be explicit per rule.
-- **Structured trace** — every applied rule emits `{id, span, from, to}` so the
-  review console can show *which pack + which rule* produced each edit.
+- **Match precision (pin exactly — bare `\b` corrupts real text).** Default
+  **case-sensitive, whole-word**. Whole-word must **not** use Python's bare `\b`
+  (it treats `'`, `-`, and combining marks as boundaries): `it→IT` would turn
+  `it's` into `IT's`, and on decomposed `Zoë` (`Z o e U+0308`) `\be\b` matches the
+  base letter *inside the grapheme*. Define boundaries with an explicit predicate —
+  adjacent character is not alphanumeric **and not** an apostrophe/hyphen/combining
+  mark. Matching runs against the **original segment text** (`re.escape(match)` +
+  optional `re.IGNORECASE`); never against a casefolded copy (`ß→ss`, `İ→i̇` are
+  length-changing and would shift every stored span). `replace` is an **exact
+  literal** — case-insensitive matching does **not** inherit the matched text's
+  case (`selectboard`→`Selectboard` turns `SELECTBOARD` into `Selectboard`);
+  document this, or a later `preserve_case` flag earns its own issue.
+- **Declared-rule reconciliation.** Each declared rule gets a per-segment status —
+  `applied` / `no_raw_match` / `cross_segment` (matched only when adjacent
+  segments are joined) / `growth_rejected` — persisted with the run and surfaced in
+  the console (#83). This turns the per-segment and surface-fragility limits (a
+  term ASR split across a pause, or emitted in a surface the rule doesn't list)
+  from **silent** non-application into a visible "declared but never fired" signal.
+- **Structured trace.** Every applied rule emits `{id, from, to, span}` where
+  `span` is an offset range **in the final persisted `enhanced_text`** (its own
+  coordinate space, computed in the single pass as replacements shift offsets — a
+  single ambiguous span cannot support highlighting). Persistence is owned by #82
+  (see §7 and §12-F3).
 - **Loud validation before run submission** — malformed `corrections:` is a
   configuration error (like a mistyped `vocabulary:`), never a silent skip.
 
@@ -189,8 +222,10 @@ corrections:
 
 `max_rules_per_pack: 256` · `max_match_chars: 256` · `max_replacement_chars: 512` ·
 `max_corrections_manifest_bytes: 131072`. On a segment transformation that would
-exceed the existing enhanced-text growth constraints, **reject that segment's
-transformation** rather than truncate.
+exceed the existing enhanced-text growth constraints, **reject that whole
+segment's transformation atomically** (fall back to the segment's pre-rule text —
+raw, or the LLM output if the LLM path ran; see §8) and record `growth_rejected`
+for the offending rule — never truncate, and never apply a partial rule subset.
 
 ### Word timestamps & boundaries (the correctness contract)
 
@@ -209,7 +244,10 @@ that machinery:
 - Any feature that needs effective-text↔word alignment (notably click-to-split)
   must **declare itself unavailable after a material correction** — exactly as the
   current split path already refuses a materially-enhanced segment. Mirror that
-  conservative behavior; do not invent alignment.
+  conservative behavior; do not invent alignment. "Material correction" is defined
+  **by the persisted trace being non-empty for the segment** (a rule actually
+  fired), not inferred by re-diffing text — so the dependency is wired to a stored
+  signal, not implied (§12-F3).
 
 ---
 
@@ -234,6 +272,14 @@ correction *utility* or *collision safety*. A parallel corpus is required.
 NUL, identical segment-index set, no merge/split/reorder, protected tokens
 preserved. `prompt_injection`, `unicode`, `noop_clean`, `disfluencies`, and
 `multi_speaker_swap` are mandatory regression cases the engine must pass trivially.
+Pin the harness boundary so this stays meaningful (§12-F7): compare **decoded
+Python strings** against the **corrector in isolation** (an empty rule set is the
+identity function — this stages *wiring*, not the engine); one-time **assert all
+six fixtures are already NFC** so the "no NFC" contract is explicit, not
+accidentally true; and add **one separate no-LLM/no-rules `enhance_match` identity
+test** (guards JSON re-serialization / `ensure_ascii` from mangling curly quotes,
+em-dash, or `农业`), since existing stage behavior — not the corrector — is the only
+thing that could break byte-identity here.
 
 **B. New parallel corpus (`tests/fixtures/rules_correct/`):**
 
@@ -241,15 +287,27 @@ preserved. `prompt_injection`, `unicode`, `noop_clean`, `disfluencies`, and
    the declared correction is **required**, not optional.
 2. **Negative collision** contexts where the surface is already correct or is a
    substring (`catalog` must not match a `cat` rule) — zero changes.
-3. Case-sensitive / case-insensitive / whole-word / punctuation-adjacent /
-   substring-boundary behavior.
+3. Boundary/case edges that the review flagged (§12-F1): **possessive/contraction**
+   (`it's` under an `it→IT` rule), **hyphenated compound**, **punctuation-adjacent**,
+   and **NFD combining-mark** text (`Zoë` decomposed) — all must not corrupt.
+   Case-sensitive vs `IGNORECASE`, and the exact-literal (non-case-inheriting)
+   `replace` behavior.
 4. Overlapping rules → deterministic leftmost-longest resolution.
-5. Non-cascading + idempotence: `correct(correct(t)) == correct(t)`.
+5. **Idempotence over a validated rule set**: `correct(correct(t)) == correct(t)`
+   holds *because* load-time validation rejected `[a→b, b→c]`-style chains — plus a
+   negative test that such a chain is **rejected at load** (§6, §12-F2).
 6. Growth / rule-count / manifest-size / NUL / invalid-schema **failures**.
-7. **Trace completeness** — every changed span maps to exactly one declared rule;
-   no undeclared character changes.
-8. **Composition** — LLM success, LLM failure (rules apply to `raw_text`), and an
-   LLM output that tries to undo a domain term (rules-last wins).
+7. **Regex-metachar literal**: a `match` like `C.D.B.G.` is treated as a literal
+   (`re.escape`) — with an empty rule set in gate A, an unescaped-`re` bug is
+   invisible, so gate B must catch it (§12-F9).
+8. **Trace completeness** — every changed span maps to exactly one declared rule,
+   `span` addresses the final `enhanced_text` correctly under offset shifts, and no
+   undeclared character changes.
+9. **Composition** (§8 dual pass) — rules on **raw** produce the authoritative
+   trace; the post-LLM enforcement pass applies only rules that matched raw;
+   fixtures for LLM success, LLM failure (raw path), an LLM output that tries to
+   *undo* a domain term (enforced), and an LLM output that **invents** a matchable
+   surface absent from raw (must **not** be blessed — §12-F6).
 
 **Faithfulness gate (stricter than the LLM's):** *zero unauthorized edits.* Every
 changed character must be covered by an applied operator rule; every protected
@@ -262,32 +320,62 @@ no-op behavior. Deterministic ⇒ a single run suffices (no `--reps`).
 ### A persistence subtlety that separates this from `triage.py`
 
 `triage.py` is computed at **read time** and is safe to recompute. The corrector
-is **not** — its output must be **persisted** (into `enhanced_text`, as today),
-and `CORRECTOR_VERSION` + applied-rule ids stored durably. Recomputing corrected
-transcript content purely at read time would let a `CORRECTOR_VERSION` bump
-*silently rewrite historical renderings* of already-adjudicated runs. Persist and
-version; do not read-time-recompute transcript text.
+is **not** — its output must be **persisted** (into `enhanced_text`, as today).
+Recomputing corrected transcript content purely at read time would let a
+`CORRECTOR_VERSION` bump *silently rewrite historical renderings* of
+already-adjudicated runs. Persist and version; do not read-time-recompute.
+
+**The trace/version storage model must be a named column owned by one issue
+(#82), not left implicit (§12-F3).** The review found the "auditable trail" is
+currently unauditable: with no persisted store, the exact string the trace spans
+describe exists nowhere, and legacy `enhanced_text` rows predate the corrector.
+Pin: `transcript_segments.correction_trace JSONB NOT NULL DEFAULT '[]'` holding
+`{version, input_base: "raw"|"llm", entries: [{id, from, to, span}]}` per segment,
+plus a per-segment (or per-run) `corrector_version` where `NULL` = legacy
+unversioned output that is **rendered as "enhanced (unversioned)" and never
+recomputed**. The `correction_trace` and `enhanced_text` for a segment reset
+**atomically** on any re-enhance. Migration + test owned by **#82**.
 
 ---
 
 ## 8. Composition with the LLM path, and the honest default
 
-**Composition (recommended): LLM → rules.** When both are enabled, run
-`HttpLLMClient.enhance_segments` first, then apply the operator's frozen literal
-corrections **last**, so the operator's explicit, frozen domain intent is the
-authoritative final transformation the model cannot un-correct. If the LLM batch
-fails, apply rules to `raw_text`. Persist `enhanced_text` only when the final text
-differs from `raw_text`. (This is the reverse of the spike's initial rules-then-LLM
-guess; see §9-D2 for the dissent.)
+**Composition (recommended): a *raw-gated dual pass*, not a single LLM→rules
+pass.** The 3-model review (§12-F1/F6) showed that applying literal rules to the
+LLM's *output* has two failures: the trace spans then live in the LLM's coordinate
+space (not the evidence's), and — worse — the LLM can **invent** a surface absent
+from raw that a rule then fires on, making a hallucination look
+operator-authorized. The fix keeps codex's "operator intent is final" without
+those failures:
+
+1. **Rules on `raw_text` first** → the authoritative provenance: the set of rule
+   ids that matched each segment *in the evidence*, with spans in a raw coordinate
+   base.
+2. **LLM enhancement** (if enabled) runs as today.
+3. **Post-LLM enforcement pass** may apply **only the rules that matched raw in
+   that same segment** — so the operator's canonical form is the final word on
+   terms that were genuinely present, but the LLM cannot conjure a new rule firing.
+   The persisted trace records `input_base` (`raw` when the LLM is off/failed,
+   `llm` when enforced on LLM output) so provenance is never ambiguous.
+
+If the LLM is off or its batch fails, step 3 is a no-op and the raw-pass result
+stands. Persist `enhanced_text` only when the final text differs from `raw_text`.
+*(This supersedes the pre-review "single LLM→rules pass"; the final call between
+this dual pass and a protected-substring variant is #82's, with both recorded.)*
 
 **Architecture:** call the pure corrector **inside the existing `enhance_match`
 stage** — it is already where `enhanced_text` is produced and reset, and it runs
 even when the LLM is off. Do not bury it inside `HttpLLMClient`, and do not add a
 separate pipeline stage unless independent scheduling/retry ever demands one.
-Gate it with the documented **tri-state runtime pattern** (a nullable
-`AppSettings` column + a `resolve_effective_*` resolver snapshotted into
-`RunPreferences`), so an operator toggle applies without a worker restart —
-exactly as `watch_folder_enabled` (#60) and the enrichment flags already work.
+
+**No new runtime enable/disable toggle.** The pre-review draft gated the corrector
+with the tri-state `AppSettings` pattern; the review (§12-F, tri-state item)
+judged that **bloat** — unlike the LLM (cost/latency/privacy reasons to toggle
+independently), the corrector is free, offline, and deterministic, and is already
+gated by pack selection (`generic` declares no rules; choosing/authoring a pack is
+the enable action). Per-rule control belongs in authoring (remove/disable a
+misfiring rule), not a global switch. A kill-switch can be added later if a real
+story appears.
 
 **The honest default for a no-GPU, non-technical operator:**
 
@@ -334,6 +422,10 @@ maintainer may legitimately revisit these.
   #66 faithfulness sin (a model "creatively" rewriting an operator's explicit
   fix); the failure grok avoids (LLM sees dirtier ASR) is minor. Rules still run
   when the LLM is off, applied to `raw_text`.
+- ⚠ **Superseded by the second panel (§12-F1/F6):** a plain LLM→rules single pass
+  invalidates the trace's coordinate base and lets the LLM entrench a hallucination
+  as operator-authored. §8 now specifies a **raw-gated dual pass** (rules on raw
+  for provenance; a post-LLM enforcement pass applies only rules that matched raw).
 
 **D3 — A separate versioned pipeline stage, or inside `enhance_match`?**
 - *grok:* a separate stage upstream of `enhance_segments`.
@@ -362,28 +454,34 @@ audience and its evidence-fidelity/anti-bloat doctrine.
 ## 10. Follow-up implementation issues (dependency-ordered)
 
 This spike (#79) closes on acceptance of this report. Implementation proceeds
-through **#80 (refined)** plus **three new issues**. `generic` stays a
-byte-preserving no-op throughout.
+through **#80 (refined)** plus **four new issues**. The order below is corrected
+per the review (§12-F8): **the schema/semantics come first (#80), then the engine
+that consumes them (#81)** — the pre-review filing had the engine as the
+"foundation" while importing its semantics from #80, an ownership cycle. `generic`
+stays a byte-preserving no-op throughout.
 
-| # | Issue | Depends on | Scope |
+| Order | Issue | Depends on | Scope |
 |---|---|---|---|
-| **A** | **Refine #80 — operator corrections in domain packs (literal, frozen)** | packs + mig 0017 | Add `corrections:` to `DomainPack` + `from_mapping`/`to_mapping` round-trip + the frozen snapshot; the literal schema, validation bounds, leftmost-longest overlap order, non-cascading single-pass, and trace contract of §6. **Remove executable regex from #80's scope** (defer to a later spike). Update `docs/domain-packs.md`. |
-| **B** | **(new) Deterministic correction faithfulness contract + frozen corpus** | A | The pure `stdlib` corrector module + `CORRECTOR_VERSION`, contract-pinned like `test_triage_config.py`; reuse the six enhancement fixtures as byte-identical regressions; add the parallel positive/collision/bounds/idempotence/trace corpus (§7); exact-edit gate, one-failure-blocks-release. Lands **before or with** integration. |
-| **C** | **(new) Compose frozen domain-pack corrections with enhancement** | A, B | Invoke the corrector inside `enhance_match`; LLM-then-rules with `raw_text` fallback; persist `enhanced_text` only when materially different; durably store `CORRECTOR_VERSION` + applied-rule ids; gate via the tri-state runtime pattern; keep LLM name-hints independent; split/search/export regressions. |
-| **D** | **(new) Expose deterministic-correction provenance in the review console** | C | Show that rules fired and list their stable ids + source pack; keep raw text one action away for comparison/reversion; document composition, precedence, and that a material correction disables word-boundary splitting. Domain-pack authoring UI stays out of scope unless #80 already owns it. |
+| **1** | **#80 — Operator corrections in domain packs (literal schema + semantics)** | packs + mig 0017 | Owns the rule **type + semantics**: `corrections:` on `DomainPack` + `from_mapping`/`to_mapping` round-trip + frozen snapshot; literal-only (no regex); the leftmost-longest / non-cascading / **explicit-boundary** / case / **replacement-contains-match load-time validation** / bounds rules of §6. Update `docs/domain-packs.md`. Pack parsing is a **one-way adapter** into the engine's rule type. |
+| **2** | **#81 — Corrector module + faithfulness contract & frozen corpus** | #80 | The pure `stdlib` engine consuming #80's rule type + `CORRECTOR_VERSION`, contract-pinned like `test_triage_config.py`; reuse the six fixtures as **corrector-only byte-identical** regressions (+ NFC assertion + separate `enhance_match` identity test); the parallel positive/collision/boundary/idempotence/metachar/trace corpus (§7); exact-edit gate, one-failure-blocks-release. |
+| **3** | **#82 — Compose corrections with enhancement (dual pass + trace/version persistence)** | #80, #81 | Invoke the corrector inside `enhance_match` via the **raw-gated dual pass** (§8); **owns the migration**: `correction_trace` JSONB + `corrector_version` (§7), atomic reset on re-enhance, legacy-NULL rendering; persist `enhanced_text` only when materially different; **no** tri-state runtime gate; keep LLM name-hints independent; split/search/export regressions. |
+| **4** | **#83 — Expose deterministic-correction provenance in the review console** | #82 | Show that rules fired + their ids + source pack; **surface the declared-rule reconciliation statuses** (`no_raw_match`/`cross_segment`/`growth_rejected`) so silent non-application is visible; keep raw one action away; document precedence + that a material correction disables word-splitting. |
+| **5** | **(new) Minimal corrections-authoring surface for non-technical operators** | #80 | A simple console editor for the selected pack's `corrections:` (`match`/`replace`/`case_sensitive`/`whole_word`), mirroring the existing custom-vocabulary-in-wizard precedent, so the target operator can author a correction **without hand-editing YAML** (§12-F4). Until it lands, installer/UX copy must say corrections are a pack-author capability. |
 
 **Do not file** "integrate SymSpell", a "general English confusables list", or a
 regex engine as children of this epic — each is a rejected direction above.
 
 **Principal risks & mitigations** (carried into the issues): operator-rule
-collisions → whole-word + case-sensitive defaults, collision fixtures,
-preview/explainability, immutable raw; rule-ordering surprises → non-cascading
-single pass + leftmost-longest + trace; regex DoS → no regex in v1; LLM overwrites
-operator intent → rules applied last; corrected text mistaken for word-aligned
-evidence → words immutable, no cross-segment edits, alignment-dependent actions
-disabled after a material change; a `CORRECTOR_VERSION` bump silently rewriting
-history → persist outputs + durable version/provenance, never read-time-recompute
-transcript content.
+collisions → explicit-boundary whole-word + case-sensitive defaults, collision +
+possessive/hyphen/NFD fixtures, immutable raw; rule-ordering / non-idempotence →
+leftmost-longest + non-cascading + **replacement-contains-match load validation** +
+trace; regex DoS → no regex in v1; LLM entrenches a hallucination → **raw-gated
+dual pass** (rules-fire set fixed on raw); silent non-application → declared-rule
+reconciliation statuses surfaced; corrected text mistaken for word-aligned
+evidence → words immutable, no cross-segment edits, split disabled after a material
+change (defined by a non-empty trace); a `CORRECTOR_VERSION` bump rewriting history
+→ persisted `correction_trace`/`corrector_version`, legacy-NULL never recomputed;
+**unusable-by-audience** → the authoring issue (#5) or honest pack-author framing.
 
 ---
 
@@ -394,6 +492,70 @@ transcript content.
   `tests/fixtures/llm_qual/enhancement/*.json`, and the enhancement/domain-pack/
   models code (`src/voxint/clients/llm.py`, `pipeline/stages/enhance_match.py`,
   `domain_packs/base.py`, `db/models.py`, `adjudication/transcript.py`).
-- Panels: **codex** (zen `clink`, planner role) and **grok-4.5** (zen `chat`,
-  thinking=high), each given the same framing and the grounding files; their
-  divergences are §9.
+- **Design panel** (framing → recommendation): **codex** (zen `clink`, planner
+  role) and **grok-4.5** (zen `chat`, thinking=high); their divergences are §9.
+- **Review panel** (adversarial review of the frozen design + issue split):
+  **codex** (zen `clink`, codereviewer role), **kimi-k3**, and **deepseek-v4-pro**
+  (both zen `chat`), each given the landed report + grounding; their convergent
+  findings and the resulting changes are §12.
+
+---
+
+## 12. Second-panel review and the changes it forced (2026-08-18)
+
+After the design above was drafted and its follow-up issues filed, a **three-model
+adversarial panel** (codex-codereviewer, kimi-k3, deepseek-v4-pro) reviewed the
+*frozen design and the issue decomposition* for defects. Three independent models
+**converged** on the same set — strong signal these are real, not model noise.
+Every finding was applied to §4–§10 above; recorded here for the audit trail.
+
+- **F1 — Whole-word `\b` corrupts real text (codex, kimi, deepseek).** Bare `\b`
+  fires inside possessives/contractions (`it→IT` breaks `it's`), hyphenated
+  compounds, and — on decomposed text — *inside a grapheme* (`\be\b` splits `Zoë`'s
+  base letter from its combining mark, hitting the shipped `unicode` fixture).
+  **Applied:** §6 pins an explicit boundary predicate (apostrophe/hyphen/combining
+  mark are intra-word), match on original text, exact-literal `replace`; §7 adds
+  possessive/hyphen/NFD fixtures.
+- **F2 — "Guaranteed idempotence" was false (codex, kimi).** A non-cascading single
+  pass does not give idempotence across rule chains (`[a→b, b→c]`), yet §7 made it
+  a blocking gate. **Applied:** §6 makes idempotence conditional on a **load-time
+  validation rejecting any `replace` that contains any rule's `match`**; §7 asserts
+  idempotence only over validated sets + a load-rejection test.
+- **F3 — Trace had no coordinate space, no store, no owner (codex, kimi, deepseek)
+  — the weakest point.** A single `span` is ambiguous once replacements shift
+  offsets, and the string it describes was persisted nowhere. **Applied:** §6/§7
+  define `span` in the final `enhanced_text` coordinate space; a named
+  `correction_trace` JSONB + `corrector_version` column, atomic reset,
+  legacy-NULL rendering, **migration owned by #82**.
+- **F4 — v1 was unusable by the stated audience (kimi, deepseek).** #80 is
+  YAML-only and #83 excluded authoring, so a non-technical operator could not
+  create a correction. **Applied:** a new **authoring issue (#10 order-5)** mirroring
+  the custom-vocabulary-in-wizard precedent; honest pack-author UX copy until then.
+- **F5 — Per-segment matching silently drops cross-segment / surface-variant terms
+  (kimi, deepseek).** `Zoning Board` split across a pause never fires; `C D B G`
+  fires on one surface only. **Applied:** §6 adds **declared-rule reconciliation
+  statuses** surfaced in #83, and steers such terms to pack `vocabulary` (ASR bias)
+  as the primary mechanism.
+- **F6 — LLM→rules can bless a hallucination + breaks trace provenance (kimi,
+  deepseek).** Rules on LLM output let the model invent a matchable surface absent
+  from raw. **Applied:** §8 replaces the single pass with a **raw-gated dual pass**;
+  §9-D2 marked superseded; §7 adds the amplification fixture. Final mechanism
+  (dual pass vs protected-substring) is #82's call, both recorded.
+- **F7 — Byte-identical reuse is sound but near-vacuous, harness boundary
+  unspecified (kimi, deepseek).** **Applied:** §7 pins corrector-only decoded-string
+  comparison + an NFC assertion + a separate `enhance_match` identity test + a
+  regex-metachar (`C.D.B.G.`) literal fixture.
+- **F8 — Issue ownership cycle / wrong order (codex, kimi).** The engine (#81) was
+  filed as "foundation" while importing semantics from #80. **Applied:** §10
+  reordered to **#80 (schema+semantics) → #81 (engine) → #82 → #83 → authoring**,
+  with pack-parsing as a one-way adapter.
+- **Tri-state runtime gate — panel split, resolved to *drop it* (deepseek drop;
+  kimi break-out).** The corrector is free/offline/deterministic and already gated
+  by pack selection; per-rule control belongs in authoring. **Applied:** §8 removes
+  the tri-state gate from #82 (anti-bloat).
+
+**Verdict of the review panel:** the doctrine (literals-only, frozen pack,
+immutable raw/words, byte-preserving default, stricter gate, inside `enhance_match`)
+is **sound**; the defects were in *composition provenance, matching precision, and
+the issue decomposition*, all now corrected. The single change of substance is the
+composition mechanism (F6).

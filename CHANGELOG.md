@@ -8,14 +8,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ### Added
 - **Design recommendation: deterministic, non-LLM transcript correction (#79,
   epic #78)**: a research-spike report
-  (`docs/reports/nonllm-transcript-correction-design-2026-08-18.md`, reviewed by
-  two external panels) recommending a deliberately narrow v1 — a pure-`stdlib`,
-  versioned, per-segment **literal-substitution** engine driven only by a new
-  frozen domain-pack `corrections:` field, refusing general homophone/casing/
-  number/disfluency rules and executable regex, composing **after** the optional
-  LLM path, and gated by a stricter-than-LLM faithfulness corpus. Sequences the
-  follow-up implementation issues (refined #80 + three new). **No runtime change**
-  — analysis only.
+  (`docs/reports/nonllm-transcript-correction-design-2026-08-18.md`) recommending a
+  deliberately narrow v1 — a pure-`stdlib`, versioned, per-segment
+  **literal-substitution** engine driven only by a new frozen domain-pack
+  `corrections:` field, refusing general homophone/casing/number/disfluency rules
+  and executable regex, and gated by a stricter-than-LLM faithfulness corpus. Built
+  by one AI panel and then **adversarially reviewed by a second 3-model panel**
+  whose convergent findings hardened the design (§12): a **raw-gated dual-pass**
+  composition with the optional LLM path (so a hallucinated term can't be entrenched
+  as operator-authored), an explicit whole-word boundary predicate, a
+  replacement-contains-match idempotence validation, a persisted
+  `correction_trace`/`corrector_version`, and a required console
+  authoring surface. Sequences the follow-up issues (#80 schema → #81 engine → #82
+  composition+migration → #83 provenance → #84 authoring). **No runtime change** —
+  analysis only.
 - **Local-LLM qualification harness + frozen corpus (#66)**: a maintainer tool
   (`tools/qualify_local_llm.py`) and a hand-annotated, clean-room fixture corpus
   (`tests/fixtures/llm_qual/`, 19 fixtures + a frozen six-gate manifest) that
