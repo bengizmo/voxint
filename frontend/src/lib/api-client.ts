@@ -2,6 +2,11 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     public readonly detail: string,
+    // Conflict discriminator from the X-Voxint-Conflict header (issue #59): "claim"
+    // marks a 409 as a lost/taken claim, distinct from a segment-STATE 409 the same
+    // route can raise. null when the header is absent. Lets a caller stop the review
+    // loop on a genuine claim loss without misreading a state conflict as one.
+    public readonly conflictKind: string | null = null,
   ) {
     super(`${status}: ${detail}`);
     this.name = "ApiError";
@@ -29,7 +34,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
     } catch {
       /* non-JSON error body; keep statusText */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, res.headers.get("X-Voxint-Conflict"));
   }
   return res;
 }

@@ -709,6 +709,35 @@ class AdjudicationDecision(Base):
             "pipeline_run_id",
             "transcript_segment_id",
         ),
+        # Word-range scope (issue #59 slice 3): start/end are set together or
+        # both NULL — a half-open [start, end) range over the parent's words, or
+        # no range at all.
+        CheckConstraint(
+            "(start_word_index IS NULL) = (end_word_index IS NULL)",
+            name="adjudication_decisions_word_range_pair_check",
+        ),
+        # A present range must scope a segment (never a bare label) and be a
+        # well-formed non-empty half-open interval. The contrapositive also gives
+        # the plan's "label-scope rows keep the range NULL": no segment ⇒ no range.
+        CheckConstraint(
+            "start_word_index IS NULL OR ("
+            "transcript_segment_id IS NOT NULL"
+            " AND start_word_index >= 0"
+            " AND end_word_index > start_word_index)",
+            name="adjudication_decisions_word_range_bounds_check",
+        ),
+        # Batch-load the per-run word-range overlay in one indexed pass, newest
+        # first per (segment, range). Mirrors ix_..._run_segment for the finer
+        # sub-segment grain (issue #59 slice 3).
+        Index(
+            "ix_adjudication_decisions_word_range",
+            "pipeline_run_id",
+            "transcript_segment_id",
+            "start_word_index",
+            "end_word_index",
+            "created_at",
+            "id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -723,6 +752,14 @@ class AdjudicationDecision(Base):
     transcript_segment_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("transcript_segments.id"), nullable=True
     )
+    # Word-range scope (issue #59 slice 3): a half-open ``[start, end)`` interval
+    # into the parent segment's immutable ``words`` list, addressing one derived
+    # split child (or any word-range) for reassignment. Both NULL = whole-segment
+    # scope (the 0018 grain); both set = this sub-segment range. The range keys on
+    # the immutable parent id + word offsets, never on a disposable boundary row,
+    # so it survives re-split/un-split. A CHECK pairs them and bounds the interval.
+    start_word_index: Mapped[int | None] = mapped_column(nullable=True)
+    end_word_index: Mapped[int | None] = mapped_column(nullable=True)
     operator: Mapped[str] = mapped_column(Text)
     idempotency_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

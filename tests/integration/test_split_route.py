@@ -115,6 +115,9 @@ def test_split_expands_parent_into_children(
     assert {s["segmentId"] for s in segments} == {str(seg_id)}
     # ...but exactly one child is the review-queue entry (parent-scoped counting).
     assert [s["reviewTarget"] for s in segments] == [True, False]
+    # Each child carries its half-open word range (issue #59 slice 3): the exact
+    # coordinates the per-child reassign picker posts to /relabel.
+    assert [(s["wordStart"], s["wordEnd"]) for s in segments] == [(0, 2), (2, 3)]
     assert body["progress"] == {"verified": 0, "total": 1}
 
 

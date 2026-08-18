@@ -55,6 +55,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and its command/port parity with compose and the metal launcher. Technical
   preview, **not** the signed non-technical release (#73); on the metal tier
   long recordings take real compute time. See `docs/native-macos-preview.md`.
+- **Native launcher `restore --fresh` disaster-recovery** (#69): a destructive
+  `scripts/native/voxint-native.sh restore --fresh <dump>` that, with the app
+  services down, drops the database, proves it is genuinely empty (OID flip +
+  zero public tables), and rebuilds it from a dump as the sole schema source —
+  the vendored pgvector extension is preinstalled by the superuser and excluded
+  from the restore so the unprivileged role never recreates a non-trusted
+  extension. It **fails closed before touching your data**: it refuses while
+  api/worker/beat are supervised, verifies the archive is a voxint dump
+  (`alembic_version` in its TOC) and that the postmaster on the port is the
+  managed cluster, all **before** the drop; the restore runs in a single
+  transaction (no `--clean`). Recovery scope is DB-only (not media/weights).
 - **Word-boundary segment splits** (#59, slice 2): an operator can
   split a mis-split diarization segment at a word boundary. A split is stored as
   an append-only *cut* ("split before word i") in a new `segment_split_boundaries`
@@ -82,6 +93,34 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   rather than offering a control that would fail. Splitting needs the browser
   island; with JavaScript off the transcript still lists any already-derived
   child lines.
+- **Sub-segment speaker reassignment** (#59, slice 3, backend): a derived split
+  child (or any immutable word-range of a segment) can be reassigned to a
+  different speaker, so the two halves of a mis-split segment can carry the two
+  real speakers instead of sharing the parent's one. The scope is an append-only
+  ledger ruling keyed on the *immutable parent segment id + a half-open
+  `[start, end)` word-range* (nullable `start_word_index`/`end_word_index` on
+  `adjudication_decisions`, migration 0025) — never a foreign key to a disposable
+  split-boundary row — so a reassignment survives re-split/un-split. Read-time
+  precedence is most-specific-wins: a word-range override beats a whole-segment
+  override beats the label, and an `inherit` on the exact range removes it live
+  (append-only, never a frozen copy). Applied through the one shared read path
+  (`attributed_transcript`), so the transcript export reflects a reassigned child
+  too. The `POST /review/{run}/segments/{seg}/relabel` route gains an optional
+  `start_word_index`/`end_word_index`; a range is accepted only when it matches a
+  *current* split child (never an arbitrary span the read path would ignore) and
+  is validated against the parent's word count. Same claim-lock + nonce
+  idempotency as every other review mutation. The **review-stepper island now
+  renders a per-child speaker picker**: each derived child line carries its
+  `[wordStart, wordEnd)` and a `<select>` of the active roster; choosing a
+  speaker reassigns just that child, choosing "inherit" resets it to follow the
+  label. The picker POSTs the range to `/relabel` (which gains a JSON-Accept
+  response path returning the whole-run reconcile, leaving the htmx labels
+  workbench's HTML fragment byte-identical) and the console adopts server truth
+  wholesale. Splitting an already-split segment into more than two parts is now
+  refused server-side (it would re-derive the children and orphan a reassignment
+  keyed on the old coordinates); the existing cut still replays idempotently.
+  (Un-split/re-split of an already-reassigned range, and ranged *correction* of a
+  split child, remain later work.)
 - **Per-word timings captured from ASR** (#59, foundation): the whisper service
   already computes word-level timestamps (`word_timestamps=True`) but voxint
   dropped them at the client seam; they now flow through and are stored as a

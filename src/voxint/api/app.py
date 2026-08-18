@@ -38,7 +38,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from voxint import __version__
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
-from voxint.adjudication.ledger import ConflictingReplayError, record_decision
+from voxint.adjudication.ledger import (
+    ConflictingReplayError,
+    WordRangeError,
+    record_decision,
+)
 from voxint.adjudication.merge import (
     MergeConflictError,
     MergeError,
@@ -67,6 +71,7 @@ from voxint.adjudication.slots import (
 )
 from voxint.adjudication.splits import (
     UnsplittableError,
+    derive_children,
     record_split,
     splittable_words,
 )
@@ -1043,6 +1048,23 @@ def _wants_html(request: Request) -> bool:
     return "text/html" in accept and "application/json" not in accept
 
 
+# Response header marking a 409 as a lost/again-taken claim (issue #59), so the
+# island can distinguish it from a segment-STATE 409 the same route raises (a
+# non-child range, an already-split parent). A claim loss must stop the review
+# loop and prompt a re-claim; a state conflict shows an inline reason and keeps
+# the claim. The value is opaque; only presence + "claim" matters to the client.
+_CLAIM_CONFLICT_HEADERS = {"X-Voxint-Conflict": "claim"}
+
+
+def _wants_island_json(request: Request) -> bool:
+    """True only when the caller explicitly asks for JSON (the island's ``apiFetch``
+    sets ``Accept: application/json``). Unlike ``not _wants_html``, this is a
+    POSITIVE signal: the htmx labels workbench and the default ``*/*`` test client
+    stay on the server-rendered path, so a route that also serves the island keeps
+    its HTML-fragment contract byte-identical for every non-island caller."""
+    return "application/json" in request.headers.get("accept", "")
+
+
 # Capability reason codes meaning GET /media would not serve bytes at all (as
 # opposed to a present-but-untrusted timeline). Mirrors MEDIA_UNAVAILABLE_CODES
 # in frontend/src/components/PlaybackControls.tsx.
@@ -1153,6 +1175,17 @@ def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, An
             str(ln.source_segment_id) if ln.source_segment_id is not None else None
         ),
         "reviewTarget": ln.review_target,
+        # Word-range coordinates of a split child (issue #59 slice 3): what the
+        # per-child reassign picker posts to /relabel to scope a ruling to this
+        # child. Both None on unsplit and synthetic lines.
+        "wordStart": ln.word_start,
+        "wordEnd": ln.word_end,
+        # The child's OWN range-override speaker id (None ⇒ inheriting): the picker
+        # binds its <select> to this so it shows a child-scoped assignment only when
+        # one exists, never an inherited speaker mislabeled as a child ruling.
+        "wordRangeSpeakerId": (
+            str(ln.word_range_speaker_id) if ln.word_range_speaker_id is not None else None
+        ),
     }
 
 
@@ -1165,6 +1198,21 @@ def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, 
     return [_island_segment(ln, palette) for ln in lines]
 
 
+def _run_reconcile_response(session: Session, run_id: uuid.UUID) -> JSONResponse:
+    """The whole-run island reconcile — every segment (split parents expanded) plus
+    the run's N-of-M counter — the shape a STRUCTURAL write returns so the console
+    adopts server truth wholesale rather than patching one line. Shared by /split
+    and the island /relabel path (a reassignment changes a child's speaker string,
+    which a per-segment patch cannot express, so both re-render the whole run)."""
+    verified_n, total = verified_progress(session, run_id)
+    return JSONResponse(
+        {
+            "segments": _run_island_segments(session, run_id),
+            "progress": {"verified": verified_n, "total": total},
+        }
+    )
+
+
 def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
     """Whether a segment carries at least one operator split boundary (issue #59)."""
     return (
@@ -1175,6 +1223,31 @@ def _segment_is_split(session: Session, segment_id: uuid.UUID) -> bool:
         ).first()
         is not None
     )
+
+
+def _segment_child_ranges(
+    session: Session, segment: TranscriptSegment
+) -> set[tuple[int, int]]:
+    """The half-open ``(word_start, word_end)`` ranges of a segment's current
+    derived split children (issue #59 slice 3).
+
+    The reassign route validates a submitted range against this set so a ruling
+    can only target a child that actually exists right now — an arbitrary range
+    would write a ledger row the read path never applies (it matches children by
+    exact coordinates). Empty for an unsplit or unsplittable segment."""
+    cuts = list(
+        session.execute(
+            select(SegmentSplitBoundary.word_index).where(
+                SegmentSplitBoundary.parent_segment_id == segment.id
+            )
+        ).scalars()
+    )
+    if not cuts:
+        return set()
+    children = derive_children(segment, cuts)
+    if children is None or len(children) < 2:
+        return set()
+    return {(child.word_start, child.word_end) for child in children}
 
 
 def _segment_is_corrected(session: Session, segment_id: uuid.UUID) -> bool:
@@ -2600,6 +2673,16 @@ def _register_routes(app: FastAPI) -> None:
         # Extras the review loop needs beyond the shared display props.
         island_props["reviewToken"] = str(token) if token is not None else None
         island_props["initialProgress"] = {"verified": verified_n, "total": total}
+        # The assignable roster for the per-child reassign picker (issue #59 slice
+        # 3): ACTIVE identities only — merged/archived speakers are curated out and
+        # must not attract new rulings, mirroring the /relabel route's own
+        # roster_is_active guard so the picker never offers a speaker the write
+        # would reject. The read-only transcript-player never gets this (it cannot
+        # relabel); only the claim-gated review-stepper needs a picker.
+        island_props["speakers"] = [
+            {"id": str(sp.id), "displayName": sp.display_name}
+            for sp in active_speakers(session)
+        ]
         return templates.TemplateResponse(
             request,
             "review_transcript.html",
@@ -3188,8 +3271,11 @@ def _register_routes(app: FastAPI) -> None:
         nonce: Annotated[str, Form(min_length=8, max_length=64)],
         action: Annotated[str, Form()],
         speaker_id: Annotated[uuid.UUID | None, Form()] = None,
+        start_word_index: Annotated[int | None, Form()] = None,
+        end_word_index: Annotated[int | None, Form()] = None,
     ) -> Response:
-        """Two-scope relabel, THIS-SEGMENT scope (issue #54 Phase B).
+        """Two-scope relabel, THIS-SEGMENT scope (issue #54 Phase B), optionally
+        narrowed to a word-range (issue #59 slice 3).
 
         Overrides one transcript segment's attribution without touching the rest
         of its label. ``action`` is ``assign`` (a speaker just for this segment)
@@ -3198,11 +3284,23 @@ def _register_routes(app: FastAPI) -> None:
         server-side, never trusted from the client. Claim-gated and idempotent
         like every workbench ruling; a later whole-label ruling leaves the
         override intact, and inherit tracks the label live rather than freezing.
+
+        With ``start_word_index``/``end_word_index`` the ruling scopes just that
+        half-open ``[start, end)`` word-range — reassigning ONE derived split
+        child. The range must match a child that currently exists (validated
+        against the segment's live cut set), so a ruling can only target a real
+        partition, never an arbitrary span the read path would ignore. Both
+        indices are set together or both omitted (whole-segment scope).
         """
         try:
             run = verify_claim(session, run_id, token, for_update=True)
         except ClaimMismatchError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # Marked so the island can tell a lost claim from the segment-STATE 409
+            # this route also raises (a non-child range): the picker treats a plain
+            # 409 as a state conflict, but a claim loss must stop the loop.
+            raise HTTPException(
+                status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+            ) from exc
         try:
             decision = Decision(action)
         except ValueError as exc:
@@ -3215,6 +3313,11 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=422, detail="assign requires speaker_id; inherit forbids it"
             )
+        if (start_word_index is None) != (end_word_index is None):
+            raise HTTPException(
+                status_code=422,
+                detail="start_word_index and end_word_index must be set together",
+            )
         segment = session.get(TranscriptSegment, segment_id)
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -3222,6 +3325,19 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(
                 status_code=400, detail="segment has no diarization label to override"
             )
+        if start_word_index is not None and end_word_index is not None:
+            # A ranged ruling may only target a child that exists right now, so it
+            # can never write a row the read path silently drops.
+            child_ranges = _segment_child_ranges(session, segment)
+            if (start_word_index, end_word_index) not in child_ranges:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"word-range [{start_word_index}, {end_word_index}) is not a "
+                        "current split child of this segment; split it at that "
+                        "boundary first"
+                    ),
+                )
         if speaker_id is not None:
             speaker = session.execute(
                 select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
@@ -3246,9 +3362,19 @@ def _register_routes(app: FastAPI) -> None:
                 idempotency_key=nonce,
                 speaker_id=speaker_id,
                 transcript_segment_id=segment_id,
+                start_word_index=start_word_index,
+                end_word_index=end_word_index,
             )
         except ConflictingReplayError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except WordRangeError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # The island (JSON Accept) reassigns a split child and reconciles against a
+        # whole-run render — a child's speaker string moved, which the per-segment
+        # review shape can't carry. The htmx labels workbench (and any non-island
+        # caller) keeps the byte-identical server-rendered fragment.
+        if _wants_island_json(request):
+            return _run_reconcile_response(session, run_id)
         return _labels_response(request, session, run, token)
 
     def _segment_review_json(
@@ -3352,7 +3478,12 @@ def _register_routes(app: FastAPI) -> None:
         try:
             verify_claim(session, run_id, token, for_update=True)
         except ClaimMismatchError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+            # Marked so the island distinguishes a lost claim from the segment-STATE
+            # 409 this route also raises (already-split / corrected): the split
+            # handler treats a plain 409 as a state conflict, a claim loss must stop.
+            raise HTTPException(
+                status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+            ) from exc
         segment = session.get(TranscriptSegment, segment_id)
         if segment is None or segment.pipeline_run_id != run_id:
             raise HTTPException(status_code=404, detail="no such segment in this run")
@@ -3362,19 +3493,37 @@ def _register_routes(app: FastAPI) -> None:
                 status_code=409,
                 detail="cannot split a corrected segment; clear the correction first",
             )
+        # This release supports a SINGLE cut per parent (two children). A second,
+        # DISTINCT cut would re-derive the children and orphan any word-range
+        # reassignment keyed on the old child coordinates — a written ruling the
+        # read path then silently ignores (issue #59 slice 3). The UI already
+        # disables further splits, but a second tab sharing the claim could still
+        # POST one; refuse it server-side. A replay of the EXISTING cut still falls
+        # through to record_split's idempotent no-op (same word_index), so /split
+        # stays idempotent.
+        existing_cuts = {
+            wi
+            for (wi,) in session.execute(
+                select(SegmentSplitBoundary.word_index).where(
+                    SegmentSplitBoundary.parent_segment_id == segment_id
+                )
+            )
+        }
+        if existing_cuts and word_index not in existing_cuts:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "segment is already split; splitting into more than two parts is "
+                    "not supported in this release — re-transcribe to clear the split"
+                ),
+            )
         try:
             record_split(
                 session, parent=segment, word_index=word_index, operator=operator
             )
         except UnsplittableError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        verified_n, total = verified_progress(session, run_id)
-        return JSONResponse(
-            {
-                "segments": _run_island_segments(session, run_id),
-                "progress": {"verified": verified_n, "total": total},
-            }
-        )
+        return _run_reconcile_response(session, run_id)
 
     @protected.get("/review/{run_id}/segments/{segment_id}/words")
     def segment_words(

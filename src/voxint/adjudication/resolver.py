@@ -20,7 +20,7 @@ import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TypeAlias
+from typing import TypeAlias, TypeVar
 
 from sqlalchemy import (
     ColumnElement,
@@ -53,6 +53,11 @@ from voxint.speakers.roster import canonicalize, merge_map
 # A run-id the correlated SQL predicates accept: either a literal UUID (single
 # run) or an outer column such as ``PipelineRun.id`` (correlated per row).
 RunIdRef: TypeAlias = "ColumnExpressionArgument[uuid.UUID] | uuid.UUID"
+
+# The scope key of an override reduction — a whole-segment id, or a word-range
+# ``(segment_id, start, end)`` tuple. ``_active_overrides`` is generic over it so
+# both grains share one reduction (issue #59 slice 3).
+_K = TypeVar("_K")
 
 
 def _label_unresolved(
@@ -325,12 +330,17 @@ def segment_states(
     an ``inherit`` newest means no active override (the segment follows its
     label), so it is omitted. Speaker ids canonicalize through the same merge map
     the label resolver uses, so the two scopes can never disagree on identity.
+
+    Whole-segment scope only: a row with a word-range (issue #59 slice 3) is a
+    finer sub-segment override handled by :func:`word_range_states`, so it is
+    excluded here (``start_word_index IS NULL``) — the two grains never mix.
     """
     rows = session.execute(
         select(AdjudicationDecision)
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
             AdjudicationDecision.transcript_segment_id.is_not(None),
+            AdjudicationDecision.start_word_index.is_(None),
         )
         .order_by(
             AdjudicationDecision.transcript_segment_id,
@@ -342,11 +352,73 @@ def segment_states(
     for row in rows:
         assert row.transcript_segment_id is not None
         newest.setdefault(row.transcript_segment_id, row)
+    return _active_overrides(session, newest)
 
+
+# A word-range scope key: the immutable parent segment id plus a half-open
+# ``[start, end)`` word interval (issue #59 slice 3). Keyed on the parent id and
+# offsets — never a disposable split-boundary row — so it survives re-split.
+WordRangeKey: TypeAlias = "tuple[uuid.UUID, int, int]"
+
+
+def word_range_states(
+    session: Session, run_id: uuid.UUID
+) -> dict[WordRangeKey, SegmentOverride]:
+    """Active per-word-range overrides for a run, keyed by ``(segment_id, start,
+    end)`` (issue #59 slice 3 — sub-segment reassignment).
+
+    The finer-grain sibling of :func:`segment_states`: one indexed batch load (no
+    N+1), newest row wins per exact range, a newest ``inherit`` removes the
+    override (the range follows its whole-segment/label resolution again). Only
+    rows carrying a range (``start_word_index IS NOT NULL``) are considered, so
+    whole-segment overrides never leak in. Speaker ids canonicalize through the
+    same merge map, so no scope can disagree on identity.
+    """
+    rows = session.execute(
+        select(AdjudicationDecision)
+        .where(
+            AdjudicationDecision.pipeline_run_id == run_id,
+            # A ranged row always carries a segment (the DB CHECK enforces it);
+            # asserting it here too — as segment_states does — keeps the key
+            # non-null and defends the reduction against any future CHECK relaxation.
+            AdjudicationDecision.transcript_segment_id.is_not(None),
+            AdjudicationDecision.start_word_index.is_not(None),
+        )
+        .order_by(
+            AdjudicationDecision.transcript_segment_id,
+            AdjudicationDecision.start_word_index,
+            AdjudicationDecision.end_word_index,
+            AdjudicationDecision.created_at.desc(),
+            AdjudicationDecision.id.desc(),
+        )
+    ).scalars()
+    newest: dict[WordRangeKey, AdjudicationDecision] = {}
+    for row in rows:
+        assert (
+            row.transcript_segment_id is not None
+            and row.start_word_index is not None
+            and row.end_word_index is not None
+        )
+        key = (row.transcript_segment_id, row.start_word_index, row.end_word_index)
+        newest.setdefault(key, row)
+    return _active_overrides(session, newest)
+
+
+def _active_overrides(
+    session: Session, newest: dict[_K, AdjudicationDecision]
+) -> dict[_K, SegmentOverride]:
+    """Reduce newest-per-scope rows to active :class:`SegmentOverride`\\ s.
+
+    Shared by :func:`segment_states` and :func:`word_range_states`: keep only the
+    scopes whose newest row is an ``assign`` with a speaker (a newest ``inherit``
+    drops out — the scope follows its coarser resolution), canonicalize speaker
+    ids through merge tombstones, and batch-load display names in one query. The
+    key type is opaque (segment id, or a word-range tuple), so both grains reuse
+    this identical reduction and can never disagree on identity."""
     tombstones = merge_map(session)
-    active: dict[uuid.UUID, AdjudicationDecision] = {
-        seg_id: row
-        for seg_id, row in newest.items()
+    active: dict[_K, AdjudicationDecision] = {
+        key: row
+        for key, row in newest.items()
         if row.decision == Decision.ASSIGN.value and row.speaker_id is not None
     }
     speaker_ids = {
@@ -365,11 +437,11 @@ def segment_states(
         if speaker_ids
         else {}
     )
-    result: dict[uuid.UUID, SegmentOverride] = {}
-    for seg_id, row in active.items():
+    result: dict[_K, SegmentOverride] = {}
+    for key, row in active.items():
         assert row.speaker_id is not None  # active rows are assigns; narrows for mypy
         canonical = canonicalize(row.speaker_id, tombstones)
-        result[seg_id] = SegmentOverride(
+        result[key] = SegmentOverride(
             speaker_id=canonical,
             speaker_name=names.get(canonical),
             decision=row,

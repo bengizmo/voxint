@@ -47,6 +47,19 @@ export interface Segment {
   // entry), so the loop counts one target per parent, never per child.
   sourceSegmentId: string | null;
   reviewTarget: boolean;
+  // Word-range coordinates of a split child (issue #59 slice 3): the exact
+  // half-open [wordStart, wordEnd) this line covers within its parent. Set only
+  // on a split parent's derived children — the coordinates the per-child reassign
+  // picker posts to /relabel to scope a ruling to this child alone. Both null on
+  // unsplit lines and synthetic/blank lines (no partitionable range).
+  wordStart: number | null;
+  wordEnd: number | null;
+  // The child's OWN active word-range override speaker id (issue #59 slice 3), or
+  // null when the child merely inherits the segment's whole-segment/label speaker.
+  // The reassign picker binds its <select> to this, so the control shows a
+  // child-scoped assignment only when one truly exists (never an inherited speaker
+  // mislabeled as a child ruling), and "inherit" is selected exactly when null.
+  wordRangeSpeakerId: string | null;
 }
 
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The
@@ -97,6 +110,17 @@ export interface TranscriptPlayerProps {
   // driver (ReviewStepper), which POSTs it — the player never touches the DB.
   splitFocus?: SplitFocus | null;
   onSplitAt?: (sourceSegmentId: string, wordIndex: number) => void;
+  // Per-child reassign (issue #59 slice 3). Present only on the claim-gated review
+  // surface. When onReassign is set, a split parent's derived child lines (those
+  // carrying wordStart/wordEnd — the ONLY lines the backend ranges) render a
+  // speaker <select>: choosing a roster speaker assigns just that child's word
+  // range, choosing "inherit" resets it to follow the label. The player raises the
+  // choice; ReviewStepper POSTs /relabel — the player never touches the DB.
+  // reassignSpeakers is the ACTIVE roster; reassignBusy disables the picker while a
+  // write is in flight. Absent on the read-only surface (no picker rendered).
+  reassignSpeakers?: { id: string; displayName: string }[];
+  onReassign?: (seg: Segment, speakerId: string | null) => void;
+  reassignBusy?: boolean;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -156,6 +180,9 @@ export const TranscriptPlayer = forwardRef<
     cursorIndex,
     splitFocus,
     onSplitAt,
+    reassignSpeakers,
+    onReassign,
+    reassignBusy,
   },
   ref,
 ) {
@@ -402,7 +429,13 @@ export const TranscriptPlayer = forwardRef<
           if (active) classes.push("bg-sky-500/20", "px-1");
           return (
             <p
-              key={`${seg.start}-${i}`}
+              // Keyed by parent + word-range (falling back to start time) so a
+              // whole-run reconcile after a split/reassign re-associates each line
+              // with its own DOM node — a split parent's children share a start
+              // time, so a start-only key could otherwise remount the wrong <select>
+              // and drop its focus. Index keeps unsplit lines with equal starts
+              // distinct.
+              key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
               ref={active ? activeLineRef : undefined}
               data-seg-index={i}
               className={classes.join(" ")}
@@ -475,6 +508,41 @@ export const TranscriptPlayer = forwardRef<
               ) : (
                 seg.text
               )}
+              {onReassign != null &&
+                reassignSpeakers != null &&
+                seg.wordStart != null &&
+                seg.wordEnd != null && (
+                  <label
+                    className="tp-reassign ml-2 text-xs opacity-80"
+                    // Keep the whole control — label text included — off the line's
+                    // seek handler, not just the <select>.
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {" · "}speaker:{" "}
+                    <select
+                      // Bound to the child's OWN range-override id: "" (inherit) is
+                      // selected exactly when the child has no child-scoped ruling,
+                      // so an inherited speaker is never shown as a child assignment.
+                      // Server truth, so a failed write (no reconcile) re-imposes the
+                      // prior value on the next render rather than leaving the picked
+                      // option showing. WRITE is by id regardless.
+                      value={seg.wordRangeSpeakerId ?? ""}
+                      disabled={reassignBusy}
+                      aria-label={`Reassign speaker for “${seg.text}”`}
+                      onChange={(e) => {
+                        e.stopPropagation();
+                        onReassign(seg, e.target.value === "" ? null : e.target.value);
+                      }}
+                    >
+                      <option value="">↺ inherit (follow the segment)</option>
+                      {reassignSpeakers.map((sp) => (
+                        <option key={sp.id} value={sp.id}>
+                          {sp.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
             </p>
           );
         })}

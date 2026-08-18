@@ -198,12 +198,16 @@ It is built in lanes; **landed so far:**
   above never touches, and reads back the durable invariants (run + all six stages
   `completed`, non-empty ASR text, diarization turns embedded in `titanet-large-v1`
   at 192 dims, and zero operator-enrollment rows). Finally it checks `backup` +
-  **restart-survival** persistence (down → up → re-verify). Unlike every other lane
-  it runs against the launcher's **live** `voxint` database (the native install is
-  throwaway), so the verifier is **read-back / SELECT-only** — there is no
-  schema-drop path in the tool, and the generated `DB_PASSWORD`/`CSRF_SECRET` are
-  read from `state.env` internally, never passed on argv. macOS/Apple-Silicon only;
-  serial (issue #23).
+  **restart-survival** persistence (down → up → re-verify), and — in the opt-in
+  **`--with-restore`** rung (Part C) — an honest destructive-recovery gate:
+  `voxint-native.sh restore --fresh <dump>` drops the DB, proves it empty
+  (`EMPTY_DB PASS`), rebuilds it from a backup as the sole schema source, then
+  re-verifies the same run. Unlike every other lane it runs against the launcher's
+  **live** `voxint` database (the native install is throwaway), so the verifier is
+  **read-back / SELECT-only** — there is no schema-drop path in the tool (the
+  destructive DDL is launcher-owned, behind the explicit `--fresh` flag), and the
+  generated `DB_PASSWORD`/`CSRF_SECRET` are read from `state.env` internally, never
+  passed on argv. macOS/Apple-Silicon only; serial (issue #23).
 
 ### Gate semantics
 

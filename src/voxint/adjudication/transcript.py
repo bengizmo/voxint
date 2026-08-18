@@ -20,6 +20,7 @@ from voxint.adjudication.resolver import (
     label_states,
     review_states,
     segment_states,
+    word_range_states,
 )
 from voxint.adjudication.splits import boundaries_for_run, derive_children
 from voxint.db.models import TranscriptSegment
@@ -71,6 +72,20 @@ class TranscriptLine:
     # and its own review target. ``None``/``False`` on a synthetic export line.
     source_segment_id: uuid.UUID | None = None
     review_target: bool = False
+    # Word-range coordinates of a split child (issue #59 slice 3): the exact
+    # ``[word_start, word_end)`` this line covers within its parent. Set only on
+    # a split parent's derived children — the coordinate the per-child reassign
+    # picker posts to ``/relabel`` to scope a ruling to this child alone. ``None``
+    # on unsplit lines and synthetic/export lines (no partitionable range).
+    word_start: int | None = None
+    word_end: int | None = None
+    # The canonical speaker id of the child's OWN active word-range override, if
+    # any (issue #59 slice 3). ``None`` when the child has no range-scoped ruling
+    # and merely inherits the segment's whole-segment/label speaker. The reassign
+    # picker binds its ``<select>`` to this — so the control shows a child-scoped
+    # assignment ONLY when one truly exists, never an inherited speaker dressed up
+    # as a child ruling, and "inherit" is selected exactly when this is ``None``.
+    word_range_speaker_id: uuid.UUID | None = None
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:
@@ -140,6 +155,9 @@ def attributed_transcript(
     """
     states = {s.label: s for s in label_states(session, run_id)}
     overrides = segment_states(session, run_id)
+    # Per-word-range overrides (issue #59 slice 3): a reassigned split child wins
+    # over its parent's whole-segment/label speaker, for its exact range only.
+    range_overrides = word_range_states(session, run_id)
     review = review_states(session, run_id)
     # Every split boundary of the run, grouped by parent id, in one query — so the
     # child expansion below adds no per-segment round-trip (issue #59).
@@ -174,11 +192,22 @@ def attributed_transcript(
         children = derive_children(seg, cuts) if cuts else None
         if children is not None and len(children) > 1:
             for child_i, child in enumerate(children):
+                # Most-specific scope wins: a word-range override for this exact
+                # child range beats the parent's whole-segment/label speaker; with
+                # no such override the child inherits the parent's ``speaker``.
+                child_override = range_overrides.get(
+                    (seg.id, child.word_start, child.word_end)
+                )
+                child_speaker = (
+                    segment_speaker(child_override, seg)
+                    if child_override is not None
+                    else speaker
+                )
                 lines.append(
                     TranscriptLine(
                         start_seconds=child.start_seconds,
                         end_seconds=child.end_seconds,
-                        speaker=speaker,
+                        speaker=child_speaker,
                         text=child.text,
                         diarization_label=seg.diarization_label,
                         confidence=seg.confidence,
@@ -191,6 +220,18 @@ def attributed_transcript(
                         source_segment_id=seg.id,
                         # One queue entry per parent: only the first child counts.
                         review_target=child_i == 0,
+                        # The child's exact word range — what the per-child
+                        # reassign picker posts to scope a ruling to this child.
+                        word_start=child.word_start,
+                        word_end=child.word_end,
+                        # The child's OWN range override id (None ⇒ inheriting) —
+                        # what the picker's <select> binds to, so it reflects true
+                        # child-scope, not the resolved (possibly inherited) speaker.
+                        word_range_speaker_id=(
+                            child_override.speaker_id
+                            if child_override is not None
+                            else None
+                        ),
                     )
                 )
         else:

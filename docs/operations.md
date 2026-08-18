@@ -488,10 +488,33 @@ be split rather than guessing at boundaries. Splitting and inline editing are
 **mutually exclusive**: a segment that has been split cannot then be edited (and a
 segment with an operator correction cannot be split) — the box is disabled with a
 short note, because a split's text is word-derived and a free-form edit would have
-nowhere faithful to live. There is no un-split control in this release; a mis-split
-is cleared by re-transcribing the run. Like inline editing, splitting needs the
-browser island — with JavaScript off the transcript still lists any already-derived
-child lines, but no new split can be made.
+nowhere faithful to live. A segment can be cut once (into two children); splitting
+an already-split segment into more parts is refused in this release, and there is
+no un-split control — a mis-split is cleared by re-transcribing the run. Like
+inline editing, splitting needs the browser island — with JavaScript off the
+transcript still lists any already-derived child lines, but no new split can be
+made.
+
+**Reassign a split child to the right speaker.** A split's two halves start out
+sharing the parent segment's single resolved speaker, which is rarely what you
+want — the point of splitting a mis-merged segment is to give each half its own
+speaker. After a split, each derived child line shows a small **speaker:**
+dropdown listing your active roster; pick a speaker to reassign just that child,
+or pick **↺ inherit (follow the segment)** to clear that child's own speaker so
+it follows the segment again (a whole-segment reassignment if one exists,
+otherwise the diarization label). The choice is scoped to that child's exact
+word-range and stored as an append-only ruling on the immutable parent — it
+survives a later whole-label decision and, because it is append-only, an
+`inherit` reset tracks later rulings live rather than freezing a copy. A
+word-range reassignment takes precedence over a whole-segment reassignment,
+which takes precedence over the label. Only active roster identities are offered (a merged or archived
+speaker cannot attract a new ruling); a run with no roster yet shows only the
+inherit option. Like the rest of the review loop, the picker needs the browser
+island and a held claim — with JavaScript off the child lines still render with
+their resolved speakers, but there is no per-child picker. (Correcting a split
+child's *text* per-range, and un-splitting an already-reassigned segment, are not
+yet available; clear a mistaken reassignment with **↺ inherit**, or re-transcribe
+to clear the split entirely.)
 
 **Waveform strip (who spoke when).** The transcript pages (read-only and
 review) draw a compact waveform under the audio player, tinted per speaker with
