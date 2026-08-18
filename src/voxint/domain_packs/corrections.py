@@ -322,33 +322,46 @@ def compile_match(rule: CorrectionRule) -> re.Pattern[str]:
     return re.compile(re.escape(rule.match), flags)
 
 
+def first_match_from(
+    rule: CorrectionRule, text: str, start: int = 0
+) -> tuple[int, int] | None:
+    """First boundary-valid ``[begin, end)`` match span of ``rule`` at or after ``start``.
+
+    The single scan primitive that both :func:`iter_matches` (per-rule iteration)
+    and the #81 apply engine (cursor-relative rediscovery across rules) share, so
+    boundary/case/resume semantics live in exactly one place. A rejected
+    (boundary-invalid) candidate resumes the scan **one code point past its
+    start**, not at its end, so it can never hide a later *overlapping* candidate
+    that IS boundary-valid — e.g. ``"ha ha"`` against ``"aha ha ha"`` still finds
+    ``(4, 9)`` even though the candidate at offset 1 fails its left boundary.
+
+    Honors ``case_sensitive`` (via ``re.IGNORECASE`` — for matching only) and the
+    explicit whole-word predicate. ``re.escape`` makes ``match`` a literal, so
+    regex metacharacters match themselves. Matching is against the original text —
+    never a casefolded copy, which would shift the reported offsets.
+    """
+    pattern = compile_match(rule)
+    pos = start
+    while (m := pattern.search(text, pos)) is not None:
+        if _boundary_ok(text, m.start(), m.end(), rule.whole_word):
+            return (m.start(), m.end())
+        pos = m.start() + 1
+    return None
+
+
 def iter_matches(rule: CorrectionRule, text: str) -> Iterator[tuple[int, int]]:
     """Yield half-open ``[start, end)`` spans in ORIGINAL ``text`` where ``rule`` matches.
 
-    Honors ``case_sensitive`` (via ``re.IGNORECASE`` — for matching only) and the
-    explicit whole-word boundary predicate. ``re.escape`` makes ``match`` a
-    literal, so regex metacharacters (``.``, ``*``, …) match themselves. Matching
-    is against the original text — never a casefolded copy, which would shift the
-    reported offsets.
-
-    A rejected (boundary-invalid) candidate resumes the scan **one code point
-    past its start**, not at its end, so it can never consume a later
-    *overlapping* candidate that IS boundary-valid — e.g. ``"ha ha"`` against
-    ``"aha ha ha"`` must still find ``(4, 9)`` even though the candidate at
-    offset 1 fails its left boundary. Accepted matches are non-overlapping (the
-    scan resumes at the accepted end), mirroring the single left-to-right pass of
-    the #81 engine that reuses this function.
+    Accepted matches are non-overlapping — the scan resumes at each accepted end —
+    mirroring the single left-to-right pass of the #81 engine. Boundary/case/resume
+    semantics come from :func:`first_match_from`.
     """
-    pattern = compile_match(rule)
     pos = 0
-    while (m := pattern.search(text, pos)) is not None:
-        if _boundary_ok(text, m.start(), m.end(), rule.whole_word):
-            yield (m.start(), m.end())
-            pos = m.end()
-        else:
-            pos = m.start() + 1
+    while (span := first_match_from(rule, text, pos)) is not None:
+        yield span
+        pos = span[1]
 
 
 def find_first(rule: CorrectionRule, text: str) -> tuple[int, int] | None:
     """The first boundary-valid match span of ``rule`` in ``text``, or ``None``."""
-    return next(iter_matches(rule, text), None)
+    return first_match_from(rule, text, 0)

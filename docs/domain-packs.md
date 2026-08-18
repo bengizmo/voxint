@@ -195,11 +195,37 @@ Semantics (validated strictly at load, before a run is submitted — a malformed
   rules**, `match` ≤ **256** code points, `replace` ≤ **512** code points, and the
   corrections payload ≤ **128 KiB**.
 
-The rules are declared here in #80; the engine that **applies** them to transcript
-text (inside the enhancement stage) lands in issue #81, and the persisted
-applied-rule trace + version column follow in #82. The bundled `generic` pack
-declares none, so the default pipeline is byte-preserving until you author or
-select a pack with corrections.
+### How the rules apply (the corrector engine, #81)
+
+A pure, versioned engine (`CORRECTOR_VERSION`) turns a segment string plus a rule
+set into corrected text and a structured `{id, from, to, span}` trace. Its
+behavior is frozen:
+
+- **One left-to-right, non-cascading pass.** Matching runs against the original
+  segment text; a replacement's own characters are never re-examined. So a
+  `a → ba` rule and a `ba → Z` rule applied to `a` give `ba`, not `Z`.
+- **Overlapping matches resolve leftmost-longest**, with the manifest order (the
+  order rules appear in `corrections:`) as the final tie-break. When two rules
+  could fire at the same spot, the one starting earliest wins; ties go to the
+  longer match, then to the earlier-listed rule.
+- **The trace addresses the corrected text.** Each applied rule records the
+  original phrase it replaced and a `[start, end)` span **in the final corrected
+  string** (offsets shift as earlier replacements grow or shrink the text), so the
+  console (#83) can highlight exactly what changed. A pass where no rule fires
+  returns the text unchanged with an empty trace.
+- **Idempotence holds for any pack that loaded** — the load-time
+  replacement-contains-match check above is what guarantees `correct(correct(t)) ==
+  correct(t)` for the sets the engine actually receives. (One documented edge is
+  outside that guard: a second-pass match that spans a replacement *and* adjacent
+  original text, e.g. `ab → x` with `xc → y` on `abc`; the single pass is still
+  deterministic.)
+- **A transformation that would grow a segment past the enhancement size limit is
+  rejected whole** — the segment falls back to its pre-correction text rather than
+  applying a partial or truncated result.
+
+Applying the engine inside the enhancement stage and persisting the trace + version
+column follow in #82. The bundled `generic` pack declares no corrections, so the
+default pipeline stays byte-preserving until you author or select a pack with them.
 
 ## Vocabulary precedence: pack vs. custom vocabulary
 

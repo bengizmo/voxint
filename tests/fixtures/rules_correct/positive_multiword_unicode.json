@@ -1,0 +1,39 @@
+{
+  "description": "positive_multiword_unicode",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    },
+    {
+      "id": "nogyo",
+      "match": "農業",
+      "replace": "Agriculture",
+      "whole_word": false
+    }
+  ],
+  "input": "the zoom board briefed the 農業 team",
+  "expected_text": "the Zoning Board briefed the Agriculture team",
+  "expected_trace": [
+    {
+      "id": "zb",
+      "from": "zoom board",
+      "to": "Zoning Board",
+      "span": [
+        4,
+        16
+      ]
+    },
+    {
+      "id": "nogyo",
+      "from": "農業",
+      "to": "Agriculture",
+      "span": [
+        29,
+        40
+      ]
+    }
+  ]
+}

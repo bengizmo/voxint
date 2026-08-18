@@ -1,0 +1,24 @@
+{
+  "description": "regex_metachar_literal",
+  "rules": [
+    {
+      "id": "cdbg",
+      "match": "C.D.B.G.",
+      "replace": "CDBG",
+      "whole_word": false
+    }
+  ],
+  "input": "grant C.D.B.G. approved",
+  "expected_text": "grant CDBG approved",
+  "expected_trace": [
+    {
+      "id": "cdbg",
+      "from": "C.D.B.G.",
+      "to": "CDBG",
+      "span": [
+        6,
+        10
+      ]
+    }
+  ]
+}

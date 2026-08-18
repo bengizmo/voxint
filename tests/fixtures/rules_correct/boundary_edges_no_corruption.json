@@ -1,0 +1,39 @@
+{
+  "description": "boundary_edges_no_corruption",
+  "rules": [
+    {
+      "id": "it",
+      "match": "it",
+      "replace": "IT",
+      "whole_word": true
+    },
+    {
+      "id": "co",
+      "match": "co",
+      "replace": "CO",
+      "whole_word": true
+    }
+  ],
+  "input": "it's a co-op but it works when co leads",
+  "expected_text": "it's a co-op but IT works when CO leads",
+  "expected_trace": [
+    {
+      "id": "it",
+      "from": "it",
+      "to": "IT",
+      "span": [
+        17,
+        19
+      ]
+    },
+    {
+      "id": "co",
+      "from": "co",
+      "to": "CO",
+      "span": [
+        31,
+        33
+      ]
+    }
+  ]
+}

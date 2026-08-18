@@ -26,6 +26,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   vendored models (`services/llama-cpp/provenance.json`). The bundled image is
   built and verified but not yet published — the GitHub asset release + registry
   image land at the next release cut.
+- **Deterministic corrector engine + faithfulness gate (#81, epic #78)**: the pure,
+  `stdlib`-only, versioned engine (`CORRECTOR_VERSION`) that **applies** a pack's
+  `corrections:` rules to a segment — a single left-to-right, non-cascading pass with
+  **leftmost-longest** overlap resolution (manifest order as the final tie-break),
+  exact-literal replacement, and a `{id, from, to, span}` trace whose spans address the
+  final corrected string. Reuses #80's matcher unchanged, so boundary/case semantics
+  can't fork. A would-be segment growth past a caller-supplied limit is rejected whole
+  and atomically (never truncated). Proven by a two-part gate: the six frozen
+  enhancement fixtures replay byte-identically under an empty rule set (with an explicit
+  NFC assertion), and a new stricter-than-LLM corpus (`tests/fixtures/rules_correct/`)
+  pins positive substitutions, substring/collision safety, possessive/hyphen/NFD
+  boundary edges, regex-metachar literals, leftmost-longest determinism, idempotence
+  over a validated set, atomic growth rejection, and full trace faithfulness — **zero
+  unauthorized edits, one failure blocks release**. **No pipeline wiring or persistence
+  yet** (that is #82); the `generic` pack still declares no rules, so the default
+  pipeline stays byte-preserving.
 - **Domain-pack `corrections:` schema (#80, epic #78)**: a new frozen, per-run
   domain-pack field declaring deterministic **literal** substitution rules
   (`id`/`match`/`replace`/`case_sensitive`/`whole_word`) that fix recurring

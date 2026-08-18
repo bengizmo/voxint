@@ -1,0 +1,30 @@
+{
+  "description": "leftmost_longest_overlap",
+  "rules": [
+    {
+      "id": "short",
+      "match": "select",
+      "replace": "S",
+      "whole_word": false
+    },
+    {
+      "id": "long",
+      "match": "selectboard",
+      "replace": "Selectboard",
+      "whole_word": false
+    }
+  ],
+  "input": "the selectboard voted",
+  "expected_text": "the Selectboard voted",
+  "expected_trace": [
+    {
+      "id": "long",
+      "from": "selectboard",
+      "to": "Selectboard",
+      "span": [
+        4,
+        15
+      ]
+    }
+  ]
+}

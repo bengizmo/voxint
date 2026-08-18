@@ -1,0 +1,9 @@
+{
+  "description": "A [a->b, b->c] chain is non-idempotent and refused by #80 load validation, which is precisely what lets the engine assume idempotence over any set it receives.",
+  "rules": [
+    {"id": "1", "match": "alpha", "replace": "beta", "whole_word": false},
+    {"id": "2", "match": "beta", "replace": "gamma", "whole_word": false}
+  ],
+  "input": "alpha then beta",
+  "expect_load_error": true
+}
