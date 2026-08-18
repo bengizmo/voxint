@@ -63,6 +63,7 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     SegmentReviewState,
+    Speaker,
     TranscriptSegment,
 )
 
@@ -219,6 +220,15 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
     session.flush()
     run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
     session.add(run)
+    session.flush()
+
+    # A small ACTIVE roster so the browser lane can exercise the whole-segment
+    # speaker assignment (issue #51: the 1-9 / 0 keys and the "Assign speaker"
+    # <select>). These are curation identities only — no embeddings, so speaker
+    # MATCHING still never runs; the segments keep their detected S0/S1 labels
+    # and the roster is merely the assignable set the relabel endpoint accepts.
+    for name in ("Ada Roster", "Blair Roster"):
+        session.add(Speaker(display_name=name))
     session.flush()
 
     audio_rel = f"artifacts/{run.id}/normalized.wav"
