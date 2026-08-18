@@ -1,7 +1,7 @@
 # Plan — #63: MEDIA_ROOT folder browser + per-folder domain-pack picker
 
 **Created:** 2026-08-18 00:15 · **Issue:** #63 (settings/first-run arc child of #47) ·
-**Branch (to cut):** `feat/63-folder-browser` (forgejo-only until complete) ·
+**Branch (to cut):** `feat/63-folder-browser` (unmerged until complete) ·
 **Base:** `main` @ `df1f4d7` · **Migration:** none (reuses existing columns).
 
 ## Goal
