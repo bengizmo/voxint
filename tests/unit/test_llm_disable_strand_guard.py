@@ -10,6 +10,9 @@ exercising the pure decision without a database), plus an anti-drift lock that
 keeps `_LLM_DEPENDENCY_LABELS` in lockstep with the shared validator's messages.
 """
 
+import pytest
+
+from voxint.api import app as app_module
 from voxint.api.app import (
     _LLM_DEPENDENCY_LABELS,
     _join_operator_labels,
@@ -86,6 +89,26 @@ def test_message_carries_no_config_identifiers() -> None:
     assert message is not None
     for jargon in ("enrichment_", "llm_enabled", "voxint_web_research", "web_search_"):
         assert jargon not in message
+
+
+def test_defensive_fallback_on_unmapped_new_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The no-label branch is unreachable today (only the three mapped llm-dependency
+    # invariants can flip when llm_enabled goes False), but it must still refuse — and
+    # never crash on a KeyError — if a future invariant reads llm_enabled without a
+    # label. Force that by making the validator emit a novel message only when llm is
+    # off, so it lands in the delta unmapped.
+    novel = "some_future_invariant requires llm_enabled=true — no label yet"
+
+    def fake_validate(effective: EffectiveFlags) -> list[str]:
+        return [novel] if not effective.llm_enabled else []
+
+    monkeypatch.setattr(app_module, "validate_effective_flags", fake_validate)
+    message = _llm_disable_strand_error(None, _settings(llm_enabled=True))
+    assert message is not None
+    assert "Another feature still needs LLM enhancement" in message
+    assert novel not in message  # the raw invariant string never reaches the operator
 
 
 def test_join_operator_labels_shapes() -> None:

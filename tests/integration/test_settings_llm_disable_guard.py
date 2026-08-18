@@ -93,6 +93,57 @@ def test_disable_blocked_when_run_assets_on_via_row(
     assert row.enrichment_run_assets_enabled is True  # dependent NOT auto-disabled
 
 
+def test_refused_disable_writes_no_llm_field(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Prove "writes nothing" across EVERY LLM column, not just llm_enabled: seed
+    # distinct stored values, submit endpoint/model edits alongside the disable, and
+    # assert the whole row is untouched (the submitted edits must not leak either).
+    client, _ = make_client(session_factory, media_root)
+    _seed_flags(
+        session_factory,
+        enrichment_run_assets_enabled=True,
+        llm_base_url="http://seeded.example:9999/v1",
+        llm_model="seeded-model",
+        llm_api_key="sk-SEEDED-value",
+    )
+
+    form = _disable_form()
+    form["llm_base_url"] = "http://attacker.example/edited"
+    form["llm_model"] = "edited-model"
+    resp = client.post("/settings/llm", data=form)
+
+    assert resp.status_code == 200
+    row = _row(session_factory)
+    assert row is not None
+    assert row.llm_enabled is True
+    assert row.llm_base_url == "http://seeded.example:9999/v1"
+    assert row.llm_model == "seeded-model"
+    assert row.llm_api_key == "sk-SEEDED-value"
+
+
+def test_setup_disable_with_no_row_and_env_dependent_creates_no_row(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # /setup/llm before the wizard has ever saved: no app_settings row exists and the
+    # dependent is env-configured. A refused disable must not call get_or_create — the
+    # singleton row stays absent (the strongest form of "writes nothing").
+    client, _ = make_client(
+        session_factory,
+        media_root,
+        onboarded=False,
+        llm_enabled=True,
+        enrichment_run_assets_enabled=True,
+    )
+    assert _row(session_factory) is None  # precondition: no row yet
+
+    resp = client.post("/setup/llm", data=_disable_form(CSRF_SETUP))
+
+    assert resp.status_code == 200
+    assert "run assets" in resp.text
+    assert _row(session_factory) is None  # nothing created
+
+
 def test_disable_blocked_when_run_assets_on_via_env(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

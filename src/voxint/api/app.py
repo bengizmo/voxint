@@ -1519,9 +1519,13 @@ def _persist_llm_settings(
         )
     # Issue #77: refuse a deliberate disable that would strand a feature depending on
     # LLM, BEFORE any mutation — write nothing (no get_or_create), keep LLM on rather
-    # than auto-disabling the dependent (#62). The fail-closed *enable* path below is
-    # deliberately not guarded here: it already returns the primary key/budget error,
-    # and re-signalling a stranded dependent there would be confusing double-signal.
+    # than auto-disabling the dependent (#62). Scope is deliberate-disable-only: the
+    # fail-closed *enable* path below (requested-on but no usable key/budget) forces
+    # llm_enabled=False and so can ITSELF leave a dependent stranded, yet it is left
+    # unguarded on purpose — it already returns the operator's real problem (the
+    # key/budget error), keeps the valid key they typed (#46), and fixing that key
+    # re-enables LLM and un-strands the dependent. Guarding it would have to either
+    # drop that key or bury the key error under a strand message. Known residual (#77).
     if not enabled:
         strand_error = _llm_disable_strand_error(get_app_settings(session), settings)
         if strand_error is not None:
