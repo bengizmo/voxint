@@ -34,6 +34,13 @@ prompt_fragments:         # advisory LLM framing; see "Fragment keys" below
     Summaries should foreground decisions, votes, and who is accountable.
   name_attribution_context: >
     Speakers address each other by title ("Councilor", "Chair"); use those.
+corrections:                # deterministic literal fixes (see "Corrections" below)
+  - id: zoning-board
+    match: "zoom board"     # literal phrase (never a regex)
+    replace: "Zoning Board" # exact canonical form you author
+  - id: cdbg
+    match: "C D B G"
+    replace: "CDBG"
 ```
 
 Only `name` is required (non-empty, unique). Every other field defaults to
@@ -96,7 +103,7 @@ choices. A per-**submission** pack override remains a backend capability
 ## The frozen snapshot (why editing a manifest never rewrites history)
 
 At submit time the resolved pack's **content** — name, description, vocabulary,
-name seeds, and prompt fragments — is stamped **write-once** onto the run
+name seeds, prompt fragments, and corrections — is stamped **write-once** onto the run
 (`pipeline_runs.domain_pack`, a JSON column added in migration 0017). Every stage
 that consumes pack content reads *that snapshot*, not the live manifest on disk:
 
@@ -129,11 +136,70 @@ Each piece of pack content has **one** documented consumer. Prompt fragments are
 | `prompt_fragments.enhancement_context` | Transcript-enhancement system prompt | ASR/enhancement framing (tone, what to preserve vs. fix). The vocabulary line is appended here. |
 | `prompt_fragments.summary_context` | Run-asset LLM producer system prompt | Domain framing for the run summary, topics, and entity mentions. |
 | `prompt_fragments.name_attribution_context` | Transcript-enhancement name-hint pass | A second labeled advisory block on the call that harvests speaker-name hints (e.g. anchoring a recurring host or a titled speaker). |
+| `corrections` | Deterministic corrector (issue #81, inside `enhance_match`) | Literal substitutions applied to segment text and frozen per run. Empty in `generic` — a byte-preserving no-op. See "Corrections" below. |
 
 Fragments are **advisory**: each is fenced so a pack can *guide* the model but
 never override the strict reply schema, and an absent fragment leaves the prompt
 **byte-for-byte unchanged**. Unknown keys in `prompt_fragments` are simply
 carried in the snapshot and ignored (no consumer reads them).
+
+## Corrections (deterministic literal substitutions)
+
+A pack's `corrections:` list declares **deterministic, offline literal
+substitutions** that fix recurring transcription mis-hears for your domain —
+`zoom board → Zoning Board`, `C D B G → CDBG`. They run with **no model and no
+prompt**, so they are reproducible, fast, and cannot translate, drop filler, or
+obey an instruction hidden in the audio. They **complement** the optional LLM
+enhancement rather than replacing it, and — like the rest of the pack — they are
+frozen onto each run's snapshot, so editing the manifest never rewrites history.
+
+> Distinct from the review console's **manual corrections**: those are per-segment
+> edits an operator makes while reviewing one transcript (`corrected → enhanced →
+> raw`). A pack's `corrections:` are declared rules applied automatically to every
+> run under that pack.
+
+Each rule:
+
+```yaml
+corrections:
+  - id: zoning-board      # stable, operator-readable; unique within the pack
+    match: "zoom board"   # the literal phrase to find (NOT a regex)
+    replace: "Zoning Board"
+    case_sensitive: true  # default true
+    whole_word: true      # default true
+```
+
+Semantics (validated strictly at load, before a run is submitted — a malformed
+`corrections:` is a loud configuration error, never a silent skip):
+
+- **Literal only.** `match` is a literal phrase; regex metacharacters (`.`, `*`,
+  …) match themselves. There is no regex in v1.
+- **`id`, `match`, `replace` are required, non-empty, and NUL-free.** `replace`
+  is an **exact literal** — its casing is what you author and is **not** inherited
+  from the matched text (`selectboard → Selectboard` turns `SELECTBOARD` into
+  `Selectboard`, not `SELECTBOARD`).
+- **`case_sensitive` and `whole_word` default `true`** — the conservative posture
+  for domain terms. Whole-word uses an explicit boundary rule where **apostrophes,
+  hyphens, and combining marks count as part of a word**, so an `it → IT` rule
+  never fires inside `it's` and a rule never splits a combining-mark grapheme
+  (`Zoë`).
+- **No invisible characters.** `id`, `match`, and `replace` reject control,
+  format, and surrogate code points, so a stray zero-width space or a block-scalar
+  trailing newline is a loud error, never a silently dead rule.
+- **Ids are unique**, and the set must be **idempotent**: no rule's `replace` may
+  contain any rule's `match` in a way that would let that rule fire again
+  (evaluated with that rule's own case/whole-word flags). So `zoom board → Zoning
+  Board` is fine, but a chain like `a → b` together with `b → c` is rejected —
+  split the rules or change a replacement/flag.
+- **Bounds** (exceeding one rejects the pack, never truncates): at most **256
+  rules**, `match` ≤ **256** code points, `replace` ≤ **512** code points, and the
+  corrections payload ≤ **128 KiB**.
+
+The rules are declared here in #80; the engine that **applies** them to transcript
+text (inside the enhancement stage) lands in issue #81, and the persisted
+applied-rule trace + version column follow in #82. The bundled `generic` pack
+declares none, so the default pipeline is byte-preserving until you author or
+select a pack with corrections.
 
 ## Vocabulary precedence: pack vs. custom vocabulary
 

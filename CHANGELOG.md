@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Domain-pack `corrections:` schema (#80, epic #78)**: a new frozen, per-run
+  domain-pack field declaring deterministic **literal** substitution rules
+  (`id`/`match`/`replace`/`case_sensitive`/`whole_word`) that fix recurring
+  domain mis-hears offline, with no model or prompt. Strict load-time validation —
+  literal-only, unique ids, an explicit whole-word boundary predicate (apostrophes,
+  hyphens, and combining marks are intra-word, so `it→IT` never breaks `it's` and
+  a rule never splits `Zoë`), a boundary-aware replacement-contains-match
+  idempotence check, and hard bounds (256 rules / 256 match / 512 replace / 128 KiB)
+  — surfaces a malformed pack loudly before a run is submitted. Ships the pure
+  single-rule matcher the apply engine (#81) will reuse. **Schema + validation
+  only; no runtime text change** — the `generic` pack declares none, so the
+  default pipeline stays byte-preserving.
 - **Design recommendation: deterministic, non-LLM transcript correction (#79,
   epic #78)**: a research-spike report
   (`docs/reports/nonllm-transcript-correction-design-2026-08-18.md`) recommending a
