@@ -815,12 +815,78 @@ bootstrap_service() {
 
 managed_cluster() { [ -f "$NATIVE_PGDATA/PG_VERSION" ]; }
 
+# The on-disk PG major of the managed cluster, from initdb's PG_VERSION file
+# (a bare integer like "17" on PostgreSQL 10+). Trims whitespace; a missing,
+# empty, or non-numeric file returns non-zero with NO stdout, so a damaged
+# cluster is never mistaken for a version. (Pre-10 "9.6"-style files contain a
+# dot and are intentionally rejected: this tier only manages 17+.)
+cluster_pg_major() {
+  local raw
+  [ -f "$NATIVE_PGDATA/PG_VERSION" ] || return 1
+  raw=$(cat "$NATIVE_PGDATA/PG_VERSION" 2>/dev/null) || return 1
+  # Trim only leading/trailing whitespace (command substitution already dropped
+  # trailing newlines). INTERNAL whitespace or extra lines survive the trim and
+  # then fail the numeric guard below -- a corrupted "1 7" / two-line PG_VERSION
+  # is rejected fail-closed, never silently read as "17".
+  raw=${raw#"${raw%%[![:space:]]*}"}
+  raw=${raw%"${raw##*[![:space:]]}"}
+  case $raw in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$raw"
+}
+
+# The PG major a bindir's server binary reports, e.g. "17" from
+# "postgres (PostgreSQL) 17.5" (and "18" from a "18beta1"/"18rc1" build). Parses
+# the version token that FOLLOWS the "(PostgreSQL) " marker, because packaged
+# builds append a vendor suffix -- Homebrew prints
+# "postgres (PostgreSQL) 17.11 (Homebrew)", whose LAST token is "(Homebrew)".
+# A missing/non-executable binary, output without the marker, or a non-numeric
+# major returns non-zero with NO stdout so the caller fails closed.
+bindir_pg_major() {
+  local bindir=$1 out ver major
+  [ -x "$bindir/postgres" ] || return 1
+  out=$("$bindir/postgres" --version 2>/dev/null) || return 1
+  case $out in
+    *'(PostgreSQL) '*) ver=${out##*'(PostgreSQL) '} ;;
+    *) return 1 ;;
+  esac
+  ver=${ver%% *}          # first token after the marker: "17.11" / "18beta1"
+  major=${ver%%.*}        # drop a ".minor" if present
+  major=${major%%[!0-9]*} # drop any trailing non-digits (e.g. "18beta1" -> "18")
+  case $major in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$major"
+}
+
+# Refuse `up` when the managed cluster's on-disk major differs from the major of
+# the postgres binaries `up` would launch -- otherwise the postmaster refuses to
+# start against the incompatible data dir with a cryptic "database files are
+# incompatible with server" error and no guidance. Both majors are read OFFLINE
+# (the PG_VERSION file + `postgres --version`), so this needs no running server
+# and can gate before any launchd bootstrap. A damaged/unreadable PG_VERSION or
+# an unparseable binary also fails closed here.
+require_cluster_binary_major_match() {
+  local cmaj bmaj
+  cmaj=$(cluster_pg_major) \
+    || fail "the managed cluster at $NATIVE_PGDATA looks damaged (unreadable or invalid PG_VERSION) -- see: $0 doctor"
+  bmaj=$(bindir_pg_major "$NATIVE_PG_BINDIR") \
+    || fail "cannot determine the Postgres major of $NATIVE_PG_BINDIR/postgres -- see: $0 doctor"
+  [ "$cmaj" = "$bmaj" ] \
+    || fail "Postgres major mismatch: the managed cluster at $NATIVE_PGDATA is v$cmaj but the binaries at $NATIVE_PG_BINDIR are v$bmaj -- the server would refuse to start against it. To run your existing data, point the launcher back at the matching major: install it if needed (brew install postgresql@$cmaj) and set VOXINT_NATIVE_PG_BINDIR=\"\$(brew --prefix postgresql@$cmaj)/bin\", then retry. (See: $0 doctor.)"
+}
+
 cmd_up() {
   require_macos
   load_state
   local media_root svc managed=0 metal_up_rc=0
   [ -x "$(core_venv)/bin/voxint" ] || fail "core venv missing -- run: $0 setup"
   managed_cluster && managed=1
+  # Offline major-skew gate BEFORE any launchd bootstrap: a v-mismatched cluster
+  # would only fail cryptically once the postmaster tried to start. (Operator-
+  # provided clusters are the operator's to version-manage, so guard managed only.)
+  [ "$managed" = 1 ] && require_cluster_binary_major_match
   media_root=$(resolved_media_root_or_fail)
   mkdir -p "$VOXINT_NATIVE_HOME/run" "$VOXINT_NATIVE_HOME/logs"
 
@@ -1296,7 +1362,7 @@ doctor_report() {
 cmd_doctor() {
   DOCTOR_RC=0
   load_state
-  local venv bin su
+  local venv bin su cmaj bmaj
 
   step "Tooling"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
@@ -1317,9 +1383,12 @@ cmd_doctor() {
   done
 
   step "Datastore binaries"
+  # Report the presence + actual major (the "Cluster + datastores" step compares
+  # it against the on-disk cluster); avoid asserting a hardcoded "@17" that would
+  # misdescribe an overridden bindir pointing at another major.
   [ -x "$NATIVE_PG_BINDIR/postgres" ] \
-    && doctor_report PASS "postgresql@17 binaries at $NATIVE_PG_BINDIR" \
-    || doctor_report FAIL "postgresql@17 binaries missing -- run: $0 setup"
+    && doctor_report PASS "Postgres server binaries at $NATIVE_PG_BINDIR (v$(bindir_pg_major "$NATIVE_PG_BINDIR" 2>/dev/null || printf '?'))" \
+    || doctor_report FAIL "Postgres server binaries missing at $NATIVE_PG_BINDIR -- run: $0 setup"
   [ -x "$NATIVE_BREW_PREFIX/bin/redis-server" ] \
     && doctor_report PASS "redis-server present" \
     || doctor_report FAIL "redis-server missing -- run: $0 setup"
@@ -1344,6 +1413,19 @@ cmd_doctor() {
   step "Cluster + datastores"
   if managed_cluster; then
     doctor_report PASS "private cluster initialized ($NATIVE_PGDATA)"
+    # Offline major-skew check (same gate `up` enforces): the cluster's on-disk
+    # major vs the installed binaries' major. FAIL here means `up` will refuse.
+    cmaj=$(cluster_pg_major) || cmaj=
+    bmaj=$(bindir_pg_major "$NATIVE_PG_BINDIR") || bmaj=
+    if [ -z "$cmaj" ]; then
+      doctor_report FAIL "cluster PG_VERSION unreadable/invalid at $NATIVE_PGDATA -- the cluster may be damaged"
+    elif [ -z "$bmaj" ]; then
+      doctor_report FAIL "cannot read the Postgres major of $NATIVE_PG_BINDIR/postgres"
+    elif [ "$cmaj" = "$bmaj" ]; then
+      doctor_report PASS "cluster major (v$cmaj) matches the installed binaries"
+    else
+      doctor_report FAIL "cluster is v$cmaj but the installed binaries are v$bmaj -- $0 up will refuse; reinstall postgresql@$cmaj to run the existing data"
+    fi
   else
     doctor_report SKIP "no managed cluster -- $0 up will expect operator-provided datastores"
   fi

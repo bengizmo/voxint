@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,6 +47,7 @@ def run_lib(
         "VOXINT_NATIVE_API_HOST",
         "VOXINT_NATIVE_API_PORT",
         "VOXINT_NATIVE_BREW_PREFIX",
+        "VOXINT_NATIVE_PG_BINDIR",
         "VOXINT_NATIVE_PASSWORD",
         "VOXINT_NATIVE_CSRF_SECRET",
         "VOXINT_NATIVE_MEDIA_ROOT",
@@ -409,6 +411,216 @@ def test_write_state_env_is_mode_0600(tmp_path: Path) -> None:
     assert (state.stat().st_mode & 0o777) == 0o600
     body = state.read_text()
     assert "PG_PORT=" in body and "DB_PASSWORD=" in body
+
+
+# --------------------------------------------------------------------------- #
+# #71 slice 2a — Postgres major-version skew detection
+# --------------------------------------------------------------------------- #
+# `cluster_pg_major` / `bindir_pg_major` read the cluster's on-disk major and
+# the binaries' major OFFLINE; the `cmd_up` guard (require_cluster_binary_major_
+# match) and the doctor line refuse a mismatch that would otherwise fail the
+# postmaster with a cryptic "database files are incompatible with server".
+
+
+def _write_pg_version(home: Path, contents: str) -> None:
+    """Lay down $home/pgdata/PG_VERSION (NATIVE_PGDATA), as initdb would."""
+    pgdata = home / "pgdata"
+    pgdata.mkdir(parents=True, exist_ok=True)
+    (pgdata / "PG_VERSION").write_text(contents)
+
+
+def _make_pg_bindir(
+    bindir: Path, version_line: str | None, *, exit_rc: int = 0
+) -> Path:
+    """A stub bindir whose ``postgres --version`` prints version_line.
+
+    ``version_line=None`` writes a binary that has no version output (just
+    ``exit exit_rc``); ``exit_rc`` lets a test model a binary that errors.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    pg = bindir / "postgres"
+    if version_line is None:
+        pg.write_text(f"#!/bin/bash\nexit {exit_rc}\n")
+    else:
+        pg.write_text(
+            "#!/bin/bash\n"
+            'if [ "$1" = "--version" ]; then\n'
+            f"  printf '%s\\n' {shlex.quote(version_line)}\n"
+            f"  exit {exit_rc}\n"
+            "fi\n"
+            "exit 0\n"
+        )
+    pg.chmod(0o755)
+    return bindir
+
+
+@pytest.mark.parametrize(
+    "contents,expected",
+    [("17\n", "17"), ("  18 \n", "18"), ("17", "17"), ("21\n", "21")],
+)
+def test_cluster_pg_major_reads_valid(
+    tmp_path: Path, contents: str, expected: str
+) -> None:
+    _write_pg_version(tmp_path, contents)
+    proc = run_lib(tmp_path, "cluster_pg_major")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "contents",
+    ["", "   \n", "abc", "9.6\n", "17x", "1 7\n", "1\t7", "1\n7\n"],
+)
+def test_cluster_pg_major_rejects_invalid(tmp_path: Path, contents: str) -> None:
+    # Empty / whitespace / non-numeric / pre-10 dotted / trailing-garbage / and
+    # INTERNAL whitespace or multi-line (a corrupted "1 7" / two-line file) all
+    # fail closed with NO stdout, so a damaged cluster is never read as a version.
+    _write_pg_version(tmp_path, contents)
+    proc = run_lib(tmp_path, "cluster_pg_major")
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+def test_cluster_pg_major_missing_file(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, "cluster_pg_major")  # no pgdata/PG_VERSION at all
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+@pytest.mark.parametrize(
+    "version_line,expected",
+    [
+        ("postgres (PostgreSQL) 17.5", "17"),
+        ("postgres (PostgreSQL) 18.0", "18"),
+        ("postgres (PostgreSQL) 18beta1", "18"),
+        ("postgres (PostgreSQL) 21rc1", "21"),
+        # The real Homebrew build appends a vendor suffix -- the parser must read
+        # the token after "(PostgreSQL) ", not the last one ("(Homebrew)").
+        ("postgres (PostgreSQL) 17.11 (Homebrew)", "17"),
+        ("postgres (PostgreSQL) 18.2 (Homebrew)", "18"),
+    ],
+)
+def test_bindir_pg_major_parses(
+    tmp_path: Path, version_line: str, expected: str
+) -> None:
+    bindir = _make_pg_bindir(tmp_path / "b", version_line)
+    proc = run_lib(tmp_path, f"bindir_pg_major {shlex.quote(str(bindir))}")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    "version_line",
+    ["17.5", "not-postgres 18", "postgres (weird build)", "PostgreSQL 17.5"],
+)
+def test_bindir_pg_major_rejects_without_marker(
+    tmp_path: Path, version_line: str
+) -> None:
+    # Output lacking the canonical "(PostgreSQL) <ver>" shape fails closed rather
+    # than guessing a major from an arbitrary token.
+    bindir = _make_pg_bindir(tmp_path / "b", version_line)
+    proc = run_lib(tmp_path, f"bindir_pg_major {shlex.quote(str(bindir))}")
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+def test_bindir_pg_major_missing_binary(tmp_path: Path) -> None:
+    proc = run_lib(tmp_path, f"bindir_pg_major {shlex.quote(str(tmp_path / 'nope'))}")
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+def test_bindir_pg_major_nonzero_exit(tmp_path: Path) -> None:
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.5", exit_rc=3)
+    proc = run_lib(tmp_path, f"bindir_pg_major {shlex.quote(str(bindir))}")
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+def test_bindir_pg_major_unparseable_output(tmp_path: Path) -> None:
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (weird build)")
+    proc = run_lib(tmp_path, f"bindir_pg_major {shlex.quote(str(bindir))}")
+    assert proc.returncode != 0
+    assert proc.stdout.strip() == ""
+
+
+def test_up_guard_passes_on_match(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.5")
+    proc = run_lib(
+        tmp_path,
+        "require_cluster_binary_major_match",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)},
+    )
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_up_guard_refuses_on_mismatch(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 18.1")
+    proc = run_lib(
+        tmp_path,
+        "require_cluster_binary_major_match",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)},
+    )
+    assert proc.returncode != 0
+    assert "major mismatch" in proc.stderr
+    assert "v17" in proc.stderr and "v18" in proc.stderr
+    # Actionable guidance: install the matching major AND repoint the bindir at it
+    # (installing the formula alone does not change which binaries the launcher uses).
+    assert "brew install postgresql@17" in proc.stderr
+    assert "VOXINT_NATIVE_PG_BINDIR" in proc.stderr
+
+
+def test_up_guard_fails_closed_on_damaged_cluster(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "garbage\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.5")
+    proc = run_lib(
+        tmp_path,
+        "require_cluster_binary_major_match",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(bindir)},
+    )
+    assert proc.returncode != 0
+    assert "damaged" in proc.stderr
+
+
+def test_up_guard_fails_closed_on_unreadable_binary(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    proc = run_lib(
+        tmp_path,
+        "require_cluster_binary_major_match",
+        extra_env={"VOXINT_NATIVE_PG_BINDIR": str(tmp_path / "nope")},
+    )
+    assert proc.returncode != 0
+    assert "cannot determine" in proc.stderr
+
+
+def _doctor_env(bindir: Path) -> dict[str, str]:
+    # Skip metal delegation (cmd_doctor shells out to the real metal launcher
+    # otherwise) and force the "Postgres not running" SKIP with an unused port so
+    # the doctor run stays hermetic and fast.
+    return {
+        "VOXINT_NATIVE_PG_BINDIR": str(bindir),
+        "VOXINT_NATIVE_WITH_MODELS": "0",
+        "VOXINT_NATIVE_PG_PORT": "59999",
+    }
+
+
+def test_doctor_reports_major_match(tmp_path: Path) -> None:
+    # Real Homebrew vendor-suffixed output must read as a PASS, not a probe error.
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 17.11 (Homebrew)")
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=_doctor_env(bindir))
+    assert "[PASS] cluster major (v17) matches the installed binaries" in proc.stderr
+
+
+def test_doctor_reports_major_skew(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_pg_bindir(tmp_path / "b", "postgres (PostgreSQL) 18.1 (Homebrew)")
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=_doctor_env(bindir))
+    # The [FAIL] marker proves doctor_report ran with FAIL (which sets DOCTOR_RC).
+    assert "[FAIL] cluster is v17 but the installed binaries are v18" in proc.stderr
+    assert "up will refuse" in proc.stderr
 
 
 # --------------------------------------------------------------------------- #

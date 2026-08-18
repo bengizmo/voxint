@@ -119,6 +119,22 @@ the new build; reload the page after `up` to pick it up. (Superseded hashed
 bundles linger unreferenced under `static/app/` — harmless; the manifest only
 ever points at the current build.)
 
+### Postgres major-version mismatch
+
+The two commands above upgrade the *application*. They do **not** move your data
+to a new **Postgres major** (e.g. 17 → 18). Skew happens when the Postgres
+binaries the launcher runs are a different major than the private cluster on
+disk — for example after a launcher release that targets a newer
+`postgresql@NN`, or when `VOXINT_NATIVE_PG_BINDIR` is pointed at a different
+major. The server would then refuse to start against the old data directory.
+`up` now catches this **before** starting anything and stops with a plain
+message, and `doctor` reports it as a failure naming both versions. To run your
+existing data, point the launcher back at the matching major — install it if
+needed (`brew install postgresql@17`) and set
+`VOXINT_NATIVE_PG_BINDIR="$(brew --prefix postgresql@17)/bin"`. A guided,
+data-preserving *migration* to a newer major is tracked as follow-up work under
+the bundled-Postgres child (#71).
+
 ## Backup and restore
 
 ```bash
@@ -146,8 +162,9 @@ entirely; older dumps are still filtered at restore time.
   source. Use this for disaster recovery when you want the database to match the
   dump exactly.
 
-Bundling the Postgres distribution and Postgres major-version upgrades remain
-deferred to the bundled-Postgres child (#71).
+Postgres major-version **skew is now detected** at `up`/`doctor` (see above).
+Bundling the Postgres distribution and a guided, data-preserving major-version
+*migration* remain deferred to the bundled-Postgres child (#71).
 
 ## Verifying the install (E2E)
 

@@ -42,6 +42,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   selection with a plain-language message instead of failing the page. No schema
   change (reuses the `media_folders` and `folder_domain_packs` columns). The old
   `POST /setup/media` textarea route was removed.
+- **Native tier: Postgres major-version skew detection (#71)**: the native macOS
+  launcher now reads the managed cluster's on-disk major (`PG_VERSION`) and the
+  installed binaries' major (parsed from `postgres --version`, tolerating the
+  Homebrew vendor suffix) and refuses `up` — **before** starting anything — when
+  they differ, instead of letting the postmaster fail with a cryptic "database
+  files are incompatible with server". `doctor` reports the same check as a
+  PASS/FAIL naming both versions. The message is actionable: install the matching
+  major **and** repoint `VOXINT_NATIVE_PG_BINDIR` at it (installing the formula
+  alone does not change which binaries the launcher uses). A guided,
+  data-preserving major-version *migration* (`upgrade-db`) is the next #71 slice.
 - **Settings → Sources & research: in-UI web-research config (#76, settings-overhaul
   arc #47)**: a new **Sources & research** section on the Settings page lets a
   non-technical operator configure web research entirely from the browser — the
