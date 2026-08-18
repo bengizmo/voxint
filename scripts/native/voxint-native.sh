@@ -705,6 +705,12 @@ install_logrotate() {
 # Setup
 # ---------------------------------------------------------------------------
 require_macos() {
+  # Library/test mode (VOXINT_NATIVE_LIB=1): skip the OS gate so the portable
+  # command logic (version gate, arg parsing, rollback shape) stays exercisable on
+  # a Linux CI runner. A real invocation never sets this, so an actual non-macOS
+  # user still gets the clean early error below. Mirrors scripts/install.sh's
+  # VOXINT_INSTALL_LIB seam.
+  [ "${VOXINT_NATIVE_LIB:-}" = "1" ] && return 0
   [ "$(uname -s)" = "Darwin" ] || fail "the native tier is macOS-only (this is $(uname -s))"
   [ "$(uname -m)" = "arm64" ] || fail "the native tier needs Apple Silicon (this is $(uname -m))"
 }
