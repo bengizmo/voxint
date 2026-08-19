@@ -437,7 +437,13 @@ def normalize_operator_corrections(
     try:
         validate_corrections(tuple(rules))
     except DomainPackError as exc:
-        raise OperatorCorrectionError(_operator_message(str(exc), None), row=None) from exc
+        # Per-rule bound faults (match/replace too long) live in validate_corrections
+        # and name their rule as ``corrections[N]``; recover that index so the island
+        # can highlight the row and the message reads "Rule N+1", not "corrections[N]".
+        # Whole-set faults (duplicate id, idempotence, byte budget, rule count) carry
+        # no leading index and stay row=None.
+        row = _leading_rule_index(str(exc))
+        raise OperatorCorrectionError(_operator_message(str(exc), row), row=row) from exc
     result = [rule.to_mapping() for rule in rules]
     if pack_corrections:
         try:
@@ -520,13 +526,43 @@ def _slugify(value: Any) -> str:
     return slug[:_MAX_GENERATED_ID_CHARS].strip("-")
 
 
+def operator_correction_message(message: str) -> str:
+    """Public: soften a raw pack-facing :class:`DomainPackError` message for an operator.
+
+    Used at submit/ingest boundaries (web routes, CLI, the watch sweep) where a
+    freeze-time operator↔folder-pack collision surfaces far from the authoring form.
+    Recovers the offending rule index (if any) and strips pack jargon, so the operator
+    sees ``Rule N …`` / ``The corrections …`` rather than ``domain pack corrections[N]``.
+    Deterministic and never raises.
+    """
+    return _operator_message(message, _leading_rule_index(message))
+
+
+_RULE_INDEX_RE = re.compile(r"^domain pack corrections\[(\d+)\]")
+
+
+def _leading_rule_index(message: str) -> int | None:
+    """The zero-based rule index a ``domain pack corrections[N]`` message opens with.
+
+    ``None`` for whole-set messages (duplicate id, idempotence, byte budget, rule
+    count) that name no single rule. Multi-digit indices are safe — the anchored
+    ``\\[(\\d+)\\]`` consumes the full bracketed number, so ``[12]`` never reads as
+    ``1``.
+    """
+    match = _RULE_INDEX_RE.match(message)
+    return int(match.group(1)) if match else None
+
+
 def _operator_message(message: str, index: int | None) -> str:
     """Rephrase a :class:`DomainPackError` message for a console operator.
 
-    Deterministic (the row index is known, so no fragile parsing): the pack-facing
-    ``domain pack corrections[N]`` subject becomes ``Rule N+1`` and the remaining
-    ``domain pack`` framing is softened. The substance of the message — the actual
-    validation reason — is preserved verbatim (honest-UX doctrine).
+    Deterministic string rewrite (never throws — pure ``str.replace`` on an
+    already-``str`` message): the pack-facing ``domain pack corrections[N]`` subject
+    becomes ``Rule N+1`` and the remaining ``domain pack`` framing is softened. The
+    substance of the message — the actual validation reason — is preserved verbatim
+    (honest-UX doctrine). ``index`` is the rule the message names (recovered by
+    :func:`_leading_rule_index` for bound faults, passed directly for field faults),
+    or ``None`` for a whole-set fault.
     """
     if index is not None:
         message = message.replace(
@@ -535,6 +571,12 @@ def _operator_message(message: str, index: int | None) -> str:
         message = message.replace(
             f"domain pack corrections[{index}]", f"Rule {index + 1}"
         )
+    # The duplicate-id shape ("domain pack corrections has …") needs the "list"
+    # noun to stay grammatical after softening; do it before the generic strip.
+    message = message.replace(
+        "domain pack corrections has a duplicate id",
+        "The corrections list has a duplicate id",
+    )
     message = message.replace("domain pack corrections", "The corrections")
     message = message.replace("domain pack declares", "The corrections list has")
     message = message.replace("domain pack 'corrections'", "The corrections list")

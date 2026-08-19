@@ -15,6 +15,7 @@ user-facing copy says "already known", never "already transcribed".
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 import uuid
@@ -32,7 +33,10 @@ from voxint import app_settings
 from voxint.api.setup_wizard import scan_media_folders
 from voxint.config import Settings
 from voxint.db.models import AppSettings
+from voxint.domain_packs.base import DomainPackError
 from voxint.ingest.service import submit_media_item_if_new
+
+logger = logging.getLogger(__name__)
 
 
 class SettleState(StrEnum):
@@ -88,7 +92,8 @@ class WatchSweepSummary:
     already_known: int = 0  # files skipped — a MediaItem already claims them
     settling: int = 0  # files still within the settle window this sweep
     deferred: int = 0  # runs committed but not published (broker down)
-    stat_errors: int = 0  # candidates that vanished/were unreadable mid-sweep
+    stat_errors: int = 0  # candidates that couldn't be picked up (vanished/unreadable,
+    # or a domain-pack collision that made the run un-submittable — see the sweep log)
     hit_entry_cap: bool = False  # the walk stopped at setup_scan_max_entries
     hit_file_cap: bool = False  # net-new stopped at setup_scan_max_files
     root_missing: bool = False  # the configured media root was absent/unmounted this sweep
@@ -144,7 +149,22 @@ def sweep_watch_folders(
         run_ids: list[uuid.UUID] = []
         raced_known = 0
         for rel in settled:
-            submitted = submit_media_item_if_new(session, rel, settings=settings)
+            try:
+                submitted = submit_media_item_if_new(session, rel, settings=settings)
+            except DomainPackError:
+                # A freeze-time domain-pack collision (issue #84) / unresolvable pack
+                # (issue #11) is a PERSISTENT operator config error, not a transient
+                # per-file fault. Log and skip so one bad folder→pack mapping can't
+                # crash the recurring beat sweep (which would otherwise silently stop
+                # ingesting every other folder). The operator sees the same collision,
+                # with a plain-language fix, the moment they submit via the console/CLI.
+                logger.warning(
+                    "watch sweep skipped %s: domain pack could not be applied "
+                    "(check Settings → Corrections and this folder's pack)",
+                    rel,
+                )
+                stat_errors += 1
+                continue
             if submitted is None:
                 # A concurrent sweep/submission claimed the path since the scan — it
                 # is now known, not newly picked up.

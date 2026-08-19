@@ -130,6 +130,8 @@ def _publish_or_defer(run_id: uuid.UUID) -> bool:
 def _submit(args: argparse.Namespace) -> int:
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.domain_packs.base import DomainPackError
+    from voxint.domain_packs.corrections import operator_correction_message
     from voxint.ingest import submit_media_item
 
     settings = get_settings()
@@ -153,8 +155,18 @@ def _submit(args: argparse.Namespace) -> int:
     engine = build_engine()
     try:
         factory = build_session_factory(engine)
-        with session_scope(factory) as session:
-            run_id = submit_media_item(session, str(relative)).id
+        try:
+            with session_scope(factory) as session:
+                run_id = submit_media_item(session, str(relative)).id
+        except DomainPackError as exc:
+            # Freeze-time domain-pack collision (issue #84) / unresolvable pack
+            # (issue #11): fail honestly (exit 2) with a plain-language message
+            # rather than a raw traceback (matches the URL-submit posture).
+            print(
+                "error: the domain pack for this media couldn't be applied: "
+                f"{operator_correction_message(str(exc))}"
+            )
+            return 2
         # Print the id BEFORE publishing: the durable QUEUED run already exists,
         # so a broker outage must never cost the operator the run id. The id
         # stays alone on stdout; --wait progress and warnings go to stderr.
@@ -386,6 +398,8 @@ def _fetch(args: argparse.Namespace) -> int:
     from voxint.app_settings import get_app_settings, resolve_effective_ytdlp_enabled
     from voxint.config import get_settings
     from voxint.db.session import build_session_factory, session_scope
+    from voxint.domain_packs.base import DomainPackError
+    from voxint.domain_packs.corrections import operator_correction_message
     from voxint.ingest import (
         UploadConflictError,
         UploadValidationError,
@@ -423,6 +437,14 @@ def _fetch(args: argparse.Namespace) -> int:
             run_id = submit_url(session, url=url, submission_id=submission_id).id
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
+        return 2
+    except DomainPackError as exc:
+        # Freeze-time domain-pack collision (issue #84) / unresolvable pack (issue
+        # #11): fail honestly (exit 2) with a plain-language message, not a traceback.
+        print(
+            "error: the domain pack for this media couldn't be applied: "
+            f"{operator_correction_message(str(exc))}"
+        )
         return 2
     except SQLAlchemyError:
         # A well-formed but unreachable DB fails here (lazy connect), not in

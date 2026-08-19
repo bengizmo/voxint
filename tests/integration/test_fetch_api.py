@@ -362,3 +362,32 @@ def test_broker_down_fetch_leaves_run_queued(
         assert run is not None
         assert run.status == RunStatus.QUEUED.value  # never FAILED
         assert run.error is None  # a broker outage is not a stage failure
+
+
+def test_fetch_maps_domain_pack_error_to_422(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A freeze-time snapshot collision (issue #84) / unresolvable pack (issue #11)
+    # raises DomainPackError from submit_url; the route must map it to a plain-language
+    # 422 (never a raw 500) and queue no run. The raise itself (operator↔pack union
+    # collision) is proven at the service level in test_ingest_service.py; here we lock
+    # the ROUTE's error mapping, which the review found missing.
+    from voxint.domain_packs.base import DomainPackError
+
+    def _raise(*_args: object, **_kwargs: object) -> None:
+        raise DomainPackError(
+            "domain pack corrections are not idempotent: rule 'b' (match 'Board') "
+            "would re-fire on the replacement of rule 'zb'"
+        )
+
+    monkeypatch.setattr("voxint.api.app.submit_url", _raise)
+    resp = client.post("/fetch", data=_fd(url=_URL, submission_id=uuid.uuid4().hex))
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert "couldn't be applied" in detail
+    assert "not idempotent" in detail  # the substance is preserved
+    assert "domain pack corrections" not in detail  # raw pack jargon is softened out
+    with session_factory() as session:
+        assert session.execute(select(PipelineRun)).scalars().all() == []

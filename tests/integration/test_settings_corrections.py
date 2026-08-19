@@ -222,6 +222,61 @@ def test_post_collision_with_default_pack_rejected(
     assert "idempotent" in resp.json()["error"]
 
 
+def test_post_missing_rules_field_rejected(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # An omitted ``rules`` field is a 422 (FastAPI validation), NOT a silent
+    # replace-all-with-empty wipe: the field is required so a stale/hand-rolled POST
+    # that drops it can never erase the operator's saved rules.
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.corrections = [
+            {
+                "id": "keep",
+                "match": "a",
+                "replace": "A",
+                "case_sensitive": True,
+                "whole_word": True,
+            },
+        ]
+        session.commit()
+    client, _ = make_client(session_factory, media_root)
+    resp = client.post(
+        "/settings/corrections",
+        data={"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS)},
+        headers=_JSON,
+    )
+    assert resp.status_code == 422
+    # The prior rules survive untouched.
+    row = _row(session_factory)
+    assert row is not None and [r["id"] for r in row.corrections] == ["keep"]
+
+
+def test_post_broken_default_pack_degrades_not_500(
+    session_factory: sessionmaker[Session], media_root: Path, tmp_path: Path
+) -> None:
+    # If the default pack can't be loaded (its own manifest is invalid), the union
+    # check can't run — refuse the save with guidance rather than 500 (mirrors the
+    # folder panel's graceful degradation), and write nothing.
+    pack_dir = _write_pack(
+        tmp_path / "packs",
+        "broken",
+        corrections=[{"id": "x"}],  # missing match/replace → pack fails the #80 gate
+    )
+    client, _ = make_client(session_factory, media_root, domain_pack_path=pack_dir)
+    resp = client.post(
+        "/settings/corrections",
+        data=_form([{"match": "zoom board", "replace": "Zoning Board"}]),
+        headers=_JSON,
+    )
+    assert resp.status_code == 422
+    payload = resp.json()
+    assert payload["ok"] is False
+    assert "Domain packs can't be loaded" in payload["error"]
+    row = _row(session_factory)
+    assert row is None or not row.corrections
+
+
 def test_post_requires_csrf(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

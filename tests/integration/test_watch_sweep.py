@@ -234,6 +234,37 @@ def test_vanished_candidate_is_counted_not_fatal(
     assert _runs(session_factory) == []
 
 
+def test_domain_pack_collision_is_skipped_not_fatal(
+    session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A freeze-time domain-pack collision (issue #84) / unresolvable pack is a
+    # PERSISTENT operator config error. It must be logged + counted (stat_errors) and
+    # the file skipped — never propagate out and crash the recurring beat sweep (which
+    # would silently stop ingesting every folder). Issue #84 review finding.
+    import voxint.ingest.watch as watch_mod
+    from voxint.domain_packs.base import DomainPackError
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "bad.wav")
+    _drop(media_root, "good.wav")
+
+    real_submit = watch_mod.submit_media_item_if_new
+
+    def _submit(session: object, rel: str, **kw: object) -> object:
+        if rel.endswith("bad.wav"):
+            raise DomainPackError("domain pack corrections are not idempotent: rule 'b'")
+        return real_submit(session, rel, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(watch_mod, "submit_media_item_if_new", _submit)
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    # The good file still ingests; the colliding one is counted, not fatal.
+    assert summary.picked_up == 1
+    assert summary.stat_errors == 1
+    assert _media_paths(session_factory) == {f"{FOLDER}/good.wav"}
+
+
 def test_race_loss_at_submit_counts_as_already_known(
     session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

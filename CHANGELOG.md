@@ -26,8 +26,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   submitted; a rule that would collide with the selected pack's own rules (a
   duplicate id, or a replacement that re-fires another rule) is refused with the
   reason — at author time for the default pack, and visibly at submit-freeze for a
-  differently-scoped pack (never a silent drop). A React island with a server-
-  rendered read-only fallback; the editor itself needs JavaScript, stated honestly.
+  differently-scoped pack (never a silent drop). That submit-freeze refusal is a
+  plain-language message on **every** ingest path — the upload, URL-fetch and
+  folder-scan submit routes and the CLI all surface it instead of an opaque 500, and
+  the background watch-folder sweep logs-and-skips the offending file instead of
+  stalling. Saving corrections while the pack registry is unreadable is refused with
+  guidance rather than erroring. A React island with a server-rendered read-only
+  fallback; the editor itself needs JavaScript, stated honestly.
   *(Not a regex editor; a dry-run preview and seeding rules from operator edit
   signals are deliberate follow-ups.)*
 - **Deterministic-correction provenance in the review console (#83, epic #78)**:

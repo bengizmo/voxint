@@ -240,6 +240,7 @@ from voxint.domain_packs.corrections import (
     MAX_RULES_PER_PACK,
     OperatorCorrectionError,
     normalize_operator_corrections,
+    operator_correction_message,
 )
 from voxint.domain_packs.registry import available_domain_packs, default_domain_pack
 from voxint.enrichment.asset_jobs import (
@@ -695,6 +696,21 @@ def _run_redirect(run_id: uuid.UUID, *, published: bool) -> RedirectResponse:
     bookmark can carry the parameter past the point the sweep already published."""
     suffix = "" if published else "?enqueue=deferred"
     return RedirectResponse(f"/runs/{run_id}{suffix}", status_code=303)
+
+
+def _submit_domain_pack_detail(exc: DomainPackError) -> str:
+    """Operator-facing text for a freeze-time ``DomainPackError`` at a submit boundary.
+
+    ``_run_domain_pack_snapshot`` raises this when the run's resolved domain pack
+    can't be applied — either an unresolvable pack name (issue #11) or an operator
+    correction that collides with the folder's pack (issue #84). Neutral wording
+    covers both, and the underlying reason is softened out of pack jargon so a
+    non-technical operator can act on it instead of seeing a 500."""
+    return (
+        "The domain pack for this media couldn't be applied: "
+        f"{operator_correction_message(str(exc))} "
+        "Check Settings → Corrections and the folder's domain-pack assignment."
+    )
 
 
 def _get_media_gate(request: Request) -> MediaGate:
@@ -2756,11 +2772,19 @@ def _register_routes(app: FastAPI) -> None:
         result = scan_media_folders(session, settings.media_root, folders, settings)
         # submit_media_item_if_new is race-safe and returns None for an already-known
         # path, so a double-clicked confirm or a concurrent one cannot duplicate runs.
-        run_ids = [
-            run.id
-            for path in result.candidates
-            if (run := submit_media_item_if_new(session, path)) is not None
-        ]
+        # A freeze-time domain-pack collision (issue #84) / unresolvable pack (issue
+        # #11) aborts the batch with a plain-language 422 rather than a raw 500 — no
+        # run is committed (the commit is a single call below), so nothing is stranded.
+        try:
+            run_ids = [
+                run.id
+                for path in result.candidates
+                if (run := submit_media_item_if_new(session, path)) is not None
+            ]
+        except DomainPackError as exc:
+            raise HTTPException(
+                status_code=422, detail=_submit_domain_pack_detail(exc)
+            ) from exc
         # Commit the whole batch ONCE (commit-before-publish); if the commit fails,
         # nothing is published and no partial state escapes.
         session.commit()
@@ -3203,6 +3227,12 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except UploadConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DomainPackError as exc:
+            # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
+            # #11): surface a plain-language 422, not the raw 500 the bare raise gave.
+            raise HTTPException(
+                status_code=422, detail=_submit_domain_pack_detail(exc)
+            ) from exc
         run_id = run.id
         # Commit-before-publish: the durable QUEUED run must exist before the
         # enqueue, so commit here rather than leaning on the dependency's
@@ -3242,6 +3272,13 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except UploadConflictError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except DomainPackError as exc:
+            # Freeze-time snapshot collision (issue #84) / unresolvable pack (issue
+            # #11): plain-language 422 rather than a raw 500. The snapshot is frozen
+            # before any row/source_path write, so nothing is stranded.
+            raise HTTPException(
+                status_code=422, detail=_submit_domain_pack_detail(exc)
+            ) from exc
         run_id = run.id
         # Commit-before-publish, exactly as /submit: the durable QUEUED run must
         # exist before the enqueue, so a broker outage leaves it QUEUED for the
@@ -4774,6 +4811,9 @@ def _register_routes(app: FastAPI) -> None:
                 "maxReplacementChars": MAX_REPLACEMENT_CHARS,
             },
         }
+        # Initialized like every sibling error (llm_error, watch_folder_error) so the
+        # template never leans on Jinja's lenient Undefined; overridden on a rejected save.
+        context["corrections_error"] = None
         context.update(overrides)
         return context
 
@@ -4872,7 +4912,7 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         operator: OperatorDep,
         session: SessionDep,
-        rules: Annotated[str, Form()] = "[]",
+        rules: Annotated[str, Form()],
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
         """Replace the operator's console-authored correction rules (issue #84).
@@ -4907,7 +4947,29 @@ def _register_routes(app: FastAPI) -> None:
         # Candidate → validate (field + cross-rule + default-pack union) → ONE
         # mutation. get_or_create only after validation, so a rejected save (which
         # the API session would commit on a 200/422 render) writes nothing.
-        pack_corrections = default_domain_pack(settings).to_mapping().get("corrections")
+        # The union check needs the default pack; if the registry is unreadable
+        # (bad DOMAIN_PACKS_DIR / DOMAIN_PACK_PATH) degrade like the folder panel
+        # (_set_folder_pack) — refuse with guidance, never 500. Skipping the union
+        # silently would be worse (it would let a colliding rule save).
+        try:
+            pack_corrections = (
+                default_domain_pack(settings).to_mapping().get("corrections")
+            )
+        except DomainPackError:
+            message = (
+                "Domain packs can't be loaded right now, so corrections can't be "
+                "validated — check your domain-pack configuration and try again."
+            )
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "error": message, "row": None}, status_code=422
+                )
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, corrections_error=message),
+                status_code=422,
+            )
         try:
             normalized = normalize_operator_corrections(
                 raw_items, pack_corrections=pack_corrections

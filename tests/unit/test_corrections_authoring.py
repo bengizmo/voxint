@@ -16,6 +16,7 @@ from voxint.domain_packs.corrections import (
     MAX_RULES_PER_PACK,
     OperatorCorrectionError,
     normalize_operator_corrections,
+    operator_correction_message,
     union_pack_corrections,
 )
 
@@ -142,12 +143,20 @@ def test_nul_control_char_rejected_with_row() -> None:
 def test_match_too_long_rejected_with_row() -> None:
     with pytest.raises(OperatorCorrectionError) as excinfo:
         normalize_operator_corrections(
-            [{"id": "z", "match": "a" * (MAX_MATCH_CHARS + 1), "replace": "b"}]
+            [
+                {"id": "ok", "match": "a", "replace": "b"},
+                {"id": "z", "match": "a" * (MAX_MATCH_CHARS + 1), "replace": "b"},
+            ]
         )
-    # A length fault is a cross-rule (validate_corrections) check: row is None but
-    # the message still names the offending rule so the operator can find it.
-    assert "domain pack" not in excinfo.value.message
-    assert str(MAX_MATCH_CHARS) in excinfo.value.message
+    # A length fault lives in validate_corrections but names its rule as
+    # ``corrections[N]``; the index is recovered so the island can highlight the row
+    # and the operator sees "Rule 2", never the internal 0-based ``corrections[1]``.
+    err = excinfo.value
+    assert err.row == 1
+    assert err.message.startswith("Rule 2 ")
+    assert "corrections[" not in err.message
+    assert "domain pack" not in err.message
+    assert str(MAX_MATCH_CHARS) in err.message
 
 
 def test_replacement_too_long_rejected() -> None:
@@ -155,7 +164,11 @@ def test_replacement_too_long_rejected() -> None:
         normalize_operator_corrections(
             [{"id": "z", "match": "a", "replace": "b" * (MAX_REPLACEMENT_CHARS + 1)}]
         )
-    assert str(MAX_REPLACEMENT_CHARS) in excinfo.value.message
+    err = excinfo.value
+    assert err.row == 0
+    assert err.message.startswith("Rule 1 ")
+    assert "corrections[" not in err.message
+    assert str(MAX_REPLACEMENT_CHARS) in err.message
 
 
 def test_too_many_rules_rejected() -> None:
@@ -289,3 +302,36 @@ def test_union_pack_without_corrections_key() -> None:
         {"name": "generic"}, [{"id": "o", "match": "a", "replace": "b"}]
     )
     assert [rule["id"] for rule in merged["corrections"]] == ["o"]
+
+
+# Every representative validator fault, as its RAW pack-facing DomainPackError text.
+# Kept beside the validator so a new message shape that forgets to soften "domain
+# pack" jargon fails this drift guard rather than leaking to a non-technical operator.
+_RAW_VALIDATOR_MESSAGES = [
+    "domain pack corrections[0].match must be a non-empty string",
+    "domain pack corrections[2].replace contains a non-printing character",
+    f"domain pack corrections[1].match is 300 characters; the maximum is {MAX_MATCH_CHARS}",
+    "domain pack corrections has a duplicate id 'dup'; each correction id must be unique",
+    "domain pack corrections are not idempotent: rule 'a' fires inside 'a b'",
+    f"domain pack declares 999 corrections; the maximum is {MAX_RULES_PER_PACK}",
+    "domain pack corrections serialize to 99999 bytes; the maximum is 65536",
+]
+
+
+@pytest.mark.parametrize("raw", _RAW_VALIDATOR_MESSAGES)
+def test_operator_message_never_leaks_pack_jargon(raw: str) -> None:
+    softened = operator_correction_message(raw)
+    assert "domain pack" not in softened
+    assert "corrections[" not in softened  # 0-based bracket index never reaches the operator
+    # The substance (numbers, quoted ids) is preserved verbatim — honest-UX doctrine.
+    assert softened  # never empties the message
+
+
+def test_operator_message_softens_leading_indexed_rule() -> None:
+    # A bound fault names its rule as corrections[N]; the public helper recovers the
+    # index so the operator sees "Rule N+1" with the reason intact.
+    softened = operator_correction_message(
+        f"domain pack corrections[3].match is 300 characters; the maximum is {MAX_MATCH_CHARS}"
+    )
+    assert softened.startswith("Rule 4 ")
+    assert str(MAX_MATCH_CHARS) in softened
