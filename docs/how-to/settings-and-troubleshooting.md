@@ -1,6 +1,6 @@
 # Settings and troubleshooting
 
-*A how-to guide for Voxint operators (v0.17.0).*
+*A how-to guide for Voxint operators (v0.19.0).*
 
 Almost everything about Voxint is configurable from your browser. Open the
 console at `http://127.0.0.1:8080/`, sign in (it uses a simple username and

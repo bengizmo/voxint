@@ -121,9 +121,9 @@ ships inside the images too). Rules:
 
 - Pre-1.0: **bump MINOR often** (0.5.0 → 0.6.0 …); PATCH is for pure fixes.
   Never propose 1.0.0; that needs far more field validation.
-- Version bumps are **atomic**: pyproject + `__init__.__version__` + all four
-  compose `VOXINT_IMAGE_TAG` defaults + `.env.example` comment move together
-  (pin-parity contract tests enforce this). Floating `X.Y` image tags exist;
+- Version bumps are **atomic**: pyproject + `__init__.__version__` + every
+  compose `VOXINT_IMAGE_TAG` default (across the six compose files) +
+  `.env.example` comment move together (pin-parity contract tests enforce this). Floating `X.Y` image tags exist;
   don't ship behavior changes under an already-published minor.
 - Full checklist in `docs/release-process.md`: gates (ruff/mypy/pytest/
   gitleaks), maintainer GPU gates for the lanes CI can't smoke (CUDA and

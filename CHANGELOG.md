@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-08-19
+
 ### Added
 - **Deterministic-correction provenance in the review console (#83, epic #78)**:
   the review console now **shows** deterministic domain-pack corrections. Each
