@@ -220,3 +220,51 @@ and **corrected two claims above**:
 - **Net in-scope result (greedy + hardened prompt): 9/10 fixtures pass**, the sole
   residual being the `unicode` non-Latin-script case above. This is the basis on which
   the scoped bundle is being built.
+
+## #85 re-measure — bundled `name_hints` suppression (parse-only)
+
+Issue #85 proposed that, because the scoped bundled model does no speaker
+attribution, the enhancement pass on the bundled path should stop **sending** the
+`name_hints` schema *and* stop **parsing** the reply for hints — so a weak 4B
+model hallucinating an out-of-range hint can no longer fail the whole batch for a
+channel that is discarded anyway. Removing the `name_hints` block changes the
+enhancement **system prompt**, so it was re-measured against this frozen corpus
+before landing (numerics doctrine: measured equivalence, not reasoning).
+
+**Measured on the canonical release engine** (the shipped `voxint-llm` image —
+llama.cpp base `sha256:092d1291…`, the exact serving profile above, CPU `-t 16`,
+greedy). A same-server A/B (with-hints vs no-hints prompt), reproduced identically
+on a second independent engine build:
+
+| enhancement fixture | with-hints (shipped prompt) | no-hints (#85 proposal) |
+|---|---|---|
+| `asr_errors` | **PASS** (keeps "they're") | **FAIL** — drops the word "they're" |
+| `disfluencies` | FAIL (identical output) | FAIL (identical output) |
+| `multi_speaker_swap` | PASS (identical) | PASS (identical) |
+| `noop_clean` | PASS (identical) | PASS (identical) |
+| `prompt_injection` | PASS (identical) | PASS (identical) |
+| `unicode` | FAIL (residual) | FAIL (residual) |
+| **total** | **4/6** | **3/6** |
+
+**Finding: removing the `name_hints` block regresses segment faithfulness.**
+Greedy output is byte-identical on 4 of 6 fixtures, but on `asr_errors` the
+no-hints prompt perturbs the model into deleting a leading word ("they're") — an
+unauthorized edit that fails the authorized-edit-subset gate. The change is
+deterministic and reproduced on two engine builds, so it is a real regression,
+not sampling noise.
+
+**Decision: parse-only.** The enhancement prompt is kept **byte-for-byte
+identical on every path** (the #66-qualified prompt); only the reply **parsing**
+is skipped on the bundled path (`enhance_segments(..., want_name_hints=False)`).
+This fixes the batch-poisoning bug — a hallucinated hint is ignored, never fatal —
+with **provably zero** change to segment output. Re-running the enhancement job
+with the parse-only build reproduces the with-hints baseline exactly (**4/6**,
+`asr_errors` back to PASS), confirming no faithfulness change.
+
+Two notes on the baseline. The `disfluencies` and `unicode` residuals belong to
+the **shipped** v0.18.0 bundle on this engine (they fail with the unchanged
+prompt), not to #85. And the "9/10 in-scope" figure above was **projected** from
+pre-corpus-fix per-model counts ("the fixes add ~1–2 passes … not re-scored
+here"); it was never a directly-measured Qwen enhancement number on the corrected
+corpus. The load-bearing acceptance for #85 is therefore *no regression vs the
+shipped prompt*, which is met exactly (4/6 → 4/6).

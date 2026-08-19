@@ -273,7 +273,12 @@ def run_llm_name_producer(
                 corrected=corrected,
             ):
                 try:
-                    hints.extend(llm.enhance_segments(batch, "").name_hints)
+                    # BYO-only producer: its whole purpose is the name_hints
+                    # channel, so request it explicitly (never runs the bundled
+                    # model, which suppresses hints under #85).
+                    hints.extend(
+                        llm.enhance_segments(batch, "", want_name_hints=True).name_hints
+                    )
                 except LLMError as exc:
                     # Abort, never a false authoritative 'none' — a 'none'
                     # generation would retire the prior LLM proposals.

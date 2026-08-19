@@ -835,12 +835,22 @@ sha-pinned, digest-pinned model whose serving profile is fixed by measurement.
 - **Scope** (enforced by the Phase B routing, not by prose): enhancement +
   run-asset summary/entity_mentions only. Web research, LLM name attribution,
   and run-asset topics stay on the BYO endpoint and never fall back here.
+- **Hints not parsed on the bundled path** (#85): because the bundled model does
+  no attribution, the enhancement pass **skips parsing** its `name_hints` — a weak
+  model's hallucinated out-of-range hint can no longer fail the batch for a channel
+  that is discarded anyway. The **prompt is unchanged** (identical on every path):
+  a measured A/B showed that removing the `name_hints` block perturbs the 4B
+  model's greedy output and regresses segment faithfulness, so only the reply
+  parsing differs, never the qualified prompt.
 - **Device**: CPU by default (a slow backstop for a dense 4B model — the bundled
   run-asset input is clamped to 16k chars for this reason); GPU strongly
   recommended (uncomment the `-ngl 99` + device-reservation block in
   `compose.llm.yaml`). Qualified against the #66 frozen corpus under the shipped
-  enhancement prompt; see
-  `docs/reports/local-llm-qualification-granite-2026-08-18.md`.
+  enhancement prompt, which #85 leaves byte-for-byte unchanged (parse-only), so
+  the qualification carries; see
+  `docs/reports/local-llm-qualification-granite-2026-08-18.md` (with the #85
+  re-measure addendum, which records the measured regression that motivated
+  keeping the prompt intact).
 
 ## Contract tests
 

@@ -324,6 +324,12 @@ def run_enhancement(
             segments,
             fx.get("context", ""),
             name_attribution_context=fx.get("name_attribution_context", ""),
+            # #85: the enhancement job measures the SHIPPED scoped-bundle path,
+            # which skips name_hints PARSING (want_name_hints=False) while sending
+            # the unchanged prompt; the names job keeps the BYO contract (True).
+            # run_enhancement serves both via is_names, so this one flag routes
+            # each to its real production shape.
+            want_name_hints=is_names,
         )
     except LLMError as exc:
         rec["elapsed"] = time.perf_counter() - start

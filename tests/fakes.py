@@ -105,6 +105,9 @@ class FakeLLM:
         # name_attribution_context block).
         self.contexts: list[str] = []
         self.attribution_contexts: list[str] = []
+        # Per-call want_name_hints, so wiring tests can assert the bundled path
+        # (#85) suppresses the hints channel (False) while BYO leaves it on.
+        self.want_name_hints_calls: list[bool] = []
 
     def enhance_segments(
         self,
@@ -112,11 +115,13 @@ class FakeLLM:
         context: str,
         *,
         name_attribution_context: str = "",
+        want_name_hints: bool = True,
     ) -> EnhancementBatchResult:
         self.calls.append(segments)
         self.contexts.append(context)
         self.attribution_contexts.append(name_attribution_context)
-        hints = self._name_hints if len(self.calls) == 1 else ()
+        self.want_name_hints_calls.append(want_name_hints)
+        hints = self._name_hints if len(self.calls) == 1 and want_name_hints else ()
         return EnhancementBatchResult(
             enhanced={s.segment_index: s.text.capitalize() for s in segments},
             name_hints=hints,
@@ -132,5 +137,6 @@ class FailingLLM:
         context: str,
         *,
         name_attribution_context: str = "",
+        want_name_hints: bool = True,
     ) -> EnhancementBatchResult:
         raise LLMError("endpoint down")

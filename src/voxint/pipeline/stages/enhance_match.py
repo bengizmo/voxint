@@ -145,6 +145,12 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
 
     hints: list[SpeakerNameHint] = []
     if ctx.llm is not None and segments:
+        # The scoped bundled local model (#67) powers enhancement text only, never
+        # speaker attribution — so its reply is NOT parsed for name_hints (#85). The
+        # prompt is left identical on every path (changing it regressed the 4B
+        # model's segment faithfulness); only the parse differs, so a hallucinated
+        # hint can't fail the batch for a channel that is discarded below anyway.
+        want_name_hints = not ctx.llm_bundled
         # The run's frozen #11 pack may add a name-attribution fragment. Read it
         # straight from the pack (unlike enhancement_context it needs no derived
         # form — no vocabulary is folded in), keeping one source of truth.
@@ -158,6 +164,7 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
             segments,
             run_id,
             name_attribution_context=name_attribution_context,
+            want_name_hints=want_name_hints,
         )
 
     # Compose corrections with the (optional) LLM output and persist per segment,
@@ -189,9 +196,11 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
 
     if ctx.llm_bundled:
         # Scoped bundled local model (issue #67): it powers enhancement text ONLY,
-        # never speaker attribution (#66: it misattributes names). Drop the pass's
-        # name_hints so they can't reach proposals through the back door —
-        # attribution stays exclusively on the BYO names producer.
+        # never speaker attribution (#66: it misattributes names). #85 already
+        # suppresses the hints channel at the source (want_name_hints=False above),
+        # so `hints` is empty here; this stays as an independent policy boundary —
+        # attribution reaches proposals exclusively via the BYO names producer,
+        # even if the upstream seam ever regresses.
         hints = []
 
     proposals = match_speakers(session, run_id, ctx.matching_gates)
@@ -206,11 +215,13 @@ def _enhance(
     run_id: uuid.UUID,
     *,
     name_attribution_context: str = "",
+    want_name_hints: bool = True,
 ) -> list[SpeakerNameHint]:
     """Write enhanced_text onto ``segments`` batch by batch; return the name
     hints heard along the way (in encounter order). ``name_attribution_context``
     is the run's #11 pack fragment guiding the name_hints pass ("" when the pack
-    declares none)."""
+    declares none). ``want_name_hints=False`` (the scoped bundled path, #85)
+    suppresses the hints channel for every batch, so the returned list is empty."""
     batches = _build_batches(segments, policy)
     deadline = time.monotonic() + policy.run_budget_seconds
     consecutive_failures = 0
@@ -251,7 +262,10 @@ def _enhance(
                 break
             try:
                 result = llm.enhance_segments(
-                    request, context, name_attribution_context=name_attribution_context
+                    request,
+                    context,
+                    name_attribution_context=name_attribution_context,
+                    want_name_hints=want_name_hints,
                 )
                 break
             except LLMError as exc:

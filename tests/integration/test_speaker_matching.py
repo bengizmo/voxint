@@ -260,6 +260,56 @@ def test_enhance_stage_omits_attribution_context_when_pack_declares_none(session
     assert llm.attribution_contexts == [""]
 
 
+def test_enhance_stage_bundled_requests_no_hint_parse(session: Session) -> None:
+    """#85: the scoped bundled path asks the client NOT to parse name_hints
+    (want_name_hints=False) while the BYO path leaves parsing on (True). The
+    prompt itself is path-independent, so the pack's attribution guidance is still
+    forwarded on both paths (changing the prompt regressed 4B faithfulness)."""
+    from pathlib import Path
+
+    from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder, FakeLLM
+
+    pack = DomainPack(
+        name="podcast",
+        prompt_fragments={"name_attribution_context": "The host is the most talkative voice."},
+    )
+
+    def _run(*, bundled: bool) -> FakeLLM:
+        run_id = make_run(session)
+        session.add(
+            TranscriptSegment(
+                pipeline_run_id=run_id,
+                segment_index=0,
+                start_seconds=0.0,
+                end_seconds=1.0,
+                raw_text="hello",
+                diarization_label="SPEAKER_00",
+            )
+        )
+        session.flush()
+        llm = FakeLLM()
+        ctx = StageContext(
+            asr=FakeASR(),
+            diarizer=FakeDiarizer(),
+            embedder=FakeEmbedder(),
+            llm=llm,
+            media_root=Path("/data/media"),
+            domain_pack=pack,
+            llm_bundled=bundled,
+        )
+        enhance_match.run(ctx, session, run_id)
+        return llm
+
+    bundled = _run(bundled=True)
+    assert bundled.want_name_hints_calls == [False]
+    # Prompt is identical on every path, so attribution guidance is still sent.
+    assert bundled.attribution_contexts == ["The host is the most talkative voice."]
+
+    byo = _run(bundled=False)
+    assert byo.want_name_hints_calls == [True]
+    assert byo.attribution_contexts == ["The host is the most talkative voice."]
+
+
 def test_enhance_stage_bundled_drops_name_hints(session: Session) -> None:
     """The scoped bundled model (#67) powers enhancement text ONLY — its
     name_hints must never reach proposals, so the bundle can't drive speaker

@@ -25,6 +25,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   provenance UI follows in #83/#84.
 
 ### Fixed
+- **Bundled local LLM no longer risks batch-poisoning on hallucinated name hints
+  (#85, follows #67)**: the scoped bundled model (Qwen3-4B) powers transcript
+  enhancement text only — never speaker attribution — yet its reply was strictly
+  parsed for `name_hints` that the pipeline discards anyway. A weak model
+  hallucinating an out-of-range hint (unknown speaker label / bad `kind`) raised
+  an error that failed the **whole enhancement batch** for output that was thrown
+  away. Enhancement now carries a `want_name_hints` seam: on the bundled path the
+  reply is **not parsed for hints**, so a hallucinated hint is ignored rather than
+  fatal. The enhancement **prompt is unchanged on every path** — a measured A/B
+  against the #66 frozen corpus (`tools/qualify_local_llm.py`) showed that removing
+  the `name_hints` block from the prompt perturbs the 4B model's greedy output and
+  **regresses segment faithfulness**, so per the numerics doctrine the qualified
+  prompt is kept byte-for-byte and only the parse differs. BYO (bring-your-own
+  capable model) enhancement and the BYO name producer still parse hints exactly
+  as before.
 - **Native: plain `restore` now takes a pre-restore safety backup too**: the
   docker-free launcher's `restore <file>` (in-place replace) previously took **no**
   safety backup, while the scarier `restore --fresh` did — an inversion. The

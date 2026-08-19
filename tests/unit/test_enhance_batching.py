@@ -95,6 +95,7 @@ class ScriptedLLM:
         context: str,
         *,
         name_attribution_context: str = "",
+        want_name_hints: bool = True,
     ) -> EnhancementBatchResult:
         self.calls += 1
         if self.calls <= self.failures:

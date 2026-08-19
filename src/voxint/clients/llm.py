@@ -78,7 +78,15 @@ def _build_system(context: str, name_attribution_context: str) -> str:
     operator-authored pack content carried in the system message, so the
     attribution block is fenced as advisory — it must never override the strict
     reply schema or the name-hint rules above. Empty fragments are omitted, so a
-    pack declaring neither yields the exact pre-#11 prompt byte-for-byte."""
+    pack declaring neither yields the exact pre-#11 prompt byte-for-byte.
+
+    The prompt is identical on every path — including the scoped bundled model
+    (#67). The bundle's ``name_hints`` are dropped by SKIPPING the parse
+    (``enhance_segments(..., want_name_hints=False)``), never by changing this
+    prompt: a measured A/B showed that removing the ``name_hints`` block perturbs
+    a weak 4B model's greedy output and regresses segment faithfulness (#85), so
+    the qualified prompt is left byte-for-byte intact and only the reply parsing
+    differs."""
     system = _SYSTEM_PROMPT
     if context:
         system += f"\n\nContext: {context}"
@@ -206,7 +214,12 @@ class HttpLLMClient:
         context: str,
         *,
         name_attribution_context: str = "",
+        want_name_hints: bool = True,
     ) -> EnhancementBatchResult:
+        # ``want_name_hints`` gates only reply PARSING, never the prompt: the
+        # scoped bundled model (#67) still receives the qualified prompt verbatim
+        # (changing it regressed faithfulness, #85) but has its hallucination-prone
+        # name_hints ignored instead of strictly parsed.
         if not segments:
             return EnhancementBatchResult(enhanced={})
         if len({s.segment_index for s in segments}) != len(segments):
@@ -239,7 +252,7 @@ class HttpLLMClient:
         if response.status_code >= 400:
             raise self._http_error(response)
         try:
-            return _parse_batch(response, segments)
+            return _parse_batch(response, segments, want_name_hints=want_name_hints)
         except LLMError as exc:
             # A 200 reply is still untrusted: _parse_batch reflects offending
             # reply fragments into its message, and the enrichment jobs log that
@@ -308,7 +321,10 @@ class HttpLLMClient:
 
 
 def _parse_batch(
-    response: httpx.Response, segments: tuple[EnhancementRequestSegment, ...]
+    response: httpx.Response,
+    segments: tuple[EnhancementRequestSegment, ...],
+    *,
+    want_name_hints: bool = True,
 ) -> EnhancementBatchResult:
     try:
         content = response.json()["choices"][0]["message"]["content"]
@@ -354,6 +370,14 @@ def _parse_batch(
     if set(enhanced) != expected_indexes:
         missing = sorted(expected_indexes - set(enhanced))
         raise LLMError(f"reply missing segment indexes {missing}")
+
+    if not want_name_hints:
+        # Scoped bundled path (#85): the prompt still asks for name_hints (changing
+        # it regressed faithfulness), but the caller does not consume them and the
+        # pass discards them anyway — so ignore whatever the model returned rather
+        # than parse it. A weak model's hallucinated/out-of-range hint must not fail
+        # the batch for a channel that is thrown away. Segment parsing stays strict.
+        return EnhancementBatchResult(enhanced=enhanced, name_hints=())
 
     raw_hints = body.get("name_hints", [])
     if not isinstance(raw_hints, list):

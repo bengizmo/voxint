@@ -39,6 +39,14 @@ forever), and its failure semantics follow from that:
   that (verified against the local-LLM qualification corpus). It is a
   best-effort guard, not a sandbox — the structural batch-integrity check above
   is the backstop that rejects any reply that still deviates.
+- **Name hints are consumed only on the BYO path.** Enhancement can also surface
+  explicit spoken-name hints for speaker attribution, but only capable BYO models
+  have them parsed: the scoped bundled model (#67) does no attribution, so its
+  enhancement reply is **not parsed for `name_hints`** (#85) — a hallucinated hint
+  from a weak model cannot fail the batch, and attribution stays exclusively on
+  the BYO name producer. The enhancement **prompt is identical on every path**
+  (removing the hints block measurably regressed the 4B model's segment
+  faithfulness); only the reply parsing differs.
 - **Requests are deterministic by default** (`temperature = 0`, greedy). The
   client carries a fixed sampling profile; greedy is deliberate for a
   faithfulness task (reproducible, conservative), not an accident.

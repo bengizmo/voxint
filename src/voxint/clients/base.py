@@ -136,4 +136,5 @@ class LLMClient(Protocol):
         context: str,
         *,
         name_attribution_context: str = "",
+        want_name_hints: bool = True,
     ) -> EnhancementBatchResult: ...
