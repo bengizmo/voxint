@@ -5,22 +5,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
-### Changed
-- **Console typography + shell restyle (#91, epic #89 — console visual refresh)**:
-  the first visible step of the "Reading Room" refresh. A warm paper-and-ink canvas
-  replaces the pure black/white, with a calm teal accent kept distinct from the
-  success-green, subdued speaker hues, and a real type hierarchy (larger, clearer
-  headings; monospace tabular figures for timecodes, IDs and counters). Nav,
-  buttons, form fields, cards, status pills, notices and tables are all restyled
-  from the #90 design tokens — so the page chrome **and** the React islands move
-  together — and the dashboard gains **summary stat cards** (backlog, runs,
-  completed, roster) above the detail tables plus an inline relative **mini-bar**
-  on stage timing (the exact numbers stay visible). Theming still follows the OS
-  light/dark setting; an in-app theme toggle is a later step. Accessibility is
-  preserved: the keyboard focus ring (now teal), skip-link, high-contrast
-  (forced-colors) support, table scroll-containment, non-color-only status cues,
-  and a reduced-motion guard.
-
 ## [0.19.0] - 2026-08-19
 
 ### Added
@@ -89,6 +73,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   provenance UI follows in #83/#84.
 
 ### Changed
+- **Console typography + shell restyle (#91, epic #89 — console visual refresh)**:
+  the first visible step of the "Reading Room" refresh. A warm paper-and-ink canvas
+  replaces the pure black/white, with a calm teal accent kept distinct from the
+  success-green, subdued speaker hues, and a real type hierarchy (larger, clearer
+  headings; monospace tabular figures for timecodes, IDs and counters). Nav,
+  buttons, form fields, cards, status pills, notices and tables are all restyled
+  from the #90 design tokens — so the page chrome **and** the React islands move
+  together — and the dashboard gains **summary stat cards** (backlog, runs,
+  completed, roster) above the detail tables plus an inline relative **mini-bar**
+  on stage timing (the exact numbers stay visible). Theming still follows the OS
+  light/dark setting; an in-app theme toggle is a later step. Accessibility is
+  preserved: the keyboard focus ring (now teal), skip-link, high-contrast
+  (forced-colors) support, table scroll-containment, non-color-only status cues,
+  and a reduced-motion guard.
 - **Console design-token foundation (#90, epic #89 — console visual refresh)**:
   the review console's colors now come from one semantic set of CSS design tokens
   in `base.html` that the React islands alias through Tailwind (never duplicating
