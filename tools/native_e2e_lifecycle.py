@@ -52,7 +52,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 from sqlalchemy import create_engine, func, select
@@ -185,8 +185,14 @@ class NativeConfig:
 
     @property
     def database_url(self) -> str:
+        # Percent-encode the userinfo so a password (or user) containing RFC-3986
+        # reserved characters -- @ : / ? # & % + and friends -- does not corrupt
+        # the URL SQLAlchemy parses. Mirrors native_database_url() in
+        # scripts/native/voxint-native.sh; keep the two composers in lockstep.
+        user = quote(self.db_user, safe="")
+        password = quote(self.db_password, safe="")
         return (
-            f"postgresql+psycopg://{self.db_user}:{self.db_password}"
+            f"postgresql+psycopg://{user}:{password}"
             f"@{LOOPBACK}:{self.pg_port}/{self.db_name}"
         )
 

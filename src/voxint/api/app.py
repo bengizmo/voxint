@@ -48,6 +48,12 @@ from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from voxint import __version__
+from voxint.adjudication.corrections_view import (
+    DeclaredRuleIndex,
+    build_declared_rule_index,
+    resolve_segment_provenance,
+    run_reconciliation,
+)
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
 from voxint.adjudication.ledger import (
     ConflictingReplayError,
@@ -1188,6 +1194,9 @@ def _transcript_island_props(
         and peaks_artifact_row(session, run_id) is not None
     )
     peaks_available = not media_unavailable or reclaimed_with_cache
+    # The run's frozen pack, resolved once for every segment's correction
+    # provenance (#83) — read-time, from the immutable per-run snapshot.
+    rule_index = _load_run_rule_index(session, run_id)
     return {
         "runId": str(run_id),
         "mediaUrl": f"/media/{run_id}",
@@ -1206,11 +1215,35 @@ def _transcript_island_props(
         # fallback compare against the SAME server setting, so they flag
         # identically. A segment with confidence None is never flagged.
         "lowConfidenceThreshold": settings.review_low_confidence_threshold,
-        "segments": [_island_segment(ln, palette) for ln in lines],
+        "segments": [
+            _island_segment(ln, palette, rule_index) for ln in lines
+        ],
     }
 
 
-def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, Any]:
+def _load_run_rule_index(
+    session: Session, run_id: uuid.UUID
+) -> DeclaredRuleIndex | None:
+    """The run's frozen domain-pack snapshot resolved into a declared-rule index
+    for read-time provenance (#83), or ``None`` when the run is gone or its
+    snapshot is absent/corrupt.
+
+    Reads the ``domain_pack`` snapshot column DIRECTLY and hands it to
+    :func:`build_declared_rule_index` — never through ``domain_pack_from_snapshot``,
+    which would degrade a NULL/corrupt snapshot to the current default pack and
+    fabricate declarations this run never had.
+    """
+    run = session.get(PipelineRun, run_id)
+    if run is None:
+        return None
+    return build_declared_rule_index(run.domain_pack)
+
+
+def _island_segment(
+    ln: TranscriptLine,
+    palette: dict[str, int],
+    rule_index: DeclaredRuleIndex | None = None,
+) -> dict[str, Any]:
     """One transcript line as the island's per-segment shape — the ONE builder the
     hydrated props and the split-route response share, so a page reload and a live
     split can never disagree on a segment's fields.
@@ -1220,7 +1253,30 @@ def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, An
     across a split parent's derived children. ``reviewTarget`` is true on exactly
     one line per parent — the queue entry — so the N-of-M loop counts one target
     per parent and never double-counts children.
+
+    ``corrections`` / ``rawText`` (#83) carry deterministic domain-pack correction
+    provenance and the immutable raw evidence for the compare/reset affordance.
+    Both are whole-segment concerns: a split child (``word_start`` set) never
+    carries them (the parent's spans address its full enhanced text, not a child
+    slice), and ``correction_trace`` is ``None`` there anyway (a corrected segment
+    is never split).
     """
+    is_split_child = ln.word_start is not None
+    # Operator edit supersedes pipeline provenance (#83): once the operator saves
+    # their own text (`corrected`), the domain-pack trace's spans address the
+    # PIPELINE-enhanced text, not the operator-effective text now shown — so the
+    # "corrected by domain pack" marker would be stale and misleading. The client
+    # clears it locally on a /text save, but the SERVER must own the rule too, or a
+    # page reload (and any whole-run reconcile via /split or /relabel, which reuse
+    # this builder) resurrects the stale marker. `rawText` stays exposed — the
+    # compare / reset-to-raw affordance remains honest and useful after an edit.
+    corrections = (
+        None
+        if is_split_child or ln.corrected
+        else resolve_segment_provenance(
+            ln.correction_trace, ln.corrector_version, rule_index
+        )
+    )
     return {
         "start": ln.start_seconds,
         "end": ln.end_seconds,
@@ -1257,6 +1313,15 @@ def _island_segment(ln: TranscriptLine, palette: dict[str, int]) -> dict[str, An
         "wordRangeSpeakerId": (
             str(ln.word_range_speaker_id) if ln.word_range_speaker_id is not None else None
         ),
+        # Deterministic domain-pack correction provenance (#83): which pack/rule
+        # produced each edit, or an honest unavailable state; None when no rule
+        # materially fired (or on a split child). Never a text diff — driven by the
+        # persisted trace (trace_has_entries) alone.
+        "corrections": corrections,
+        # The immutable raw ASR text for the whole segment (#83), for the console's
+        # compare / reset-to-raw affordance. None on split children (raw is a
+        # whole-segment concern) and synthetic export lines.
+        "rawText": None if is_split_child else ln.raw_text,
     }
 
 
@@ -1266,7 +1331,8 @@ def _run_island_segments(session: Session, run_id: uuid.UUID) -> list[dict[str, 
     truth. Same builder as hydration, so a split response and a page reload agree."""
     palette = speaker_palette(_run_label_universe(session, run_id))
     lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
-    return [_island_segment(ln, palette) for ln in lines]
+    rule_index = _load_run_rule_index(session, run_id)
+    return [_island_segment(ln, palette, rule_index) for ln in lines]
 
 
 def _run_reconcile_response(session: Session, run_id: uuid.UUID) -> JSONResponse:
@@ -3367,6 +3433,29 @@ def _register_routes(app: FastAPI) -> None:
             {"id": str(sp.id), "displayName": sp.display_name}
             for sp in active_speakers(session)
         ]
+        # Declared-rule reconciliation (#83): the run-level "declared but never
+        # fired" panel. Computed ONCE per page load by replaying the frozen pack
+        # over every segment's IMMUTABLE raw_text (one row per segment — never the
+        # split-expanded lines, which would double-count a rule's applied segments).
+        # [] when the snapshot is unavailable or declares no corrections, so the
+        # panel simply does not render. Skip the replay (and the raw-text query)
+        # entirely for an unclaimed/read-only view — the panel lives inside the
+        # writable block and never renders there — and when the pack declares no
+        # rules (run_reconciliation would short-circuit to [] anyway).
+        rule_index = _load_run_rule_index(session, run_id) if token is not None else None
+        if rule_index is not None and rule_index.rules:
+            raw_texts = (
+                session.execute(
+                    select(TranscriptSegment.raw_text).where(
+                        TranscriptSegment.pipeline_run_id == run_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            island_props["reconciliation"] = run_reconciliation(rule_index, raw_texts)
+        else:
+            island_props["reconciliation"] = []
         return templates.TemplateResponse(
             request,
             "review_transcript.html",

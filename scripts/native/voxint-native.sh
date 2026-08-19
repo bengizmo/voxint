@@ -23,7 +23,8 @@
 #                         Postgres/Redis reachability
 #   logs <svc> [-f]       show (or follow) a service's log
 #   doctor                environment checks: tooling, brew formulae, venv,
-#                         ffmpeg/ffprobe, cluster + pgvector, ports
+#                         ffmpeg/ffprobe, cluster + pgvector, datastore
+#                         reachability & managed-cluster identity
 #   backup                pg_dump -Fc the voxint database into backups/
 #   restore <file>        pg_restore a dump into the voxint database
 #   upgrade-db            dump/restore Postgres major upgrade (one forward),
@@ -49,7 +50,7 @@
 # Sourcing with VOXINT_NATIVE_LIB=1 loads the functions without running main
 # (tests/unit/test_native_launcher.py exercises the pure logic that way).
 
-set -eu
+set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Locate the checkout. When sourced for tests, $0 is the shell -- fall back to
@@ -185,9 +186,41 @@ frontend_dir()     { printf '%s' "$NATIVE_FRONTEND_DIR"; }
 app_assets_dir()   { printf '%s' "$NATIVE_APP_ASSETS_DIR"; }
 app_manifest_path() { printf '%s/.vite/manifest.json' "$NATIVE_APP_ASSETS_DIR"; }
 
+# RFC-3986 percent-encode $1 for a URI component: keep the unreserved set
+# (A-Za-z0-9-._~) verbatim, %-encode every other byte. LC_ALL=C forces byte
+# semantics so multibyte UTF-8 encodes per-byte and `%` (0x25) is itself
+# encoded to %25 -- there is no separate "encode % first" pass because the
+# loop never special-cases an already-present %. Bash 3.2-safe (no ${var//}
+# patterns, no ${(q)} -- a while-over-bytes loop). Mirrors urllib.parse.quote(
+# s, safe="") used by tools/native_e2e_lifecycle.py; keep the two in lockstep.
+percent_encode() {
+  local LC_ALL=C string=$1 out= i n c ord
+  n=${#string}
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    c=${string:$i:1}
+    case $c in
+      [A-Za-z0-9._~-]) out=$out$c ;;
+      *)
+        ord=$(printf '%d' "'$c")
+        [ "$ord" -lt 0 ] && ord=$((ord + 256))
+        out=$out$(printf '%%%02X' "$ord")
+        ;;
+    esac
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
 native_database_url() {
+  # Percent-encode the userinfo: the DB password may legitimately contain
+  # RFC-3986 reserved characters (@ : / ? # & % + space ...) -- only a newline is
+  # rejected upstream (validate_native_inputs) -- and a raw reserved char here
+  # would corrupt the URL psycopg/SQLAlchemy parses. The user is already
+  # identifier-validated (encoding is a no-op) but encoded too for symmetry.
   printf 'postgresql+psycopg://%s:%s@127.0.0.1:%s/%s' \
-    "$NATIVE_DB_USER" "$NATIVE_DB_PASSWORD" "$NATIVE_PG_PORT" "$NATIVE_DB_NAME"
+    "$(percent_encode "$NATIVE_DB_USER")" "$(percent_encode "$NATIVE_DB_PASSWORD")" \
+    "$NATIVE_PG_PORT" "$NATIVE_DB_NAME"
 }
 
 native_redis_url() {
@@ -265,6 +298,10 @@ validate_native_inputs() {
   _reject_control_chars VOXINT_NATIVE_API_HOST "$NATIVE_API_HOST"
   _reject_control_chars VOXINT_NATIVE_BREW_PREFIX "$NATIVE_BREW_PREFIX"
   _reject_control_chars VOXINT_NATIVE_PG_BINDIR "$NATIVE_PG_BINDIR"
+  # The old-cluster bindir override (upgrade-db) also reaches PATH/plist-adjacent
+  # code paths; validate it here rather than only at its far-off consumption site,
+  # so it cannot bypass this gate. Empty by default (only set for a manual upgrade).
+  _reject_control_chars VOXINT_NATIVE_OLD_PG_BINDIR "${VOXINT_NATIVE_OLD_PG_BINDIR:-}"
 }
 
 # True if something on 127.0.0.1:$1 accepts a TCP connection or leaves it
@@ -622,11 +659,16 @@ prune_log_archives() {
   local log=$1 keep=$2 dir base old
   dir=$(dirname "$log")
   base=$(basename "$log" .log)
+  # Under `set -o pipefail` a benign mid-pipe non-zero would surface as the
+  # pipeline's status: `grep -E` exits 1 when nothing matches (a logs dir with
+  # no rotated archives yet) and `ls` on a missing dir exits non-zero. Neither
+  # is an error here -- "nothing to prune" is success -- so tolerate it with
+  # `|| true` rather than letting it falsely fail rotation (cmd_rotate_logs rc).
   ls -1 "$dir" 2>/dev/null \
     | grep -E "^${base}_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}\.log$" \
     | sort -r | tail -n +$((keep + 1)) | while IFS= read -r old; do
       rm -f "$dir/$old"
-    done
+    done || true
 }
 
 cmd_rotate_logs() {
@@ -1083,9 +1125,43 @@ cmd_down() {
   delegate_metal down || true
 }
 
+# Best-effort liveness of a launchd job from captured `launchctl print` output.
+# That text is NON-API (its shape varies across macOS releases), so parse it
+# conservatively and never claim more than the fields prove. $1 = the captured
+# stdout of `launchctl print gui/<uid>/<label>`. Emits exactly one of:
+#   running                    -- `state = running`; a stale non-zero last-exit
+#                                 from a prior spawn on a RUNNING job is normal
+#                                 (KeepAlive) and must NOT read unhealthy.
+#   restarting (last exit N)   -- not running AND a non-zero last exit code/status
+#                                 (a crash-looping KeepAlive job between throttled
+#                                 respawns) -- the honest not-healthy signal.
+#   state unknown              -- loaded but state/exit fields absent or
+#                                 unparsable; never the misleading bare "healthy".
+launchd_job_state() {
+  local out=$1 state exit_code
+  # Fields look like a tab-indented `state = running` / `last exit code = 1`
+  # (older macOS spells it `last exit status = 256`). Take the first match of
+  # each; -E is honoured by both BSD (macOS) and GNU (CI) sed.
+  # `| head -1` can SIGPIPE the upstream `sed` (exit 141) if the input ever
+  # carried >1 matching line; under `set -o pipefail` that 141 would surface and
+  # abort this unguarded capture. Normal launchctl output has a single match, so
+  # `|| true` is a defensive no-op that keeps a first-match capture from failing.
+  state=$(printf '%s\n' "$out" \
+    | sed -n -E 's/^[[:space:]]*state = (.*)$/\1/p' | head -1 || true)
+  exit_code=$(printf '%s\n' "$out" \
+    | sed -n -E 's/^[[:space:]]*last exit (code|status) = (-?[0-9]+).*$/\2/p' | head -1 || true)
+  if [ "$state" = running ]; then
+    printf 'running'
+  elif [ -n "$exit_code" ] && [ "$exit_code" != 0 ]; then
+    printf 'restarting (last exit %s)' "$exit_code"
+  else
+    printf 'state unknown'
+  fi
+}
+
 cmd_status() {
   load_state
-  local svc label state health
+  local svc label state health print_out
   step "Managed datastores"
   for svc in $NATIVE_DATASTORES; do
     label=$(plist_label "$svc")
@@ -1106,17 +1182,23 @@ cmd_status() {
   step "Core services"
   for svc in $NATIVE_SERVICES; do
     label=$(plist_label "$svc")
-    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    if print_out=$(launchctl print "gui/$(id -u)/$label" 2>/dev/null); then
       state="supervised"
     else
       state="NOT loaded"
+      print_out=""
     fi
     if [ "$svc" = api ]; then
       health=$(curl -fsS -m 3 "http://127.0.0.1:$NATIVE_API_PORT/healthz" 2>/dev/null) \
         || health="unreachable"
       printf '%-9s %-12s :%s  %s\n' "$svc" "[$state]" "$NATIVE_API_PORT" "$health"
-    else
+    elif [ "$state" = "NOT loaded" ]; then
       printf '%-9s %-12s\n' "$svc" "[$state]"
+    else
+      # worker/beat have no health endpoint; [supervised] alone would read as
+      # healthy even for a crash-looping job. Derive liveness from launchd's own
+      # bookkeeping so a restart loop is visible.
+      printf '%-9s %-12s %s\n' "$svc" "[$state]" "$(launchd_job_state "$print_out")"
     fi
   done
 
@@ -1891,10 +1973,23 @@ doctor_report() {
   return 0
 }
 
+# Canonical absolute form of a directory (resolves `..`, doubled/trailing
+# separators, and symlinks) so two spellings of the SAME directory compare
+# equal. Bash 3.2/BSD-safe via a subshell `cd ... && pwd -P`. Falls back to the
+# raw value when the path is not a reachable directory (e.g. a foreign
+# postmaster's data_directory that does not exist on this host) so a genuine
+# mismatch still reads as a mismatch. NATIVE_PGDATA is $VOXINT_NATIVE_HOME/pgdata
+# unnormalized, and Postgres normalizes what `SHOW data_directory` returns, so a
+# literal string compare would mislabel the managed cluster as foreign whenever
+# the operator set a non-canonical VOXINT_NATIVE_HOME.
+canonical_dir() {
+  ( cd "$1" 2>/dev/null && pwd -P ) || printf '%s' "$1"
+}
+
 cmd_doctor() {
   DOCTOR_RC=0
   load_state
-  local venv bin su cmaj bmaj
+  local venv bin su cmaj bmaj datadir
 
   step "Tooling"
   if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
@@ -1963,6 +2058,24 @@ cmd_doctor() {
   fi
   if wait_for_postgres_once; then
     doctor_report PASS "Postgres reachable on :$NATIVE_PG_PORT"
+    # Reachability alone does not prove the postmaster holding the port is OUR
+    # managed cluster -- a foreign Postgres (e.g. a default Homebrew install)
+    # could be squatting :$NATIVE_PG_PORT. When we manage a cluster on disk,
+    # assert its data_directory matches (mirrors the restore_preflight guard).
+    # Aggregate through doctor_report -- never fail/exit, so later checks still
+    # run. An operator-provided datastore (no managed cluster) legitimately
+    # lives elsewhere, so only assert when managed_cluster is true.
+    if managed_cluster; then
+      if datadir=$(super_psql_scalar postgres "SHOW data_directory"); then
+        if [ "$(canonical_dir "$datadir")" = "$(canonical_dir "$NATIVE_PGDATA")" ]; then
+          doctor_report PASS "the postmaster on :$NATIVE_PG_PORT is the managed cluster"
+        else
+          doctor_report FAIL "the postmaster on :$NATIVE_PG_PORT is NOT the managed cluster (data_directory=$datadir, expected $NATIVE_PGDATA) -- a foreign Postgres is holding the port; stop it or move VOXINT_NATIVE_PG_PORT"
+        fi
+      else
+        doctor_report FAIL "could not query data_directory on the postmaster at :$NATIVE_PG_PORT -- cannot confirm it is the managed cluster"
+      fi
+    fi
     su=$(id -un)
     if "$NATIVE_PG_BINDIR/psql" -h 127.0.0.1 -p "$NATIVE_PG_PORT" -U "$su" -d postgres -tAc \
         "SELECT 1 FROM pg_available_extensions WHERE name='vector'" 2>/dev/null | grep -q 1; then
@@ -2137,6 +2250,7 @@ main() {
       say "  upgrade-db            major-version upgrade (one forward, e.g. 17->18):"
       say "                        dump/restore preserving data; old cluster kept as rollback"
       say "  upgrade-db --rollback   restore the retained pre-upgrade cluster"
+      say "  upgrade-db --rehearse   maintainer self-test (same-major dump/restore cycle)"
       say "  run <svc> --foreground  debug api|worker|beat in the foreground"
       say "  rotate-logs           copytruncate-rotate oversized service logs"
       say "                        (also runs daily via launchd once 'up' has run)"

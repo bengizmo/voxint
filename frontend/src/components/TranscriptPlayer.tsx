@@ -18,6 +18,46 @@ import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
 
+// Deterministic domain-pack correction provenance (issue #83). Mirrors the
+// server's `resolve_segment_provenance` shapes EXACTLY — the keys are pinned by
+// tests/contracts/test_correction_provenance_contract.py, so a drift here rots the
+// console silently. One shown entry = one rule that materially fired on this
+// segment: `pack`/`match`/`replace` are the resolved rule identity (null when the
+// fired id is absent from the run's frozen snapshot — the entry stays VISIBLE as
+// "unresolved rule <id>", never dropped); `span` addresses the persisted enhanced
+// text in its `inputBase` coordinate space, NOT the operator-effective text.
+export interface CorrectionEntry {
+  id: string;
+  from: string;
+  to: string;
+  span: [number, number] | null;
+  pack: string | null;
+  match: string | null;
+  replace: string | null;
+  resolved: boolean;
+}
+
+// The per-segment `corrections` field: null when no rule materially fired (or on a
+// split child), an honest "unavailable" state when the row was recorded by a
+// different corrector version than this console reads, else the shown provenance.
+export type SegmentCorrections =
+  | { status: "shown"; version: number; inputBase: string; entries: CorrectionEntry[] }
+  | { status: "unavailable"; reason: string; recordedVersion: number | null };
+
+// One row of the run-level "declared but never fired" reconciliation (issue #83).
+// Mirrors the server's `run_reconciliation` entry shape (contract-pinned). status:
+// `applied` (fired on >=1 segment's raw, appliedCount>0), `no_raw_match` (matched no
+// segment's raw), or `growth_rejected` (would fire but the raw transformation
+// overflowed the growth ceiling). appliedCount is 0 for the non-applied statuses.
+export interface ReconciliationEntry {
+  id: string;
+  pack: string;
+  match: string;
+  replace: string;
+  status: "applied" | "no_raw_match" | "growth_rejected";
+  appliedCount: number;
+}
+
 export interface Segment {
   start: number;
   end: number;
@@ -60,6 +100,15 @@ export interface Segment {
   // child-scoped assignment only when one truly exists (never an inherited speaker
   // mislabeled as a child ruling), and "inherit" is selected exactly when null.
   wordRangeSpeakerId: string | null;
+  // Deterministic domain-pack correction provenance (issue #83): which pack + rule
+  // produced each edit on this segment, or an honest "unavailable" state; null when
+  // no rule materially fired (keyed off the persisted trace, never a text diff) or
+  // on a split child (spans are parent-scoped, never a child slice).
+  corrections: SegmentCorrections | null;
+  // The immutable raw ASR text for the WHOLE segment (issue #83), for the console's
+  // compare / reset-to-raw affordance. null on split children (raw is a
+  // whole-segment concern) and synthetic/blank export lines.
+  rawText: string | null;
 }
 
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The

@@ -113,6 +113,42 @@ touch the network:
   (`select[aria-label="Playback speed"]`), press `v` → **no** new `/verify`
   (a focused `<select>`/`<textarea>`/`<input>` suppresses the single-key keymap).
 
+### Domain-pack correction provenance (#83)
+
+The seed freezes a two-rule pack (`_E2E_PACK_NAME`/`_E2E_CORRECTIONS` in the
+lifecycle tool) and corrects **segment 0** (`everyone` → `everybody`, an
+`input_base:"raw"` trace); the second rule (`quarterly synergies`) matches nothing,
+so reconciliation carries one `applied` and one `no_raw_match`. All server-side
+tests stay green without this, so assert it in the browser:
+
+- **Marker present + distinct from "edited".** Navigate to segment 0 (click its
+  transcript line, or step there). A `button.tp-corrected-chip` reading "corrected by
+  domain pack (1)" is present in the current-segment header. It is **not** the
+  `.spk-badge` "edited" chip (that one appears only after an operator save) — the two
+  are different affordances. Click the chip → its `aria-expanded` flips to `true` and
+  the `#review-provenance-body` list shows the rule `everyone → everybody`.
+- **Marker absent on an untouched segment.** Move to segment 2 (high-confidence, no
+  correction): **no** `.tp-corrected-chip` in the header.
+- **Raw one action away.** On segment 0, click **"▸ Original (raw) transcript"** →
+  `#review-raw-body` reveals a readOnly textarea whose value is the raw
+  `Good morning everyone, thanks for joining.` (the corrected `everybody` is in the
+  edit box; raw still says `everyone`). Click **"Reset edit to raw"** → the edit
+  textarea's value becomes the raw text, and **no** `/text` or `/verify` request
+  fires (reset populates the box only; nothing persists until Save). Click **"Copy
+  raw text"** → the polite status line reports success or the honest
+  clipboard-unavailable fallback (headless Chromium may lack clipboard permission;
+  either message is acceptable — assert one of them renders, never a false success).
+- **Reconciliation panel.** In the review header, the **"Correction rules — 1 of 2
+  applied, 1 never fired"** toggle is present; expand it → the
+  `#review-reconciliation-body` list shows `everyone → everybody` with an "applied ·
+  1 segment" badge and `quarterly synergies → Q3 results` with a "never fired" badge,
+  plus the `vocabulary` remediation note.
+- **Operator edit supersedes provenance.** With segment 0 focused, type a genuine
+  correction into the edit box and save (`ControlOrMeta+Enter`) → one `POST …/text`
+  (200), and the `.tp-corrected-chip` marker is now **gone** from the header (the
+  operator's text supersedes the pipeline trace — no stale spans). Restore/leave as
+  appropriate for the reconcile expectation (this counts segment 0 as corrected).
+
 Note: `aria-current` on `p.tp-line` tracks the audio **playback** highlight, not
 the review cursor — assert the review cursor via the edit box's value and the
 "Reviewing segment at …" line, not `aria-current` (which stays put when the

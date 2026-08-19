@@ -62,6 +62,9 @@ def run_lib(
         "VOXINT_NATIVE_APP_ASSETS_DIR",
         "VOXINT_NATIVE_LOG_MAX_MB",
         "VOXINT_NATIVE_LOG_ARCHIVES",
+        # Upgrade-db old-cluster bindir override: an ambient value would leak
+        # into validate_native_inputs and perturb the #12 validation tests.
+        "VOXINT_NATIVE_OLD_PG_BINDIR",
     ):
         env.pop(key, None)
     if extra_env:
@@ -117,6 +120,154 @@ def test_redis_url_default_and_override(tmp_path: Path) -> None:
         tmp_path, "native_redis_url", extra_env={"VOXINT_NATIVE_REDIS_PORT": "6399"}
     )
     assert proc.stdout == "redis://127.0.0.1:6399/0"
+
+
+# --------------------------------------------------------------------------- #
+# #7 — DSN reserved-character handling: the password may legitimately contain
+# RFC-3986 reserved characters (only a newline is rejected upstream), so both
+# DSN composers must percent-encode the userinfo. A string built from a raw
+# reserved char would either mis-parse or corrupt the URL SQLAlchemy consumes.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("voxint", "voxint"),  # unreserved: encoding is a no-op
+        ("AZaz09-._~", "AZaz09-._~"),  # the full unreserved set survives verbatim
+        ("p@ss:w/rd", "p%40ss%3Aw%2Frd"),  # the classic DSN-breaking trio
+        ("a?b#c&d=e", "a%3Fb%23c%26d%3De"),  # query/fragment/sub-delims
+        ("%already", "%25already"),  # a literal % is itself encoded (no double pass)
+        ("sp ace+plus", "sp%20ace%2Bplus"),  # space and + both reserved
+        ("café", "caf%C3%A9"),  # multibyte UTF-8 encodes per-byte under LC_ALL=C
+    ],
+)
+def test_percent_encode_matches_rfc3986(
+    tmp_path: Path, value: str, expected: str
+) -> None:
+    # The Bash encoder must agree byte-for-byte with urllib.parse.quote(safe="")
+    # (which the Python composer uses) so the two DSN builders stay in lockstep.
+    from urllib.parse import quote
+
+    assert quote(value, safe="") == expected  # guards the expectation itself
+    proc = run_lib(tmp_path, f'percent_encode {shlex.quote(value)}')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
+
+
+def test_database_url_password_round_trips_through_make_url(tmp_path: Path) -> None:
+    # A password full of reserved characters must survive the Bash composer:
+    # SQLAlchemy's own parser must recover the exact original password, user,
+    # host, port, and database. String-equality on the URL is insufficient —
+    # parse it back and compare the decoded fields (codex).
+    from sqlalchemy.engine import make_url
+
+    password = "p@ss:w/rd?#&%+ x"
+    proc = run_lib(
+        tmp_path,
+        "native_database_url",
+        extra_env={
+            "VOXINT_NATIVE_DB_USER": "voxint",
+            "VOXINT_NATIVE_DB_PASSWORD": password,
+            "VOXINT_NATIVE_DB_NAME": "vxdb",
+            "VOXINT_NATIVE_PG_PORT": "5432",
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    url = make_url(proc.stdout)
+    assert url.password == password
+    assert url.username == "voxint"
+    assert url.host == "127.0.0.1"
+    assert url.port == 5432
+    assert url.database == "vxdb"
+
+
+def test_python_and_bash_composers_agree_on_reserved_password() -> None:
+    # The second composer (tools/native_e2e_lifecycle.py) must encode identically,
+    # so the acceptance lane's engine and the launcher's alembic hit the same DSN.
+    from sqlalchemy.engine import make_url
+    from tools.native_e2e_lifecycle import LOOPBACK, NativeConfig
+
+    password = "p@ss:w/rd?#&%+ x"
+    cfg = NativeConfig(
+        pg_port="5432",
+        redis_port="6379",
+        api_port="8000",
+        db_password=password,
+        voxint_password="pw",
+        csrf_secret="c" * 32,
+        db_user="voxint",
+        db_name="vxdb",
+    )
+    url = make_url(cfg.database_url)
+    assert url.password == password
+    assert url.username == "voxint"
+    assert url.host == LOOPBACK
+    assert url.database == "vxdb"
+
+
+# --------------------------------------------------------------------------- #
+# #12 — VOXINT_NATIVE_OLD_PG_BINDIR (the upgrade-db old-cluster override) must
+# pass through the same validate_native_inputs control-char gate as the other
+# operator-settable path knobs; a newline could otherwise forge a second plist
+# env record downstream. Consumed far from the gate, so it must be validated
+# up front rather than only where it is read.
+# --------------------------------------------------------------------------- #
+def test_validate_accepts_clean_old_pg_bindir(tmp_path: Path) -> None:
+    # A normal path and the empty (unset) default both pass.
+    for val in ("/opt/homebrew/opt/postgresql@17/bin", ""):
+        proc = run_lib(
+            tmp_path,
+            "validate_native_inputs && echo OK",
+            extra_env={"VOXINT_NATIVE_OLD_PG_BINDIR": val},
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "OK" in proc.stdout
+
+
+@pytest.mark.parametrize("payload", ["a\nb", "x\rY"])
+def test_validate_rejects_control_char_in_old_pg_bindir(
+    tmp_path: Path, payload: str
+) -> None:
+    # Both LF and CR forge a record, so both are rejected with the same message.
+    proc = run_lib(
+        tmp_path,
+        "validate_native_inputs",
+        extra_env={"VOXINT_NATIVE_OLD_PG_BINDIR": payload},
+    )
+    assert proc.returncode != 0
+    assert "VOXINT_NATIVE_OLD_PG_BINDIR must not contain a newline" in proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# #6 — worker/beat liveness. They have no /healthz, so `status` derived their
+# health from `launchctl print` exit=0 alone, printing a bare [supervised] even
+# for a crash-looping job. launchd_job_state parses the (non-API) print output
+# conservatively: a running job is running even with a stale non-zero prior
+# exit; a not-running job with a non-zero exit is restarting; anything
+# unparsable is "state unknown" -- never a false-healthy bare state.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(
+    "block,expected",
+    [
+        # running, clean exit
+        ("\tstate = running\n\tpid = 42\n\tlast exit code = 0\n", "running"),
+        # running but a STALE non-zero exit from a prior KeepAlive spawn: healthy
+        ("\tstate = running\n\tpid = 42\n\tlast exit code = 1\n", "running"),
+        # crash loop: throttled between respawns with a non-zero exit
+        ("\tstate = waiting\n\tlast exit code = 1\n", "restarting (last exit 1)"),
+        # killed by signal (older macOS spells it 'last exit status')
+        ("\tstate = not running\n\tlast exit status = 15\n", "restarting (last exit 15)"),
+        # loaded but the state/exit fields are absent -> never bare-healthy
+        ("\tactive count = 0\n\tpath = /x\n", "state unknown"),
+        # non-numeric exit, not running -> unparsable -> state unknown
+        ("\tstate = not running\n\tlast exit code = (never exited)\n", "state unknown"),
+    ],
+)
+def test_launchd_job_state_classifies(
+    tmp_path: Path, block: str, expected: str
+) -> None:
+    proc = run_lib(tmp_path, f"launchd_job_state {shlex.quote(block)}")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
 
 
 # --------------------------------------------------------------------------- #
@@ -821,6 +972,20 @@ def test_prune_log_archives_keeps_newest_n(tmp_path: Path) -> None:
     assert remaining == ["api_2026-08-12-00-00-00.log", "api_2026-08-13-00-00-00.log"]
 
 
+def test_prune_log_archives_no_matching_archives_succeeds(tmp_path: Path) -> None:
+    # pipefail regression pin (#11): with zero rotated archives, the internal
+    # `ls | grep -E | ...` pipeline's `grep` exits 1 (no match). Under
+    # `set -o pipefail` that becomes the pipeline's status; without the `|| true`
+    # guard the function would return 1 and falsely fail log rotation. "Nothing to
+    # prune" is success -- assert return 0 and that the live log is left intact.
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "api.log").write_text("live\n")
+    proc = run_lib(tmp_path, f'prune_log_archives "{logs / "api.log"}" 2')
+    assert proc.returncode == 0, proc.stderr
+    assert list(logs.iterdir()) == [logs / "api.log"]
+
+
 @pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_logrotate_plist_lints_and_invokes_native_rotate(tmp_path: Path) -> None:
     out = tmp_path / "lr.plist"
@@ -955,6 +1120,7 @@ def _make_stub_bindir(
     db_present_before: bool = False,
     dump_rc: int = 0,
     presence_probe_rc: int = 0,
+    job_blocks: dict[str, str] | None = None,
 ) -> Path:
     """A fake $NATIVE_PG_BINDIR + a hermetic launchctl on PATH (see _stub_env).
 
@@ -988,6 +1154,10 @@ def _make_stub_bindir(
     logdir.mkdir()
     running = logdir / "running_labels"
     running.write_text("".join(f"{label}\n" for label in running_labels))
+    # Optional per-label `launchctl print` body (for #6 status liveness). A
+    # running label with no explicit block gets a default healthy running body.
+    for label, block in (job_blocks or {}).items():
+        (logdir / f"block_{label}").write_text(block)
 
     (bindir / "pg_isready").write_text("#!/usr/bin/env bash\nexit 0\n")
     (bindir / "psql").write_text(
@@ -1065,7 +1235,13 @@ def _make_stub_bindir(
         'cmd=$1; shift\n'
         'if [ "$cmd" = "print" ]; then\n'
         '  label=${1##*/}\n'
-        '  grep -qxF "$label" "$RUNNING" 2>/dev/null && exit 0\n'
+        '  if grep -qxF "$label" "$RUNNING" 2>/dev/null; then\n'
+        f'    blk="{logdir}/block_$label"\n'
+        '    if [ -f "$blk" ]; then cat "$blk"; else\n'
+        "      printf '\\tstate = running\\n\\tlast exit code = 0\\n'\n"
+        "    fi\n"
+        "    exit 0\n"
+        "  fi\n"
         "  exit 1\n"
         "fi\n"
         'if [ "$cmd" = "bootout" ]; then\n'
@@ -2061,3 +2237,150 @@ def test_upgrade_source_inventory_refuses_extra_extension(tmp_path: Path) -> Non
     assert "unexpected extensions" in proc.stderr
     assert "postgis" in proc.stderr
     assert not list(tmp_path.glob("pgdata.pg17-*"))
+
+
+# --------------------------------------------------------------------------- #
+# #6 (wiring) — cmd_status must surface a crash-looping worker/beat rather than
+# printing a bare [supervised]. Uses the hermetic launchctl stub's optional
+# per-label print body; unused datastore ports keep the run hermetic and fast.
+# --------------------------------------------------------------------------- #
+def _status_env(bindir: Path) -> dict[str, str]:
+    env = _stub_env(bindir)
+    env.update(
+        {
+            "VOXINT_NATIVE_WITH_MODELS": "0",  # skip metal delegation
+            "VOXINT_NATIVE_PG_PORT": "59991",  # unused -> "not reachable"
+            "VOXINT_NATIVE_REDIS_PORT": "59992",
+            "VOXINT_NATIVE_API_PORT": "59993",  # unused -> healthz "unreachable"
+        }
+    )
+    return env
+
+
+def test_status_surfaces_crashloop_worker_and_healthy_beat(tmp_path: Path) -> None:
+    crash = "\tstate = waiting\n\tlast exit code = 1\n"
+    bindir = _make_stub_bindir(
+        tmp_path,
+        running_labels=(
+            "com.voxint.native.api",
+            "com.voxint.native.worker",
+            "com.voxint.native.beat",
+        ),
+        job_blocks={"com.voxint.native.worker": crash},  # beat -> default healthy
+    )
+    proc = run_lib(tmp_path, "cmd_status", extra_env=_status_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    worker_line = next(
+        ln for ln in proc.stdout.splitlines() if ln.startswith("worker")
+    )
+    beat_line = next(ln for ln in proc.stdout.splitlines() if ln.startswith("beat"))
+    # The crash-looping worker is no longer a bare healthy [supervised].
+    assert "restarting (last exit 1)" in worker_line
+    assert "[supervised]" in worker_line
+    # A genuinely running beat reads running.
+    assert beat_line.rstrip().endswith("running")
+
+
+def test_status_not_loaded_worker_has_no_liveness_suffix(tmp_path: Path) -> None:
+    # A NOT-loaded worker keeps the plain two-column form (no launchd body to read).
+    bindir = _make_stub_bindir(tmp_path, running_labels=())
+    proc = run_lib(tmp_path, "cmd_status", extra_env=_status_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    worker_line = next(
+        ln for ln in proc.stdout.splitlines() if ln.startswith("worker")
+    )
+    assert "[NOT loaded]" in worker_line
+    assert "restarting" not in worker_line
+    assert "running" not in worker_line
+
+
+# --------------------------------------------------------------------------- #
+# #10 — doctor foreign-postmaster detection. When a managed cluster exists and
+# Postgres is reachable, doctor must prove the reachable postmaster is OURS
+# (SHOW data_directory == $NATIVE_PGDATA), aggregating the verdict through
+# doctor_report (never fail/exit, so later checks still run).
+# --------------------------------------------------------------------------- #
+def _make_doctor_identity_bindir(
+    bindir: Path, *, datadir_echo: str, datadir_rc: int = 0
+) -> Path:
+    """A doctor bindir: postgres v17, pg_isready reachable, and a psql that
+    answers SHOW data_directory with ``datadir_echo`` (or exits ``datadir_rc``)."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    (bindir / "postgres").write_text(
+        "#!/bin/bash\n"
+        'if [ "$1" = "--version" ]; then\n'
+        "  printf '%s\\n' 'postgres (PostgreSQL) 17.5'\n"
+        "fi\n"
+        "exit 0\n"
+    )
+    (bindir / "pg_isready").write_text("#!/usr/bin/env bash\nexit 0\n")
+    (bindir / "psql").write_text(
+        "#!/usr/bin/env bash\n"
+        'sql=""\n'
+        'while [ $# -gt 0 ]; do case "$1" in -tAc) shift; sql=$1 ;; esac; shift; done\n'
+        'case "$sql" in\n'
+        f"  *data_directory*) [ {datadir_rc} -eq 0 ] || exit {datadir_rc}; "
+        f"printf '%s\\n' {shlex.quote(datadir_echo)}; exit 0 ;;\n"
+        "esac\n"
+        "exit 0\n"
+    )
+    for name in ("postgres", "pg_isready", "psql"):
+        (bindir / name).chmod(0o755)
+    return bindir
+
+
+def _identity_doctor_env(bindir: Path) -> dict[str, str]:
+    # Reachable Postgres (real pg_isready in the stub bindir), no metal, unused
+    # Redis port so redis reads a clean SKIP.
+    return {
+        "VOXINT_NATIVE_PG_BINDIR": str(bindir),
+        "VOXINT_NATIVE_WITH_MODELS": "0",
+        "VOXINT_NATIVE_REDIS_PORT": "59998",
+    }
+
+
+def test_doctor_confirms_managed_cluster_identity(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_doctor_identity_bindir(
+        tmp_path / "b", datadir_echo=str(tmp_path / "pgdata")
+    )
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=_identity_doctor_env(bindir))
+    assert "[PASS] the postmaster on :5432 is the managed cluster" in proc.stderr
+    assert "NOT the managed cluster" not in proc.stderr
+
+
+def test_doctor_flags_foreign_postmaster(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_doctor_identity_bindir(
+        tmp_path / "b", datadir_echo="/opt/homebrew/var/postgresql@17"
+    )
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=_identity_doctor_env(bindir))
+    assert "[FAIL] the postmaster on :5432 is NOT the managed cluster" in proc.stderr
+    assert "/opt/homebrew/var/postgresql@17" in proc.stderr
+    assert proc.returncode != 0  # doctor_report FAIL set DOCTOR_RC
+
+
+def test_doctor_flags_unqueryable_data_directory(tmp_path: Path) -> None:
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_doctor_identity_bindir(
+        tmp_path / "b", datadir_echo="", datadir_rc=2
+    )
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=_identity_doctor_env(bindir))
+    assert "[FAIL] could not query data_directory" in proc.stderr
+    assert proc.returncode != 0
+
+
+def test_doctor_identity_tolerates_noncanonical_home(tmp_path: Path) -> None:
+    # A non-canonical VOXINT_NATIVE_HOME (here a trailing slash) makes
+    # NATIVE_PGDATA=".../home//pgdata", while Postgres normalizes what SHOW
+    # data_directory returns (".../home/pgdata"). A literal compare would
+    # mislabel the correct cluster as foreign; canonical_dir must prevent that.
+    _write_pg_version(tmp_path, "17\n")
+    bindir = _make_doctor_identity_bindir(
+        tmp_path / "b", datadir_echo=str(tmp_path / "pgdata")  # canonical form
+    )
+    env = _identity_doctor_env(bindir)
+    env["VOXINT_NATIVE_HOME"] = f"{tmp_path}/"  # trailing slash -> doubled sep
+    proc = run_lib(tmp_path, "cmd_doctor", extra_env=env)
+    assert "[PASS] the postmaster on :5432 is the managed cluster" in proc.stderr
+    assert "NOT the managed cluster" not in proc.stderr

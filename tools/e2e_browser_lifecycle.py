@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.adjudication.review_state import verified_progress
 from voxint.app_settings import complete_onboarding
+from voxint.clients.llm import enhanced_size_ceiling
 from voxint.db.models import (
     ArtifactKind,
     AudioArtifact,
@@ -66,6 +67,8 @@ from voxint.db.models import (
     Speaker,
     TranscriptSegment,
 )
+from voxint.domain_packs.corrections import parse_corrections
+from voxint.domain_packs.corrector import CORRECTOR_VERSION, apply_corrections
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_FRONTEND_DIR = REPO_ROOT / "frontend"
@@ -85,6 +88,22 @@ _SEED_SEGMENTS: tuple[tuple[str, str, float | None], ...] = (
     ("S1", "I had one question about the numbers.", 0.31),  # uncertain
     ("S0", "Of course, go right ahead and ask.", None),  # no confidence → never flagged
 )
+
+# Deterministic domain-pack correction provenance (issue #83) for the browser lane.
+# The run freezes this ONE pack; the browser lane asserts the "corrected by domain
+# pack" marker, the raw-compare affordance, and the run-level reconciliation panel.
+# `greet` fires on segment 0's raw ("everyone" → applied, appliedCount 1); `ghost`
+# matches no segment's raw ("declared but never fired" → no_raw_match) — so the
+# reconciliation panel shows both statuses. A high-confidence, non-uncertain segment
+# is corrected (index 0) so the two `.tp-uncertain-chip` assertions on segments 1 & 3
+# stay untouched. Kept as an unmistakable-but-plausible edit so the raw-vs-corrected
+# compare is visibly different.
+_E2E_PACK_NAME = "e2e-corrections"
+_E2E_CORRECTIONS: tuple[dict[str, str], ...] = (
+    {"id": "greet", "match": "everyone", "replace": "everybody"},
+    {"id": "ghost", "match": "quarterly synergies", "replace": "Q3 results"},
+)
+_CORRECTED_SEGMENT_INDEX = 0
 
 
 def fail(msg: str) -> None:
@@ -218,9 +237,35 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
     )
     session.add(media)
     session.flush()
-    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    # Freeze the #83 provenance pack onto the run's snapshot column (the same shape
+    # the pipeline persists: a dict with `name` + `corrections`). `_load_run_rule_index`
+    # reads this dict DIRECTLY, so the console resolves fired rules and reconciles
+    # declared-but-never-fired ones exactly as it would for a real run.
+    run = PipelineRun(
+        media_item_id=media.id,
+        status=RunStatus.COMPLETED.value,
+        domain_pack={"name": _E2E_PACK_NAME, "corrections": list(_E2E_CORRECTIONS)},
+    )
     session.add(run)
     session.flush()
+
+    # Precompute the corrected segment's provenance with the REAL corrector, exactly
+    # as the raw-pass path in enhance_match does (LLM off ⇒ input_base "raw"), so the
+    # seeded envelope is byte-faithful — never hand-rolled. Self-check: the seed rule
+    # MUST materially fire, or the lane would assert a marker that never renders.
+    correction_rules = parse_corrections([dict(c) for c in _E2E_CORRECTIONS])
+    corrected_raw = _SEED_SEGMENTS[_CORRECTED_SEGMENT_INDEX][1]
+    corrected = apply_corrections(
+        corrected_raw,
+        correction_rules,
+        max_output_chars=enhanced_size_ceiling(corrected_raw),
+    )
+    if not corrected.trace or corrected.growth_rejected:
+        raise AssertionError(
+            "e2e seed: the #83 correction rule did not materially fire on segment "
+            f"{_CORRECTED_SEGMENT_INDEX}'s raw text — fix _E2E_CORRECTIONS so the "
+            "browser lane has a real 'corrected by domain pack' marker to assert."
+        )
 
     # A small ACTIVE roster so the browser lane can exercise the whole-segment
     # speaker assignment (issue #51: the 1-9 / 0 keys and the "Assign speaker"
@@ -244,17 +289,27 @@ def seed_browser_run(session: Session, media_root: Path) -> uuid.UUID:
     )
 
     for index, (label, seg_text, confidence) in enumerate(_SEED_SEGMENTS):
-        session.add(
-            TranscriptSegment(
-                pipeline_run_id=run.id,
-                segment_index=index,
-                start_seconds=float(index) * _SEGMENT_SECONDS,
-                end_seconds=float(index) * _SEGMENT_SECONDS + _SEGMENT_SECONDS,
-                raw_text=seg_text,
-                diarization_label=label,
-                confidence=confidence,
-            )
+        segment = TranscriptSegment(
+            pipeline_run_id=run.id,
+            segment_index=index,
+            start_seconds=float(index) * _SEGMENT_SECONDS,
+            end_seconds=float(index) * _SEGMENT_SECONDS + _SEGMENT_SECONDS,
+            raw_text=seg_text,
+            diarization_label=label,
+            confidence=confidence,
         )
+        if index == _CORRECTED_SEGMENT_INDEX:
+            # Persist enhanced_text + the versioned trace envelope exactly as
+            # enhance_match does on a raw-pass correction. raw_text stays untouched
+            # (the console's compare/reset reads it), so effective≠raw is visible.
+            segment.enhanced_text = corrected.text
+            segment.correction_trace = {
+                "version": CORRECTOR_VERSION,
+                "input_base": "raw",
+                "entries": [entry.to_mapping() for entry in corrected.trace],
+            }
+            segment.corrector_version = CORRECTOR_VERSION
+        session.add(segment)
         # A matching diarization turn per segment (issue #57): the waveform
         # strip paints TURNS, so without these the seeded strip would render
         # bare gray bars and the region assertions would have nothing to test.

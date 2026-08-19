@@ -6,6 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Deterministic-correction provenance in the review console (#83, epic #78)**:
+  the review console now **shows** deterministic domain-pack corrections. Each
+  corrected segment carries a distinct **"corrected by domain pack"** marker (never
+  conflated with an operator's own "edited" change) that expands to the exact pack +
+  rule (`match → replace`) behind every edit; the **immutable raw text** is one
+  action away for compare / copy / **reset-to-raw** (reset populates the edit box
+  only — the operator still saves, so the unsaved-edit discard protection stays
+  intact); an operator edit **supersedes** the marker (stale spans never show against
+  operator-authored text); and a run-level **"declared but never fired"** panel
+  reconciles every declared rule as `applied` / `no_raw_match` / `growth_rejected`
+  with plain-language remediation. All resolved **read-time** from the persisted
+  `#82` `correction_trace` + the run's frozen `domain_pack` snapshot, with **no
+  migration**. Honest by construction: a rule recorded by a different corrector
+  version reads as "unavailable" (never replayed with mismatched semantics); a
+  NULL/corrupt snapshot yields **no** provenance rather than a fabricated default
+  pack; an unresolved rule id stays visible; and provenance keys off the canonical
+  `trace_has_entries` predicate, never a text diff. *(LLM-enforcement-pass growth
+  rejection and cross-segment matching are honest, deferred v1 gaps — steer such
+  terms to pack `vocabulary`.)* Authoring these rules in the console is #84.
 - **Domain-pack corrections composed into enhancement (#82, epic #78)**: the
   deterministic corrector (#81) is now wired **inside** the `enhance_match` stage
   via a **raw-gated dual pass** — rules run on the raw ASR text first to fix which
@@ -24,6 +43,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   corrections, so a **default install's pipeline output is unchanged**; authoring/
   provenance UI follows in #83/#84.
 
+### Changed
+- **Native: launcher now runs under `set -o pipefail` (#11)**: a defensive
+  hardening so a mid-pipe failure can no longer be masked by a later command's
+  success. The pipeline inventory found no silent-loss path, so three benign
+  mid-pipe exits are explicitly guarded to keep `pipefail` from turning them into
+  spurious aborts: the log-archive prune (`grep` legitimately finds nothing to
+  prune) and the two `launchctl`-state captures (a `head -1` could SIGPIPE `sed`).
+  Rotation and `status` behaviour are unchanged.
+- **Native: `upgrade-db --rehearse` is now listed in `--help` (#13)**: the accepted
+  maintainer self-test flag was parsed but undocumented in the built-in usage
+  block. The `doctor` help line also now names what it checks (datastore
+  reachability & managed-cluster identity) rather than an over-promising "ports".
+
 ### Fixed
 - **Bundled local LLM no longer risks batch-poisoning on hallucinated name hints
   (#85, follows #67)**: the scoped bundled model (Qwen3-4B) powers transcript
@@ -40,6 +72,29 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   prompt is kept byte-for-byte and only the parse differs. BYO (bring-your-own
   capable model) enhancement and the BYO name producer still parse hints exactly
   as before.
+- **Native: `status` no longer reports a crash-looping worker/beat as healthy
+  (#6)**: `worker`/`beat` have no `/healthz`, so `status` printed a bare
+  `[supervised]` for them purely from `launchctl print` exit 0 — a job stuck in a
+  KeepAlive restart loop read as fine. `status` now parses launchd's own
+  bookkeeping (best-effort; that output is non-API) and appends a liveness word:
+  `running`, `restarting (last exit N)`, or `state unknown` (never a misleading
+  bare healthy state; a stale non-zero exit on a currently-running job is not
+  flagged).
+- **Native: the DB connection string now percent-encodes the password (#7)**:
+  `native_database_url` (and the acceptance tool's composer) interpolated the DB
+  password into the DSN raw, so a password containing RFC-3986 reserved
+  characters (`@ : / ? # & % +` …) — which the launcher otherwise allows — would
+  corrupt the URL psycopg/SQLAlchemy parses. Both composers now RFC-3986
+  percent-encode the userinfo (Bash side under `LC_ALL=C`, matching Python's
+  `urllib.parse.quote(safe="")` byte-for-byte).
+- **Native: `doctor` now detects a foreign Postgres squatting the port (#10)**:
+  when a managed cluster exists and Postgres is reachable, `doctor` asserts the
+  reachable postmaster is ours (`SHOW data_directory == $NATIVE_PGDATA`) instead
+  of trusting bare reachability, reported through the aggregating `doctor_report`
+  so later checks still run.
+- **Native: the `upgrade-db` old-cluster bindir override is now validated (#12)**:
+  `VOXINT_NATIVE_OLD_PG_BINDIR` bypassed `validate_native_inputs`; it now passes
+  the same control-character gate as the other operator-settable path knobs.
 - **Native: plain `restore` now takes a pre-restore safety backup too**: the
   docker-free launcher's `restore <file>` (in-place replace) previously took **no**
   safety backup, while the scarier `restore --fresh` did — an inversion. The

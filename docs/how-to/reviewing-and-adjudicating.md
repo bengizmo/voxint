@@ -208,6 +208,35 @@ Click a line to bring it into the **edit box**, correct the text, and save with
   edit away. Save it (Ctrl/⌘+Enter), or repeat the action to discard and
   continue.
 
+### Corrections your domain pack made
+
+If you run with a [domain pack](../domain-packs.md) that declares corrections, some
+lines are fixed **automatically** before you ever see them — a recurring
+mishearing turned into the right spelling every time. When that happened on the
+current line, you'll see a **"corrected by domain pack"** marker next to the line —
+kept deliberately separate from the **"edited"** badge, which means a change *you*
+made. Expand the marker to see exactly which rule fired: the phrase it matched and
+what it became.
+
+- **Compare against the original.** Open **Original (raw) transcript** to see the
+  exact words the model first heard, next to the corrected version. You can **copy**
+  the raw text, or **Reset edit to raw** to drop it back into the edit box.
+- **Reset doesn't save.** "Reset edit to raw" only fills the box — nothing is stored
+  until you Save, so you stay in control (and the unsaved-edit warning still applies).
+- **Your edit wins.** The moment you save your own wording for a line, the
+  "corrected by domain pack" marker goes away — from then on the line shows *your*
+  text, not the pack's automatic edit.
+- **A corrected line can't be split.** Splitting a line at a word (below) is turned
+  off once a correction has fired on it; Voxint tells you why rather than offering a
+  cut that wouldn't work.
+
+At the top of the page, **Correction rules** summarizes how the pack's rules did
+across the whole run — how many **applied**, and which ones **never fired**. A rule
+that never fired usually means the recording didn't contain that term, or the term
+was split across a pause. For terms that get broken across pauses, add them to the
+pack's **vocabulary** (which nudges the transcriber up front) instead of relying on
+a correction after the fact.
+
 ### The waveform strip
 
 Under the audio player sits a compact **waveform** — a colored strip where each
