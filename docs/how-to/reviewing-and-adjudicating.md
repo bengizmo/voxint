@@ -330,11 +330,13 @@ decision, not "needs ruling") and the **transcript reads right** (the lines you
 care about are verified and corrected). At that point the run drops off the
 Review queue.
 
-Now export it. The **Download transcript** menu on either the workbench or the
-transcript page offers plain text, subtitles (SubRip / WebVTT), JSON, and RTTM,
-with your corrections and speaker names baked in. See [Managing speakers and
-exporting](managing-speakers-and-exporting.md) for the formats and when to use
-each.
+Now read or export it. The **Download transcript** menu on either the workbench
+or the transcript page offers plain text, Markdown, subtitles (SubRip / WebVTT),
+JSON, and RTTM, with your corrections and speaker names baked in. The same menu
+has a **Read on screen** link that opens a clean reading view of the transcript,
+no download needed. See [Managing speakers and
+exporting](managing-speakers-and-exporting.md) for the formats, the reading view,
+and when to use each.
 
 ## Related guides
 

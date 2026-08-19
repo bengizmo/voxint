@@ -124,14 +124,22 @@
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
     th { color: var(--ink-2); font-size: var(--t-sm); }
-    /* Tokenized controls. `:not(:where(.tp-split-word))` keeps specificity at
-       exactly `button` (0,0,1): high enough to beat Tailwind Preflight's
-       `button { background: transparent; padding: 0 }` (also 0,0,1) as the later
+    /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip))`
+       keeps specificity at exactly `button` (0,0,1): high enough to beat
+       Tailwind Preflight's bare `button { ... }` reset (also 0,0,1) as the later
        source, but low enough that any island utility (w-full, text-sm, hover:*)
-       at 0,1,0 still wins. The inline word-chip (.tp-split-word) AND the
-       correction chip (.tp-corrected-chip) opt out entirely: the :hover rule
-       below is 0,1,1, which would otherwise defeat a chip's own 0,1,0 styling
-       on hover, so both are excluded here rather than left to self-defend. */
+       at 0,1,0 still wins. Caveat (verified in the #93 review): Preflight ALSO
+       resets `[type='button'|'reset'|'submit'] { background-color: transparent }`
+       at (0,1,0), which defeats this rule's background on typed buttons — so a
+       neutral `<button type="submit">` is transparent-backed, not --surface.
+       Harmless today: every neutral button sits on a --surface card
+       (transparent == surface); a placement on --paper or a tinted notice would
+       show through. The eventual fix is a (0,1,0) tie-break re-declaring the
+       background for `[type=…]`, deferred to a focused follow-up.
+       button.primary/.secondary at (0,1,1) are unaffected. The word-chip
+       (.tp-split-word) AND correction chip (.tp-corrected-chip) opt out entirely:
+       the :hover rule below is 0,1,1, which would otherwise defeat a chip's own
+       0,1,0 styling on hover, so both are excluded here. */
     button:not(:where(.tp-split-word, .tp-corrected-chip)) {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-md);
@@ -195,11 +203,32 @@
     ol.wizard-steps li .n { display: inline-block; min-width: 1.4rem; text-align: center;
                             border: 1px solid var(--line); border-radius: var(--r-full);
                             margin-right: .3rem; }
+    ol.wizard-steps li.done .n { border-color: var(--line-strong); }
+    ol.wizard-steps li.current .n { border-color: var(--accent); color: var(--accent-ink); }
+    /* Setup wizard step body as one card (issue #93), matching .review-stepper. */
+    .setup { background: var(--surface); border: 1px solid var(--line);
+             border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+             padding: 1.2rem 1.4rem; margin: 1rem 0; }
+    .setup > h1:first-child, .setup .notice + h1 { margin-top: 0; }
     .setup textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: .95rem; }
     .setup .field { margin: 1rem 0; }
     .setup .actions { display: flex; gap: 1rem; align-items: center; margin: 1.5rem 0 0; }
-    .svc { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; }
-    .svc-fix { margin: 0 0 .6rem; padding-left: .4rem; font-size: .9rem; }
+    .svc { display: flex; gap: .6rem; align-items: baseline; padding: .5rem 0;
+           border-top: 1px solid var(--line); }
+    .svc-fix { margin: 0 0 .6rem; padding-left: .4rem; font-size: .9rem; color: var(--ink-2); }
+    /* Watch-folder panel (shared setup + settings, issue #93). Readability only —
+       list separators, alignment, wrapping. No htmx/form-structure changes. */
+    .folder-panel h3 { margin: 1.2rem 0 .4rem; }
+    .registered-folders, .dir-list { list-style: none; padding: 0; margin: .5rem 0; }
+    .registered-folders > li, .dir-list > li { display: flex; flex-wrap: wrap;
+                      gap: .4rem .8rem; align-items: center; padding: .5rem 0;
+                      border-top: 1px solid var(--line); }
+    .registered-folders > li:first-child, .dir-list > li:first-child { border-top: 0; }
+    .breadcrumbs { font-size: .9rem; margin: .5rem 0; }
+    form.pack-picker, form.remove-folder, form.add-folder { display: inline-flex;
+                      gap: .4rem; align-items: center; flex-wrap: wrap; margin: 0; }
+    form.folder-jump { display: flex; gap: .5rem; align-items: flex-end;
+                      flex-wrap: wrap; margin: .8rem 0 0; }
     .tutorial-banner { border: 1px solid var(--accent); border-left: .3rem solid var(--accent);
                        background: var(--accent-soft); border-radius: var(--r-md);
                        padding: .8rem 1rem; margin: 0 0 1.5rem; }
@@ -211,11 +240,33 @@
                         margin-top: .8rem; }
     .settings dl { margin: 1rem 0; }
     .settings dt { font-weight: 600; margin-top: .8rem; }
+    /* Settings section cards (issue #93). Frame each direct-child <section> as a
+       card, but EXCLUDE the .tutorial-banner note (it owns its own accent
+       treatment; a bare `.settings section` at (0,1,1) would erase it). The
+       #setup re-entry section and the six settings partials get carded; the
+       _corrections section holds the hydrated corrections-editor island, and
+       the card frames only its outer <section>. */
+    .settings > section:not(.tutorial-banner) { background: var(--surface);
+                      border: 1px solid var(--line); border-radius: var(--r-lg);
+                      box-shadow: var(--shadow-1); padding: 1rem 1.2rem; margin: 1.2rem 0; }
+    .settings > section:not(.tutorial-banner) > h2:first-child { margin-top: 0; }
+    /* Speaker roster cards (issue #93): the .review-head card family, applied
+       via the compound .label-card.roster-card ((0,2,0), order-independent) so
+       it deterministically overrides the shared global .label-card left stripe
+       WITHOUT touching that rule (the workbench labels fragment still owns it
+       for its speaker-palette accent). The roster carries no spk-N class, so
+       its stripe was neutral --line anyway — restated as a clean full border. */
+    .label-card.roster-card { background: var(--surface); border: 1px solid var(--line);
+                      border-left: 1px solid var(--line); border-radius: var(--r-lg);
+                      box-shadow: var(--shadow-1); padding: .9rem 1.1rem; margin: 1rem 0; }
     .roster-card h2 { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .3rem; }
     .voiceprint { width: 6rem; height: 1.1rem; flex: none; color: var(--ink-3); }
     .voiceprint rect { fill: currentColor; }
-    .roster-actions { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
-                      margin-top: .5rem; }
+    /* roster.html pairs .roster-actions with .card-actions; the action-row
+       layout (gap / margin-top / top divider) is owned by .card-actions so the
+       two never fight on source order. .roster-actions carries no competing
+       layout of its own. */
+    .roster-actions { display: flex; flex-wrap: wrap; align-items: center; }
     details.embeddings, details.roster-inactive { margin: .6rem 0; }
     details.embeddings summary, details.roster-inactive summary {
       cursor: pointer; font-size: .9rem; color: var(--ink-2); }
@@ -309,19 +360,19 @@
     .card-actions { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
                     margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--line); }
     .card-actions form.inline { margin-right: 0; }
-    /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
-       (resolved-of-total), with always-visible text so the bar is never the
-       only signal for a screen reader or a non-technical operator. */
+    /* Adjudication-queue ergonomics (issue #56, restructured #93). Progress
+       fills toward DONE (resolved-of-total). The count text is ADJACENT (not
+       overlaid) and stays the primary signal for a screen reader or a
+       non-technical operator; the slim bar reuses the review-journey
+       .progress-track and is aria-hidden. Overlaying the label on the accent
+       fill was measured below 4.5:1 across the filled/unfilled split (#93). */
     .media-title { font-weight: 600; display: inline-block; max-width: 30rem;
                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
                    vertical-align: bottom; }
     .sort-control { font-size: .9rem; margin: .5rem 0 1rem; }
     .sort-control a[aria-current="true"] { font-weight: 600; text-decoration: none; }
-    .progress { position: relative; min-width: 8rem; height: 1.2rem; border: 1px solid var(--line);
-                border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); }
-    .progress-fill { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: .45; }
-    .progress-label { position: relative; display: block; text-align: center;
-                      font-size: .75rem; line-height: 1.2rem; white-space: nowrap; }
+    .progress { display: flex; align-items: center; gap: .5rem; }
+    .progress-label { font-size: var(--t-xs); color: var(--ink-2); white-space: nowrap; }
     /* Dashboard summary (issue #91). Stat cards above the detail tables + inline
        relative mini-bars for stage timing. Numbers stay visible so a bar is never
        the only signal (screen-reader + non-color-only). */

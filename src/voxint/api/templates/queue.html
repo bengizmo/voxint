@@ -33,11 +33,13 @@
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
       <td>
-        {# Fills toward done: resolved-of-total, so fuller = closer to finished. #}
+        {# Fills toward done: resolved-of-total, so fuller = closer to finished.
+           The adjacent count text is the primary signal; the slim bar reuses the
+           review-journey .progress-track and is aria-hidden (#93). #}
         <div class="progress" role="progressbar"
              aria-valuenow="{{ resolved }}" aria-valuemin="0" aria-valuemax="{{ e.total_labels }}"
              aria-label="{{ resolved }} of {{ e.total_labels }} voices resolved">
-          <div class="progress-fill" style="width: {{ ((100 * resolved / e.total_labels) | round(1)) if e.total_labels else 0 }}%"></div>
+          <span class="progress-track" aria-hidden="true"><span style="width: {{ ((100 * resolved / e.total_labels) | round(1)) if e.total_labels else 0 }}%"></span></span>
           <span class="progress-label">{{ resolved }} of {{ e.total_labels }} resolved</span>
         </div>
       </td>
@@ -45,7 +47,7 @@
       <td>
         <form method="post" action="/review/{{ e.run_id }}/claim">
           <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
-          <button type="submit">Review</button>
+          <button type="submit" class="primary">Review</button>
         </form>
       </td>
     </tr>

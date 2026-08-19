@@ -4,7 +4,7 @@
 format you need.*
 
 This guide covers two everyday tasks: keeping your **speaker roster** tidy, and
-**downloading a finished transcript** in the format you need.
+**reading or downloading a finished transcript** in the format you need.
 
 Voxint runs on your own machine. Open the console at
 [http://127.0.0.1:8080/](http://127.0.0.1:8080/) and sign in with the username
@@ -129,31 +129,83 @@ within a small fixed budget of searches and page reads, and produces profile
 drafts for you to accept or discard. It never changes a speaker's identity on its
 own; like everything else, it proposes and you decide.
 
-## Export a transcript
+## Read or export a transcript
 
-Once a recording has finished processing, you can download its transcript. Open
-the run (from the workbench or the transcript page) and use the **Download
-transcript** menu. It offers five formats. Pick the one that matches what you are
-going to do with the file.
+Once a recording has finished processing, you can read it on screen or download
+it in the format you need. Open the run from the workbench or the transcript page.
 
-For every format except `.rttm`, you also choose between **enhanced** text (the
-cleaned-up wording, with any corrections you made while reviewing) and **raw**
-text (the exact words the transcriber produced). Plain text additionally lets you
-download **with or without timestamps**.
+### Read it on screen
+
+Click **Read on screen** in the Download transcript menu. This opens a clean
+reading view: one heading per speaker followed by that speaker's words as plain
+paragraphs, with none of the per-line clutter the review player shows. It is the
+quickest way to read a finished transcript or share your screen with someone.
+
+Two links let you adjust the view:
+
+- **Show timestamps** / **Hide timestamps** turns the per-paragraph times on and
+  off. The reading view opens without times, which reads best for sharing.
+- **Exit reading view** returns you to the audio-synced player.
+
+### Download a file
+
+Use the **Download transcript** menu. It offers six formats. Pick the one that
+matches what you are going to do with the file.
+
+For every format except `.rttm`, you choose which wording to save:
+
+- **Reviewed** is the text as you approved it in the console, the same text you
+  see while reviewing. This is the everyday choice.
+- **Enhanced** is the cleaned-up wording from before you reviewed it.
+- **Raw** is the exact words the transcriber produced.
+
+Plain text and Markdown also offer a **reading copy** (no timestamps) alongside
+the **timed** version.
 
 | Format | Use this when… |
 |---|---|
-| **`.txt`** (plain text) | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the timestamp-free copy for clean pasting. |
+| **`.txt`** (plain text) | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the reading copy for clean pasting. |
+| **`.md`** (Markdown) | You want a formatted document with a heading for each speaker and their words as quoted paragraphs. Markdown opens in notes apps, wikis, and static-site tools, and reads fine as plain text too. |
 | **`.srt`** (SubRip subtitles) | You are captioning a video in most players, editors, or on video platforms. |
 | **`.vtt`** (WebVTT subtitles) | You are captioning video for a web page or web video player. |
 | **`.json`** (structured data) | You are feeding the transcript into another tool, or archiving it as structured segments (each with start time, end time, speaker, and text). |
 | **`.rttm`** (diarization turns) | You are using speaker-diarization research or scoring tools that expect this format. **See the caveat below.** |
 
+### What a Markdown export looks like
+
+Each run of one speaker's lines becomes a heading followed by a single quoted
+paragraph. With timestamps on, the paragraph opens with the start and end time of
+that run in brackets:
+
+```markdown
+## Maria Chen
+
+> [00:00:00.000–00:00:12.480] Thanks for having me on the show.
+
+## Interviewer
+
+> [00:00:12.480–00:00:15.900] Glad you could make it.
+```
+
+The reading copy is the same, without the bracketed times. Special characters in
+the transcript are written literally, so a stray symbol at the start of a line
+cannot turn into an accidental heading, list, or other formatting. A web address
+in the text stays as text, though some viewers will still make it clickable.
+
+### Speaker names always appear
+
+Every text, Markdown, subtitle, and data export labels each passage with the
+speaker. There is no switch to drop the names, because a transcript without "who
+said what" is rarely useful and captions need it. If you want to share a
+transcript without real names, rename the speakers on the roster first (for
+example to "Participant A"), then export. An export always uses whatever names
+the roster holds at that moment.
+
 ### Which files show your speaker names
 
 This distinction matters:
 
-- **`.txt`, `.srt`, `.vtt`, and `.json`** carry the **speaker names you
+- **`.txt`, `.md`, `.srt`, `.vtt`, and `.json`** carry the **speaker names you
   adjudicated**. If you assigned a label to "Maria Chen," that is the name these
   files show.
 - **`.rttm` does not.** RTTM is a diarization interchange format, and it carries

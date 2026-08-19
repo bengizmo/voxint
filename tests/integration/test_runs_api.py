@@ -45,6 +45,7 @@ from voxint.db.models import (
     StageRun,
     TranscriptSegment,
 )
+from voxint.export import format_timespan
 
 CREDS = ("reviewer", "s3cret")
 SPACE = "titanet-large-v1"
@@ -879,3 +880,206 @@ def test_transcript_html_escaped(
     body = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
     assert payload not in body
     assert "&lt;script&gt;" in body
+
+
+# --- read mode + Markdown export (issue #65) ----------------------------------
+
+
+def test_transcript_read_mode_groups_and_drops_island(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Read mode renders paragraphs from the SAME resolver + the SAME grouping the
+    # Markdown export uses: adjacent same-speaker lines merge into one paragraph,
+    # a speaker change starts a new one, and no player island is mounted.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],  # unresolved → speaker == bare label (predictable)
+            segments=[
+                ("S0", "hello", None),  # [0, 8]
+                ("S0", "there", None),  # [10, 18]  merges with the line above
+                ("S1", "bye", None),  # [20, 28]  new speaker → new paragraph
+            ],
+        )
+    resp = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    # Two paragraphs: S0's two lines merged, S1 alone.
+    assert body.count("<h2>S0</h2>") == 1
+    assert body.count("<h2>S1</h2>") == 1
+    assert "hello there" in body  # joined with a single ASCII space
+    # Read mode is pure server-rendered HTML — no player island, no props JSON.
+    assert 'data-island="transcript-player"' not in body
+    # timestamps=false → no time-range bracket anywhere in the reading copy.
+    assert "[00:00:" not in body
+
+
+def test_transcript_read_mode_timestamps_toggle(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0"],
+            segments=[("S0", "hello", None), ("S0", "there", None)],  # [0,8]+[10,18]
+        )
+    # timestamps=true → the merged paragraph opens with the full run span.
+    on = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "true"}
+    ).text
+    assert format_timespan(0.0, 18.0) in on
+    # timestamps=false → no bracketed range.
+    off = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "timestamps": "false"}
+    ).text
+    assert format_timespan(0.0, 18.0) not in off
+    assert "[00:00:" not in off
+
+
+def test_transcript_read_mode_preserves_query_in_toggles(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(
+            session, labels=["S0"], segments=[("S0", "raw hi", "enh hi")]
+        )
+    body = client.get(
+        f"/runs/{run_id}/transcript",
+        params={"read": "1", "timestamps": "false", "text": "raw"},
+    ).text
+    base = f"/runs/{run_id}/transcript"
+    # Exit drops read but keeps the text variant; the timestamps toggle flips the
+    # flag while keeping read + variant; variant tabs keep read + timestamps.
+    assert f'href="{base}?text=raw"' in body
+    assert f'href="{base}?text=raw&read=1&timestamps=true"' in body
+    assert f'href="{base}?text=raw&read=1&timestamps=false"' in body
+    assert 'aria-current="page">raw' in body
+
+
+def test_transcript_read_mode_entry_link_on_normal_view(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The normal (island) view offers a prominent timestamp-free reading entry and
+    # keeps its player island — read mode is opt-in, never the default.
+    with session_factory() as session:
+        run_id = make_run(
+            session, labels=["S0"], grounded=["S0"], segments=[("S0", "r", "e")]
+        )
+    body = client.get(f"/runs/{run_id}/transcript").text
+    assert f'href="/runs/{run_id}/transcript?text=corrected&read=1&timestamps=false"' in body
+    assert 'data-island="transcript-player"' in body
+    assert "<h2>" not in body  # normal mode uses inline attribution, not headings
+
+
+def test_export_menu_read_link_keeps_active_variant(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Opening "Read on screen" from a raw/enhanced view must not silently switch
+    # the wording back to reviewed: the picker's read link carries the current
+    # text variant through.
+    with session_factory() as session:
+        run_id = make_run(
+            session, labels=["S0"], grounded=["S0"], segments=[("S0", "r", "e")]
+        )
+    raw = client.get(f"/runs/{run_id}/transcript", params={"text": "raw"}).text
+    assert f"/runs/{run_id}/transcript?read=1&amp;timestamps=false&amp;text=raw" in raw
+
+
+def test_transcript_read_mode_attribution_matches_export(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Read mode shares attributed_transcript with the exports: the SAME
+    # corrected→enhanced→raw precedence and the SAME speaker attribution, so a
+    # grounded name and an excluded label read identically across both surfaces.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            grounded=["S0"],
+            decided=["S1"],  # exclude
+            segments=[("S0", "s0 raw", "s0 enh"), ("S1", "s1 raw", None)],
+        )
+        s0 = session.execute(
+            select(Speaker.display_name)
+            .join(SpeakerAssignment, SpeakerAssignment.speaker_id == Speaker.id)
+            .where(
+                SpeakerAssignment.pipeline_run_id == run_id,
+                SpeakerAssignment.diarization_label == "S0",
+            )
+        ).scalar_one()
+    read = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
+    assert f"<h2>{s0}</h2>" in read  # grounded → display name
+    assert "s0 enh" in read  # default corrected → enhanced fallback
+    assert "<h2>(excluded) S1</h2>" in read
+    assert "s1 raw" in read  # enhanced NULL → raw fallback
+    export = client.get(f"/review/{run_id}/export.txt").text
+    assert s0 in export and "(excluded) S1" in export
+    # A raw read view ignores the enhancement, exactly like the raw export.
+    raw = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}
+    ).text
+    assert "s0 raw" in raw and "s0 enh" not in raw
+
+
+def test_transcript_read_mode_escapes_hostile_text(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    payload = "<script>alert(1)</script>"
+    with session_factory() as session:
+        run_id = make_run(
+            session, labels=["S0"], segments=[("S0", payload, None)]
+        )
+    body = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "text": "raw"}
+    ).text
+    assert payload not in body  # Jinja autoescape neutralizes raw HTML
+    assert "&lt;script&gt;" in body
+
+
+def test_transcript_read_mode_empty_run(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, labels=[])  # no segments
+    body = client.get(f"/runs/{run_id}/transcript", params={"read": "1"}).text
+    assert "No transcript segments for this run." in body
+    assert "<h2>" not in body
+
+
+def test_transcript_read_mode_rejects_bad_text(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        run_id = make_run(session, labels=["S0"], grounded=["S0"])
+    resp = client.get(
+        f"/runs/{run_id}/transcript", params={"read": "1", "text": "sideways"}
+    )
+    assert resp.status_code == 422
+
+
+def test_export_md_route_bytes_and_media_type(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The Markdown route funnels through the same render_transcript as every other
+    # export; assert byte-exact output (headings, merged blockquote, time range,
+    # trailing newline) and the Markdown media type.
+    with session_factory() as session:
+        run_id = make_run(
+            session,
+            labels=["S0", "S1"],
+            segments=[("S0", "hello", None), ("S1", "bye", None)],
+        )
+    ts0 = format_timespan(0.0, 8.0)
+    ts1 = format_timespan(10.0, 18.0)
+    expected = f"## S0\n\n> {ts0} hello\n\n## S1\n\n> {ts1} bye\n"
+    resp = client.get(f"/review/{run_id}/export.md")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert resp.content == expected.encode()
+    # ?timestamps=false drops the per-paragraph range for a clean reading copy.
+    clean = client.get(
+        f"/review/{run_id}/export.md", params={"timestamps": "false"}
+    ).text
+    assert ts0 not in clean and "hello" in clean

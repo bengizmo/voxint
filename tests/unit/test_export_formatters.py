@@ -8,12 +8,17 @@ import json
 
 import pytest
 
-from voxint.adjudication.transcript import TranscriptLine
+from voxint.adjudication.transcript import (
+    TranscriptLine,
+    TranscriptParagraph,
+    paragraphize_transcript,
+)
 from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
     render_transcript,
     to_json,
+    to_markdown,
     to_rttm,
     to_srt,
     to_txt,
@@ -143,6 +148,157 @@ def test_rttm_empty_is_empty_string() -> None:
     assert to_rttm([], "run-1") == ""
 
 
+MD_LINES = [
+    TranscriptLine(start_seconds=0.0, end_seconds=2.5, speaker="Alice", text="Hello *there*."),
+    TranscriptLine(start_seconds=2.5, end_seconds=5.0, speaker="Alice", text="Still here."),
+    TranscriptLine(start_seconds=5.0, end_seconds=8.25, speaker="Bob", text="Yes & noted."),
+]
+
+
+def test_markdown_headings_and_merged_blockquote() -> None:
+    # An H2 per contiguous same-speaker run; adjacent Alice lines merge into one
+    # blockquote whose time range spans the whole run (0.00 → 5.00).
+    assert to_markdown(MD_LINES) == (
+        "## Alice\n\n"
+        "> [00:00:00.000\u201300:00:05.000] Hello \\*there\\*. Still here.\n"
+        "\n"
+        "## Bob\n\n"
+        "> [00:00:05.000\u201300:00:08.250] Yes &amp; noted.\n"
+    )
+
+
+def test_markdown_without_timestamps_drops_time_range() -> None:
+    assert to_markdown(MD_LINES, timestamps=False) == (
+        "## Alice\n\n"
+        "> Hello \\*there\\*. Still here.\n"
+        "\n"
+        "## Bob\n\n"
+        "> Yes &amp; noted.\n"
+    )
+
+
+def test_markdown_empty_is_empty_string() -> None:
+    assert to_markdown([]) == ""
+
+
+def test_markdown_speaker_return_starts_new_paragraph() -> None:
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one"),
+        TranscriptLine(start_seconds=1.0, end_seconds=2.0, speaker="B", text="two"),
+        TranscriptLine(start_seconds=2.0, end_seconds=3.0, speaker="A", text="three"),
+    ]
+    assert to_markdown(lines, timestamps=False) == (
+        "## A\n\n> one\n\n## B\n\n> two\n\n## A\n\n> three\n"
+    )
+
+
+def test_markdown_quotes_every_physical_line() -> None:
+    # Embedded newlines in a segment stay as separate blockquote lines.
+    lines = [TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one\ntwo")]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> one\n> two\n"
+
+
+def test_markdown_escapes_markdown_and_html_control_chars() -> None:
+    # Hostile/incidental text must render literally — no injected emphasis, code,
+    # links, or raw HTML — in both the heading and the blockquote body.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0,
+            end_seconds=1.0,
+            speaker="A <b>",
+            text="see `code`, _em_, [link](x) and <script>&",
+        )
+    ]
+    assert to_markdown(lines, timestamps=False) == (
+        "## A &lt;b&gt;\n\n"
+        "> see \\`code\\`, \\_em\\_, \\[link\\](x) and &lt;script&gt;&amp;\n"
+    )
+
+
+def test_markdown_defuses_line_leading_block_markers() -> None:
+    # A physical line that opens with a block marker must render as literal prose
+    # inside the blockquote, never as a heading, list item, or thematic break.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0,
+            end_seconds=1.0,
+            speaker="A",
+            text=(
+                "# not a heading\n- not a bullet\n+ not a bullet\n"
+                "1. not a list\n2) also not\n--- not a rule"
+            ),
+        )
+    ]
+    assert to_markdown(lines, timestamps=False) == (
+        "## A\n\n"
+        "> \\# not a heading\n"
+        "> \\- not a bullet\n"
+        "> \\+ not a bullet\n"
+        "> 1\\. not a list\n"
+        "> 2\\) also not\n"
+        "> \\--- not a rule\n"
+    )
+
+
+def test_markdown_timestamp_prefix_keeps_first_line_defused() -> None:
+    # With timestamps on, the first body line opens with the [range]; the marker
+    # is still defused so turning timestamps off can never re-expose a heading.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="# hi"),
+    ]
+    assert to_markdown(lines) == (
+        "## A\n\n> [00:00:00.000\u201300:00:01.000] \\# hi\n"
+    )
+
+
+def test_markdown_folds_speaker_newline_into_one_heading() -> None:
+    # A crafted speaker name with an embedded newline cannot break out of the
+    # `##` heading to forge its own structure; the name is folded to one line.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0,
+            end_seconds=1.0,
+            speaker="Alice\n## forged",
+            text="hi",
+        )
+    ]
+    assert to_markdown(lines, timestamps=False) == "## Alice ## forged\n\n> hi\n"
+
+
+def test_paragraphize_merges_adjacent_same_speaker() -> None:
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=2.5, speaker="Alice", text="Hello."),
+        TranscriptLine(start_seconds=2.5, end_seconds=5.0, speaker="Alice", text="Still here."),
+    ]
+    assert paragraphize_transcript(lines) == [
+        TranscriptParagraph(
+            speaker="Alice", start_seconds=0.0, end_seconds=5.0, text="Hello. Still here."
+        )
+    ]
+
+
+def test_paragraphize_preserves_chronology_on_speaker_return() -> None:
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one"),
+        TranscriptLine(start_seconds=1.0, end_seconds=2.0, speaker="B", text="two"),
+        TranscriptLine(start_seconds=2.0, end_seconds=3.0, speaker="A", text="three"),
+    ]
+    assert [p.speaker for p in paragraphize_transcript(lines)] == ["A", "B", "A"]
+
+
+def test_paragraphize_empty_is_empty_list() -> None:
+    assert paragraphize_transcript([]) == []
+
+
+def test_paragraphize_join_respects_existing_whitespace() -> None:
+    # A segment already ending in a newline gets no extra boundary space.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="line one\n"),
+        TranscriptLine(start_seconds=1.0, end_seconds=2.0, speaker="A", text="line two"),
+    ]
+    assert paragraphize_transcript(lines)[0].text == "line one\nline two"
+
+
 @pytest.mark.parametrize("fmt", list(TranscriptFormat))
 def test_dispatcher_matches_direct_formatters(fmt: TranscriptFormat) -> None:
     direct = {
@@ -150,16 +306,20 @@ def test_dispatcher_matches_direct_formatters(fmt: TranscriptFormat) -> None:
         TranscriptFormat.SRT: to_srt,
         TranscriptFormat.VTT: to_vtt,
         TranscriptFormat.JSON: to_json,
+        TranscriptFormat.MARKDOWN: to_markdown,
     }[fmt]
     assert render_transcript(LINES, fmt) == direct(LINES)
 
 
-def test_dispatcher_timestamps_flag_only_affects_txt() -> None:
-    # TXT honors timestamps=False; the flag is inert for the other formats
-    # (subtitle timing is structural, JSON keys are a frozen contract).
+def test_dispatcher_timestamps_flag_affects_only_txt_and_markdown() -> None:
+    # TXT and Markdown honor timestamps=False; the flag is inert for the other
+    # formats (subtitle timing is structural, JSON keys are a frozen contract).
     assert render_transcript(LINES, TranscriptFormat.TXT, timestamps=False) == to_txt(
         LINES, timestamps=False
     )
+    assert render_transcript(
+        LINES, TranscriptFormat.MARKDOWN, timestamps=False
+    ) == to_markdown(LINES, timestamps=False)
     for fmt, direct in (
         (TranscriptFormat.SRT, to_srt),
         (TranscriptFormat.VTT, to_vtt),
@@ -170,5 +330,6 @@ def test_dispatcher_timestamps_flag_only_affects_txt() -> None:
 
 def test_media_types_cover_every_cli_format() -> None:
     # Every CLI/route format (incl. rttm) must have a declared content type.
-    assert set(MEDIA_TYPES) == {"txt", "srt", "vtt", "json", "rttm"}
+    assert set(MEDIA_TYPES) == {"txt", "srt", "vtt", "json", "md", "rttm"}
     assert MEDIA_TYPES["json"].startswith("application/json")
+    assert MEDIA_TYPES["md"].startswith("text/markdown")

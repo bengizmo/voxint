@@ -1108,11 +1108,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_p.set_defaults(fn=_fetch)
 
-    export_p = sub.add_parser("export", help="export a run's transcript (srt/vtt/json/rttm/txt)")
+    export_p = sub.add_parser(
+        "export", help="export a run's transcript (txt/md/srt/vtt/json/rttm)"
+    )
     export_p.add_argument("run_id", type=uuid.UUID)
     export_p.add_argument(
         "--format",
-        choices=["txt", "srt", "vtt", "json", "rttm"],
+        choices=["txt", "md", "srt", "vtt", "json", "rttm"],
         default="txt",
         help="output format (default: txt)",
     )
@@ -1131,7 +1133,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="timestamps",
         action="store_false",
         default=True,
-        help="omit the [start end] time column (txt only; ignored for other formats)",
+        help="omit timestamps (txt bracket column / md time range; ignored for other formats)",
     )
     export_p.add_argument("-o", "--output", help="write to PATH instead of stdout")
     export_p.add_argument(

@@ -12,10 +12,11 @@ strings. Callers own the DB read and the transport's error/response mapping.
 
 import enum
 import json
+import re
 from collections.abc import Sequence
 from typing import Protocol, assert_never
 
-from voxint.adjudication.transcript import TranscriptLine
+from voxint.adjudication.transcript import TranscriptLine, paragraphize_transcript
 
 
 class TranscriptFormat(enum.StrEnum):
@@ -25,6 +26,7 @@ class TranscriptFormat(enum.StrEnum):
     SRT = "srt"
     VTT = "vtt"
     JSON = "json"
+    MARKDOWN = "md"
 
 
 # Content types for HTTP responses, keyed by every CLI/route format including
@@ -35,6 +37,7 @@ MEDIA_TYPES: dict[str, str] = {
     "srt": "application/x-subrip; charset=utf-8",
     "vtt": "text/vtt; charset=utf-8",
     "json": "application/json; charset=utf-8",
+    "md": "text/markdown; charset=utf-8",
     "rttm": "text/plain; charset=utf-8",
 }
 
@@ -167,6 +170,132 @@ def to_json(lines: Sequence[TranscriptLine]) -> str:
     return json.dumps(transcript_payload(lines), ensure_ascii=False, indent=2) + "\n"
 
 
+# Inline Markdown control characters backslash-escaped so transcript text renders
+# literally: no injected emphasis, code spans, or link syntax. HTML-significant
+# characters (&, <, >) are entity-encoded separately in _md_escape so raw HTML in
+# the text can never activate. Line-leading block markers (#, -, +, ordered
+# lists) are neutralized per physical line by _md_defuse_block_start, since those
+# are position-sensitive and _md_escape cannot see them. A bare URL is left as
+# text; a GFM renderer may still autolink it, which is cosmetic and safe.
+# TXT/JSON stay verbatim; only Markdown (like SRT/VTT's --> neutralization)
+# mutates content, and only to defuse it.
+_MD_INLINE_ESCAPES = {
+    "\\": "\\\\",
+    "`": "\\`",
+    "*": "\\*",
+    "_": "\\_",
+    "[": "\\[",
+    "]": "\\]",
+}
+
+# A line-leading ordered-list marker (``1.`` / ``12)``) followed by whitespace or
+# end of line; CommonMark starts a list on it. Matched against an already
+# inline-escaped line so it can be backslash-defused per physical line.
+_MD_ORDERED_LIST = re.compile(r"^(\s*)(\d+)([.)])(?=\s|$)")
+
+# Line-leading block markers CommonMark reads at the start of a physical line:
+# ``#`` (ATX heading), ``-`` / ``+`` (bullet, and ``-`` also a thematic break or
+# setext underline). ``*``/``_`` are already inline-escaped; ``>`` is entity-
+# encoded; so those need no line-position handling here.
+_MD_BLOCK_LEADERS = frozenset({"#", "-", "+"})
+
+
+# EN DASH for the Markdown time range, matching the on-screen transcript view's
+# ``[start-end]``. Written as an escape so it is unambiguous in source (ruff
+# RUF001) while emitting the same byte the reading view uses.
+_TIME_RANGE_DASH = "\u2013"
+
+
+def format_timespan(start_seconds: float, end_seconds: float) -> str:
+    """``[HH:MM:SS.mmm\u2013HH:MM:SS.mmm]`` reading-timestamp range.
+
+    The single formatting truth shared by the Markdown export and the on-screen
+    read mode, so the two can never drift on how a paragraph's time span reads.
+    """
+    start = _timestamp(start_seconds, sep=".")
+    end = _timestamp(end_seconds, sep=".")
+    return f"[{start}{_TIME_RANGE_DASH}{end}]"
+
+
+def _md_escape(text: str) -> str:
+    """Neutralize Markdown and raw-HTML control syntax in ``text``.
+
+    Backslash-escapes the inline Markdown specials (\\ ` * _ [ ]) and
+    entity-encodes ``& < >`` so a hostile or incidental transcript string cannot
+    inject emphasis, a code span, link syntax, or raw HTML into the rendered
+    document. Line-leading block markers are handled separately, per physical
+    line, by :func:`_md_defuse_block_start`. Applied to both the speaker heading
+    and the blockquote body.
+    """
+    out: list[str] = []
+    for ch in text:
+        escaped = _MD_INLINE_ESCAPES.get(ch)
+        if escaped is not None:
+            out.append(escaped)
+        elif ch == "&":
+            out.append("&amp;")
+        elif ch == "<":
+            out.append("&lt;")
+        elif ch == ">":
+            out.append("&gt;")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _md_defuse_block_start(line: str) -> str:
+    """Backslash-escape a line-leading block marker so one physical line renders
+    as literal prose inside the blockquote, never as a heading, list item, or
+    thematic break.
+
+    Runs on an already inline-escaped line (see :func:`_md_escape`), closing the
+    position-sensitive markers that escaper cannot see: leading ``#`` / ``-`` /
+    ``+`` and an ordered-list ``1.`` / ``1)``. ``*``/``_`` are already escaped and
+    ``>`` is entity-encoded, so a nested blockquote or emphasis break cannot form.
+    """
+    stripped = line.lstrip(" ")
+    indent = line[: len(line) - len(stripped)]
+    if stripped[:1] in _MD_BLOCK_LEADERS:
+        return f"{indent}\\{stripped}"
+    ordered = _MD_ORDERED_LIST.match(line)
+    if ordered is not None:
+        return f"{ordered.group(1)}{ordered.group(2)}\\{ordered.group(3)}{line[ordered.end():]}"
+    return line
+
+
+def to_markdown(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> str:
+    """Readable Markdown: an ``## Speaker`` heading per contiguous same-speaker run
+    followed by one blockquote paragraph.
+
+    Adjacent same-speaker lines are merged (via :func:`paragraphize_transcript`),
+    so the export reads as prose rather than reproducing per-segment noise. Every
+    physical line of the paragraph is prefixed ``> ``; with ``timestamps=True``
+    the paragraph body opens with ``[HH:MM:SS.mmm-HH:MM:SS.mmm]`` spanning the run.
+    Speaker and text are escaped for inline specials, raw HTML, and line-leading
+    block markers (:func:`_md_escape` + :func:`_md_defuse_block_start`), and the
+    speaker heading is collapsed to one line, so content stays literal and cannot
+    forge document structure. A bare URL stays as text (a GFM renderer may still
+    autolink it, which is harmless). Empty input yields ``""``; non-empty output
+    ends with exactly one newline.
+    """
+    blocks: list[str] = []
+    for para in paragraphize_transcript(lines):
+        # A speaker name is a single heading line: fold any embedded newline so a
+        # crafted name cannot break out of the `##` and forge its own headings.
+        speaker = para.speaker.replace("\r", " ").replace("\n", " ")
+        heading = f"## {_md_escape(speaker)}"
+        body_lines = [
+            _md_defuse_block_start(line) for line in _md_escape(para.text).split("\n")
+        ]
+        if timestamps:
+            body_lines[0] = (
+                f"{format_timespan(para.start_seconds, para.end_seconds)} {body_lines[0]}"
+            )
+        quoted = "\n".join(f"> {line}" for line in body_lines)
+        blocks.append(f"{heading}\n\n{quoted}\n")
+    return "\n".join(blocks)
+
+
 def to_rttm(turns: Sequence[RttmTurn], file_id: str) -> str:
     """NIST RTTM diarization output — one ``SPEAKER`` line per turn.
 
@@ -195,9 +324,10 @@ def render_transcript(
     RTTM is deliberately not here: it consumes diarization turns, not transcript
     lines, so callers reach :func:`to_rttm` directly.
 
-    ``timestamps`` is meaningful for TXT only (its bracket column is optional);
-    SRT/VTT cue timing is structural and JSON keys are a frozen contract, so the
-    flag is intentionally inert for those formats rather than corrupting them.
+    ``timestamps`` is meaningful for TXT (its bracket column is optional) and
+    Markdown (its per-paragraph time range is optional); SRT/VTT cue timing is
+    structural and JSON keys are a frozen contract, so the flag is intentionally
+    inert for those formats rather than corrupting them.
     """
     match fmt:
         case TranscriptFormat.TXT:
@@ -208,5 +338,7 @@ def render_transcript(
             return to_vtt(lines)
         case TranscriptFormat.JSON:
             return to_json(lines)
+        case TranscriptFormat.MARKDOWN:
+            return to_markdown(lines, timestamps=timestamps)
         case _:  # a new TranscriptFormat member without a case is a bug, not a None body
             assert_never(fmt)

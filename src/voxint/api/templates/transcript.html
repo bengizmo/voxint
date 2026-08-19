@@ -8,15 +8,41 @@
 
 <nav class="top" style="border: 0; margin: .5rem 0;">
   {% for v in variants %}
-  <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}"
+  <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}{% if read %}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% endif %}"
      {% if text == v %}aria-current="page"{% endif %}>{{ v.value }}</a>
   {% endfor %}
 </nav>
 
-{{ export_menu(run) }}
+{# Read mode (issue #65): plain-anchor toggles, no JS. Each link preserves the
+   current text variant so switching views never loses the reading position. The
+   reading-view entry deliberately opens timestamp-free (the shareable "reading
+   copy"); a within-mode toggle brings timestamps back. #}
+<nav class="top" style="border: 0; margin: .5rem 0;">
+  {% if read %}
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}">Exit reading view</a>
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'false' if read_timestamps else 'true' }}">{% if read_timestamps %}Hide timestamps{% else %}Show timestamps{% endif %}</a>
+  {% else %}
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps=false">Reading view</a>
+  {% endif %}
+</nav>
+
+{{ export_menu(run, text) }}
 
 {% if not lines %}
 <p>No transcript segments for this run.</p>
+{% elif read %}
+{# Server-rendered reading view: one heading + paragraph per contiguous
+   same-speaker run. Grouping and timestamp formatting are done in Python
+   (paragraphize_transcript / format_timespan); the template only lays out the
+   supplied rows. Jinja autoescape keeps hostile transcript text literal. #}
+<div class="read-mode">
+  {% for row in read_rows %}
+  <section class="read-para">
+    <h2>{{ row.speaker }}</h2>
+    <p class="read-body">{% if row.timespan %}<span class="t">{{ row.timespan }}</span> {% endif %}{% for tl in row.lines %}{% if not loop.first %}<br>{% endif %}{{ tl }}{% endfor %}</p>
+  </section>
+  {% endfor %}
+</div>
 {% else %}
 {# Island mount point (issue #48): the transcript-player island renders the
    audio-synced view over this fallback once hydrated. The server-rendered loop

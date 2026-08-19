@@ -464,20 +464,33 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   merge tombstones as the label path; `attributed_transcript` overlays it, so the
   HTML page and every export agree. Deliberate v1 limit: speaker search and the
   queue stay label-scoped (a segment-only speaker does not surface there).
-- **Export picker** (issue #52): every built transcript format is reachable from
-  the workbench and the transcript page through one shared Jinja fragment
-  (`fragments/export_menu.html`): TXT, SubRip (`.srt`), WebVTT (`.vtt`), JSON,
-  and RTTM, each with a plain-language label. Pure HTML (no island): each option
-  is a plain `<a>` whose href carries the query, so the menu works with
-  JavaScript off. The raw/enhanced text variant is selectable for the
-  transcript-line formats (RTTM carries raw diarization labels only, so it takes
-  no variant). TXT alone offers a **timestamp-free** reading copy
-  (`?timestamps=false`), a `to_txt(timestamps=...)` keyword the CLI mirrors
-  (`voxint export --no-timestamps`); an integration test asserts the download is
-  byte-identical to the CLI for both settings. The flag is inert for SRT/VTT (cue
-  timing is structural) and JSON (keys are a frozen contract). Deliberately not
-  built: a speaker-name toggle (caption guidance keeps speaker IDs; anonymization
-  belongs in the roster, not the exporter), filed as a follow-up.
+- **Export picker** (issues #52, #65): every built transcript format is reachable
+  from the workbench and the transcript page through one shared Jinja fragment
+  (`fragments/export_menu.html`): TXT, Markdown (`.md`), SubRip (`.srt`), WebVTT
+  (`.vtt`), JSON, and RTTM, each with a plain-language label. Pure HTML (no
+  island): each option is a plain `<a>` whose href carries the query, so the menu
+  works with JavaScript off. The reviewed (`corrected`, operator-effective) /
+  enhanced / raw text variant is selectable for the transcript-line formats (RTTM
+  carries raw diarization labels only, so it takes no variant). TXT and Markdown
+  both offer a **timestamp-free** reading copy (`?timestamps=false`), a
+  `timestamps=...` keyword the CLI mirrors (`voxint export --no-timestamps`); an
+  integration test asserts the download is byte-identical to the CLI for both
+  settings. The flag is inert for SRT/VTT (cue timing is structural) and JSON
+  (keys are a frozen contract). The picker makes the reading copy the prominent
+  first choice and offers a **Read on screen** link.
+- **Read mode + Markdown** (issue #65): a server-rendered on-screen reading view
+  (`GET /runs/{id}/transcript?read=1`, no island) and a `.md` export both render
+  from the same `attributed_transcript` seam through one grouping helper,
+  `paragraphize_transcript` (in `src/voxint/adjudication/transcript.py`), which
+  merges adjacent same-speaker lines into paragraphs. `to_markdown` writes `##`
+  speaker headings over `>` blockquotes with `format_timespan` time ranges, and
+  funnels through `render_transcript` for CLI/route byte parity; read mode renders
+  the same paragraphs via Jinja autoescape. So the two surfaces cannot drift from
+  each other or from the other exports. Deliberately not built: a speaker-name
+  omission toggle (caption guidance keeps speaker IDs; anonymization belongs in
+  the roster, not the exporter) and a plain-`.txt` default flip (the timestamped
+  default is a golden-pinned contract; the reading copy is surfaced in the UI
+  instead), both parked for a real user story.
 - **Triage & correction** (issues #53/#58): the transcript flags **low-confidence**
   segments (persisted `transcript_segments.confidence = exp(avg_logprob)`, below a
   configurable threshold) as "uncertain", a non-background cue so it never

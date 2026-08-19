@@ -257,6 +257,16 @@ def test_queue_renders_operator_ergonomics(
     assert 'aria-valuenow="1"' in body
     assert 'aria-valuemax="2"' in body
     assert "1 of 2 resolved" in body
+    # #93: the count text is ADJACENT (not overlaid on the fill); the slim bar
+    # reuses the review-journey .progress-track and is aria-hidden. An overlaid
+    # label on the accent gradient measured below AA across the filled/unfilled
+    # split, so the old absolute-positioned .progress-fill is retired.
+    assert 'class="progress-track" aria-hidden="true"' in body
+    assert 'class="progress-fill"' not in body
+    # role="progressbar" makes children presentational, so the accessible name
+    # comes from aria-label alone — pin it so it can't silently drift from the
+    # visible count on a future edit.
+    assert 'aria-label="1 of 2 voices resolved"' in body
     # Responsive + a11y (issue #64): the wide queue table scrolls inside a
     # keyboard-reachable, labelled region, with scoped column headers.
     assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
@@ -264,6 +274,8 @@ def test_queue_renders_operator_ergonomics(
     # The otherwise-empty action column header carries a visually-hidden label so
     # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
     assert '<th scope="col"><span class="visually-hidden">Action</span></th>' in body
+    # #93: the per-row Review action is the one teal primary of the row.
+    assert 'class="primary">Review</button>' in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text
@@ -489,11 +501,20 @@ def test_export_menu_surfaces_every_format(
 
     for page in (f"/runs/{run_id}/transcript", f"/review/{run_id}"):
         html = client.get(page).text
-        for ext in ("txt", "srt", "vtt", "json", "rttm"):
+        for ext in ("txt", "md", "srt", "vtt", "json", "rttm"):
             assert f"/review/{run_id}/export.{ext}" in html, f"{ext} missing on {page}"
-        # Both text variants are selectable, and txt offers a timestamp-free copy.
-        assert "text=enhanced" in html and "text=raw" in html
+        # Every non-RTTM format offers all THREE variants the help text promises:
+        # reviewed (corrected, the operator-effective default the picker used to
+        # hide), enhanced, and raw (issue #65). Asserted per-format so dropping one
+        # variant from a single format can never hide behind another's link.
+        for ext in ("txt", "md", "srt", "vtt", "json"):
+            for variant in ("corrected", "enhanced", "raw"):
+                assert (
+                    f"/review/{run_id}/export.{ext}?text={variant}" in html
+                ), f"{ext} missing variant {variant} on {page}"
+        # A timestamp-free reading copy and an on-screen read-mode entry.
         assert "timestamps=false" in html
+        assert f"/runs/{run_id}/transcript?read=1" in html
 
 
 def test_decision_correction_and_stale_token(
