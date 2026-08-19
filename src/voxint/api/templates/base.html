@@ -3,6 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  {# Pre-paint theme resolver (#94). MUST stay before every stylesheet AND the
+     blocking htmx script below: a slow script fetch must not delay theme
+     resolution, or the first painted frame flashes the wrong theme. Guarded:
+     unreadable storage or an unknown value falls back to System (no
+     attribute). All other theme wiring lives at the end of <body>. #}
+  <script>(function(){try{var t=localStorage.getItem("voxint-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();</script>
   <title>{% block title %}Voxint review{% endblock %}</title>
   <script src="/static/htmx.min.js"></script>
   {# Island stylesheet (issue #48). Placed BEFORE the inline <style> so the
@@ -10,7 +16,10 @@
      guard keeps source-run/dev (no build) fully functional. #}
   {% if asset_url('tailwind') %}<link rel="stylesheet" href="{{ asset_url('tailwind') }}">{% endif %}
   <style>
-    :root { color-scheme: light dark; }
+    /* Resolved color-scheme (#94): native controls (audio, select, scrollbars)
+       follow the EFFECTIVE theme, not a permanent `light dark`. Light is the
+       base; both dark token blocks below pin `color-scheme: dark`. */
+    :root { color-scheme: light; }
     /* ============================================================
        "Reading Room" design tokens (epic #89: #90 foundation, #91 palette +
        type). ONE semantic source of truth: base.html chrome consumes these
@@ -26,12 +35,16 @@
          form can never drift. --wave-neutral is a COMPLETE color read in JS by
          WaveformStrip (not a channel triple): opaque #88888c = (136,136,140).
 
-       Dark theme is a SINGLE consolidated @media block below; the status vars
+       Dark theme lives in TWO deliberately identical blocks below (#94): the
+       @media screen and (prefers-color-scheme: dark) block, guarded with
+       :not([data-theme="light"]) so an explicit light choice beats a dark OS,
+       and :root[data-theme="dark"] (screen-scoped; print stays light) for the
+       explicit choice. CSS cannot OR a media query with a selector, so the
+       duplication is structural; a contract test keeps the two declaration
+       sets identical. The status vars
        (--uncertain/--corrected/--focus-ring) and .error reference tokens, so
-       they re-theme automatically without their own dark overrides. The
-       explicit data-theme toggle is deliberately deferred to #94 — this slice
-       stays OS-signal-only, keeping color-scheme: light dark for native
-       controls. Ship the system-ui stack; a bundled font is a gated follow-up. */
+       they re-theme automatically without their own dark overrides. Ship the
+       system-ui stack; a bundled font is a gated follow-up. */
     :root {
       /* Warm paper & ink (light) */
       --paper: #f7f4ee;        /* app canvas — warm, not pure white */
@@ -90,10 +103,39 @@
       --accent-contrast: #ffffff;
       --kbd-overlay: rgb(0 0 0 / .18);
     }
-    /* System dark — ONE consolidated override. Redefine only themed tokens;
-       everything downstream (chrome, islands, status vars, .error) follows. */
-    @media (prefers-color-scheme: dark) {
-      :root {
+    /* Dark tokens, case 1 of 2 — SYSTEM dark: the OS prefers dark and the
+       operator has not forced light. Redefine only themed tokens; everything
+       downstream (chrome, islands, status vars, .error) follows. Both dark
+       blocks are scoped to `screen` so PRINT always uses the light tokens:
+       browsers suppress page backgrounds when printing, which would leave
+       dark-theme light ink on white paper (measured in the #94 browser lane).
+       ⚠ PAIRED with the :root[data-theme="dark"] block directly below: the two
+       declaration sets must stay IDENTICAL (contract-tested) — edit both. */
+    @media screen and (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
+        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #a39e94;
+        --line-rgb: 46 51 58; --line-strong: #3d434b;
+        --accent: #5eb8ae; --accent-ink: #7fccc3; --accent-strong: #74c4bb;
+        --accent-soft: #1e2e2c;
+        --ok: #3fb950;   --ok-soft: #16261a;
+        --warn: #d29922; --warn-soft: #2a2411;
+        --danger: #f2685e; --danger-soft: #301715;
+        --info: #6ba7dd; --info-soft: #14212e;
+        --spk-0: #5fb8cf; --spk-1: #e0954a; --spk-2: #57c06f; --spk-3: #a78be6;
+        --spk-4: #4fc9c4; --spk-5: #e879b0; --spk-6: #d0af4f; --spk-7: #ec7a72;
+        --shadow-1: 0 1px 2px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.34);
+        --shadow-2: 0 6px 18px rgba(0,0,0,.40), 0 18px 40px rgba(0,0,0,.46);
+        --accent-contrast: var(--paper);
+      }
+    }
+    /* Dark tokens, case 2 of 2 — EXPLICIT dark chosen in Settings (#94),
+       regardless of the OS signal. Screen-scoped like case 1 (print stays
+       light). Keep declaration-identical to the block above (contract-tested). */
+    @media screen {
+      :root[data-theme="dark"] {
+        color-scheme: dark;
         --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
         --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #a39e94;
         --line-rgb: 46 51 58; --line-strong: #3d434b;
@@ -188,6 +230,11 @@
     form.filters { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
                    margin: 1rem 0; }
     form.filters label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
+    /* Appearance section (#94): borderless fieldset, radios in a row. */
+    fieldset.theme-choice { border: 0; padding: 0; margin: .6rem 0;
+                            display: flex; flex-wrap: wrap; gap: 1.2rem; align-items: center; }
+    fieldset.theme-choice legend { padding: 0; margin-bottom: .4rem; font-weight: 600; }
+    fieldset.theme-choice label { display: inline-flex; gap: .4rem; align-items: center; }
     .pill.running { background: var(--info-soft); border-color: var(--info); }
     .pill.completed { background: var(--ok-soft); border-color: var(--ok); }
     .pill.failed { background: var(--danger-soft); border-color: var(--danger); }
@@ -424,6 +471,54 @@
   {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
   {% block body %}{% endblock %}
   </main>
+  {# Theme wiring (#94). The <head> resolver owns first paint; this owns the
+     rest. Split on purpose (multi-model plan review): applyDom never persists
+     and the storage handler never writes back, so cross-tab events cannot
+     echo; persistence failures degrade to a working same-page toggle. The
+     Settings radios are wired by document-level delegation (inert on pages
+     without them, survives htmx swaps — no script lives in the partial);
+     pageshow re-reads for bfcache restores. OS flips in System mode need no
+     JS: the guarded @media block re-themes chrome, and WaveformStrip has its
+     own matchMedia listener. #}
+  <script>
+  (function () {
+    var KEY = "voxint-theme";
+    var root = document.documentElement;
+    function normalize(v) { return v === "light" || v === "dark" ? v : null; }
+    function stored() {
+      try { return normalize(localStorage.getItem(KEY)); } catch (e) { return null; }
+    }
+    function applyDom(v) {
+      if (v) { if (root.getAttribute("data-theme") !== v) root.setAttribute("data-theme", v); }
+      else if (root.hasAttribute("data-theme")) { root.removeAttribute("data-theme"); }
+    }
+    function persist(v) {
+      try { if (v) { localStorage.setItem(KEY, v); } else { localStorage.removeItem(KEY); } } catch (e) {}
+    }
+    function syncRadios(v) {
+      var radios = document.querySelectorAll('input[name="theme-choice"]');
+      for (var i = 0; i < radios.length; i++) {
+        radios[i].checked = radios[i].value === (v || "system");
+      }
+    }
+    document.addEventListener("change", function (e) {
+      var el = e.target;
+      if (!el || el.name !== "theme-choice" || !el.checked) { return; }
+      var v = normalize(el.value);
+      applyDom(v); persist(v); syncRadios(v);
+    });
+    window.addEventListener("storage", function (e) {
+      if (e.key !== null && e.key !== KEY) { return; }
+      var v = e.key === null ? stored() : normalize(e.newValue);
+      applyDom(v); syncRadios(v);
+    });
+    window.addEventListener("pageshow", function () {
+      var v = stored(); applyDom(v); syncRadios(v);
+    });
+    document.body.addEventListener("htmx:afterSwap", function () { syncRadios(stored()); });
+    syncRadios(stored());
+  })();
+  </script>
   {# Shared island loader (issue #48): the ONLY script every page pulls in. It
      no-ops when a page has no [data-island] nodes and dynamically imports only
      the island bundles present, so adding an island never touches base.html.

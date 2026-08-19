@@ -83,7 +83,9 @@ export function WaveformStrip({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const probesRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState<number>(0);
-  // Bumped when the color scheme flips so the draw effect re-resolves accents.
+  // Bumped when either theme signal flips — the OS prefers-color-scheme query
+  // or the explicit data-theme toggle on <html> (issue #94) — so the draw
+  // effect re-resolves accents.
   const [themeEpoch, setThemeEpoch] = useState<number>(0);
   // Left position (%) of the "no transcript here" note after a click that lands
   // on no segment; null hides it. Cleared by the next valid click, replaced by
@@ -112,8 +114,16 @@ export function WaveformStrip({
       setThemeEpoch((n) => n + 1);
     };
     mq.addEventListener("change", onChange);
+    // The theme toggle (#94) sets/removes data-theme on <html> without moving
+    // the OS signal, so watch that attribute too.
+    const observer = new MutationObserver(onChange);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme"],
+    });
     return () => {
       mq.removeEventListener("change", onChange);
+      observer.disconnect();
     };
   }, []);
 

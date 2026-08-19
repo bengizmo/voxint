@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **A System / Light / Dark theme control for the review console (#94).** A new
+  **Appearance** section on the Settings page lets the operator follow the
+  device's light/dark preference (System, the default) or force either look.
+  The choice is stored per device in the browser (localStorage), applied by an
+  inline script before first paint so no page ever flashes the wrong theme, and
+  propagated to every open console tab. Native controls (form fields,
+  scrollbars, the audio player) follow the chosen theme via `color-scheme`, and
+  the waveform strip repaints in the new palette the moment the theme changes.
+  Without JavaScript the console keeps following the device setting.
 - **On-screen read mode and a Markdown export for finished transcripts (#65).** A
   new reading view (`/runs/{id}/transcript?read=1`, reachable from the Download
   transcript menu) renders the transcript as prose: one heading per speaker over a

@@ -5,8 +5,10 @@ diarization labels silently lose their color:
 
 1. backend ``speaker_colors.PALETTE_SIZE`` (maps labels to indices ``0..N-1``),
 2. the frontend ``WaveformStrip`` probe count (``PALETTE_SIZE`` in the .tsx),
-3. the ``--spk-0 .. --spk-{N-1}`` design tokens in ``base.html`` (both the light
-   ``:root`` and the ``:root`` nested in the ``prefers-color-scheme: dark`` block),
+3. the ``--spk-0 .. --spk-{N-1}`` design tokens in ``base.html`` — the light
+   ``:root`` block AND both dark blocks (#94 theme toggle): the guarded
+   ``:root:not([data-theme="light"])`` nested in the ``prefers-color-scheme:
+   dark`` media query, and the explicit ``:root[data-theme="dark"]`` sibling —
    and
 4. the ``.spk-0 .. .spk-{N-1}`` -> ``--spk-accent: var(--spk-N)`` class mappings in
    ``base.html`` (the public hook the islands and this waveform read through probe
@@ -18,9 +20,12 @@ real speaker turn renders as "no speaker" with no error. A synchronized change t
 only the two integer constants would still leave the CSS short. This contract pins
 all four to the same contiguous ``0..N-1`` set so any partial change fails here.
 
-The CSS checks are deliberately structural: the ``:root`` bodies are brace-matched
+The CSS checks are deliberately structural: the root bodies are brace-matched
 and comments stripped so the token set is read from the ACTUAL light/dark
-declarations (not merely "somewhere after the dark marker"), and each ``.spk-N``
+declarations (not merely "somewhere after the dark marker"), the two dark
+blocks must define identical ``--spk-*`` values (they are deliberate duplicates
+— CSS cannot OR a media query with a selector — so a palette tweak to only one
+would silently fork system-dark from explicit-dark), and each ``.spk-N``
 mapping is matched WITH its ``var(--spk-M)`` target so a self-referential
 ``k -> k`` mapping is required (an empty or cross-wired rule fails).
 """
@@ -38,17 +43,16 @@ def _strip_css_comments(css: str) -> str:
     return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
 
 
-def _root_bodies(css: str) -> list[tuple[int, str]]:
-    """Return ``(selector_index, body)`` for every brace-matched ``:root { ... }``.
+def _selector_bodies(css: str, selector_pattern: str) -> list[tuple[int, str]]:
+    """Return ``(selector_index, body)`` for every brace-matched block whose
+    selector matches ``selector_pattern`` (a regex, matched right before ``{``).
 
-    ``base.html`` has several ``:root`` blocks (a bare ``color-scheme`` one, the
-    light token block, and the dark token block), so callers select the one that
-    actually bears ``--spk-*`` rather than assuming position. Depth matching keeps
-    this correct even if a nested rule is ever added.
+    Depth matching keeps this correct for nested rules (e.g. a ``:root`` block
+    inside an ``@media`` block) even if further nesting is ever added.
     """
     bodies: list[tuple[int, str]] = []
-    for match in re.finditer(r":root\s*\{", css):
-        open_brace = css.index("{", match.start())
+    for match in re.finditer(selector_pattern + r"\s*\{", css):
+        open_brace = css.index("{", match.end() - 1)
         depth = 0
         for i in range(open_brace, len(css)):
             if css[i] == "{":
@@ -59,28 +63,55 @@ def _root_bodies(css: str) -> list[tuple[int, str]]:
                     bodies.append((match.start(), css[open_brace + 1 : i]))
                     break
         else:
-            raise AssertionError("unbalanced braces after :root in base.html")
+            raise AssertionError("unbalanced braces in base.html CSS")
     return bodies
 
 
-def _spk_root_body(css: str, *, before: bool, split_at: int) -> str:
-    """The single ``:root`` body bearing ``--spk-*`` on one side of ``split_at``.
-
-    ``before=True`` selects the light block (before the dark media marker);
-    ``before=False`` selects the dark block. Asserting exactly one match guards
-    against a stray duplicate or a token block landing on the wrong side.
-    """
+def _light_root_body(css: str) -> str:
+    """The single bare ``:root`` body bearing ``--spk-*`` BEFORE the dark media
+    marker (base.html also carries a bare ``color-scheme: light`` root, which
+    defines no palette). Asserting exactly one guards against a stray duplicate
+    or a token block landing on the wrong side of the marker."""
+    dark_at = css.index("prefers-color-scheme: dark")
     side = [
         body
-        for idx, body in _root_bodies(css)
-        if "--spk-" in body and (idx < split_at if before else idx > split_at)
+        for idx, body in _selector_bodies(css, r":root")
+        if "--spk-" in body and idx < dark_at
     ]
-    scope = "light" if before else "dark"
     assert len(side) == 1, (
-        f"expected exactly one {scope} :root block defining --spk-* tokens in "
+        "expected exactly one light :root block defining --spk-* tokens in "
         f"base.html, found {len(side)}"
     )
     return side[0]
+
+
+def _system_dark_root_body(css: str) -> str:
+    """The single guarded ``:root:not([data-theme="light"])`` body INSIDE the
+    single ``prefers-color-scheme: dark`` media query (#94 system-dark case)."""
+    media = _selector_bodies(
+        css, r"@media\s+screen\s+and\s+\(\s*prefers-color-scheme:\s*dark\s*\)"
+    )
+    assert len(media) == 1, (
+        "expected exactly one screen and (prefers-color-scheme: dark) media "
+        f"query in base.html, found {len(media)}"
+    )
+    guarded = _selector_bodies(media[0][1], re.escape(':root:not([data-theme="light"])'))
+    assert len(guarded) == 1, (
+        'expected exactly one :root:not([data-theme="light"]) block inside the '
+        f"dark media query, found {len(guarded)}"
+    )
+    return guarded[0][1]
+
+
+def _explicit_dark_root_body(css: str) -> str:
+    """The single explicit ``:root[data-theme="dark"]`` body (#94 forced-dark
+    case, the deliberate duplicate of the guarded system-dark block)."""
+    bodies = _selector_bodies(css, re.escape(':root[data-theme="dark"]'))
+    assert len(bodies) == 1, (
+        'expected exactly one :root[data-theme="dark"] block in base.html, '
+        f"found {len(bodies)}"
+    )
+    return bodies[0][1]
 
 
 def _frontend_palette_size() -> int:
@@ -93,6 +124,14 @@ def _frontend_palette_size() -> int:
 def _token_indices(css_body: str) -> set[int]:
     """Indices with a ``--spk-N:`` token definition in the given CSS body."""
     return {int(m) for m in re.findall(r"--spk-(\d+)\s*:", css_body)}
+
+
+def _spk_values(css_body: str) -> dict[int, str]:
+    """``index -> whitespace-normalized value`` for every ``--spk-N:`` token."""
+    return {
+        int(idx): " ".join(value.split())
+        for idx, value in re.findall(r"--spk-(\d+)\s*:\s*([^;}]+)", css_body)
+    }
 
 
 def _mapping_pairs(css: str) -> set[tuple[int, int]]:
@@ -110,18 +149,28 @@ def test_frontend_palette_size_matches_backend() -> None:
 
 def test_base_html_light_and_dark_tokens_cover_the_palette() -> None:
     css = _strip_css_comments(_BASE_HTML.read_text())
-    dark_at = css.index("prefers-color-scheme: dark")
-    light_body = _spk_root_body(css, before=True, split_at=dark_at)
-    dark_body = _spk_root_body(css, before=False, split_at=dark_at)
+    light_body = _light_root_body(css)
+    system_dark_body = _system_dark_root_body(css)
+    explicit_dark_body = _explicit_dark_root_body(css)
     expected = set(range(PALETTE_SIZE))
 
     assert _token_indices(light_body) == expected, (
         "light :root --spk-* tokens must be exactly the contiguous "
         f"0..{PALETTE_SIZE - 1} set that matches speaker_colors.PALETTE_SIZE"
     )
-    assert _token_indices(dark_body) == expected, (
-        "dark :root --spk-* tokens must be exactly the contiguous "
+    assert _token_indices(system_dark_body) == expected, (
+        "system-dark (guarded media-query) --spk-* tokens must be exactly the "
+        f"contiguous 0..{PALETTE_SIZE - 1} set that matches "
+        "speaker_colors.PALETTE_SIZE"
+    )
+    assert _token_indices(explicit_dark_body) == expected, (
+        ':root[data-theme="dark"] --spk-* tokens must be exactly the contiguous '
         f"0..{PALETTE_SIZE - 1} set that matches speaker_colors.PALETTE_SIZE"
+    )
+    assert _spk_values(system_dark_body) == _spk_values(explicit_dark_body), (
+        "the two dark token blocks are deliberate duplicates (#94: media-query "
+        "system-dark vs explicit data-theme dark) — their --spk-* values must "
+        "stay identical, or the palette forks between the two dark modes"
     )
 
 

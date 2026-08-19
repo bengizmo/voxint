@@ -12,9 +12,9 @@ Changes you save do **not** touch runs that are already in progress. They apply
 to your **next** run or job. That is by design: a run's settings are locked in
 the moment it starts, so nothing shifts underneath a job that is already going.
 
-![The Voxint Settings page, showing the First-run setup, Features, Media
-folders, Corrections, LLM enhancement, Sources and research, and Guided tutorial
-sections stacked down the page.](../images/settings.png)
+![The Voxint Settings page, showing the First-run setup, Appearance, Features,
+Media folders, Corrections, LLM enhancement, Sources and research, and Guided
+tutorial sections stacked down the page.](../images/settings.png)
 
 ---
 
@@ -36,6 +36,21 @@ service readiness screen.
 
 For a full walkthrough of the wizard, see the [onboarding
 guide](../onboarding.md).
+
+### Appearance
+
+The console can follow your device's light or dark setting, or you can pick one
+outright. Under **Theme**, choose:
+
+- **System** *(the default)*: match whatever your device is set to. If your
+  device switches to dark mode at night, the console switches with it.
+- **Light** or **Dark**: always use that look, no matter what the device says.
+
+Your choice applies immediately everywhere in the console, including the
+waveform strip and any other tabs you have open. It is remembered by **this
+browser on this device** only; a different computer or browser keeps its own
+choice. The control needs JavaScript; with scripts off, the console simply
+follows your device setting.
 
 ### Features
 

@@ -1,8 +1,10 @@
 import type { Config } from "tailwindcss";
 
-// darkMode: "media" (NOT "class") so islands follow the same OS light/dark
-// signal base.html's `:root { color-scheme: light dark; }` already uses.
-// Islands must not fight the page for a `dark` class.
+// darkMode: "media" is inert in practice: islands use ZERO `dark:` utilities
+// and theme entirely through base.html's CSS variables, which since #94
+// re-resolve under both the guarded `prefers-color-scheme: dark` block and
+// the explicit `:root[data-theme="dark"]` block. Islands must not fight the
+// page for a `dark` class.
 export default {
   content: ["./src/**/*.{ts,tsx}"],
   darkMode: "media",

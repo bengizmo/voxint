@@ -81,20 +81,66 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
 
 
 def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
-    """Light/dark theming stays intact and the focus ring degrades sanely under a
-    forced-colors (high-contrast) system setting."""
-    body = client.get("/dashboard").text
-    assert "color-scheme: light dark;" in body
-    # The consolidated dark block (issue #91) redefines the themed tokens the ring
-    # and error colour follow: the teal accent gets a dark value, and the ring is
-    # bound to it, so keyboard focus stays visible on the dark canvas. A
-    # forced-colors fallback still overrides both.
-    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--accent:\s*#5eb8ae", body)
+    """Light/dark theming stays intact under the #94 theme toggle and the focus
+    ring degrades sanely under a forced-colors (high-contrast) system setting.
+
+    #94 replaced the permanent ``color-scheme: light dark`` with a RESOLVED
+    scheme: light is the base, and ``color-scheme: dark`` is pinned inside BOTH
+    dark token blocks — the ``prefers-color-scheme: dark`` media query (guarded
+    with ``:not([data-theme="light"])`` so an explicit light choice beats a dark
+    OS) and the explicit ``:root[data-theme="dark"]`` sibling. Both dark blocks
+    must carry the themed accent/danger values, or one of the two dark modes
+    loses its focus ring / error legibility."""
+    raw = client.get("/dashboard").text
+    # The stylesheet's own comments name these selectors, so structural index
+    # checks work on a comment-stripped copy; literal value assertions run on
+    # it too (a value living only inside a comment must not pass).
+    body = re.sub(r"/\*.*?\*/", "", raw, flags=re.DOTALL)
+    # Resolved base scheme (#94): light is the default; the old permanent
+    # `light dark` (which let native controls go dark under a forced-light
+    # choice) is gone.
+    assert re.search(r":root\s*\{\s*color-scheme:\s*light;\s*\}", body)
+    assert "color-scheme: light dark;" not in body
+    # Both dark blocks exist, in order: media query, then its guarded root,
+    # then the explicit data-theme sibling.
+    media_idx = body.index("prefers-color-scheme: dark")
+    guard_idx = body.index(':root:not([data-theme="light"])')
+    explicit_idx = body.index(':root[data-theme="dark"]')
+    assert media_idx < guard_idx < explicit_idx, (
+        "the guarded :root:not([data-theme=light]) block must sit inside the "
+        "prefers-color-scheme: dark media query, before the explicit "
+        ':root[data-theme="dark"] block'
+    )
+    system_dark = body[guard_idx:explicit_idx]
+    explicit_dark = body[explicit_idx:]
+    for scope, block in (("system-dark", system_dark), ("explicit-dark", explicit_dark)):
+        # Native controls (audio, select, scrollbars) follow the effective theme.
+        assert "color-scheme: dark;" in block, f"{scope} block lost color-scheme: dark"
+        # Each dark block redefines the themed tokens the ring and error colour
+        # follow: the teal accent gets a dark value, and the ring is bound to
+        # it, so keyboard focus stays visible on the dark canvas; .error reads
+        # --danger, retargeted to a lighter red (AC4).
+        assert re.search(r"--accent:\s*#5eb8ae", block), f"{scope} block lost dark --accent"
+        assert re.search(r"--danger:\s*#f2685e", block), f"{scope} block lost dark --danger"
     assert re.search(r"--focus-ring:\s*var\(--accent\)", body)
     # The forced-colors fallback actually retargets the ring to the system
     # Highlight colour — assert the declaration, not just the media-query name.
     assert re.search(r"forced-colors:\s*active[^}]*outline-color:\s*Highlight", body)
-    # Dark-scheme error colour keeps error text legible on a dark canvas (AC4):
-    # .error reads --danger, which the dark block retargets to a lighter red.
     assert re.search(r"\.error\s*\{[^}]*color:\s*var\(--danger\)", body)
-    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--danger:\s*#f2685e", body)
+
+
+def test_settings_renders_appearance_theme_radiogroup(client: TestClient) -> None:
+    """GET /settings renders the Appearance section (#94): a labelled region, a
+    ``<legend>Theme</legend>`` fieldset naming the radiogroup, and the three
+    ``theme-choice`` radios (system/light/dark) each WRAPPED in a ``<label>``
+    carrying visible text — the wrapping is the accessible name, so a bare
+    unwrapped radio must fail here."""
+    body = client.get("/settings").text
+    assert 'id="appearance"' in body
+    assert "<legend>Theme</legend>" in body
+    for value, label_text in (("system", "System"), ("light", "Light"), ("dark", "Dark")):
+        assert re.search(
+            rf'<label>\s*<input[^>]*type="radio"[^>]*name="theme-choice"'
+            rf'[^>]*value="{value}"[^>]*>\s*{label_text}\s*</label>',
+            body,
+        ), f"missing label-wrapped theme radio for {value!r}"
