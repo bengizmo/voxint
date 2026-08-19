@@ -137,9 +137,37 @@ docker compose -f compose.yaml -f compose.gpu.yaml pull
 docker compose -f compose.yaml -f compose.gpu.yaml up -d
 ```
 
-All three services share one GPU. Their loaded weights total roughly 3.5–4.5 GB
-of VRAM (Whisper large-v2 ~1.5 GB, pyannote ~1–2 GB, TitaNet ~1 GB); budget about
-**6–8 GB** in practice for decoding headroom. An **8 GB card is comfortable**.
+All three services share one GPU. Whisper is pinned to `int8`, so the loaded
+weights are lean; budget for decoding headroom on top:
+
+| What you run | Resident VRAM | Practical budget | Comfortable on |
+|---|---|---|---|
+| **Transcription suite** (Whisper large-v2 int8 ~1.5 GB + pyannote ~1–2 GB + TitaNet ~1 GB) | ~3.5–4.5 GB | **6–8 GB** | an **8 GB** card |
+| **+ bundled local LLM** (Qwen3-4B Q5_K_M, `compose.llm.yaml`, GPU-offloaded) | +~4.5–5 GB | **~10–11 GB** | a **12 GB** card |
+
+The pipeline stages run **one at a time**, but each service holds its model
+resident for the whole session, so the budget is the *sum of resident weights
+plus one stage's decode spike* — not all peaks at once.
+
+**Compatible consumer cards** (NVIDIA):
+
+- **8 GB** (RTX 3050/3060 Ti/4060) — transcription suite, comfortably.
+- **12 GB** (RTX 3060 12 GB, 4070) — transcription suite **plus** the bundled
+  Qwen3-4B LLM overlay on the same card, with a thin margin.
+- **16 GB+** (RTX 4060 Ti 16 GB, 4070 Ti Super, 4080/4090) — the same workload
+  with comfortable headroom for longer LLM context or concurrent runs.
+
+> The bundled LLM is opt-in and GPU offload is off by default — enable it by
+> uncommenting the GPU `command:`/`deploy:` blocks in `compose.llm.yaml`. It
+> covers transcript **enhancement** and run-asset **summary/entities** only;
+> web research and speaker-name attribution still need a BYO endpoint.
+
+> **Measured numbers pending.** These are estimates. End-to-end
+> speed benchmarks on an **RTX 3060 12 GB** and an **AMD Radeon 9060 XT 16 GB**
+> are planned ([#96](https://github.com/bengizmo/voxint/issues/96)), alongside a
+> quality assessment against an expertly annotated reference dataset
+> ([#97](https://github.com/bengizmo/voxint/issues/97)).
+
 Wire contracts: [docs/gpu-contracts.md](gpu-contracts.md).
 
 ### AMD GPU — ROCm tier

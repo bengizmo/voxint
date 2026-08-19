@@ -68,6 +68,13 @@ else, starts Voxint, waits until it is healthy, and prints the console address.
 > a long recording can take hours rather than minutes — but it works anywhere. A
 > GPU (NVIDIA, AMD, or an Apple Silicon Mac) just makes it faster.
 
+> **Have a GPU? How much VRAM you need.** The transcription suite (Whisper +
+> pyannote + TitaNet) shares one card and fits comfortably on **8 GB** (e.g. RTX
+> 3050/3060 Ti/4060). Turning on the optional bundled local LLM adds ~5 GB, so
+> running everything on one card wants **12 GB** (e.g. RTX 3060 12 GB) or more.
+> AMD cards work via the ROCm tier. Full breakdown and card examples →
+> [docs/setup.md](docs/setup.md#nvidia-gpu--the-fast-path).
+
 When it finishes, open the console at **`http://127.0.0.1:8080/`** and sign in
 with the username and password you set. On a fresh install Voxint walks you
 through a short in-browser **setup wizard** and an optional **guided tutorial**
