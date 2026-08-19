@@ -573,28 +573,42 @@ lanes PASS:
 The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
 run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
 
-#### Verdict: v0.19.0 — Gate A/R/M carry from v0.18.0; Gate E owed at the cut
+#### Verdict: v0.19.0 — Gate A/R/M carry from v0.18.0; Gate E run fresh, both lanes PASS (2026-08-19)
 
-Prepared at `063d1c4` — the epic-#78 deterministic-corrections arc (#82 dual-pass
+Cut at `bd702aa` — the epic-#78 deterministic-corrections arc (#82 dual-pass
 composition, #83 console provenance, #84 console authoring), #85 bundled-LLM
-name-hint hardening, the native-macOS media-serving fix, and the native
-install-path remediation. `git diff 20f3b42..063d1c4` (v0.18.0..HEAD) over the
-numerics scope (`services/{whisper,pyannote,titanet}`, `tests/parity/`, their
-`Dockerfile*` + `provenance.json`) is **empty**, so **Gate A (CUDA byte-parity),
-Gate R (ROCm / RX 9060 XT), and Gate M (Metal tier) all carry their v0.18.0
-verdicts** — no maintainer GPU re-run is required for the model numerics. CI's
-parity + smoke jobs still run unconditionally on the release digests.
+name-hint hardening, #90 console design-token foundation (no-op refactor), the
+native-macOS media-serving fix, and the native install-path remediation.
+`git diff 20f3b42..bd702aa` (v0.18.0..HEAD) over the numerics scope
+(`services/{whisper,pyannote,titanet}`, `tests/parity/`, their `Dockerfile*` +
+`provenance.json`) is **empty**, so **Gate A (CUDA byte-parity), Gate R (ROCm /
+RX 9060 XT), and Gate M (Metal tier) all carry their v0.18.0 verdicts** — no
+maintainer GPU re-run is required for the model numerics. CI's parity + smoke jobs
+still run unconditionally on the release digests.
 
 **Gate E (whole-pipeline E2E) does NOT carry** — the corrections epic touched
-`src/voxint/{pipeline,enrichment,db,api}` and `frontend/` — and is **owed by the
-release cut**. The #84 **corrections-editor browser lane** was extended and
-**passed** during this branch's landing (author → `200` + persisted
-`app_settings.corrections` → server-rendered reload → `422` + no-persist on an
-invalid rule; the operator-rule → frozen-pack union → corrector-fires composition
-proven through the real submit-freeze seam). The **full** Gate E re-run — the
-real-pipeline ROCm lane (`tests/e2e/test_real_pipeline.py`) plus a complete browser
-review reconcile — has **not** been run for 0.19.0 and remains a maintainer gate to
-complete before tagging.
+`src/voxint/{pipeline,enrichment,db,api}` and `frontend/` — and was **run fresh** at
+`bd702aa`. Both lanes PASS:
+- **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
+  + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT; isolated
+  worktree + disposable DB to dodge a concurrent session): **`2 passed`** — COMPLETED
+  runs, all six stages, real `titanet-large-v1` embeddings, no restarts.
+- **Browser review lane** (islands via `tools/e2e_browser_lifecycle.py` + Playwright
+  on maintainer hardware): all island behaviours asserted (2 low-confidence chips at
+  indexes 1 & 3; verify-and-advance; replay teardown-guard — audio survives the verify
+  re-render; skip; click-to-edit; unsaved-edit discard warning; edit+save; keymap
+  suppression on a focused `<select>`; the #57 waveform strip — single peaks fetch,
+  region click → selection+seek, keymap↔strip playhead sync) **plus the new #83
+  correction-provenance affordances** (per-segment "corrected by domain pack" marker
+  distinct from "edited", expandable rule trace, raw disclosure + reset-to-raw with no
+  write, copy-raw, the "1 of 2 applied, 1 never fired" reconciliation panel, provenance
+  absent on an untouched segment, and operator-edit-supersedes-provenance). Final network
+  sweep: exactly 2 `/verify`, 1 `/text`, 1 `/peaks`, no stray writes. `RECONCILE PASS`
+  against `segment_review_states` (2 of 5 verified at `[2,4]`, correction on segment 0).
+  The #84 corrections-editor path additionally has its own unit+integration coverage
+  (green in CI).
+
+All maintainer GPU/E2E gates green at `bd702aa` — clear to tag v0.19.0.
 
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
