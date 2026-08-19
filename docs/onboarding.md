@@ -1,11 +1,15 @@
 # First-run onboarding
 
+*From a fresh clone to your first attributed transcript, with no config to hand-edit.*
+
 From a fresh clone to your first attributed transcript, with no config to
 hand-edit. Three pieces do the work: a guided **installer** brings the stack up,
 a first-run **setup wizard** configures it in the browser, and a bundled
 **guided tutorial** walks one full run end to end.
 
-Day-2 operations (migrations, recovery, backup, endpoint reference) live in
+New here? Install Docker and start the stack first with
+[setup.md](setup.md), then come back for this in-browser walkthrough. Day-2
+operations (migrations, recovery, backup, endpoint reference) live in
 [operations.md](operations.md); this doc is only the first-run path.
 
 ## Why it exists
@@ -65,6 +69,8 @@ states outright that submissions fail until that has run
 
 ## 2. First-run setup wizard
 
+![The first-run setup wizard](images/setup-wizard.png)
+
 On a fresh install the **onboarding gate** holds the whole console at the wizard:
 any authenticated page redirects to `/setup` (303) until setup is finished. That
 is deliberate. `/runs` and `/review` are not usable first-run destinations until
@@ -86,17 +92,17 @@ Two behaviors worth knowing:
 
 - **Preferences apply per run, with no worker restart.** Vocabulary and LLM
   settings (endpoint, model, **and API key**) are snapshotted at the start of each
-  pipeline run — and resolved live for enrichment jobs and `voxint doctor` — so a
+  pipeline run (and resolved live for enrichment jobs and `voxint doctor`), so a
   change takes effect on your *next* submission. You never bounce the worker to
   reconfigure.
 - **The LLM API key can be set in the UI.** Enter it on the LLM step (or later on
   the Settings page); a saved key **wins** over env `LLM_API_KEY`, which remains the
-  seed/fallback. It applies system-wide — enhancement, the enrichment producers,
+  seed/fallback. It applies system-wide: enhancement, the enrichment producers,
   and `voxint doctor`. Leaving the key field blank keeps the saved key untouched
   (it is never shown again after saving); a **"Remove saved key"** checkbox reverts
-  to the environment. The key is stored in Voxint's database in plaintext — fine for
-  a single-operator local deployment, but note a database dump/backup contains it —
-  and is never displayed, logged, or exported. You can still keep it env-only if you
+  to the environment. The key is stored in Voxint's database in plaintext (fine for
+  a single-operator local deployment, though note a database dump/backup contains
+  it), and is never displayed, logged, or exported. You can still keep it env-only if you
   prefer: set `LLM_API_KEY` in `.env` and leave the UI field blank.
 
 ## 3. Guided tutorial
@@ -105,11 +111,11 @@ Voxint bundles a synthetic **three-speaker sample** and can stage it as a
 ready-to-adjudicate run, so you learn the review loop before using your own
 audio. **No command line needed:** on the wizard's Finish step choose **"Finish
 setup & start tutorial →"**, or from the Settings page click **"Set up & start
-the guided tutorial →"**. Either one stages the sample (idempotent — an existing
+the guided tutorial →"**. Either one stages the sample (idempotent, so an existing
 tutorial run is reused) and drops you straight into it.
 
 The equivalent CLI seed still exists for scripted/maintainer setups (Docker
-install only — it `exec`s into the `api` container; on the docker-free native
+install only, since it `exec`s into the `api` container; on the docker-free native
 preview use the browser button above):
 
 ```bash
@@ -147,13 +153,13 @@ nav) is the durable entry point for both flows:
 - **Re-run the setup wizard** (`/setup`). It never resets existing preferences
   unless you change them.
 - **Manage LLM enhancement** (`POST /settings/llm`). Enable/disable enhancement and
-  set the endpoint, model, and **API key** — the same controls as the wizard's LLM
+  set the endpoint, model, and **API key**, the same controls as the wizard's LLM
   step, available any time after onboarding. A saved key wins over env
   `LLM_API_KEY`; leave the key field blank to keep the saved one, or tick **"Remove
   saved key"** to revert to the environment. The form carries its own CSRF token.
 - **Set up, start, replay, or complete the tutorial.** When it has not been
   staged yet, **"Set up & start the guided tutorial →"**
-  (`POST /settings/tutorial/seed`) stages the bundled sample and enters it — no
+  (`POST /settings/tutorial/seed`) stages the bundled sample and enters it, with no
   CLI needed. Replay (`POST /settings/tutorial/replay`) is **non-destructive**: it
   walks the sample again but preserves your previous rulings on the tutorial run.
   Completion (`POST /settings/tutorial/complete`) records `tutorial_completed_at`.

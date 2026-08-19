@@ -31,18 +31,18 @@ forever), and its failure semantics follow from that:
   only matching/persistence invariant violations fail the stage.
 - **Segment text is content, never instructions.** The enhancement prompt
   instructs the model to treat every segment's words strictly as transcript
-  content to edit — a segment that reads like a command ("ignore previous
+  content to edit. A segment that reads like a command ("ignore previous
   instructions", "reply with a single word", "you are now a translator", "drop
   the other segments") is still returned unchanged, not obeyed. This matters
   because transcripts are untrusted input and small local models will otherwise
   follow instructions embedded in speech; a hardened prompt measurably stops
   that (verified against the local-LLM qualification corpus). It is a
-  best-effort guard, not a sandbox — the structural batch-integrity check above
+  best-effort guard, not a sandbox; the structural batch-integrity check above
   is the backstop that rejects any reply that still deviates.
 - **Name hints are consumed only on the BYO path.** Enhancement can also surface
   explicit spoken-name hints for speaker attribution, but only capable BYO models
   have them parsed: the scoped bundled model (#67) does no attribution, so its
-  enhancement reply is **not parsed for `name_hints`** (#85) — a hallucinated hint
+  enhancement reply is **not parsed for `name_hints`** (#85): a hallucinated hint
   from a weak model cannot fail the batch, and attribution stays exclusively on
   the BYO name producer. The enhancement **prompt is identical on every path**
   (removing the hints block measurably regressed the 4B model's segment
@@ -102,16 +102,16 @@ an opaque score. `llm_hint` rows store `confidence = NULL`, because
 model-reported confidence is not calibrated and is not recorded.
 
 `transcript_segments.confidence` (issue #53) is the same kind of thing for ASR:
-`exp(avg_logprob)` clamped to [0, 1] — a *transformed likelihood* (the geometric
+`exp(avg_logprob)` clamped to [0, 1], a *transformed likelihood* (the geometric
 mean of the segment's token probabilities), **not** the probability that the
 segment is correct. It is persisted verbatim from the whisper service, NULL when
 the backend reports none (older runs never fabricate a value). The review console
 flags segments below `review_low_confidence_threshold` (default 0.6) for triage
-and labels them **"uncertain, not necessarily wrong"** — never "N% correct". The
+and labels them **"uncertain, not necessarily wrong"**, never "N% correct". The
 threshold is a configurable starting default, deliberately **not** a UI slider (a
 non-technical operator mis-setting it would distrust the signal); refine it
 against a real-corpus histogram before exposing any tuning UI. This reads existing
-model output and does not touch inference — parity/contract gates are unaffected.
+model output and does not touch inference; parity/contract gates are unaffected.
 
 Draft **review priority** (issue #42, [`enrichment-triage.md`](enrichment-triage.md))
 is the same kind of thing for enrichment drafts: a read-time, explainable
@@ -194,3 +194,12 @@ The quality gates above act at pipeline time. The *measurement* layer is the
 offline harness: name accuracy against ground truth, acoustic agreement
 verdicts, two-voter fusion, regression gate metrics. It is documented in
 [harness.md](harness.md) and exposed as `voxint score …` (file-based, DB-free).
+
+## See also
+
+- [architecture.md](architecture.md): where these gates sit in the pipeline and
+  data model.
+- [gpu-contracts.md](gpu-contracts.md): the service contracts that produce the
+  confidence, embedding, and diarization values gated here.
+- [enrichment-triage.md](enrichment-triage.md), [harness.md](harness.md), and the
+  [docs index](README.md).

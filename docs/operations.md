@@ -155,7 +155,7 @@ the `-cpu` images. What that buys you, and its constraints:
 ### Running on Apple Silicon (metal tier)
 
 Prerequisites beyond Docker Desktop: **[Homebrew](https://brew.sh)** and
-**[`uv`](https://docs.astral.sh/uv/)** (`brew install uv`) — `voxint-metal.sh setup`
+**[`uv`](https://docs.astral.sh/uv/)** (`brew install uv`); `voxint-metal.sh setup`
 hard-fails without `uv`. Docker Desktop is required specifically (Colima/OrbStack/
 plain `dockerd` break the `host.docker.internal` loopback the overlay depends on).
 
@@ -311,7 +311,7 @@ DOMAIN_PACKS_DIR=/data/voxint/packs
 With `DOMAIN_PACK_PATH` unset, only the bundled `generic` pack is used. Each run
 **freezes** the pack it was submitted with (`pipeline_runs.domain_pack`, migration
 0017), so editing a manifest on disk never changes a past run's transcription or
-enrichment — a manifest change takes effect on the *next* run.
+enrichment. A manifest change takes effect on the *next* run.
 
 > Per-**folder** assignment (`{media_folder → pack_name}`) is editable in the
 > console (issue #63): the setup wizard's media step and **Settings → Media
@@ -320,16 +320,16 @@ enrichment — a manifest change takes effect on the *next* run.
 > pack (`DOMAIN_PACK_PATH`) stays the installation-wide fallback.
 
 **Deterministic corrections (epic #78).** A pack may also declare a `corrections:`
-list — literal `find → replace` rules that the `enhance_match` stage applies with
+list of literal `find → replace` rules that the `enhance_match` stage applies with
 no model, composed with the optional LLM enhancement through a raw-gated dual pass
 (#82). An operator can author their **own** rules from **Settings → Corrections**
 (#84) without editing a manifest; those live per deployment in
 `app_settings.corrections` (migration **0029**) and, at submit time, are **unioned
 onto the resolved pack and frozen** into the same `pipeline_runs.domain_pack`
-snapshot — so one frozen pack drives both the correction and its review-console
+snapshot, so one frozen pack drives both the correction and its review-console
 provenance (#83). The per-segment trail the console reads back is
 `transcript_segments.correction_trace` + `corrector_version` (migration **0028**).
-A colliding operator rule is refused — at author time against the default pack,
+A colliding operator rule is refused: at author time against the default pack,
 and visibly at submit-time freeze for a differently-scoped folder pack (never a
 silent drop; on the ingest routes this surfaces as a plain-language 422, on the
 CLI as exit 2, and the watch-folder sweep logs-and-skips the offending file rather
@@ -424,7 +424,7 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   `review=needed|resolved|claimed`. **`GET /runs/{id}`** shows the run detail and
   the per-stage attempt ledger (the same data as `voxint status`), with
   transcript and audio links when present.
-- **`GET /review`**: the adjudication queue — completed runs with at least one
+- **`GET /review`**: the adjudication queue of completed runs with at least one
   voice still needing a human ruling. Each row shows a **friendly title**, the
   recording **duration** and **age**, and a **resolved-of-total** progress bar,
   so it is clear at a glance both what a recording is and how much is left to
@@ -469,8 +469,8 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   evidence ledger (adjudication / transcript / diarization rows) is untouched.
   This is the **manual** counterpart to the scheduled media-retention GC (issue
   #15, below): the manual action deletes the rows and files on demand, while the
-  GC sweep keeps the `AudioArtifact` row and stamps `reclaimed_at` for audit —
-  use whichever fits, they compose (deleting a run already GC-reclaimed just
+  GC sweep keeps the `AudioArtifact` row and stamps `reclaimed_at` for audit.
+  Use whichever fits, they compose (deleting a run already GC-reclaimed just
   finds its file already gone).
 
 Beyond these, the console stays **append-only** for evidence: archive hides but
@@ -490,7 +490,7 @@ fire while you are typing, and Space/scroll keys stay with the native player). A
 correction is stored **beside** the immutable `raw_text` and clears that
 segment's verified mark (edited text must be re-checked); reverting to the
 pipeline wording removes it. All writes are claim-gated and carry the workbench's
-claim token — the page never re-claims (a fresh claim would evict the workbench
+claim token; the page never re-claims (a fresh claim would evict the workbench
 tab). With JavaScript off the same page lists every segment, with a plain
 **Verify** form on each one still unverified (inline editing needs the browser
 island, stated plainly), and it renders read-only with a prompt to claim when
@@ -501,38 +501,38 @@ words into one segment, the review page can cut it at a word. Press the **⎇ Sp
 at a word** button to enter split mode; the segment under the review cursor then
 shows its individual words, and clicking a word cuts the segment *before* it (you
 cannot cut before the first word). The cut is stored as an append-only boundary
-on the immutable segment — the original `raw_text` and its word timings are never
-altered — and the segment renders from then on as the derived child lines, each
+on the immutable segment (the original `raw_text` and its word timings are never
+altered), and the segment renders from then on as the derived child lines, each
 inheriting the parent's speaker and review state. A split is only offered when the
 segment's words reconcatenate exactly to its `raw_text` and its text has not been
 materially enhanced; otherwise split mode reports plainly that the segment cannot
 be split rather than guessing at boundaries. Splitting and inline editing are
 **mutually exclusive**: a segment that has been split cannot then be edited (and a
-segment with an operator correction cannot be split) — the box is disabled with a
+segment with an operator correction cannot be split): the box is disabled with a
 short note, because a split's text is word-derived and a free-form edit would have
 nowhere faithful to live. A segment can be cut once (into two children); splitting
 an already-split segment into more parts is refused in this release, and there is
-no un-split control — a mis-split is cleared by re-transcribing the run. Like
-inline editing, splitting needs the browser island — with JavaScript off the
+no un-split control. A mis-split is cleared by re-transcribing the run. Like
+inline editing, splitting needs the browser island: with JavaScript off the
 transcript still lists any already-derived child lines, but no new split can be
 made.
 
 **Reassign a split child to the right speaker.** A split's two halves start out
 sharing the parent segment's single resolved speaker, which is rarely what you
-want — the point of splitting a mis-merged segment is to give each half its own
+want. The point of splitting a mis-merged segment is to give each half its own
 speaker. After a split, each derived child line shows a small **speaker:**
 dropdown listing your active roster; pick a speaker to reassign just that child,
 or pick **↺ inherit (follow the segment)** to clear that child's own speaker so
 it follows the segment again (a whole-segment reassignment if one exists,
 otherwise the diarization label). The choice is scoped to that child's exact
-word-range and stored as an append-only ruling on the immutable parent — it
+word-range and stored as an append-only ruling on the immutable parent. It
 survives a later whole-label decision and, because it is append-only, an
 `inherit` reset tracks later rulings live rather than freezing a copy. A
 word-range reassignment takes precedence over a whole-segment reassignment,
 which takes precedence over the label. Only active roster identities are offered (a merged or archived
 speaker cannot attract a new ruling); a run with no roster yet shows only the
 inherit option. Like the rest of the review loop, the picker needs the browser
-island and a held claim — with JavaScript off the child lines still render with
+island and a held claim: with JavaScript off the child lines still render with
 their resolved speakers, but there is no per-child picker. (Correcting a split
 child's *text* per-range, and un-splitting an already-reassigned segment, are not
 yet available; clear a mistaken reassignment with **↺ inherit**, or re-transcribe
@@ -540,14 +540,14 @@ to clear the split entirely.)
 
 **Waveform strip (who spoke when).** The transcript pages (read-only and
 review) draw a compact waveform under the audio player, tinted per speaker with
-the same colors as the segment list — the colored regions come from the
+the same colors as the segment list. The colored regions come from the
 diarization turns themselves, so overlapping speech shows a hatched marker and
 diarized-but-untranscribed stretches still appear. Clicking the strip jumps to
 that segment in the list (and plays it, when seeking is trusted); the review
 page also underlines the segment under the review cursor. The amplitude data is
 computed once per run on first view (a second or two for long recordings) and
 cached; the strip keeps rendering as a static who-spoke-when map even after the
-run's processed audio has been reclaimed to free disk space — though when
+run's processed audio has been reclaimed to free disk space, though when
 seeking is disabled (untrusted timeline, missing media) a strip click only
 selects the segment, never seeks, and no playhead is shown. If the amplitude
 data cannot be computed (e.g. the media file is gone and nothing was cached)
@@ -581,10 +581,10 @@ The same `beat` schedule carries the opt-in sweeps: the media-retention GC
 (when `MEDIA_RETENTION_ENABLED`), the webhook delivery sweep (when
 `NOTIFY_ENABLED`), and the **watch-folder ingest sweep** `voxint.watch_sweep`
 (issue #60). The watch sweep is registered unconditionally at
-`WATCH_FOLDER_SWEEP_SECONDS` but re-checks its **effective** gate each run —
+`WATCH_FOLDER_SWEEP_SECONDS` but re-checks its **effective** gate each run:
 the env `WATCH_FOLDER_ENABLED` default overridden by the runtime
-`app_settings.watch_folder_enabled` toggle (Settings → Media folders) — so a
-disabled installation only pays one DB read per sweep and enabling it needs no
+`app_settings.watch_folder_enabled` toggle (Settings → Media folders). A
+disabled installation only pays one DB read per sweep, and enabling it needs no
 restart. When on, it walks the operator's registered `media_folders`, submits
 each new file (skipping ones already ingested), waits out
 `WATCH_FOLDER_SETTLE_SECONDS` so a file still being copied in is not read
@@ -630,7 +630,7 @@ It runs a small filtering forward proxy (the same Voxint image, no extra
 download) on an internal network, points yt-dlp's always-passed `--proxy` at it
 (`YTDLP_PROXY`), and applies the **same** public-address policy the worker gate
 uses (`voxint.media.netcheck.ip_is_public`) **at the connection boundary**,
-connecting only to the vetted public IP. Because the proxy — not yt-dlp — makes
+connecting only to the vetted public IP. Because the proxy, not yt-dlp, makes
 the outbound connection, this closes the rebind window and refuses redirect /
 extractor destinations that resolve to a private address. The worker keeps its
 normal network, so Postgres, Redis, the model services, and the LLM/research/
@@ -639,7 +639,7 @@ notify endpoints are unaffected.
 **What it does and does not cover** (state it honestly): it constrains the
 HTTP(S) traffic that honours yt-dlp's `--proxy`, *including* its redirects and
 extractor-constructed URLs. It is **not** a kernel-level route removal and **not**
-a sandbox — a helper yt-dlp spawns that ignores the proxy (e.g. ffmpeg for some
+a sandbox: a helper yt-dlp spawns that ignores the proxy (e.g. ffmpeg for some
 streaming formats), or the worker container's own routable network, is beyond it.
 For that last mile, additionally deny the worker a route to RFC1918 / link-local /
 `169.254.169.254` with a host-level egress firewall. A refused destination is the
@@ -663,8 +663,8 @@ WEB_SEARCH_BASE_URL=http://<your-searxng-host>:8888   # must serve format=json
 # WEB_SEARCH_API_KEY=...   # only if your instance sits behind an auth proxy
 ```
 
-These four settings — the web-research master toggle, the enrichment-producer
-toggle (below), the endpoint, and the API key — are also editable from
+These four settings (the web-research master toggle, the enrichment-producer
+toggle below, the endpoint, and the API key) are also editable from
 **Settings → Sources & research** (issue #76): a saved value wins over the
 environment and takes effect on the next job with no restart. The env values above
 are the fallback when the settings row is blank. The `WEB_READ_*` /
@@ -702,7 +702,7 @@ LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
 ```
 
 > The LLM endpoint, model, and API key can also be set in the UI (setup wizard /
-> Settings, issue #10) — a UI-saved value wins over these env vars, and the key is
+> Settings, issue #10); a UI-saved value wins over these env vars, and the key is
 > resolved live per job. The **`LLM_ENABLED` gate above is env-only for enrichment**:
 > the UI enhancement toggle governs per-run transcript enhancement, not the
 > enrichment producers, so web research and run assets still require
@@ -749,12 +749,12 @@ Then enable it in **Settings → Features → "Use the bundled local model"** (o
 enhancement gate). The bundle is **scoped**: it powers **only transcript
 enhancement and run-asset summaries + entity mentions**. Web research, LLM
 speaker-name suggestions, and run-asset **topics** stay on the BYO endpoint and
-never fall back to the bundle — #66 measured that a small local model isn't
+never fall back to the bundle; #66 measured that a small local model isn't
 reliable at those. When the bundle is active for a run-asset job, topics is
 silently skipped rather than generated badly. The overlay publishes **no host
 port**: only the worker reaches `voxint-llm` by service DNS.
 
-⚠ CPU is a slow backstop for a dense 4B model — enhancement (~20 s) and
+⚠ CPU is a slow backstop for a dense 4B model: enhancement (~20 s) and
 small/medium run-assets are fine, but large transcripts are not, so the bundled
 run-asset input is clamped to `LLM_BUNDLED_RUN_ASSETS_MAX_INPUT_CHARS`
 (16k, vs the BYO `RUN_ASSETS_MAX_INPUT_CHARS=48000`). A GPU is strongly
@@ -903,7 +903,7 @@ mutations are gated by their per-run claim token.
 Storage grows with every run: the pipeline writes a normalized 16 kHz WAV
 intermediate (`artifacts/{run_id}/normalized.wav`) that transcription and
 diarization read, and nothing reclaims it. When enabled, a beat-scheduled GC
-sweep reclaims that intermediate for **old terminal runs** — it unlinks the WAV
+sweep reclaims that intermediate for **old terminal runs**: it unlinks the WAV
 and stamps the `audio_artifacts` row (`reclaimed_at`, `reclaimed_bytes`) as an
 audit record; the row itself is never deleted.
 
@@ -911,19 +911,19 @@ audit record; the row itself is never deleted.
 `completed` or `cancelled` and untouched for `MEDIA_RETENTION_SECONDS`.
 
 **What is always kept:** the **source media** (so a reclaimed run stays
-re-processable — re-submit it to regenerate the intermediate and downstream
+re-processable; re-submit it to regenerate the intermediate and downstream
 results), the transcript, diarization turns, speaker assignments, and the
 immutable adjudication decision ledger. Runs mid-pipeline, `failed`/requeue-able
 runs, the guided-tutorial run, and any file that is also registered as a run's
 source are all excluded.
 
-**It is off by default** — no bytes are reclaimed until you opt in. In the
+**It is off by default**: no bytes are reclaimed until you opt in. In the
 console, a run whose intermediate was reclaimed shows a "Media reclaimed on
 `<date>`" notice instead of the audio link, and `GET /media/{run_id}` returns
 `410 Gone`.
 
 ```dotenv
-# .env — enable and tune (defaults shown)
+# .env: enable and tune (defaults shown)
 MEDIA_RETENTION_ENABLED=true      # off unless set
 MEDIA_RETENTION_SECONDS=2592000   # 30 d; floor 3600 (1 h)
 GC_SWEEP_SECONDS=3600             # how often the sweep runs
@@ -932,7 +932,7 @@ GC_BATCH_LIMIT=500                # rows per sweep, oldest-first
 
 A backlog drains at `GC_BATCH_LIMIT` rows per `GC_SWEEP_SECONDS` (the sweep
 processes one bounded, oldest-first batch per run and is safe to run
-concurrently — rows are claimed with `FOR UPDATE ... SKIP LOCKED`). To reclaim a
+concurrently; rows are claimed with `FOR UPDATE ... SKIP LOCKED`). To reclaim a
 large accumulated backlog faster, raise `GC_BATCH_LIMIT` or lower
 `GC_SWEEP_SECONDS` until it catches up.
 
@@ -941,23 +941,23 @@ the sweep), use the manual **Delete derived audio files** action on the run
 detail page (`POST /runs/{id}/media/delete`, issue #5, above). The manual action
 deletes the rows and files outright; the scheduled sweep keeps the row and
 stamps `reclaimed_at` as an audit record. Archived runs remain eligible for the
-sweep — archiving only hides a run from the console, it does not exempt its
+sweep: archiving only hides a run from the console, it does not exempt its
 intermediate from reclamation.
 
 ## Run notifications / webhooks (issue #12; off by default)
 
 Voxint can POST a **signed webhook** to an endpoint you control when a run
-reaches a **notifiable transition** — `completed` or `failed`. It is opt-in and
+reaches a **notifiable transition** (`completed` or `failed`). It is opt-in and
 off by default; nothing is emitted or delivered until you enable it, and
 enabling later never back-fills runs that finished while it was off.
 
 **How it is delivered (at-least-once).** The notification is recorded as an
 outbox row **in the same database transaction as the run's state change**, so
-delivery intent is atomic with the transition — a run never "completes" without
+delivery intent is atomic with the transition: a run never "completes" without
 its notification queued, and a rolled-back transition takes its notification with
 it. A beat-scheduled sweep then delivers each row **outside any transaction**, so
 a slow or down receiver never blocks the pipeline. Because delivery is retried
-until it succeeds, your receiver **can see the same delivery more than once** —
+until it succeeds, your receiver **can see the same delivery more than once**, so
 **deduplicate on the `delivery_id`** in the body (equivalently the
 `X-Voxint-Delivery` header). A `failed` notification whose run is requeued before
 delivery is *suppressed* (you are not paged about a failure the system already
@@ -971,7 +971,7 @@ rebinding), redirects are **not** followed, and an ambient `HTTP(S)_PROXY` is
 ignored. No URL, secret, or payload is ever written to a log or a stored error.
 
 ```dotenv
-# .env — enable and tune (defaults shown)
+# .env: enable and tune (defaults shown)
 NOTIFY_ENABLED=true
 NOTIFY_WEBHOOK_URL=https://your-host.example.com/voxint-hook
 NOTIFY_WEBHOOK_SECRET=<a random string, >= 16 chars>   # keep secret
@@ -984,17 +984,17 @@ NOTIFY_RETENTION_SECONDS=604800   # purge delivered/suppressed rows after 7 d
 
 | Header | Meaning |
 | --- | --- |
-| `X-Voxint-Delivery` | The `delivery_id` — your idempotency key. |
+| `X-Voxint-Delivery` | The `delivery_id`, your idempotency key. |
 | `X-Voxint-Timestamp` | Unix seconds when the POST was signed. |
-| `X-Voxint-Signature` | `sha256=<hex>` — HMAC-SHA256 of `timestamp + "." + body`. |
+| `X-Voxint-Signature` | `sha256=<hex>`, HMAC-SHA256 of `timestamp + "." + body`. |
 
 The body is `{"schema_version", "event", "run_id", "transition_revision",
 "occurred_at", "delivery_id"}`. It deliberately **omits the run's error text**
 (it can carry sensitive detail); look up the run by `run_id` for detail.
 
 **Verifying a delivery (receiver side).** Recompute the signature over the
-**raw request bytes** — parse-and-re-serialize would change them and the check
-would fail — compare in constant time, and reject a stale timestamp:
+**raw request bytes** (parse-and-re-serialize would change them and the check
+would fail), compare in constant time, and reject a stale timestamp:
 
 ```python
 import hashlib, hmac, time

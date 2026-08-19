@@ -1,8 +1,9 @@
 # Setup
 
-Everything you need to get Voxint running on your operating system and hardware.
-This page takes you from "nothing installed" to "the console is up"; the
-in-browser first-run walkthrough that follows (setup wizard + guided tutorial)
+*Getting Voxint running on your operating system and hardware, from nothing installed to the console being up.*
+
+This page takes you from "nothing installed" to "the console is up". The
+in-browser first-run walkthrough that follows (setup wizard and guided tutorial)
 is covered in [onboarding.md](onboarding.md), and running it day to day is in
 [operations.md](operations.md).
 
@@ -17,10 +18,10 @@ control (your laptop, a home server, a workstation). For the **standard install*
 
 - **[Docker](https://docs.docker.com/get-started/get-docker/) Engine with the
   Compose plugin, version ≥ 2.24.** Check with `docker compose version`. The old
-  standalone `docker-compose` (v1) command cannot read this stack — you need the
+  standalone `docker-compose` (v1) command cannot read this stack; you need the
   `docker compose` (two words) plugin.
 
-Everything else — the database, the AI models, all their weights — is installed
+Everything else (the database, the AI models, all their weights) is installed
 for you. There is **no Hugging Face account or token** to create.
 
 > Two Apple-Silicon paths need a little more: the **metal tier** additionally
@@ -36,7 +37,7 @@ Follow the official Docker instructions for your platform, then come back here.
 | **Ubuntu / Debian** | [Docker Engine on Ubuntu](https://docs.docker.com/engine/install/ubuntu/) · [Debian](https://docs.docker.com/engine/install/debian/) | Install *Docker Engine* + the Compose plugin (not the old `docker-compose`). |
 | **Fedora / RHEL** | [Fedora](https://docs.docker.com/engine/install/fedora/) · [RHEL](https://docs.docker.com/engine/install/rhel/) | Same: Docker Engine + Compose plugin. |
 | **Arch Linux** | [ArchWiki: Docker](https://wiki.archlinux.org/title/Docker) | `docker` and `docker-compose` (the plugin) from the official repos. |
-| **macOS** | [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/) | Docker Desktop runs containers inside a VM. For the CPU tier, raise the VM's **memory limit** to ≥ 8 GB in Docker Desktop → Settings → Resources. Apple Silicon Macs can also run the faster **metal** tier — see below. |
+| **macOS** | [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/) | Docker Desktop runs containers inside a VM. For the CPU tier, raise the VM's **memory limit** to ≥ 8 GB in Docker Desktop → Settings → Resources. Apple Silicon Macs can also run the faster **metal** tier (see below). |
 | **Windows** | [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/) | Use the **WSL 2** backend. Run the commands below from your WSL 2 Linux shell. |
 
 On Linux you may also want to
@@ -52,18 +53,18 @@ git clone https://github.com/bengizmo/voxint.git && cd voxint
 ./scripts/install.sh
 ```
 
-The installer (a plain Bash script — nothing extra to install for the Docker
+The installer (a plain Bash script, with nothing extra to install for the Docker
 tiers; the metal tier adds Homebrew + `uv`, see §3) checks your Docker setup,
 then asks for three things:
 
 - an **admin password** for the console,
 - a **media folder** for your recordings, and
-- a **compute tier** — which hardware runs the models (it suggests the right one:
+- a **compute tier**, which hardware runs the models (it suggests the right one:
   NVIDIA GPU, AMD GPU, Apple Silicon, plain CPU, or "none for now").
 
 It generates everything else, pulls the pinned release images, starts the stack,
 waits until the API reports healthy, and prints the console URL. It is safe to
-re-run — an existing configuration is kept (and backed up before any change), and
+re-run: an existing configuration is kept (and backed up before any change), and
 your tier choice is remembered. Then continue with the in-browser
 [first-run walkthrough](onboarding.md).
 
@@ -79,14 +80,14 @@ docker compose up -d          # database, Redis, one-shot migrate, console, work
 ```
 
 A one-shot `migrate` step brings the database up to date before the console and
-worker start — seeing it report `Exited (0)` in `docker compose ps -a` is
+worker start; seeing it report `Exited (0)` in `docker compose ps -a` is
 **success, not a crash**. If a default port is already taken on your machine,
 override the published side in `.env` (`API_PORT`, `POSTGRES_PORT`,
 `REDIS_PORT`). More detail: [operations.md](operations.md#deployment).
 
 The commands above start the **core stack** (console + database + worker). To
 actually transcribe anything you also need a **compute tier** for the model
-services — pick yours below.
+services. Pick yours below.
 
 ## 3. Choose your compute tier
 
@@ -99,17 +100,17 @@ core stack. Per-service details and tunables live in each
 
 | Your hardware | Compute tier | Overlay / guide |
 |---|---|---|
-| No GPU, or any Mac via Docker | **CPU** (the default) | `compose.cpu.yaml` — below |
-| NVIDIA GPU | **NVIDIA** | `compose.gpu.yaml` — below |
-| AMD GPU | **AMD / ROCm** | `compose.rocm.yaml` — below |
-| Apple Silicon Mac (fastest on a Mac) | **metal** | `voxint-metal.sh` — below |
+| No GPU, or any Mac via Docker | **CPU** (the default) | `compose.cpu.yaml` (below) |
+| NVIDIA GPU | **NVIDIA** | `compose.gpu.yaml` (below) |
+| AMD GPU | **AMD / ROCm** | `compose.rocm.yaml` (below) |
+| Apple Silicon Mac (fastest on a Mac) | **metal** | `voxint-metal.sh` (below) |
 
 All four run the **core stack in Docker**. Separately, Apple-Silicon users who
 can't or won't run Docker Desktop can use the docker-free
-**[native preview](native-macos-preview.md)** — that's a *deployment mode*, not a
-fifth compute tier (it still runs the metal model services under the hood).
+**[native preview](native-macos-preview.md)**. That is a *deployment mode* rather
+than a fifth compute tier: it still runs the metal model services under the hood.
 
-### CPU — runs anywhere (the default)
+### CPU: runs anywhere (the default)
 
 No graphics card, no special drivers. Works on ordinary servers and Apple Silicon
 Macs (via Docker Desktop).
@@ -118,16 +119,17 @@ Macs (via Docker Desktop).
 docker compose -f compose.yaml -f compose.cpu.yaml up -d
 ```
 
-(`up -d` pulls the images on first run — no separate `pull` step needed.)
+(`up -d` pulls the images on first run, so no separate `pull` step is needed.)
 
-Expect it to be **much slower** than a GPU — a long recording can take hours
-rather than minutes — but the results are identical. **8 GB of memory is the
+Expect it to be **much slower** than a GPU (a long recording can take hours
+rather than minutes), but the results are identical. **8 GB of memory is the
 tight floor** (on Docker Desktop that's the *VM* memory limit, not your machine's
-total) — below it the services are OOM-killed with an opaque exit, not a clear
-message, so a long recording can fail with no diagnosis. **16 GB is comfortable.**
-More: [operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier).
+total). Below it the services are OOM-killed with an opaque exit rather than a
+clear message, so a long recording can fail with no diagnosis. **16 GB is
+comfortable.** More:
+[operations.md](operations.md#running-without-an-nvidia-gpu-cpu-tier).
 
-### NVIDIA GPU — the fast path
+### NVIDIA GPU: the fast path
 
 Needs an NVIDIA GPU and the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
@@ -147,17 +149,17 @@ weights are lean; budget for decoding headroom on top:
 
 The pipeline stages run **one at a time**, but each service holds its model
 resident for the whole session, so the budget is the *sum of resident weights
-plus one stage's decode spike* — not all peaks at once.
+plus one stage's decode spike*, not all peaks at once.
 
 **Compatible consumer cards** (NVIDIA):
 
-- **8 GB** (RTX 3050/3060 Ti/4060) — transcription suite, comfortably.
-- **12 GB** (RTX 3060 12 GB, 4070) — transcription suite **plus** the bundled
+- **8 GB** (RTX 3050/3060 Ti/4060): transcription suite, comfortably.
+- **12 GB** (RTX 3060 12 GB, 4070): transcription suite **plus** the bundled
   Qwen3-4B LLM overlay on the same card, with a thin margin.
-- **16 GB+** (RTX 4060 Ti 16 GB, 4070 Ti Super, 4080/4090) — the same workload
+- **16 GB+** (RTX 4060 Ti 16 GB, 4070 Ti Super, 4080/4090): the same workload
   with comfortable headroom for longer LLM context or concurrent runs.
 
-> The bundled LLM is opt-in and GPU offload is off by default — enable it by
+> The bundled LLM is opt-in and GPU offload is off by default; enable it by
 > uncommenting the GPU `command:`/`deploy:` blocks in `compose.llm.yaml`. It
 > covers transcript **enhancement** and run-asset **summary/entities** only;
 > web research and speaker-name attribution still need a BYO endpoint.
@@ -170,11 +172,11 @@ plus one stage's decode spike* — not all peaks at once.
 
 Wire contracts: [docs/gpu-contracts.md](gpu-contracts.md).
 
-### AMD GPU — ROCm tier
+### AMD GPU: ROCm tier
 
 A hybrid tier for an AMD GPU: transcription runs on the GPU, while speaker
 separation and voice identity use the CPU images. The host needs only the
-**amdgpu kernel driver** — no ROCm install (the image carries its own).
+**amdgpu kernel driver**, with no ROCm install (the image carries its own).
 
 ```bash
 docker compose -f compose.yaml -f compose.rocm.yaml up -d
@@ -184,12 +186,12 @@ Some AMD consumer GPUs still hit a known convolution issue
 ([#4](https://github.com/bengizmo/voxint/issues/4)). Details:
 [operations.md](operations.md#running-on-an-amd-gpu-rocm-tier).
 
-### Apple Silicon Mac — metal tier
+### Apple Silicon Mac: metal tier
 
 Docker Desktop can't pass the Apple GPU into a container, so on a Mac the metal
 tier keeps the core stack in Docker but runs the model services **natively** so
 speaker separation can use the Apple GPU. This tier needs **Docker Desktop**
-specifically — Colima, OrbStack, and plain `dockerd` can't route the containers to
+specifically: Colima, OrbStack, and plain `dockerd` can't route the containers to
 the native services (they break the `host.docker.internal` loopback). It also needs
 **[Homebrew](https://brew.sh) and [`uv`](https://docs.astral.sh/uv/)**
 (`brew install uv`) for the native model environments.
@@ -201,20 +203,20 @@ the native services (they break the `host.docker.internal` loopback). It also ne
 ./scripts/metal/voxint-metal.sh status # confirm: whisper cpu / pyannote mps / titanet cpu
 ```
 
-Weights come from the same verified release assets the images use — still no
+Weights come from the same verified release assets the images use, still with no
 Hugging Face account. Details:
 [operations.md](operations.md#running-on-apple-silicon-metal-tier).
 
 **Most Mac users want the metal tier.** There is also a docker-free
 **[native preview](native-macos-preview.md)** that runs the *whole* stack without
-Docker — choose it only if you can't or won't run Docker Desktop; it's a hands-on
-technical preview, not the packaged release.
+Docker; choose it only if you can't or won't run Docker Desktop. It is a hands-on
+technical preview rather than the packaged release.
 
 ### Optional: bundled local LLM (no API key)
 
 Voxint's transcript enhancement and run-asset summaries can call a language
 model. You can point them at your own OpenAI-compatible endpoint (Settings →
-LLM), **or** run the opt-in bundled model — a vendored, Apache-2.0
+LLM), **or** run the opt-in bundled model: a vendored, Apache-2.0
 Qwen3-4B-Instruct served locally, so those features work with **no external
 key**. It layers on top of *any* tier above:
 
@@ -223,7 +225,7 @@ docker compose -f compose.yaml -f compose.cpu.yaml -f compose.llm.yaml up -d
 ```
 
 Then turn on **Settings → Features → "Use the bundled local model"**. It powers
-**only** enhancement and run-asset summaries + entities — web research and LLM
+**only** enhancement and run-asset summaries plus entities; web research and LLM
 speaker-name suggestions still need your own endpoint. On CPU it is slow for a
 4B model, so a GPU is recommended (see the note in `compose.llm.yaml`). Details:
 [operations.md](operations.md#bundled-local-llm-issue-67-optional-no-api-key).
@@ -250,7 +252,7 @@ curl http://127.0.0.1:8080/healthz     # 200 = ready (use your API_PORT if you c
 
 Then open **`http://127.0.0.1:8080/`** in a browser and sign in with the username
 and password you set. A fresh install holds you at the **setup wizard** until
-you finish it — that's expected. Continue with the
+you finish it, which is expected. Continue with the
 [first-run walkthrough](onboarding.md), which covers the wizard and the guided
 tutorial.
 

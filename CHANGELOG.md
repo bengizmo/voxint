@@ -21,6 +21,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   restyling of the dialog is intentionally left to the console-modernization epic
   (#89). Browser behaviour is covered by the maintainer E2E lane, extended to open
   and dismiss the cheat-sheet.
+- **Docs: aligned the documentation set with the `voxint-docs` house style.**
+  Retrofitted the README, contributor docs, and every reference and how-to guide
+  under `docs/` to the two audience lanes: removed emdashes, cut LLM-isms,
+  tightened cross-links, and added lay-reader subtitles and technical "See also"
+  footers. Dated reports, plans, and the security audit were left as historical
+  artifacts. Prose only, no behaviour change.
 
 ### Security
 

@@ -96,7 +96,7 @@ same contract.
     absence (older services) and any future additive values.
   - **whisper only** additionally carries a cached *decode identity* (#33
     Slice 2b), populated once the model is loaded (`null` while `degraded`):
-    `decode_config_hash` (digest of the effective decode config — engine,
+    `decode_config_hash` (digest of the effective decode config: engine,
     model, compute_type, batch_size, engine/runtime versions, VAD params +
     plan version), `vad_plan_version`, `vad_params`, and `model_revision`
     (the pinned HF snapshot). It never hashes weights per request; it exists so
@@ -157,7 +157,7 @@ Response:
   consumes this flat list (it was previously dropped at the ASR client),
   buckets each word into its segment by maximum temporal overlap, and stores
   the result as a nullable `words` JSONB column on `transcript_segments`. This
-  is derived detail beside the immutable ASR text/interval — not a numerics
+  is derived detail beside the immutable ASR text/interval, not a numerics
   contract of its own, so it carries no parity gate.
 - `transcript` is the segment texts joined with single spaces, verbatim.
 - `confidence` values are `exp(avg_logprob)` clamped to [0, 1]; segment
@@ -450,7 +450,7 @@ gate AGAINST them:
   (`references/ct2-cpu-metal/transcribe.json`) with **zero drift** on every
   committed entry × both decode paths. Originally the anchor proof that the
   `WHISPER_ENGINE` seam refactor moved the shipped path mechanically (Slice 2a);
-  after Slice 2b it also guards the shared `assemble_transcription_output` — the
+  after Slice 2b it also guards the shared `assemble_transcription_output`, the
   result-assembly loop deduplicated into the front layer and now called by
   `ct2-legacy` too, so zero drift here proves that dedup is byte-faithful. The
   AMI windows need the prepared work-dir corpus; the committed synthetic clips
@@ -474,7 +474,7 @@ reports comes from `tools/generate_parity_references.py --tier metal
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-17, #33 Slice 2a/2b whisper engine)
 
 Gate M re-run for the **v0.16.0 release**, triggered by #33 Slice 2a/2b landing the
-`WHISPER_ENGINE` compatibility seam and the shared-VAD `ct2` decode engine — a
+`WHISPER_ENGINE` compatibility seam and the shared-VAD `ct2` decode engine, a
 substantial refactor of `services/whisper` (non-empty `git diff v0.15.0..dee0f65
 -- services/`), so the whisper metal lanes must be re-measured before the tag.
 Measured on maintainer Apple Silicon hardware (Apple M1 Pro, 16 GB, macOS 26.5.2
@@ -487,7 +487,7 @@ are added here as that note required):
 
 | Lane | Assertion | Result |
 |---|---|---|
-| `test_whisper_ct2_legacy_replay.py` (#33 Slice 2a/2b, full sweep) | `ct2-legacy` replays the frozen CT2-CPU oracle (`references/ct2-cpu-metal/`) with **zero drift** on every committed entry × both decode paths — full 30 synthetic + 30 AMI corpus at oracle `batch_size=4` | **60 passed** (39m07s), zero drift |
+| `test_whisper_ct2_legacy_replay.py` (#33 Slice 2a/2b, full sweep) | `ct2-legacy` replays the frozen CT2-CPU oracle (`references/ct2-cpu-metal/`) with **zero drift** on every committed entry × both decode paths (full 30 synthetic + 30 AMI corpus at oracle `batch_size=4`) | **60 passed** (39m07s), zero drift |
 | `test_whisper_ct2_self_parity.py` (#33 Slice 2b) | shared `ct2` ≈ `ct2-legacy` to **≤ 0.5pp pooled WER per vad mode** (micro-avg S/D/I/N; empty-ref clips held to a zero-insertion invariant) over synthetic + curated AMI 2–10 window subset | **2 passed** (27m33s) |
 | `test_whisper_metal.py` | native CT2 transcript vs cuda ref (similarity / segments / confidence) | 3 passed |
 | `test_pyannote_metal.py` | full mps=cpu=cuda-ref speaker/turn/mapping gate | 7 passed |
@@ -511,44 +511,44 @@ reference)** and **Gate R (ROCm / RX 9060 XT, `device: rocm` + correct
 transcription at GPU speed)**, all three maintainer GPU gates PASS at `dee0f65`
 for the v0.16.0 tag.
 
-#### Verdict: v0.17.0 — Gate A/R/M carry from `dee0f65`; Gate E run fresh (2026-08-18)
+#### Verdict: v0.17.0, Gate A/R/M carry from `dee0f65`; Gate E run fresh (2026-08-18)
 
-Cut at `d91eadc` (72 commits after v0.16.0 — the #47 settings/setup arc plus the
+Cut at `d91eadc` (72 commits after v0.16.0: the #47 settings/setup arc plus the
 review-console epic). **`services/`, `tests/parity/`, all `Dockerfile*`, and every
 `provenance.json` are unchanged since v0.16.0** (`git diff v0.16.0..d91eadc` over
 that scope is empty), so the model-service numerics gates **carry**: Gate A (CUDA
 byte-parity), Gate R (ROCm / RX 9060 XT), Gate M (Metal tier) all carry their
-`dee0f65` verdicts unchanged — no maintainer GPU re-run. CI's parity + smoke jobs
+`dee0f65` verdicts unchanged, with no maintainer GPU re-run. CI's parity + smoke jobs
 still run unconditionally on the release digests.
 
-**Gate E (whole-pipeline E2E) does NOT carry** and was **run fresh** — its
+**Gate E (whole-pipeline E2E) does NOT carry** and was **run fresh**: its
 carry-over scope is pipeline-aware (`services/`, `src/voxint/{pipeline,clients,
 enrichment,db,api}`, `frontend/`, `tests/e2e/`, `tools/e2e_browser_lifecycle.py`),
 all heavily touched this range, and the `tests/e2e/` suite is itself new since
 v0.16.0 (first release with a Gate E suite). Both lanes PASS at `d91eadc`:
 - **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
   + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT, render
-  gid 990): `2 passed` — COMPLETED runs, all stages, real `titanet-large-v1`
+  gid 990): `2 passed`, i.e. COMPLETED runs, all stages, real `titanet-large-v1`
   embeddings, no restarts.
 - **Browser review lane** (#53/#57/#58 islands via `tools/e2e_browser_lifecycle.py` +
   Playwright on maintainer hardware): all island behaviours asserted (verify/skip/replay,
   click-to-edit, unsaved-edit discard warning, keymap suppression on focused controls,
-  the low-confidence chips, and the #57 waveform strip — single peaks fetch, region
+  the low-confidence chips, and the #57 waveform strip: single peaks fetch, region
   click → selection+seek, keymap↔strip playhead sync), then `RECONCILE PASS` against
   `segment_review_states`.
 
 The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
 run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
 
-#### Verdict: v0.18.0 — Gate A/R/M carry from v0.17.0; Gate E run fresh (2026-08-18)
+#### Verdict: v0.18.0, Gate A/R/M carry from v0.17.0; Gate E run fresh (2026-08-18)
 
-Cut at `20f3b42` — the #67 optional bundled-LLM release (`voxint-llm`,
+Cut at `20f3b42`, the #67 optional bundled-LLM release (`voxint-llm`,
 Qwen3-4B-Instruct-2507 Q5_K_M fetched from Hugging Face at a pinned revision and
 baked into the image), plus the #79/#80/#81 deterministic-corrector work.
 `git diff v0.17.0..20f3b42` over the numerics scope (`services/whisper`,
 `services/pyannote`, `services/titanet`, `tests/parity/`, their `Dockerfile*` +
 `provenance.json`) is **empty**, so **Gate A (CUDA byte-parity), Gate R (ROCm /
-RX 9060 XT), Gate M (Metal tier) all carry their v0.17.0 verdicts** — no
+RX 9060 XT), Gate M (Metal tier) all carry their v0.17.0 verdicts**, with no
 maintainer GPU re-run. The only new `services/` image is `voxint-llm`, which ships
 a **serving profile, not a numerics contract**, and therefore has **no parity gate**
 (CI's `publish-llm` is build-only). CI's parity + smoke jobs still run
@@ -559,13 +559,13 @@ arc touched `enrichment/db/api/frontend`) and was **run fresh** at `20f3b42`. Bo
 lanes PASS:
 - **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
   + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT; isolated
-  worktree + disposable DB to dodge a concurrent session): **`2 passed in 132.62s`** —
-  COMPLETED runs, all six stages, real `titanet-large-v1` embeddings, no restarts.
+  worktree + disposable DB to dodge a concurrent session): **`2 passed in 132.62s`**,
+  i.e. COMPLETED runs, all six stages, real `titanet-large-v1` embeddings, no restarts.
 - **Browser review lane** (#53/#57/#58 islands via `tools/e2e_browser_lifecycle.py` +
   Playwright on maintainer hardware): all island behaviours asserted (2 low-confidence
-  chips at indexes 1 & 3; verify-and-advance; replay teardown-guard — audio survives the
-  verify re-render; skip; click-to-edit; unsaved-edit discard warning; edit+save;
-  keymap suppression on a focused `<select>`; and the #57 waveform strip — single peaks
+  chips at indexes 1 & 3; verify-and-advance; replay teardown-guard (audio survives the
+  verify re-render); skip; click-to-edit; unsaved-edit discard warning; edit+save;
+  keymap suppression on a focused `<select>`; and the #57 waveform strip (single peaks
   fetch, region click → selection+seek, keymap↔strip playhead sync). Final network sweep:
   exactly 2 `/verify`, 1 `/text`, 1 `/peaks`, no stray writes. `RECONCILE PASS` against
   `segment_review_states`.
@@ -573,31 +573,31 @@ lanes PASS:
 The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
 run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
 
-#### Verdict: v0.19.0 — Gate A/R/M carry from v0.18.0; Gate E run fresh, both lanes PASS (2026-08-19)
+#### Verdict: v0.19.0, Gate A/R/M carry from v0.18.0; Gate E run fresh, both lanes PASS (2026-08-19)
 
-Cut at `bd702aa` — the epic-#78 deterministic-corrections arc (#82 dual-pass
+Cut at `bd702aa`, the epic-#78 deterministic-corrections arc (#82 dual-pass
 composition, #83 console provenance, #84 console authoring), #85 bundled-LLM
 name-hint hardening, #90 console design-token foundation (no-op refactor), the
 native-macOS media-serving fix, and the native install-path remediation.
 `git diff 20f3b42..bd702aa` (v0.18.0..HEAD) over the numerics scope
 (`services/{whisper,pyannote,titanet}`, `tests/parity/`, their `Dockerfile*` +
 `provenance.json`) is **empty**, so **Gate A (CUDA byte-parity), Gate R (ROCm /
-RX 9060 XT), and Gate M (Metal tier) all carry their v0.18.0 verdicts** — no
-maintainer GPU re-run is required for the model numerics. CI's parity + smoke jobs
+RX 9060 XT), and Gate M (Metal tier) all carry their v0.18.0 verdicts**, with no
+maintainer GPU re-run required for the model numerics. CI's parity + smoke jobs
 still run unconditionally on the release digests.
 
-**Gate E (whole-pipeline E2E) does NOT carry** — the corrections epic touched
-`src/voxint/{pipeline,enrichment,db,api}` and `frontend/` — and was **run fresh** at
+**Gate E (whole-pipeline E2E) does NOT carry** (the corrections epic touched
+`src/voxint/{pipeline,enrichment,db,api}` and `frontend/`) and was **run fresh** at
 `bd702aa`. Both lanes PASS:
 - **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
   + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT; isolated
-  worktree + disposable DB to dodge a concurrent session): **`2 passed`** — COMPLETED
+  worktree + disposable DB to dodge a concurrent session): **`2 passed`**, i.e. COMPLETED
   runs, all six stages, real `titanet-large-v1` embeddings, no restarts.
 - **Browser review lane** (islands via `tools/e2e_browser_lifecycle.py` + Playwright
   on maintainer hardware): all island behaviours asserted (2 low-confidence chips at
-  indexes 1 & 3; verify-and-advance; replay teardown-guard — audio survives the verify
-  re-render; skip; click-to-edit; unsaved-edit discard warning; edit+save; keymap
-  suppression on a focused `<select>`; the #57 waveform strip — single peaks fetch,
+  indexes 1 & 3; verify-and-advance; replay teardown-guard (audio survives the verify
+  re-render); skip; click-to-edit; unsaved-edit discard warning; edit+save; keymap
+  suppression on a focused `<select>`; the #57 waveform strip, single peaks fetch,
   region click → selection+seek, keymap↔strip playhead sync) **plus the new #83
   correction-provenance affordances** (per-segment "corrected by domain pack" marker
   distinct from "edited", expandable rule trace, raw disclosure + reset-to-raw with no
@@ -608,13 +608,13 @@ still run unconditionally on the release digests.
   The #84 corrections-editor path additionally has its own unit+integration coverage
   (green in CI).
 
-All maintainer GPU/E2E gates green at `bd702aa` — clear to tag v0.19.0.
+All maintainer GPU/E2E gates green at `bd702aa`; clear to tag v0.19.0.
 
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
 metal whisper launcher to **`BATCH_SIZE=4`** (mirroring `Dockerfile.cpu`; commit
-`ece6656`) — a numerics-affecting change to the metal whisper lane that must be
+`ece6656`), a numerics-affecting change to the metal whisper lane that must be
 re-measured before a tag. Measured on maintainer Apple Silicon hardware (Apple
 M1 Pro, 16 GB, macOS 26.5.2 build 25F84), working tree `main` @ `dca6c06`, torch
 2.5.0 / pyannote.audio 3.1.1 / faster-whisper 1.2.1 / CT2 4.8.1 / onnxruntime
@@ -642,7 +642,7 @@ and the in-process parity lane (`WhisperTranscriber` ctor default 16) both run a
 `batch_size=4` and `batch_size=16` produce **identical** margins (both 0.9953
 similarity / 2 = 2 segments / 0.0014 confidence drift): the fixture resolves to
 ≤ 2 VAD speech segments, so BatchedInferencePipeline packs them the same way at
-either batch size — batching is a numerical no-op here and the launcher flip does
+either batch size. Batching is a numerical no-op here and the launcher flip does
 not move the gate. A fixture with > 4 VAD segments would be needed to exercise a
 genuine batch-boundary difference; the committed short fixture does not, so this
 lane confirms the flip is safe without proving batch-size invariance in general.
@@ -750,10 +750,10 @@ the voxint-owned Silero **VADPlan** (speech intervals + pad/merge + decode
 windows + source-time offsets), window→file timestamp remapping, the
 `exp(avg_logprob)` confidence transform, and repetition soft-tagging; engines
 only decode identical pre-cut windows. `/healthz` identity gains a cached decode
-identity — `decode_config_hash` (digest of the effective decode config: engine,
+identity: `decode_config_hash` (digest of the effective decode config: engine,
 model, compute_type, batch_size, engine/runtime versions, VAD params + plan
 version), `vad_plan_version`, `vad_params`, and `model_revision` (the pinned HF
-snapshot; weights are never hashed per request) — and device selection is
+snapshot; weights are never hashed per request). Device selection is
 verified fail-closed so a requested Metal engine cannot silently execute on CPU.
 
 **Two denominators, named explicitly.** `ct2-legacy` is the untouched shipped path
@@ -772,7 +772,7 @@ Pre-registered bounds (ratcheting any afterwards is a numerics decision):
 
 | Gate | Bound |
 |---|---|
-| CT2 self-parity (`legacy` vs `ct2`, `vad_filter` true & false) | normalized WER-diff ≤ 0.5 pp; segmentation delta reported — implemented in `tests/parity/test_whisper_ct2_self_parity.py` (#33 Slice 2b), pooled micro-average per vad mode, empty refs held to zero-insertion |
+| CT2 self-parity (`legacy` vs `ct2`, `vad_filter` true & false) | normalized WER-diff ≤ 0.5 pp; segmentation delta reported (implemented in `tests/parity/test_whisper_ct2_self_parity.py`, #33 Slice 2b), pooled micro-average per vad mode, empty refs held to zero-insertion |
 | Contract: disagreement vs frozen CT2 baseline | normalized WER-diff ≤ 2.0 pp pooled; p95 per-file ≤ 5 pp; token agreement ≥ 97 % |
 | Guardrail: accuracy vs gold | candidate normalized WER ≤ CT2 normalized WER + 1.0 pp (per-stratum and pooled) |
 | Segment boundary drift (text-aligned, matched non-empty only) | p95 ≤ 0.5 s **and** p99/max ≤ 1.5 s; unmatched-segment rate ≤ 2 %; word-timestamp drift reported |
@@ -800,10 +800,10 @@ verdict row + report under `docs/reports/`) in a separate change from the flip,
 which ships as a MINOR release with `WHISPER_ENGINE=ct2`/`ct2-legacy` as the
 rollback path and a diarization canary on a diarized AMI slice beforehand.
 
-**Measured verdict — mlx (2026-08-17): documented-ineligible in current form.**
+**Measured verdict for mlx (2026-08-17): documented-ineligible in current form.**
 A 4-file diagnostic screen (AMI, 3–10 VAD windows each, committed scoring
 harness vs the frozen CT2 baseline) measured `mlx-whisper==0.4.3` +
-`whisper-large-v2-mlx` (fp16; greedy — no beam search exists upstream) at
+`whisper-large-v2-mlx` (fp16; greedy, no beam search exists upstream) at
 pooled WER-diff **19–21 pp** vs the ≤2.0 pp bound and worst-file **115–149 pp**
 vs ≤5 pp, under every decode configuration tested (temperature-fallback ladder
 on/off, per-window and concatenated feeding). Not a fixable decode-config
@@ -817,17 +817,17 @@ gate ≥1.5×). Full evidence:
 only if upstream lands beam search and/or the #1427 fallback fix; `mlx` stays
 out of `KNOWN_ENGINES`. The next measured candidate arm was **whisper.cpp
 Metal** (nominally addressing both measured root causes via beam search and
-int8-family quantization) — see the following verdict block: also
+int8-family quantization); see the following verdict block, also
 measured-ineligible. CT2-MPS remains deferred (upstream PR
 OpenNMT/CTranslate2#2077).
 
-**Measured verdict — whisper.cpp (2026-08-17): documented-ineligible in
+**Measured verdict for whisper.cpp (2026-08-17): documented-ineligible in
 current form.** The same 4-file screen (same harness, frozen baseline, and
 per-window feeding) measured whisper.cpp Metal (`pywhispercpp==1.5.0`,
 `ggml-large-v2-q8_0`, beam_size 5, CT2-parity decode map incl.
 `suppress_nst`) at worst-file WER-diff **98.57 pp** (EN2002c) vs the ≤5 pp
 bound and pooled **11.60 pp** vs ≤2.0 pp. Clean-file drift is largely solved
-(ES2009a 0.92 pp, IS1004d 4.79 pp — inside the per-file bound; ES2009a beats
+(ES2009a 0.92 pp, IS1004d 4.79 pp, both inside the per-file bound; ES2009a beats
 CT2 against gold) and reconstructed `avg_logprob` confidence matches CT2 with
 MAE 0.002–0.016 where transcripts agree, but the EN2002c failure is the same
 confident-crosstalk transcription that killed mlx, and measured attribution
@@ -837,7 +837,7 @@ rather than expanding top-k, so the true-beam-suppression hypothesis was
 never actually exercised), and an f16 control reproduces the Q8_0 blowup
 word-for-word-scale (quantization irrelevant). Performance again not the
 blocker (≈1.58× pooled, indicative). Re-measure only if upstream whisper.cpp
-lands true top-k beam expansion — the strongest recorded re-measure trigger,
+lands true top-k beam expansion, the strongest recorded re-measure trigger,
 since every other gate dimension screened is passing or near-passing. Full
 evidence: `docs/reports/whisper-metal-bakeoff-whispercpp-arm-2026-08-17.md`.
 With mlx and whisper.cpp both measured-ineligible and CT2-MPS deferred
@@ -847,7 +847,7 @@ remains the default and only shipped engine.
 ## Bundled local LLM: llama.cpp server (optional; issue #67)
 
 Unlike the three model services above, this is **not** part of the transcription
-pipeline and has **no numerics parity gate** — it is an optional, opt-in
+pipeline and has **no numerics parity gate**; it is an optional, opt-in
 enrichment endpoint an operator can turn on to get transcript enhancement and
 run-asset summaries/entities with no external API key (`compose.llm.yaml`; see
 `docs/operations.md`). It is documented here because it, too, is a vendored,
@@ -867,20 +867,20 @@ sha-pinned, digest-pinned model whose serving profile is fixed by measurement.
   `--reasoning off` is load-bearing: the client ignores `reasoning_content`, so
   reasoning must not leak into `message.content`.
 - **Sampling** is pinned to **greedy** (`temperature 0`) **client-side**
-  (`SamplingProfile`, `src/voxint/clients/llm.py`), not as a server flag — so the
+  (`SamplingProfile`, `src/voxint/clients/llm.py`), not as a server flag, so the
   BYO path's bytes are unchanged and the bundled path is deterministic.
 - **Scope** (enforced by the Phase B routing, not by prose): enhancement +
   run-asset summary/entity_mentions only. Web research, LLM name attribution,
   and run-asset topics stay on the BYO endpoint and never fall back here.
 - **Hints not parsed on the bundled path** (#85): because the bundled model does
-  no attribution, the enhancement pass **skips parsing** its `name_hints` — a weak
+  no attribution, the enhancement pass **skips parsing** its `name_hints`: a weak
   model's hallucinated out-of-range hint can no longer fail the batch for a channel
   that is discarded anyway. The **prompt is unchanged** (identical on every path):
   a measured A/B showed that removing the `name_hints` block perturbs the 4B
   model's greedy output and regresses segment faithfulness, so only the reply
   parsing differs, never the qualified prompt.
-- **Device**: CPU by default (a slow backstop for a dense 4B model — the bundled
-  run-asset input is clamped to 16k chars for this reason); GPU strongly
+- **Device**: CPU by default (a slow backstop for a dense 4B model, which is why
+  the bundled run-asset input is clamped to 16k chars); GPU strongly
   recommended (uncomment the `-ngl 99` + device-reservation block in
   `compose.llm.yaml`). Qualified against the #66 frozen corpus under the shipped
   enhancement prompt, which #85 leaves byte-for-byte unchanged (parse-only), so
@@ -908,3 +908,12 @@ these tests can import them (via `importlib`, under unique module names)
 without GPU dependencies. Each service's `app/schemas.py` is the wire-schema
 source of truth for its endpoint; the client dataclasses are a separate
 representation kept compatible by these tests.
+
+## See also
+
+- [gpu-smoke.md](gpu-smoke.md): the manual GPU smoke procedure that exercises
+  these contracts against real images.
+- [quality-gates.md](quality-gates.md): how the pipeline weights the confidence,
+  embedding, and diarization values these services return.
+- [architecture.md](architecture.md), [release-process.md](release-process.md),
+  and the [docs index](README.md).

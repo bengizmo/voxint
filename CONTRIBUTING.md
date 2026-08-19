@@ -1,7 +1,7 @@
 # Contributing to Voxint
 
 Thanks for your interest. Voxint is pre-alpha, so expect churn through the 0.x
-series.
+series. The full documentation index is [docs/README.md](docs/README.md).
 
 ## Development setup
 
@@ -59,6 +59,11 @@ parallelism, rule-of-three padding, empty summary closers, over-signposting).
 Prose stays emoji-free apart from a `⚠️`/`✅` callout glyph. The full guidance,
 including per-lane structure and a pre-publish checklist, lives in the
 `voxint-docs` skill; agents should load it before writing or editing docs.
+
+## Reporting security issues
+
+Do not open a public issue for a vulnerability. Report it privately via GitHub
+Security Advisories, as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

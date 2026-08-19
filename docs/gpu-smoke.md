@@ -1,10 +1,10 @@
 # GPU service smoke procedure
 
 CPU-only contract tests (`uv run pytest tests/contracts`) prove the wire
-schemas; this procedure proves the images actually load their models and
-infer on a real GPU. Run it after any change to a `services/*/` Dockerfile,
-requirements, or model-touching code. First verified end-to-end 2026-08-11 on
-an RTX 3090.
+schemas defined in [gpu-contracts.md](gpu-contracts.md); this procedure proves
+the images actually load their models and infer on a real GPU. Run it after any
+change to a `services/*/` Dockerfile, requirements, or model-touching code.
+First verified end-to-end 2026-08-11 on an RTX 3090.
 
 ## Setup
 
@@ -84,3 +84,11 @@ If you edit `app/` code while a build is already running, the image silently
 contains the pre-edit files (this bit us on first smoke: a half-applied
 async→sync refactor). When a smoke failure makes no sense against the source
 you're reading, rebuild first; the pip layers are cached, so it's seconds.
+
+## See also
+
+- [gpu-contracts.md](gpu-contracts.md): the versioned `/v1` + `/healthz`
+  contracts this procedure exercises.
+- [quality-gates.md](quality-gates.md): how the pipeline weights the values these
+  services return.
+- [docs index](README.md).

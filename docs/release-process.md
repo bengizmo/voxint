@@ -54,7 +54,7 @@ The optional bundled-LLM image (`ghcr.io/bengizmo/voxint-llm`, `compose.llm.yaml
 Apache-2.0). Unlike the titanet/pyannote checkpoints, the GGUF is **not** a
 vendored GitHub asset: at ~2.89 GB it exceeds GitHub's 2 GiB release-asset limit,
 and a smaller quant would invalidate the #66 qualification (measured on Q5_K_M).
-So it follows the **whisper large-v2 pattern instead** — the image build fetches
+So it follows the **whisper large-v2 pattern instead**: the image build fetches
 the weight from Hugging Face at the sha-pinned `upstream_revision` in
 `services/llama-cpp/provenance.json`, verifies its `sha256`, and bakes it in. The
 weight is baked, so **end users pull the image with no Hugging Face account,
@@ -63,7 +63,7 @@ token, or network access** (the `HF_HUB_OFFLINE`-equivalent property).
 The `publish-llm` job in `release.yml` does this on a version tag: `curl` the
 pinned `resolve/<revision>/<file>` URL → `sha256sum -c` against provenance →
 build + push `ghcr.io/bengizmo/voxint-llm:X.Y.Z` (+ floating `X.Y`), amd64 only.
-It is BUILD-ONLY (no parity gate — the image ships a serving profile, not a
+It is BUILD-ONLY (no parity gate, since the image ships a serving profile, not a
 numerics contract) and has no `-cpu`/`-rocm` split (GPU is a `compose.llm.yaml`
 device-reservation concern). A weight refresh bumps `upstream_revision` + the
 `sha256` in provenance and the `QWEN_GGUF_SHA256` ARG default in the Dockerfile
@@ -82,7 +82,7 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   footing as `ruff`/`mypy`/`pytest` and runs independently (no Postgres
   coupling). It is a **required status check** on `main`. The Dockerfile runs
   the identical frontend build stage as part of the single image build, so no
-  standalone release job is needed — building in both CI and the Dockerfile is
+  standalone release job is needed. Building in both CI and the Dockerfile is
   intentional (CI fails fast without a full Docker build; the Dockerfile stage
   is what ships). A version bump needs **no** frontend rebuild unless
   `frontend/` changed. Frontend dependency provenance: capture
@@ -137,8 +137,8 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   (`tests/parity/test_pyannote_metal.py`, `test_whisper_metal.py`,
   `test_titanet_onnx.py`, plus the two whisper-engine lanes from the
   `WHISPER_ENGINE` seam (#33): `test_whisper_ct2_legacy_replay.py`, which must
-  replay the frozen CT2-CPU baseline with zero drift — run the full 15-AMI +
-  synthetic sweep here, not just the fast synthetic subset — and, once shipping
+  replay the frozen CT2-CPU baseline with zero drift (run the full 15-AMI +
+  synthetic sweep here, not just the fast synthetic subset) and, once shipping
   the shared `ct2` engine, `test_whisper_ct2_self_parity.py`, which must hold
   `ct2 ≈ ct2-legacy` to ≤0.5pp pooled WER per vad mode; on arm64; see
   docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
@@ -147,21 +147,21 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   this gate being listed here and the dated verdict blocks in
   gpu-contracts.md, which a release must not leave stale.
 
-### E2E gate (Gate E — whole pipeline, maintainer-run)
+### E2E gate (Gate E, whole pipeline, maintainer-run)
 
 The per-service smokes (`smoke-cpu`, Gate R) prove each model service in
 isolation; the parity gates prove numerics. Neither proves the **whole
-pipeline** — submit → PREPARE → transcribe → diarize → embed → persist — holds
+pipeline** (submit → PREPARE → transcribe → diarize → embed → persist) holds
 together against the real services. `tests/e2e/` is that gate. It is
 **maintainer-run and never wired into CI** (GitHub has neither GPUs nor the
 weights), so it runs on maintainer hardware BEFORE tagging.
 
 Before tagging a release that touches `services/` or the pipeline stages, bring
 up the three model services on a lane the host supports (the maintainer's
-host-specific bring-up — compose overlays and CPU limits — lives outside this
+host-specific bring-up, covering compose overlays and CPU limits, lives outside this
 public repo) and run the real-pipeline lane against a disposable database. Note
 `test_real_pipeline.py`'s `EXPECTED_SERVICES` **hardcodes whisper `device: rocm`**
-(fail-not-skip, no env override), so the pipeline lane is **AMD-only** — run it on
+(fail-not-skip, no env override), so the pipeline lane is **AMD-only**: run it on
 an AMD/ROCm box; the browser review lane below is hardware-agnostic:
 
 ```bash
@@ -171,11 +171,11 @@ VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
 
 Expect COMPLETED runs with the persistence invariants intact and no
 model-service restarts. Keep it serial. `VOXINT_E2E=1` makes a missing
-prerequisite a hard failure, not a skip — see
+prerequisite a hard failure, not a skip; see
 [`testing.md`](testing.md#automated-e2e-testse2e).
 
 To also gate the **real-LLM enrichment lane** (a real `HttpLLMClient` against a
-real endpoint — the summary chain), set the enrichment LLM env before the run
+real endpoint, the summary chain), set the enrichment LLM env before the run
 (the endpoint URL, model alias, and key live in the maintainer's environment,
 never in the repo):
 
@@ -188,7 +188,7 @@ That lane is an optional sub-lane: unconfigured it skips, configured-but-broken
 it fails (see [`testing.md`](testing.md#gate-semantics)).
 
 Gate E also covers a **browser runtime acceptance lane** for the review-console
-islands (#53/#58) — the one lane that is not a `tests/e2e/` pytest module
+islands (#53/#58), the one lane that is not a `tests/e2e/` pytest module
 (Playwright is a Claude-Code capability, and the durable check is post-hoc). Run
 it via the `voxint-e2e-review` skill over `tools/e2e_browser_lifecycle.py`: it
 builds + serves a working-tree instance, drives the verify-and-advance loop
@@ -204,7 +204,7 @@ review loop, so it must re-run whenever anything it measures could have changed.
 Carry the previous release's Gate-E evidence only when
 `git diff vPREV..main --stat -- services/ src/voxint/pipeline/ src/voxint/clients/ src/voxint/enrichment/ src/voxint/db/ src/voxint/api/ frontend/ tests/e2e/ tools/e2e_browser_lifecycle.py`
 is empty; otherwise re-run it before tagging. (Gates A/R below stay
-`services/`-scoped — they measure the model services in isolation.)
+`services/`-scoped; they measure the model services in isolation.)
 
 ### Gate-evidence carry-over
 
@@ -216,7 +216,7 @@ when what they measure could have changed. Before tagging, check
   over from the previous release's evidence; the new images are rebuilds of the
   same numerics (CI's parity + smoke jobs still run unconditionally and prove the
   rebuild). Gate E (whole-pipeline E2E) carries over under its own **pipeline-aware**
-  diff scope stated above — a services-only empty diff is not sufficient for it.
+  diff scope stated above; a services-only empty diff is not sufficient for it.
   Record the carry-over and the commit range it rests on
   in the release-commit message (v0.10.0 is the precedent: `services/`
   untouched since v0.9.0, A/R carried, Gate M satisfied by the committed
@@ -234,10 +234,10 @@ model assets) voids it for the gate it feeds.
 
 1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
-   **all six image-bearing compose files** — `compose.yaml` + `compose.gpu.yaml`
+   **all six image-bearing compose files**: `compose.yaml` + `compose.gpu.yaml`
    + `compose.cpu.yaml` + `compose.rocm.yaml` + `compose.ytdlp-egress.yaml` (the
    #16 egress overlay carries the base `voxint` tag too) + `compose.llm.yaml`
-   (the #67 bundled-LLM overlay carries the `voxint-llm` tag) — plus the
+   (the #67 bundled-LLM overlay carries the `voxint-llm` tag), plus the
    `.env.example` comment, so the default stack always runs the release this
    checkout documents.
    Grep the old version rather than trusting a hand-list
@@ -245,7 +245,7 @@ model assets) voids it for the gate it feeds.
    test globs `compose*.yaml`, so a missed flavor fails `pytest`. Run the gates
    (`ruff` / `mypy` / `pytest` with the pgvector test DB) and both gitleaks scans
    (`gitleaks dir .` and `gitleaks git .` with `.gitleaks.toml`; the `git` history
-   scan is the authoritative clean-room check — a `dir` scan also flags gitignored
+   scan is the authoritative clean-room check; a `dir` scan also flags gitignored
    local `.env` / `internal/` files, which is expected, not a leak). As a
    security-posture checkpoint, glance at
    [`security/audit-2026-08-18.md`](security/audit-2026-08-18.md) for the standing
@@ -274,7 +274,7 @@ model assets) voids it for the gate it feeds.
    `docker run --rm ghcr.io/bengizmo/voxint:X.Y.Z sh -c 'command -v node || echo NO-NODE'`
    prints `NO-NODE`, proving no Node ships in the runtime image.
 6. **PyPI**: first **build and stage the frontend islands** into
-   `src/voxint/api/static/app/` — the wheel serves them at runtime, but
+   `src/voxint/api/static/app/`. The wheel serves them at runtime, but
    `static/app/*` is git-ignored (clean-tree hygiene, added with #69), so
    hatchling's VCS-ignore drops them unless they are re-included. `pyproject.toml`
    does that with a **global** `[tool.hatch.build] artifacts` entry (global, not
@@ -288,7 +288,7 @@ model assets) voids it for the gate it feeds.
    uv publish --token <pypi-token> dist/*
    ```
    A wheel that ships only `static/app/.gitkeep` cannot hydrate the review-console
-   islands from a `pip install` — verify the manifest is in the wheel before
+   islands from a `pip install`; verify the manifest is in the wheel before
    publishing. Then check `https://pypi.org/pypi/voxint/json` reports the new
    version. (The token also lives in `~/.pypirc` `[pypi]`; export it as
    `UV_PUBLISH_TOKEN` if not passing `--token`.)

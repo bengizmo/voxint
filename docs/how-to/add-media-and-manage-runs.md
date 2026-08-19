@@ -1,13 +1,16 @@
 # Add media and manage runs
 
+*How to get a recording into Voxint, follow it through the pipeline, and look
+after the run it produces.*
+
 This guide shows you how to get audio or video into Voxint, follow it as it is
 processed, and look after the resulting runs. It is written for the person doing
-the work — no coding required for the browser paths.
+the work, with no coding required for the browser paths.
 
 Everything here happens on your own machine. The console lives at
 `http://127.0.0.1:8080/` and asks for the username and password you set during
 setup (a standard browser login box). Nothing is uploaded to the internet, and
-Voxint does not reach out anywhere on its own — the one exception is the "paste a
+Voxint does not reach out anywhere on its own. The one exception is the "paste a
 URL" feature below, which downloads the file you ask it to.
 
 If you have not installed Voxint yet, start with [setup](../setup.md) and the
@@ -18,13 +21,13 @@ run finishes, see [reviewing and adjudicating](reviewing-and-adjudicating.md).
 
 There are three ways to add a recording:
 
-1. **Upload it in your browser** — the simplest, and the best place to start.
-2. **Paste a URL** — Voxint downloads the audio or video for you.
-3. **Point at a local file or a watched folder** — for files already sitting in
+1. **Upload it in your browser.** The simplest way, and the best place to start.
+2. **Paste a URL.** Voxint downloads the audio or video for you.
+3. **Point at a local file or a watched folder.** For files already sitting in
    the media area Voxint is configured to read.
 
-Once a recording is in, Voxint runs it through six stages — download, prepare,
-transcribe, identify speakers, enhance, and finalize — and you can watch the
+Once a recording is in, Voxint runs it through six stages (download, prepare,
+transcribe, identify speakers, enhance, and finalize), and you can watch the
 progress on the run's page. When it finishes, you review it. Along the way you
 can requeue a run that failed, cancel one that is still going, tuck a finished
 one out of sight, free up disk space, and jot down notes.
@@ -51,8 +54,8 @@ A couple of honest notes:
 - **There is a size limit.** Very large uploads are rejected so a single file
   can't exhaust the server. If your file is over the limit, use one of the two
   methods below instead, or split the recording.
-- The upload is durable the moment Voxint accepts it: even if the task system is
-  briefly busy, your run is safely queued and will start on its own — you don't
+- The upload is durable the moment Voxint accepts it. Even if the task system is
+  briefly busy, your run is safely queued and will start on its own, so you don't
   need to resubmit.
 
 ### 2. Paste a URL
@@ -66,9 +69,9 @@ fetch the file. This uses a tool called yt-dlp as the run's first stage.
 Voxint downloads the media, then processes it exactly like an uploaded file.
 
 **Please read this before you paste a link you don't fully trust.** Fetching a
-URL is not a locked-down sandbox — it is Voxint reaching out to the internet on
-your behalf, with the same access your machine has, and it will follow redirects
-to wherever the link points. So:
+URL is not a locked-down sandbox. It is Voxint reaching out to the internet on
+your behalf, with the same access your machine has, and it follows redirects to
+wherever the link points. So:
 
 - Only fetch links from sources **you trust**.
 - If you need to fetch links you are unsure about, run the optional restricted
@@ -77,21 +80,20 @@ to wherever the link points. So:
   [operations · URL ingestion & egress security](../operations.md#url-ingestion--egress-security).
 
 If you don't want this feature available at all, you can turn **"Download media
-from a URL"** off in **Settings** — see
+from a URL"** off in **Settings**; see
 [settings and troubleshooting](settings-and-troubleshooting.md). When it is off,
 the Runs page simply says URL ingestion is disabled and the box does not appear.
 
 ### 3. A local file or a watched folder
 
-Voxint can also work from files that already live in its **media area** — the
+Voxint can also work from files that already live in its **media area**, the
 folder (called `MEDIA_ROOT`) that you told Voxint it may read during setup.
 
-This is the one point that trips people up, so it is worth stating plainly:
-**these paths are inside Voxint's configured media area, not anywhere on your
-computer.** Voxint can only see files you have placed under that area. A path
-like `interviews/session-1.mp3` means "the file `session-1.mp3` in the
-`interviews` sub-folder of the media area" — not an arbitrary location on your
-disk.
+This is the one point that trips people up, so here it is plainly: **these paths
+are inside Voxint's configured media area, not anywhere on your computer.**
+Voxint can only see files you have placed under that area. A path like
+`interviews/session-1.mp3` means "the file `session-1.mp3` in the `interviews`
+sub-folder of the media area", not an arbitrary location on your disk.
 
 There are two ways to use the media area.
 
@@ -99,23 +101,23 @@ There are two ways to use the media area.
 folders** you can browse the folders inside your media area and register the ones
 Voxint should work with. You can also give each folder a
 [domain pack](../domain-packs.md), which tunes the vocabulary for that kind of
-recording. The folder browser is also part of first-run setup — see the
+recording. The folder browser is also part of first-run setup; see the
 [onboarding walkthrough](../onboarding.md) and
 [settings and troubleshooting](settings-and-troubleshooting.md).
 
 **Turn on automatic ingest (optional).** Registering a folder does not, on its
-own, start anything — it tells Voxint where your media lives and (with the
+own, start anything. It tells Voxint where your media lives and (with the
 setup wizard's scan) lets you queue what is already there. To have Voxint keep
 watching and **pick up new recordings on its own**, turn on **Automatic ingest**,
 the toggle just below the folder list in **Settings → Media folders**. It is
 **off by default**. Once it is on, Voxint checks your registered folders on a
-schedule and starts a run for each new recording it finds — files it has already
+schedule and starts a run for each new recording it finds. Files it has already
 picked up are skipped, so you can drop a whole batch of interviews in and let them
 queue themselves. The toggle applies immediately, no restart. A status line right
-there shows the last check ("Last checked … — picked up 3 new files; 12 already
+there shows the last check ("Last checked …, picked up 3 new files; 12 already
 known; 2 waiting to settle").
 
-Two things are worth knowing so it behaves the way you expect:
+Two things help it behave the way you expect:
 
 - **Copy files in with a move/rename when you can.** Voxint waits until a file has
   stopped changing before it ingests it, so a recording that is still being copied
@@ -123,14 +125,14 @@ Two things are worth knowing so it behaves the way you expect:
   them somewhere else first and then **move** (rename) them into the watched
   folder in one step.
 - **"Already known" means already added, not necessarily finished.** A file is
-  skipped once Voxint has a record of it — including one whose earlier run
+  skipped once Voxint has a record of it, including one whose earlier run
   **failed**. The watcher will not retry a failed run; requeue it yourself from the
   run's detail page. A file you **rename or move** looks new and will be picked up
   again.
 
 **Submit a single file (for people comfortable with the terminal).** If you would
 rather kick off one file by hand, Voxint has a command line. These commands are
-for the **Docker install** — they run inside the running `api` container. (On the
+for the **Docker install**: they run inside the running `api` container. (On the
 docker-free [native macOS preview](../native-macos-preview.md) there is no
 container to `exec` into; use the browser upload, which does the same thing.)
 
@@ -142,7 +144,7 @@ docker compose exec api voxint submit path/to/file.mp3
 docker compose exec api voxint fetch <url>
 ```
 
-`voxint submit` is a **one-off** — it processes that single file once. With
+`voxint submit` is a **one-off**: it processes that single file once. With
 **Automatic ingest** turned on, a registered folder is standing: set it up once
 and everything you drop in gets picked up. Most non-technical operators will never
 need the command line; the browser upload and automatic ingest cover the same
@@ -152,37 +154,37 @@ ground.
 
 ## Watch a run
 
-Every run has its own page (open it from the **Runs** list — click **open** on a
-row). The page shows where the run is and what has happened.
+Every run has its own page (open it from the **Runs** list, then click **open** on
+a row). The page shows where the run is and what has happened.
 
 ![The Runs page: execution history, newest first, with the upload and URL boxes at the top.](../images/runs-list.png)
 
 A run moves through **six stages**, in order:
 
-1. **acquire** — download or locate the source file.
-2. **prepare** — convert the audio into the form the models need.
-3. **transcribe** — turn speech into text (Whisper).
-4. **diarize & embed** — work out who spoke when, and capture each voice's
+1. **acquire**: download or locate the source file.
+2. **prepare**: convert the audio into the form the models need.
+3. **transcribe**: turn speech into text (Whisper).
+4. **diarize & embed**: work out who spoke when, and capture each voice's
    fingerprint (pyannote + TitaNet).
-5. **enhance & match** — tidy the transcript and match voices to known speakers.
-6. **finalize** — assemble the finished result.
+5. **enhance & match**: tidy the transcript and match voices to known speakers.
+6. **finalize**: assemble the finished result.
 
 Near the bottom of the run page, the **stage ledger** lists each attempt at each
-stage — when it started, when it finished, and any error. This is the detailed
+stage: when it started, when it finished, and any error. This is the detailed
 record; you rarely need it unless something went wrong.
 
 ![A run's detail page showing its status and the stage ledger.](../images/run-detail.png)
 
 The run's overall **status** tells you the headline:
 
-- **queued** — accepted and waiting to start. It will begin on its own.
-- **running** — a stage is working right now.
-- **completed** — all stages finished. Time to review it.
-- **failed** — a stage hit an error it could not get past.
+- **queued**: accepted and waiting to start. It will begin on its own.
+- **running**: a stage is working right now.
+- **completed**: all stages finished. Time to review it.
+- **failed**: a stage hit an error it could not get past.
 
 A failed stage is retried automatically a few times, with a growing pause
 between attempts. Only after those retries are exhausted does the run land in
-**failed** — at which point it waits for you (see below). If the failure was in
+**failed**, at which point it waits for you (see below). If the failure was in
 the **transcribe** or **diarize & embed** stage, the most common cause is that
 the model services were not running; the run page says so and tells you how to
 start them.
@@ -196,9 +198,9 @@ The run page gives you a few controls for looking after a run.
 ### Requeue a failed run
 
 If a run failed, a **Requeue** button appears. Click it to retry from the stage
-that failed — handy once you have fixed whatever caused it (for example, started
-the model services). If you had the page open in an old tab and something changed
-underneath you, the requeue is safely refused rather than acting on stale
+that failed. This is handy once you have fixed whatever caused it (for example,
+started the model services). If you had the page open in an old tab and something
+changed underneath you, the requeue is safely refused rather than acting on stale
 information; just reload and try again.
 
 ### Cancel a run that is still going
@@ -206,13 +208,13 @@ information; just reload and try again.
 While a run is **queued** or **running**, a **Cancel run** button is available.
 Cancelling is **cooperative**, not a hard stop: the stage that is running right
 now finishes first, and then no further stages start. Your media and any partial
-results are left in place — cancelling does not delete anything.
+results are left in place; cancelling does not delete anything.
 
 ### Archive and un-archive a finished run
 
 Once a run is finished (completed, failed, or cancelled), you can **Archive** it.
 Archiving **reversibly hides** the run from the Runs list and the review queue.
-Nothing is deleted — every bit of its data, including the record of your review
+Nothing is deleted: every bit of its data, including the record of your review
 decisions, stays intact. To bring it back, open it (the archived view is linked
 from the top of the Runs page) and click **Un-archive**.
 
@@ -230,7 +232,7 @@ need the audio back, you can re-run from the original source.
 ### Add notes
 
 Each run has an **Operator notes** box. Use it for anything you want to remember
-about the recording — who is speaking, the context, follow-ups to do later.
+about the recording: who is speaking, the context, follow-ups to do later.
 Notes are yours; they are kept separate from any information Voxint scraped about
 the source, so the two are never confused.
 
@@ -247,5 +249,5 @@ in [reviewing and adjudicating](reviewing-and-adjudicating.md).
 - [Review & adjudicate](reviewing-and-adjudicating.md)
 - [Manage speakers & export](managing-speakers-and-exporting.md)
 - [Settings & troubleshooting](settings-and-troubleshooting.md)
-- [Setup](../setup.md) — install Voxint on your OS and hardware.
-- [First-run walkthrough](../onboarding.md) — the setup wizard and guided tutorial.
+- [Setup](../setup.md): install Voxint on your OS and hardware.
+- [First-run walkthrough](../onboarding.md): the setup wizard and guided tutorial.

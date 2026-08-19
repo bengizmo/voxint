@@ -11,7 +11,7 @@ stage, a second worker re-executes it, and the run pays twice.
 
 Every budget must fit strictly inside the next one out:
 
-```
+```text
 per-call HTTP timeout            gpu_http_timeout_seconds
   + persistence margin           GPU_CALL_PERSISTENCE_MARGIN_SECONDS (600 s)
 < stage lease                    stage_lease_seconds / diarize_embed_lease_seconds

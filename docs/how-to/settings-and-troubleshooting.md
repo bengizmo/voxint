@@ -1,11 +1,12 @@
 # Settings and troubleshooting
 
-*A how-to guide for Voxint operators (v0.19.0).*
+*How to configure Voxint from your browser, and fix the problems you are most
+likely to hit.*
 
 Almost everything about Voxint is configurable from your browser. Open the
 console at `http://127.0.0.1:8080/`, sign in (it uses a simple username and
 password), and click **Settings** in the top navigation bar. Every option on
-this page saves right there — no files to edit, no services to restart.
+this page saves right there, with no files to edit and no services to restart.
 
 Changes you save do **not** touch runs that are already in progress. They apply
 to your **next** run or job. That is by design: a run's settings are locked in
@@ -20,7 +21,7 @@ sections stacked down the page.](../images/settings.png)
 ## The Settings page, section by section
 
 The page is a stack of self-contained sections. Each one has its own **Save**
-button and saves on its own — saving one section never disturbs another. Here is
+button and saves on its own; saving one section never disturbs another. Here is
 what each does.
 
 ### First-run setup
@@ -30,7 +31,7 @@ again. Click **Re-run the setup wizard** to walk through it any time.
 
 Re-running is safe: the wizard **never resets your existing preferences** unless
 you deliberately change something as you go through it. Use it when you want to
-revisit the guided sequence — for example to re-check your media folder or the
+revisit the guided sequence, for example to re-check your media folder or the
 service readiness screen.
 
 For a full walkthrough of the wizard, see the [onboarding
@@ -41,9 +42,9 @@ guide](../onboarding.md).
 This section turns Voxint's **optional** features on and off. Each feature has
 three settings:
 
-- **On** — always use it.
-- **Off** — never use it.
-- **Use installation setting** — follow whatever was configured when Voxint was
+- **On**: always use it.
+- **Off**: never use it.
+- **Use installation setting**: follow whatever was configured when Voxint was
   installed. Choosing this is how you *undo* an override: it hands the decision
   back to the installation default, so you are never permanently pinned to a
   choice you made here. The label tells you what that default currently is
@@ -51,28 +52,28 @@ three settings:
 
 The optional features are:
 
-- **Speaker name suggestions** — scans finished transcripts for likely speaker
+- **Speaker name suggestions**: scans finished transcripts for likely speaker
   names. This runs fully on your machine and needs no LLM.
-- **LLM name pass** — additionally asks the enhancement LLM to propose speaker
+- **LLM name pass**: additionally asks the enhancement LLM to propose speaker
   names. This one needs both LLM enhancement (below) and Speaker name
   suggestions to be on.
-- **Run assets (summary, topics, entities)** — generates a summary, a topic
+- **Run assets (summary, topics, entities)**: generates a summary, a topic
   list, and grounded entity mentions for each run. Needs LLM enhancement.
-- **Use the bundled local model** — routes transcript enhancement and run-asset
+- **Use the bundled local model**: routes transcript enhancement and run-asset
   summaries + entities to a local model that ships with Voxint, so they work
-  with **no external API key**. It powers only those — topics, web research, and
+  with **no external API key**. It powers only those; topics, web research, and
   LLM name suggestions still need your own endpoint. Needs LLM enhancement on and
   the bundled model service running (the `compose.llm.yaml` overlay; see
   [setup.md](../setup.md#optional-bundled-local-llm-no-api-key)).
-- **Auto-generate run assets** — starts that run-asset generation automatically
+- **Auto-generate run assets**: starts that run-asset generation automatically
   the moment a run is finalized, instead of you asking for it. Needs Run assets
   to be on.
-- **Download media from a URL** — lets you submit media by pasting a URL, which
-  Voxint fetches with yt-dlp. This is independent of the LLM features. Note that
-  fetching a URL reaches out to the network (see the last troubleshooting entry).
+- **Download media from a URL**: lets you submit media by pasting a URL, which
+  Voxint fetches with yt-dlp. This is independent of the LLM features. Fetching a
+  URL reaches out to the network (see the last troubleshooting entry).
 
 If LLM enhancement is off, the page reminds you that the LLM-dependent features
-above stay inactive even if you switch them On here — turn on LLM enhancement
+above stay inactive even if you switch them On here; turn on LLM enhancement
 first.
 
 ### Media folders
@@ -83,10 +84,10 @@ those folders and pick a **domain pack** for each one.
 A domain pack tunes transcription and enrichment for a particular kind of
 recording (for example, a pack with the right vocabulary and prompts for your
 subject area). Assigning packs per folder lets you keep, say, interviews and
-lectures tuned differently. Browsing stays inside your media root — you cannot
+lectures tuned differently. Browsing stays inside your media root; you cannot
 wander off into the rest of the disk. Changes apply to the next job you submit.
 
-**Automatic ingest** *(optional, off by default)* — the toggle below the folder
+**Automatic ingest** *(optional, off by default)* is the toggle below the folder
 list. When it is on, Voxint checks your registered folders on a schedule and
 starts a run for each **new** recording, skipping files it already knows, so you
 can drop a batch in and let it queue itself. A status line shows the last check.
@@ -100,8 +101,8 @@ To learn what domain packs are and how to choose one, see
 
 ### Corrections *(optional)*
 
-Fix words your recordings get wrong **every time** — a name, an acronym, a piece
-of jargon — without hand-editing any files. Each rule replaces a literal phrase
+Fix words your recordings get wrong **every time** (a name, an acronym, a piece
+of jargon) without hand-editing any files. Each rule replaces a literal phrase
 with the form you want (for example `zoom board` → `Zoning Board`, or `C D B G` →
 `CDBG`). The rules run with no model and no network, so they are exact and
 repeatable.
@@ -109,22 +110,22 @@ repeatable.
 To author a rule:
 
 - **Add rule**, then type the phrase to **Find** and what to **Replace with**.
-- **Match case** and **Whole word only** are on by default — the safe posture for
+- **Match case** and **Whole word only** are on by default, the safe posture for
   a domain term. Turn *Match case* off to catch any capitalization; turn *Whole
   word only* off to match inside longer words.
 - Leave the id blank and Voxint generates one from your phrase. Use the **↑ / ↓**
   buttons to reorder, **Remove** to delete a row, then **Save corrections**.
 
 Voxint checks every rule when you save and refuses a bad one **with the reason
-pinned to the row** — for example an empty field, a rule that would loop on its
-own replacement, or one that collides with the selected pack's own rules — so a
+pinned to the row** (for example an empty field, a rule that would loop on its
+own replacement, or one that collides with the selected pack's own rules), so a
 mistake is caught at save time, not when a run fails. Nothing is saved unless the
 whole list is valid.
 
 Your rules live with **this Voxint** (not inside a pack file), so they **survive
 pack upgrades** and apply on top of **whichever** pack a run uses. Like every
 other setting, they apply to your **next** run, never one already in progress. On
-a corrected line the review console shows exactly which rule changed it — see
+a corrected line the review console shows exactly which rule changed it; see
 [Reviewing → corrections your domain pack made](reviewing-and-adjudicating.md#corrections-your-domain-pack-made).
 
 This is a list of **literal** find-and-replace rules, not a regular-expression
@@ -136,16 +137,16 @@ corrections compose with LLM enhancement, see
 
 When enabled, Voxint sends transcript segments to an OpenAI-compatible model to
 clean them up and suggest likely speaker names. This is **best-effort**: a slow
-or failing model never blocks a run — the run still completes, just without the
+or failing model never blocks a run; the run still completes, just without the
 enhancement.
 
 You configure three things:
 
-- **Endpoint base URL** — the address of your OpenAI-compatible model, for
+- **Endpoint base URL**: the address of your OpenAI-compatible model, for
   example `https://llm.example.com/v1`. Leave it blank to use the installation
   setting.
-- **Model** — the model name to request. Blank uses the installation setting.
-- **API key** — the credential for that endpoint. It is stored in Voxint's own
+- **Model**: the model name to request. Blank uses the installation setting.
+- **API key**: the credential for that endpoint. It is stored in Voxint's own
   local database and used for all LLM features. For your safety it is **never
   shown again after you save it**; leave the field blank to keep the key you
   already saved.
@@ -155,7 +156,7 @@ and want to fall back to the environment key, tick **Remove saved key**.
 
 Before enhancement can be enabled you need a key configured (either saved here or
 in the environment), and the LLM time budget has to fit within the transcription
-stage's lease — the page tells you if it does not.
+stage's lease; the page tells you if it does not.
 
 If you would rather not run an external endpoint at all, turn on **Use the
 bundled local model** (above) instead: it needs no endpoint URL and no key. It
@@ -168,19 +169,19 @@ Voxint can research the people in your recordings **on the web** to suggest
 names and background. This is off unless you turn it on, and it is the one part
 of Voxint that deliberately reaches out to the internet.
 
-- **Web research** — the master switch. When **On**, Voxint makes outbound web
+- **Web research**: the master switch. When **On**, Voxint makes outbound web
   requests to the search provider you configure to research speakers. When
   **Off**, Voxint never touches the network for research. Like the Features
   toggles, it also offers **Use installation setting**.
-- **Web-research enrichment producer** — generates researched background for
+- **Web-research enrichment producer**: generates researched background for
   each run. It needs both Web research (above) and LLM enhancement to be on.
-- **Search provider endpoint** — the address of the search instance Voxint
+- **Search provider endpoint**: the address of the search instance Voxint
   queries. Enter just the endpoint address, with no query string, fragment, or
   embedded credentials.
-- **Search provider API key** — only needed if your search provider requires
+- **Search provider API key**: only needed if your search provider requires
   one. Stored locally in Voxint's database and, like the LLM key, never shown
   again after saving.
-- **Trusted domains** — an optional list of domains you trust. Drafts that cite
+- **Trusted domains**: an optional list of domains you trust. Drafts that cite
   these domains are given more confidence during review. This does **not** block
   anything: other domains are still used and researched normally. Enter bare
   domains separated by commas, spaces, or new lines.
@@ -190,8 +191,8 @@ stays inactive until you enable it.
 
 ### Guided tutorial
 
-A short, hands-on walkthrough of one full run on a bundled three-speaker sample —
-submit, review, attribute, export — with no command line needed.
+A short, hands-on walkthrough of one full run on a bundled three-speaker sample
+(submit, review, attribute, export), with no command line needed.
 
 - If you have not set it up yet, **Set up and start the guided tutorial** stages
   the sample and drops you straight into it.
@@ -205,7 +206,7 @@ submit, review, attribute, export — with no command line needed.
 ## Troubleshooting
 
 Start with the [onboarding troubleshooting
-list](../onboarding.md#troubleshooting) — it covers the most common
+list](../onboarding.md#troubleshooting); it covers the most common
 setup-time problems. The short version, plus a few review-console questions, is
 below.
 
@@ -219,8 +220,8 @@ below.
   not to a run already in flight. Submit again to see it take effect.
 - **The setup wizard's service check shows everything down.** The core stack does
   not include the model services; you start those with an overlay (a GPU or CPU
-  overlay, depending on your machine). The check is advisory — you can finish
-  setup either way — but see the next entry for what happens if you submit a run
+  overlay, depending on your machine). The check is advisory, and you can finish
+  setup either way, but see the next entry for what happens if you submit a run
   while a service is down.
 
 ![The setup wizard's readiness-check screen, listing each Voxint service with a
@@ -236,18 +237,18 @@ down.](../images/setup-wizard.png)
 ### The review console
 
 - **I submitted a run while a model service was down, and it failed.** A run
-  submitted while a service it needs is unavailable does not fail instantly — it
+  submitted while a service it needs is unavailable does not fail instantly. It
   retries with backoff (roughly five attempts over about an hour and a half) and
   only then lands as **failed**. Bring the services up, then **requeue** the run
   from its page. Nothing is lost; it simply starts over cleanly.
 - **The transcript shows fewer (or more) speakers than I heard.** This is usually
-  correct behavior being misread rather than a bug — for example two people with
+  correct behavior being misread rather than a bug, for example two people with
   similar voices merged, or one person split across a noisy passage. Before
   correcting it by hand, read
   [interpreting-diarization.md](../interpreting-diarization.md), which explains
   what the diarizer is doing and how to read its output.
-- **"Does nothing leave my machine?"** By default, all processing — transcription,
-  diarization, speaker identification, and review — happens **locally** on your
+- **"Does nothing leave my machine?"** By default, all processing (transcription,
+  diarization, speaker identification, and review) happens **locally** on your
   hardware, and no audio or transcript is sent anywhere. There are exactly three
   features that reach the network, and **each is off unless you, the operator,
   turn it on**: fetching media from a URL (Features), web research (Sources and
@@ -262,11 +263,11 @@ down.](../images/setup-wizard.png)
 - [Add media & manage runs](add-media-and-manage-runs.md)
 - [Review & adjudicate](reviewing-and-adjudicating.md)
 - [Manage speakers & export](managing-speakers-and-exporting.md)
-- [Setup](../setup.md) — install Voxint on your OS and hardware.
+- [Setup](../setup.md): install Voxint on your OS and hardware.
 
-- [Onboarding](../onboarding.md) — the guided installer, the setup wizard, and
+- [Onboarding](../onboarding.md): the guided installer, the setup wizard, and
   the built-in tutorial.
-- [Domain packs](../domain-packs.md) — what the per-folder packs do and how to
+- [Domain packs](../domain-packs.md): what the per-folder packs do and how to
   pick one.
-- [Interpreting diarization](../interpreting-diarization.md) — how to read the
+- [Interpreting diarization](../interpreting-diarization.md): how to read the
   speaker output before you correct it.

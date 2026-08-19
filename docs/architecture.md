@@ -1,8 +1,13 @@
 # Voxint architecture
 
+How a run moves through the pipeline, the state machine and data model that back
+it, and the invariants each stage upholds. Pairs with
+[gpu-contracts.md](gpu-contracts.md) (the service wire contracts) and
+[quality-gates.md](quality-gates.md) (the thresholds the stages apply).
+
 ## Pipeline shape
 
-```
+```text
 input ──▶ acquire ──▶ prepare ──▶ transcribe ──▶ diarize_embed ──▶ enhance_match ──▶ finalize
           (yt-dlp     (ffmpeg      (ASR)          (diarization +     (LLM enhance +
            URL         16 kHz,                     speaker            speaker matching)
@@ -32,7 +37,7 @@ compare-and-swap on an explicit `revision` column: every transition is an
 A worker holding a stale snapshot gets `StaleRevisionError` and must re-read.
 Lost updates are structurally impossible.
 
-```
+```text
 queued ──▶ running ──▶ completed
   ▲          │ ▲  │
   │          │ │  └──▶ awaiting_adjudication ──▶ running   (human pause = DB state)
@@ -44,7 +49,7 @@ queued ──▶ running ──▶ completed
 `completed` and `cancelled` are terminal. A requeued run **retries the stage it was
 interrupted in**: earlier stages are not re-run and nothing is skipped.
 
-Validation covers the full `(status, stage)` tuple, not just status membership: a
+Validation covers the full `(status, stage)` tuple, not status membership alone: a
 run cannot start at the wrong stage, advance backwards or by more than one stage,
 complete mid-pipeline, or requeue at an unrelated stage.
 
@@ -67,14 +72,14 @@ rules. Stage bodies remain at-least-once for non-transactional effects
 
 | Table | Role |
 |---|---|
-| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it — the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list — the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen) |
+| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen) |
 | `media_items` | media identity, one row per source file. `source_path` (UNIQUE) is already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs; a nullable, non-unique `source_url` records URL provenance (revision 0005) |
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity: nothing here feeds attribution, and a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry), the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS), and the **write-once** `domain_pack` JSONB snapshot resolved at submit (revision 0017: the exact pack the run was transcribed with, read by the worker and enrichment; `NULL` on pre-0017 runs) |
 | `stage_runs` | per-stage attempt ledger **and execution claim** (worker id, lease, status, timing, error, metrics) |
-| `audio_artifacts` | derived files (preprocessed audio, chunks, exports); `reclaimed_at`/`reclaimed_bytes` record GC reclamation of the preprocessed-audio intermediate (issue #15) — the row survives as an audit stamp after its file is unlinked |
+| `audio_artifacts` | derived files (preprocessed audio, chunks, exports); `reclaimed_at`/`reclaimed_bytes` record GC reclamation of the preprocessed-audio intermediate (issue #15); the row survives as an audit stamp after its file is unlinked |
 | `audio_chunks` | chunk boundaries for long-file processing |
-| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag; two GIN expression indexes (`english` tsvectors over each text variant separately, revision 0008) back the `/runs` transcript search. Both variants stay searchable; enhancement never shadows raw. Revision **0028** adds the deterministic-correction trail written by the `enhance_match` dual pass (#82): `correction_trace` JSONB (either `[]` or the `{version, input_base, entries}` envelope, `input_base` recording a `raw` vs `llm` base) and `corrector_version` — written **only when the final text materially differs from raw**, reset atomically on every re-enhance, and read back at review time for the #83 provenance surface (`NULL` `corrector_version` = legacy/unversioned, never recomputed) |
+| `transcript_segments` | raw ASR text (immutable) + `enhanced_text` beside it + `suspect` soft-tag; two GIN expression indexes (`english` tsvectors over each text variant separately, revision 0008) back the `/runs` transcript search. Both variants stay searchable; enhancement never shadows raw. Revision **0028** adds the deterministic-correction trail written by the `enhance_match` dual pass (#82): `correction_trace` JSONB (either `[]` or the `{version, input_base, entries}` envelope, `input_base` recording a `raw` vs `llm` base) and `corrector_version`, written **only when the final text materially differs from raw**, reset atomically on every re-enhance, and read back at review time for the #83 provenance surface (`NULL` `corrector_version` = legacy/unversioned, never recomputed) |
 | `diarization_turns` | run-scoped observation ledger, one row per turn: interval, label, overlap, and the window's embedding outcome (vector + space, or an auditable `skip_reason`) |
 | `speakers` | the grown speaker roster, with a curation lifecycle: `merged_into_id`/`merged_at` (merge tombstones) and `deleted_at` (reversible archive) (revision 0007) |
 | `speaker_embeddings` | `vector(192)` + `embedding_space` tag; enrollment rows carry provenance (source run, label, and a unique link to the human decision that created them) |
@@ -228,7 +233,7 @@ through a small filtering forward proxy (`voxint.media.egress_proxy`, the same
 image) that re-applies `ip_is_public` **at the connection boundary** and connects
 only to the vetted public IP. Because the proxy makes the outbound connection, the
 rebind window is closed and redirect / extractor destinations that resolve to
-private space are refused — for yt-dlp's own HTTP(S) traffic. It is deliberately
+private space are refused (for yt-dlp's own HTTP(S) traffic). It is deliberately
 **not** a sandbox: a helper yt-dlp spawns that ignores the proxy, or the worker's
 routable network, still wants a host-level egress firewall. See
 `docs/operations.md`, "Restricted URL-download overlay".
@@ -373,7 +378,7 @@ worker and the offline name producer both read that snapshot, never the live
 env, so late enrichment can never diverge from what transcription used and a
 manifest edited on disk afterward never changes a past run's result. The pack
 is chosen **per watched folder** via a `{media_folder → pack_name}` map on
-`app_settings` (`folder_domain_packs`) — an unmapped folder, an upload, or a
+`app_settings` (`folder_domain_packs`); an unmapped folder, an upload, or a
 URL takes the default pack (`DOMAIN_PACK_PATH`, else the bundled `generic`).
 Several named packs may live under `DOMAIN_PACKS_DIR` (one child folder per
 pack, resolved by manifest `name`); `voxint.domain_packs.registry` is the
@@ -426,7 +431,7 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   re-derivable. Provenance columns plus a unique constraint on the source
   decision make duplicate enrollment structurally impossible.
 - **Inline speaker merge** (`adjudication/merge.py`, issue #54): the over-split
-  fix — "these labels are one voice in this recording" — as a workbench action
+  fix ("these labels are one voice in this recording") as a workbench action
   instead of a roster-page trip. It is **run-local**: it records one `assign`
   ruling per label to a single survivor (an existing active speaker, or a newly
   enrolled one via the same `enroll_new_speaker` path) and **never** calls
@@ -442,43 +447,43 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   effective-ruling id and returns 409 if it drifted since the preview.
 - **Two-scope relabel** (issue #54 Phase B): a ruling can target ONE transcript
   segment instead of the whole `(run, label)`. Storage stays the one immutable
-  ledger — a nullable `adjudication_decisions.transcript_segment_id` (NULL = the
-  historical label scope), not a second table — with a new segment-only
+  ledger, a nullable `adjudication_decisions.transcript_segment_id` (NULL = the
+  historical label scope), not a second table, with a new segment-only
   `inherit` decision as the append-only reset (the ledger is insert-only, so
   "undo this override" is a new row, never an UPDATE). The writer derives the
   segment's label server-side; a CHECK keeps `inherit` segment-only.
   **Every label-scope query filters `transcript_segment_id IS NULL`** so a
-  segment override never leaks into label resolution — `effective_decisions`
+  segment override never leaks into label resolution: `effective_decisions`
   (the source `label_states` reads), the `_label_unresolved` /
   `speaker_attributed_exists` SQL mirrors, and the web-research seeds. Read-time
   precedence is scope-local: **newest within a scope, then segment beats label
   beats grounded machine**, never comparing timestamps across scopes.
   `segment_states` resolves the active per-segment overrides (newest `assign`
-  per segment; a newest `inherit` means none — the segment follows its label
+  per segment; a newest `inherit` means none, so the segment follows its label
   live, never a frozen copy) and canonicalizes speaker ids through the same
   merge tombstones as the label path; `attributed_transcript` overlays it, so the
   HTML page and every export agree. Deliberate v1 limit: speaker search and the
   queue stay label-scoped (a segment-only speaker does not surface there).
 - **Export picker** (issue #52): every built transcript format is reachable from
   the workbench and the transcript page through one shared Jinja fragment
-  (`fragments/export_menu.html`) — TXT, SubRip (`.srt`), WebVTT (`.vtt`), JSON,
+  (`fragments/export_menu.html`): TXT, SubRip (`.srt`), WebVTT (`.vtt`), JSON,
   and RTTM, each with a plain-language label. Pure HTML (no island): each option
   is a plain `<a>` whose href carries the query, so the menu works with
   JavaScript off. The raw/enhanced text variant is selectable for the
   transcript-line formats (RTTM carries raw diarization labels only, so it takes
   no variant). TXT alone offers a **timestamp-free** reading copy
-  (`?timestamps=false`) — a `to_txt(timestamps=...)` keyword the CLI mirrors
+  (`?timestamps=false`), a `to_txt(timestamps=...)` keyword the CLI mirrors
   (`voxint export --no-timestamps`); an integration test asserts the download is
   byte-identical to the CLI for both settings. The flag is inert for SRT/VTT (cue
   timing is structural) and JSON (keys are a frozen contract). Deliberately not
   built: a speaker-name toggle (caption guidance keeps speaker IDs; anonymization
-  belongs in the roster, not the exporter) — filed as a follow-up.
+  belongs in the roster, not the exporter), filed as a follow-up.
 - **Triage & correction** (issues #53/#58): the transcript flags **low-confidence**
   segments (persisted `transcript_segments.confidence = exp(avg_logprob)`, below a
-  configurable threshold) as "uncertain" — a non-background cue so it never
+  configurable threshold) as "uncertain", a non-background cue so it never
   collides with the active-line highlight or the speaker accent. Per-segment
   operator workflow state lives in **`segment_review_states`** (mutable, one row
-  per segment, UPSERT latest-wins) — deliberately NOT the append-only adjudication
+  per segment, UPSERT latest-wins), deliberately NOT the append-only adjudication
   ledger (orthogonal to speaker attribution) and NOT columns on the immutable
   `transcript_segments`: a **verified** mark (feeds an "N of M" counter) and an
   operator **corrected_text**. A correction is written *beside* `raw_text`, never
@@ -488,15 +493,15 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   text without corrections. Corrections are full-text-searchable (a partial FTS
   index over `corrected_text`, never coalesced with the raw/enhanced renderings)
   and feed enrichment (the name miners and run-asset generators read the same
-  `effective_text`) — both as settled in the provenance design note. Editing text clears the verified mark in the same
+  `effective_text`), both as settled in the provenance design note. Editing text clears the verified mark in the same
   transaction (edited text must be re-verified); reverting to the pipeline wording
   clears the correction. Both writes are claim-gated; the UPSERT is idempotent
   without a nonce. This operator `corrected_text` is distinct from a **domain
   pack's** automatic corrections (#82): those are deterministic literal
   substitutions the pipeline applies, recorded per segment in `correction_trace`
   (above) and surfaced separately in the console as "corrected by domain pack"
-  (#83) — an operator edit *supersedes* that marker for the segment. See
-  `docs/domain-packs.md`.
+  (#83); an operator edit *supersedes* that marker for the segment. See
+  [domain-packs.md](domain-packs.md).
 - **Auth**: single-operator HTTP Basic (constant-time compare) on every route
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default
@@ -510,12 +515,12 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
 ## Frontend islands (issue #48)
 
 Jinja owns every page; interactive regions are React **islands** mounted into
-server-rendered markup. This extends the review console — it is not a new
+server-rendered markup. This extends the review console; it is not a new
 subsystem and adds no page routing.
 
 - **Vite, not Astro (settled decision).** Plain Vite v6 multi-entry + React 19
   + Tailwind v3, `vite build` only. Astro's value is its own page/SSR
-  rendering, content collections, and `.astro` format — all unused here, since
+  rendering, content collections, and `.astro` format, all unused here, since
   Jinja renders every page and mounting into a foreign template engine still
   means hand-writing `createRoot(el).render(...)` against `data-*` points. Vite's
   multi-entry + `manifest.json` output is the first-class workflow for compiling
@@ -524,18 +529,18 @@ subsystem and adds no page routing.
   adapter that would violate "no Node at operator runtime". It also keeps the
   npm supply-chain surface (every `npm audit` line) smaller. **Trade-off (honest):**
   if voxint ever wants genuinely server-rendered `.astro` pages we'd migrate then
-  — cheap, because the React components are framework-agnostic beyond their mount
-  call — and we accept hand-writing the ~20-line manifest→`<script>`/`<link>`
+  (cheap, because the React components are framework-agnostic beyond their mount
+  call), and we accept hand-writing the ~20-line manifest→`<script>`/`<link>`
   lookup on the Python side as the price of not carrying an unused meta-framework.
 - **Progressive enhancement is the contract.** The server HTML is the fallback,
   fully usable with JS disabled or the asset route unbuilt; islands are additive
   and replace only their region's *visual* role once hydrated. An island that
-  fails to hydrate degrades one region, never the page — the server markup inside
+  fails to hydrate degrades one region, never the page; the server markup inside
   its mount div stays visible. The transcript page demonstrates this: a native
   `<audio>` plus the segment list, active segment highlighted on `timeupdate`,
   over the same `{% for ln in lines %}` loop the JS-off page renders.
 - **Auth-aware asset route, never a `StaticFiles` mount.** Bundles serve through
-  `GET /static/app/{path}` carrying the operator auth dependency on every byte —
+  `GET /static/app/{path}` carrying the operator auth dependency on every byte;
   a mount would bypass it, and "everything but `/healthz` authenticates" is
   absolute. The route resolves+contains the untrusted path (traversal/symlink
   escapes 404 before any filesystem read) and sets `immutable` caching only for
@@ -544,7 +549,7 @@ subsystem and adds no page routing.
 - **Build-stage boundary.** The Dockerfile's `node:22-slim` stage builds the
   bundles and is then discarded; only `dist/` is COPYed into the Python image
   before `uv sync --no-editable`, so the wheel packages the static tree. No Node
-  binary ships — empirically verifiable via `docker history` /
+  binary ships, empirically verifiable via `docker history` /
   `command -v node` in the runtime image.
 - **Mount convention #49–#59 extend, not reinvent.** `base.html` pulls one
   shared module (`main.ts`) that scans for `[data-island]` nodes and
@@ -553,7 +558,7 @@ subsystem and adds no page routing.
   fallback inside. Adding an island never edits `base.html`. Islands read props
   via `readProps()` and call voxint's own routes through the shared
   `api-client.ts` `apiFetch`, whose `ApiError` mirrors FastAPI's `{detail}`
-  shape — the seam #54/#55 consume for capability-aware responses.
+  shape, the seam #54/#55 consume for capability-aware responses.
 - **Per-turn playback + fail-closed seek gating (issues #49/#55).** Two islands
   add "play this turn"/"preview this speaker" seeking. `transcript-player`
   (transcript.html) is fully in-React: per-line ▶ buttons and click-to-seek call
@@ -577,11 +582,11 @@ subsystem and adds no page routing.
   transcript interval is well-formed, and no interval runs past `duration +
   0.05s` (a fixed tolerance, absorbing float noise without scaling on long
   files). It accumulates **every** applicable reason with plain-language messages
-  the islands show in a visible banner — never a bare tooltip. Media servability
+  the islands show in a visible banner, never a bare tooltip. Media servability
   reuses `resolve_servable_media()`, the **single seam** `GET /media` itself
   calls, so capability can never advertise seeking while `/media` would 404/410.
   "Preview this speaker" seeks a clean `DiarizationTurn` (longest non-overlap,
-  fallback longest) — never the longest transcript segment, which carries only a
+  fallback longest), never the longest transcript segment, which carries only a
   dominant-overlap label and can contain other voices.
 - **Follow-along highlight + per-speaker colors (issues #50/#47).** The
   `transcript-player` island keeps the active line in view as playback advances:
@@ -598,7 +603,7 @@ subsystem and adds no page routing.
   `api/speaker_colors.py` `speaker_palette()`: a deterministic, order-independent
   map from the run's **canonical label universe** to curated palette indices
   `[0, 8)`. That universe (`_run_label_universe`) is the union of the run's
-  diarization-turn and transcript-segment labels — so even a transcript-only
+  diarization-turn and transcript-segment labels, so even a transcript-only
   label (a segment whose label has no turn) gets a color. Both the transcript
   route and `_workbench_context` derive the palette from that same universe, so a
   label's color agrees across the transcript page, the JS-off fallback, and the
@@ -606,7 +611,7 @@ subsystem and adds no page routing.
   color is rendered identically on every surface as a `spk-N` class → a CSS
   left-border accent (light/dark variants in `base.html`), and it is
   **supplemental only**: a raw-label badge (`.spk-badge`) is the primary,
-  non-color identity cue everywhere (accessibility — never color alone), which
+  non-color identity cue everywhere (accessibility: never color alone), which
   also disambiguates the palette's by-design repeat past eight speakers.
 
 ## Worker orchestration (P3)
@@ -637,7 +642,7 @@ claims and CAS arbitrate.
 
 A second, **opt-in** beat task (`voxint.gc_sweep`, issue #15) reclaims the
 large normalized-audio intermediate for old terminal runs when
-`MEDIA_RETENTION_ENABLED` — it unlinks `artifacts/{run_id}/normalized.wav` and
+`MEDIA_RETENTION_ENABLED`: it unlinks `artifacts/{run_id}/normalized.wav` and
 stamps the `audio_artifacts` row (`reclaimed_at`/`reclaimed_bytes`; the row is
 kept as an audit record). File reclamation only: source media, transcript,
 diarization, and the decision ledger are never touched, so a reclaimed run
@@ -654,3 +659,12 @@ makes one diarization call plus several sequential embedding batches, and
 cleanup margin, validated at startup) **<** Redis visibility timeout
 (`CELERY_VISIBILITY_TIMEOUT_SECONDS`, which covers a whole run and is sized to
 the six-stage worst case, 48 h).
+
+## See also
+
+- [gpu-contracts.md](gpu-contracts.md): the versioned service wire contracts the
+  provider seams call.
+- [quality-gates.md](quality-gates.md): the enhancement, matching, and grounding
+  thresholds the stages apply.
+- [timeouts-and-leases.md](timeouts-and-leases.md), [operations.md](operations.md),
+  [domain-packs.md](domain-packs.md), and the [docs index](README.md).

@@ -1,5 +1,8 @@
 # Managing speakers and exporting transcripts
 
+*How to keep your speaker roster tidy and download a finished transcript in the
+format you need.*
+
 This guide covers two everyday tasks: keeping your **speaker roster** tidy, and
 **downloading a finished transcript** in the format you need.
 
@@ -14,14 +17,14 @@ The next recording you process, Voxint listens for that same voice and suggests
 "this might be Maria Chen" for you to confirm. The more voices you enroll, the
 more work Voxint can do for you up front.
 
-Two things are worth understanding from the start:
+Two things to understand from the start:
 
 - **The roster grows as you use it.** It starts empty. It fills up as you enroll
   voices from your recordings. Matching is done by voice, using the sound of the
   speech itself, not by name.
 - **Your rulings are permanent history.** When you confirm who a speaker is on a
   past recording, that decision is kept for good. Nothing you do on the roster
-  later — renaming, merging, archiving — rewrites the decisions you already made
+  later (renaming, merging, archiving) rewrites the decisions you already made
   on finished recordings.
 
 ## The roster
@@ -48,8 +51,8 @@ recording's decisions.
 
 ### Merge duplicates
 
-Sometimes the same person gets enrolled twice under two different names — for
-example, "Maria" on one recording and "Maria Chen" on another. Merging joins
+Sometimes the same person gets enrolled twice under two different names, for
+example "Maria" on one recording and "Maria Chen" on another. Merging joins
 them back into one speaker.
 
 On the card for the duplicate you want to remove, pick the speaker to merge it
@@ -67,7 +70,7 @@ match against, click **Archive** and confirm. An archived speaker:
 
 - leaves speaker matching, so Voxint stops suggesting them on new recordings,
 - has its machine proposals removed,
-- but is **kept**, not deleted — you can restore it later.
+- but is **kept**, not deleted; you can restore it later.
 
 Archiving is reversible and non-destructive. It is the safe way to clear a
 mistake without losing anything.
@@ -77,7 +80,7 @@ mistake without losing anything.
 Archived and merged speakers move into a **Former speakers** section at the
 bottom of the page. For an archived speaker, click **Restore** to bring it back
 into active matching. (A merged speaker is listed there for the record but is not
-restored individually — its voice samples now live with the speaker you merged it
+restored individually; its voice samples now live with the speaker you merged it
 into.)
 
 ### Remove a bad voice sample
@@ -106,7 +109,7 @@ excluded.](../images/review-workbench.png)
 
 From that point on, the enrolled voice becomes a **match candidate**: on later
 recordings, Voxint compares each voice against your roster and proposes a name
-when a voice is close enough. You always confirm the match — Voxint suggests, you
+when a voice is close enough. You always confirm the match: Voxint suggests, you
 decide.
 
 For the full walkthrough of assigning, enrolling, and confirming speakers on a
@@ -117,14 +120,14 @@ recording, see **[Reviewing and adjudicating](reviewing-and-adjudicating.md)**.
 Voxint can optionally look a speaker up on the web to gather background about who
 they might be, then hand you draft notes to review. This is **off by default**.
 It only becomes available when you have turned on web research, configured a
-search provider, and enabled LLM enhancement — all in
+search provider, and enabled LLM enhancement, all in
 [Settings](http://127.0.0.1:8080/settings). If you have not set those up, the
 speaker card simply says web research is off and points you to Settings.
 
 When it is available, a speaker's card offers **Research this speaker**, runs
 within a small fixed budget of searches and page reads, and produces profile
 drafts for you to accept or discard. It never changes a speaker's identity on its
-own — like everything else, it proposes and you decide.
+own; like everything else, it proposes and you decide.
 
 ## Export a transcript
 
@@ -140,22 +143,22 @@ download **with or without timestamps**.
 
 | Format | Use this when… |
 |---|---|
-| **`.txt`** — plain text | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the timestamp-free copy for clean pasting. |
-| **`.srt`** — SubRip subtitles | You are captioning a video in most players, editors, or on video platforms. |
-| **`.vtt`** — WebVTT subtitles | You are captioning video for a web page or web video player. |
-| **`.json`** — structured data | You are feeding the transcript into another tool, or archiving it as structured segments (each with start time, end time, speaker, and text). |
-| **`.rttm`** — diarization turns | You are using speaker-diarization research or scoring tools that expect this format. **See the caveat below.** |
+| **`.txt`** (plain text) | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the timestamp-free copy for clean pasting. |
+| **`.srt`** (SubRip subtitles) | You are captioning a video in most players, editors, or on video platforms. |
+| **`.vtt`** (WebVTT subtitles) | You are captioning video for a web page or web video player. |
+| **`.json`** (structured data) | You are feeding the transcript into another tool, or archiving it as structured segments (each with start time, end time, speaker, and text). |
+| **`.rttm`** (diarization turns) | You are using speaker-diarization research or scoring tools that expect this format. **See the caveat below.** |
 
 ### Which files show your speaker names
 
-This distinction matters, so it is worth stating plainly:
+This distinction matters:
 
 - **`.txt`, `.srt`, `.vtt`, and `.json`** carry the **speaker names you
   adjudicated**. If you assigned a label to "Maria Chen," that is the name these
   files show.
 - **`.rttm` does not.** RTTM is a diarization interchange format, and it carries
   the **raw diarization labels** (`SPEAKER_00`, `SPEAKER_01`, …) with their
-  timing — never the names you assigned. It records who-spoke-when as the machine
+  timing, never the names you assigned. It records who-spoke-when as the machine
   heard it, so it can be scored against other diarization tools. If you open an
   `.rttm` file expecting your speaker names, they will not be there, and that is
   by design.
@@ -165,18 +168,18 @@ If you want the timeline of who-spoke-when **with your assigned names**, use
 
 ## Where to go next
 
-- **[Reviewing and adjudicating](reviewing-and-adjudicating.md)** — assign,
+- **[Reviewing and adjudicating](reviewing-and-adjudicating.md)**: assign,
   enroll, and confirm speakers on a recording; correct the transcript.
 - The other how-to guides in this folder cover getting recordings into Voxint and
   understanding your results.
-- **[First-run onboarding](../onboarding.md)** — the guided installer, the setup
+- **[First-run onboarding](../onboarding.md)**: the guided installer, the setup
   wizard, and the bundled tutorial.
-- **[Setup](../setup.md)** — installing and configuring Voxint.
+- **[Setup](../setup.md)**: installing and configuring Voxint.
 
 ## Related guides
 
 - [Add media & manage runs](add-media-and-manage-runs.md)
 - [Review & adjudicate](reviewing-and-adjudicating.md)
 - [Settings & troubleshooting](settings-and-troubleshooting.md)
-- [Setup](../setup.md) — install Voxint on your OS and hardware.
-- [First-run walkthrough](../onboarding.md) — the setup wizard and guided tutorial.
+- [Setup](../setup.md): install Voxint on your OS and hardware.
+- [First-run walkthrough](../onboarding.md): the setup wizard and guided tutorial.

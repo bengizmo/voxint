@@ -35,7 +35,7 @@ optimally relabel speakers before scoring, so they are blind to whether the
 
 ## `voxint score name-accuracy`
 
-```
+```bash
 voxint score name-accuracy items.jsonl [--baseline base.jsonl] \
     [--aliases aliases.json] [--target-accuracy 0.95] [--seed 0] [--out report.json]
 ```
@@ -94,7 +94,7 @@ given `--seed`).
 
 ## `voxint score agreement`
 
-```
+```bash
 voxint score agreement --slots slots.jsonl --enrollment enrollment.json \
     --thresholds thresholds.json [--out verdicts.jsonl]
 ```
@@ -159,7 +159,7 @@ slots, weak/leaking enrollment, low cosine).
 
 ## `voxint score ensemble`
 
-```
+```bash
 voxint score ensemble titanet-verdicts.jsonl other-verdicts.jsonl [--out fused.jsonl]
 ```
 
