@@ -36,8 +36,10 @@ _WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 _SHA_PINNED = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")
 # A pinned container action: ``docker://host/image@sha256:<64-hex>`` (allowed).
 _DOCKER_PINNED = re.compile(r"^docker://\S+@sha256:[0-9a-f]{64}$")
-# The provenance comment on the value's source line must name a semver version.
-_VERSION_COMMENT = re.compile(r"#.*\bv\d+\.\d+\.\d+\b")
+# The provenance comment must be the trailing ``# vX.Y.Z`` pin label Dependabot
+# maintains, not merely a semver mentioned anywhere on the line (so a stray
+# ``# see v0.0.0`` can never stand in for a real tag annotation).
+_VERSION_COMMENT = re.compile(r"#\s*v\d+\.\d+\.\d+\s*$")
 
 
 def _workflow_files() -> list[Path]:
@@ -114,6 +116,16 @@ def test_ci_and_metal_lane_declare_least_privilege_token() -> None:
             f"{name}: top-level `permissions` must be exactly "
             f"{{'contents': 'read'}}, got {perms!r}"
         )
+        # A job-level `permissions:` block replaces the default token entirely,
+        # so the realistic F2 regression is not editing the top-level line but
+        # widening one job (e.g. `permissions: {packages: write}` on the
+        # PR-triggered secrets-scan). Every job here is read-only today; require
+        # that none re-declares permissions at all.
+        for job_name, job in (doc.get("jobs") or {}).items():
+            assert "permissions" not in (job or {}), (
+                f"{name}:{job_name} overrides the read-only default token — a "
+                f"job-level `permissions:` widening escapes the top-level cap"
+            )
 
 
 def test_release_jobs_keep_least_privilege_permissions() -> None:
@@ -250,4 +262,50 @@ def test_gitleaks_verifies_and_extracts_the_same_downloaded_archive() -> None:
     assert downloaded and downloaded == verified == extracted, (
         "download / verify / extract must all reference the same archive; got "
         f"curl={downloaded!r} sha256sum={verified!r} tar={extracted!r}"
+    )
+
+
+def test_gitleaks_gate_is_structurally_fail_closed() -> None:
+    """F4 (structural): the digest env exists and is well-formed, the install
+    step verifies it, and nothing downgrades the gate to advisory.
+
+    The behavioral tests above stub the environment, so on their own they stay
+    green even if the real ``GITLEAKS_SHA256`` env entry is deleted, the URL is
+    repointed at a different artifact, or a ``continue-on-error: true`` turns the
+    fail-closed gate into an advisory. Pin those blind spots here.
+    """
+    doc = yaml.safe_load((_WORKFLOWS_DIR / "ci.yml").read_text())
+    env = doc.get("env") or {}
+    assert "GITLEAKS_VERSION" in env, "ci.yml env is missing GITLEAKS_VERSION"
+    digest = str(env.get("GITLEAKS_SHA256", ""))
+    assert re.fullmatch(r"[0-9a-f]{64}", digest), (
+        f"ci.yml env GITLEAKS_SHA256 must be a 64-hex sha256, got {digest!r}"
+    )
+
+    install_job = install_step = None
+    for job in (doc.get("jobs") or {}).values():
+        for step in (job or {}).get("steps") or []:
+            if step.get("name") == "Install gitleaks":
+                install_job, install_step = job, step
+    assert install_step is not None, "ci.yml has no 'Install gitleaks' step"
+
+    # The gate must stay fail-closed: a job- or step-level continue-on-error
+    # would let a checksum failure pass as advisory while the behavioral tests
+    # (which only run the script) stay green.
+    assert (install_job or {}).get("continue-on-error") in (None, False), (
+        "the secrets-scan job must not set continue-on-error (fail-closed gate)"
+    )
+    assert install_step.get("continue-on-error") in (None, False), (
+        "the 'Install gitleaks' step must not set continue-on-error"
+    )
+
+    # It must verify the repo-held digest and must not fall back to the release's
+    # co-published checksums.txt (same trust boundary as the tarball; the audit
+    # deliberately does not trust it).
+    script = install_step["run"]
+    assert "GITLEAKS_SHA256" in script, (
+        "the install step must verify $GITLEAKS_SHA256, not a fetched checksum"
+    )
+    assert "checksums.txt" not in script, (
+        "the install step must not trust the release's co-published checksums.txt"
     )
