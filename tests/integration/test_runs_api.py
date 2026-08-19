@@ -596,10 +596,19 @@ def test_transcript_defaults_to_enhanced(
             segments=[("S0", "raw only", "enhanced only")],
         )
     # No text= → default 'corrected'; with no correction it falls through to
-    # enhanced (then raw), so an uncorrected run renders exactly as before.
+    # enhanced (then raw), so the DISPLAYED transcript renders exactly as before.
     body = client.get(f"/runs/{run_id}/transcript").text
     assert "enhanced only" in body
-    assert "raw only" not in body
+    (seg,) = _island_props(body)["segments"]
+    # The effective (displayed) text is the enhanced fallback, never the raw text.
+    assert seg["text"] == "enhanced only"
+    # #83 exposes the immutable raw text to the review island as hydration data
+    # (for the compare / reset-to-raw affordance), so it appears in the data-props
+    # JSON by design — but it must never be the rendered line text nor leak into
+    # the JS-off fallback the operator reads.
+    assert seg["rawText"] == "raw only"
+    body_without_props = re.sub(r"data-props='[^']*'", "", body)
+    assert "raw only" not in body_without_props
 
 
 def test_transcript_attribution_and_export_agree(
