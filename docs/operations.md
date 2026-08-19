@@ -387,7 +387,7 @@ same `?since=` query param still overrides it directly (any span/ISO-8601 syntax
 
 ### Exporting transcripts
 
-Every run's speaker-attributed transcript exports in five formats, from the CLI
+Every run's speaker-attributed transcript exports in six formats, from the CLI
 or over HTTP. Both paths share the same formatters, so a downloaded file and a
 piped export are byte-identical.
 
@@ -397,22 +397,40 @@ docker compose exec -T api voxint export <run-id> --format vtt   > out.vtt
 docker compose exec -T api voxint export <run-id> --format json  > out.json
 docker compose exec -T api voxint export <run-id> --format rttm  > out.rttm
 docker compose exec -T api voxint export <run-id> --format txt   > out.txt
+docker compose exec -T api voxint export <run-id> --format md    > out.md
+docker compose exec -T api voxint export <run-id> --format md --no-timestamps > reading.md
 ```
 
 - `--format`: `srt` (SubRip), `vtt` (WebVTT), `json` (array of
   `{start_seconds, end_seconds, speaker, text}`), `rttm` (NIST diarization
-  format), or `txt` (bracketed plain text). Default `txt`.
-- `--text raw|enhanced`: which transcript variant to render (default
-  `enhanced`, the LLM-cleaned text; `raw` is the immutable ASR output). Ignored
-  for `rttm`, which carries raw diarization labels, not attributed text.
+  format), `txt` (bracketed plain text), or `md` (Markdown: a `##` speaker
+  heading per contiguous same-speaker run over a `>` blockquote paragraph, with
+  a per-paragraph `[start-end]` time range gated by the timestamps flag).
+  Default `txt`.
+- `--text corrected|enhanced|raw`: which transcript variant to render (default
+  `corrected`, the operator-effective text with review corrections applied over
+  the enhanced or raw fallback; `enhanced` is the LLM-cleaned pipeline text
+  before corrections; `raw` is the immutable ASR output). Ignored for `rttm`,
+  which carries raw diarization labels, not attributed text.
+- `--no-timestamps`: drop the per-line time column (`txt`) or per-paragraph time
+  range (`md`) for a clean reading copy. Ignored for the other formats, whose
+  timing is structural.
 - `-o PATH`: write to a file instead of stdout (refuses to overwrite an
   existing file unless `--force`).
 
 The same exports are available over HTTP at
-`GET /review/{run_id}/export.{txt,srt,vtt,json,rttm}` (add `?text=raw` for the
-raw variant). RTTM uses the run's UUID as the file id and the raw diarization
-labels (`SPEAKER_00` …), so it round-trips against diarization scoring tools,
-and it deliberately does **not** substitute adjudicated speaker names.
+`GET /review/{run_id}/export.{txt,md,srt,vtt,json,rttm}` (add `?text=raw` for the
+raw variant, or `?timestamps=false` on `txt`/`md` for the reading copy). RTTM
+uses the run's UUID as the file id and the raw diarization labels (`SPEAKER_00`
+…), so it round-trips against diarization scoring tools, and it deliberately
+does **not** substitute adjudicated speaker names.
+
+The transcript view route serves the same attributed text as an on-screen
+**read mode**: `GET /runs/{run_id}/transcript?read=1` renders the transcript as
+prose (one speaker heading over a merged paragraph), server-side with no
+JavaScript, gated by `&timestamps=false` for a timestamp-free reading view. Read
+mode and the Markdown export share one grouping helper (`paragraphize_transcript`)
+with the presentation seam, so neither can drift from the other exports.
 
 ### The browser console
 
@@ -863,7 +881,7 @@ finished, so `/review` below becomes reachable only after onboarding completes
    separate from machine proposals; adjudication precedence is defined in
    quality-gates.md.
 4. **Release / export**: release the claim for the next reviewer, or export
-   the speaker-attributed transcript (`/review/{run_id}/export.{txt,srt,vtt,
+   the speaker-attributed transcript (`/review/{run_id}/export.{txt,md,srt,vtt,
    json,rttm}`, or `voxint export`; see "Exporting transcripts" above).
 
 ## HTTP endpoints
@@ -881,7 +899,7 @@ mutations are gated by their per-run claim token.
 | `GET /dashboard` | Operator dashboard: read-only HTML render of the `/metrics` aggregates; optional `?since=` window, 15s htmx auto-refresh |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
-| `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML) |
+| `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
 | `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item |
 | `POST /fetch` | yt-dlp URL ingestion (create media item + run, enqueue) |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
@@ -890,7 +908,7 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}` | Adjudication workbench |
 | `POST /review/{run_id}/labels/{label}/decision` | Record a human ruling for a label |
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
-| `GET /review/{run_id}/export.{txt,srt,vtt,json}?text=raw\|enhanced` | Speaker-attributed transcript export (plain text, SubRip, WebVTT, JSON) |
+| `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |

@@ -42,8 +42,8 @@ Voxint takes a recording and walks it through four steps:
 3. **You review**: confirm each speaker, and fix any wording, in a screen built
    for exactly this. Machine guesses stay separate from your decisions; you
    always have the final say.
-4. **Export**: download a clean, speaker-labelled transcript (plain text,
-   subtitles, or structured data).
+4. **Read or export**: read a finished transcript on screen, or download a clean,
+   speaker-labelled copy (plain text, Markdown, subtitles, or structured data).
 
 The models all run **locally**: transcription (Whisper), speaker separation
 (pyannote), and voice identity (TitaNet). Everything they need is bundled into
