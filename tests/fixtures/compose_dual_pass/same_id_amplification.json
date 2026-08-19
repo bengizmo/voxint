@@ -1,0 +1,30 @@
+{
+  "description": "One raw occurrence, two in the LLM output -> both corrected (frozen ID-set, decision C).",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "the zoom board met",
+  "enhanced": "The zoom board and the zoom board met.",
+  "expected_final_text": "The Zoning Board and the Zoning Board met.",
+  "expected_input_base": "llm",
+  "expected_trace": [
+    {
+      "id": "zb",
+      "from": "zoom board",
+      "to": "Zoning Board",
+      "span": [4, 16]
+    },
+    {
+      "id": "zb",
+      "from": "zoom board",
+      "to": "Zoning Board",
+      "span": [25, 37]
+    }
+  ],
+  "expected_changed": true
+}

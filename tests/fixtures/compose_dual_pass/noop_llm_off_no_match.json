@@ -1,0 +1,17 @@
+{
+  "description": "LLM off and no rule matches -> raw base, empty trace, changed=False (nothing persisted).",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "nothing to fix here",
+  "enhanced": null,
+  "expected_final_text": "nothing to fix here",
+  "expected_input_base": "raw",
+  "expected_trace": [],
+  "expected_changed": false
+}

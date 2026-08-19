@@ -952,15 +952,31 @@ def _make_stub_bindir(
     restore_rc: int = 0,
     toc: tuple[str, ...] = _STUB_TOC_VOXINT,
     running_labels: tuple[str, ...] = (),
+    db_present_before: bool = False,
+    dump_rc: int = 0,
+    presence_probe_rc: int = 0,
 ) -> Path:
     """A fake $NATIVE_PG_BINDIR + a hermetic launchctl on PATH (see _stub_env).
 
     - pg_isready: always ready (so fresh_restore skips launchd bootstrap).
     - psql: answers the scalar probes fresh_restore issues (SHOW data_directory,
       OIDs, emptiness, alembic presence) and logs every statement to psql.log;
-      records the DROP via a marker file.
+      records the DROP via a marker file. ``db_present_before`` makes the
+      pre-mutation ``SELECT 1 FROM pg_database`` presence probe report the target
+      as EXISTING (before any DROP marker) so the pre-restore safety backup
+      actually fires; after a DROP it reports absent so the fresh-restore
+      empty-gate still passes. Default False keeps the historical "absent"
+      behaviour (safety backup skipped) for tests that don't exercise it.
     - pg_restore: `--list` prints ``toc`` (or exits ``list_rc``); a restore
-      invocation logs its argv to pg_restore.log.
+      invocation logs its argv to pg_restore.log and exits ``restore_rc``.
+    - pg_dump: logs its argv to pg_dump.log and exits ``dump_rc`` (non-zero
+      simulates a failed safety backup).
+    - events.log: pg_dump, the mutating psql statements (``drop_database`` /
+      ``create_extension``), and a REAL pg_restore (not `--list`) each append
+      their name here in call order, so a test can prove the safety backup ran
+      BEFORE the FIRST mutation via a single shared event log (separate per-bin
+      logs can't). ``presence_probe_rc`` makes only the ``SELECT 1 FROM
+      pg_database`` presence probe exit non-zero, to drive the fail-closed branch.
     - launchctl: a HERMETIC stub (never the host's real launchctl) so the tests
       can neither be perturbed by nor perturb the developer's real launchd jobs.
       `print` succeeds only for a label listed in ``running_labels``; `bootout`
@@ -978,6 +994,7 @@ def _make_stub_bindir(
         "#!/usr/bin/env bash\n"
         f'LOG="{logdir}/psql.log"\n'
         f'MARK="{logdir}/dropped"\n'
+        f'EVENTS="{logdir}/events.log"\n'
         "sql=\"\"; mode=stmt\n"
         "while [ $# -gt 0 ]; do\n"
         '  case "$1" in\n'
@@ -987,6 +1004,13 @@ def _make_stub_bindir(
         "  shift\n"
         "done\n"
         'printf "%s\\n" "$sql" >> "$LOG"\n'
+        # Record the MUTATING statements in the shared event log too, so a test
+        # can prove the safety backup ran before the FIRST mutation (the DROP on
+        # --fresh, the CREATE EXTENSION on plain) -- not merely before pg_restore.
+        'case "$sql" in\n'
+        '  *"DROP DATABASE"*)   printf "drop_database\\n" >> "$EVENTS" ;;\n'
+        '  *"CREATE EXTENSION"*) printf "create_extension\\n" >> "$EVENTS" ;;\n'
+        "esac\n"
         'case "$sql" in\n'
         # SHOW data_directory must echo exactly $NATIVE_PGDATA so the
         # managed-cluster identity check passes ($VOXINT_NATIVE_HOME/pgdata).
@@ -995,7 +1019,15 @@ def _make_stub_bindir(
         '  *"count(*)"*) echo 0; exit 0 ;;\n'
         '  *information_schema*) echo 1; exit 0 ;;\n'
         '  *"oid FROM pg_database"*) [ -f "$MARK" ] && echo 20000 || echo 16386; exit 0 ;;\n'
-        '  *"SELECT 1 FROM pg_database"*) exit 0 ;;\n'  # absent after drop → empty
+        # Presence probe: report EXISTING before any DROP (so the safety backup
+        # fires) only when db_present_before is set; absent after the DROP marker
+        # (so the fresh empty-gate still passes). Default → always empty. A
+        # non-zero presence_probe_rc makes ONLY this probe fail, to exercise the
+        # helper's fail-closed branch (a probe error must not read as "absent").
+        '  *"SELECT 1 FROM pg_database"*)\n'
+        f"    [ {presence_probe_rc} -eq 0 ] || exit {presence_probe_rc}\n"
+        f'    if [ {1 if db_present_before else 0} -eq 1 ] && [ ! -f "$MARK" ]; then echo 1; fi\n'
+        "    exit 0 ;;\n"
         "esac\n"
         "exit 0\n"
     )
@@ -1012,6 +1044,7 @@ def _make_stub_bindir(
         # A real restore invocation: log the argv AND copy the actual -L file so a
         # test can assert the filtered TOC handed to pg_restore is vector-free.
         'printf "%s\\n" "$*" >> "$LOG"\n'
+        f'printf "pg_restore\\n" >> "{logdir}/events.log"\n'
         'prev=""\n'
         'for a in "$@"; do\n'
         '  if [ "$prev" = "-L" ]; then cp "$a" "$LFILE" 2>/dev/null || true; fi\n'
@@ -1022,8 +1055,9 @@ def _make_stub_bindir(
     (bindir / "pg_dump").write_text(
         "#!/usr/bin/env bash\n"
         f'printf "%s\\n" "$*" >> "{logdir}/pg_dump.log"\n'
+        f'printf "pg_dump\\n" >> "{logdir}/events.log"\n'
         'printf "PGDMP-stub\\n"\n'  # bytes on stdout for cmd_backup's `> "$out"`
-        "exit 0\n"
+        f"exit {dump_rc}\n"
     )
     (bindir / "launchctl").write_text(
         "#!/usr/bin/env bash\n"
@@ -1104,6 +1138,31 @@ def test_fresh_restore_uses_safe_restore_flags(tmp_path: Path) -> None:
     psql_calls = (tmp_path / "stublog" / "psql.log").read_text()
     assert "CREATE EXTENSION vector" in psql_calls
     assert "TEMPLATE template0" in psql_calls
+
+
+def test_fresh_restore_takes_safety_backup(tmp_path: Path) -> None:
+    # --fresh drops the database, so an existing target must be dumped to a 0600
+    # pre-image FIRST. This locks the shared helper refactor: fresh keeps taking
+    # its safety backup, under its own filename label, before the destructive drop.
+    _prime_install(tmp_path)
+    (tmp_path / "backups").mkdir()
+    bindir = _make_stub_bindir(tmp_path, db_present_before=True)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore --fresh {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    assert "SAFETY_BACKUP" in proc.stderr
+    backups = list((tmp_path / "backups").glob("pre-fresh-restore-*.dump"))
+    assert len(backups) == 1, backups
+    assert oct(backups[0].stat().st_mode & 0o777) == "0o600"
+    assert not list((tmp_path / "backups").glob("*.partial"))
+    # The safety dump (pg_dump) precedes the FIRST mutation -- for --fresh that is
+    # the destructive DROP DATABASE -- and the restore, in the shared event log.
+    assert (tmp_path / "stublog" / "dropped").exists()
+    events = (tmp_path / "stublog" / "events.log").read_text().split()
+    assert events.index("pg_dump") < events.index("drop_database") < events.index(
+        "pg_restore"
+    ), events
 
 
 def test_fresh_restore_refuses_when_core_service_running(tmp_path: Path) -> None:
@@ -1232,6 +1291,117 @@ def test_plain_restore_uses_safe_clean_flags(tmp_path: Path) -> None:
     # The extension is preinstalled idempotently (IF NOT EXISTS -- the target
     # usually already has it), so a bare CREATE never errors on a present ext.
     assert "CREATE EXTENSION IF NOT EXISTS vector" in psql_calls
+
+
+def test_plain_restore_takes_safety_backup(tmp_path: Path) -> None:
+    # A plain (in-place) restore of a valid-but-wrong/older dump silently REPLACES
+    # live data -- --single-transaction only rolls back a FAILED restore, never an
+    # unwanted successful one. So the plain path must take a recoverable pre-image
+    # FIRST, before any mutation, exactly like --fresh does. Prove the ordering
+    # with a single shared event log: the safety backup (pg_dump) must run strictly
+    # BEFORE the restore (pg_restore) -- separate per-bin logs cannot prove order.
+    _prime_install(tmp_path)
+    (tmp_path / "backups").mkdir()
+    bindir = _make_stub_bindir(tmp_path, db_present_before=True)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    # The safety backup ran, was announced, and landed as a 0600 pre-restore dump.
+    assert "SAFETY_BACKUP" in proc.stderr
+    dump_argv = (tmp_path / "stublog" / "pg_dump.log").read_text()
+    assert "--exclude-extension=vector" in dump_argv
+    assert "-Fc" in dump_argv
+    backups = list((tmp_path / "backups").glob("pre-restore-*.dump"))
+    assert len(backups) == 1, backups
+    assert oct(backups[0].stat().st_mode & 0o777) == "0o600"
+    assert not list((tmp_path / "backups").glob("*.partial"))  # finalized, no leak
+    # Ordering: the safety backup (pg_dump) runs strictly before the FIRST
+    # mutation -- for the plain path that is CREATE EXTENSION -- and before the
+    # restore itself. A regression placing the backup after either would fail.
+    events = (tmp_path / "stublog" / "events.log").read_text().split()
+    assert events.index("pg_dump") < events.index("create_extension") < events.index(
+        "pg_restore"
+    ), events
+    # And the restore itself still ran to completion.
+    assert "restore complete" in proc.stderr
+
+
+def test_plain_restore_aborts_if_safety_backup_fails(tmp_path: Path) -> None:
+    # A failed safety backup must ABORT before anything is touched: refusing is
+    # safer than restoring in place with no recoverable pre-image. Nothing
+    # downstream runs -- no pg_restore, no CREATE EXTENSION -- and no artefacts
+    # leak: neither a finalized dump nor a stray .partial.
+    _prime_install(tmp_path)
+    (tmp_path / "backups").mkdir()
+    bindir = _make_stub_bindir(tmp_path, db_present_before=True, dump_rc=1)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "safety backup failed" in proc.stderr
+    # Nothing downstream ran: no restore invocation, no extension DDL.
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+    events_file = tmp_path / "stublog" / "events.log"
+    if events_file.exists():
+        assert "pg_restore" not in events_file.read_text().split()
+    psql_calls = (tmp_path / "stublog" / "psql.log").read_text()
+    assert "CREATE EXTENSION" not in psql_calls
+    # No finalized safety dump and no leaked partial.
+    assert not list((tmp_path / "backups").glob("pre-restore-*.dump"))
+    assert not list((tmp_path / "backups").glob("*.partial"))
+
+
+def test_plain_restore_aborts_if_presence_probe_fails(tmp_path: Path) -> None:
+    # Fail-closed: if the "does the database exist?" probe ERRORS, it must NOT be
+    # read as "absent" and skipped past on the way to a mutation -- that would
+    # restore in place with no pre-image. A probe error aborts the whole operation
+    # before the backup even starts: no dump, no DDL, no restore, no artifacts.
+    _prime_install(tmp_path)
+    (tmp_path / "backups").mkdir()
+    bindir = _make_stub_bindir(tmp_path, presence_probe_rc=1)
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode != 0
+    assert "could not check whether" in proc.stderr  # the fail-closed probe branch
+    # The backup never even started, and nothing downstream ran.
+    assert not (tmp_path / "stublog" / "pg_dump.log").exists()
+    assert not (tmp_path / "stublog" / "pg_restore.log").exists()
+    psql_calls = (tmp_path / "stublog" / "psql.log").read_text()
+    assert "CREATE EXTENSION" not in psql_calls
+    assert not (tmp_path / "stublog" / "dropped").exists()
+    assert not list((tmp_path / "backups").glob("*.dump"))
+    assert not list((tmp_path / "backups").glob("*.partial"))
+
+
+def test_plain_restore_safety_backup_is_collision_safe(tmp_path: Path) -> None:
+    # Two restores in the same wall-clock second share a date stamp; the backup
+    # name must NOT let `mv` clobber an earlier same-second backup. With `date`
+    # frozen and both the unsuffixed final AND its partial pre-existing, the helper
+    # must write a SUFFIXED backup and leave both existing files untouched.
+    _prime_install(tmp_path)
+    (tmp_path / "backups").mkdir()
+    bindir = _make_stub_bindir(tmp_path, db_present_before=True)
+    # Freeze the timestamp so the collision is deterministic.
+    (bindir / "date").write_text('#!/usr/bin/env bash\necho "2026-01-01-00-00-00"\n')
+    (bindir / "date").chmod(0o755)
+    stamp = "2026-01-01-00-00-00"
+    existing = tmp_path / "backups" / f"pre-restore-{stamp}.dump"
+    existing.write_text("OLD")
+    existing_partial = tmp_path / "backups" / f"pre-restore-{stamp}.dump.partial"
+    existing_partial.write_text("OLDPARTIAL")
+    dump = tmp_path / "good.dump"
+    dump.write_text("archive")
+    proc = run_lib(tmp_path, f"cmd_restore {dump}", extra_env=_stub_env(bindir))
+    assert proc.returncode == 0, proc.stderr
+    # A suffixed backup was written; the pre-existing files are byte-for-byte intact.
+    suffixed = tmp_path / "backups" / f"pre-restore-{stamp}-2.dump"
+    assert suffixed.exists()
+    assert oct(suffixed.stat().st_mode & 0o777) == "0o600"
+    assert f"SAFETY_BACKUP {suffixed}" in proc.stderr
+    assert existing.read_text() == "OLD"
+    assert existing_partial.read_text() == "OLDPARTIAL"
 
 
 def test_plain_restore_refuses_when_core_service_running(tmp_path: Path) -> None:

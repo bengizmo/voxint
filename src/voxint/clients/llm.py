@@ -30,6 +30,17 @@ HINT_KINDS = frozenset({"self", "other"})
 MAX_ENHANCED_GROWTH_FACTOR = 4
 MAX_ENHANCED_SLACK_CHARS = 200
 
+
+def enhanced_size_ceiling(text: str) -> int:
+    """Per-segment upper bound on enhanced/corrected output length.
+
+    Shared by the LLM enhancement reply check (below) and the deterministic
+    corrector composition (#82, ``enhance_match``): a corrected segment must not
+    balloon past what an enhanced one could, and the corrector's growth-rejection
+    mechanism reuses the same ceiling so it is reachable in production.
+    """
+    return len(text) * MAX_ENHANCED_GROWTH_FACTOR + MAX_ENHANCED_SLACK_CHARS
+
 _SYSTEM_PROMPT = """\
 You are a transcript enhancement engine. You receive a JSON array of transcript \
 segments, each with an integer "index", an optional speaker "label", and raw "text".
@@ -313,10 +324,7 @@ def _parse_batch(
         raise LLMError(f"expected a JSON object, got {type(body).__name__}")
 
     expected_indexes = {s.segment_index for s in segments}
-    max_text_length = {
-        s.segment_index: len(s.text) * MAX_ENHANCED_GROWTH_FACTOR + MAX_ENHANCED_SLACK_CHARS
-        for s in segments
-    }
+    max_text_length = {s.segment_index: enhanced_size_ceiling(s.text) for s in segments}
     known_labels = {s.diarization_label for s in segments if s.diarization_label is not None}
 
     raw_segments = body.get("segments")

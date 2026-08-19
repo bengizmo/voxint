@@ -136,6 +136,28 @@ uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"
 scripts/native/voxint-native.sh down
 ```
 
+Then a second sub-rung exercises the **plain in-place** restore (#71) so its new
+pre-restore safety backup is proven on real hardware — not just the `--fresh`
+path:
+
+```bash
+scripts/native/voxint-native.sh down          # services down (required for restore)
+scripts/native/voxint-native.sh restore "<that-dump-path>"   # in-place replace
+#   → prints `SAFETY_BACKUP <path>` where <path> is backups/pre-restore-<stamp>.dump
+#     — an automatic pre-image taken BEFORE any mutation; aborts before touching
+#     anything if that dump fails. Assert the file exists and is mode 0600.
+scripts/native/voxint-native.sh up            # alembic no-ops at head; app starts
+uv run python tools/native_e2e_lifecycle.py env      # wait /healthz 200
+uv run python tools/native_e2e_lifecycle.py verify --run-id "<RUN_ID>"
+#   → VERIFY PASS: the run survived an in-place plain restore
+scripts/native/voxint-native.sh down
+```
+
+- **Assert the plain-restore `SAFETY_BACKUP`**: the printed path is under
+  `backups/`, named `pre-restore-<stamp>.dump` (distinct from the `--fresh` path's
+  `pre-fresh-restore-<stamp>.dump`), and is `0600`. Restart survival + the
+  unchanged `verify` PASS prove the pre-image was taken without disturbing the
+  restored data.
 - **Capture the dump path from `backup`'s own output** (`backup complete: …`),
   not a newest-file heuristic.
 - `restore --fresh` refuses to run while api/worker/beat are supervised (the flag
@@ -152,13 +174,16 @@ scripts/native/voxint-native.sh down
   the message says so).
 - **Recovery scope is DB-only.** `pg_dump`/`restore --fresh` cover database state,
   **not** external media files or model weights.
-- **Plain `restore <file>` (non-`--fresh`) now shares the same fail-closed
+- **Plain `restore <file>` (non-`--fresh`) shares the same fail-closed
   preflight** (#71): services-down gate, archive + `alembic_version` identity,
   managed-postmaster `data_directory` check, and vector-TOC filtering — but it
   *replaces in place* (`--clean --if-exists` in one transaction) rather than
-  dropping the database, so objects absent from the archive survive. `--fresh`
-  remains the exact-rebuild path this Part C exercises. New `backup` dumps are
-  taken with `--exclude-extension=vector`.
+  dropping the database, so objects absent from the archive survive. It **also
+  takes the same pre-restore safety backup** (`pre-restore-<stamp>.dump`, 0600)
+  before any mutation — the single transaction only rolls back a *failed* restore,
+  so a *successful* restore of a wrong dump would otherwise overwrite live data
+  with no fallback. Part C exercises **both** the plain and `--fresh` rungs. New
+  `backup` dumps are taken with `--exclude-extension=vector`.
 
 ## Cleanup
 

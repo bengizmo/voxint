@@ -227,14 +227,20 @@ transaction (any error rolls back and leaves the dump untouched). New backups ar
 taken with `--exclude-extension=vector`, so fresh dumps omit the extension
 entirely; older dumps are still filtered at restore time.
 
-- **`restore <file>`** — *replacement in place*. Runs `pg_restore --clean
-  --if-exists`, so objects the archive carries are replaced; objects present in
-  the current database but **absent from the archive survive**.
+**Both** restore paths take an **automatic pre-restore safety backup** of the
+current database first — a `0600` dump under `backups/`, announced with a
+`SAFETY_BACKUP <path>` line. If that dump fails the restore **aborts before
+touching anything**, so you are never left without a fallback. (The
+single-transaction guarantee only protects a *failed* restore; a *successful*
+restore of a valid-but-wrong or older dump still replaces your live data, which
+nothing else can undo — hence the pre-image on every restore.)
+
+- **`restore <file>`** — *replacement in place*. Takes the pre-restore safety
+  backup, then runs `pg_restore --clean --if-exists`, so objects the archive
+  carries are replaced; objects present in the current database but **absent
+  from the archive survive**.
 - **`restore --fresh <file>`** — *exact rebuild*. Because this one is destructive,
-  it first takes an **automatic pre-drop safety backup** of the current database
-  (a `0600` dump under `backups/`) and prints a `SAFETY_BACKUP <path>` line; if
-  that dump fails it **aborts before dropping anything**, so you are never left
-  without a fallback. It then drops the database, proves it empty
+  it takes the pre-restore safety backup, then drops the database, proves it empty
   (`EMPTY_DB PASS`), and rebuilds it from `<file>` as the sole schema source. Use
   this for disaster recovery when you want the database to match the dump exactly —
   and if a restore ever goes wrong, recover with `restore --fresh` on the

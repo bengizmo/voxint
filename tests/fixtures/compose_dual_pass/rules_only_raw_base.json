@@ -1,0 +1,24 @@
+{
+  "description": "LLM off (enhanced=null); a rule fires on raw -> raw base, changed.",
+  "rules": [
+    {
+      "id": "zb",
+      "match": "zoom board",
+      "replace": "Zoning Board",
+      "whole_word": true
+    }
+  ],
+  "raw": "the zoom board met",
+  "enhanced": null,
+  "expected_final_text": "the Zoning Board met",
+  "expected_input_base": "raw",
+  "expected_trace": [
+    {
+      "id": "zb",
+      "from": "zoom board",
+      "to": "Zoning Board",
+      "span": [4, 16]
+    }
+  ],
+  "expected_changed": true
+}

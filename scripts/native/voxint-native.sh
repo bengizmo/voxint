@@ -1353,6 +1353,47 @@ cmd_restore() {
   fi
 }
 
+# --- shared pre-restore safety backup (both `restore` and `restore --fresh`) --
+# Dump the CURRENT target database to a private 0600 archive BEFORE the restore
+# touches it, so an unwanted-but-successful restore stays recoverable -- whether
+# the plain path replaces live data in place with a valid-but-wrong/older dump,
+# or the --fresh path drops the database outright. A dump FAILURE aborts the
+# whole operation before anything is modified: refusing is safer than proceeding
+# with no fallback. A brand-new install has no database yet, so there is nothing
+# to back up -- and this is fail-closed like the drop gates: a probe ERROR is
+# never read as "database absent" and skipped past on the way to a mutation.
+# $1 is the filename label ("pre-restore" for plain, "pre-fresh-restore" for
+# --fresh). The final name is made collision-safe: two restores in the same
+# wall-clock second would otherwise share a stamp and the `mv` would silently
+# clobber the earlier backup.
+pre_restore_safety_backup() {
+  local label=$1 db_present stamp base safety n
+  db_present=$(super_psql_scalar postgres \
+    "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
+    || fail "could not check whether $NATIVE_DB_NAME exists before the safety backup"
+  [ -n "$db_present" ] || return 0
+  stamp=$(date +%Y-%m-%d-%H-%M-%S)
+  base=$VOXINT_NATIVE_HOME/backups/$label-$stamp
+  safety=$base.dump
+  # Same-second stamps collide; walk to the first free name so `mv` cannot
+  # overwrite an earlier backup (serial single-operator tool -- the counter
+  # closes the realistic same-second window; also skip a name whose `.partial`
+  # is mid-flight).
+  n=2
+  while [ -e "$safety" ] || [ -e "$safety.partial" ]; do
+    safety=$base-$n.dump
+    n=$((n + 1))
+  done
+  step "Safety backup of the current $NATIVE_DB_NAME before the restore"
+  "$NATIVE_PG_BINDIR/pg_dump" -Fc --exclude-extension=vector -h 127.0.0.1 \
+    -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$safety.partial" \
+    || { rm -f "$safety.partial"; \
+         fail "pre-restore safety backup failed -- refusing to modify $NATIVE_DB_NAME (nothing changed)"; }
+  mv "$safety.partial" "$safety" || fail "could not finalize safety backup at $safety"
+  chmod 600 "$safety" || fail "could not secure $safety"
+  say "SAFETY_BACKUP $safety (recover with: $0 restore --fresh $safety)"
+}
+
 plain_restore() {
   # In-place replacement restore (no drop): runs with the app services DOWN and
   # only managed Postgres up (maintenance mode). `pg_restore --clean --if-exists`
@@ -1366,6 +1407,13 @@ plain_restore() {
   # and leaves the pre-restore database intact; the dump file is never mutated.
   local file=$1
   restore_preflight "$file"
+
+  # Safety backup BEFORE any mutation. `--single-transaction` only protects a
+  # FAILED restore (it rolls back); a SUCCESSFUL restore of a valid-but-wrong or
+  # older dump silently replaces live data in place, which nothing here can undo.
+  # Take the recoverable pre-image first -- a dump failure aborts before the
+  # CREATE EXTENSION / pg_restore below touch anything.
+  pre_restore_safety_backup pre-restore
 
   # Preinstall the privileged extension as the superuser -- idempotent, because
   # an in-place target usually already has it (a bare CREATE would error if so).
@@ -1395,31 +1443,14 @@ fresh_restore() {
   # no-ops at head). On FAILURE after maintenance Postgres has started, it is left
   # supervised (running) for inspection/retry -- `$0 down` stops it; the dump file
   # is never mutated. See docs + the voxint-native-e2e skill's --with-restore rung.
-  local file=$1 old_oid new_oid ntables absent safety
+  local file=$1 old_oid new_oid ntables absent
   restore_preflight "$file"
 
   # --- safety backup BEFORE the irreversible drop (C1) -------------------------
-  # If the target database already exists, dump it to a private 0600 archive so a
-  # failed or incomplete restore is recoverable. A dump failure ABORTS the whole
-  # operation before anything is destroyed -- refusing is safer than dropping with
-  # no fallback. (A brand-new install has no database yet; nothing to back up.)
-  # Fail-closed like the drop gates below: a probe ERROR must never be read as
-  # "database absent" and silently skip the safety backup on the way to the DROP.
-  local db_present
-  db_present=$(super_psql_scalar postgres \
-    "SELECT 1 FROM pg_database WHERE datname='$NATIVE_DB_NAME'") \
-    || fail "could not check whether $NATIVE_DB_NAME exists before the safety backup"
-  if [ -n "$db_present" ]; then
-    safety=$VOXINT_NATIVE_HOME/backups/pre-fresh-restore-$(date +%Y-%m-%d-%H-%M-%S).dump
-    step "Safety backup of the current $NATIVE_DB_NAME before the destructive drop"
-    "$NATIVE_PG_BINDIR/pg_dump" -Fc --exclude-extension=vector -h 127.0.0.1 \
-      -p "$NATIVE_PG_PORT" -U "$NATIVE_DB_USER" "$NATIVE_DB_NAME" > "$safety.partial" \
-      || { rm -f "$safety.partial"; \
-           fail "pre-restore safety backup failed -- refusing to drop $NATIVE_DB_NAME (nothing destroyed)"; }
-    mv "$safety.partial" "$safety" || fail "could not finalize safety backup at $safety"
-    chmod 600 "$safety" || fail "could not secure $safety"
-    say "SAFETY_BACKUP $safety (recover with: $0 restore --fresh $safety)"
-  fi
+  # Dump the current database (if any) to a private 0600 archive so a failed or
+  # incomplete restore is recoverable; a dump failure ABORTS before anything is
+  # destroyed. Shared with the plain path -- see pre_restore_safety_backup.
+  pre_restore_safety_backup pre-fresh-restore
 
   # --- destroy + prove empty (fail-closed gate, as the cluster superuser) ------
   # Every scalar probe below is captured into a plain assignment and status-checked

@@ -12,6 +12,7 @@ from typing import Any
 from voxint.adjudication.splits import (
     derive_children,
     splittable_words,
+    trace_has_entries,
     word_count,
 )
 from voxint.db.models import TranscriptSegment
@@ -22,6 +23,7 @@ def _seg(
     raw_text: str,
     words: list[dict[str, Any]] | None,
     enhanced_text: str | None = None,
+    correction_trace: dict[str, Any] | list[Any] | None = None,
     start: float = 0.0,
     end: float = 10.0,
 ) -> TranscriptSegment:
@@ -33,8 +35,20 @@ def _seg(
         end_seconds=end,
         raw_text=raw_text,
         enhanced_text=enhanced_text,
+        correction_trace=[] if correction_trace is None else correction_trace,
         words=words,
     )
+
+
+def _envelope(
+    *, input_base: str = "raw", entries: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """A #82 correction_trace envelope; ``entries`` non-empty means a rule fired."""
+    return {
+        "version": 1,
+        "input_base": input_base,
+        "entries": entries if entries is not None else [],
+    }
 
 
 def _word(word: str, start: float, end: float) -> dict[str, Any]:
@@ -138,6 +152,62 @@ def test_materially_enhanced_segment_is_unsplittable() -> None:
     # A whitespace-only enhanced delta is NOT material.
     ok = _seg(raw_text=" Hello world", words=_HELLO, enhanced_text="Hello world")
     assert splittable_words(ok) is not None
+
+
+def test_fired_pack_correction_is_unsplittable() -> None:
+    # A domain-pack rule actually fired (#82): the stored trace has a non-empty
+    # entries list, so the segment is unsplittable even though its words
+    # reconcatenate and its enhanced_text matches raw (the correction's canonical
+    # surface could not be re-derived from the immutable word tokens).
+    seg = _seg(
+        raw_text=" Hello world",
+        words=_HELLO,
+        enhanced_text=" Hello world",
+        correction_trace=_envelope(
+            entries=[{"id": "h", "from": "Hello", "to": "Hullo", "span": [1, 6]}]
+        ),
+    )
+    assert splittable_words(seg) is None
+    assert word_count(seg) is None
+
+
+def test_outer_whitespace_only_correction_caught_by_trace_not_text_diff() -> None:
+    # The trace guard is load-bearing, not redundant: a correction that alters
+    # only OUTER whitespace leaves enhanced_text.strip() == raw_text.strip(), so
+    # the enhanced-text diff below would pass it — but the stored trace has a
+    # fired entry, so trace_has_entries refuses it first.
+    seg = _seg(
+        raw_text=" Hello world",
+        words=_HELLO,
+        enhanced_text="Hello world ",  # strip-equal to raw: the text-diff guard misses it
+        correction_trace=_envelope(
+            input_base="llm",
+            entries=[{"id": "w", "from": "world", "to": "world ", "span": [6, 12]}],
+        ),
+    )
+    # Sanity: the enhanced-text diff guard alone would NOT catch this.
+    assert seg.enhanced_text is not None
+    assert seg.enhanced_text.strip() == seg.raw_text.strip()
+    assert splittable_words(seg) is None
+
+
+def test_empty_or_entryless_trace_does_not_block_split() -> None:
+    # The default [] and a pure-LLM envelope (entries: []) are both falsy — neither
+    # is a fired pack correction, so neither blocks a split on its own.
+    assert trace_has_entries([]) is False
+    assert trace_has_entries(_envelope(input_base="llm", entries=[])) is False
+    # A non-list `entries` is never written by the app, but harden: a truthy
+    # non-list value must NOT read as "a rule fired".
+    assert trace_has_entries({"entries": {"a": 1}}) is False
+    assert trace_has_entries({"entries": "bogus"}) is False
+    ok_default = _seg(raw_text=" Hello world", words=_HELLO, correction_trace=[])
+    ok_entryless = _seg(
+        raw_text=" Hello world",
+        words=_HELLO,
+        correction_trace=_envelope(input_base="llm", entries=[]),
+    )
+    assert splittable_words(ok_default) is not None
+    assert splittable_words(ok_entryless) is not None
 
 
 def test_word_timings_outside_parent_interval_are_unsplittable() -> None:

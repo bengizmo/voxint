@@ -17,15 +17,23 @@ text FAITHFULLY IN EVERY RENDERING VARIANT, which requires:
 * the tokens RECONCATENATE to ``raw_text`` exactly (only an outer-edge whitespace
   delta on the whole string is tolerated — never a per-token strip, which would
   drop the inter-word spaces that make the partition faithful); and
+* the stored ``correction_trace`` has no fired entries — a materially CORRECTED
+  segment (a domain-pack rule actually fired, #82) is unsplittable. This reads
+  the authoritative STORED signal (a non-empty ``entries`` list), not a re-diff
+  of text, so it also catches a correction that alters only outer whitespace
+  (which the ``enhanced_text`` strip-comparison below would miss); and
 * ``enhanced_text`` is NULL or matches ``raw_text`` (no material enhancement) —
   so a split parent's effective text equals its word-derived text under
   ``?text=raw|enhanced|corrected`` alike, and expanding children never
   contradicts the variant/export contract. A materially-enhanced segment is
   surfaced as unsplittable rather than silently rendered raw.
 
-Correction is orthogonal and handled at the routes: a split cannot be created on
-a corrected segment, and a split parent cannot later be corrected (both deferred
-to a later slice). This module does not read review state.
+Two DIFFERENT correction concepts, deliberately separated: pack corrections
+(#82, the segment's own ``correction_trace`` column) ARE checked here; manual
+operator review edits (#58, ``SegmentReviewState.corrected_text``) remain
+orthogonal and route-owned — a split cannot be created on a review-corrected
+segment, and a split parent cannot later be review-corrected. This module still
+does not read review state.
 """
 
 from __future__ import annotations
@@ -121,17 +129,33 @@ def _validated_words(seg: TranscriptSegment) -> list[_Word] | None:
 _EPS = 1e-6
 
 
+def trace_has_entries(trace: object) -> bool:
+    """True iff ``correction_trace`` is the envelope object with a non-empty
+    ``entries`` list — i.e. a domain-pack rule actually fired (#82). The default
+    ``[]`` and a pure-LLM envelope (``entries: []``) are both falsy here. A
+    non-list ``entries`` (never written by the app) is also treated as falsy."""
+    if not isinstance(trace, dict):
+        return False
+    entries = trace.get("entries")
+    return isinstance(entries, list) and len(entries) > 0
+
+
 def splittable_words(seg: TranscriptSegment) -> list[_Word] | None:
     """The parent's validated tokens iff the segment is word-splittable, else ``None``.
 
-    Adds the faithfulness checks on top of :func:`_validated_words`: the tokens
-    must reconcatenate to ``raw_text`` (exact, or differing only by outer-edge
+    Adds the faithfulness checks on top of :func:`_validated_words`: no fired pack
+    correction (``correction_trace`` entries empty, #82), the tokens must
+    reconcatenate to ``raw_text`` (exact, or differing only by outer-edge
     whitespace on the whole joined string), and ``enhanced_text`` must be NULL or
-    match ``raw_text`` (ignoring outer whitespace). Correction state is NOT checked
-    here — the routes own that guard.
+    match ``raw_text`` (ignoring outer whitespace). Review-state correction (#58)
+    is still NOT checked here — the routes own that guard.
     """
     words = _validated_words(seg)
     if words is None:
+        return None
+    # A materially corrected segment (a pack rule actually fired, #82) is
+    # unsplittable — read the authoritative STORED trace signal, not a text diff.
+    if trace_has_entries(seg.correction_trace):
         return None
     joined = "".join(w.text for w in words)
     if joined != seg.raw_text and joined.strip() != seg.raw_text.strip():
@@ -223,7 +247,8 @@ def record_split(
     if count is None:
         raise UnsplittableError(
             "segment cannot be split at a word boundary "
-            "(no aligned word timings, or its text was enhanced)"
+            "(no aligned word timings, its text was enhanced, or a "
+            "domain-pack correction applied)"
         )
     if not 0 < word_index < count:
         raise UnsplittableError(

@@ -10,14 +10,24 @@ Two independent halves, deliberately unequal in failure semantics:
 - **Speaker matching always runs** and its invariant violations DO fail the
   stage: proposals are science, not garnish.
 
-Idempotent under retry: enhanced_text is reset and proposals are replaced
-(delete-then-insert via the single writer) on every invocation.
+Deterministic domain-pack corrections (#82) compose with the LLM output via a
+raw-gated dual pass (:func:`_compose_correction`): rules run on ``raw_text`` to
+fix the authoritative rule-fire set, then — when the LLM ran — only those rules
+are enforced on its output, so a hallucinated surface can never be blessed as
+operator-authored. enhanced_text + the correction trace/version are persisted
+only when the final text materially differs from raw.
+
+Idempotent under retry: enhanced_text, correction_trace, and corrector_version
+are reset together and proposals are replaced (delete-then-insert via the single
+writer) on every invocation.
 """
 
 import logging
 import time
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,8 +37,14 @@ from voxint.clients.base import (
     LLMClient,
     SpeakerNameHint,
 )
-from voxint.clients.llm import LLMError
+from voxint.clients.llm import LLMError, enhanced_size_ceiling
 from voxint.db.models import TranscriptSegment
+from voxint.domain_packs.corrections import CorrectionRule
+from voxint.domain_packs.corrector import (
+    CORRECTOR_VERSION,
+    CorrectionResult,
+    apply_corrections,
+)
 from voxint.pipeline.stages.context import LLMPolicy, StageContext
 from voxint.speakers.matching import (
     MAX_PROPOSED_NAME_LENGTH,
@@ -38,6 +54,63 @@ from voxint.speakers.matching import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _Composition:
+    """The dual-pass outcome for one segment (see :func:`_compose_correction`)."""
+
+    final_text: str
+    input_base: str  # "raw" | "llm"
+    entries: tuple[dict[str, Any], ...]  # each {id, from, to, span:[s,e]}
+    changed: bool  # final_text != raw_text
+
+
+def _compose_correction(
+    raw_text: str,
+    raw_result: CorrectionResult,
+    enhanced_text: str | None,
+    rules: Sequence[CorrectionRule],
+) -> _Composition:
+    """Compose domain-pack corrections with the LLM output — the raw-gated dual
+    pass (#82, design report §8).
+
+    ``raw_result`` is the corrector applied to ``raw_text``, computed once by the
+    caller BEFORE the LLM ran; its trace fixes the authoritative rule-fire set in
+    the evidence. When the LLM is off or its batch failed (``enhanced_text is
+    None``) the raw-pass result stands (``input_base="raw"``). Otherwise the
+    enforcement pass re-applies ONLY the rules whose id matched raw to the LLM
+    output (``input_base="llm"``): the operator's canonical form is final on terms
+    genuinely present, but a rule with no raw basis can never fire — so the LLM
+    cannot get a hallucinated surface blessed as operator-authored (§12-F6).
+
+    Enforcement is frozen ID-set (a matched-raw rule applies to all its
+    occurrences in the LLM output); ``input_base="llm"`` marks those spans as
+    LLM-coordinate, never evidence.
+
+    Both passes derive their growth ceiling from ``raw_text``
+    (:func:`enhanced_size_ceiling`), NOT from the already-expanded LLM output:
+    the enforcement bound must stay tied to the authoritative raw length so a
+    corrected segment can never outgrow the raw→enhanced envelope. Deriving it
+    from ``enhanced_text`` would compound the two bounds (~``16*len(raw)``).
+    """
+    raw_fire_ids = {entry.id for entry in raw_result.trace}
+    if enhanced_text is None:
+        final, base, trace = raw_result.text, "raw", raw_result.trace
+    else:
+        enforcement_rules = [rule for rule in rules if rule.id in raw_fire_ids]
+        enforced = apply_corrections(
+            enhanced_text,
+            enforcement_rules,
+            max_output_chars=enhanced_size_ceiling(raw_text),
+        )
+        final, base, trace = enforced.text, "llm", enforced.trace
+    return _Composition(
+        final_text=final,
+        input_base=base,
+        entries=tuple(entry.to_mapping() for entry in trace),
+        changed=final != raw_text,
+    )
 
 
 def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
@@ -50,8 +123,25 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
         .scalars()
         .all()
     )
+    # Atomic re-enhance reset: enhanced_text, correction trace, and version clear
+    # together on every invocation (retry-idempotent — a stale trace must never
+    # outlive the enhanced_text it described).
     for segment in segments:
         segment.enhanced_text = None
+        segment.correction_trace = []
+        segment.corrector_version = None
+
+    # Raw pass FIRST, for every segment — even when the LLM will succeed — so the
+    # rule-fire set is fixed in the evidence before enhancement can rewrite it.
+    rules = ctx.domain_pack.corrections
+    raw_results = {
+        segment.segment_index: apply_corrections(
+            segment.raw_text,
+            rules,
+            max_output_chars=enhanced_size_ceiling(segment.raw_text),
+        )
+        for segment in segments
+    }
 
     hints: list[SpeakerNameHint] = []
     if ctx.llm is not None and segments:
@@ -69,6 +159,33 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
             run_id,
             name_attribution_context=name_attribution_context,
         )
+
+    # Compose corrections with the (optional) LLM output and persist per segment,
+    # BEFORE speaker matching. enhanced_text/trace/version are written only when
+    # the final text materially differs from raw_text (design report §8).
+    for segment in segments:
+        composition = _compose_correction(
+            segment.raw_text,
+            raw_results[segment.segment_index],
+            segment.enhanced_text,
+            rules,
+        )
+        if composition.changed:
+            # Pure-LLM enhancement (engine ran, no pack rule fired) persists here
+            # too: entries=[], input_base="llm", corrector_version=1 (decision B).
+            # Split-eligibility then keys off trace_has_entries (falsy for []) plus
+            # the enhanced-text strip check, NOT the mere presence of a trace.
+            segment.enhanced_text = composition.final_text
+            segment.correction_trace = {
+                "version": CORRECTOR_VERSION,
+                "input_base": composition.input_base,
+                "entries": list(composition.entries),
+            }
+            segment.corrector_version = CORRECTOR_VERSION
+        else:
+            segment.enhanced_text = None
+            segment.correction_trace = []
+            segment.corrector_version = None
 
     if ctx.llm_bundled:
         # Scoped bundled local model (issue #67): it powers enhancement text ONLY,

@@ -5,6 +5,40 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Domain-pack corrections composed into enhancement (#82, epic #78)**: the
+  deterministic corrector (#81) is now wired **inside** the `enhance_match` stage
+  via a **raw-gated dual pass** — rules run on the raw ASR text first to fix which
+  rules matched *in the evidence*, the LLM enhancement runs as usual, then **only
+  those raw-matched rules are re-enforced on the LLM output**, so a term the model
+  *invents* can never be corrected into a domain phrase and mistaken for
+  operator-authored (and a term the model *undoes* is restored). Each segment gains
+  a durable, versioned provenance trail (new migration **0028**): `correction_trace`
+  (either `[]` or the `{version, input_base, entries}` envelope, with `input_base`
+  recording a `raw` vs `llm` base) and `corrector_version` — written **only when the
+  final text materially differs from raw** (a no-op reads back byte-identical), reset
+  atomically on every re-enhance, and never recomputed at read time (legacy pre-#82
+  `enhanced_text` reads as "enhanced (unversioned)"). A materially-corrected segment
+  is now **unsplittable** (#59), read from the stored trace so the console renders it
+  whole instead of deriving children at stale offsets. The `generic` pack declares no
+  corrections, so a **default install's pipeline output is unchanged**; authoring/
+  provenance UI follows in #83/#84.
+
+### Fixed
+- **Native: plain `restore` now takes a pre-restore safety backup too**: the
+  docker-free launcher's `restore <file>` (in-place replace) previously took **no**
+  safety backup, while the scarier `restore --fresh` did — an inversion. The
+  single-transaction guarantee only rolls back a *failed* restore; a *successful*
+  restore of a valid-but-wrong or older dump silently overwrites live data with no
+  fallback. Both restore paths now share one collision-safe
+  `pre_restore_safety_backup` helper that dumps the current database to a `0600`
+  `pre-restore-<stamp>.dump` / `pre-fresh-restore-<stamp>.dump` under `backups/`
+  **before any mutation** and **aborts before touching anything** if that dump
+  fails. The shared helper also fixes a latent same-second filename collision in
+  `--fresh` (two restores in the same wall-clock second could let `mv` clobber the
+  earlier backup). Recover with `restore --fresh` on the printed `SAFETY_BACKUP`
+  path.
+
 ## [0.18.0] - 2026-08-18
 
 ### Added

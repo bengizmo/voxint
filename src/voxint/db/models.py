@@ -512,6 +512,21 @@ class TranscriptSegment(Base):
         JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql"),
         nullable=True,
     )
+    # Deterministic domain-pack correction provenance (#82). Either [] (no material
+    # correction / re-enhance reset) or the envelope
+    # {"version": int, "input_base": "raw"|"llm", "entries": [{id, from, to, span:[s,e]}]}.
+    # Written by the enhance_match dual pass beside enhanced_text; they reset
+    # atomically on re-enhance. A NON-EMPTY entries list is the authoritative
+    # "a rule fired" signal the split machinery reads (never a re-diff of text).
+    correction_trace: Mapped[dict[str, Any] | list[Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        server_default=text("'[]'"),
+    )
+    # Corrector engine version stamped when a material correction/enhancement is
+    # persisted (#82). NULL = legacy pre-#82 enhanced_text (rendered "enhanced
+    # (unversioned)", never recomputed) OR a row with no persisted enhanced output.
+    corrector_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class DiarizationTurn(Base):
