@@ -45,7 +45,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import Engine, exists, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import MutableHeaders
+from starlette.requests import ClientDisconnect
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from voxint import __version__
 from voxint.adjudication.corrections_view import (
@@ -337,6 +339,7 @@ from voxint.media.serving import (
     RangeNotSatisfiableError,
     parse_range,
 )
+from voxint.media.source_metadata import RAW_URL_KEYS
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
 from voxint.speakers.matching import gates_from_settings
@@ -489,24 +492,28 @@ _UPLOAD_ENVELOPE_ALLOWANCE = 1024 * 1024
 
 
 class _RequestSizeLimitMiddleware:
-    """Reject an over-cap ``Content-Length`` before the request body is read.
+    """Bound request-body reception at ``max_bytes`` regardless of Content-Length.
 
     FastAPI parses a multipart body (spooling file parts to a temp) *before* a
     route's dependencies run, so a per-route check cannot gate body reception —
-    by the time the handler executes, the whole body is already spooled. This
-    ASGI middleware inspects only the ``Content-Length`` header and returns 413
-    before Starlette consumes the body, so an *honestly-declared* oversized upload
-    is rejected early ("reject oversized Content-Length early" is real). The
-    authoritative per-file cap is still enforced while streaming in
-    ``submit_upload``.
+    by the time the handler executes, the whole body is already spooled. This ASGI
+    middleware bounds spooling in two layers:
 
-    Residual (NOT covered here): a chunked request with no ``Content-Length``, or
-    a transport that permits an understated one, is still fully multipart-spooled
-    by Starlette before the streaming cap runs — so pre-body spooling is bounded
-    only for honest declared lengths, not universally. A truly-bounded streaming
-    multipart parse (and moving Basic auth ahead of body parsing, which a per-route
-    ``OperatorDep`` cannot, given FastAPI's dispatch order) is deferred to the
-    security slice. For single-operator home-IP hosting that residual is low-risk.
+    * **Fast path** — an *honestly-declared* over-cap ``Content-Length`` is refused
+      with 413 before Starlette reads a single body byte.
+    * **Streaming cap (finding D3)** — the middleware also wraps ``receive`` and
+      counts body bytes as they arrive, so a chunked request with **no**
+      ``Content-Length`` (or an understated one) is cut off the moment the running
+      total exceeds ``max_bytes`` — it can no longer be fully multipart-spooled
+      first. On overflow it truncates the stream to the app (an injected
+      ``http.disconnect`` → the parser unwinds) and emits a single bare 413,
+      swallowing the app's own response so exactly one response is sent.
+
+    The authoritative per-file cap still runs while streaming in ``submit_upload``.
+    Not addressed here (deliberately, on a loopback single-operator console):
+    moving Basic auth *ahead* of body parsing, which a per-route ``OperatorDep``
+    cannot given FastAPI's dispatch order — an unauthenticated over-cap body is
+    still bounded by this cap, just not rejected with 401 before the bounded read.
     """
 
     def __init__(self, app: ASGIApp, *, max_bytes: int) -> None:
@@ -514,19 +521,68 @@ class _RequestSizeLimitMiddleware:
         self._max_bytes = max_bytes
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            for name, value in scope["headers"]:
-                if name != b"content-length":
-                    continue
-                try:
-                    length = int(value)
-                except ValueError:
-                    break  # unparseable → let the streaming cap be authoritative
-                if length > self._max_bytes:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        # Fast path: refuse an honestly-declared over-cap body before any read.
+        for name, value in scope["headers"]:
+            if name != b"content-length":
+                continue
+            try:
+                if int(value) > self._max_bytes:
                     await self._reject(send)
                     return
-                break
-        await self._app(scope, receive, send)
+            except ValueError:
+                pass  # unparseable → the streaming cap below is authoritative
+            break
+
+        received = 0
+        rejecting = False  # committed to sending our own 413 in place of the app's
+        real_response_started = False
+
+        async def counting_receive() -> Message:
+            nonlocal received, rejecting
+            if rejecting:
+                # Keep the app unwinding; do not pull more real body.
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > self._max_bytes and not real_response_started:
+                    rejecting = True
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal real_response_started
+            if rejecting:
+                return  # our 413 stands in for the app's response
+            if message["type"] == "http.response.start":
+                real_response_started = True
+            await send(message)
+
+        try:
+            await self._app(scope, counting_receive, guarded_send)
+        except ClientDisconnect:
+            # Expected: truncating the over-cap body makes the body reader raise.
+            if not rejecting:
+                raise
+        except Exception:
+            # Once we have committed to rejecting we have already swallowed the
+            # app's output, so any exception it raises while unwinding the
+            # truncated stream (a parser error, not just ClientDisconnect) must
+            # not escape — the 413 below is the single response. Only re-raise a
+            # genuine error from a request we were NOT capping.
+            if not rejecting:
+                raise
+            logger.warning(
+                "over-cap request body: app raised while unwinding the truncated "
+                "stream; returning 413",
+                exc_info=True,
+            )
+        if rejecting:
+            await self._reject(send)
 
     @staticmethod
     async def _reject(send: Send) -> None:
@@ -538,6 +594,91 @@ class _RequestSizeLimitMiddleware:
             }
         )
         await send({"type": "http.response.body", "body": b"request entity too large"})
+
+
+class _SecurityHeadersMiddleware:
+    """Inject conservative response headers to contain the claim token (finding D1).
+
+    The review console carries the per-claim token in the URL (``?token=``); that
+    token is *both* the review lock and the CSRF defense for claim-gated mutations.
+    Two cheap headers contain its disclosure surface:
+
+    * ``Referrer-Policy: no-referrer`` on **every** response — without it, a
+      followed link or a cross-origin subresource on a token-bearing page could
+      leak the token in the ``Referer`` header, the one exploitable disclosure
+      vector under this threat model. ``no-referrer`` suppresses ``Referer`` on
+      every navigation and subresource fetch.
+    * ``Cache-Control: no-store`` on every ``/review`` response — the review pages
+      embed the token (hidden form fields, island props) and the claim/mutation
+      redirects carry it in ``Location``; stamping it centrally guarantees no
+      token-bearing review response is ever written to a browser/proxy cache, and
+      cannot be missed when a new ``/review`` route is added.
+
+    This is a *mitigation*, not token removal: the token still appears in browser
+    history, address-bar screenshots, and server access logs. That residual is
+    consciously accepted for a single-operator, loopback-bound console — carrying
+    the token in a cookie/session would add disproportionate machinery. See
+    docs/security/audit-2026-08-18.md (D1). Both headers use ``setdefault`` so a
+    route that needs a stricter/looser policy can still override them.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        review_path = scope.get("path", "").startswith("/review")
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                _apply_security_headers(
+                    MutableHeaders(scope=message), review_path=review_path
+                )
+            await send(message)
+
+        await self._app(scope, receive, send_with_headers)
+
+
+def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> None:
+    """Stamp the finding-D1 containment headers (idempotent via ``setdefault``).
+
+    Shared by ``_SecurityHeadersMiddleware`` and the 500 handler so the policy has
+    one definition."""
+    headers.setdefault("referrer-policy", "no-referrer")
+    if review_path:
+        headers.setdefault("cache-control", "no-store")
+
+
+async def _security_headers_on_error(request: Request, exc: Exception) -> Response:
+    """Re-apply the D1 headers to an unhandled-exception 500.
+
+    Starlette's ``ServerErrorMiddleware`` wraps the whole app *outside* the
+    user-added ``_SecurityHeadersMiddleware``, so a truly-unhandled exception's
+    500 would otherwise skip the header stamp. Registering this as the ``Exception``
+    handler closes that gap. ``ServerErrorMiddleware`` still re-raises after sending
+    this response, so it does not mask exceptions from the server or tests."""
+    response = Response("Internal Server Error", status_code=500, media_type="text/plain")
+    _apply_security_headers(
+        response.headers, review_path=request.url.path.startswith("/review")
+    )
+    return response
+
+
+def _export_raw_host_only(raw: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Reduce the URL keys in an exported ``raw`` snapshot to host-only (D4).
+
+    ``raw`` is an allowlisted scalar subset — only ``RAW_URL_KEYS`` hold URLs — so
+    those are reduced to a bare host (matching the run-detail provenance policy)
+    while every other key passes through unchanged."""
+    if raw is None:
+        return None
+    return {
+        key: (provenance_host(value) if key in RAW_URL_KEYS else value)
+        for key, value in raw.items()
+    }
 
 
 def create_app(
@@ -577,6 +718,13 @@ def create_app(
         _RequestSizeLimitMiddleware,
         max_bytes=resolved.upload_max_bytes + _UPLOAD_ENVELOPE_ALLOWANCE,
     )
+    # Default Referrer-Policy on every response (+ no-store on /review) so a
+    # token-bearing review URL never leaks in a Referer header (finding D1). Added
+    # last → outermost among user middleware, so it decorates normal responses and
+    # redirects; the Exception handler below covers unhandled 500s, which Starlette
+    # generates OUTSIDE this middleware.
+    app.add_middleware(_SecurityHeadersMiddleware)
+    app.add_exception_handler(Exception, _security_headers_on_error)
     _register_routes(app)
     return app
 
@@ -3710,22 +3858,29 @@ def _register_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         snapshot = run.media_item.source_metadata
+        # Finding D4: the export's URL fields are reduced to host-only, matching
+        # the run-detail UI's provenance_host policy — the full page/uploader/
+        # channel URLs (and raw's webpage_url) are the acquisition surface the
+        # operator should not re-share by handing off an export. Descriptive
+        # metadata (title, uploader/channel names, tags, description) is the
+        # operator's own data and stays. `raw` is already an allowlisted scalar
+        # subset (no signed URLs), so only its known URL keys need reducing.
         source_metadata = (
             {
                 "source_kind": snapshot.source_kind,
                 "title": snapshot.title,
                 "uploader": snapshot.uploader,
-                "uploader_url": snapshot.uploader_url,
+                "uploader_url": provenance_host(snapshot.uploader_url),
                 "channel": snapshot.channel,
-                "channel_url": snapshot.channel_url,
+                "channel_url": provenance_host(snapshot.channel_url),
                 "description": snapshot.description,
                 "upload_date": (snapshot.upload_date.isoformat() if snapshot.upload_date else None),
                 "duration_seconds": snapshot.duration_seconds,
                 "tags": snapshot.tags,
-                "canonical_url": snapshot.canonical_url,
+                "canonical_url": provenance_host(snapshot.canonical_url),
                 "extractor": snapshot.extractor,
                 "extractor_version": snapshot.extractor_version,
-                "raw": snapshot.raw,
+                "raw": _export_raw_host_only(snapshot.raw),
                 "raw_schema_version": snapshot.raw_schema_version,
                 "acquired_at": snapshot.acquired_at.isoformat(),
             }
@@ -3765,7 +3920,9 @@ def _register_routes(app: FastAPI) -> None:
             else None
         )
         envelope = {
-            "schema_version": 1,
+            # v2 (finding D4): source_metadata URL fields are host-only. v1 emitted
+            # full uploader/channel/canonical URLs and raw.webpage_url verbatim.
+            "schema_version": 2,
             "run": {
                 "id": str(run.id),
                 "status": run.status,

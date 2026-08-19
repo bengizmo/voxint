@@ -68,6 +68,7 @@ def _make_run(
                     source_kind="ytdlp",
                     title="Episode 42 <em>unsafe</em>",
                     uploader="Example Uploader",
+                    uploader_url="https://example.com/@uploader",
                     channel="Example Channel",
                     channel_url="https://example.com/channel/UC123",
                     description="About microphones.",
@@ -76,7 +77,7 @@ def _make_run(
                     canonical_url="https://example.com/watch?v=abc123",
                     extractor="example",
                     extractor_version="2026.07.04",
-                    raw={"id": "abc123"},
+                    raw={"id": "abc123", "webpage_url": "https://example.com/watch?v=abc123"},
                     raw_schema_version=1,
                     acquired_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
                 )
@@ -221,14 +222,23 @@ class TestRunExportJson:
         response = client.get(f"/runs/{run_id}/export.json")
         assert response.status_code == 200
         body = json.loads(response.text)
-        assert body["schema_version"] == 1
+        assert body["schema_version"] == 2  # v2: URL fields host-only (finding D4)
         assert body["run"]["id"] == str(run_id)
         assert body["run"]["operator_notes"] == "my notes"
         meta = body["source_metadata"]
         assert meta["source_kind"] == "ytdlp"
+        # Descriptive metadata (the operator's own data) is retained verbatim.
         assert meta["title"] == "Episode 42 <em>unsafe</em>"
+        assert meta["uploader"] == "Example Uploader"
+        assert meta["channel"] == "Example Channel"
+        assert meta["description"] == "About microphones."
         assert meta["tags"] == ["interviews", "acoustics"]
-        assert meta["raw"] == {"id": "abc123"}
+        # Finding D4: every URL field is reduced to bare host — no path/query that
+        # could carry the full acquisition URL — including raw's webpage_url.
+        assert meta["uploader_url"] == "example.com"
+        assert meta["channel_url"] == "example.com"
+        assert meta["canonical_url"] == "example.com"
+        assert meta["raw"] == {"id": "abc123", "webpage_url": "example.com"}
         assert meta["acquired_at"] == "2026-08-01T12:00:00+00:00"
         assert body["segments"] == [
             {

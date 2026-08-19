@@ -192,7 +192,9 @@ class TestExport:
         with session_factory() as session:
             run_id = seed_run(session)
         body = client.get(f"/runs/{run_id}/export.json").json()
-        assert body["schema_version"] == 1  # additive key, no bump
+        # v2 since finding D4 reduced source_metadata URL fields to host-only; the
+        # enrichment_assets key itself stays additive/nullable.
+        assert body["schema_version"] == 2
         assert body["enrichment_assets"] is None
         with session_factory() as session:
             from voxint.enrichment.asset_jobs import create_jobs
@@ -207,7 +209,7 @@ class TestExport:
             job_id = created[0].id
         execute_job(session_factory, job_id, settings=settings, llm=FakeLLM([SUMMARY_BODY]))
         body = client.get(f"/runs/{run_id}/export.json").json()
-        assert body["schema_version"] == 1
+        assert body["schema_version"] == 2
         exported = body["enrichment_assets"]["summary"]
         assert exported["payload"] == SUMMARY_BODY
         assert exported["machine_generated"] is True
