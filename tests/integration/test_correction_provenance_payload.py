@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder
 from voxint.adjudication.corrections_view import run_reconciliation
+from voxint.adjudication.review_state import set_correction
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.app import (
     _island_segment,
@@ -110,6 +111,53 @@ def test_island_payload_resolves_fired_rule_to_its_pack(session: Session) -> Non
     # The untouched segment materially corrected nothing -> no marker, raw present.
     assert quiet["corrections"] is None
     assert quiet["rawText"] == _QUIET_RAW
+
+
+def test_operator_correction_supersedes_pipeline_provenance(session: Session) -> None:
+    # The doctrine's load-bearing case: once the operator saves their own text, the
+    # pipeline trace's spans address the enhanced text, not the operator-effective
+    # text now shown. The SERVER (not just client memory) must drop the marker, or a
+    # reload / whole-run reconcile resurrects a stale "corrected by domain pack" chip
+    # over the operator's own wording. rawText MUST stay for the compare/reset path.
+    run_id = _make_run(session, NEWSROOM)
+    fired_seg_id = _add_segment(session, run_id, index=0, raw=_FIRES_RAW)
+    enhance_match.run(_ctx(NEWSROOM), session, run_id)
+    session.expire_all()
+
+    # Sanity: before the operator edit, the fired segment carries the marker.
+    index = _load_run_rule_index(session, run_id)
+    before = _island_segment(
+        next(
+            ln
+            for ln in attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+            if ln.segment_id == fired_seg_id
+        ),
+        {},
+        index,
+    )
+    assert before["corrections"] is not None
+    assert before["corrections"]["status"] == "shown"
+
+    # Operator saves their own wording (distinct from the pipeline rendering, so it
+    # is a real correction, not a revert-to-pipeline no-op).
+    seg = session.get(TranscriptSegment, fired_seg_id)
+    assert seg is not None
+    set_correction(session, segment=seg, text="The Zoning Board convened at noon.")
+    session.expire_all()
+
+    after = _island_segment(
+        next(
+            ln
+            for ln in attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+            if ln.segment_id == fired_seg_id
+        ),
+        {},
+        _load_run_rule_index(session, run_id),
+    )
+    # Marker suppressed server-side; raw evidence still exposed.
+    assert after["corrected"] is True
+    assert after["corrections"] is None
+    assert after["rawText"] == _FIRES_RAW
 
 
 def test_reconciliation_surfaces_applied_and_declared_but_never_fired(

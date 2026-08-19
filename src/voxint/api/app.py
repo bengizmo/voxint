@@ -1262,9 +1262,17 @@ def _island_segment(
     is never split).
     """
     is_split_child = ln.word_start is not None
+    # Operator edit supersedes pipeline provenance (#83): once the operator saves
+    # their own text (`corrected`), the domain-pack trace's spans address the
+    # PIPELINE-enhanced text, not the operator-effective text now shown — so the
+    # "corrected by domain pack" marker would be stale and misleading. The client
+    # clears it locally on a /text save, but the SERVER must own the rule too, or a
+    # page reload (and any whole-run reconcile via /split or /relabel, which reuse
+    # this builder) resurrects the stale marker. `rawText` stays exposed — the
+    # compare / reset-to-raw affordance remains honest and useful after an edit.
     corrections = (
         None
-        if is_split_child
+        if is_split_child or ln.corrected
         else resolve_segment_provenance(
             ln.correction_trace, ln.corrector_version, rule_index
         )
@@ -3430,18 +3438,24 @@ def _register_routes(app: FastAPI) -> None:
         # over every segment's IMMUTABLE raw_text (one row per segment — never the
         # split-expanded lines, which would double-count a rule's applied segments).
         # [] when the snapshot is unavailable or declares no corrections, so the
-        # panel simply does not render.
-        rule_index = _load_run_rule_index(session, run_id)
-        raw_texts = (
-            session.execute(
-                select(TranscriptSegment.raw_text).where(
-                    TranscriptSegment.pipeline_run_id == run_id
+        # panel simply does not render. Skip the replay (and the raw-text query)
+        # entirely for an unclaimed/read-only view — the panel lives inside the
+        # writable block and never renders there — and when the pack declares no
+        # rules (run_reconciliation would short-circuit to [] anyway).
+        rule_index = _load_run_rule_index(session, run_id) if token is not None else None
+        if rule_index is not None and rule_index.rules:
+            raw_texts = (
+                session.execute(
+                    select(TranscriptSegment.raw_text).where(
+                        TranscriptSegment.pipeline_run_id == run_id
+                    )
                 )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        island_props["reconciliation"] = run_reconciliation(rule_index, raw_texts)
+            island_props["reconciliation"] = run_reconciliation(rule_index, raw_texts)
+        else:
+            island_props["reconciliation"] = []
         return templates.TemplateResponse(
             request,
             "review_transcript.html",

@@ -131,37 +131,67 @@ def resolve_segment_provenance(
     assert isinstance(trace, Mapping)  # trace_has_entries guarantees the envelope
     version = trace.get("version")
     if version != CORRECTOR_VERSION or corrector_version != CORRECTOR_VERSION:
+        # Report the side that actually MISMATCHES (never the current-version side):
+        # the envelope's version when IT differs, else the row column's. A non-int
+        # degrades to None, which the console renders without the misleading
+        # "(recorded by corrector vN)" clause instead of pointing at the wrong side.
+        recorded = version if version != CORRECTOR_VERSION else corrector_version
         return {
             "status": "unavailable",
             "reason": "version_mismatch",
-            "recordedVersion": version if isinstance(version, int) else corrector_version,
+            "recordedVersion": recorded if isinstance(recorded, int) else None,
         }
     entries: list[dict[str, Any]] = []
-    for raw_entry in trace.get("entries", []):
+    for raw_entry in trace.get("entries") or []:
         if not isinstance(raw_entry, Mapping):
             continue
         rule_id = raw_entry.get("id")
-        display = (
-            index.by_id.get(rule_id)
-            if index is not None and isinstance(rule_id, str)
-            else None
-        )
+        from_text = raw_entry.get("from")
+        to_text = raw_entry.get("to")
+        # id/from/to are the entry's honest identity and the TS contract types them
+        # non-null `string`. A non-string is corrupt data that cannot render as a
+        # rule reference, so DROP the entry rather than emit a contract-violating
+        # null (which would show as "unresolved rule null").
+        if not (
+            isinstance(rule_id, str)
+            and isinstance(from_text, str)
+            and isinstance(to_text, str)
+        ):
+            continue
+        # span is `[int, int] | null` on the wire; normalise anything else to null
+        # (bool is an int subclass, so exclude it explicitly).
+        span = raw_entry.get("span")
+        if not (
+            isinstance(span, list)
+            and len(span) == 2
+            and all(isinstance(x, int) and not isinstance(x, bool) for x in span)
+        ):
+            span = None
+        display = index.by_id.get(rule_id) if index is not None else None
         entries.append(
             {
                 "id": rule_id,
-                "from": raw_entry.get("from"),
-                "to": raw_entry.get("to"),
-                "span": raw_entry.get("span"),
+                "from": from_text,
+                "to": to_text,
+                "span": span,
                 "pack": display.pack if display is not None else None,
                 "match": display.match if display is not None else None,
                 "replace": display.replace if display is not None else None,
                 "resolved": display is not None,
             }
         )
+    # Every entry was unrenderable (all malformed): the envelope claimed a fire but
+    # carries nothing displayable, so show NO marker rather than a hollow "corrected
+    # by domain pack (0)" chip — consistent with the "materially fired" doctrine.
+    if not entries:
+        return None
+    input_base = trace.get("input_base")
     return {
         "status": "shown",
         "version": version,
-        "inputBase": trace.get("input_base"),
+        # inputBase is a non-null `string` on the wire; a corrupt non-string trace
+        # degrades to "" (the rules themselves stay the honest content).
+        "inputBase": input_base if isinstance(input_base, str) else "",
         "entries": entries,
     }
 

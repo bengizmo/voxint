@@ -253,10 +253,16 @@ export function ReviewStepper({
           // operator saves their own text via /text, the domain-pack correction
           // trace's spans no longer address the effective text, so the "corrected by
           // domain pack" marker would be stale (and misleading — it is a PIPELINE
-          // edit, not this operator's). Clear it on a text-save; a plain verify
-          // (supersedeProvenance unset) leaves the pipeline provenance intact.
+          // edit, not this operator's). Clear it on a text-save — but ONLY when the
+          // save actually left a correction (`result.corrected`): a save that reverts
+          // to the pipeline text clears the correction server-side (corrected=false),
+          // where the pack provenance is valid again and the server keeps emitting it,
+          // so mirror that here rather than hiding it until reload. A plain verify
+          // (supersedeProvenance unset) always leaves the provenance intact.
           corrections:
-            opts?.supersedeProvenance && !split ? null : seg.corrections,
+            opts?.supersedeProvenance && result.corrected && !split
+              ? null
+              : seg.corrections,
         };
       });
       setSegments(patched);
@@ -767,12 +773,24 @@ export function ReviewStepper({
   // pipeline provenance (null once superseded by an operator edit — see
   // applyResult); `shownEntries` are the rules that materially fired (only when the
   // trace is readable — a version mismatch yields status "unavailable" instead).
-  // `neverFired` are the run's declared rules that did NOT apply anywhere — the
-  // subject of the reconciliation panel's plain-language explanation.
+  // `appliedCount`/`neverFiredCount`/`skippedCount` split the run's declared rules
+  // into the panel's three honest states: applied, `no_raw_match` ("never fired" —
+  // the term wasn't in the recording), and `growth_rejected` ("skipped" — it DID
+  // match raw text but the change overflowed the growth ceiling). The collapsed
+  // summary must not lump the last two together, or it contradicts its own per-row
+  // badges and tells the operator a matched term "never fired".
   const corrections = current?.corrections ?? null;
   const shownEntries =
     corrections?.status === "shown" ? corrections.entries : [];
-  const neverFired = reconciliation.filter((r) => r.status !== "applied");
+  const appliedCount = reconciliation.filter(
+    (r) => r.status === "applied",
+  ).length;
+  const neverFiredCount = reconciliation.filter(
+    (r) => r.status === "no_raw_match",
+  ).length;
+  const skippedCount = reconciliation.filter(
+    (r) => r.status === "growth_rejected",
+  ).length;
 
   return (
     <div>
@@ -813,21 +831,20 @@ export function ReviewStepper({
                 className="text-sm"
               >
                 {reconOpen ? "▾" : "▸"} Correction rules —{" "}
-                {reconciliation.length - neverFired.length} of{" "}
-                {reconciliation.length} applied
-                {neverFired.length > 0
-                  ? `, ${neverFired.length} never fired`
-                  : ""}
+                {appliedCount} of {reconciliation.length} applied
+                {neverFiredCount > 0 ? `, ${neverFiredCount} never fired` : ""}
+                {skippedCount > 0 ? `, ${skippedCount} skipped` : ""}
               </button>
               {reconOpen && (
                 <div id="review-reconciliation-body" className="text-sm my-1">
                   <p className="muted">
                     Each rule declared by this run’s domain pack, and whether it
-                    materially changed any segment’s text. A rule that never fired
-                    usually means the recording didn’t contain the term it matches —
-                    or the term was split across a pause; declare such terms as{" "}
-                    <code>vocabulary</code> so they’re biased at transcription time
-                    instead.
+                    matched and applied on any segment’s raw ASR text. A rule that
+                    never fired usually means the recording didn’t contain the term
+                    it matches — or the term was split across a pause; declare such
+                    terms as <code>vocabulary</code> so they’re biased at
+                    transcription time instead. A <em>skipped</em> rule did match but
+                    its replacement would have over-lengthened the segment.
                   </p>
                   <ul className="review-reconciliation-list">
                     {reconciliation.map((r) => (

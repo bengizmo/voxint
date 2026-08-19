@@ -148,6 +148,39 @@ def test_provenance_version_mismatch_in_row_column_is_unavailable() -> None:
     assert result is not None
     assert result["status"] == "unavailable"
     assert result["reason"] == "version_mismatch"
+    # recordedVersion reports the side that actually MISMATCHES (the row's 99), not
+    # the current-version envelope — the UI would otherwise say "recorded by v1"
+    # while the console also reads v1.
+    assert result["recordedVersion"] == 99
+
+
+def test_provenance_all_malformed_entries_is_none() -> None:
+    # trace_has_entries is true (non-empty list) but every entry is unrenderable:
+    # a non-mapping, a non-string id, and a non-string from. No honest marker can be
+    # shown, so the segment renders as uncorrected rather than "corrected by pack (0)".
+    idx = _index("town", [_rule("r1", "abbr", "abbreviation")])
+    trace: dict[str, Any] = {
+        "version": CORRECTOR_VERSION,
+        "input_base": "raw",
+        "entries": [
+            "not-a-mapping",
+            {"id": 7, "from": "a", "to": "b", "span": [0, 1]},
+            {"id": "r1", "from": None, "to": "b", "span": [0, 1]},
+        ],
+    }
+    assert resolve_segment_provenance(trace, CORRECTOR_VERSION, idx) is None
+
+
+def test_provenance_malformed_span_normalizes_to_none() -> None:
+    # A corrupt span (wrong arity / non-int / bool) degrades to null while the entry
+    # stays visible — the wire contract types span as [number, number] | null.
+    idx = _index("town", [_rule("r1", "abbr", "abbreviation")])
+    trace = _envelope([{"id": "r1", "from": "abbr", "to": "abbreviation", "span": [0]}])
+    result = resolve_segment_provenance(trace, CORRECTOR_VERSION, idx)
+    assert result is not None
+    (entry,) = result["entries"]
+    assert entry["span"] is None
+    assert entry["id"] == "r1" and entry["resolved"] is True
 
 
 def test_provenance_resolved_entries_carry_pack_and_rule() -> None:
