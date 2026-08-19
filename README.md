@@ -63,6 +63,13 @@ The installer asks only for what it can't invent (an admin password, a folder
 for your media, and which hardware runs the models), then generates everything
 else, starts Voxint, waits until it is healthy, and prints the console address.
 
+> **On an Apple Silicon Mac and would rather not install Docker Desktop?** A
+> docker-free **native preview** runs the whole stack under macOS's own service
+> manager instead. It is a macOS-only technical preview (a few shell commands,
+> not the one-command install above), so read
+> [docs/native-macos-preview.md](docs/native-macos-preview.md) if that is you.
+> Every other install path, on any operating system, needs Docker.
+
 > **No graphics card? That's fine.** Voxint runs the whole pipeline on an
 > ordinary computer's CPU (needs roughly **8 GB of memory** free). It is slower,
 > and a long recording can take hours rather than minutes, but it works anywhere. A
