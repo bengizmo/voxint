@@ -56,6 +56,36 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   it lives (the backend index map, the waveform probe count, and the light and
   dark `--spk-*` CSS tokens plus their `.spk-*` class mappings) so a partial edit
   can no longer silently drop a speaker's colour to the neutral bar.
+- **Review-journey restyle (#92, epic #89)**: the workbench and review-transcript
+  screens are styled as one continuous "Reading Room" flow. The workbench gains a
+  **review header card** (run identity, a claim-state indicator, and the journey's
+  actions — with **Review transcript →** / **Claim for review** as the single
+  primary accent action per surface); the review transcript gains a **verified
+  progress track** (the N-of-M count stays the visible signal; the bar is
+  decoration) in both the island and the JS-off fallback. The native `<audio>`
+  control, speed selector, speaker-colored waveform and capability banner are now
+  framed together in one **player surface** panel — the native control is wrapped,
+  never replaced, so playback, media keys, capability gating and the JS-off
+  fallback behave exactly as before (a custom transport remains a separately-gated
+  follow-up). Transcript lines pick up a quiet hover surface and aligned padding;
+  keyboard-shortcut hints render as `kbd` chips; adjudication card actions are
+  grouped into one row. All colors come from the existing token layer and meet
+  WCAG AA in both themes; keyboard review, htmx swaps, island-failure and JS-off
+  fallbacks verified in a real browser.
+- **Per-screen visual rollout (#93, epic #89)**: the "Reading Room" treatment now
+  reaches the remaining console screens. The adjudication queue keeps its scannable
+  table but promotes each row's **Review** action to the primary accent and slims
+  its progress cell to the shared review-journey track, with the resolved-of-total
+  count sitting beside the bar as the primary signal (an overlaid label measured
+  below WCAG AA across the filled and unfilled halves). The Speakers roster renders
+  as proper cards with a grouped action row. Settings frames each section as a card
+  while leaving the tutorial banner and every **Save** button neutral. The setup
+  wizard frames each step as one panel and reserves the teal accent for its forward
+  navigation (Get started, Continue, Finish and start tutorial), styles the
+  readiness-check rows and step markers, and gives the shared watch-folder panel its
+  first real layout. All color comes from the existing token layer and meets WCAG AA
+  in both themes. The obsolete-literal inventory is clean: no screen references a
+  pre-token color.
 
 ### Security
 
@@ -102,36 +132,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     GitHub lane only: the Forgejo Actions mirror ignores `permissions`, and other
     mutable inputs (base images, the `pgvector` service image, the CUDA weight
     bake) are out of scope for this change.
-- **Review-journey restyle (#92, epic #89)**: the workbench and review-transcript
-  screens are styled as one continuous "Reading Room" flow. The workbench gains a
-  **review header card** (run identity, a claim-state indicator, and the journey's
-  actions — with **Review transcript →** / **Claim for review** as the single
-  primary accent action per surface); the review transcript gains a **verified
-  progress track** (the N-of-M count stays the visible signal; the bar is
-  decoration) in both the island and the JS-off fallback. The native `<audio>`
-  control, speed selector, speaker-colored waveform and capability banner are now
-  framed together in one **player surface** panel — the native control is wrapped,
-  never replaced, so playback, media keys, capability gating and the JS-off
-  fallback behave exactly as before (a custom transport remains a separately-gated
-  follow-up). Transcript lines pick up a quiet hover surface and aligned padding;
-  keyboard-shortcut hints render as `kbd` chips; adjudication card actions are
-  grouped into one row. All colors come from the existing token layer and meet
-  WCAG AA in both themes; keyboard review, htmx swaps, island-failure and JS-off
-  fallbacks verified in a real browser.
-- **Per-screen visual rollout (#93, epic #89)**: the "Reading Room" treatment now
-  reaches the remaining console screens. The adjudication queue keeps its scannable
-  table but promotes each row's **Review** action to the primary accent and slims
-  its progress cell to the shared review-journey track, with the resolved-of-total
-  count sitting beside the bar as the primary signal (an overlaid label measured
-  below WCAG AA across the filled and unfilled halves). The Speakers roster renders
-  as proper cards with a grouped action row. Settings frames each section as a card
-  while leaving the tutorial banner and every **Save** button neutral. The setup
-  wizard frames each step as one panel and reserves the teal accent for its forward
-  navigation (Get started, Continue, Finish and start tutorial), styles the
-  readiness-check rows and step markers, and gives the shared watch-folder panel its
-  first real layout. All color comes from the existing token layer and meets WCAG AA
-  in both themes. The obsolete-literal inventory is clean: no screen references a
-  pre-token color.
 
 ## [0.19.0] - 2026-08-19
 
