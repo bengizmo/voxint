@@ -7,8 +7,18 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege default token (audit F2). Every job here only reads; grant
+# more per-job if one ever needs it. Note: this scopes the GitHub lane only —
+# the Forgejo Actions mirror ignores `permissions` and its token is write-capable.
+permissions:
+  contents: read
+
 env:
   GITLEAKS_VERSION: "8.24.3"
+  # sha256 of gitleaks_8.24.3_linux_x64.tar.gz (audit F4). Coupled to
+  # GITLEAKS_VERSION on purpose: a version bump that forgets this digest
+  # fails the checksum verification closed.
+  GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
 
 jobs:
   lint-test:
@@ -28,8 +38,8 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
         with:
           python-version: "3.12"
       - name: Install
@@ -55,8 +65,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "22"
           cache: "npm"
@@ -75,13 +85,20 @@ jobs:
   secrets-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
         with:
           fetch-depth: 0
       - name: Install gitleaks
         run: |
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
+          # Download to a file, verify sha256 against the repo-held literal
+          # digest, then extract only after verification (audit F4). No
+          # curl-pipe-to-tar: an unverified body must never reach tar.
+          curl --fail --show-error --location --retry 3 \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o "$RUNNER_TEMP/gitleaks.tar.gz"
+          printf '%s  %s\n' "$GITLEAKS_SHA256" "$RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C /usr/local/bin gitleaks
+          rm -f "$RUNNER_TEMP/gitleaks.tar.gz"
       - name: Gitleaks (history + worktree)
         run: |
           gitleaks git --config .gitleaks.toml --redact --verbose .

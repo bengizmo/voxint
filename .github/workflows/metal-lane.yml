@@ -34,6 +34,13 @@ on:
   schedule:
     - cron: "23 7 * * *"  # nightly, off the top of the hour
 
+# Least-privilege default token (audit F2). This lane only checks out code,
+# caches, fetches public release assets over plain https, and runs tests
+# (no artifact upload, no gh); `contents: read` covers the checkout and is
+# sufficient. Scopes the GitHub lane only (Forgejo has no macos runners here).
+permissions:
+  contents: read
+
 jobs:
   # The launcher's own unit suite on real macOS: plutil lint runs instead of
   # skipping, and every bash helper executes under the BSD userland it ships
@@ -43,8 +50,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
         with:
           python-version: "3.12"
       - name: Install (dev extra)
@@ -57,8 +64,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5.4.2
       - name: Resolve the pinned whisper revision (cache key)
         # Single source: the launcher's pin. hashFiles on the whole script
         # would bust a ~3 GB cache on every unrelated edit.
@@ -71,22 +78,22 @@ jobs:
       # `setup` re-verifies whatever lands here against the provenance
       # sha256s (a corrupt cache is cleared and re-fetched, not trusted).
       - name: Cache pyannote checkpoints
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ~/.voxint-metal/models/pyannote
           key: metal-pyannote-${{ runner.arch }}-${{ hashFiles('services/pyannote/models/provenance.json') }}
       - name: Cache titanet ONNX graph
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ~/.voxint-metal/models/titanet
           key: metal-titanet-${{ runner.arch }}-${{ hashFiles('tests/parity/fixtures/onnx/provenance.json') }}
       - name: Cache whisper large-v2 snapshot
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ~/.voxint-metal/models/whisper
           key: metal-whisper-${{ runner.arch }}-${{ env.WHISPER_HF_REVISION }}
       - name: Cache uv wheel downloads
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
         with:
           path: ~/Library/Caches/uv
           key: metal-uv-${{ runner.arch }}-${{ hashFiles('services/whisper/requirements.metal.txt', 'services/pyannote/requirements.metal.txt', 'services/pyannote/requirements.txt', 'services/titanet/requirements.cpu.txt') }}

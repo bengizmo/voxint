@@ -1,0 +1,14 @@
+# Keeps the SHA-pinned GitHub Actions (audit F1) from rotting: without an
+# update path, pinned commits silently miss upstream security fixes.
+# One grouped PR per month, no automerge -> low noise for a solo maintainer.
+# Dependabot understands SHA pins and bumps the same-line `# vX.Y.Z` comment.
+# GitHub-only; the Forgejo Actions mirror does not run Dependabot.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
