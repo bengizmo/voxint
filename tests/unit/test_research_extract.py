@@ -93,6 +93,15 @@ def test_charset_from_header_and_unknown_falls_back_to_utf8() -> None:
     assert isinstance(text, str)
     # Undecodable bytes are replaced, never raised.
     assert isinstance(decode_bytes(b"\xff\xfe\xfd", charset="utf-8"), str)
+    # Registered non-text codecs pass codecs.lookup but reject bytes.decode;
+    # they must fall back to utf-8, not raise (a decode-time DoS otherwise).
+    for codec in ("rot13", "base64", "hex"):
+        assert decode_bytes("café".encode(), charset=codec) == "café"
+    # Registered *text* codecs can still raise UnicodeError past errors="replace"
+    # ("undefined"/"idna" reject the handler, punycode fails on non-ASCII);
+    # these must also fall back rather than abort the fetch worker.
+    for codec in ("undefined", "idna", "punycode"):
+        assert decode_bytes("café".encode(), charset=codec) == "café"
 
 
 def test_plain_text_path_sanitizes_and_caps() -> None:

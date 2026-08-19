@@ -85,7 +85,16 @@ def decode_bytes(data: bytes, *, charset: str | None) -> str:
             codec = codecs.lookup(charset).name
         except LookupError:
             codec = "utf-8"
-    return data.decode(codec, errors="replace")
+    try:
+        return data.decode(codec, errors="replace")
+    except (LookupError, TypeError, UnicodeError):
+        # A hostile charset can still abort the decode even after the lookup
+        # succeeds: a registered non-text codec (rot13, base64, hex) raises
+        # LookupError from bytes.decode, and a text codec like "undefined" or
+        # "idna" (or malformed punycode) raises UnicodeError despite
+        # errors="replace". Fall back to utf-8, itself a text codec that with
+        # errors="replace" cannot re-raise, so the guarantee above holds.
+        return data.decode("utf-8", errors="replace")
 
 
 class _TextExtractor(HTMLParser):

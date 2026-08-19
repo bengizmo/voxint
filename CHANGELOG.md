@@ -141,6 +141,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     GitHub lane only: the Forgejo Actions mirror ignores `permissions`, and other
     mutable inputs (base images, the `pgvector` service image, the CUDA weight
     bake) are out of scope for this change.
+- **Research-agent hardening (audit findings E1, E2).** Two calibrated fixes to
+  the web-research tool loop for the single-operator threat model:
+  - **E2, charset-decode denial of service.** A hostile page could set the
+    `Content-Type` charset to one of several registered codecs that pass
+    `codecs.lookup` yet still abort `bytes.decode`: the non-text codecs (`rot13`,
+    `base64`, `hex`) raise `LookupError`, and text codecs such as `undefined`,
+    `idna`, and malformed `punycode` raise `UnicodeError` even under
+    `errors="replace"`. Any of them crashed the fetch worker. `decode_bytes` now
+    falls back to UTF-8 (a codec that with `errors="replace"` cannot re-raise for
+    any byte string) whenever the declared decode raises, honouring the never-raise
+    guarantee the docstring already promised.
+  - **E1, `web_search` as a residual disclosure channel (documented).** A hostile
+    page cannot steer `read_url`, but it can still influence a free-form
+    `web_search` query, which discloses private context to the configured search
+    provider. This is accepted for the single-operator deployment (search volume
+    is budget-bounded) and is now recorded in the agent's injection-posture
+    docstring rather than filtered, since a query-content filter would refuse
+    legitimate searches.
 
 ### Fixed
 - **Neutral typed buttons now get their intended surface background (#100).** The

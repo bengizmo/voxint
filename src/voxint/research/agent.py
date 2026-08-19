@@ -9,12 +9,18 @@ Anything outside the closed schema gets exactly one repair attempt, then the
 job fails — a model that cannot follow the contract must never silently
 degrade into an authoritative "not found".
 
-Injection posture: retrieved page text is hostile data. Its only power is to
-be quoted as evidence — it is delivered as a JSON-encoded tool result marked
+Injection posture: retrieved page text is hostile data. Its main power is to
+be quoted as evidence: it is delivered as a JSON-encoded tool result marked
 untrusted, it cannot steer ``read_url`` to arbitrary URLs (targets must come
 from this job's own search results or the operator-stored seed URLs), and no
 prompt content can alter budgets or tool policy because those live in this
-module and in the #39 tools, not in the prompt. Every concluded claim must
+module and in the #39 tools, not in the prompt. Its one residual channel is the
+free-form ``web_search`` query: a hostile page can influence what the model
+searches for, so private context can reach the configured search provider. This
+is accepted for the single-operator deployment because search volume is
+budget-bounded. Operator review bounds only what gets persisted as a claim, not
+what a query already disclosed at request time, so it is the budget, not review,
+that caps this channel. Every concluded claim must
 cite a server-issued source id from a page this job actually fetched and carry
 a snippet the server can locate verbatim in that page's kept text; claims
 failing any check are dropped, never persisted.
