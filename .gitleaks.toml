@@ -46,9 +46,15 @@ paths = [
 # macro name (a documented upstream constant, not a credential); the
 # generic-api-key rule flags its length/shape. Named individually — never
 # allowlist a broad WHISPER_* pattern.
+#
+# "elapsed/duration" is benign English prose in the #89 console-UX design report
+# (docs/reports/console-ux-modernization-design-2026-08-19.md) describing an
+# audio-transport a11y surface; the generic-api-key rule mis-flags the two words
+# joined by a slash. Named individually — never allowlist a broad prose pattern.
 regexes = [
     '''hf_(TESTSECRETTOKEN123|NEWSECRET456|PREFLIGHTSECRET789)''',
     '''WHISPER_AHEADS_LARGE_V2''',
+    '''elapsed/duration''',
 ]
 # 29ce5b5a: parity doc/test comments named the measurement host (a bare machine
 # nickname — no address or credential). Scrubbed from the worktree in the v0.4.0
