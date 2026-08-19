@@ -818,11 +818,22 @@ export function ReviewStepper({
       )}
       {writable && (
         <div className="review-stepper my-2" aria-label="Verify and advance">
-          <p aria-live="polite">
-            <strong>{progress.verified}</strong> of{" "}
-            <strong>{progress.total}</strong> segments verified
-            {done ? " — all done" : ` · ${remaining} left`}
-          </p>
+          {/* Progress track (issue #92): the count stays the visible text signal;
+              the bar is aria-hidden decoration driven by the same numbers. */}
+          <div className="progress-wrap">
+            <p aria-live="polite">
+              <strong>{progress.verified}</strong> of{" "}
+              <strong>{progress.total}</strong> segments verified
+              {done ? " — all done" : ` · ${remaining} left`}
+            </p>
+            <span className="progress-track" aria-hidden="true">
+              <i
+                style={{
+                  width: `${progress.total > 0 ? (progress.verified / progress.total) * 100 : 0}%`,
+                }}
+              />
+            </span>
+          </div>
           {/* Run-level declared-rule reconciliation (issue #83): a collapsible
               summary of which of the run's domain-pack correction rules actually
               fired. Renders only when the run declared corrections (empty ⇒ no
@@ -1061,7 +1072,7 @@ export function ReviewStepper({
                   type="button"
                   onClick={() => void verifyAndAdvance()}
                   disabled={busy}
-                  className="mr-2"
+                  className="primary mr-2"
                 >
                   Verify &amp; next <kbd>{REVIEW_KEY.verify}</kbd>
                 </button>

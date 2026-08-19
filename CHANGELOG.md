@@ -54,6 +54,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     names, tags, description) is retained. The export envelope `schema_version` is
     bumped **1 → 2**. (`raw` was already an allowlisted subset with no signed URLs,
     so this aligns URL/identity surface, not a secret leak.)
+- **Review-journey restyle (#92, epic #89)**: the workbench and review-transcript
+  screens are styled as one continuous "Reading Room" flow. The workbench gains a
+  **review header card** (run identity, a claim-state indicator, and the journey's
+  actions — with **Review transcript →** / **Claim for review** as the single
+  primary accent action per surface); the review transcript gains a **verified
+  progress track** (the N-of-M count stays the visible signal; the bar is
+  decoration) in both the island and the JS-off fallback. The native `<audio>`
+  control, speed selector, speaker-colored waveform and capability banner are now
+  framed together in one **player surface** panel — the native control is wrapped,
+  never replaced, so playback, media keys, capability gating and the JS-off
+  fallback behave exactly as before (a custom transport remains a separately-gated
+  follow-up). Transcript lines pick up a quiet hover surface and aligned padding;
+  keyboard-shortcut hints render as `kbd` chips; adjudication card actions are
+  grouped into one row. All colors come from the existing token layer and meet
+  WCAG AA in both themes; keyboard review, htmx swaps, island-failure and JS-off
+  fallbacks verified in a real browser.
 
 ## [0.19.0] - 2026-08-19
 

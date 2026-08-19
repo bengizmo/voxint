@@ -228,6 +228,8 @@
   {% endfor %}
 
   {% if token %}
+  {# Whole-label ruling controls, grouped as one action row (issue #92). #}
+  <div class="card-actions">
   <form class="inline" method="post"
         action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
         hx-post="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
@@ -272,6 +274,7 @@
     <input type="hidden" name="action" value="unknown">
     <button type="submit">Unknown</button>
   </form>
+  </div>
   {% endif %}
 </div>
 {% else %}

@@ -3,25 +3,34 @@
 {% block title %}Voxint — review {{ run.media_item.source_path }}{% endblock %}
 {% block body %}
 <p><a href="/review">← queue</a></p>
-<h1>{{ run.media_item.source_path }}</h1>
 
-{% if token %}
-<p class="muted">Claimed by you.</p>
-<form method="post" action="/review/{{ run.id }}/release" class="inline">
-  <input type="hidden" name="token" value="{{ token }}">
-  <button type="submit">Release claim</button>
-</form>
-{# Verify-and-advance transcript review (issue #53): carries the live claim token
-   so the linear player writes without re-claiming (a fresh claim would kill this
-   tab's token). #}
-<p><a href="/review/{{ run.id }}/transcript?token={{ token }}">Review transcript →</a></p>
-{% else %}
-<p class="muted">Not claimed by this tab — decisions are disabled.</p>
-<form method="post" action="/review/{{ run.id }}/claim" class="inline">
-  <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
-  <button type="submit">Claim for review</button>
-</form>
-{% endif %}
+{# Review header card (issue #92): the run identity, the claim state, and the
+   journey's actions in one surface. The claim wording is contract text the
+   integration tests assert on — keep it verbatim. #}
+<header class="review-head">
+  <h1>{{ run.media_item.source_path }}</h1>
+  {% if token %}
+  <p class="claim-state">Claimed by you.</p>
+  <div class="card-actions">
+    {# Verify-and-advance transcript review (issue #53): carries the live claim
+       token so the linear player writes without re-claiming (a fresh claim would
+       kill this tab's token). #}
+    <a class="btn-primary" href="/review/{{ run.id }}/transcript?token={{ token }}">Review transcript →</a>
+    <form method="post" action="/review/{{ run.id }}/release" class="inline">
+      <input type="hidden" name="token" value="{{ token }}">
+      <button type="submit">Release claim</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="claim-state off">Not claimed by this tab — decisions are disabled.</p>
+  <div class="card-actions">
+    <form method="post" action="/review/{{ run.id }}/claim" class="inline">
+      <input type="hidden" name="csrf_token" value="{{ csrf_claim }}">
+      <button type="submit" class="primary">Claim for review</button>
+    </form>
+  </div>
+  {% endif %}
+</header>
 
 {{ export_menu(run) }}
 
@@ -30,10 +39,14 @@
    (React ref), the speed control, the visible capability banner, and — via a
    document-level delegated click listener + an htmx:afterSwap re-enable pass —
    drives the server-rendered `data-voxint-seek` buttons inside #labels. The
-   server fallback is the bare <audio controls>, so JS-off still plays. #}
-<div data-island="workbench-player" data-props='{{ workbench_props|tojson }}'>
-  <audio controls preload="metadata" src="{{ workbench_props.mediaUrl }}"></audio>
-</div>
+   server fallback is the bare <audio controls>, so JS-off still plays. The
+   .player-surface wrapper (issue #92) is server-rendered so the styled panel
+   frames the island and the JS-off fallback identically. #}
+<section class="player-surface" aria-label="Recording playback">
+  <div data-island="workbench-player" data-props='{{ workbench_props|tojson }}'>
+    <audio controls preload="metadata" src="{{ workbench_props.mediaUrl }}"></audio>
+  </div>
+</section>
 
 <div id="labels">
   {% include "fragments/labels.html" %}

@@ -422,40 +422,45 @@ export const TranscriptPlayer = forwardRef<
 
   return (
     <div>
-      <div className="flex items-center my-2">
-        <SpeedControl rate={rate} onChange={onRateChange} />
-        {!following && (
-          <button
-            type="button"
-            onClick={resumeFollowing}
-            className="text-sm mr-2"
-          >
-            Resume following
-          </button>
+      {/* Player surface (issue #92): the native <audio>, speed control, waveform
+          and capability banner framed as one styled panel. The native control is
+          wrapped, never replaced (report §9.1) — a custom transport is #95. */}
+      <div className="player-surface">
+        <div className="flex items-center my-2">
+          <SpeedControl rate={rate} onChange={onRateChange} />
+          {!following && (
+            <button
+              type="button"
+              onClick={resumeFollowing}
+              className="text-sm mr-2"
+            >
+              Resume following
+            </button>
+          )}
+        </div>
+        <audio
+          ref={audioRef}
+          controls
+          src={mediaUrl}
+          className="w-full my-2"
+          data-run-id={runId}
+        >
+          Your browser does not support the audio element.
+        </audio>
+        {peaks && (
+          <WaveformStrip
+            peaks={peaks}
+            turns={turns ?? []}
+            segments={segments}
+            activeIndex={activeIndex}
+            cursorIndex={cursorIndex}
+            seekEnabled={seek}
+            currentTime={playheadTime}
+            onRegionActivate={onRegionActivate}
+          />
         )}
+        <CapabilityBanner capability={capability} />
       </div>
-      <audio
-        ref={audioRef}
-        controls
-        src={mediaUrl}
-        className="w-full my-2"
-        data-run-id={runId}
-      >
-        Your browser does not support the audio element.
-      </audio>
-      {peaks && (
-        <WaveformStrip
-          peaks={peaks}
-          turns={turns ?? []}
-          segments={segments}
-          activeIndex={activeIndex}
-          cursorIndex={cursorIndex}
-          seekEnabled={seek}
-          currentTime={playheadTime}
-          onRegionActivate={onRegionActivate}
-        />
-      )}
-      <CapabilityBanner capability={capability} />
       <div ref={listRef}>
         {segments.map((seg, i) => {
           const active = i === activeIndex;
@@ -474,8 +479,10 @@ export const TranscriptPlayer = forwardRef<
           const classes = ["tp-line", "my-1", "text-sm"];
           if (seg.paletteIndex != null) classes.push(`spk-${seg.paletteIndex}`);
           if (uncertain) classes.push("tp-uncertain");
-          classes.push(active ? "rounded" : "opacity-85");
-          if (active) classes.push("bg-seg/20", "px-1");
+          // Base .tp-line owns padding + radius (issue #92) so the active tint
+          // and the hover surface align without per-state padding utilities.
+          if (active) classes.push("bg-seg/20");
+          else classes.push("opacity-85");
           return (
             <p
               // Keyed by parent + word-range (falling back to start time) so a

@@ -81,6 +81,12 @@
       --r-sm: .375rem; --r-md: .625rem; --r-lg: 1rem; --r-full: 999px;
       --shadow-1: 0 1px 2px rgba(40,32,18,.05), 0 2px 8px rgba(40,32,18,.06);
       --shadow-2: 0 4px 14px rgba(40,32,18,.09), 0 14px 34px rgba(40,32,18,.10);
+
+      /* Primary-action pair (issue #92): text on an --accent fill, and the kbd
+         chip overlay inside it. White fails AA on the LIGHTER dark-theme accent,
+         so the pair flips with the theme rather than hardcoding white. */
+      --accent-contrast: #ffffff;
+      --kbd-overlay: rgb(255 255 255 / .25);
     }
     /* System dark — ONE consolidated override. Redefine only themed tokens;
        everything downstream (chrome, islands, status vars, .error) follows. */
@@ -99,6 +105,8 @@
         --spk-4: #4fc9c4; --spk-5: #e879b0; --spk-6: #d0af4f; --spk-7: #ec7a72;
         --shadow-1: 0 1px 2px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.34);
         --shadow-2: 0 6px 18px rgba(0,0,0,.40), 0 18px 40px rgba(0,0,0,.46);
+        --accent-contrast: var(--paper);
+        --kbd-overlay: rgb(0 0 0 / .18);
       }
     }
 
@@ -222,7 +230,8 @@
     /* Per-speaker identity accent (issue #50) — supplemental to the raw-label text.
        The .spk-N class names are the public hook (islands + tests rely on them);
        they map onto the --spk-N tokens so chrome and islands share one source. */
-    .tp-line { border-left: 3px solid var(--spk-accent, transparent); padding-left: .5rem; }
+    .tp-line { border-left: 3px solid var(--spk-accent, transparent);
+               padding: .15rem .5rem; border-radius: 0 var(--r-sm) var(--r-sm) 0; }
     .label-card { border-left: .35rem solid var(--spk-accent, var(--line)); }
     .spk-badge { font-size: .72rem; color: var(--ink-2); border: 1px solid var(--line);
                  border-radius: var(--r-sm); padding: 0 .35rem;
@@ -248,6 +257,56 @@
     .tp-corrected-chip { font-size: .68rem; letter-spacing: .02em; color: var(--corrected);
                  border: 1px solid var(--corrected); border-radius: var(--r-sm); padding: 0 .35rem;
                  margin-right: .4rem; white-space: nowrap; background: none; cursor: pointer; }
+    /* Review journey (issue #92): the workbench + review-transcript flagship
+       flow styled as one surface. A header card, a claim-state line, a verified
+       progress track, a wrapped native-audio player surface (report §9.1: wrap,
+       never replace — a custom transport is the separately-gated #95), primary
+       actions, and kbd chips. Tokens only; the number/text stays the primary
+       signal wherever a bar or dot appears (non-color cue). */
+    .review-head { background: var(--surface); border: 1px solid var(--line);
+                   border-radius: var(--r-lg); padding: .9rem 1.1rem; margin: 1rem 0;
+                   box-shadow: var(--shadow-1); }
+    .review-head h1 { margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
+    .claim-state { display: inline-flex; align-items: center; gap: .45rem;
+                   font-size: var(--t-sm); font-weight: 600; color: var(--ok); }
+    .claim-state::before { content: ""; width: .5rem; height: .5rem; flex: none;
+                   border-radius: var(--r-full); background: var(--ok); }
+    .claim-state.off { color: var(--ink-2); font-weight: 400; }
+    .claim-state.off::before { background: var(--ink-3); }
+    .progress-wrap { display: flex; align-items: center; flex-wrap: wrap;
+                     gap: .5rem .9rem; margin: .5rem 0 .8rem; }
+    .progress-wrap p { margin: 0; }
+    .progress-track { flex: 1; min-width: 8rem; height: .6rem; overflow: hidden;
+                      border-radius: var(--r-full); background: var(--surface-2);
+                      border: 1px solid var(--line); }
+    .progress-track > i { display: block; height: 100%; border-radius: var(--r-full);
+                      background: linear-gradient(90deg, var(--accent), var(--accent-strong)); }
+    .player-surface { background: var(--surface); border: 1px solid var(--line);
+                      border-radius: var(--r-lg); padding: .6rem .9rem; margin: 1rem 0; }
+    .player-surface audio { margin: .4rem 0; }
+    /* The island's own stepper panel is the review-transcript header card. */
+    .review-stepper { background: var(--surface); border: 1px solid var(--line);
+                      border-radius: var(--r-lg); padding: .9rem 1.1rem;
+                      box-shadow: var(--shadow-1); }
+    /* Primary action: ONE per surface (Verify & next; Claim). `button.primary`
+       is (0,1,1) on purpose — it must beat the tokenized base button AND any
+       island utility. Links get the same look via .btn-primary. */
+    button.primary, .btn-primary { background: var(--accent); border: 1px solid var(--accent);
+                      color: var(--accent-contrast); font-weight: 600; }
+    button.primary:hover, .btn-primary:hover { background: var(--accent-strong);
+                      border-color: var(--accent-strong); }
+    .btn-primary { display: inline-block; border-radius: var(--r-md);
+                   padding: .3rem .7rem; text-decoration: none; }
+    kbd { font-family: var(--font-mono); font-size: .85em; background: var(--surface-2);
+          border: 1px solid var(--line); border-radius: .3rem; padding: 0 .3rem; }
+    button.primary kbd { background: var(--kbd-overlay); border-color: transparent;
+          color: inherit; }
+    /* Line hover as a reading aid. :where() keeps this at (0,0,0) so the active
+       line's island tint (bg-seg/20, a class at 0,1,0) always wins over it. */
+    :where(.tp-line:hover) { background: var(--surface-2); }
+    .card-actions { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
+                    margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--line); }
+    .card-actions form.inline { margin-right: 0; }
     /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
        (resolved-of-total), with always-visible text so the bar is never the
        only signal for a screen reader or a non-technical operator. */

@@ -6,7 +6,7 @@
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
 
 {% if token %}
-<p class="muted">Claimed by you — verify and edit are enabled.</p>
+<p class="claim-state">Claimed by you — verify and edit are enabled.</p>
 {% else %}
 <p class="muted">Not claimed by this tab — verifying and editing are disabled.
   <a href="/review/{{ run.id }}">Claim this run in the workbench</a> to review.</p>
@@ -22,10 +22,17 @@
    loop + inline edit over this fallback. JS-off, the list below is fully usable:
    each unverified segment carries a plain verify form that POSTs and redirects
    back here (the write route content-negotiates). Inline TEXT editing needs the
-   island — stated honestly, never faked. #}
+   island — stated honestly, never faked. The progress track (issue #92) keeps
+   the count as visible text; the bar is aria-hidden decoration. #}
 <div data-island="review-stepper" data-props='{{ island_props|tojson }}'>
-  <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
-    segments verified.</p>
+  <div class="progress-wrap">
+    <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
+      segments verified.</p>
+    {% if progress.total > 0 %}
+    <span class="progress-track" aria-hidden="true"><i
+      style="width: {{ "%.1f"|format(progress.verified / progress.total * 100) }}%"></i></span>
+    {% endif %}
+  </div>
   {% for ln in lines %}
   {% set idx = palette.get(ln.diarization_label) %}
   {% set uncertain = ln.confidence is not none and ln.confidence < low_confidence_threshold %}
