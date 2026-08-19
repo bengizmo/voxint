@@ -50,7 +50,7 @@
 # Sourcing with VOXINT_NATIVE_LIB=1 loads the functions without running main
 # (tests/unit/test_native_launcher.py exercises the pure logic that way).
 
-set -eu
+set -euo pipefail
 
 # ---------------------------------------------------------------------------
 # Locate the checkout. When sourced for tests, $0 is the shell -- fall back to
@@ -659,11 +659,16 @@ prune_log_archives() {
   local log=$1 keep=$2 dir base old
   dir=$(dirname "$log")
   base=$(basename "$log" .log)
+  # Under `set -o pipefail` a benign mid-pipe non-zero would surface as the
+  # pipeline's status: `grep -E` exits 1 when nothing matches (a logs dir with
+  # no rotated archives yet) and `ls` on a missing dir exits non-zero. Neither
+  # is an error here -- "nothing to prune" is success -- so tolerate it with
+  # `|| true` rather than letting it falsely fail rotation (cmd_rotate_logs rc).
   ls -1 "$dir" 2>/dev/null \
     | grep -E "^${base}_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}\.log$" \
     | sort -r | tail -n +$((keep + 1)) | while IFS= read -r old; do
       rm -f "$dir/$old"
-    done
+    done || true
 }
 
 cmd_rotate_logs() {
@@ -1137,10 +1142,14 @@ launchd_job_state() {
   # Fields look like a tab-indented `state = running` / `last exit code = 1`
   # (older macOS spells it `last exit status = 256`). Take the first match of
   # each; -E is honoured by both BSD (macOS) and GNU (CI) sed.
+  # `| head -1` can SIGPIPE the upstream `sed` (exit 141) if the input ever
+  # carried >1 matching line; under `set -o pipefail` that 141 would surface and
+  # abort this unguarded capture. Normal launchctl output has a single match, so
+  # `|| true` is a defensive no-op that keeps a first-match capture from failing.
   state=$(printf '%s\n' "$out" \
-    | sed -n -E 's/^[[:space:]]*state = (.*)$/\1/p' | head -1)
+    | sed -n -E 's/^[[:space:]]*state = (.*)$/\1/p' | head -1 || true)
   exit_code=$(printf '%s\n' "$out" \
-    | sed -n -E 's/^[[:space:]]*last exit (code|status) = (-?[0-9]+).*$/\2/p' | head -1)
+    | sed -n -E 's/^[[:space:]]*last exit (code|status) = (-?[0-9]+).*$/\2/p' | head -1 || true)
   if [ "$state" = running ]; then
     printf 'running'
   elif [ -n "$exit_code" ] && [ "$exit_code" != 0 ]; then

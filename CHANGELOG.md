@@ -25,6 +25,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   provenance UI follows in #83/#84.
 
 ### Changed
+- **Native: launcher now runs under `set -o pipefail` (#11)**: a defensive
+  hardening so a mid-pipe failure can no longer be masked by a later command's
+  success. The pipeline inventory found no silent-loss path, so three benign
+  mid-pipe exits are explicitly guarded to keep `pipefail` from turning them into
+  spurious aborts: the log-archive prune (`grep` legitimately finds nothing to
+  prune) and the two `launchctl`-state captures (a `head -1` could SIGPIPE `sed`).
+  Rotation and `status` behaviour are unchanged.
 - **Native: `upgrade-db --rehearse` is now listed in `--help` (#13)**: the accepted
   maintainer self-test flag was parsed but undocumented in the built-in usage
   block. The `doctor` help line also now names what it checks (datastore

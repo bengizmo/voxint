@@ -972,6 +972,20 @@ def test_prune_log_archives_keeps_newest_n(tmp_path: Path) -> None:
     assert remaining == ["api_2026-08-12-00-00-00.log", "api_2026-08-13-00-00-00.log"]
 
 
+def test_prune_log_archives_no_matching_archives_succeeds(tmp_path: Path) -> None:
+    # pipefail regression pin (#11): with zero rotated archives, the internal
+    # `ls | grep -E | ...` pipeline's `grep` exits 1 (no match). Under
+    # `set -o pipefail` that becomes the pipeline's status; without the `|| true`
+    # guard the function would return 1 and falsely fail log rotation. "Nothing to
+    # prune" is success -- assert return 0 and that the live log is left intact.
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "api.log").write_text("live\n")
+    proc = run_lib(tmp_path, f'prune_log_archives "{logs / "api.log"}" 2')
+    assert proc.returncode == 0, proc.stderr
+    assert list(logs.iterdir()) == [logs / "api.log"]
+
+
 @pytest.mark.skipif(shutil.which("plutil") is None, reason="plutil is macOS-only")
 def test_logrotate_plist_lints_and_invokes_native_rotate(tmp_path: Path) -> None:
     out = tmp_path / "lr.plist"
