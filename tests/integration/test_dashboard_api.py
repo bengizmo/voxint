@@ -147,6 +147,12 @@ def test_dashboard_renders_aggregated_numbers(
     assert "Transcribe" in body
     assert "30.00s" in body
     assert "5.00s" in body
+    # Stage timing carries a supplemental relative mini-bar (issue #91): the bar
+    # is aria-hidden (the exact seconds above are the real cue), and the slowest
+    # seeded stage (transcribe, 30s) scales to a full-width bar. Pins both the
+    # presence and the max_avg width math so a broken bar can't ship green.
+    assert 'class="minibar" aria-hidden="true"' in body
+    assert "width: 100.0%" in body
     # The one seeded diarize_embed failure renders in the failures table, with the
     # humanized stage label.
     assert re.search(r"Diarize &amp; embed</td>\s*<td>1</td>", body)

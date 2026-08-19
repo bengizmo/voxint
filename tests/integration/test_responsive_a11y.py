@@ -72,7 +72,12 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     assert re.search(r"nav\.top\s*\{[^}]*flex-wrap:\s*wrap", body)
     assert "max-width: 40rem" in body
     # Utility for visually-hidden-but-announced labels (e.g. the queue action col).
-    assert ".visually-hidden" in body
+    # Assert the actual clip rule, not just the selector name — a gutted
+    # ``.visually-hidden {}`` must not pass (same anti-vacuous standard as above).
+    assert re.search(r"\.visually-hidden\s*\{[^}]*clip:\s*rect\(0 0 0 0\)", body)
+    # New chrome transitions are gated behind prefers-reduced-motion (issue #91
+    # added button hover transitions; #64 forbids unconditional motion).
+    assert re.search(r"prefers-reduced-motion:\s*reduce[^}]*transition:\s*none", body)
 
 
 def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
@@ -86,7 +91,9 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
     # forced-colors fallback still overrides both.
     assert re.search(r"prefers-color-scheme:\s*dark[^}]*--accent:\s*#5eb8ae", body)
     assert re.search(r"--focus-ring:\s*var\(--accent\)", body)
-    assert "@media (forced-colors: active)" in body
+    # The forced-colors fallback actually retargets the ring to the system
+    # Highlight colour — assert the declaration, not just the media-query name.
+    assert re.search(r"forced-colors:\s*active[^}]*outline-color:\s*Highlight", body)
     # Dark-scheme error colour keeps error text legible on a dark canvas (AC4):
     # .error reads --danger, which the dark block retargets to a lighter red.
     assert re.search(r"\.error\s*\{[^}]*color:\s*var\(--danger\)", body)

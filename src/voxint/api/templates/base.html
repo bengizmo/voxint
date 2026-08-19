@@ -39,7 +39,7 @@
       --surface-2: #f1ece2;    /* inset / row hover / subtle raise */
       --ink: #23201b;          /* primary text — warm near-black */
       --ink-2: #5c564c;        /* secondary text (muted, still AA on paper) */
-      --ink-3: #8a8477;        /* tertiary / captions */
+      --ink-3: #6a6459;        /* tertiary / captions — AA (>=4.5:1) on all surfaces */
       --line-rgb: 230 223 210; /* hairline border channels (islands: border-line/40) */
       --line: rgb(var(--line-rgb));
       --line-strong: #d3cab9;  /* stronger divider */
@@ -53,7 +53,7 @@
 
       /* Semantic status + soft pill/chip fills (separate from the brand accent) */
       --ok: #1a7f37;     --ok-soft: #dbeede;
-      --warn: #9a6700;   --warn-soft: #f4e9cf;
+      --warn: #8f6100;   --warn-soft: #f4e9cf;   /* AA (>=4.5:1) as chip TEXT on paper */
       --danger: #b3261e; --danger-soft: #f6dcd9;
       --info: #2f6fb0;   --info-soft: #dde9f5;
 
@@ -87,7 +87,7 @@
     @media (prefers-color-scheme: dark) {
       :root {
         --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
-        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #807a70;
+        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #a39e94;
         --line-rgb: 46 51 58; --line-strong: #3d434b;
         --accent: #5eb8ae; --accent-ink: #7fccc3; --accent-strong: #74c4bb;
         --accent-soft: #1e2e2c;
@@ -119,16 +119,18 @@
        exactly `button` (0,0,1): high enough to beat Tailwind Preflight's
        `button { background: transparent; padding: 0 }` (also 0,0,1) as the later
        source, but low enough that any island utility (w-full, text-sm, hover:*)
-       at 0,1,0 still wins — while the inline word-chip (.tp-split-word) opts out
-       of button chrome. .tp-corrected-chip self-defends via its own class rule. */
-    button:not(:where(.tp-split-word)) {
+       at 0,1,0 still wins. The inline word-chip (.tp-split-word) AND the
+       correction chip (.tp-corrected-chip) opt out entirely: the :hover rule
+       below is 0,1,1, which would otherwise defeat a chip's own 0,1,0 styling
+       on hover, so both are excluded here rather than left to self-defend. */
+    button:not(:where(.tp-split-word, .tp-corrected-chip)) {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-md);
       padding: .3rem .7rem; cursor: pointer;
       transition: background 160ms ease, border-color 160ms ease; }
-    button:not(:where(.tp-split-word)):hover { background: var(--surface-2);
+    button:not(:where(.tp-split-word, .tp-corrected-chip)):hover { background: var(--surface-2);
       border-color: var(--line-strong); }
-    button:not(:where(.tp-split-word)):disabled { opacity: .55; cursor: not-allowed; }
+    button:not(:where(.tp-split-word, .tp-corrected-chip)):disabled { opacity: .55; cursor: not-allowed; }
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
@@ -282,8 +284,7 @@
                  color: CanvasText; padding: .5rem .8rem; border: 1px solid;
                  border-radius: .4rem; z-index: 10; }
     .skip-link:focus { left: .5rem; }
-    :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px;
-                     border-radius: 2px; }
+    :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
     .table-wrap { overflow-x: auto; max-width: 100%; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;

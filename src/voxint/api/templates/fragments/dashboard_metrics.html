@@ -58,7 +58,9 @@
 {% if stats.stage_durations %}
 {# Relative mini-bar scaled to the slowest stage's average; the exact seconds +
    attempt count stay visible so the bar is supplemental, never the only cue.
-   max_avg guards the width math against an all-zero set (no div-by-zero). #}
+   avg_seconds is a SQL AVG of (finished_at - started_at) durations, so it is
+   finite and >= 0 and never exceeds max_avg — the ratio is naturally in [0,100];
+   `if max_avg` guards the all-zero set (no div-by-zero). #}
 {% set max_avg = stats.stage_durations | map(attribute="avg_seconds") | max %}
 <div class="table-wrap">
 <table>
@@ -70,7 +72,7 @@
       <td>
         <span class="num">{{ "%.2f"|format(d.avg_seconds) }}s</span>
         <span class="minibar" aria-hidden="true"><span
-          style="width: {{ (100.0 * d.avg_seconds / max_avg) if max_avg else 0 }}%"></span></span>
+          style="width: {{ (100.0 * d.avg_seconds / max_avg) | round(1) if max_avg else 0 }}%"></span></span>
       </td>
       <td>{{ d.attempt_count }}</td>
     </tr>
