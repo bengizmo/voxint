@@ -249,7 +249,9 @@ band is tinted for the speaker who was talking, using the same colors as the
 transcript. It's a map of who spoke when. **Click anywhere on the strip to jump**
 to that moment and select the matching line (overlapping speech is marked, and
 stretches that were spoken but not transcribed still show up, so the picture
-stays honest). A marker tracks playback and shows where your review cursor is.
+stays honest). If you click a spot with no transcript there, whether a silent
+gap or speech that was never transcribed, the strip says so instead of doing
+nothing. A marker tracks playback and shows where your review cursor is.
 
 ### Split a segment at a word
 

@@ -85,6 +85,11 @@ export function WaveformStrip({
   const [width, setWidth] = useState<number>(0);
   // Bumped when the color scheme flips so the draw effect re-resolves accents.
   const [themeEpoch, setThemeEpoch] = useState<number>(0);
+  // Left position (%) of the "no transcript here" note after a click that lands
+  // on no segment; null hides it. Cleared by the next valid click, replaced by
+  // the next gap click (see onClick). No timer / toast framework — the note is
+  // strip-local and purely presentational, so it never touches the seek gate.
+  const [gapHint, setGapHint] = useState<number | null>(null);
 
   // Track the rendered width (ResizeObserver, not window resize: the strip
   // lives in a variable-width column).
@@ -245,9 +250,20 @@ export function WaveformStrip({
       const canvas = canvasRef.current;
       if (!canvas || width <= 0) return;
       const rect = canvas.getBoundingClientRect();
-      const t = ((event.clientX - rect.left) / rect.width) * peaks.duration;
-      const index = segmentAtTime(segments, t);
-      if (index >= 0) onRegionActivate(index);
+      const relX = (event.clientX - rect.left) / rect.width;
+      const index = segmentAtTime(segments, relX * peaks.duration);
+      if (index >= 0) {
+        setGapHint(null);
+        onRegionActivate(index);
+        return;
+      }
+      // No transcript segment covers this point (untranscribed speech OR
+      // silence — segmentAtTime cannot tell them apart, so the note must not
+      // claim either). A silent no-op on a click-to-play affordance reads as a
+      // broken control to a non-technical operator; a brief strip-local note
+      // makes the limit honest. Presentational only: no upward callback, no
+      // snapping to a nearby segment, no audio — the seek gate is untouched.
+      setGapHint(Math.min(Math.max(relX * 100, 0), 100));
     },
     [segments, peaks.duration, width, onRegionActivate],
   );
@@ -292,6 +308,23 @@ export function WaveformStrip({
           className="absolute top-0 bottom-0 w-[1.5px] bg-current pointer-events-none"
           style={{ left: `${playheadPct}%` }}
         />
+      )}
+      {gapHint != null && (
+        <>
+          {/* Marker at the click, so the centered note (below) still reads
+              which point had no transcript without risking edge clipping. */}
+          <div
+            className="absolute top-0 bottom-0 w-px bg-line pointer-events-none"
+            style={{ left: `${gapHint}%` }}
+          />
+          <div
+            data-testid="waveform-gap-hint"
+            className="absolute left-1/2 top-1 -translate-x-1/2 px-1.5 py-0.5 rounded border border-line text-[11px] leading-none whitespace-nowrap pointer-events-none"
+            style={{ background: "var(--surface)", color: "var(--ink-2)" }}
+          >
+            No transcript text at this point
+          </div>
+        </>
       )}
     </div>
   );

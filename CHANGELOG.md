@@ -27,6 +27,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   tightened cross-links, and added lay-reader subtitles and technical "See also"
   footers. Dated reports, plans, and the security audit were left as historical
   artifacts. Prose only, no behaviour change.
+- **Waveform strip: a click with no transcript there now says so (#57).** Clicking
+  a silent gap or a stretch of speech that was never transcribed used to do
+  nothing, which reads as a broken control. The strip now shows a brief, local
+  note ("No transcript text at this point") and marks where you clicked. It is
+  presentational only: no seeking, no playback, no change to the fail-closed seek
+  gate. A new contract test pins the speaker-palette size across all four places
+  it lives (the backend index map, the waveform probe count, and the light and
+  dark `--spk-*` CSS tokens plus their `.spk-*` class mappings) so a partial edit
+  can no longer silently drop a speaker's colour to the neutral bar.
 
 ### Security
 
