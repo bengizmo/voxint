@@ -24,6 +24,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   corrections, so a **default install's pipeline output is unchanged**; authoring/
   provenance UI follows in #83/#84.
 
+### Fixed
+- **Native: plain `restore` now takes a pre-restore safety backup too**: the
+  docker-free launcher's `restore <file>` (in-place replace) previously took **no**
+  safety backup, while the scarier `restore --fresh` did — an inversion. The
+  single-transaction guarantee only rolls back a *failed* restore; a *successful*
+  restore of a valid-but-wrong or older dump silently overwrites live data with no
+  fallback. Both restore paths now share one collision-safe
+  `pre_restore_safety_backup` helper that dumps the current database to a `0600`
+  `pre-restore-<stamp>.dump` / `pre-fresh-restore-<stamp>.dump` under `backups/`
+  **before any mutation** and **aborts before touching anything** if that dump
+  fails. The shared helper also fixes a latent same-second filename collision in
+  `--fresh` (two restores in the same wall-clock second could let `mv` clobber the
+  earlier backup). Recover with `restore --fresh` on the printed `SAFETY_BACKUP`
+  path.
+
 ## [0.18.0] - 2026-08-18
 
 ### Added
