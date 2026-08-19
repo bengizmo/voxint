@@ -273,6 +273,51 @@ empty `entries`, changed text — is likewise unsplittable, via the enhanced-tex
 check.) This is the authoritative stored signal, not a re-diff of text, so it also
 catches a correction that alters only outer whitespace.
 
+### Seeing corrections in the review console (#83)
+
+Everything above is invisible unless the operator can see it, so the review
+console surfaces the provenance the pipeline persisted — **read-time**, with **no
+new migration**: it is reconstructed from the per-segment `correction_trace` + the
+run's frozen `domain_pack` snapshot each time the page loads.
+
+- **"corrected by domain pack" marker.** A corrected segment shows a marker
+  **distinct from the "edited" badge** — "edited" is *your* change; this marker is a
+  change the domain pack made automatically. Expanding it lists the exact rule(s)
+  that fired on that segment as `match → replace`, with the pack name and rule id. A
+  rule id present in the trace but missing from the snapshot stays visible as
+  "unresolved rule `<id>`" — never silently dropped.
+- **Raw text, one action away.** The immutable raw ASR text for the segment can be
+  revealed to compare against the corrected text, copied, or used to **reset the
+  edit box to raw**. Reset **populates the edit box only** — it does not save; you
+  still press Save, so the unsaved-edit discard protection is never bypassed.
+- **Operator edit supersedes provenance.** Once you save your own text for a
+  segment, the "corrected by domain pack" marker clears: the trace's spans described
+  the *pipeline's* enhanced text, not your edit, so showing them against your text
+  would be misleading.
+- **Splitting stays honest.** A materially-corrected segment is unsplittable (above);
+  the console says so in plain language rather than offering a cut that would fail.
+- **"Declared but never fired" reconciliation.** A run-level panel lists **every**
+  rule the pack declared and whether it materially fired, reconstructed by replaying
+  the corrector over each segment's immutable `raw_text`:
+  - **`applied`** — fired on one or more segments' raw text (with the count).
+  - **`no_raw_match`** — matched no segment's raw text. Usually the recording simply
+    didn't contain the term — or the term was **split across a pause** so no single
+    segment held it whole. For cross-segment terms, declare them as `vocabulary`
+    (biased at transcription time) rather than as a correction.
+  - **`growth_rejected`** — the rule would fire but its raw transformation overflowed
+    the enhancement growth ceiling, so the corrector skipped it (a guard against a
+    runaway substitution).
+
+**Read precedence and v1 boundaries.** The console reads a segment's text as
+`corrected → enhanced → raw`, and provenance is version-gated: a trace recorded by a
+different `corrector_version` than the console reads is shown as **"unavailable"**
+rather than replayed with mismatched semantics. Two cases are **honest, documented
+v1 gaps** (see the design report §6/§12-F5): growth rejection during the
+**LLM-enforcement** pass (its deciding input is not persisted) and exact
+**cross-segment** detection are not exhaustively computed — steer such terms to pack
+`vocabulary`. Corrections are **literal substitutions only**; regex is not supported
+in v1.
+
 ## Vocabulary precedence: pack vs. custom vocabulary
 
 Operators can also add custom vocabulary in the setup wizard (per deployment).
