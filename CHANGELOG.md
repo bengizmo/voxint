@@ -8,6 +8,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.19.0] - 2026-08-19
 
 ### Added
+- **Author domain-pack corrections from the console (#84, epic #78 — final child)**:
+  **Settings → Corrections** is a list editor for the operator's own deterministic
+  correction rules — add / edit / remove / reorder, toggle *match case* and *whole
+  word only*, leave the id blank to auto-generate one from the `match`. No more
+  hand-editing a pack's `manifest.yaml` to fix a recurring mis-hear. Every rule is
+  validated through the **same #80 gate** a pack gets (length bounds, invisible-
+  character rejection, unique ids, the boundary-aware idempotence check) with
+  **plain-language errors pinned to the offending row**, so a bad rule is refused
+  when you save it, not when a run fails. Rules live **per deployment** (new
+  `app_settings.corrections` JSONB column, migration **0029**), so they **survive
+  pack upgrades** and apply on top of whichever pack a run resolves to: at submit
+  time they are **unioned onto the selected pack's own corrections and frozen** into
+  that run's snapshot (pack rules first, then the operator's), so the corrector
+  (#82) applies them and the review console shows their provenance (#83) with no
+  code changes downstream. Editing them affects the **next** run, never one already
+  submitted; a rule that would collide with the selected pack's own rules (a
+  duplicate id, or a replacement that re-fires another rule) is refused with the
+  reason — at author time for the default pack, and visibly at submit-freeze for a
+  differently-scoped pack (never a silent drop). A React island with a server-
+  rendered read-only fallback; the editor itself needs JavaScript, stated honestly.
+  *(Not a regex editor; a dry-run preview and seeding rules from operator edit
+  signals are deliberate follow-ups.)*
 - **Deterministic-correction provenance in the review console (#83, epic #78)**:
   the review console now **shows** deterministic domain-pack corrections. Each
   corrected segment carries a distinct **"corrected by domain pack"** marker (never

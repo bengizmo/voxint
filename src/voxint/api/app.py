@@ -234,7 +234,14 @@ from voxint.db.models import (
 from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.diagnostics import check_state, run_diagnostics
 from voxint.domain_packs.base import DomainPackError
-from voxint.domain_packs.registry import available_domain_packs
+from voxint.domain_packs.corrections import (
+    MAX_MATCH_CHARS,
+    MAX_REPLACEMENT_CHARS,
+    MAX_RULES_PER_PACK,
+    OperatorCorrectionError,
+    normalize_operator_corrections,
+)
+from voxint.domain_packs.registry import available_domain_packs, default_domain_pack
 from voxint.enrichment.asset_jobs import (
     RunAssetJobError,
     active_or_last_jobs,
@@ -4749,6 +4756,24 @@ def _register_routes(app: FastAPI) -> None:
                 checked_at = None
         context["watch_folder_checked_at"] = checked_at
         context["watch_folder_error"] = None
+        # Corrections authoring (issue #84): the operator's current rules (for the
+        # no-JS read-only fallback) plus the JSON props the corrections-editor
+        # island hydrates from — the rules, the CSRF-guarded save action, and the
+        # #80 bounds so the client can hint before the server (authoritative) gate.
+        stored_corrections = (
+            list(row.corrections) if row is not None and row.corrections else []
+        )
+        context["corrections"] = stored_corrections
+        context["corrections_props"] = {
+            "rules": stored_corrections,
+            "action": "/settings/corrections",
+            "csrfToken": context["csrf_settings"],
+            "limits": {
+                "maxRules": MAX_RULES_PER_PACK,
+                "maxMatchChars": MAX_MATCH_CHARS,
+                "maxReplacementChars": MAX_REPLACEMENT_CHARS,
+            },
+        }
         context.update(overrides)
         return context
 
@@ -4840,6 +4865,70 @@ def _register_routes(app: FastAPI) -> None:
                 ),
             )
         session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/corrections")
+    def settings_corrections(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        rules: Annotated[str, Form()] = "[]",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Replace the operator's console-authored correction rules (issue #84).
+
+        The corrections-editor island owns add/edit/remove/reorder client-side and
+        submits the FULL ordered list as a JSON string in the ``rules`` form field
+        (replace-all semantics, like vocabulary). The whole set is validated through
+        the SAME #80 gate a pack gets — bounds, NUL/control-char rejection, unique
+        ids, boundary-aware idempotence — plus a union check against the current
+        default pack, so a rule the console accepts is one the frozen-per-run
+        pipeline can apply. On any violation NOTHING is written: the island (Accept:
+        application/json) gets a 422 with the plain-language message and the
+        offending row; a JS-off submit re-renders the page with the message.
+        """
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        wants_json = "application/json" in (request.headers.get("accept") or "")
+        try:
+            raw_items = json.loads(rules)
+        except json.JSONDecodeError:
+            message = "The corrections payload was not valid JSON."
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "error": message, "row": None}, status_code=422
+                )
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, corrections_error=message),
+                status_code=422,
+            )
+        # Candidate → validate (field + cross-rule + default-pack union) → ONE
+        # mutation. get_or_create only after validation, so a rejected save (which
+        # the API session would commit on a 200/422 render) writes nothing.
+        pack_corrections = default_domain_pack(settings).to_mapping().get("corrections")
+        try:
+            normalized = normalize_operator_corrections(
+                raw_items, pack_corrections=pack_corrections
+            )
+        except OperatorCorrectionError as exc:
+            if wants_json:
+                return JSONResponse(
+                    {"ok": False, "error": exc.message, "row": exc.row},
+                    status_code=422,
+                )
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(request, session, corrections_error=exc.message),
+                status_code=422,
+            )
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.corrections = normalized
+        session.commit()
+        if wants_json:
+            return JSONResponse({"ok": True, "corrections": normalized})
         return RedirectResponse("/settings", status_code=303)
 
     @protected.post("/settings/watch-folder")

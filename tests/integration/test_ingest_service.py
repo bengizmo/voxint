@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.app_settings import get_or_create
 from voxint.config import Settings
 from voxint.db.models import STAGE_ORDER, MediaItem, PipelineRun, RunStatus, Stage
+from voxint.domain_packs.base import DomainPackError
 from voxint.ingest import (
     MissingStageError,
     RunNotCancellableError,
@@ -154,6 +155,115 @@ def test_submit_stamps_from_folder_mapping(
     with session_factory() as session:
         assert session.get(PipelineRun, mapped_id).domain_pack["name"] == "interview"
         assert session.get(PipelineRun, unmapped_id).domain_pack["name"] == "generic"
+
+
+def test_submit_unions_operator_corrections_into_snapshot(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Console-authored corrections (#84) are frozen into the run's domain_pack.
+
+    They union AFTER the pack's own rules, so #82 compose and #83 provenance read
+    them off pipeline_runs.domain_pack unchanged. The generic default pack has no
+    corrections of its own, so the operator rule is the whole list here.
+    """
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.corrections = [
+            {
+                "id": "zb",
+                "match": "zoom board",
+                "replace": "Zoning Board",
+                "case_sensitive": True,
+                "whole_word": True,
+            }
+        ]
+        session.commit()
+    with session_factory() as session:
+        run = submit_media_item(session, "incoming/a.wav")
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.domain_pack["name"] == "generic"
+        assert stored.domain_pack["corrections"] == [
+            {
+                "id": "zb",
+                "match": "zoom board",
+                "replace": "Zoning Board",
+                "case_sensitive": True,
+                "whole_word": True,
+            }
+        ]
+
+
+def test_submit_unions_after_pack_corrections(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    # A pack with its OWN correction plus a non-colliding operator rule: the freeze
+    # keeps pack rules first, then the operator's.
+    _write_pack(
+        tmp_path,
+        "civic",
+        corrections=[{"id": "cd", "match": "c d b g", "replace": "CDBG"}],
+    )
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        row.corrections = [
+            {
+                "id": "teh",
+                "match": "teh",
+                "replace": "the",
+                "case_sensitive": True,
+                "whole_word": True,
+            }
+        ]
+        session.commit()
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/a.wav", settings=settings, domain_pack_name="civic"
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert [rule["id"] for rule in stored.domain_pack["corrections"]] == ["cd", "teh"]
+
+
+def test_submit_raises_on_operator_pack_correction_collision(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    """A folder/default pack whose rules collide with a stored operator rule is a
+    visible freeze-time DomainPackError — never a silent drop. (The console's
+    author-time check guards the default pack; a differently-scoped pack collision
+    surfaces here, which is what this proves.)"""
+    _write_pack(
+        tmp_path,
+        "civic",
+        corrections=[{"id": "zb", "match": "zoom board", "replace": "Zoning Board"}],
+    )
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        # "Board" would re-fire on the pack's "Zoning Board" replacement.
+        row.corrections = [
+            {
+                "id": "b",
+                "match": "Board",
+                "replace": "Committee",
+                "case_sensitive": True,
+                "whole_word": True,
+            }
+        ]
+        session.commit()
+    with session_factory() as session, pytest.raises(DomainPackError):
+        submit_media_item(
+            session, "incoming/a.wav", settings=settings, domain_pack_name="civic"
+        )
 
 
 def test_submit_media_item_reuses_media_but_mints_new_run(

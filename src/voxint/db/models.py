@@ -1295,6 +1295,21 @@ class AppSettings(Base):
         default=dict,
         server_default=text("'{}'"),
     )
+    # Operator-authored correction rules (issue #84): a list of rule mappings
+    # {id, match, replace, case_sensitive, whole_word}, each already validated
+    # through the #80 gate at author time. Unioned onto the selected pack's
+    # corrections at submit-time freeze (see
+    # ingest.service._run_domain_pack_snapshot) and stored in
+    # pipeline_runs.domain_pack — NOT applied live like vocabulary — so #82
+    # compose and #83 provenance read them off the frozen snapshot unchanged.
+    # Named "corrections" to mirror the pack field; distinct from the manual
+    # per-segment review edits in SegmentReviewState.corrected_text.
+    corrections: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+        default=list,
+        server_default=text("'[]'"),
+    )
     llm_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     # NULL -> use the env default (config.Settings).
     llm_base_url: Mapped[str | None] = mapped_column(Text)

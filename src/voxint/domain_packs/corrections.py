@@ -365,3 +365,177 @@ def iter_matches(rule: CorrectionRule, text: str) -> Iterator[tuple[int, int]]:
 def find_first(rule: CorrectionRule, text: str) -> tuple[int, int] | None:
     """The first boundary-valid match span of ``rule`` in ``text``, or ``None``."""
     return first_match_from(rule, text, 0)
+
+
+# --- console authoring seam (issue #84) --------------------------------------
+#
+# The Settings corrections editor lets a non-technical operator author rules
+# without hand-editing manifest.yaml. Authoring MUST route through the SAME
+# validation as a pack (`_rule_from_mapping` field checks + `validate_corrections`
+# cross-rule invariants) so a rule the console accepts is exactly one the frozen
+# per-run pipeline can apply; only the id auto-fill and the operator-facing error
+# phrasing are new here.
+
+# Cap an auto-generated id so a 256-char match does not mint an unwieldy id; the
+# operator can always type a shorter explicit id. Not a validation bound — purely
+# cosmetic for generated slugs.
+_MAX_GENERATED_ID_CHARS = 64
+_SLUG_STRIP = re.compile(r"[^a-z0-9]+")
+
+
+class OperatorCorrectionError(Exception):
+    """A console-authored correction rule failed validation (issue #84).
+
+    Carries an operator-facing ``message`` and, for a field-level fault, the
+    0-based ``row`` in the submitted list (``None`` for a whole-set fault like a
+    duplicate id or a non-idempotent set). The API layer renders this as a 422
+    with the row highlighted; it never leaks a raw :class:`DomainPackError`.
+    """
+
+    def __init__(self, message: str, *, row: int | None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.row = row
+
+
+def normalize_operator_corrections(
+    raw_items: Any, *, pack_corrections: Sequence[Any] | None = None
+) -> list[dict[str, Any]]:
+    """Validate + canonicalize operator-authored rules for ``AppSettings.corrections``.
+
+    Auto-generates a stable ``id`` for any rule whose id is blank/omitted (a
+    slug of its ``match``, uniqueness-suffixed, falling back to ``rule-N``), then
+    runs the whole set through the #80 gate so it earns the identical
+    NUL/whitespace/bounds/duplicate-id/idempotence guarantees a pack does.
+
+    When ``pack_corrections`` is given (the currently-effective default pack's own
+    rules), the operator set is ALSO validated unioned against them, so a rule
+    that would collide with the default pack (a duplicate id, or a cross-rule
+    idempotence break) is refused at author time with a plain-language message
+    rather than only surfacing as a submit-time freeze error. A folder-scoped pack
+    with different rules can still collide at freeze — that rarer case raises there,
+    visibly (never a silent drop).
+
+    Returns canonical JSON-safe mappings ready to persist. Raises
+    :class:`OperatorCorrectionError` (operator-facing message; ``row`` set for a
+    field-level fault, ``None`` for a whole-set/pack-collision fault) — never a
+    bare :class:`DomainPackError`.
+    """
+    if not isinstance(raw_items, (list, tuple)):
+        raise OperatorCorrectionError(
+            "The corrections list must be a list of rules.", row=None
+        )
+    prepared = _autofill_ids(raw_items)
+    rules: list[CorrectionRule] = []
+    for index, item in enumerate(prepared):
+        try:
+            rules.append(_rule_from_mapping(item, index))
+        except DomainPackError as exc:
+            raise OperatorCorrectionError(
+                _operator_message(str(exc), index), row=index
+            ) from exc
+    try:
+        validate_corrections(tuple(rules))
+    except DomainPackError as exc:
+        raise OperatorCorrectionError(_operator_message(str(exc), None), row=None) from exc
+    result = [rule.to_mapping() for rule in rules]
+    if pack_corrections:
+        try:
+            union_pack_corrections({"corrections": list(pack_corrections)}, result)
+        except DomainPackError as exc:
+            raise OperatorCorrectionError(
+                _operator_message(str(exc), None), row=None
+            ) from exc
+    return result
+
+
+def union_pack_corrections(
+    pack_mapping: Mapping[str, Any], operator_items: Sequence[Any]
+) -> dict[str, Any]:
+    """Union operator-authored corrections onto a resolved pack snapshot (issue #84).
+
+    Appends the operator rules AFTER the pack's own (pack rules keep priority),
+    then re-validates the combined set through :func:`parse_corrections` — so an
+    operator/pack duplicate id or a cross-rule idempotence violation surfaces as a
+    loud :class:`DomainPackError` at submit-time freeze, never a silent drop.
+    Returns a NEW snapshot mapping with a canonical ``corrections`` list; the
+    input is not mutated. A ``pack_mapping`` with no operator rules to add still
+    returns a fresh mapping so callers can treat the result uniformly.
+    """
+    merged = dict(pack_mapping)
+    pack_rules = list(pack_mapping.get("corrections") or [])
+    combined = [*pack_rules, *operator_items]
+    rules = parse_corrections(combined)
+    merged["corrections"] = [rule.to_mapping() for rule in rules]
+    return merged
+
+
+def _autofill_ids(raw_items: Sequence[Any]) -> list[Any]:
+    """Return a copy of ``raw_items`` with a generated id for each blank/omitted one.
+
+    Explicitly-provided non-blank ids are reserved first so a generated slug never
+    collides with one the operator typed. Non-mapping entries pass through
+    untouched so :func:`_rule_from_mapping` rejects them with its own clear error.
+    """
+    used: set[str] = set()
+    for item in raw_items:
+        if isinstance(item, Mapping):
+            rid = item.get("id")
+            if isinstance(rid, str) and rid.strip():
+                used.add(rid.strip())
+    prepared: list[Any] = []
+    for index, item in enumerate(raw_items):
+        if not isinstance(item, Mapping):
+            prepared.append(item)
+            continue
+        new = dict(item)
+        rid = new.get("id")
+        if not (isinstance(rid, str) and rid.strip()):
+            new["id"] = _generate_id(new.get("match"), index, used)
+        prepared.append(new)
+    return prepared
+
+
+def _generate_id(match: Any, index: int, used: set[str]) -> str:
+    """A stable, validation-safe id slug for a rule whose id was left blank."""
+    base = _slugify(match) or f"rule-{index + 1}"
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _slugify(value: Any) -> str:
+    """Lowercase ``[a-z0-9-]`` slug of ``value`` (empty if it has no such chars).
+
+    The result is whitespace-free and printable, so a generated id always clears
+    the id field checks in :func:`_rule_from_mapping`.
+    """
+    if not isinstance(value, str):
+        return ""
+    slug = _SLUG_STRIP.sub("-", value.strip().lower()).strip("-")
+    return slug[:_MAX_GENERATED_ID_CHARS].strip("-")
+
+
+def _operator_message(message: str, index: int | None) -> str:
+    """Rephrase a :class:`DomainPackError` message for a console operator.
+
+    Deterministic (the row index is known, so no fragile parsing): the pack-facing
+    ``domain pack corrections[N]`` subject becomes ``Rule N+1`` and the remaining
+    ``domain pack`` framing is softened. The substance of the message — the actual
+    validation reason — is preserved verbatim (honest-UX doctrine).
+    """
+    if index is not None:
+        message = message.replace(
+            f"domain pack corrections[{index}].", f"Rule {index + 1} "
+        )
+        message = message.replace(
+            f"domain pack corrections[{index}]", f"Rule {index + 1}"
+        )
+    message = message.replace("domain pack corrections", "The corrections")
+    message = message.replace("domain pack declares", "The corrections list has")
+    message = message.replace("domain pack 'corrections'", "The corrections list")
+    return message

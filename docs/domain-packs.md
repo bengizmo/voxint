@@ -195,6 +195,30 @@ Semantics (validated strictly at load, before a run is submitted — a malformed
   rules**, `match` ≤ **256** code points, `replace` ≤ **512** code points, and the
   corrections payload ≤ **128 KiB**.
 
+### Authoring corrections in the console (#84)
+
+You do **not** have to hand-edit a `manifest.yaml` to add a correction. **Settings
+→ Corrections** is a list editor for your own rules: add, edit, remove, and
+reorder them, set *Match case* / *Whole word only*, and save. Leave the id blank
+and one is generated from your `match`. Every rule is checked the **same way** a
+pack's `corrections:` are — the bounds, invisible-character rejection, unique ids,
+and idempotence above — with plain-language errors that point at the offending
+row, so a bad rule is refused when you save it, not when a run fails.
+
+These console rules live per **deployment** (not in a pack file), so they **survive
+pack upgrades** and apply on top of **whichever** pack a run resolves to. At submit
+time they are **unioned onto the selected pack's own corrections** and frozen into
+that run's snapshot — pack rules first, then yours — exactly like a pack's rules,
+so the corrector applies them and the review console shows their provenance (#83)
+with no difference. Editing them affects your **next** run, never one already
+submitted. If one of your rules would collide with the selected pack's own rules
+(a duplicate id, or a replacement that would re-fire another rule), the save is
+refused with the reason.
+
+Editing a pack's `manifest.yaml` directly is still the way to ship corrections
+*inside a shareable pack*; the console editor is for a single deployment's own
+recurring fixes.
+
 ### How the rules apply (the corrector engine, #81)
 
 A pure, versioned engine (`CORRECTOR_VERSION`) turns a segment string plus a rule

@@ -42,6 +42,7 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
 )
+from voxint.domain_packs.corrections import union_pack_corrections
 from voxint.domain_packs.registry import resolve_run_domain_pack
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.pipeline.engine import submit
@@ -207,12 +208,20 @@ def _run_domain_pack_snapshot(
     resolved = settings or get_settings()
     row = get_app_settings(session)
     folder_map = dict(row.folder_domain_packs) if row is not None else {}
-    return resolve_run_domain_pack(
+    pack_snapshot = resolve_run_domain_pack(
         source_path,
         settings=resolved,
         folder_domain_packs=folder_map,
         explicit_name=domain_pack_name,
     )
+    # Union the operator's console-authored corrections (#84) onto the resolved
+    # pack BEFORE the snapshot is frozen, so #82 compose and #83 provenance read
+    # them off pipeline_runs.domain_pack unchanged. A collision (operator/pack
+    # duplicate id or a non-idempotent union) raises DomainPackError here — the
+    # same visible, never-silently-fall-back posture as an unresolvable pack name.
+    if row is not None and row.corrections:
+        pack_snapshot = union_pack_corrections(pack_snapshot, row.corrections)
+    return pack_snapshot
 
 
 def submit_media_item(

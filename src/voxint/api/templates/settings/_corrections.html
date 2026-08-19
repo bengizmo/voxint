@@ -1,0 +1,37 @@
+{# Settings → Corrections (issue #84): author literal find→replace correction
+   rules from the console, without hand-editing a domain pack's manifest.yaml. The
+   corrections-editor island hydrates an add/edit/remove/reorder editor over this
+   fallback and submits the full list to POST /settings/corrections, which
+   validates through the SAME #80 gate a pack gets (bounds, control-char rejection,
+   unique ids, idempotence). Authored rules are unioned onto the selected pack at
+   submit-time freeze, so a corrected line's provenance (#83) shows which rule
+   changed it. JS-off the editor is unavailable — stated honestly, never faked —
+   and the current rules render read-only. Self-contained: renders from
+   _settings_context. #}
+<section id="corrections" aria-labelledby="corrections-heading">
+<h2 id="corrections-heading">Corrections</h2>
+<p class="muted">Fix words your recordings get wrong every time — a name, an
+   acronym, a piece of jargon. Each rule replaces a literal phrase with the form
+   you want (for example “zoom board” → “Zoning Board”). Rules apply to your next
+   run, and a corrected line shows which rule changed it.</p>
+{% if corrections_error %}
+  <p class="notice" role="alert">{{ corrections_error }}</p>
+{% endif %}
+<div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
+  {# No-JS fallback: the editor needs JavaScript, stated honestly. The operator's
+     current rules render read-only so the section is never blank. #}
+  <noscript><p class="muted">Editing corrections needs JavaScript. Your current
+     rules are shown below.</p></noscript>
+  {% if corrections %}
+  <ul class="corrections-fallback">
+    {% for rule in corrections %}
+    <li><code>{{ rule.match }}</code> → <code>{{ rule.replace }}</code>
+      <span class="muted">({{ "case-sensitive" if rule.case_sensitive else "any case" }},
+      {{ "whole word" if rule.whole_word else "anywhere" }})</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No correction rules yet.</p>
+  {% endif %}
+</div>
+</section>
