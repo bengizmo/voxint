@@ -319,6 +319,22 @@ enrichment — a manifest change takes effect on the *next* run.
 > per-**submission** pack override remains a backend-only capability. The default
 > pack (`DOMAIN_PACK_PATH`) stays the installation-wide fallback.
 
+**Deterministic corrections (epic #78).** A pack may also declare a `corrections:`
+list — literal `find → replace` rules that the `enhance_match` stage applies with
+no model, composed with the optional LLM enhancement through a raw-gated dual pass
+(#82). An operator can author their **own** rules from **Settings → Corrections**
+(#84) without editing a manifest; those live per deployment in
+`app_settings.corrections` (migration **0029**) and, at submit time, are **unioned
+onto the resolved pack and frozen** into the same `pipeline_runs.domain_pack`
+snapshot — so one frozen pack drives both the correction and its review-console
+provenance (#83). The per-segment trail the console reads back is
+`transcript_segments.correction_trace` + `corrector_version` (migration **0028**).
+A colliding operator rule is refused — at author time against the default pack,
+and visibly at submit-time freeze for a differently-scoped folder pack (never a
+silent drop; on the ingest routes this surfaces as a plain-language 422, on the
+CLI as exit 2, and the watch-folder sweep logs-and-skips the offending file rather
+than stalling). See `docs/domain-packs.md` for the rule schema and semantics.
+
 ### Metrics & monitoring
 
 **`voxint stats`** prints an aggregate, read-only snapshot: run counts by status,
@@ -878,8 +894,9 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
-| `GET /settings` | Post-onboarding settings: re-run the wizard, start/replay/complete the tutorial |
+| `GET /settings` | Post-onboarding settings: re-run the wizard, edit features / media folders / corrections / LLM / sources, start/replay/complete the tutorial |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
+| `POST /settings/corrections` | Replace the operator's console-authored correction rules (#84; whole list validated through the pack #80 gate, own `CSRF_SETTINGS` token; a pack collision returns a plain-language 422) |
 
 ## Media retention / garbage collection (issue #15; off by default)
 

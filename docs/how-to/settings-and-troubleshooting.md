@@ -12,7 +12,7 @@ to your **next** run or job. That is by design: a run's settings are locked in
 the moment it starts, so nothing shifts underneath a job that is already going.
 
 ![The Voxint Settings page, showing the First-run setup, Features, Media
-folders, LLM enhancement, Sources and research, and Guided tutorial
+folders, Corrections, LLM enhancement, Sources and research, and Guided tutorial
 sections stacked down the page.](../images/settings.png)
 
 ---
@@ -97,6 +97,40 @@ a move/rename rather than a slow copy; a file whose earlier run failed counts as
 
 To learn what domain packs are and how to choose one, see
 [domain-packs.md](../domain-packs.md).
+
+### Corrections *(optional)*
+
+Fix words your recordings get wrong **every time** — a name, an acronym, a piece
+of jargon — without hand-editing any files. Each rule replaces a literal phrase
+with the form you want (for example `zoom board` → `Zoning Board`, or `C D B G` →
+`CDBG`). The rules run with no model and no network, so they are exact and
+repeatable.
+
+To author a rule:
+
+- **Add rule**, then type the phrase to **Find** and what to **Replace with**.
+- **Match case** and **Whole word only** are on by default — the safe posture for
+  a domain term. Turn *Match case* off to catch any capitalization; turn *Whole
+  word only* off to match inside longer words.
+- Leave the id blank and Voxint generates one from your phrase. Use the **↑ / ↓**
+  buttons to reorder, **Remove** to delete a row, then **Save corrections**.
+
+Voxint checks every rule when you save and refuses a bad one **with the reason
+pinned to the row** — for example an empty field, a rule that would loop on its
+own replacement, or one that collides with the selected pack's own rules — so a
+mistake is caught at save time, not when a run fails. Nothing is saved unless the
+whole list is valid.
+
+Your rules live with **this Voxint** (not inside a pack file), so they **survive
+pack upgrades** and apply on top of **whichever** pack a run uses. Like every
+other setting, they apply to your **next** run, never one already in progress. On
+a corrected line the review console shows exactly which rule changed it — see
+[Reviewing → corrections your domain pack made](reviewing-and-adjudicating.md#corrections-your-domain-pack-made).
+
+This is a list of **literal** find-and-replace rules, not a regular-expression
+editor. For the full rules, the shareable-pack form of the same feature, and how
+corrections compose with LLM enhancement, see
+[domain-packs.md → Corrections](../domain-packs.md#corrections-deterministic-literal-substitutions).
 
 ### LLM enhancement *(optional)*
 

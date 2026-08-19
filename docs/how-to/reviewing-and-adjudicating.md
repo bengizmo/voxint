@@ -218,6 +218,11 @@ kept deliberately separate from the **"edited"** badge, which means a change *yo
 made. Expand the marker to see exactly which rule fired: the phrase it matched and
 what it became.
 
+![A reviewed transcript line carrying a "corrected by domain pack" marker, expanded
+to show the rule that fired (match → replace), with the run-level "Correction rules"
+panel above reconciling which declared rules applied and which never
+fired.](../images/correction-provenance.png)
+
 - **Compare against the original.** Open **Original (raw) transcript** to see the
   exact words the model first heard, next to the corrected version. You can **copy**
   the raw text, or **Reset edit to raw** to drop it back into the edit box.

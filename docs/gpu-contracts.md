@@ -573,6 +573,29 @@ lanes PASS:
 The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
 run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
 
+#### Verdict: v0.19.0 — Gate A/R/M carry from v0.18.0; Gate E owed at the cut
+
+Prepared at `063d1c4` — the epic-#78 deterministic-corrections arc (#82 dual-pass
+composition, #83 console provenance, #84 console authoring), #85 bundled-LLM
+name-hint hardening, the native-macOS media-serving fix, and the native
+install-path remediation. `git diff 20f3b42..063d1c4` (v0.18.0..HEAD) over the
+numerics scope (`services/{whisper,pyannote,titanet}`, `tests/parity/`, their
+`Dockerfile*` + `provenance.json`) is **empty**, so **Gate A (CUDA byte-parity),
+Gate R (ROCm / RX 9060 XT), and Gate M (Metal tier) all carry their v0.18.0
+verdicts** — no maintainer GPU re-run is required for the model numerics. CI's
+parity + smoke jobs still run unconditionally on the release digests.
+
+**Gate E (whole-pipeline E2E) does NOT carry** — the corrections epic touched
+`src/voxint/{pipeline,enrichment,db,api}` and `frontend/` — and is **owed by the
+release cut**. The #84 **corrections-editor browser lane** was extended and
+**passed** during this branch's landing (author → `200` + persisted
+`app_settings.corrections` → server-rendered reload → `422` + no-persist on an
+invalid rule; the operator-rule → frozen-pack union → corrector-fires composition
+proven through the real submit-freeze seam). The **full** Gate E re-run — the
+real-pipeline ROCm lane (`tests/e2e/test_real_pipeline.py`) plus a complete browser
+review reconcile — has **not** been run for 0.19.0 and remains a maintainer gate to
+complete before tagging.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the

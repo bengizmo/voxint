@@ -204,6 +204,11 @@ back without the matching binaries just re-creates the skew). If `up` finds a
 set-aside cluster but no live one — an upgrade interrupted mid-cutover — it
 refuses and points you at `upgrade-db --rollback`.
 
+To exercise the whole cutover machinery **before** a real major bump, run
+`upgrade-db --rehearse`: it forces a same-major upgrade cycle (mechanical proof
+only, not a cross-major upgrade), so you can confirm the dump/restore/cutover path
+works on your data first. Both flags are listed in `upgrade-db --help`.
+
 > Bundling the Postgres distribution itself (so no `brew install postgresql@NN`
 > is needed) remains the other, still-deferred half of the bundled-Postgres
 > child (#71).
@@ -296,3 +301,13 @@ can rotate on demand with `scripts/native/voxint-native.sh rotate-logs`.
   `static/app/.vite/manifest.json` is present.
 - **Submissions fail** — the model services are not up. `status` shows the
   delegated model state; `scripts/metal/voxint-metal.sh doctor` diagnoses them.
+- **A service keeps flapping** — `status` reports each `launchd` job's liveness:
+  `running`, or `restarting (last exit N)` when it is crash-looping (the non-zero
+  exit is the clue). Check that job's log under `logs/` for the failing command.
+- **Audio playback / the waveform strip is dead, or a "the processed audio file
+  could not be opened" banner appears** — this was a native-only bug fixed in
+  **0.19.0**: the media-serving gate probed the open file descriptor through
+  `/proc`, which macOS does not have, so `GET /media/<run>` 404'd for every valid
+  file. The gate now names the descriptor per platform (macOS `fcntl(F_GETPATH)`).
+  If you still see it, you are on a pre-0.19.0 build — update. (Docker/Linux were
+  never affected.)
