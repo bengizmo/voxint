@@ -610,6 +610,49 @@ still run unconditionally on the release digests.
 
 All maintainer GPU/E2E gates green at `bd702aa`; clear to tag v0.19.0.
 
+#### Verdict: v0.20.0, Gates A/E/M run fresh, Gate R carries; all PASS (2026-08-19)
+
+Cut at `bc4bd12`: the epic-#89 "Reading Room" console restyle plus #94 theme
+toggle, #65 read mode + Markdown export, #51 keymap single-source, #57 waveform
+gap-click, and the security slices (web console D1-D4 + #103, research E1/E2,
+supply-chain F1-F4 including the new F3 CUDA titanet sha-verify).
+
+- **Gate R (ROCm) carries** from v0.19.0: `git diff v0.19.0..bc4bd12 --
+  services/whisper` is empty.
+- **Gate A (CUDA) run fresh** (the F3 fix touched `services/titanet/Dockerfile`,
+  so carry-over does not apply). A CUDA titanet image was built from `bc4bd12`
+  on maintainer NVIDIA hardware (RTX 3060); the new build-time sha gate verified
+  the freshly downloaded `.nemo` OK against provenance `nemo_checkpoint_sha256`,
+  proving both the checkpoint and the gate itself on a real build. The
+  `generate_parity_references.py` flow then ran against that image plus the
+  published `0.19.0` CUDA whisper/pyannote images (source-identical over the
+  range): both transcript variants and the diarize response are byte-identical
+  to the committed references, and all 92 embedding vectors compare at cosine
+  1.000000 to the committed `titanet-large-v1` space. The committed references
+  are unchanged (the regeneration's metadata-only diffs were discarded).
+- **Gate E run fresh** at `bc4bd12` (the range touches `src/voxint/api/` and
+  `frontend/`). Pipeline lane on the maintainer's AMD box (RX 9060 XT, whisper
+  `0.16.0-rocm`, pyannote/titanet `0.16.0-cpu`, service code unchanged over
+  that span): `2 passed`, all six stages, real embeddings, zero service
+  restarts. The real-LLM enrichment sub-lane ran against a live maintainer
+  endpoint: `4 passed` (summary chain plus all three malformed-reply
+  honest-failure cases). Browser lane: full island sweep (uncertainty chips,
+  verify-and-advance, replay teardown-guard, skip, click-to-edit, discard
+  warning, edit+save, keymap suppression, the #51 cheat-sheet dialog with all
+  three dismissal paths and behind-modal suppression, the #83 provenance
+  affordances including operator-edit-supersedes, the #57 waveform strip with
+  single peaks fetch and region-click selection+seek), `RECONCILE PASS`.
+- **Gate M run fresh** at `bc4bd12` (#99 touched `metal-lane.yml`, so the
+  workflow-only carry did not apply). Apple M1 Pro, macOS 26.4.1, every lane
+  from the per-service metal venvs with zero skips: ct2 self-parity `2 passed`
+  (28m27s), whisper-metal `3 passed`, pyannote-metal (MPS) `7 passed`,
+  titanet-onnx CPU `7 passed` plus the CoreML experiment `7 passed`, and the
+  legacy-replay full 15-AMI + synthetic sweep `60 passed` with zero drift
+  (40m15s). A green `metal-lane` workflow dispatch was additionally verified
+  at `head_sha == bc4bd12`.
+
+All maintainer GPU/E2E gates green at `bc4bd12`; clear to tag v0.20.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
