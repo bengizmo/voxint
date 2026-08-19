@@ -475,7 +475,7 @@ export const TranscriptPlayer = forwardRef<
           if (seg.paletteIndex != null) classes.push(`spk-${seg.paletteIndex}`);
           if (uncertain) classes.push("tp-uncertain");
           classes.push(active ? "rounded" : "opacity-85");
-          if (active) classes.push("bg-sky-500/20", "px-1");
+          if (active) classes.push("bg-seg/20", "px-1");
           return (
             <p
               // Keyed by parent + word-range (falling back to start time) so a
@@ -548,7 +548,7 @@ export const TranscriptPlayer = forwardRef<
                           ? "Cannot split before the first word"
                           : `Split before “${w.word.trim()}”`
                       }
-                      className="tp-split-word px-0.5 rounded hover:bg-amber-500/30 disabled:opacity-60 disabled:cursor-default"
+                      className="tp-split-word px-0.5 rounded hover:bg-splitword/30 disabled:opacity-60 disabled:cursor-default"
                     >
                       {w.word}
                     </button>

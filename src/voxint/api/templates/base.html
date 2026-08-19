@@ -11,6 +11,22 @@
   {% if asset_url('tailwind') %}<link rel="stylesheet" href="{{ asset_url('tailwind') }}">{% endif %}
   <style>
     :root { color-scheme: light dark; }
+    /* Design tokens (issue #90, epic #89) — mechanism-only foundation. These map
+       to the console's CURRENT effective colors so the page chrome and the React
+       islands theme from ONE source with zero visual change; the warm "Reading
+       Room" palette, type scale, and elevation land in later slices (#91/#92).
+       RGB-CHANNEL form ("R G B", not a hex/rgb() string) is load-bearing: islands
+       consume Tailwind opacity utilities (e.g. bg-seg/20), and tailwind.config.ts
+       aliases these as rgb(var(--x-rgb) / <alpha-value>). --wave-neutral is a
+       COMPLETE color (read in JS by WaveformStrip, not via Tailwind): opaque RGB
+       #88888c = (136, 136, 140), a neutral gray with a faintly higher blue
+       channel — deliberately NOT --line's (136, 136, 136), so keep it verbatim. */
+    :root {
+      --seg-rgb: 14 165 233;        /* active playing segment — was bg-sky-500/20 */
+      --splitword-rgb: 245 158 11;  /* split-word hover — was bg-amber-500/30 */
+      --line-rgb: 136 136 136;      /* hairline borders — the #888 behind #8886 */
+      --wave-neutral: #88888c;      /* waveform bars/strokes with no speaker turn */
+    }
     body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem;
            padding: 0 1rem; line-height: 1.45; overflow-wrap: break-word; }
     h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; }

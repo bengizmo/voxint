@@ -39,18 +39,33 @@ interface WaveformStripProps {
 
 const STRIP_HEIGHT = 72;
 const PALETTE_SIZE = 8; // mirrors speaker_colors.PALETTE_SIZE
+// Last-resort default only: the LIVE neutral is read from the --wave-neutral
+// token at draw time (see resolveNeutral) so the canvas tracks the stylesheet,
+// like the speaker accents below. This literal is reached only if the token is
+// absent (never in the app shell, where base.html defines it in :root).
 const NEUTRAL_BAR = "#88888c";
+
+// The canvas has no stylesheet of its own, so it reads the neutral bar color
+// from the shell's --wave-neutral token (issue #90) rather than hardcoding it —
+// the root owns this global token, so a direct lookup is enough.
+function resolveNeutral(): string {
+  return (
+    getComputedStyle(document.documentElement)
+      .getPropertyValue("--wave-neutral")
+      .trim() || NEUTRAL_BAR
+  );
+}
 
 // Resolve the run palette's CSS accents from probe spans so the canvas uses
 // EXACTLY the colors the stylesheet (light or dark) currently resolves to.
-function resolveAccents(probes: HTMLElement | null): string[] {
+function resolveAccents(probes: HTMLElement | null, neutral: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < PALETTE_SIZE; i += 1) {
     const el = probes?.querySelector<HTMLElement>(`.spk-${i}`);
     const v = el
       ? getComputedStyle(el).getPropertyValue("--spk-accent").trim()
       : "";
-    out.push(v || NEUTRAL_BAR);
+    out.push(v || neutral);
   }
   return out;
 }
@@ -110,11 +125,12 @@ export function WaveformStrip({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, STRIP_HEIGHT);
 
-    const accents = resolveAccents(probesRef.current);
+    const neutral = resolveNeutral();
+    const accents = resolveAccents(probesRef.current, neutral);
     const accentOf = (paletteIndex: number | null): string =>
       paletteIndex != null && paletteIndex >= 0 && paletteIndex < accents.length
         ? accents[paletteIndex]
-        : NEUTRAL_BAR;
+        : neutral;
     const { duration } = peaks;
     const xOf = (t: number): number =>
       Math.max(0, Math.min(width, (t / duration) * width));
@@ -128,7 +144,7 @@ export function WaveformStrip({
     //    bucket that contains any of a turn's speech reads as that speaker);
     //    later turns overwrite earlier, so "later wins" holds deterministically.
     const barW = width / buckets;
-    const bucketColor: string[] = new Array<string>(buckets).fill(NEUTRAL_BAR);
+    const bucketColor: string[] = new Array<string>(buckets).fill(neutral);
     const covered: boolean[] = new Array<boolean>(buckets).fill(false);
     for (const turn of turns) {
       const b0 = Math.max(0, Math.floor((turn.start / duration) * buckets));
@@ -173,7 +189,7 @@ export function WaveformStrip({
     //    voices — an honest "not one speaker here" cue. Drawn per-turn (not from
     //    bucket ownership) so a hidden earlier speaker still shows it overlapped.
     ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = NEUTRAL_BAR;
+    ctx.strokeStyle = neutral;
     ctx.lineWidth = 1;
     for (const turn of turns) {
       if (!turn.overlap) continue;
@@ -249,7 +265,7 @@ export function WaveformStrip({
       data-testid="waveform-strip"
       data-active-index={activeIndex}
       data-cursor-index={cursorIndex ?? -1}
-      className="relative w-full my-2 rounded border border-[#8886] overflow-hidden"
+      className="relative w-full my-2 rounded border border-line/40 overflow-hidden"
       style={{ height: STRIP_HEIGHT }}
       title={
         seekEnabled
