@@ -116,6 +116,16 @@
     .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
                  color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: .5rem;
                  padding: 0 .35rem; margin-right: .4rem; white-space: nowrap; }
+    /* Deterministic domain-pack correction marker (issue #83). A DISTINCT accent
+       from the amber "uncertain" chip and the neutral speaker badge: this edit was
+       made automatically by the run's domain pack, never conflated with the
+       operator's own "edited" change. The chip is an expander button, so the native
+       button chrome is reset to match the other chips. */
+    :root { --corrected: #1a7f37; }
+    @media (prefers-color-scheme: dark) { :root { --corrected: #3fb950; } }
+    .tp-corrected-chip { font-size: .68rem; letter-spacing: .02em; color: var(--corrected);
+                 border: 1px solid var(--corrected); border-radius: .5rem; padding: 0 .35rem;
+                 margin-right: .4rem; white-space: nowrap; background: none; cursor: pointer; }
     /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
        (resolved-of-total), with always-visible text so the bar is never the
        only signal for a screen reader or a non-technical operator. */

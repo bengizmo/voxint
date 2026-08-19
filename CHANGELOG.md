@@ -6,21 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **Deterministic-correction provenance in the review console (#83, epic #78)** —
-  *backend, read-side (frontend + docs follow)*: the console payload now exposes,
-  per segment, **which domain-pack rule produced each deterministic edit** and the
-  **immutable raw text** — resolved **read-time** from the persisted `#82`
-  `correction_trace` + the run's frozen `domain_pack` snapshot, with **no
-  migration**. A run-level **declared-rule reconciliation** ("declared but never
-  fired") reports each declared rule as `applied` / `no_raw_match` /
-  `growth_rejected` (raw pass), reconstructed by replaying the corrector over the
-  immutable `raw_text`. Honest by construction: a rule recorded by a different
-  corrector version reads as "unavailable" (never replayed with mismatched
-  semantics); a NULL/corrupt snapshot yields **no** provenance rather than a
-  fabricated default pack; an unresolved rule id stays visible; and provenance keys
-  off the canonical `trace_has_entries` predicate, never a text diff. *(LLM-
-  enforcement-pass growth rejection and cross-segment matching are honest, deferred
-  v1 gaps — steer such terms to pack `vocabulary`.)*
+- **Deterministic-correction provenance in the review console (#83, epic #78)**:
+  the review console now **shows** deterministic domain-pack corrections. Each
+  corrected segment carries a distinct **"corrected by domain pack"** marker (never
+  conflated with an operator's own "edited" change) that expands to the exact pack +
+  rule (`match → replace`) behind every edit; the **immutable raw text** is one
+  action away for compare / copy / **reset-to-raw** (reset populates the edit box
+  only — the operator still saves, so the unsaved-edit discard protection stays
+  intact); an operator edit **supersedes** the marker (stale spans never show against
+  operator-authored text); and a run-level **"declared but never fired"** panel
+  reconciles every declared rule as `applied` / `no_raw_match` / `growth_rejected`
+  with plain-language remediation. All resolved **read-time** from the persisted
+  `#82` `correction_trace` + the run's frozen `domain_pack` snapshot, with **no
+  migration**. Honest by construction: a rule recorded by a different corrector
+  version reads as "unavailable" (never replayed with mismatched semantics); a
+  NULL/corrupt snapshot yields **no** provenance rather than a fabricated default
+  pack; an unresolved rule id stays visible; and provenance keys off the canonical
+  `trace_has_entries` predicate, never a text diff. *(LLM-enforcement-pass growth
+  rejection and cross-segment matching are honest, deferred v1 gaps — steer such
+  terms to pack `vocabulary`.)* Authoring these rules in the console is #84.
 - **Domain-pack corrections composed into enhancement (#82, epic #78)**: the
   deterministic corrector (#81) is now wired **inside** the `enhance_match` stage
   via a **raw-gated dual pass** — rules run on the raw ASR text first to fix which

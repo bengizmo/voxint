@@ -5,6 +5,7 @@ import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import { KeymapHelp } from "./KeymapHelp";
 import {
+  type ReconciliationEntry,
   type Segment,
   type SplitWord,
   TranscriptPlayer,
@@ -32,6 +33,12 @@ export interface ReviewStepperProps {
   // the picker never offers a speaker the /relabel write would reject). Empty on
   // a run with no roster yet — the picker then offers only "inherit / reset".
   speakers: { id: string; displayName: string }[];
+  // Run-level declared-rule reconciliation (issue #83): one row per rule the run's
+  // frozen domain pack DECLARED, with whether it materially fired anywhere. Feeds
+  // the "declared but never fired" panel, which renders only when this is non-empty
+  // (a run with no pack, or a pack with no corrections, sends []). Computed once
+  // server-side over the immutable raw_text — never recomputed on the client.
+  reconciliation: ReconciliationEntry[];
 }
 
 // A fresh idempotency nonce for a /relabel write (issue #59 slice 3). Uses
@@ -94,6 +101,9 @@ export function ReviewStepper({
   peaksUrl,
   turns,
   speakers,
+  // Default to empty: only the review route computes reconciliation, and a defensive
+  // default keeps the panel simply absent (never a crash) if a props payload omits it.
+  reconciliation = [],
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
   // the (pure) player. Verify/correct responses patch this array in place.
@@ -146,6 +156,15 @@ export function ReviewStepper({
   // gets no confirmation. Errors already speak (role="alert"); this makes success
   // speak too. Cleared as soon as the operator navigates or edits.
   const [assignStatus, setAssignStatus] = useState<string | null>(null);
+  // Issue #83 disclosure state. `provOpen` expands the current segment's domain-pack
+  // rule list; `rawOpen` reveals the raw-vs-corrected compare beside the edit box.
+  // Both reset on segment change (in the edit-sync effect). `copyStatus` is a polite,
+  // transient line for the copy-raw affordance (success or clipboard-unavailable
+  // fallback). `reconOpen` toggles the run-level "declared but never fired" panel.
+  const [provOpen, setProvOpen] = useState<boolean>(false);
+  const [rawOpen, setRawOpen] = useState<boolean>(false);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [reconOpen, setReconOpen] = useState<boolean>(false);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -171,6 +190,12 @@ export function ReviewStepper({
     // A speaker-assignment announcement belongs to the segment it was made on;
     // drop it as soon as the operator moves so it never trails onto another line.
     setAssignStatus(null);
+    // The #83 per-segment disclosures (provenance rule list, raw compare, copy
+    // status) belong to the focused segment — collapse/clear them on any move so
+    // one segment's raw text or rule list never lingers over another.
+    setProvOpen(false);
+    setRawOpen(false);
+    setCopyStatus(null);
   }, [current?.segmentId, current?.text]);
 
   const play = useCallback((index: number) => {
@@ -211,6 +236,7 @@ export function ReviewStepper({
         text: string;
         progress: { verified: number; total: number };
       },
+      opts?: { supersedeProvenance?: boolean },
     ): Segment[] => {
       const parentId = segments[index]?.sourceSegmentId ?? null;
       const split = siblingCount(segments, parentId) > 1;
@@ -223,6 +249,14 @@ export function ReviewStepper({
           verified: result.verified,
           corrected: result.corrected,
           text: split ? seg.text : result.text,
+          // Operator-edit supersedes deterministic provenance (issue #83): once the
+          // operator saves their own text via /text, the domain-pack correction
+          // trace's spans no longer address the effective text, so the "corrected by
+          // domain pack" marker would be stale (and misleading — it is a PIPELINE
+          // edit, not this operator's). Clear it on a text-save; a plain verify
+          // (supersedeProvenance unset) leaves the pipeline provenance intact.
+          corrections:
+            opts?.supersedeProvenance && !split ? null : seg.corrections,
         };
       });
       setSegments(patched);
@@ -351,7 +385,7 @@ export function ReviewStepper({
         { text: editText },
       );
       if (!result) return;
-      applyResult(index, result);
+      applyResult(index, result, { supersedeProvenance: true });
       setConfirmDiscard(false);
       // Stay on the segment after an edit (the operator likely wants to verify it
       // next); editing cleared its verified mark server-side, so it is a target
@@ -362,6 +396,29 @@ export function ReviewStepper({
       setBusy(false);
     }
   }, [current, cursor, postJson, runId, editText, applyResult, segments]);
+
+  // Copy the current segment's immutable raw text to the clipboard (issue #83).
+  // navigator.clipboard is undefined on a non-secure LAN context (plain http) —
+  // exactly where a self-hosted operator often runs — and writeText can also reject,
+  // so BOTH paths fall back to an honest instruction to select the shown raw text
+  // manually (it lives in a readOnly, selectable region). Never claims success it
+  // did not achieve.
+  const copyRaw = useCallback(async () => {
+    const raw = current?.rawText;
+    if (raw == null) return;
+    setRawOpen(true);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(raw);
+      setCopyStatus("Raw text copied to the clipboard.");
+    } catch {
+      setCopyStatus(
+        "Couldn’t copy automatically — select the raw text above and copy it manually.",
+      );
+    }
+  }, [current?.rawText]);
 
   // Lazily fetch the focused segment's words when split mode is engaged (issue
   // #59) — the /words payload is never folded into the shared hydration props, so
@@ -706,6 +763,17 @@ export function ReviewStepper({
 
   const done = remaining === 0;
 
+  // Issue #83 derived view state for the current segment. `corrections` is the
+  // pipeline provenance (null once superseded by an operator edit — see
+  // applyResult); `shownEntries` are the rules that materially fired (only when the
+  // trace is readable — a version mismatch yields status "unavailable" instead).
+  // `neverFired` are the run's declared rules that did NOT apply anywhere — the
+  // subject of the reconciliation panel's plain-language explanation.
+  const corrections = current?.corrections ?? null;
+  const shownEntries =
+    corrections?.status === "shown" ? corrections.entries : [];
+  const neverFired = reconciliation.filter((r) => r.status !== "applied");
+
   return (
     <div>
       {reviewToken === null && (
@@ -730,6 +798,55 @@ export function ReviewStepper({
             <strong>{progress.total}</strong> segments verified
             {done ? " — all done" : ` · ${remaining} left`}
           </p>
+          {/* Run-level declared-rule reconciliation (issue #83): a collapsible
+              summary of which of the run's domain-pack correction rules actually
+              fired. Renders only when the run declared corrections (empty ⇒ no
+              pack or no rules ⇒ nothing to reconcile). Read-only run context, not a
+              per-segment control, so it lives in the header above the loop. */}
+          {reconciliation.length > 0 && (
+            <div className="review-reconciliation my-1">
+              <button
+                type="button"
+                onClick={() => setReconOpen((on) => !on)}
+                aria-expanded={reconOpen}
+                aria-controls="review-reconciliation-body"
+                className="text-sm"
+              >
+                {reconOpen ? "▾" : "▸"} Correction rules —{" "}
+                {reconciliation.length - neverFired.length} of{" "}
+                {reconciliation.length} applied
+                {neverFired.length > 0
+                  ? `, ${neverFired.length} never fired`
+                  : ""}
+              </button>
+              {reconOpen && (
+                <div id="review-reconciliation-body" className="text-sm my-1">
+                  <p className="muted">
+                    Each rule declared by this run’s domain pack, and whether it
+                    materially changed any segment’s text. A rule that never fired
+                    usually means the recording didn’t contain the term it matches —
+                    or the term was split across a pause; declare such terms as{" "}
+                    <code>vocabulary</code> so they’re biased at transcription time
+                    instead.
+                  </p>
+                  <ul className="review-reconciliation-list">
+                    {reconciliation.map((r) => (
+                      <li key={r.id}>
+                        <code>{r.match}</code> → <code>{r.replace}</code>{" "}
+                        <span className="spk-badge ml-1">
+                          {r.status === "applied"
+                            ? `applied · ${r.appliedCount} segment${r.appliedCount === 1 ? "" : "s"}`
+                            : r.status === "no_raw_match"
+                              ? "never fired"
+                              : "skipped (would over-lengthen)"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => setSplitMode((on) => !on)}
@@ -760,7 +877,55 @@ export function ReviewStepper({
                 {current.corrected && (
                   <span className="spk-badge ml-2">edited</span>
                 )}
+                {/* Deterministic domain-pack correction marker (issue #83) —
+                    DISTINCT from "edited" (an operator's own change): this edit was
+                    made automatically by the run's domain pack. A version mismatch
+                    reads as an honest "unavailable" note instead of a rule list. */}
+                {corrections?.status === "shown" && (
+                  <button
+                    type="button"
+                    onClick={() => setProvOpen((on) => !on)}
+                    aria-expanded={provOpen}
+                    aria-controls="review-provenance-body"
+                    className="tp-corrected-chip ml-2"
+                  >
+                    corrected by domain pack ({shownEntries.length}){" "}
+                    {provOpen ? "▾" : "▸"}
+                  </button>
+                )}
+                {corrections?.status === "unavailable" && (
+                  <span className="muted text-sm ml-2" role="note">
+                    correction provenance unavailable
+                    {corrections.recordedVersion != null
+                      ? ` (recorded by corrector v${corrections.recordedVersion}; this console reads a different version)`
+                      : ""}
+                  </span>
+                )}
               </p>
+              {corrections?.status === "shown" && provOpen && (
+                <ul
+                  id="review-provenance-body"
+                  className="review-provenance-list text-sm my-1"
+                >
+                  {shownEntries.map((entry, i) => (
+                    <li key={`${entry.id}-${i}`}>
+                      {entry.resolved ? (
+                        <>
+                          <code>{entry.match}</code> → <code>{entry.replace}</code>{" "}
+                          <span className="muted">
+                            ({entry.pack} · rule <code>{entry.id}</code>)
+                          </span>
+                        </>
+                      ) : (
+                        <span className="muted">
+                          unresolved rule <code>{entry.id}</code> (
+                          <code>{entry.from}</code> → <code>{entry.to}</code>)
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
               <textarea
                 ref={editRef}
                 value={editText}
@@ -806,6 +971,66 @@ export function ReviewStepper({
                   This segment is already split — it can’t be split further in
                   this release.
                 </p>
+              )}
+              {/* Immutable raw ASR text, one action away (issue #83): reveal to
+                  compare the operator-effective text against what the model first
+                  heard, copy it, or reset the edit box to it. Reset POPULATES THE
+                  BOX ONLY — it never persists; the operator still presses Save (so
+                  the unsaved-edit discard protection stays intact). Hidden when the
+                  segment has no distinct raw text (split children / synthetic
+                  lines send rawText: null). */}
+              {current.rawText != null && (
+                <div className="review-raw my-1">
+                  <button
+                    type="button"
+                    onClick={() => setRawOpen((on) => !on)}
+                    aria-expanded={rawOpen}
+                    aria-controls="review-raw-body"
+                    className="text-sm"
+                  >
+                    {rawOpen ? "▾" : "▸"} Original (raw) transcript
+                  </button>
+                  {rawOpen && (
+                    <div id="review-raw-body" className="my-1">
+                      <textarea
+                        readOnly
+                        value={current.rawText}
+                        rows={2}
+                        className="w-full text-sm"
+                        aria-label="Original raw transcript text for this segment (read only)"
+                      />
+                      <div className="flex items-center my-1">
+                        <button
+                          type="button"
+                          onClick={() => void copyRaw()}
+                          className="mr-2 text-sm"
+                        >
+                          Copy raw text
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (current.rawText == null) return;
+                            setEditText(current.rawText);
+                            setConfirmDiscard(false);
+                            editRef.current?.focus();
+                          }}
+                          disabled={isSplitParent}
+                          className="text-sm"
+                        >
+                          Reset edit to raw
+                        </button>
+                      </div>
+                      <p
+                        role="status"
+                        aria-live="polite"
+                        className="muted text-sm"
+                      >
+                        {copyStatus ?? ""}
+                      </p>
+                    </div>
+                  )}
+                </div>
               )}
               <div className="flex items-center my-1">
                 <button
