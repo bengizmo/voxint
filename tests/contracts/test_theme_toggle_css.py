@@ -29,42 +29,19 @@ These are static source checks on the template file, same seam as the other
 
 import re
 
-from tests.contracts.conftest import REPO_ROOT
+from tests.contracts.conftest import REPO_ROOT, selector_bodies, strip_css_comments
 
 _BASE_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "base.html"
+
+
+def _selector_bodies(css: str, selector_pattern: str) -> list[str]:
+    """Body-only view of the shared brace-walking extractor (conftest)."""
+    return [body for _, body in selector_bodies(css, selector_pattern)]
 
 _MEDIA_DARK = r"@media\s+screen\s+and\s+\(\s*prefers-color-scheme:\s*dark\s*\)"
 _MEDIA_SCREEN_ONLY = r"@media\s+screen(?!\s+and)"
 _GUARDED_ROOT = re.escape(':root:not([data-theme="light"])')
 _EXPLICIT_ROOT = re.escape(':root[data-theme="dark"]')
-
-
-def _strip_css_comments(text: str) -> str:
-    return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-
-
-def _selector_bodies(css: str, selector_pattern: str) -> list[str]:
-    """Brace-balanced body of every block whose selector matches the pattern.
-
-    NOT a single broad regex: the dark media query nests a ``:root`` block, so
-    bodies are extracted by walking brace depth from each selector's opening
-    brace. Unbalanced braces are a hard failure, never a silent empty result.
-    """
-    bodies: list[str] = []
-    for match in re.finditer(selector_pattern + r"\s*\{", css):
-        open_brace = css.index("{", match.end() - 1)
-        depth = 0
-        for i in range(open_brace, len(css)):
-            if css[i] == "{":
-                depth += 1
-            elif css[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    bodies.append(css[open_brace + 1 : i])
-                    break
-        else:
-            raise AssertionError("unbalanced braces in base.html CSS")
-    return bodies
 
 
 def _declarations(body: str, context: str) -> dict[str, str]:
@@ -89,7 +66,7 @@ def _declarations(body: str, context: str) -> dict[str, str]:
 
 
 def test_dark_token_blocks_are_declaration_identical() -> None:
-    css = _strip_css_comments(_BASE_HTML.read_text())
+    css = strip_css_comments(_BASE_HTML.read_text())
 
     media_bodies = _selector_bodies(css, _MEDIA_DARK)
     assert len(media_bodies) == 1, (
@@ -120,10 +97,14 @@ def test_dark_token_blocks_are_declaration_identical() -> None:
     system_dark = _declarations(guarded_bodies[0], "system-dark")
     explicit_dark = _declarations(explicit_bodies[0], "explicit-dark")
 
-    # Anti-vacuous: two empty (or gutted) blocks must not "agree". Each block
-    # pins the resolved scheme and redefines at least the core surface token.
+    # Anti-vacuous: two empty (or gutted) blocks must not "agree" — parity
+    # cannot catch the same declaration vanishing from BOTH blocks, so a floor
+    # of core themed tokens is required outright (multi-model review finding).
     assert system_dark.get("color-scheme") == "dark"
-    assert "--paper" in system_dark, "system-dark block lost its token set"
+    required = {"color-scheme", "--paper", "--surface", "--ink", "--accent", "--danger"}
+    assert required <= system_dark.keys(), (
+        f"system-dark block lost core themed tokens: {sorted(required - system_dark.keys())}"
+    )
 
     assert system_dark == explicit_dark, (
         "the two dark token blocks are deliberate duplicates (#94: CSS cannot "
@@ -189,4 +170,16 @@ def test_resolver_guards_storage_and_accepts_only_known_values() -> None:
     assert re.search(r'if\s*\(\s*\w+\s*===\s*"light"\s*\|\|\s*\w+\s*===\s*"dark"\s*\)', resolver), (
         'theme resolver must gate on exactly t === "light" || t === "dark" '
         "before setting data-theme"
+    )
+
+
+def test_body_wiring_uses_the_same_storage_key() -> None:
+    """The end-of-body wiring script and the head resolver spell the storage
+    key as two independent literals; renaming one side silently breaks
+    persistence or pre-paint resolution while everything else stays green
+    (multi-model review finding)."""
+    raw = _BASE_HTML.read_text()
+    assert re.search(r'var\s+KEY\s*=\s*"voxint-theme"', raw), (
+        'the body theme-wiring KEY drifted from the head resolver\'s '
+        '"voxint-theme" storage key'
     )

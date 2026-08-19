@@ -100,7 +100,7 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
     # `light dark` (which let native controls go dark under a forced-light
     # choice) is gone.
     assert re.search(r":root\s*\{\s*color-scheme:\s*light;\s*\}", body)
-    assert "color-scheme: light dark;" not in body
+    assert not re.search(r"color-scheme:\s*light\s+dark\s*;", body)
     # Both dark blocks exist, in order: media query, then its guarded root,
     # then the explicit data-theme sibling.
     media_idx = body.index("prefers-color-scheme: dark")

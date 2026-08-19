@@ -6,14 +6,14 @@
    after htmx swaps, and on cross-tab changes. #}
 <section id="appearance" aria-labelledby="appearance-heading">
 <h2 id="appearance-heading">Appearance</h2>
-<fieldset class="theme-choice">
+<fieldset class="theme-choice" aria-describedby="theme-choice-help">
   <legend>Theme</legend>
   <label><input type="radio" name="theme-choice" value="system" checked> System</label>
   <label><input type="radio" name="theme-choice" value="light"> Light</label>
   <label><input type="radio" name="theme-choice" value="dark"> Dark</label>
 </fieldset>
-<p class="muted">System follows your device setting. Your choice is stored in
-   this browser only; other devices keep their own.</p>
+<p id="theme-choice-help" class="muted">System follows your device setting. Your
+   choice is stored in this browser only; other devices keep their own.</p>
 <noscript><p class="muted">Theme switching needs JavaScript. Without it the
    console follows your device setting.</p></noscript>
 </section>

@@ -8,6 +8,7 @@ torch/GPU deps — that's the services' side of the contract-test bargain.
 
 import importlib
 import json
+import re
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -95,6 +96,42 @@ def service_package(service: str) -> Iterator[None]:
 
 def load_fixture(name: str) -> Any:
     return json.loads((FIXTURES_DIR / name).read_text())
+
+
+# --- Shared CSS-source parsing for the base.html contracts (#94) -------------
+# test_theme_toggle_css and test_speaker_palette_parity guard the SAME
+# "dark blocks must stay identical" invariant by parsing the SAME file; a
+# parser fix applied to one private copy but not the other would let the two
+# contracts disagree about what the CSS says, so the brace-walker lives here
+# once (multi-model review finding, 2-of-3).
+
+
+def strip_css_comments(text: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+
+
+def selector_bodies(css: str, selector_pattern: str) -> list[tuple[int, str]]:
+    """``(start_index, body)`` of every block whose selector matches.
+
+    NOT a single broad regex: the dark media query nests a ``:root`` block, so
+    bodies are extracted by walking brace depth from each selector's opening
+    brace. Unbalanced braces are a hard failure, never a silent empty result.
+    """
+    bodies: list[tuple[int, str]] = []
+    for match in re.finditer(selector_pattern + r"\s*\{", css):
+        open_brace = css.index("{", match.end() - 1)
+        depth = 0
+        for i in range(open_brace, len(css)):
+            if css[i] == "{":
+                depth += 1
+            elif css[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    bodies.append((match.start(), css[open_brace + 1 : i]))
+                    break
+        else:
+            raise AssertionError("unbalanced braces in base.html CSS")
+    return bodies
 
 
 @pytest.fixture

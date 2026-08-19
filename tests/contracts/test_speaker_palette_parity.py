@@ -32,39 +32,19 @@ mapping is matched WITH its ``var(--spk-M)`` target so a self-referential
 
 import re
 
-from tests.contracts.conftest import REPO_ROOT
+from tests.contracts.conftest import (
+    REPO_ROOT,
+)
+from tests.contracts.conftest import (
+    selector_bodies as _selector_bodies,
+)
+from tests.contracts.conftest import (
+    strip_css_comments as _strip_css_comments,
+)
 from voxint.api.speaker_colors import PALETTE_SIZE
 
 _BASE_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "base.html"
 _WAVEFORM_TSX = REPO_ROOT / "frontend" / "src" / "components" / "WaveformStrip.tsx"
-
-
-def _strip_css_comments(css: str) -> str:
-    return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
-
-
-def _selector_bodies(css: str, selector_pattern: str) -> list[tuple[int, str]]:
-    """Return ``(selector_index, body)`` for every brace-matched block whose
-    selector matches ``selector_pattern`` (a regex, matched right before ``{``).
-
-    Depth matching keeps this correct for nested rules (e.g. a ``:root`` block
-    inside an ``@media`` block) even if further nesting is ever added.
-    """
-    bodies: list[tuple[int, str]] = []
-    for match in re.finditer(selector_pattern + r"\s*\{", css):
-        open_brace = css.index("{", match.end() - 1)
-        depth = 0
-        for i in range(open_brace, len(css)):
-            if css[i] == "{":
-                depth += 1
-            elif css[i] == "}":
-                depth -= 1
-                if depth == 0:
-                    bodies.append((match.start(), css[open_brace + 1 : i]))
-                    break
-        else:
-            raise AssertionError("unbalanced braces in base.html CSS")
-    return bodies
 
 
 def _light_root_body(css: str) -> str:
