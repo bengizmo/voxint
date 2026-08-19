@@ -79,6 +79,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   grouped into one row. All colors come from the existing token layer and meet
   WCAG AA in both themes; keyboard review, htmx swaps, island-failure and JS-off
   fallbacks verified in a real browser.
+- **Per-screen visual rollout (#93, epic #89)**: the "Reading Room" treatment now
+  reaches the remaining console screens. The adjudication queue keeps its scannable
+  table but promotes each row's **Review** action to the primary accent and slims
+  its progress cell to the shared review-journey track, with the resolved-of-total
+  count sitting beside the bar as the primary signal (an overlaid label measured
+  below WCAG AA across the filled and unfilled halves). The Speakers roster renders
+  as proper cards with a grouped action row. Settings frames each section as a card
+  while leaving the tutorial banner and every **Save** button neutral. The setup
+  wizard frames each step as one panel and reserves the teal accent for its forward
+  navigation (Get started, Continue, Finish and start tutorial), styles the
+  readiness-check rows and step markers, and gives the shared watch-folder panel its
+  first real layout. All color comes from the existing token layer and meets WCAG AA
+  in both themes. The obsolete-literal inventory is clean: no screen references a
+  pre-token color.
 
 ## [0.19.0] - 2026-08-19
 

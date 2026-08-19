@@ -257,6 +257,12 @@ def test_queue_renders_operator_ergonomics(
     assert 'aria-valuenow="1"' in body
     assert 'aria-valuemax="2"' in body
     assert "1 of 2 resolved" in body
+    # #93: the count text is ADJACENT (not overlaid on the fill); the slim bar
+    # reuses the review-journey .progress-track and is aria-hidden. An overlaid
+    # label on the accent gradient measured below AA across the filled/unfilled
+    # split, so the old absolute-positioned .progress-fill is retired.
+    assert 'class="progress-track" aria-hidden="true"' in body
+    assert 'class="progress-fill"' not in body
     # Responsive + a11y (issue #64): the wide queue table scrolls inside a
     # keyboard-reachable, labelled region, with scoped column headers.
     assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
@@ -264,6 +270,8 @@ def test_queue_renders_operator_ergonomics(
     # The otherwise-empty action column header carries a visually-hidden label so
     # it isn't an unnamed column for assistive tech (locks the one novel a11y bit).
     assert '<th scope="col"><span class="visually-hidden">Action</span></th>' in body
+    # #93: the per-row Review action is the one teal primary of the row.
+    assert 'class="primary">Review</button>' in body
     # Sort control offers the actionability option; default stays oldest.
     assert "Most voices to resolve" in body
     sorted_body = client.get("/review", params={"sort": "unresolved"}).text

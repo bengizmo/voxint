@@ -31,7 +31,7 @@
   <p class="muted">This quick setup takes about two minutes. Every step is optional and
      you can revisit it later.</p>
   <div class="actions">
-    <a href="/setup?step=media">Get started →</a>
+    <a href="/setup?step=media" class="btn-primary">Get started →</a>
   </div>
 
 {% elif step.value == "media" %}
@@ -52,7 +52,7 @@
   <div id="setup-scan"></div>
 
   <div class="actions">
-    <a href="/setup?step=vocabulary">Continue →</a>
+    <a href="/setup?step=vocabulary" class="btn-primary">Continue →</a>
   </div>
 
 {% elif step.value == "vocabulary" %}
@@ -70,7 +70,7 @@
     <button type="submit">Save vocabulary</button>
   </form>
   <div class="actions">
-    <a href="/setup?step=llm">Continue →</a>
+    <a href="/setup?step=llm" class="btn-primary">Continue →</a>
   </div>
 
 {% elif step.value == "llm" %}
@@ -126,7 +126,7 @@
     <button type="submit">Save LLM settings</button>
   </form>
   <div class="actions">
-    <a href="/setup?step=services">Continue →</a>
+    <a href="/setup?step=services" class="btn-primary">Continue →</a>
   </div>
 
 {% elif step.value == "services" %}
@@ -155,7 +155,7 @@
      page.</p>
   <div class="actions">
     <a href="/setup?step=services">Re-check</a>
-    <a href="/setup?step=finish">Continue →</a>
+    <a href="/setup?step=finish" class="btn-primary">Continue →</a>
   </div>
 
 {% elif step.value == "finish" %}
@@ -171,7 +171,7 @@
      You can re-run this setup, or the tutorial, any time from Settings.</p>
   <form method="post" action="/setup/finish" class="inline">
     <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
-    <button type="submit" name="start_tutorial" value="1">
+    <button type="submit" name="start_tutorial" value="1" class="primary">
       Finish setup &amp; start tutorial →</button>
   </form>
   <form method="post" action="/setup/finish" class="inline">

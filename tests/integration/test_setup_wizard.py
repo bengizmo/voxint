@@ -94,6 +94,9 @@ def test_get_setup_defaults_to_welcome(client: TestClient) -> None:
     # The protected top nav is replaced by the wizard step indicator.
     assert 'class="wizard-steps"' in body
     assert 'href="/review"' not in body
+    # #93: the step's forward CTA is the one teal accent (reserve teal for wizard
+    # forward motion; in-step Save/Scan and Re-check stay neutral).
+    assert 'class="btn-primary">Get started →</a>' in body
 
 
 def test_get_setup_unknown_step_falls_back_to_welcome(client: TestClient) -> None:
@@ -435,6 +438,15 @@ def test_services_step_llm_row_follows_row_over_env_off(
 
 
 # ------------------------------------------------------------------ finish step
+
+
+def test_get_setup_finish_step_primary_and_secondary_actions(client: TestClient) -> None:
+    """#93: the finish step's forward CTA (start-tutorial) is the teal primary;
+    the plain "Finish setup" alternative stays the neutral secondary."""
+    body = client.get("/setup?step=finish").text
+    assert "You're all set" in body
+    assert 'name="start_tutorial" value="1" class="primary"' in body
+    assert 'class="secondary">Finish setup →</button>' in body
 
 
 def test_post_finish_flips_onboarding_and_opens_console(

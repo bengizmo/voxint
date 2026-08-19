@@ -27,7 +27,7 @@
     · last seen {{ entry.last_seen_at.strftime("%Y-%m-%d") if entry.last_seen_at else "never" }}
   </p>
 
-  <div class="roster-actions">
+  <div class="roster-actions card-actions">
     <form class="inline" method="post"
           action="/speakers/{{ entry.speaker.id }}/rename"
           hx-post="/speakers/{{ entry.speaker.id }}/rename"
