@@ -111,6 +111,10 @@ ships inside the images too). Rules:
 - **Honest UX copy**: installer/handoff/error text states what is actually
   true (e.g. a down service means submissions fail, say so; don't claim
   "downloading weights" when weights are baked).
+- **Documentation**: when writing or editing any doc a person reads (README,
+  `docs/`, CONTRIBUTING, installer/first-run/error copy), follow the house
+  style in the `voxint-docs` skill: pick the audience lane (lay-reader vs
+  technical), no emdashes, no LLM-isms, emoji-free prose.
 - **Reviews**: non-trivial changes get a multi-model review before landing;
   never dismiss a finding without verifying it; record applied fixes and
   deliberate skips (with reasons) in the commit message.

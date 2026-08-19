@@ -43,6 +43,23 @@ independently (currently Python 3.10, dictated by the CUDA base images).
   provenance files recording upstream revisions and license attribution (see
   NOTICE and the provenance JSONs referenced there).
 
+## Documentation
+
+Docs are part of the change, not an afterthought. Update `docs/` in the same
+commit that alters the behavior it documents; stale docs are treated as bugs.
+
+Voxint docs follow a two-lane house style. User-facing docs (README, `docs/setup.md`,
+`docs/onboarding.md`, `docs/how-to/*`, installer and first-run copy) are written
+for a non-technical reader: warm, jargon-free, outcome-focused. Technical docs
+(this file, `docs/architecture.md`, the contract and operations references) are
+written for a developer: direct, code-first, with in-line parameter tables.
+
+Two rules hold in both lanes: no emdashes, and no LLM-isms (negative
+parallelism, rule-of-three padding, empty summary closers, over-signposting).
+Prose stays emoji-free apart from a `⚠️`/`✅` callout glyph. The full guidance,
+including per-lane structure and a pre-publish checklist, lives in the
+`voxint-docs` skill; agents should load it before writing or editing docs.
+
 ## License
 
 By contributing you agree your contributions are licensed under Apache-2.0.

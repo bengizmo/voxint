@@ -28,3 +28,7 @@ Reference & internals:
 | `security/` | Security audits calibrated to the single-operator threat model — the whole-repo audit, its threat model, and the standing findings + their remediation status |
 | `reports/` | Dated measurement reports (parity screens, bakeoff diagnostics, negative results) — the evidence behind verdict blocks in `gpu-contracts.md` |
 | [`../examples/`](../examples/README.md) | End-to-end `voxint score` walkthrough on a synthetic dataset |
+
+Writing or editing docs? Follow the two-lane house style described in
+[the Documentation section of `CONTRIBUTING.md`](../CONTRIBUTING.md#documentation).
+Agents should load the `voxint-docs` skill first.
