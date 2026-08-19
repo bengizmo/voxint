@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from "../lib/api-client";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import { KeymapHelp } from "./KeymapHelp";
+import { ASSIGN_DIGIT_MAX, ASSIGN_DIGIT_MIN, REVIEW_KEY } from "./keymap";
 import {
   type ReconciliationEntry,
   type Segment,
@@ -694,24 +695,27 @@ export function ReviewStepper({
         return;
       // Lower-case the letter keys so Caps Lock doesn't silently disable the
       // shortcuts; `?` and the digit branch below read the raw key unaffected.
+      // Key literals come from REVIEW_KEY (shared with the cheat-sheet and the
+      // inline <kbd> hints) so a rebinding can't drift; dispatch stays a plain,
+      // visible switch.
       switch (event.key.toLowerCase()) {
-        case "v":
+        case REVIEW_KEY.verify:
           event.preventDefault();
           void verifyAndAdvance();
           break;
-        case "n":
+        case REVIEW_KEY.skip:
           event.preventDefault();
           jumpNext();
           break;
-        case "p":
+        case REVIEW_KEY.replay:
           event.preventDefault();
           if (cursor >= 0) play(cursor);
           break;
-        case "e":
+        case REVIEW_KEY.edit:
           event.preventDefault();
           editRef.current?.focus();
           break;
-        case "j": {
+        case REVIEW_KEY.next: {
           // Next segment (plays on move, like clicking a line). Clamped, and a
           // no-op at the last segment — no needless replay of the current one.
           event.preventDefault();
@@ -719,21 +723,21 @@ export function ReviewStepper({
           if (next !== cursor) goTo(next);
           break;
         }
-        case "k": {
+        case REVIEW_KEY.previous: {
           // Previous segment — the "go back" the forward-only n/jumpNext lacks.
           event.preventDefault();
           const prev = Math.max(cursor - 1, 0);
           if (prev !== cursor) goTo(prev);
           break;
         }
-        case "0":
+        case REVIEW_KEY.resetSpeaker:
           // Reset the focused segment to inherit its detected label. Fires
           // regardless of roster (inherit needs no speaker); reassignSegment
           // refuses only a split parent (with an inline reason).
           event.preventDefault();
           void reassignSegment(null);
           break;
-        case "?":
+        case REVIEW_KEY.help:
           event.preventDefault();
           setHelpOpen(true);
           break;
@@ -741,8 +745,11 @@ export function ReviewStepper({
           // Digit-assign (issue #51): 1–9 → the Nth roster speaker. Only fires on
           // a real roster slot, so a run with fewer speakers never writes a
           // phantom ruling; reassignSegment additionally refuses a split parent.
-          if (event.key >= "1" && event.key <= "9") {
-            const speaker = speakers[Number(event.key) - 1];
+          if (
+            event.key >= String(ASSIGN_DIGIT_MIN) &&
+            event.key <= String(ASSIGN_DIGIT_MAX)
+          ) {
+            const speaker = speakers[Number(event.key) - ASSIGN_DIGIT_MIN];
             if (speaker) {
               event.preventDefault();
               void reassignSegment(speaker.id);
@@ -878,7 +885,7 @@ export function ReviewStepper({
             aria-haspopup="dialog"
             className="text-sm my-1 ml-2"
           >
-            ⌨ Shortcuts
+            ⌨ Shortcuts <kbd>{REVIEW_KEY.help}</kbd>
           </button>
           {current && current.segmentId !== null && (
             <div>
@@ -1056,7 +1063,7 @@ export function ReviewStepper({
                   disabled={busy}
                   className="mr-2"
                 >
-                  Verify &amp; next <kbd>v</kbd>
+                  Verify &amp; next <kbd>{REVIEW_KEY.verify}</kbd>
                 </button>
                 <button
                   type="button"
@@ -1072,14 +1079,14 @@ export function ReviewStepper({
                   disabled={busy}
                   className="mr-2"
                 >
-                  Skip <kbd>n</kbd>
+                  Skip <kbd>{REVIEW_KEY.skip}</kbd>
                 </button>
                 <button
                   type="button"
                   onClick={() => cursor >= 0 && play(cursor)}
                   disabled={busy}
                 >
-                  Replay <kbd>p</kbd>
+                  Replay <kbd>{REVIEW_KEY.replay}</kbd>
                 </button>
               </div>
               {!isSplitParent && (
@@ -1092,7 +1099,16 @@ export function ReviewStepper({
                 // pickers. The keymap's SELECT guard keeps digits from firing while
                 // this control is focused.
                 <label className="tp-reassign text-sm my-1 block">
-                  Assign speaker:{" "}
+                  Assign speaker
+                  {speakers.length > 0 && (
+                    // The digit keys only assign when the roster has slots, so the
+                    // cue appears only then (honest-UX: no key advertised that no-ops).
+                    <>
+                      {" "}
+                      (<kbd>{ASSIGN_DIGIT_MIN}</kbd>–<kbd>{ASSIGN_DIGIT_MAX}</kbd>)
+                    </>
+                  )}
+                  :{" "}
                   <select
                     className="text-sm"
                     value=""
@@ -1111,7 +1127,7 @@ export function ReviewStepper({
                     <option value="">Assign speaker…</option>
                     {speakers.map((sp, i) => (
                       <option key={sp.id} value={sp.id}>
-                        {i < 9 ? `${i + 1}. ` : ""}
+                        {i < ASSIGN_DIGIT_MAX ? `${i + ASSIGN_DIGIT_MIN}. ` : ""}
                         {sp.displayName}
                       </option>
                     ))}
@@ -1122,7 +1138,8 @@ export function ReviewStepper({
               {confirmDiscard && (
                 <p role="alert" className="text-sm">
                   You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save
-                  it, or repeat the action (<kbd>v</kbd> to verify, or click the
+                  it, or repeat the action (<kbd>{REVIEW_KEY.verify}</kbd> to
+                  verify, or click the
                   word again to split) to discard the edit and continue.
                 </p>
               )}

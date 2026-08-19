@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { REVIEW_SHORTCUTS, shortcutDesc } from "./keymap";
 
 export interface KeymapHelpProps {
   open: boolean;
@@ -148,7 +149,8 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
         </div>
         <p className="muted text-sm">
           Shortcuts work while reviewing and never fire while you are typing in a
-          text box or menu. Every shortcut also has a button on the page.
+          text box or menu. Every action also has a clickable equivalent on the
+          page.
         </p>
         <dl
           style={{
@@ -158,21 +160,13 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
             margin: ".5rem 0 .75rem",
           }}
         >
-          <Row keys="v" desc="Verify this segment and go to the next" />
-          <Row keys="n" desc="Skip to the next unreviewed segment" />
-          <Row keys="p" desc="Replay the current segment" />
-          <Row keys="e" desc="Edit the current segment’s text" />
-          <Row keys="j / k" desc="Go to and play the next / previous segment" />
-          <Row
-            keys="1 – 9"
-            desc={
-              hasRoster
-                ? "Assign this segment to the 1st–9th speaker"
-                : "Assign this segment to a speaker (no speakers on this run yet)"
-            }
-          />
-          <Row keys="0" desc="Reset this segment to its detected speaker" />
-          <Row keys="?" desc="Show this list of shortcuts" />
+          {REVIEW_SHORTCUTS.map((shortcut) => (
+            <Row
+              key={shortcut.keys}
+              keys={shortcut.keys}
+              desc={shortcutDesc(shortcut, { hasRoster })}
+            />
+          ))}
         </dl>
         <p className="muted text-sm" style={{ marginBottom: 0 }}>
           Space plays or pauses and the arrow keys scroll — these stay with the

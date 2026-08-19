@@ -288,7 +288,8 @@ flows through to your exports.
 ## Keyboard shortcuts
 
 The transcript review page is built to run from the keyboard. Press **?** at any
-time for the same cheat-sheet built into the console.
+time — or click the **⌨ Shortcuts** button (it shows the `?` accelerator) — for
+the same cheat-sheet built into the console.
 
 ![The keyboard-shortcuts cheat-sheet: a modal dialog titled "Keyboard shortcuts"
 listing v, n, p, e, j/k, 1–9, 0, and ? with a plain-language description of each,

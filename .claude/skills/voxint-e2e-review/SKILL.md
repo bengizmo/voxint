@@ -8,7 +8,9 @@ description: >-
   durable state, then clean up. Use whenever verifying the transcript review loop
   end to end in a browser — verify/edit/skip/replay keys, click-to-edit, the
   unsaved-edit discard warning, the keymap suppression on focused form
-  controls, or the waveform strip (#57: peaks fetch, region click → selection,
+  controls, the keyboard-shortcuts cheat-sheet modal (#51: open via `?` or the
+  button, focus trap, Escape/close/backdrop dismiss), or the waveform strip
+  (#57: peaks fetch, region click → selection,
   playhead/cursor sync) — or when a Gate E release check calls for the browser
   lane. Serial only on maintainer hardware; never public CI.
 ---
@@ -112,6 +114,18 @@ touch the network:
 - **keymap suppression:** focus the speed control
   (`select[aria-label="Playback speed"]`), press `v` → **no** new `/verify`
   (a focused `<select>`/`<textarea>`/`<input>` suppresses the single-key keymap).
+- **cheat-sheet modal (#51) — open both ways, dismiss, and suppress:** move focus
+  off any form control, then press `?` → a `[role="dialog"][aria-modal="true"]`
+  titled "Keyboard shortcuts" appears (the eight-row `<dl>` renders from the shared
+  `REVIEW_SHORTCUTS` source of truth). While it is open, press `v` → **no** new
+  `/verify` (the `helpOpenRef` guard suppresses the global keymap behind the modal).
+  Press **Escape** → the dialog is gone. Reopen via the **"⌨ Shortcuts ?"** button
+  (`button[aria-haspopup="dialog"]`) instead of the key, then dismiss with the ✕
+  close control (`aria-label="Close keyboard shortcuts"`); reopen once more and
+  dismiss with a **backdrop click** (mousedown+click on the fixed overlay, not the
+  panel). Each dismiss returns focus to the opener. (The seed has a roster, so the
+  header's inline `Assign speaker (1–9):` digit cue is present; on a roster-less run
+  it is intentionally absent — not asserted here.)
 
 ### Domain-pack correction provenance (#83)
 

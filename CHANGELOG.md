@@ -5,6 +5,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Review-console keyboard shortcuts now have one source of truth, and the
+  cheat-sheet is easier to find (#51).** The eight review shortcuts used to be
+  written out in three places — the key handler, the `?` cheat-sheet, and the
+  inline hints on the buttons — and kept in sync by hand. They now share a single
+  `keymap` definition, so the cheat-sheet and the on-screen hints can never
+  disagree with the keys that actually fire. Discoverability nudges, no new
+  behaviour: the **⌨ Shortcuts** button now shows its `?` accelerator, and the
+  **Assign speaker** control shows a `1–9` cue when the run has a speaker roster
+  (and stays quiet when it doesn't, since those keys have nothing to assign). The
+  cheat-sheet's copy is corrected to say every action has a *clickable equivalent*
+  (not a button — walking with `j`/`k` is done by clicking a line, which is why
+  that pair stays cheat-sheet-only rather than gaining page clutter). Visual
+  restyling of the dialog is intentionally left to the console-modernization epic
+  (#89). Browser behaviour is covered by the maintainer E2E lane, extended to open
+  and dismiss the cheat-sheet.
+
 ### Security
 
 - **Web-console hardening (audit findings D1–D4).** A calibrated pass over the
