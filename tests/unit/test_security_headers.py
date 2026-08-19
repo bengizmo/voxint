@@ -30,6 +30,13 @@ async def test_error_handler_stamps_referrer_policy_on_any_path() -> None:
     assert "cache-control" not in response.headers
 
 
+async def test_error_handler_stamps_nosniff_on_any_path() -> None:
+    # Issue #103: X-Content-Type-Options: nosniff is a baseline header on every
+    # response, so it must survive an unhandled 500 like the D1 referrer policy.
+    response = await _security_headers_on_error(_request("/runs/x"), RuntimeError("boom"))
+    assert response.headers["x-content-type-options"] == "nosniff"
+
+
 async def test_error_handler_adds_no_store_on_review_path() -> None:
     response = await _security_headers_on_error(
         _request("/review/abc123?token=t"), RuntimeError("boom")

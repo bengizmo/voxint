@@ -98,6 +98,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Security
 
+- **`X-Content-Type-Options: nosniff` on every console response (#103).** The
+  console serves user-controlled transcript text as downloadable exports (`.txt`,
+  `.md`, `.srt`, `.vtt`, `.json`, `.rttm`) and the built frontend as first-party
+  assets. The header, stamped in the same shared seam as the D1 headers (so a new
+  route cannot miss it and it survives an unhandled 500), forces the browser to
+  honor the server-declared `Content-Type` instead of sniffing the bytes, so a
+  transcript carrying crafted markup cannot be reinterpreted as HTML and executed.
+  Every asset the frontend build emits already resolves to a correct type, so
+  nothing legitimate is blocked. Scope is this one header: `X-Frame-Options` and a
+  content-security policy stay out, keeping the minimal posture calibrated for a
+  single-operator, loopback console.
 - **Web-console hardening (audit findings D1–D4).** A calibrated pass over the
   review console for the single-operator, loopback threat model — no database
   migration, no change to how the islands talk to the server:

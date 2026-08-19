@@ -599,7 +599,11 @@ class _RequestSizeLimitMiddleware:
 
 
 class _SecurityHeadersMiddleware:
-    """Inject conservative response headers to contain the claim token (finding D1).
+    """Inject the console's conservative baseline security headers.
+
+    The per-response policy lives in ``_apply_security_headers``; this middleware
+    stamps it on the ``http.response.start`` of every response. The bulk of the
+    policy contains the URL-borne claim token (finding D1).
 
     The review console carries the per-claim token in the URL (``?token=``); that
     token is *both* the review lock and the CSRF defense for claim-gated mutations.
@@ -620,8 +624,10 @@ class _SecurityHeadersMiddleware:
     history, address-bar screenshots, and server access logs. That residual is
     consciously accepted for a single-operator, loopback-bound console — carrying
     the token in a cookie/session would add disproportionate machinery. See
-    docs/security/audit-2026-08-18.md (D1). Both headers use ``setdefault`` so a
-    route that needs a stricter/looser policy can still override them.
+    docs/security/audit-2026-08-18.md (D1). A third baseline header,
+    ``X-Content-Type-Options: nosniff`` (issue #103), rides the same seam. All use
+    ``setdefault`` so a route that needs a stricter/looser policy can still
+    override them.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -645,11 +651,24 @@ class _SecurityHeadersMiddleware:
 
 
 def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> None:
-    """Stamp the finding-D1 containment headers (idempotent via ``setdefault``).
+    """Stamp the console's baseline security headers (idempotent via ``setdefault``).
 
     Shared by ``_SecurityHeadersMiddleware`` and the 500 handler so the policy has
-    one definition."""
+    one definition.
+
+    * ``Referrer-Policy: no-referrer`` and ``Cache-Control: no-store`` (on
+      ``/review``) contain the URL-borne claim token (finding D1).
+    * ``X-Content-Type-Options: nosniff`` on **every** response (issue #103): the
+      console serves user-controlled transcript text as downloadable exports
+      (``.txt``/``.md``/``.srt``/``.vtt``/``.json``/``.rttm``) and the built
+      frontend bundle as first-party assets. ``nosniff`` forces the browser to
+      honour the server-declared ``Content-Type`` instead of sniffing the bytes,
+      so a transcript carrying crafted markup cannot be reinterpreted as HTML and
+      executed. Every asset the Vite build emits already resolves to a correct
+      type in ``_APP_ASSET_MEDIA_TYPES``, so this blocks nothing legitimate.
+    """
     headers.setdefault("referrer-policy", "no-referrer")
+    headers.setdefault("x-content-type-options", "nosniff")
     if review_path:
         headers.setdefault("cache-control", "no-store")
 
