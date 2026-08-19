@@ -57,6 +57,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   reachability & managed-cluster identity) rather than an over-promising "ports".
 
 ### Fixed
+- **Review console: audio playback and the waveform strip now work on the native
+  macOS install**: the media-serving gate probed the just-opened file descriptor
+  through `/proc/<pid>/fd` (a Linux-only interface). On the native, docker-free
+  macOS path — which has no `/proc` — ffprobe could not open that path, so **every
+  valid audio file was rejected as unservable**: `GET /media/<run>` 404'd and the
+  review console showed a false "the processed audio file could not be opened"
+  banner with playback and the #57 waveform strip both dead. The gate now names
+  the descriptor per platform (Linux `/proc/<pid>/fd`, macOS `fcntl(F_GETPATH)`),
+  keeping the probe-the-exact-descriptor anti-TOCTOU property on both. Docker and
+  Linux deployments were never affected.
 - **Bundled local LLM no longer risks batch-poisoning on hallucinated name hints
   (#85, follows #67)**: the scoped bundled model (Qwen3-4B) powers transcript
   enhancement text only — never speaker attribution — yet its reply was strictly

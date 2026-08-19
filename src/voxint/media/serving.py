@@ -12,9 +12,11 @@ semantics, and Accept-Ranges advertised. Multipart ranges are ignored — the
 whole file is returned with 200, which HTTP permits.
 """
 
+import fcntl
 import os
 import stat as stat_module
 import subprocess
+import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,9 +24,45 @@ from typing import BinaryIO
 
 from voxint.media.normalize import NormalizationError, probe_audio
 
+# Linux exposes each open descriptor as /proc/<pid>/fd/<n>; macOS has no /proc.
+# Probed once at import so the per-request path stays a cheap dict-free branch.
+_HAS_PROC_FD = Path("/proc/self/fd").is_dir()
+# Darwin MAXPATHLEN — the fcntl(F_GETPATH) buffer must be at least this large.
+_F_GETPATH_BUFSIZE = 1024
+
 
 class MediaNotServableError(Exception):
     """The path is missing, escapes the media root, or is not decodable audio."""
+
+
+def _descriptor_probe_path(fd: int) -> Path:
+    """A filesystem path ffprobe can read that names the gate's open descriptor.
+
+    Linux exposes the descriptor as ``/proc/<pid>/fd/<n>`` — a handle that
+    reopens the *same inode* the gate holds open, so a path replaced on disk
+    after the confinement check cannot smuggle unprobed content into the
+    response. macOS has no ``/proc``; the closest equivalent is
+    ``fcntl(F_GETPATH)``, which returns the descriptor's current pathname.
+    ffprobe then *reopens that pathname*, so on macOS a rename/replace between
+    F_GETPATH and the probe is a (small) TOCTOU window Linux does not have —
+    acceptable for a single-operator local app, and no worse than the existing
+    in-place-write race the (size, mtime) cache already tolerates. Without this
+    split the ``/proc`` path simply did not exist on macOS and every valid file
+    404'd on the native (docker-free) install.
+    """
+    if _HAS_PROC_FD:
+        return Path(f"/proc/{os.getpid()}/fd/{fd}")
+    if sys.platform == "darwin":
+        try:
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\x00" * _F_GETPATH_BUFSIZE)
+        except OSError as exc:  # keep the gate's 404 contract, never a 500
+            raise MediaNotServableError(
+                f"cannot resolve descriptor {fd} to a path: {exc}"
+            ) from exc
+        return Path(os.fsdecode(raw.split(b"\x00", 1)[0]))
+    raise MediaNotServableError(
+        "cannot probe the served descriptor: no /proc and not macOS"
+    )
 
 
 @dataclass(frozen=True)
@@ -87,9 +125,11 @@ class MediaGate:
 
     Everything — the size the response advertises, the probe, and the bytes
     streamed — comes from ONE file descriptor, opened after confinement
-    checks. Probing goes through ``/proc/self/fd`` (v1 targets one Linux
-    machine), so a path replaced on disk mid-request can never smuggle
-    unprobed content into a response.
+    checks. The probe names that descriptor (Linux ``/proc/<pid>/fd``, macOS
+    ``fcntl(F_GETPATH)`` — see :func:`_descriptor_probe_path`). On Linux the
+    probe reopens the exact inode, so a path swapped mid-request cannot smuggle
+    unprobed content in; on macOS ffprobe reopens by pathname, a small race
+    accepted for the single-operator threat model.
     """
 
     def __init__(
@@ -125,9 +165,10 @@ class MediaGate:
             with self._lock:
                 cached = self._validated.get(resolved) == fingerprint
             if not cached:
-                # The parent's pid, not /proc/self: ffprobe runs as a child
-                # with close_fds, so "self" would be the child's empty table.
-                fd_path = Path(f"/proc/{os.getpid()}/fd/{fh.fileno()}")
+                # Name the descriptor by our own pid, not /proc/self: ffprobe
+                # runs as a child with close_fds, so "self" would be the child's
+                # empty table. macOS resolves the descriptor via F_GETPATH.
+                fd_path = _descriptor_probe_path(fh.fileno())
                 try:
                     probe_audio(
                         fd_path, ffprobe_bin=self._ffprobe_bin, timeout_seconds=self._timeout

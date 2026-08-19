@@ -1,6 +1,9 @@
 """Range parsing and the media-serving gate (path confinement + probe cache)."""
 
+import io
 import os
+import shutil
+import wave
 from pathlib import Path
 
 import pytest
@@ -101,10 +104,16 @@ class TestMediaGate:
         audio.write_bytes(b"x" * 64)
         gate = MediaGate(tmp_path)
         fh, _size = gate.open_for_serving(audio)
+        probe_path = str(probed[0])
         fh.close()
         # The probe target was this process's descriptor, not the pathname —
         # a path swapped on disk after open can't smuggle unprobed bytes.
-        assert str(probed[0]).startswith(f"/proc/{os.getpid()}/fd/")
+        if serving._HAS_PROC_FD:
+            assert probe_path.startswith(f"/proc/{os.getpid()}/fd/")
+        else:
+            # macOS/BSD: no /proc; F_GETPATH names the very inode the descriptor
+            # held open (still open when the path was captured, above).
+            assert os.path.samefile(probe_path, audio)
 
     def test_modified_file_reprobed(self, tmp_path: Path, probed: list[Path]) -> None:
         audio = tmp_path / "a.wav"
@@ -159,3 +168,35 @@ class TestMediaGate:
             with pytest.raises(MediaNotServableError):
                 gate.open_for_serving(audio)
         assert len(calls) == 2  # failures never enter the cache
+
+
+def _tiny_wav_bytes(seconds: float = 0.1, rate: int = 16000) -> bytes:
+    """A minimal decodable PCM16 mono WAV (stdlib only — no external assets)."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * int(rate * seconds))
+    return buf.getvalue()
+
+
+class TestMediaGateRealProbe:
+    """Exercise the REAL ffprobe against the REAL descriptor path.
+
+    The faked-probe tests above never touch the filesystem path the gate hands
+    ffprobe, so they cannot catch a descriptor path that does not resolve on the
+    host platform — which is exactly how the ``/proc/self/fd`` probe shipped
+    404ing every valid file on the native macOS install. This is the guard.
+    """
+
+    def test_serves_a_real_wav_on_this_platform(self, tmp_path: Path) -> None:
+        if shutil.which("ffprobe") is None:
+            pytest.skip("ffprobe not installed")
+        audio = tmp_path / "real.wav"
+        audio.write_bytes(_tiny_wav_bytes())
+        gate = MediaGate(tmp_path)
+        fh, size = gate.open_for_serving(audio)
+        with fh:
+            assert size == audio.stat().st_size
+            assert fh.read(4) == b"RIFF"  # streaming from the probed descriptor
