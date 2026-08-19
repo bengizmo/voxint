@@ -124,14 +124,22 @@
     table { border-collapse: collapse; width: 100%; }
     th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
     th { color: var(--ink-2); font-size: var(--t-sm); }
-    /* Tokenized controls. `:not(:where(.tp-split-word))` keeps specificity at
-       exactly `button` (0,0,1): high enough to beat Tailwind Preflight's
-       `button { background: transparent; padding: 0 }` (also 0,0,1) as the later
+    /* Tokenized controls. `:not(:where(.tp-split-word, .tp-corrected-chip))`
+       keeps specificity at exactly `button` (0,0,1): high enough to beat
+       Tailwind Preflight's bare `button { ... }` reset (also 0,0,1) as the later
        source, but low enough that any island utility (w-full, text-sm, hover:*)
-       at 0,1,0 still wins. The inline word-chip (.tp-split-word) AND the
-       correction chip (.tp-corrected-chip) opt out entirely: the :hover rule
-       below is 0,1,1, which would otherwise defeat a chip's own 0,1,0 styling
-       on hover, so both are excluded here rather than left to self-defend. */
+       at 0,1,0 still wins. Caveat (verified in the #93 review): Preflight ALSO
+       resets `[type='button'|'reset'|'submit'] { background-color: transparent }`
+       at (0,1,0), which defeats this rule's background on typed buttons — so a
+       neutral `<button type="submit">` is transparent-backed, not --surface.
+       Harmless today: every neutral button sits on a --surface card
+       (transparent == surface); a placement on --paper or a tinted notice would
+       show through. The eventual fix is a (0,1,0) tie-break re-declaring the
+       background for `[type=…]`, deferred to a focused follow-up.
+       button.primary/.secondary at (0,1,1) are unaffected. The word-chip
+       (.tp-split-word) AND correction chip (.tp-corrected-chip) opt out entirely:
+       the :hover rule below is 0,1,1, which would otherwise defeat a chip's own
+       0,1,0 styling on hover, so both are excluded here. */
     button:not(:where(.tp-split-word, .tp-corrected-chip)) {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-md);
@@ -254,8 +262,11 @@
     .roster-card h2 { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .3rem; }
     .voiceprint { width: 6rem; height: 1.1rem; flex: none; color: var(--ink-3); }
     .voiceprint rect { fill: currentColor; }
-    .roster-actions { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
-                      margin-top: .5rem; }
+    /* roster.html pairs .roster-actions with .card-actions; the action-row
+       layout (gap / margin-top / top divider) is owned by .card-actions so the
+       two never fight on source order. .roster-actions carries no competing
+       layout of its own. */
+    .roster-actions { display: flex; flex-wrap: wrap; align-items: center; }
     details.embeddings, details.roster-inactive { margin: .6rem 0; }
     details.embeddings summary, details.roster-inactive summary {
       cursor: pointer; font-size: .9rem; color: var(--ink-2); }
@@ -360,7 +371,7 @@
                    vertical-align: bottom; }
     .sort-control { font-size: .9rem; margin: .5rem 0 1rem; }
     .sort-control a[aria-current="true"] { font-weight: 600; text-decoration: none; }
-    .progress { display: flex; align-items: center; gap: .5rem; min-width: 8rem; }
+    .progress { display: flex; align-items: center; gap: .5rem; }
     .progress-label { font-size: var(--t-xs); color: var(--ink-2); white-space: nowrap; }
     /* Dashboard summary (issue #91). Stat cards above the detail tables + inline
        relative mini-bars for stage timing. Numbers stay visible so a bar is never

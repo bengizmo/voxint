@@ -263,6 +263,10 @@ def test_queue_renders_operator_ergonomics(
     # split, so the old absolute-positioned .progress-fill is retired.
     assert 'class="progress-track" aria-hidden="true"' in body
     assert 'class="progress-fill"' not in body
+    # role="progressbar" makes children presentational, so the accessible name
+    # comes from aria-label alone — pin it so it can't silently drift from the
+    # visible count on a future edit.
+    assert 'aria-label="1 of 2 voices resolved"' in body
     # Responsive + a11y (issue #64): the wide queue table scrolls inside a
     # keyboard-reachable, labelled region, with scoped column headers.
     assert 'class="table-wrap" role="region" aria-label="Review queue" tabindex="0"' in body
