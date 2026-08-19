@@ -8,6 +8,7 @@ its own formatting (HTML vs plain text).
 
 import enum
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -98,6 +99,77 @@ class TranscriptLine:
     correction_trace: dict[str, object] | list[object] | None = None
     corrector_version: int | None = None
     raw_text: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptParagraph:
+    """Consecutive same-speaker lines merged into one reading paragraph.
+
+    The single grouping unit shared by the on-screen read mode and the Markdown
+    export, so the two can never drift on where a paragraph begins or ends.
+    ``text`` is the constituent lines joined with the boundary rule below;
+    ``start_seconds``/``end_seconds`` span the first line's start to the last
+    line's end.
+    """
+
+    speaker: str
+    start_seconds: float
+    end_seconds: float
+    text: str
+
+
+def _join_segment_texts(texts: Sequence[str]) -> str:
+    """Join consecutive segment texts into one paragraph body.
+
+    Embedded newlines inside a segment are preserved. A single ASCII space is
+    inserted at a segment boundary only when neither side already carries
+    whitespace there, so ``"Hello." + "Still here."`` becomes
+    ``"Hello. Still here."`` while a segment that already ends in a newline is
+    not given an extra space. Empty segments contribute nothing (no double
+    spaces).
+    """
+    out = ""
+    for piece in texts:
+        if not piece:
+            continue
+        if out and not out[-1].isspace() and not piece[0].isspace():
+            out += " "
+        out += piece
+    return out
+
+
+def paragraphize_transcript(
+    lines: Sequence[TranscriptLine],
+) -> list[TranscriptParagraph]:
+    """Merge adjacent same-speaker lines into reading paragraphs.
+
+    Grouping is on the already-resolved ``speaker`` (exact equality, never the
+    diarization label), and only for lines that are adjacent in transcript order
+    — a speaker returning after someone else starts a new paragraph, so
+    chronology is preserved. Pure: no DB, no I/O.
+    """
+    paragraphs: list[TranscriptParagraph] = []
+    group: list[TranscriptLine] = []
+
+    def flush() -> None:
+        if not group:
+            return
+        paragraphs.append(
+            TranscriptParagraph(
+                speaker=group[0].speaker,
+                start_seconds=group[0].start_seconds,
+                end_seconds=group[-1].end_seconds,
+                text=_join_segment_texts([ln.text for ln in group]),
+            )
+        )
+
+    for line in lines:
+        if group and line.speaker != group[0].speaker:
+            flush()
+            group = []
+        group.append(line)
+    flush()
+    return paragraphs
 
 
 def parse_transcript_text(raw: str | None) -> TranscriptText:

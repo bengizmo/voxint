@@ -6,7 +6,7 @@ from collections.abc import Iterator
 import pytest
 
 from voxint import __version__
-from voxint.cli import main
+from voxint.cli import build_parser, main
 from voxint.db.models import AppSettings
 
 
@@ -123,6 +123,16 @@ def test_export_rejects_unknown_format() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["export", str(uuid.uuid4()), "--format", "docx"])
     assert exc.value.code == 2
+
+
+def test_export_accepts_markdown_format() -> None:
+    # md joins the shared formatter set (issue #65); argparse must accept it and
+    # carry the timestamps flag (which md honors, like txt).
+    args = build_parser().parse_args(
+        ["export", str(uuid.uuid4()), "--format", "md", "--no-timestamps"]
+    )
+    assert args.format == "md"
+    assert args.timestamps is False
 
 
 def test_list_rejects_unknown_status_before_db(

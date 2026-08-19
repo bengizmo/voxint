@@ -100,6 +100,7 @@ from voxint.adjudication.transcript import (
     TranscriptText,
     attributed_transcript,
     effective_text,
+    paragraphize_transcript,
     parse_transcript_text,
 )
 from voxint.api.auth import require_operator
@@ -298,6 +299,7 @@ from voxint.enrichment.triage import (
 from voxint.export import (
     MEDIA_TYPES,
     TranscriptFormat,
+    format_timespan,
     render_transcript,
     to_rttm,
     transcript_payload,
@@ -3540,6 +3542,8 @@ def _register_routes(app: FastAPI) -> None:
         operator: OperatorDep,
         session: SessionDep,
         text: str | None = None,
+        read: bool = False,
+        timestamps: bool = True,
     ) -> Response:
         run = _run_or_404(session, run_id)
         try:
@@ -3552,6 +3556,41 @@ def _register_routes(app: FastAPI) -> None:
         # for its <audio src>; no new backend route.
         lines = attributed_transcript(session, run_id, text=variant)
         settings: Settings = request.app.state.settings
+        if read:
+            # Read mode (issue #65): a timestamp-optional, shareable reading view
+            # rendered purely server-side from the SAME presentation seam and the
+            # SAME paragraph grouping the Markdown export uses — no island, no
+            # second transcript truth. Grouping and timestamp formatting stay in
+            # Python; the template only lays out the supplied rows. Jinja
+            # autoescape (not the markdown-specific `_md_escape`) makes hostile
+            # transcript text render literally in the HTML view.
+            read_rows = [
+                {
+                    "speaker": para.speaker,
+                    "lines": para.text.split("\n"),
+                    "timespan": (
+                        format_timespan(para.start_seconds, para.end_seconds)
+                        if timestamps
+                        else None
+                    ),
+                }
+                for para in paragraphize_transcript(lines)
+            ]
+            return templates.TemplateResponse(
+                request,
+                "transcript.html",
+                {
+                    "request": request,
+                    "run": run,
+                    "lines": lines,
+                    "read": True,
+                    "read_rows": read_rows,
+                    "read_timestamps": timestamps,
+                    "text": variant,
+                    "variants": list(TranscriptText),
+                    "active_nav": "runs",
+                },
+            )
         # Fail-closed seek gating (issue #55): the island only offers per-line
         # playback when GET /media would truly serve and the timeline is sound.
         capability = playback_capability(session, run, settings, _get_media_gate(request))
@@ -3572,6 +3611,7 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "run": run,
                 "lines": lines,
+                "read": False,
                 "island_props": island_props,
                 "palette": palette,
                 "low_confidence_threshold": settings.review_low_confidence_threshold,
@@ -4693,9 +4733,23 @@ def _register_routes(app: FastAPI) -> None:
         timestamps: bool = True,
     ) -> Response:
         # ?timestamps=false drops the [start end] bracket column for a clean
-        # reading copy (issue #52). TXT is the only format where the flag applies.
+        # reading copy (issue #52). Only txt and md honor the flag.
         return _export_transcript(
             run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps
+        )
+
+    @protected.get("/review/{run_id}/export.md")
+    def export_transcript_md(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+        timestamps: bool = True,
+    ) -> Response:
+        # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
+        # ?timestamps=false drops the per-paragraph time range for a clean copy.
+        return _export_transcript(
+            run_id, session, TranscriptFormat.MARKDOWN, text, timestamps=timestamps
         )
 
     @protected.get("/review/{run_id}/export.srt")

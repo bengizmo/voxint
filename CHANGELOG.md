@@ -5,6 +5,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **On-screen read mode and a Markdown export for finished transcripts (#65).** A
+  new reading view (`/runs/{id}/transcript?read=1`, reachable from the Download
+  transcript menu) renders the transcript as prose: one heading per speaker over a
+  merged paragraph of their words, with a plain-anchor toggle for timestamps and
+  no JavaScript required. A new `.md` export writes the same layout to a file
+  (`## Speaker` headings, one `>` blockquote per contiguous run, per-paragraph
+  time ranges gated by `?timestamps=false`), on both the HTTP route
+  (`/review/{id}/export.md`) and the CLI (`voxint export --format md`). Read mode
+  and the Markdown export share one grouping helper (`paragraphize_transcript`)
+  with the existing presentation seam, so they can never drift from what the other
+  exports show. Markdown output escapes inline specials, raw HTML, and
+  line-leading block markers (headings, lists, thematic breaks), and folds a
+  speaker name to one line, so transcript content cannot forge document structure;
+  read mode renders through Jinja autoescape for the same guarantee in HTML. The
+  plain `.txt` default is unchanged
+  (timestamps stay on); the timestamp-free reading copy is now the prominent first
+  choice in the picker, which also surfaces the reviewed (operator-effective) text
+  variant it previously hid.
+
 ### Changed
 - **Review-console keyboard shortcuts now have one source of truth, and the
   cheat-sheet is easier to find (#51).** The eight review shortcuts used to be

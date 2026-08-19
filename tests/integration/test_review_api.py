@@ -501,11 +501,20 @@ def test_export_menu_surfaces_every_format(
 
     for page in (f"/runs/{run_id}/transcript", f"/review/{run_id}"):
         html = client.get(page).text
-        for ext in ("txt", "srt", "vtt", "json", "rttm"):
+        for ext in ("txt", "md", "srt", "vtt", "json", "rttm"):
             assert f"/review/{run_id}/export.{ext}" in html, f"{ext} missing on {page}"
-        # Both text variants are selectable, and txt offers a timestamp-free copy.
-        assert "text=enhanced" in html and "text=raw" in html
+        # Every non-RTTM format offers all THREE variants the help text promises:
+        # reviewed (corrected, the operator-effective default the picker used to
+        # hide), enhanced, and raw (issue #65). Asserted per-format so dropping one
+        # variant from a single format can never hide behind another's link.
+        for ext in ("txt", "md", "srt", "vtt", "json"):
+            for variant in ("corrected", "enhanced", "raw"):
+                assert (
+                    f"/review/{run_id}/export.{ext}?text={variant}" in html
+                ), f"{ext} missing variant {variant} on {page}"
+        # A timestamp-free reading copy and an on-screen read-mode entry.
         assert "timestamps=false" in html
+        assert f"/runs/{run_id}/transcript?read=1" in html
 
 
 def test_decision_correction_and_stale_token(
