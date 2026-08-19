@@ -540,6 +540,39 @@ v0.16.0 (first release with a Gate E suite). Both lanes PASS at `d91eadc`:
 The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
 run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
 
+#### Verdict: v0.18.0 — Gate A/R/M carry from v0.17.0; Gate E run fresh (2026-08-18)
+
+Cut at `20f3b42` — the #67 optional bundled-LLM release (`voxint-llm`,
+Qwen3-4B-Instruct-2507 Q5_K_M fetched from Hugging Face at a pinned revision and
+baked into the image), plus the #79/#80/#81 deterministic-corrector work.
+`git diff v0.17.0..20f3b42` over the numerics scope (`services/whisper`,
+`services/pyannote`, `services/titanet`, `tests/parity/`, their `Dockerfile*` +
+`provenance.json`) is **empty**, so **Gate A (CUDA byte-parity), Gate R (ROCm /
+RX 9060 XT), Gate M (Metal tier) all carry their v0.17.0 verdicts** — no
+maintainer GPU re-run. The only new `services/` image is `voxint-llm`, which ships
+a **serving profile, not a numerics contract**, and therefore has **no parity gate**
+(CI's `publish-llm` is build-only). CI's parity + smoke jobs still run
+unconditionally on the release digests.
+
+**Gate E (whole-pipeline E2E) does NOT carry** (the #66/#67 enrichment + bundled-LLM
+arc touched `enrichment/db/api/frontend`) and was **run fresh** at `20f3b42`. Both
+lanes PASS:
+- **Pipeline lane** (`tests/e2e/test_real_pipeline.py`, real ROCm whisper `0.16.0-rocm`
+  + pyannote/titanet `0.16.0-cpu` on the maintainer's AMD box, RX 9060 XT; isolated
+  worktree + disposable DB to dodge a concurrent session): **`2 passed in 132.62s`** —
+  COMPLETED runs, all six stages, real `titanet-large-v1` embeddings, no restarts.
+- **Browser review lane** (#53/#57/#58 islands via `tools/e2e_browser_lifecycle.py` +
+  Playwright on maintainer hardware): all island behaviours asserted (2 low-confidence
+  chips at indexes 1 & 3; verify-and-advance; replay teardown-guard — audio survives the
+  verify re-render; skip; click-to-edit; unsaved-edit discard warning; edit+save;
+  keymap suppression on a focused `<select>`; and the #57 waveform strip — single peaks
+  fetch, region click → selection+seek, keymap↔strip playhead sync). Final network sweep:
+  exactly 2 `/verify`, 1 `/text`, 1 `/peaks`, no stray writes. `RECONCILE PASS` against
+  `segment_review_states`.
+
+The optional real-LLM enrichment sub-lane (`test_enrich_assets_real_llm.py`) was not
+run (no maintainer endpoint configured; enrichment covered mocked in unit/contracts).
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
