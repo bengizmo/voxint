@@ -519,6 +519,18 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   but `/healthz`, fragments and media included; operator identity comes only
   from credentials. Startup refuses to bind off-loopback with the default
   password.
+- **Response headers**: one shared middleware seam (`_apply_security_headers`)
+  stamps a deliberately minimal set on every response, and re-applies it on an
+  unhandled 500. `Referrer-Policy: no-referrer` on every response (the review
+  token rides in the URL, so no navigation or subresource may leak it in a
+  `Referer`); `Cache-Control: no-store` on every `/review` response
+  (token-bearing pages and redirects are never cached); `X-Content-Type-Options:
+  nosniff` on every response (#103), so the browser honours the declared
+  `Content-Type` instead of sniffing operator-controlled transcript exports or
+  first-party assets into HTML. `X-Frame-Options` and a content-security policy
+  are intentionally left out: neither is proportionate for a loopback,
+  Basic-authed, single-operator console, and a real CSP for the
+  htmx-plus-islands page would put the JavaScript-off fallback at risk.
 - **Media**: audio streams through a gate that requires the file to be
   DB-referenced, to resolve inside `MEDIA_ROOT` (symlink escapes rejected),
   and to carry a decodable audio stream per ffprobe (bounded subprocess,
