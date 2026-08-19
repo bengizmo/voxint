@@ -142,6 +142,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     mutable inputs (base images, the `pgvector` service image, the CUDA weight
     bake) are out of scope for this change.
 
+### Fixed
+- **Neutral typed buttons now get their intended surface background (#100).** The
+  Tailwind Preflight reset for `[type='submit'|'button'|'reset']` outranks the
+  console's bare-button rule, so a neutral `<button type="submit">` rendered
+  transparent-backed. Invisible while every such button sat on a same-coloured
+  card, it would have shown through on the page canvas or a tinted notice. A
+  same-specificity tie-break in the console stylesheet re-declares the surface
+  background for typed buttons (browser-verified in both themes).
+
 ## [0.19.0] - 2026-08-19
 
 ### Added

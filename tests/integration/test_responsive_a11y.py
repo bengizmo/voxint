@@ -78,6 +78,12 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     # New chrome transitions are gated behind prefers-reduced-motion (issue #91
     # added button hover transitions; #64 forbids unconditional motion).
     assert re.search(r"prefers-reduced-motion:\s*reduce[^}]*transition:\s*none", body)
+    # #100: Preflight resets `[type=…] { background-color: transparent }` at
+    # (0,1,0), which beats the (0,0,1) bare-button rule on typed buttons — the
+    # tie-break must re-declare the surface background at the same specificity.
+    assert re.search(
+        r"\[type='submit'\][^{]*\{[^}]*background-color:\s*var\(--surface\)", body
+    )
 
 
 def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:

@@ -170,14 +170,14 @@
        keeps specificity at exactly `button` (0,0,1): high enough to beat
        Tailwind Preflight's bare `button { ... }` reset (also 0,0,1) as the later
        source, but low enough that any island utility (w-full, text-sm, hover:*)
-       at 0,1,0 still wins. Caveat (verified in the #93 review): Preflight ALSO
-       resets `[type='button'|'reset'|'submit'] { background-color: transparent }`
-       at (0,1,0), which defeats this rule's background on typed buttons — so a
-       neutral `<button type="submit">` is transparent-backed, not --surface.
-       Harmless today: every neutral button sits on a --surface card
-       (transparent == surface); a placement on --paper or a tinted notice would
-       show through. The eventual fix is a (0,1,0) tie-break re-declaring the
-       background for `[type=…]`, deferred to a focused follow-up.
+       at 0,1,0 still wins. Preflight ALSO resets
+       `[type='button'|'reset'|'submit'] { background-color: transparent }` at
+       (0,1,0), which would defeat this rule's background on typed buttons —
+       the `[type=…]` tie-break rule below (#100) re-declares it at the same
+       (0,1,0) as the later source. That tie also beats a same-specificity
+       island `bg-*` utility on a TYPED button, verified safe: no island
+       renders a typed button with a `bg-*` utility (re-check before adding
+       one, or drop the type attribute there).
        button.primary/.secondary at (0,1,1) are unaffected. The word-chip
        (.tp-split-word) AND correction chip (.tp-corrected-chip) opt out entirely:
        the :hover rule below is 0,1,1, which would otherwise defeat a chip's own
@@ -190,6 +190,12 @@
     button:not(:where(.tp-split-word, .tp-corrected-chip)):hover { background: var(--surface-2);
       border-color: var(--line-strong); }
     button:not(:where(.tp-split-word, .tp-corrected-chip)):disabled { opacity: .55; cursor: not-allowed; }
+    /* #100: neutral TYPED buttons — match Preflight's `[type=…]` reset at
+       (0,1,0) as the later source, or they render transparent-backed. */
+    [type='submit']:not(:where(.tp-split-word, .tp-corrected-chip)),
+    [type='button']:not(:where(.tp-split-word, .tp-corrected-chip)),
+    [type='reset']:not(:where(.tp-split-word, .tp-corrected-chip)) {
+      background-color: var(--surface); }
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
