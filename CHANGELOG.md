@@ -63,6 +63,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     names, tags, description) is retained. The export envelope `schema_version` is
     bumped **1 → 2**. (`raw` was already an allowlisted subset with no signed URLs,
     so this aligns URL/identity surface, not a secret leak.)
+- **CI supply-chain hardening (audit findings F1, F2, F4).** Hardens the GitHub
+  Actions release pipeline that builds and publishes the public images:
+  - **F1, pin every action to a commit SHA.** All third-party actions across
+    `ci.yml`, `release.yml`, and `metal-lane.yml` now reference a full 40-character
+    commit SHA (with a `# vX.Y.Z` comment) instead of a mutable major tag, so a
+    moved tag can no longer swap an action's code into a `packages: write` job. A
+    new `.github/dependabot.yml` proposes grouped action updates once a month to
+    keep the pins current.
+  - **F2, least-privilege token.** `ci.yml` and `metal-lane.yml` declare a
+    top-level `permissions: contents: read`, dropping the over-broad default
+    token; `release.yml` already scoped its jobs per job.
+  - **F4, verify the gitleaks download.** The secrets-scan job downloads the
+    gitleaks tarball to a file and checks its sha256 against a repo-held digest
+    before extracting, replacing the previous unverified `curl | tar`.
+  - A contract test (`tests/contracts/test_workflow_supply_chain.py`) pins all
+    three invariants so a later edit cannot quietly undo them. This scopes the
+    GitHub lane only: the Forgejo Actions mirror ignores `permissions`, and other
+    mutable inputs (base images, the `pgvector` service image, the CUDA weight
+    bake) are out of scope for this change.
 - **Review-journey restyle (#92, epic #89)**: the workbench and review-transcript
   screens are styled as one continuous "Reading Room" flow. The workbench gains a
   **review header card** (run identity, a claim-state indicator, and the journey's
