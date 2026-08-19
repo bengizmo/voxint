@@ -95,8 +95,9 @@ RAW_ALLOWLIST: tuple[str, ...] = (
 # RAW_ALLOWLIST keys whose value is a URL: cleaned with the structural URL
 # policy (_clean_http_url) instead of the prose cleaner, so `raw` can never
 # hold a credential-bearing or scheme-smuggled URL the normalized columns
-# would refuse.
-_RAW_URL_KEYS = frozenset({"webpage_url"})
+# would refuse. Public because the JSON export reduces these same keys to
+# host-only (finding D4) and must stay aligned with what is a URL in ``raw``.
+RAW_URL_KEYS = frozenset({"webpage_url"})
 
 
 class SourceMetadataError(Exception):
@@ -263,7 +264,7 @@ def extract(
             # the normalized canonical_url correctly refuses.
             cleaned = (
                 _clean_http_url(value, extra_secrets)
-                if key in _RAW_URL_KEYS
+                if key in RAW_URL_KEYS
                 else _clean_text(
                     value, max_chars=MAX_TEXT_CHARS, extra_secrets=extra_secrets
                 )

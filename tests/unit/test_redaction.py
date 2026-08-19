@@ -303,6 +303,15 @@ def test_provenance_host_none_input_returns_none() -> None:
     assert provenance_host(None) is None
 
 
+def test_provenance_host_non_str_fails_closed_without_raising() -> None:
+    # A numeric/bool value can slip into a persisted `raw` URL key (the extractor
+    # stores scalars before URL validation); the run export reduces those keys
+    # through provenance_host, which must fail-closed rather than raise (finding
+    # D4 review fix — otherwise export.json 500s on a dirty snapshot).
+    for bad in (123, 4.5, True, ["https://example.com"], {"x": 1}):
+        assert provenance_host(bad) is None  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "garbage",
     [

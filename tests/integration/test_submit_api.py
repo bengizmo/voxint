@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 import wave
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -266,6 +267,54 @@ def test_oversized_content_length_rejected_before_auth_and_body(
         follow_redirects=False,
     )
     assert resp.status_code == 413
+    with session_factory() as session:
+        assert session.execute(select(PipelineRun)).first() is None
+
+
+def test_chunked_oversized_upload_rejected_and_no_run(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    published: list[uuid.UUID],
+) -> None:
+    # Finding D3: a body with NO Content-Length (streamed → chunked transfer) that
+    # exceeds the cap is bounded by the streaming receive-counter — it can no
+    # longer be fully spooled first. 413, no run, nothing published. Sending a
+    # generator body makes httpx omit Content-Length, so the fast path cannot fire
+    # and the streaming cap is what refuses it.
+    client = make_client(session_factory, media_root, max_bytes=64)
+    boundary = "----voxintD3boundary"
+    threshold = 64 + _UPLOAD_ENVELOPE_ALLOWANCE
+    head = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="csrf_token"\r\n\r\n'
+        f"{mint_csrf_token(_CSRF_KEY, CSRF_SUBMIT)}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="submission_id"\r\n\r\n'
+        f"{uuid.uuid4().hex}\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="big.wav"\r\n'
+        "Content-Type: audio/wav\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+
+    def body_stream() -> Iterator[bytes]:
+        yield head
+        # Emit the oversized file part in chunks so the transfer stays chunked.
+        remaining = threshold + 4096
+        while remaining > 0:
+            chunk = b"x" * min(1024, remaining)
+            remaining -= len(chunk)
+            yield chunk
+        yield tail
+
+    resp = client.post(
+        "/submit",
+        content=body_stream(),
+        headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 413
+    assert published == []
     with session_factory() as session:
         assert session.execute(select(PipelineRun)).first() is None
 

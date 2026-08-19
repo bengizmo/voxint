@@ -5,6 +5,33 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Security
+
+- **Web-console hardening (audit findings D1–D4).** A calibrated pass over the
+  review console for the single-operator, loopback threat model — no database
+  migration, no change to how the islands talk to the server:
+  - **D1 — contain the claim token in the URL.** The per-claim review token rides
+    in `?token=`; a new response-header layer stamps `Referrer-Policy: no-referrer`
+    on every response (so a followed link or subresource never leaks it in a
+    `Referer` header) and `Cache-Control: no-store` on every `/review` response (so
+    a token-bearing page or redirect is never cached). This is a *mitigation* with
+    a consciously accepted residual (browser history, screenshots, access logs),
+    not token removal — proportionate for a loopback, Basic-authed console.
+  - **D2 — CSRF tokens now expire.** The stateless, action-bound CSRF token gains a
+    signed mint timestamp and a fixed 24 h TTL (plus a small clock-skew allowance),
+    so a captured token is no longer valid indefinitely. A form left open past the
+    TTL simply re-mints on refresh.
+  - **D3 — authoritative request-body cap.** The size middleware now counts body
+    bytes as they stream, so a chunked request with no (or an understated)
+    `Content-Length` is bounded at the cap and refused with 413 instead of being
+    fully spooled first — closing the residual the `Content-Length`-only check left.
+  - **D4 — run export URL fields reduced to host-only.** `export.json` now runs the
+    uploader / channel / canonical / `raw.webpage_url` fields through the same
+    host-only provenance policy the console UI uses; descriptive metadata (title,
+    names, tags, description) is retained. The export envelope `schema_version` is
+    bumped **1 → 2**. (`raw` was already an allowlisted subset with no signed URLs,
+    so this aligns URL/identity surface, not a secret leak.)
+
 ## [0.19.0] - 2026-08-19
 
 ### Added

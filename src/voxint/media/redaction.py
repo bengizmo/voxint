@@ -187,7 +187,10 @@ def provenance_host(source_url: str | None) -> str | None:
     ``validate_ingest_url`` (absolute http/https), so in practice only ``None``
     is hit; the structural fail-closed guards a future non-validated caller.
     """
-    if source_url is None:
+    if not isinstance(source_url, str):
+        # Fail-closed on None or any non-str (e.g. a numeric value that slipped
+        # into a persisted ``raw`` URL key): never raise from a redaction helper,
+        # and never leak a non-host value. Callers render nothing for None.
         return None
     parsed = _split_authority(source_url)
     if parsed is None:

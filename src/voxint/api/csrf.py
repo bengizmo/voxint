@@ -6,12 +6,13 @@ POST, rather than a server-stored synchronizer token or a cookie. HTTP Basic
 credentials are cached and auto-attached by the browser to cross-site requests,
 so CSRF is a real (if low-severity, on single-operator localhost) vector.
 
-A token is ``nonce.HMAC_SHA256(secret, "action.nonce")``: unforgeable without the
-app's ``csrf_secret``, and **bound to a specific action** so a token minted for
-one form cannot be replayed against another route (a cheap, useful property — each
-mutation route mints and verifies under its own action string). The
-attacker cannot read a same-origin rendered token, so they cannot supply a valid
-one; a missing/malformed/mis-signed token is refused *before* any DB write.
+A token is ``nonce.ts.HMAC_SHA256(secret, "action.nonce.ts")``: unforgeable
+without the app's ``csrf_secret``, **bound to a specific action** so a token
+minted for one form cannot be replayed against another route (a cheap, useful
+property — each mutation route mints and verifies under its own action string),
+and **stamped with a mint time** so it expires (finding D2). The attacker cannot
+read a same-origin rendered token, so they cannot supply a valid one; a
+missing/malformed/mis-signed/expired token is refused *before* any DB write.
 
 The secret is independent of ``voxint_password`` on purpose: a human-memorable
 Basic password would make every rendered token a fast offline password-guessing
@@ -19,19 +20,36 @@ oracle. ``create_app`` uses ``Settings.csrf_secret`` when set (persistent, share
 by every worker) and otherwise mints a random per-process one (zero-config, but
 open forms break on restart / across workers).
 
+Expiry (finding D2): the signed ``ts`` bounds a leaked token's usefulness to
+``_CSRF_TTL_SECONDS`` after mint (24h — generous for a console form, so an
+operator who leaves a page open still submits) rather than "forever until the
+secret rotates". A small future-skew allowance tolerates minor clock jitter. This
+is *not* single-use — replay inside the TTL is still possible — but it removes the
+unbounded-lifetime window. The ``ts`` is signed, so it cannot be back-dated. A
+legacy two-part token (minted before this change) has the wrong shape and is
+refused with a harmless 403 → the operator refreshes to mint a fresh one.
+
 Not defended here: this is not an XSS mitigation (script on the page can read the
-token), and a leaked token stays valid until the secret rotates (fresh nonces do
-not make a token single-use — acceptable for this console). Verification is
-constant-time (``hmac.compare_digest``).
+token). Verification is constant-time (``hmac.compare_digest``).
 """
 
 import hmac
 import secrets
+import time
 from hashlib import sha256
 
-# token_urlsafe / hexdigest never emit ".", so it cleanly separates the two parts.
+# token_urlsafe (base64url) / decimal ts / hexdigest never emit ".", so it cleanly
+# separates the three parts.
 _SEP = "."
 _NONCE_BYTES = 16
+# A minted token verifies for 24h after its stamped mint time (finding D2). Long
+# enough that an operator who leaves a form open still submits; short enough that a
+# captured token is not usable indefinitely. Fixed, not a Settings knob — no
+# operator needs to tune this, and a knob would be bloat.
+_CSRF_TTL_SECONDS = 24 * 60 * 60
+# Tolerate a token whose ts is a little ahead of our clock (minor skew between
+# mint and verify), but reject one implausibly far in the future.
+_CSRF_FUTURE_SKEW_SECONDS = 60
 
 # Stable per-route action strings. A form mints its token under one of these and
 # the matching POST route verifies under the same one, so a token is not
@@ -85,24 +103,43 @@ CSRF_RUN_UNARCHIVE = "run-unarchive"
 CSRF_RUN_MEDIA_DELETE = "run-media-delete"
 
 
-def _sign(secret: str, action: str, nonce: str) -> str:
-    message = f"{action}{_SEP}{nonce}".encode()
+def _sign(secret: str, action: str, nonce: str, ts: int) -> str:
+    message = f"{action}{_SEP}{nonce}{_SEP}{ts}".encode()
     return hmac.new(secret.encode(), message, sha256).hexdigest()
 
 
-def mint_csrf_token(secret: str, action: str) -> str:
-    """Mint a fresh CSRF token binding a random nonce to ``action``."""
+def mint_csrf_token(secret: str, action: str, *, now: float | None = None) -> str:
+    """Mint a fresh CSRF token binding a random nonce and the mint time to
+    ``action``. ``now`` is injectable for tests; production uses wall-clock."""
     nonce = secrets.token_urlsafe(_NONCE_BYTES)
-    return f"{nonce}{_SEP}{_sign(secret, action, nonce)}"
+    ts = int(time.time() if now is None else now)
+    return f"{nonce}{_SEP}{ts}{_SEP}{_sign(secret, action, nonce, ts)}"
 
 
-def verify_csrf_token(secret: str, action: str, token: str | None) -> bool:
-    """Return True iff ``token`` is a well-formed, correctly-signed token for
-    ``action``. False for None/empty/malformed/mis-signed — the caller maps that
-    to a 403 before any state change. Constant-time on the signature compare."""
+def verify_csrf_token(
+    secret: str, action: str, token: str | None, *, now: float | None = None
+) -> bool:
+    """Return True iff ``token`` is a well-formed, correctly-signed, unexpired token
+    for ``action``. False for None/empty/malformed/mis-signed/expired/future-dated —
+    the caller maps that to a 403 before any state change. A legacy two-part token
+    is malformed here and refused. Constant-time on the signature compare; the
+    ts/expiry checks run only on an already-authenticated signature, so they leak no
+    timing about the secret. ``now`` is injectable for tests."""
     if not token:
         return False
-    nonce, sep, mac = token.partition(_SEP)
-    if not sep or not nonce or not mac:
+    parts = token.split(_SEP)
+    if len(parts) != 3:
         return False
-    return hmac.compare_digest(mac, _sign(secret, action, nonce))
+    nonce, ts_raw, mac = parts
+    if not nonce or not ts_raw or not mac:
+        return False
+    try:
+        ts = int(ts_raw)
+    except ValueError:
+        return False
+    if not hmac.compare_digest(mac, _sign(secret, action, nonce, ts)):
+        return False
+    current = time.time() if now is None else now
+    # In-window: not expired (older than the TTL) and not implausibly future-dated
+    # beyond the skew allowance (a forged/replayed clock).
+    return current - _CSRF_TTL_SECONDS <= ts <= current + _CSRF_FUTURE_SKEW_SECONDS
