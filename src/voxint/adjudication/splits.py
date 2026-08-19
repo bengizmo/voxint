@@ -132,8 +132,12 @@ _EPS = 1e-6
 def trace_has_entries(trace: object) -> bool:
     """True iff ``correction_trace`` is the envelope object with a non-empty
     ``entries`` list — i.e. a domain-pack rule actually fired (#82). The default
-    ``[]`` and a pure-LLM envelope (``entries: []``) are both falsy here."""
-    return isinstance(trace, dict) and bool(trace.get("entries"))
+    ``[]`` and a pure-LLM envelope (``entries: []``) are both falsy here. A
+    non-list ``entries`` (never written by the app) is also treated as falsy."""
+    if not isinstance(trace, dict):
+        return False
+    entries = trace.get("entries")
+    return isinstance(entries, list) and len(entries) > 0
 
 
 def splittable_words(seg: TranscriptSegment) -> list[_Word] | None:
@@ -243,7 +247,8 @@ def record_split(
     if count is None:
         raise UnsplittableError(
             "segment cannot be split at a word boundary "
-            "(no aligned word timings, or its text was enhanced)"
+            "(no aligned word timings, its text was enhanced, or a "
+            "domain-pack correction applied)"
         )
     if not 0 < word_index < count:
         raise UnsplittableError(

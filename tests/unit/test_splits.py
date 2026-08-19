@@ -196,6 +196,10 @@ def test_empty_or_entryless_trace_does_not_block_split() -> None:
     # is a fired pack correction, so neither blocks a split on its own.
     assert trace_has_entries([]) is False
     assert trace_has_entries(_envelope(input_base="llm", entries=[])) is False
+    # A non-list `entries` is never written by the app, but harden: a truthy
+    # non-list value must NOT read as "a rule fired".
+    assert trace_has_entries({"entries": {"a": 1}}) is False
+    assert trace_has_entries({"entries": "bogus"}) is False
     ok_default = _seg(raw_text=" Hello world", words=_HELLO, correction_trace=[])
     ok_entryless = _seg(
         raw_text=" Hello world",

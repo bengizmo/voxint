@@ -87,6 +87,12 @@ def _compose_correction(
     Enforcement is frozen ID-set (a matched-raw rule applies to all its
     occurrences in the LLM output); ``input_base="llm"`` marks those spans as
     LLM-coordinate, never evidence.
+
+    Both passes derive their growth ceiling from ``raw_text``
+    (:func:`enhanced_size_ceiling`), NOT from the already-expanded LLM output:
+    the enforcement bound must stay tied to the authoritative raw length so a
+    corrected segment can never outgrow the raw→enhanced envelope. Deriving it
+    from ``enhanced_text`` would compound the two bounds (~``16*len(raw)``).
     """
     raw_fire_ids = {entry.id for entry in raw_result.trace}
     if enhanced_text is None:
@@ -96,7 +102,7 @@ def _compose_correction(
         enforced = apply_corrections(
             enhanced_text,
             enforcement_rules,
-            max_output_chars=enhanced_size_ceiling(enhanced_text),
+            max_output_chars=enhanced_size_ceiling(raw_text),
         )
         final, base, trace = enforced.text, "llm", enforced.trace
     return _Composition(
@@ -165,6 +171,10 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
             rules,
         )
         if composition.changed:
+            # Pure-LLM enhancement (engine ran, no pack rule fired) persists here
+            # too: entries=[], input_base="llm", corrector_version=1 (decision B).
+            # Split-eligibility then keys off trace_has_entries (falsy for []) plus
+            # the enhanced-text strip check, NOT the mere presence of a trace.
             segment.enhanced_text = composition.final_text
             segment.correction_trace = {
                 "version": CORRECTOR_VERSION,

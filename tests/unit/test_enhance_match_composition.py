@@ -114,24 +114,48 @@ def test_growth_rejected_on_raw_base_persists_nothing() -> None:
 
 
 def test_growth_rejected_on_llm_base_enforces_nothing() -> None:
-    # The rule fires on raw (so it is in the enforcement set), but re-applying it
-    # to a shorter LLM output would exceed THAT text's ceiling, so the enforcement
-    # pass is rejected whole: the oversized replacement never lands and no entry is
-    # fabricated. ``changed`` still reflects the LLM's own edit (enhanced != raw).
+    # BOTH passes bound growth by enhanced_size_ceiling(raw_text), so the
+    # enforcement ceiling is raw-derived, never enhanced-derived (else the two
+    # bounds compound to ~16*len(raw)). The rule fires once on raw (in the
+    # enforcement set), but the LLM output repeats the term, so re-applying the
+    # oversized replacement to every occurrence blows the raw-derived ceiling and
+    # the enforcement pass is rejected whole: nothing lands, no entry is fabricated.
+    # ``changed`` still reflects the LLM's own edit (enhanced != raw).
     rules = parse_corrections(
-        [{"id": "g", "match": "zz", "replace": "Q" * 209, "whole_word": True}]
+        [{"id": "g", "match": "zz", "replace": "Q" * 105, "whole_word": True}]
     )
-    raw = "zz "  # ceiling 212; projected 210 -> fires, id in raw-fire set
-    enhanced = "zz"  # ceiling 208; projected 209 -> enforcement rejected
+    raw = "zz"  # ceiling 4*2+200=208; raw projected 105 <= 208 -> fires, id in set
+    enhanced = "zz zz zz"  # 3 occ; enforcement projected 8+3*103=317 > 208 -> rejected
     raw_result = apply_corrections(raw, rules, max_output_chars=enhanced_size_ceiling(raw))
     assert {entry.id for entry in raw_result.trace} == {"g"}
 
     composition = _compose_correction(raw, raw_result, enhanced, rules)
-    assert composition.final_text == "zz"  # enforcement rejected -> LLM text intact
+    assert composition.final_text == "zz zz zz"  # enforcement rejected -> LLM text intact
     assert composition.input_base == "llm"
     assert composition.entries == ()
-    assert ("Q" * 209) not in composition.final_text
-    assert composition.changed is True  # enhanced ("zz") differs from raw ("zz ")
+    assert ("Q" * 105) not in composition.final_text
+    assert composition.changed is True  # enhanced ("zz zz zz") differs from raw ("zz")
+
+
+def test_enforcement_ceiling_is_raw_derived_not_enhanced_derived() -> None:
+    # Regression pinning the fix: an LLM output sitting EXACTLY at the raw-derived
+    # ceiling (4*len(raw)+200) leaves no headroom, so any growing correction is
+    # rejected. Were the ceiling derived from the enhanced text instead, this
+    # replacement would fit and wrongly land — the compounding bound the fix closes.
+    rules = parse_corrections(
+        [{"id": "g", "match": "zz", "replace": "Q" * 10, "whole_word": True}]
+    )
+    raw = "zz"  # raw-derived ceiling = 4*2+200 = 208
+    enhanced = "zz " + "x" * 205  # length exactly 208; one 'zz' occurrence
+    assert len(enhanced) == enhanced_size_ceiling(raw)
+    raw_result = apply_corrections(raw, rules, max_output_chars=enhanced_size_ceiling(raw))
+    assert {entry.id for entry in raw_result.trace} == {"g"}
+
+    composition = _compose_correction(raw, raw_result, enhanced, rules)
+    assert composition.final_text == enhanced  # growth rejected -> LLM text intact
+    assert composition.input_base == "llm"
+    assert composition.entries == ()
+    assert composition.changed is True
 
 
 # --------------------------------------------------------------------------- #
