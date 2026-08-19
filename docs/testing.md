@@ -257,6 +257,14 @@ export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:54
 VOXINT_E2E=1 uv run --extra dev pytest tests/e2e -q
 ```
 
+> ⚠ The browser lane and this pytest lane default to the **same** disposable
+> database name (`voxint_e2e`), and the browser lane's teardown (or the manual
+> cleanup below) can drop it. The pytest lane expects the database to already
+> exist and fails with "database does not exist" rather than creating it. If
+> the browser lane ran first with `--drop-db`, recreate the database and its
+> `vector` extension before this lane (`CREATE DATABASE voxint_e2e;` then
+> `CREATE EXTENSION vector;` in it), or run the pytest lane first.
+
 To include the real-LLM lane, also set the enrichment LLM env (endpoint URL,
 model alias, and key live in your own environment, never in the repo):
 

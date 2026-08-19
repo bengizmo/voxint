@@ -13,6 +13,7 @@ the image workflow only runs on GitHub (`release.yml` is guarded by
 | `ghcr.io/bengizmo/voxint-{whisper,pyannote,titanet}:X.Y.Z` (CUDA, amd64) | GHCR | `release.yml` `publish-images` matrix |
 | `ghcr.io/bengizmo/voxint-{whisper,pyannote,titanet}:X.Y.Z-cpu` (multi-arch amd64+arm64) | GHCR | `release.yml` `build-multiarch` → `merge-multiarch` |
 | `ghcr.io/bengizmo/voxint-whisper:X.Y.Z-rocm` (AMD GPU, amd64, build-only in CI; see Gate R) | GHCR | `release.yml` `publish-whisper-rocm` |
+| `ghcr.io/bengizmo/voxint-llm:X.Y.Z` (optional bundled LLM, amd64, build-only; issue #67) | GHCR | `release.yml` `publish-llm` |
 | `voxint X.Y.Z` sdist + wheel | PyPI | manual `uv build` + `uv publish` (not in CI) |
 | Release notes | GitHub Releases | manual `gh release create` |
 
@@ -111,6 +112,19 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   `tools/generate_parity_references.py` flow on an NVIDIA box against the new tag
   before releasing (Gate A, the NVIDIA regression gate). Never tag the CUDA
   titanet image without a green Gate A.
+
+  **What a Gate A pass looks like.** Do not expect a regeneration to leave
+  `git diff` clean against the committed references: each reference file embeds
+  the run's date, tag, and the live `/healthz` identity, and that identity has
+  grown fields since the committed references were generated, so metadata
+  always differs; float tails can also differ across GPU models. The pass
+  criteria are the *measurements*: both transcript variants and the diarize
+  response byte-identical to the committed references, and every embedding
+  vector within cosine 0.999 of its committed counterpart. Discard the
+  regenerated files afterwards; the committed references are only replaced by
+  a deliberate re-export (new checkpoint or export pins), never by a routine
+  Gate A run. Record the measured results in the release's verdict block in
+  [`gpu-contracts.md`](gpu-contracts.md).
 - **`smoke-cpu`** runs before any tag exists, per arch, against the
   untagged digest images (`image@sha256:…` is pullable without tags), so a
   failed smoke leaves nothing public. `tools/smoke_cpu_services.py` asserts
@@ -229,7 +243,7 @@ The maintainer-run gates re-verify the *model services*, so they re-run only
 when what they measure could have changed. Before tagging, check
 `git diff vPREV..main --stat -- services/`:
 
-- **Empty** → Gates A (CUDA reference regeneration) and R (ROCm smoke) carry
+- **Empty** → Gates A (the CUDA regression re-measure) and R (ROCm smoke) carry
   over from the previous release's evidence; the new images are rebuilds of the
   same numerics (CI's parity + smoke jobs still run unconditionally and prove the
   rebuild). Gate E (whole-pipeline E2E) carries over under its own **pipeline-aware**
@@ -281,7 +295,9 @@ model assets) voids it for the gate it feeds.
    (`gh api -X POST repos/…/actions/runs/<id>/rerun-failed-jobs`; this `gh`
    version's `run rerun` has no `--failed` flag).
 5. **Verify anonymous pull** of all published images, with no login: app
-   (both arches), three CUDA, three `-cpu` (both arches), whisper `-rocm`.
+   (both arches), three CUDA, three `-cpu` (both arches), whisper `-rocm`,
+   and `voxint-llm` (nine images total; `publish-llm` runs on every version
+   tag, so the bundled-LLM image is part of every release's checklist).
    The packages inherit public visibility from the repo via the
    `org.opencontainers.image.source` label, but confirm it: fetch each
    manifest with an anonymous GHCR token and expect 200. Optionally
@@ -307,8 +323,12 @@ model assets) voids it for the gate it feeds.
    A wheel that ships only `static/app/.gitkeep` cannot hydrate the review-console
    islands from a `pip install`; verify the manifest is in the wheel before
    publishing. Then check `https://pypi.org/pypi/voxint/json` reports the new
-   version. (The token also lives in `~/.pypirc` `[pypi]`; export it as
-   `UV_PUBLISH_TOKEN` if not passing `--token`.)
+   version **and lists both files** under the release. That JSON check and the
+   `uv publish` exit code are the only honest success signals: `uv publish`
+   prints `Uploaded <file>` progress lines even when the server then rejects
+   the upload (observed with a 403 on a bad token), so never judge a publish
+   by its log output. (The token also lives in `~/.pypirc` `[pypi]`; export it
+   as `UV_PUBLISH_TOKEN` if not passing `--token`.)
 7. **GitHub Release**: `gh release create vX.Y.Z --title "Voxint vX.Y.Z" --notes …`
    and update `CHANGELOG.md` in the next commit if it wasn't part of the
    release commit.

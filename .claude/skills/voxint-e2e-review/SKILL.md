@@ -227,6 +227,13 @@ Always tear down, even on failure (kills by **port**, never
 uv run python tools/e2e_browser_lifecycle.py teardown --port 8099   # add --drop-db --database-url "$DSN" to drop the DB
 ```
 
+⚠ `--drop-db` removes the same `voxint_e2e` database the pytest pipeline lane
+(`tests/e2e/`) defaults to, and that lane expects the database to exist rather
+than creating it. If the pipeline lane still has to run (a Gate E sequence),
+either skip `--drop-db` here or recreate the database plus its `vector`
+extension before the pytest lane. See
+[`docs/testing.md`](../../../docs/testing.md#automated-e2e-testse2e).
+
 Confirm afterward: port 8099 freed, `src/voxint/api/static/app/` holds only
 `.gitkeep`, and `git status` is clean (no staged build artifacts, no `media-e2e`).
 
