@@ -1350,6 +1350,66 @@ class TestCpuImageProvenance:
         ), f"unexpected additions in requirements.metal.txt: {sorted(extras)}"
 
 
+class TestCudaTitanetImageProvenance:
+    """The CUDA titanet image downloads the TitaNet-Large .nemo at build time
+    (from_pretrained, no revision arg), so a build-time sha256 gate is the only
+    thing standing between a re-published upstream checkpoint and silent
+    embedding-space drift on the one weights lane CI cannot parity-gate (no GPU
+    runner). Pin the sha ARG to provenance, keep the gate wired, and bind the
+    runtime load offline so it cannot re-fetch a different snapshot at startup."""
+
+    @staticmethod
+    def _dockerfile() -> str:
+        from tests.contracts.conftest import REPO_ROOT
+
+        # The CUDA Dockerfile (not Dockerfile.cpu) is the one that bakes .nemo.
+        return (REPO_ROOT / "services" / "titanet" / "Dockerfile").read_text()
+
+    def test_dockerfile_nemo_sha_matches_provenance(self) -> None:
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        # Anchor to an active ARG instruction so a commented-out line can't pass.
+        match = re.search(
+            r"(?m)^ARG TITANET_NEMO_SHA256=([0-9a-f]{64})$", self._dockerfile()
+        )
+        assert match is not None, (
+            "services/titanet/Dockerfile lost its active TITANET_NEMO_SHA256 default"
+        )
+        provenance = json.loads(
+            (
+                REPO_ROOT / "tests" / "parity" / "fixtures" / "onnx" / "provenance.json"
+            ).read_text()
+        )
+        assert match.group(1) == provenance["nemo_checkpoint_sha256"], (
+            "services/titanet/Dockerfile TITANET_NEMO_SHA256 drifted from "
+            "provenance.json nemo_checkpoint_sha256"
+        )
+
+    def test_dockerfile_verifies_the_baked_nemo_against_the_arg(self) -> None:
+        # The pin is only meaningful if a build step actually consumes it: guard
+        # against deleting the sha256sum gate while leaving the ARG default.
+        dockerfile = self._dockerfile()
+        assert "sha256sum -c" in dockerfile, (
+            "services/titanet/Dockerfile lost the sha256sum -c weight-integrity gate"
+        )
+        assert "${TITANET_NEMO_SHA256}" in dockerfile, (
+            "services/titanet/Dockerfile no longer feeds TITANET_NEMO_SHA256 into "
+            "the checksum gate"
+        )
+
+    def test_runtime_is_offline_bound(self) -> None:
+        # engine_nemo.py calls from_pretrained again at startup; without an
+        # offline bind an online host could re-resolve a re-published checkpoint
+        # that never passed the build-time gate, reopening the drift path.
+        assert "ENV HF_HUB_OFFLINE=1" in self._dockerfile(), (
+            "services/titanet/Dockerfile lost HF_HUB_OFFLINE=1; the runtime "
+            "from_pretrained could re-download an unverified checkpoint"
+        )
+
+
 class TestWhisperOfflineStartup:
     """Weights are baked/pre-downloaded, so no whisper deployment may phone
     home at startup (issue #30): an unadvertised HF hub revision check would

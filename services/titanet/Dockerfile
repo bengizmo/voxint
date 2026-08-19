@@ -38,8 +38,26 @@ RUN pip3 install --no-cache-dir \
 ENV NEMO_CACHE_DIR=/app/models
 ENV TORCH_HOME=/app/models
 ENV HF_HOME=/app/models
+# The .nemo is downloaded at build time (from_pretrained takes no revision arg),
+# so its integrity is pinned by a post-download sha256 gate: the build FAILS
+# unless the resolved checkpoint matches TITANET_NEMO_SHA256, which must equal
+# "nemo_checkpoint_sha256" in tests/parity/fixtures/onnx/provenance.json (a
+# contract test pins the two together). Overriding this ARG produces a
+# NON-PROVENANCE build (dev-only escape hatch); release CI never overrides it.
+ARG TITANET_NEMO_SHA256=e838520693f269e7984f55bc8eb3c2d60ccf246bf4b896d4be9bcabe3e4b0fe3
 RUN mkdir -p /app/models && \
     python3 -c "import nemo.collections.asr as nemo_asr; nemo_asr.models.EncDecSpeakerLabelModel.from_pretrained(model_name='nvidia/speakerverification_en_titanet_large', map_location='cpu')"
+# from_pretrained resolves into the HF-hub cache under /app/models; verify the
+# single baked .nemo against the committed provenance sha before the image ships.
+RUN nemo_count="$(find /app/models -name '*.nemo' | wc -l | tr -d ' ')" && \
+    if [ "$nemo_count" != "1" ]; then \
+        echo "expected exactly one baked .nemo under /app/models, found ${nemo_count}" >&2; exit 1; \
+    fi && \
+    nemo_path="$(find /app/models -name '*.nemo')" && \
+    if ! printf '%s  %s\n' "${TITANET_NEMO_SHA256}" "${nemo_path}" | sha256sum -c -; then \
+        echo "baked TitaNet-Large .nemo does not match provenance nemo_checkpoint_sha256; \
+upstream may have re-published the checkpoint, re-verify numerics on GPU before repinning" >&2; exit 1; \
+    fi
 
 WORKDIR /app
 COPY --chown=voxint:voxint app/ /app/app/
@@ -50,6 +68,13 @@ ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:256,expandable_segments:True,garb
 
 USER voxint
 ENV HOME=/app
+
+# Weights are baked and sha-verified above, so the runtime load must never
+# re-resolve against the hub: the service calls from_pretrained again at startup
+# (app/engine_nemo.py), and without this an online host could fetch a
+# re-published checkpoint that never passed the build-time gate. The baked HF-hub
+# cache carries refs/main, so the revision-less load resolves offline.
+ENV HF_HUB_OFFLINE=1
 
 ENV MEDIA_ROOT=/data/media
 ENV PORT=8021

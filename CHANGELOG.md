@@ -152,6 +152,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
     GitHub lane only: the Forgejo Actions mirror ignores `permissions`, and other
     mutable inputs (base images, the `pgvector` service image, the CUDA weight
     bake) are out of scope for this change.
+- **CUDA titanet weight integrity (audit finding F3).** The CUDA titanet image
+  baked the TitaNet-Large `.nemo` at build time via `from_pretrained` with no
+  revision pin and no checksum, the one weights path in the repo that floated
+  while the ONNX, pyannote, and LLM weights were all sha-pinned. A build-time
+  `sha256sum -c` gate now pins the downloaded checkpoint to
+  `nemo_checkpoint_sha256` in `tests/parity/fixtures/onnx/provenance.json` (via a
+  `TITANET_NEMO_SHA256` Dockerfile ARG), so a re-published upstream checkpoint
+  fails the build instead of shipping weights the parity references were never
+  measured against. The image is also now offline-bound at runtime
+  (`HF_HUB_OFFLINE=1`, matching the whisper service), because the titanet service
+  calls `from_pretrained` again at startup; without it an online host could
+  re-resolve a re-published checkpoint that never passed the build gate. Contract
+  tests pin the ARG to provenance, keep the checksum gate wired, and assert the
+  offline bind. The build sha was confirmed against a real NeMo download, so the
+  gate passes on the correct weights and fails on drift. This closes the
+  drift-detection hole; the
+  behavioral CUDA parity gate stays a maintainer-run precondition to tagging
+  (Gate A, no GPU runner in CI), now recorded as such in the release process.
 - **Research-agent hardening (audit findings E1, E2).** Two calibrated fixes to
   the web-research tool loop for the single-operator threat model:
   - **E2, charset-decode denial of service.** A hostile page could set the

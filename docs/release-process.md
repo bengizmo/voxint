@@ -36,6 +36,20 @@ asset release (`titanet-onnx-v2`, …), update `provenance.json` and
 test pins them together), and bump `TITANET_ONNX_RELEASE` in `release.yml`. Assets under an existing tag
 are immutable by policy, never replaced.
 
+The **CUDA** titanet image is different: it bakes the raw `.nemo` checkpoint at
+build time via `from_pretrained`, which downloads from upstream and takes no
+revision argument. A build-time `sha256sum -c` gate pins that download to
+`nemo_checkpoint_sha256` in `provenance.json` (the `TITANET_NEMO_SHA256`
+Dockerfile default, contract-tested against provenance), so a re-published
+upstream checkpoint fails the build instead of shipping silently. The image is
+also offline-bound at runtime (`HF_HUB_OFFLINE=1`) because the service calls
+`from_pretrained` again at startup, so it loads the baked, verified snapshot
+rather than re-resolving the hub. That gate is drift **detection**, not a
+numerics proof: CI has no GPU runner, so the CUDA image's embedding space cannot
+be parity-gated in the workflow. Confirming it stays the measured
+`titanet-large-v1` space is Gate A below, a hard maintainer-run precondition to
+tagging.
+
 ### The pyannote model asset (release dependency)
 
 Same pattern: the diarization checkpoints (~33 MB, `segmentation-3.0.bin` +
@@ -90,10 +104,13 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   ONNX/pyannote provenance discipline; each new npm dep is justified in its PR.
 - **`parity-gate`** runs the strict titanet ONNX parity harness
   (`VOXINT_PARITY_REQUIRED=1`) natively on both amd64 and arm64 runners, and
-  blocks every multi-arch build. The NeMo/CUDA reference side stays a
-  maintainer-run gate: re-run the `tools/generate_parity_references.py` flow on
-  an NVIDIA box against the new tag before releasing (Gate A, the NVIDIA
-  regression gate).
+  blocks every multi-arch build. This covers the ONNX `-cpu` lane. The CUDA
+  image's baked `.nemo` gets a build-time sha256 gate (drift detection) but no
+  behavioral parity gate here, because CI has no GPU runner. Confirming its
+  embedding space is a **hard tagging precondition**: re-run the
+  `tools/generate_parity_references.py` flow on an NVIDIA box against the new tag
+  before releasing (Gate A, the NVIDIA regression gate). Never tag the CUDA
+  titanet image without a green Gate A.
 - **`smoke-cpu`** runs before any tag exists, per arch, against the
   untagged digest images (`image@sha256:…` is pullable without tags), so a
   failed smoke leaves nothing public. `tools/smoke_cpu_services.py` asserts
