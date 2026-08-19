@@ -91,9 +91,11 @@ def decode_bytes(data: bytes, *, charset: str | None) -> str:
         # A hostile charset can still abort the decode even after the lookup
         # succeeds: a registered non-text codec (rot13, base64, hex) raises
         # LookupError from bytes.decode, and a text codec like "undefined" or
-        # "idna" (or malformed punycode) raises UnicodeError despite
-        # errors="replace". Fall back to utf-8, itself a text codec that with
-        # errors="replace" cannot re-raise, so the guarantee above holds.
+        # "idna" raises UnicodeError despite errors="replace" (punycode does
+        # too up to Python 3.12; on 3.13+ it decodes such input to mojibake
+        # instead, which also satisfies the never-raise guarantee). Fall back
+        # to utf-8, itself a text codec that with errors="replace" cannot
+        # re-raise, so the guarantee above holds.
         return data.decode("utf-8", errors="replace")
 
 

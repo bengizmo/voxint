@@ -98,10 +98,15 @@ def test_charset_from_header_and_unknown_falls_back_to_utf8() -> None:
     for codec in ("rot13", "base64", "hex"):
         assert decode_bytes("café".encode(), charset=codec) == "café"
     # Registered *text* codecs can still raise UnicodeError past errors="replace"
-    # ("undefined"/"idna" reject the handler, punycode fails on non-ASCII);
+    # ("undefined"/"idna" reject the handler on every supported Python);
     # these must also fall back rather than abort the fetch worker.
-    for codec in ("undefined", "idna", "punycode"):
+    for codec in ("undefined", "idna"):
         assert decode_bytes("café".encode(), charset=codec) == "café"
+    # punycode is version-dependent: it raises UnicodeError on these bytes up
+    # to Python 3.12 (so decode_bytes falls back to utf-8) but decodes them to
+    # mojibake on 3.13+. The contract is the same either way: a str comes back
+    # and nothing raises, so pin only the never-raise guarantee here.
+    assert isinstance(decode_bytes("café".encode(), charset="punycode"), str)
 
 
 def test_plain_text_path_sanitizes_and_caps() -> None:

@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-08-19
+
 ### Added
 - **A System / Light / Dark theme control for the review console (#94).** A new
   **Appearance** section on the Settings page lets the operator follow the
@@ -35,6 +37,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   variant it previously hid.
 
 ### Changed
+- **The `export.json` envelope `schema_version` is now 2.** If you feed
+  `export.json` into your own scripts, check that field before parsing: version 2
+  marks the reduction of the uploader, channel, canonical, and `raw.webpage_url`
+  fields to host-only values (the D4 item under Security below has the full
+  policy). The envelope shape and every other field are unchanged.
 - **Review-console keyboard shortcuts now have one source of truth, and the
   cheat-sheet is easier to find (#51).** The eight review shortcuts used to be
   written out in three places — the key handler, the `?` cheat-sheet, and the

@@ -293,8 +293,18 @@ def _fake_getent(repo: Path, body: str) -> None:
     p.chmod(0o755)
 
 
+def _fake_stat_failing(repo: Path) -> None:
+    # On a host with a real GPU, /dev/kfd exists and its gid would satisfy
+    # detect_render_gid before the getent fallback these tests exercise. A
+    # failing stat neutralizes that probe so the tests behave the same on
+    # GPU and GPU-less machines.
+    p = repo / "fakebin" / "stat"
+    p.write_text("#!/bin/sh\nexit 1\n")
+    p.chmod(0o755)
+
+
 def test_detect_render_gid_parses_getent(repo: Path) -> None:
-    # /dev/kfd does not exist in the test env, so the getent fallback runs.
+    _fake_stat_failing(repo)
     _fake_getent(repo, "#!/bin/sh\necho 'render:x:990:ben'\n")
     proc = run_lib(repo, 'detect_render_gid\nprintf "%s" "$RENDER_GID_VALUE"')
     assert proc.returncode == 0, proc.stderr
@@ -302,6 +312,7 @@ def test_detect_render_gid_parses_getent(repo: Path) -> None:
 
 
 def test_detect_render_gid_rejects_non_numeric_and_notes(repo: Path) -> None:
+    _fake_stat_failing(repo)
     _fake_getent(repo, "#!/bin/sh\necho 'garbage output'\n")
     proc = run_lib(repo, 'detect_render_gid\nprintf "[%s]" "$RENDER_GID_VALUE"')
     assert proc.returncode == 0, proc.stderr
@@ -310,6 +321,7 @@ def test_detect_render_gid_rejects_non_numeric_and_notes(repo: Path) -> None:
 
 
 def test_detect_render_gid_empty_when_getent_fails(repo: Path) -> None:
+    _fake_stat_failing(repo)
     _fake_getent(repo, "#!/bin/sh\nexit 2\n")
     proc = run_lib(repo, 'detect_render_gid\nprintf "[%s]" "$RENDER_GID_VALUE"')
     assert proc.returncode == 0, proc.stderr  # set -eu must survive the failure
