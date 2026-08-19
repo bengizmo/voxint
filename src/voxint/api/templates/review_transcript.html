@@ -5,11 +5,16 @@
 <h1>Review transcript <code>{{ run.id.hex[:8] }}</code></h1>
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
 
+{# This server-rendered line OWNS the claim state, JS on or off — the island
+   deliberately renders no unclaimed notice of its own (review finding: the two
+   copies used to double up after hydration). The inner span keeps the text one
+   flex item so it wraps normally beside the status dot. #}
 {% if token %}
 <p class="claim-state">Claimed by you — verify and edit are enabled.</p>
 {% else %}
-<p class="muted">Not claimed by this tab — verifying and editing are disabled.
-  <a href="/review/{{ run.id }}">Claim this run in the workbench</a> to review.</p>
+<p class="claim-state off"><span>Not claimed by this tab — verifying and editing
+  are disabled. <a href="/review/{{ run.id }}">Claim this run in the workbench</a>
+  to review.</span></p>
 {% endif %}
 
 <p class="muted"><a href="/runs/{{ run.id }}/transcript">Read-only transcript</a>
@@ -25,13 +30,17 @@
    island — stated honestly, never faked. The progress track (issue #92) keeps
    the count as visible text; the bar is aria-hidden decoration. #}
 <div data-island="review-stepper" data-props='{{ island_props|tojson }}'>
-  <div class="progress-wrap">
-    <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
-      segments verified.</p>
-    {% if progress.total > 0 %}
-    <span class="progress-track" aria-hidden="true"><i
-      style="width: {{ "%.1f"|format(progress.verified / progress.total * 100) }}%"></i></span>
-    {% endif %}
+  {# Same card the hydrated island renders, so JS-off/island-failure does not
+     drop the flagship surface (hydration replaces this innerHTML wholesale). #}
+  <div class="review-stepper">
+    <div class="progress-wrap">
+      <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
+        segments verified.</p>
+      {% if progress.total > 0 %}
+      <span class="progress-track" aria-hidden="true"><span
+        style="width: {{ "%.1f"|format(progress.verified / progress.total * 100) }}%"></span></span>
+      {% endif %}
+    </div>
   </div>
   {% for ln in lines %}
   {% set idx = palette.get(ln.diarization_label) %}

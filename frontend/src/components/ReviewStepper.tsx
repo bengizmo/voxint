@@ -801,39 +801,44 @@ export function ReviewStepper({
 
   return (
     <div>
-      {reviewToken === null && (
-        <p className="muted" role="status">
-          Not claimed by this tab — verifying and editing are disabled.{" "}
-          <a href={`/review/${runId}`}>Claim this run in the workbench</a> to
-          review.
-        </p>
-      )}
+      {/* The unclaimed notice is server-rendered OUTSIDE this island (the
+          template owns it, JS on or off) — rendering a copy here doubled it up
+          after hydration (review finding). */}
       {claimLost && (
-        <p role="alert" className="tp-uncertain-chip">
+        // A full-sentence alert, so the .notice box — never the nowrap
+        // uppercase .tp-uncertain-chip, which cannot wrap and overflowed the
+        // stepper card (review finding).
+        <p role="alert" className="notice text-sm">
           Your claim expired or was taken over. Everything you already saved is
           safe — copy any unsaved edit from the box first, then{" "}
           <a href={`/review/${runId}`}>re-claim in the workbench</a> and reopen
           this page to continue.
         </p>
       )}
-      {writable && (
-        <div className="review-stepper my-2" aria-label="Verify and advance">
-          {/* Progress track (issue #92): the count stays the visible text signal;
-              the bar is aria-hidden decoration driven by the same numbers. */}
-          <div className="progress-wrap">
-            <p aria-live="polite">
-              <strong>{progress.verified}</strong> of{" "}
-              <strong>{progress.total}</strong> segments verified
-              {done ? " — all done" : ` · ${remaining} left`}
-            </p>
-            <span className="progress-track" aria-hidden="true">
-              <i
-                style={{
-                  width: `${progress.total > 0 ? (progress.verified / progress.total) * 100 : 0}%`,
-                }}
-              />
-            </span>
-          </div>
+      {/* The stepper card renders for every viewer: progress is run context a
+          read-only/claim-lost tab keeps (and the JS-off fallback shows) — only
+          the write controls below are claim-gated (review finding). */}
+      <section className="review-stepper my-2" aria-label="Verify and advance">
+        {/* Progress track (issue #92): the count stays the visible text signal;
+            the bar is aria-hidden decoration driven by the same numbers.
+            aria-atomic so a change announces the whole sentence, never a bare
+            number. */}
+        <div className="progress-wrap">
+          <p aria-live="polite" aria-atomic="true">
+            <strong>{progress.verified}</strong> of{" "}
+            <strong>{progress.total}</strong> segments verified
+            {done ? " — all done" : ` · ${remaining} left`}
+          </p>
+          <span className="progress-track" aria-hidden="true">
+            <span
+              style={{
+                width: `${progress.total > 0 ? (progress.verified / progress.total) * 100 : 0}%`,
+              }}
+            />
+          </span>
+        </div>
+        {writable && (
+          <div>
           {/* Run-level declared-rule reconciliation (issue #83): a collapsible
               summary of which of the run's domain-pack correction rules actually
               fired. Renders only when the run declared corrections (empty ⇒ no
@@ -1166,13 +1171,14 @@ export function ReviewStepper({
               </p>
             </div>
           )}
-          <KeymapHelp
-            open={helpOpen}
-            onClose={() => setHelpOpen(false)}
-            hasRoster={speakers.length > 0}
-          />
-        </div>
-      )}
+            <KeymapHelp
+              open={helpOpen}
+              onClose={() => setHelpOpen(false)}
+              hasRoster={speakers.length > 0}
+            />
+          </div>
+        )}
+      </section>
       <TranscriptPlayer
         ref={playerRef}
         runId={runId}

@@ -481,8 +481,10 @@ export const TranscriptPlayer = forwardRef<
           if (uncertain) classes.push("tp-uncertain");
           // Base .tp-line owns padding + radius (issue #92) so the active tint
           // and the hover surface align without per-state padding utilities.
+          // No opacity dimming on inactive lines: element opacity compounds
+          // into child chips/timecodes and pushed small text below AA (review
+          // finding) — the active line's tint + aria-current carry emphasis.
           if (active) classes.push("bg-seg/20");
-          else classes.push("opacity-85");
           return (
             <p
               // Keyed by parent + word-range (falling back to start time) so a
