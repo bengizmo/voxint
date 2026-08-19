@@ -5,6 +5,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Console design-token foundation (#90, epic #89 — console visual refresh)**:
+  the review console's colors now come from one semantic set of CSS design tokens
+  in `base.html` that the React islands alias through Tailwind (never duplicating
+  values), replacing four ad-hoc color literals in the transcript player and
+  waveform. This is an internal foundation with **no visible change** — every
+  token maps to the color that already rendered — that lets the upcoming visual
+  refresh restyle the whole console from a single source.
+
 ## [0.19.0] - 2026-08-19
 
 ### Added
