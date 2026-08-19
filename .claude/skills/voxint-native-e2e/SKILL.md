@@ -78,6 +78,86 @@ scripts/native/voxint-native.sh down --no-models
   manifest drift); every hashed bundle in `.vite/manifest.json` serves 200 with
   non-empty bytes. A non-zero exit fails the gate.
 
+## Part A2 — Phase-2 launcher honesty rungs (`--no-models`, cheap)
+
+Two acceptance rungs that unit tests provably **cannot** cover. The unit suite already
+proves the *logic* with stubs (`test_percent_encode_matches_rfc3986`,
+`test_python_and_bash_composers_agree_on_reserved_password`,
+`test_launchd_job_state_classifies`, `test_status_surfaces_crashloop_worker_and_healthy_beat`);
+these rungs prove the *live* behaviors a stub can't: a reserved-char password surviving a
+real Postgres role + a real app boot on the encoded DSN, and the real `launchctl print`
+output shape of a genuinely crash-looping launchd job matching the launcher's parse.
+
+Both are `--no-models` (no model tier needed), macOS/Apple-Silicon only, require
+`VOXINT_NATIVE_E2E=1`, and mutate real launchd + brew state. Each runs against its **own
+throwaway `VOXINT_NATIVE_HOME`** so the operator's real `~/.voxint-native` install is never
+touched; `rm -rf` the throwaway home when the rung is done.
+
+### Rung 1 — reserved-password DSN (#7)
+
+Seed a DB password containing RFC-3986 reserved chars via the launcher's existing setup-time
+override `VOXINT_NATIVE_DB_PASSWORD` and prove the stack stands up on the percent-encoded DSN.
+
+```bash
+export VOXINT_NATIVE_E2E=1
+H1="$(mktemp -d)/voxint-native-p2r1"
+VOXINT_NATIVE_HOME="$H1" VOXINT_NATIVE_DB_PASSWORD='p@ss:w/rd?#&%+' \
+  scripts/native/voxint-native.sh setup --no-models
+VOXINT_NATIVE_HOME="$H1" scripts/native/voxint-native.sh up --no-models
+uv run python tools/native_e2e_lifecycle.py env    --state-file "$H1/state.env"   # wait /healthz 200
+VOXINT_NATIVE_HOME="$H1" scripts/native/voxint-native.sh doctor --no-models       # overall PASS
+uv run python tools/native_e2e_lifecycle.py smoke  --state-file "$H1/state.env"   # SMOKE PASS
+VOXINT_NATIVE_HOME="$H1" scripts/native/voxint-native.sh down --no-models
+rm -rf "$H1"
+```
+
+- **The DSN proof is `up` itself**: it runs `alembic upgrade` under the percent-encoded
+  `DATABASE_URL`, and api/worker boot under the same baked DSN — a mishandled reserved
+  password fails `up` outright, before smoke. `smoke` then asserts `/healthz` + `/setup` +
+  every hashed bundle serves 200; `doctor` reports overall PASS (model-tier SKIP is expected
+  under `--no-models`).
+- Reserved chars pass the launcher's input gate (only control chars are rejected); the role
+  is created with the password as a psql `-v` variable (never string-interpolated). Optional
+  cross-check: `grep '^DB_PASSWORD=' "$H1/state.env"` shows the literal password and the
+  baked plist / `env` DSN shows `%40%3A%2F%3F%23%26%25%2B` encoding.
+
+### Rung 2 — crash-loop fault gate (#6)
+
+Inject a genuinely crash-looping `beat` and assert `status` prints `restarting (last exit N)`
+(NOT a bare `[supervised]`). This is the rung's whole reason to exist: a Linux stub can't
+produce the real `launchctl print` block the launcher's `sed -E` parse must survive.
+
+```bash
+export VOXINT_NATIVE_E2E=1
+H2="$(mktemp -d)/voxint-native-p2r2"
+VOXINT_NATIVE_HOME="$H2" scripts/native/voxint-native.sh setup --no-models
+VOXINT_NATIVE_HOME="$H2" scripts/native/voxint-native.sh up --no-models
+label=com.voxint.native.beat; plist="$H2/run/$label.plist"
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+while launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; do sleep 0.2; done
+# rewrite ONLY beat's ProgramArguments to a fast non-zero exit; keep Label + KeepAlive
+/usr/libexec/PlistBuddy \
+  -c 'Delete :ProgramArguments' \
+  -c 'Add :ProgramArguments array' \
+  -c 'Add :ProgramArguments: string /bin/sh' \
+  -c 'Add :ProgramArguments: string -c' \
+  -c 'Add :ProgramArguments: string "exit 7"' "$plist"
+launchctl bootstrap "gui/$(id -u)" "$plist"
+sleep 12                                    # let launchd throttle a respawn (~10s window)
+VOXINT_NATIVE_HOME="$H2" scripts/native/voxint-native.sh status --no-models
+#   → assert the `beat` row contains: restarting (last exit 7)
+launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
+VOXINT_NATIVE_HOME="$H2" scripts/native/voxint-native.sh down --no-models
+rm -rf "$H2"
+```
+
+- **Assert** the `beat` line of `status` literally contains `restarting (last exit 7)`. A
+  bare `[supervised]` with no liveness suffix is a **failure** — that was the #6 bug.
+- If `status` shows `running` instead, the crash job has not yet been throttled between
+  respawns — re-poll `status` (launchd relaunches instantly on the first exit; the throttled
+  `restarting` window opens after the first fast crash). Do not lengthen the argv sleep; a
+  fast exit is what forces the throttle.
+
 ## Part B — full usage lane (with the model tier)
 
 ```bash
