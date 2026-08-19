@@ -11,136 +11,240 @@
   {% if asset_url('tailwind') %}<link rel="stylesheet" href="{{ asset_url('tailwind') }}">{% endif %}
   <style>
     :root { color-scheme: light dark; }
-    /* Design tokens (issue #90, epic #89) — mechanism-only foundation. These map
-       to the console's CURRENT effective colors so the page chrome and the React
-       islands theme from ONE source with zero visual change; the warm "Reading
-       Room" palette, type scale, and elevation land in later slices (#91/#92).
-       RGB-CHANNEL form ("R G B", not a hex/rgb() string) is load-bearing: islands
-       consume Tailwind opacity utilities (e.g. bg-seg/20), and tailwind.config.ts
-       aliases these as rgb(var(--x-rgb) / <alpha-value>). --wave-neutral is a
-       COMPLETE color (read in JS by WaveformStrip, not via Tailwind): opaque RGB
-       #88888c = (136, 136, 140), a neutral gray with a faintly higher blue
-       channel — deliberately NOT --line's (136, 136, 136), so keep it verbatim. */
+    /* ============================================================
+       "Reading Room" design tokens (epic #89: #90 foundation, #91 palette +
+       type). ONE semantic source of truth: base.html chrome consumes these
+       directly and tailwind.config.ts ALIASES them (never duplicates hex) so
+       the page chrome and the React islands theme from a single layer.
+
+       Two token forms live here on purpose:
+       - Full colors (--paper, --ink, --accent, …) — read by this stylesheet.
+       - RGB-CHANNEL triples ("R G B") — --seg-rgb/--splitword-rgb/--line-rgb —
+         because islands consume Tailwind OPACITY utilities (bg-seg/20,
+         border-line/40); tailwind aliases them as rgb(var(--x-rgb)/<alpha>).
+         --line is DERIVED from --line-rgb so the full color and the channel
+         form can never drift. --wave-neutral is a COMPLETE color read in JS by
+         WaveformStrip (not a channel triple): opaque #88888c = (136,136,140).
+
+       Dark theme is a SINGLE consolidated @media block below; the status vars
+       (--uncertain/--corrected/--focus-ring) and .error reference tokens, so
+       they re-theme automatically without their own dark overrides. The
+       explicit data-theme toggle is deliberately deferred to #94 — this slice
+       stays OS-signal-only, keeping color-scheme: light dark for native
+       controls. Ship the system-ui stack; a bundled font is a gated follow-up. */
     :root {
-      --seg-rgb: 14 165 233;        /* active playing segment — was bg-sky-500/20 */
-      --splitword-rgb: 245 158 11;  /* split-word hover — was bg-amber-500/30 */
-      --line-rgb: 136 136 136;      /* hairline borders — the #888 behind #8886 */
+      /* Warm paper & ink (light) */
+      --paper: #f7f4ee;        /* app canvas — warm, not pure white */
+      --surface: #fffdf9;      /* cards, nav — float slightly brighter */
+      --surface-2: #f1ece2;    /* inset / row hover / subtle raise */
+      --ink: #23201b;          /* primary text — warm near-black */
+      --ink-2: #5c564c;        /* secondary text (muted, still AA on paper) */
+      --ink-3: #8a8477;        /* tertiary / captions */
+      --line-rgb: 230 223 210; /* hairline border channels (islands: border-line/40) */
+      --line: rgb(var(--line-rgb));
+      --line-strong: #d3cab9;  /* stronger divider */
+
+      /* Calm teal accent — brand · links · focus · primary. Kept distinct from
+         --ok green so "interactive" never reads as "success". */
+      --accent: #2f7d76;
+      --accent-ink: #1f5c56;   /* accent text on paper (AA) */
+      --accent-strong: #256a63;
+      --accent-soft: #dcebe8;  /* tinted accent fills */
+
+      /* Semantic status + soft pill/chip fills (separate from the brand accent) */
+      --ok: #1a7f37;     --ok-soft: #dbeede;
+      --warn: #9a6700;   --warn-soft: #f4e9cf;
+      --danger: #b3261e; --danger-soft: #f6dcd9;
+      --info: #2f6fb0;   --info-soft: #dde9f5;
+
+      /* Island-only highlight channels (functional tints, theme-agnostic) */
+      --seg-rgb: 14 165 233;        /* active playing segment — bg-seg/20 */
+      --splitword-rgb: 245 158 11;  /* split-word hover — bg-splitword/30 */
       --wave-neutral: #88888c;      /* waveform bars/strokes with no speaker turn */
+
+      /* Status vars reference tokens so they re-theme with one dark block */
+      --uncertain: var(--warn);     /* low-confidence dashed underline + chip (#53) */
+      --corrected: var(--ok);       /* domain-pack correction chip (#83) */
+      --focus-ring: var(--accent);  /* keyboard focus ring (#64) */
+
+      /* Harmonized, subdued speaker scale (supplemental to the raw label text) */
+      --spk-0: #2f7d8f; --spk-1: #b5651d; --spk-2: #2e7d43; --spk-3: #6a4fb0;
+      --spk-4: #1f8a86; --spk-5: #b03d78; --spk-6: #8a6d1f; --spk-7: #b13d3d;
+
+      /* Type — system-ui stack (Inter deferred, report §7); mono for time/IDs */
+      --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
+      --t-xs: .75rem; --t-sm: .8125rem; --t-base: .9375rem; --t-md: 1.0625rem;
+      --t-lg: 1.375rem; --t-xl: 1.75rem; --t-2xl: 2.25rem;
+
+      /* Radius + restrained elevation (two soft shadows, used sparingly) */
+      --r-sm: .375rem; --r-md: .625rem; --r-lg: 1rem; --r-full: 999px;
+      --shadow-1: 0 1px 2px rgba(40,32,18,.05), 0 2px 8px rgba(40,32,18,.06);
+      --shadow-2: 0 4px 14px rgba(40,32,18,.09), 0 14px 34px rgba(40,32,18,.10);
     }
-    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 72rem;
-           padding: 0 1rem; line-height: 1.45; overflow-wrap: break-word; }
-    h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; }
+    /* System dark — ONE consolidated override. Redefine only themed tokens;
+       everything downstream (chrome, islands, status vars, .error) follows. */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
+        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #807a70;
+        --line-rgb: 46 51 58; --line-strong: #3d434b;
+        --accent: #5eb8ae; --accent-ink: #7fccc3; --accent-strong: #74c4bb;
+        --accent-soft: #1e2e2c;
+        --ok: #3fb950;   --ok-soft: #16261a;
+        --warn: #d29922; --warn-soft: #2a2411;
+        --danger: #f2685e; --danger-soft: #301715;
+        --info: #6ba7dd; --info-soft: #14212e;
+        --spk-0: #5fb8cf; --spk-1: #e0954a; --spk-2: #57c06f; --spk-3: #a78be6;
+        --spk-4: #4fc9c4; --spk-5: #e879b0; --spk-6: #d0af4f; --spk-7: #ec7a72;
+        --shadow-1: 0 1px 2px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.34);
+        --shadow-2: 0 6px 18px rgba(0,0,0,.40), 0 18px 40px rgba(0,0,0,.46);
+      }
+    }
+
+    body { font-family: var(--font-ui); margin: 2rem auto; max-width: 72rem;
+           padding: 0 1rem; line-height: 1.55; overflow-wrap: break-word;
+           background: var(--paper); color: var(--ink);
+           -webkit-font-smoothing: antialiased; }
+    h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
+    h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
+    h3 { font-size: var(--t-md); line-height: 1.25; }
+    a { color: var(--accent-ink); text-underline-offset: 2px; }
+    code, time, .num, .preview .t, .spk-badge { font-family: var(--font-mono);
+           font-variant-numeric: tabular-nums; }
     table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #8884; }
-    .label-card { border: 1px solid #8886; border-radius: .5rem; padding: .8rem 1rem;
-                  margin: .8rem 0; }
-    .pill { display: inline-block; border-radius: 1rem; padding: .05rem .6rem;
-            font-size: .8rem; border: 1px solid #8888; }
-    .pill.unresolved { background: #c332; border-color: #c33; }
-    .pill.human { background: #2823; border-color: #282; }
-    .pill.grounded { background: #22a3; border-color: #26a; }
-    .pill.ready { background: #2823; border-color: #282; }
-    .pill.unverified { background: #da22; border-color: #da2; }
-    .preview { font-size: .9rem; opacity: .85; margin: .4rem 0; }
-    .preview .t { opacity: .6; font-variant-numeric: tabular-nums; margin-right: .4rem; }
+    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); }
+    th { color: var(--ink-2); font-size: var(--t-sm); }
+    /* Tokenized controls. `:not(:where(.tp-split-word))` keeps specificity at
+       exactly `button` (0,0,1): high enough to beat Tailwind Preflight's
+       `button { background: transparent; padding: 0 }` (also 0,0,1) as the later
+       source, but low enough that any island utility (w-full, text-sm, hover:*)
+       at 0,1,0 still wins — while the inline word-chip (.tp-split-word) opts out
+       of button chrome. .tp-corrected-chip self-defends via its own class rule. */
+    button:not(:where(.tp-split-word)) {
+      font: inherit; color: var(--ink); background: var(--surface);
+      border: 1px solid var(--line); border-radius: var(--r-md);
+      padding: .3rem .7rem; cursor: pointer;
+      transition: background 160ms ease, border-color 160ms ease; }
+    button:not(:where(.tp-split-word)):hover { background: var(--surface-2);
+      border-color: var(--line-strong); }
+    button:not(:where(.tp-split-word)):disabled { opacity: .55; cursor: not-allowed; }
+    button.secondary { background: transparent; border-color: transparent;
+      color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
+    button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+    input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])),
+    select, textarea {
+      font: inherit; color: var(--ink); background: var(--surface);
+      border: 1px solid var(--line); border-radius: var(--r-sm); padding: .3rem .45rem; }
+    input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])):focus-visible,
+    select:focus-visible, textarea:focus-visible { border-color: var(--accent); }
+    .label-card { border: 1px solid var(--line); border-radius: var(--r-md);
+                  padding: .8rem 1rem; margin: .8rem 0; background: var(--surface); }
+    .pill { display: inline-block; border-radius: var(--r-full); padding: .05rem .6rem;
+            font-size: var(--t-xs); border: 1px solid var(--line); }
+    .pill.unresolved { background: var(--danger-soft); border-color: var(--danger); }
+    .pill.human { background: var(--ok-soft); border-color: var(--ok); }
+    .pill.grounded { background: var(--info-soft); border-color: var(--info); }
+    .pill.ready { background: var(--ok-soft); border-color: var(--ok); }
+    .pill.unverified { background: var(--warn-soft); border-color: var(--warn); }
+    .preview { font-size: var(--t-sm); color: var(--ink-2); margin: .4rem 0; }
+    .preview .t { color: var(--ink-3); margin-right: .4rem; }
     form.inline { display: inline-flex; gap: .4rem; align-items: center; margin-right: 1rem; }
-    .muted { opacity: .65; }
+    .muted { color: var(--ink-2); }
     audio { width: 100%; margin: .6rem 0 1rem; }
-    .error { color: #c33; }
-    .notice { border: 1px solid #b80; background: #fb02; border-radius: .5rem;
-              padding: .6rem .9rem; margin: 1rem 0; }
+    .error { color: var(--danger); }
+    .notice { border: 1px solid var(--warn); background: var(--warn-soft);
+              border-radius: var(--r-md); padding: .6rem .9rem; margin: 1rem 0; }
     form.requeue { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
     nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;
-              padding-bottom: .6rem; border-bottom: 1px solid #8884; font-size: .95rem; }
-    nav.top a[aria-current="page"] { font-weight: 600; }
+              padding-bottom: .6rem; border-bottom: 1px solid var(--line); font-size: .95rem; }
+    nav.top a { color: var(--ink-2); text-decoration: none; }
+    nav.top a:hover { color: var(--accent-ink); }
+    nav.top a[aria-current="page"] { font-weight: 600; color: var(--ink); }
     form.upload { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
-                  margin: 1rem 0; padding: .8rem 1rem; border: 1px solid #8886;
-                  border-radius: .5rem; }
+                  margin: 1rem 0; padding: .8rem 1rem; border: 1px solid var(--line);
+                  border-radius: var(--r-md); background: var(--surface); }
     form.upload label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
     form.filters { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
                    margin: 1rem 0; }
     form.filters label { display: flex; flex-direction: column; font-size: .8rem; gap: .2rem; }
-    .pill.running { background: #26a3; border-color: #26a; }
-    .pill.completed { background: #2823; border-color: #282; }
-    .pill.failed { background: #c332; border-color: #c33; }
-    .pill.queued, .pill.awaiting_adjudication { background: #8882; }
-    .pill.cancelled { background: #8881; opacity: .7; }
-    .pill.skipped { background: #8881; opacity: .6; }
+    .pill.running { background: var(--info-soft); border-color: var(--info); }
+    .pill.completed { background: var(--ok-soft); border-color: var(--ok); }
+    .pill.failed { background: var(--danger-soft); border-color: var(--danger); }
+    .pill.queued, .pill.awaiting_adjudication { background: var(--surface-2); }
+    .pill.cancelled { background: var(--surface-2); color: var(--ink-3); }
+    .pill.skipped { background: var(--surface-2); color: var(--ink-3); }
     ol.wizard-steps { display: flex; flex-wrap: wrap; gap: .4rem 1rem; list-style: none;
-                      padding: 0; margin: 0 0 1.5rem; border-bottom: 1px solid #8884;
+                      padding: 0; margin: 0 0 1.5rem; border-bottom: 1px solid var(--line);
                       padding-bottom: .6rem; font-size: .9rem; }
-    ol.wizard-steps li { opacity: .5; }
-    ol.wizard-steps li.done { opacity: .8; }
-    ol.wizard-steps li.current { opacity: 1; font-weight: 600; }
+    ol.wizard-steps li { color: var(--ink-3); }
+    ol.wizard-steps li.done { color: var(--ink-2); }
+    ol.wizard-steps li.current { color: var(--ink); font-weight: 600; }
     ol.wizard-steps li .n { display: inline-block; min-width: 1.4rem; text-align: center;
-                            border: 1px solid #8886; border-radius: 1rem; margin-right: .3rem; }
+                            border: 1px solid var(--line); border-radius: var(--r-full);
+                            margin-right: .3rem; }
     .setup textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: .95rem; }
     .setup .field { margin: 1rem 0; }
     .setup .actions { display: flex; gap: 1rem; align-items: center; margin: 1.5rem 0 0; }
     .svc { display: flex; gap: .6rem; align-items: baseline; padding: .3rem 0; }
     .svc-fix { margin: 0 0 .6rem; padding-left: .4rem; font-size: .9rem; }
-    .tutorial-banner { border: 1px solid #26a; border-left: .3rem solid #26a;
-                       background: #26a2; border-radius: .5rem; padding: .8rem 1rem;
-                       margin: 0 0 1.5rem; }
+    .tutorial-banner { border: 1px solid var(--accent); border-left: .3rem solid var(--accent);
+                       background: var(--accent-soft); border-radius: var(--r-md);
+                       padding: .8rem 1rem; margin: 0 0 1.5rem; }
     .tutorial-banner h2 { margin: .2rem 0 .4rem; }
     .tutorial-banner p { margin: .3rem 0; }
     .tutorial-step { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em;
-                     opacity: .75; margin: 0; }
+                     color: var(--ink-3); margin: 0; }
     .tutorial-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;
                         margin-top: .8rem; }
     .settings dl { margin: 1rem 0; }
     .settings dt { font-weight: 600; margin-top: .8rem; }
     .roster-card h2 { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .3rem; }
-    .voiceprint { width: 6rem; height: 1.1rem; flex: none; opacity: .75; }
+    .voiceprint { width: 6rem; height: 1.1rem; flex: none; color: var(--ink-3); }
     .voiceprint rect { fill: currentColor; }
     .roster-actions { display: flex; gap: 1rem; flex-wrap: wrap; align-items: center;
                       margin-top: .5rem; }
     details.embeddings, details.roster-inactive { margin: .6rem 0; }
     details.embeddings summary, details.roster-inactive summary {
-      cursor: pointer; font-size: .9rem; opacity: .8; }
+      cursor: pointer; font-size: .9rem; color: var(--ink-2); }
     /* Export picker (issue #52) */
     details.export-menu { margin: 1rem 0; }
     details.export-menu summary { cursor: pointer; font-weight: 600; }
     details.export-menu ul { list-style: none; padding: 0; margin: .6rem 0 0; }
-    details.export-menu li { padding: .5rem 0; border-top: 1px solid #8882; }
+    details.export-menu li { padding: .5rem 0; border-top: 1px solid var(--line); }
     details.export-menu li:first-child { border-top: 0; }
     .export-links { margin-top: .25rem; font-size: .9rem; }
     .embedding-row { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap;
                      padding: .25rem 0; font-size: .9rem; }
-    /* Per-speaker identity accent (issue #50) — supplemental to the raw-label text. */
+    /* Per-speaker identity accent (issue #50) — supplemental to the raw-label text.
+       The .spk-N class names are the public hook (islands + tests rely on them);
+       they map onto the --spk-N tokens so chrome and islands share one source. */
     .tp-line { border-left: 3px solid var(--spk-accent, transparent); padding-left: .5rem; }
-    .label-card { border-left: .35rem solid var(--spk-accent, #8886); }
-    .spk-badge { font-size: .72rem; font-variant-numeric: tabular-nums; opacity: .7;
-                 border: 1px solid #8886; border-radius: .5rem; padding: 0 .35rem;
+    .label-card { border-left: .35rem solid var(--spk-accent, var(--line)); }
+    .spk-badge { font-size: .72rem; color: var(--ink-2); border: 1px solid var(--line);
+                 border-radius: var(--r-sm); padding: 0 .35rem;
                  margin-right: .4rem; white-space: nowrap; }
-    .spk-0{--spk-accent:#0969da} .spk-1{--spk-accent:#bc4c00} .spk-2{--spk-accent:#1a7f37}
-    .spk-3{--spk-accent:#8250df} .spk-4{--spk-accent:#1b7c83} .spk-5{--spk-accent:#bf3989}
-    .spk-6{--spk-accent:#7d4e00} .spk-7{--spk-accent:#cf222e}
-    @media (prefers-color-scheme: dark) {
-      .spk-0{--spk-accent:#58a6ff} .spk-1{--spk-accent:#ec8e2c} .spk-2{--spk-accent:#3fb950}
-      .spk-3{--spk-accent:#bc8cff} .spk-4{--spk-accent:#39c5cf} .spk-5{--spk-accent:#f778ba}
-      .spk-6{--spk-accent:#d29922} .spk-7{--spk-accent:#ff7b72}
-    }
+    .spk-0{--spk-accent:var(--spk-0)} .spk-1{--spk-accent:var(--spk-1)}
+    .spk-2{--spk-accent:var(--spk-2)} .spk-3{--spk-accent:var(--spk-3)}
+    .spk-4{--spk-accent:var(--spk-4)} .spk-5{--spk-accent:var(--spk-5)}
+    .spk-6{--spk-accent:var(--spk-6)} .spk-7{--spk-accent:var(--spk-7)}
     /* Low-confidence triage (issue #53). A NON-background treatment: the active
        playing line already owns the background tint and the left border carries
        the speaker accent, so uncertainty reads as a dashed amber underline plus
        a small "uncertain" chip — supplemental, never the only cue, and honest
        ("uncertain, not necessarily wrong"). */
-    :root { --uncertain: #9a6700; }
-    @media (prefers-color-scheme: dark) { :root { --uncertain: #d29922; } }
     .tp-uncertain { border-bottom: 1px dashed var(--uncertain); }
     .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
-                 color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: .5rem;
+                 color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: var(--r-sm);
                  padding: 0 .35rem; margin-right: .4rem; white-space: nowrap; }
     /* Deterministic domain-pack correction marker (issue #83). A DISTINCT accent
        from the amber "uncertain" chip and the neutral speaker badge: this edit was
        made automatically by the run's domain pack, never conflated with the
        operator's own "edited" change. The chip is an expander button, so the native
        button chrome is reset to match the other chips. */
-    :root { --corrected: #1a7f37; }
-    @media (prefers-color-scheme: dark) { :root { --corrected: #3fb950; } }
     .tp-corrected-chip { font-size: .68rem; letter-spacing: .02em; color: var(--corrected);
-                 border: 1px solid var(--corrected); border-radius: .5rem; padding: 0 .35rem;
+                 border: 1px solid var(--corrected); border-radius: var(--r-sm); padding: 0 .35rem;
                  margin-right: .4rem; white-space: nowrap; background: none; cursor: pointer; }
     /* Adjudication-queue ergonomics (issue #56). Progress fills toward DONE
        (resolved-of-total), with always-visible text so the bar is never the
@@ -150,11 +254,26 @@
                    vertical-align: bottom; }
     .sort-control { font-size: .9rem; margin: .5rem 0 1rem; }
     .sort-control a[aria-current="true"] { font-weight: 600; text-decoration: none; }
-    .progress { position: relative; min-width: 8rem; height: 1.2rem; border: 1px solid #8886;
-                border-radius: .6rem; overflow: hidden; background: #8881; }
-    .progress-fill { position: absolute; inset: 0 auto 0 0; background: #2a2; opacity: .35; }
+    .progress { position: relative; min-width: 8rem; height: 1.2rem; border: 1px solid var(--line);
+                border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); }
+    .progress-fill { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: .45; }
     .progress-label { position: relative; display: block; text-align: center;
                       font-size: .75rem; line-height: 1.2rem; white-space: nowrap; }
+    /* Dashboard summary (issue #91). Stat cards above the detail tables + inline
+       relative mini-bars for stage timing. Numbers stay visible so a bar is never
+       the only signal (screen-reader + non-color-only). */
+    .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+                  gap: .8rem; margin: 1rem 0 1.5rem; }
+    .stat-card { border: 1px solid var(--line); border-radius: var(--r-md);
+                 background: var(--surface); padding: .7rem .9rem; box-shadow: var(--shadow-1); }
+    .stat-card .stat-value { font-size: var(--t-xl); line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat-card .stat-label { font-size: var(--t-xs); text-transform: uppercase;
+                 letter-spacing: .05em; color: var(--ink-3); margin-top: .1rem; }
+    .stat-card .stat-note { font-size: var(--t-xs); color: var(--ink-2); }
+    .minibar { display: inline-block; vertical-align: middle; width: 6rem; height: .5rem;
+               border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
+               margin-left: .5rem; }
+    .minibar > span { display: block; height: 100%; background: var(--accent); opacity: .55; }
     /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
        desktop screen for the single operator: a keyboard skip-link + main landmark,
        a visible focus ring, wide tables that scroll inside their own container
@@ -163,17 +282,14 @@
                  color: CanvasText; padding: .5rem .8rem; border: 1px solid;
                  border-radius: .4rem; z-index: 10; }
     .skip-link:focus { left: .5rem; }
-    :root { --focus-ring: #0969da; }
-    @media (prefers-color-scheme: dark) { :root { --focus-ring: #58a6ff; } }
     :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px;
                      border-radius: 2px; }
     @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
-    @media (prefers-color-scheme: dark) { .error { color: #ff7b72; } }
     .table-wrap { overflow-x: auto; max-width: 100%; }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
                        margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
                        white-space: nowrap; border: 0; }
-    @media (max-width: 40rem) { body { margin: 1rem auto; } h1 { font-size: 1.25rem; } }
+    @media (max-width: 40rem) { body { margin: 1rem auto; } h1 { font-size: var(--t-lg); } }
   </style>
 </head>
 <body>

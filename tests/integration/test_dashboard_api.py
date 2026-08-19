@@ -113,9 +113,13 @@ def test_dashboard_renders_aggregated_numbers(
     body = resp.text
     # Full page: nav chrome present, active tab marked.
     assert 'href="/dashboard" aria-current="page"' in body
-    # Review backlog (2 awaiting_adjudication) and roster (2 speakers) surface.
-    assert "2 run(s) awaiting adjudication" in body
-    assert "2 enrolled speaker(s)" in body
+    # Review backlog (2 awaiting_adjudication) and roster (2 speakers) surface as
+    # summary stat cards (issue #91); the value is tied to its label, and each
+    # card keeps its unit as text so the number is never bare.
+    assert _stat_value(body, "Review backlog") == 2
+    assert "run(s) awaiting adjudication" in body
+    assert _stat_value(body, "Roster") == 2
+    assert "enrolled speaker(s)" in body
     # Status table zero-fills the enum: a status with no runs renders a 0 row.
     # The LABEL is humanized (issue #56) but the pill's CSS class stays the raw
     # enum so it keeps its colour — assert both, since keeping the class raw is
@@ -156,7 +160,8 @@ def test_dashboard_htmx_returns_fragment_without_chrome(
     assert resp.status_code == 200
     body = resp.text
     # Fragment carries the numbers but not the page chrome / nav.
-    assert "2 run(s) awaiting adjudication" in body
+    assert _stat_value(body, "Review backlog") == 2
+    assert "run(s) awaiting adjudication" in body
     assert "<nav" not in body
     assert "<h1>Dashboard</h1>" not in body
     # The fragment must NOT re-emit the polling container or its hx-get: the
@@ -172,7 +177,7 @@ def test_dashboard_since_narrows_created_window(
     seed_snapshot(session_factory)
     # Default (24h) excludes the 3-day-old run: 3 recent runs created.
     default_body = client.get("/dashboard").text
-    assert "Runs created in window" in default_body
+    assert _stat_value(default_body, "Runs in window") == 3
     # A 7-day window includes the old run too (all 4).
     wide_body = client.get("/dashboard", params={"since": "7d"}).text
     # The window line differs; assert the wide window reports one more run than
@@ -237,9 +242,9 @@ def test_dashboard_matches_metrics_snapshot(
     assert "voxint_runs_created_24h 3" in metrics
     # roster + backlog line up with their Prometheus gauges.
     assert "voxint_roster_speakers 2" in metrics
-    assert "2 enrolled speaker(s)" in dash
+    assert _stat_value(dash, "Roster") == 2
     assert 'voxint_runs{status="awaiting_adjudication"} 2' in metrics
-    assert "2 run(s) awaiting adjudication" in dash
+    assert _stat_value(dash, "Review backlog") == 2
 
 
 def test_dashboard_malformed_since_degrades_to_default(
@@ -256,6 +261,18 @@ def _created_count(body: str) -> int:
     """Pull the runs-created count out of the rendered HTML via its stable hook."""
     match = re.search(r'data-metric="runs-created"[^>]*>\s*(\d+)', body)
     assert match is not None, "runs-created metric hook missing from dashboard render"
+    return int(match.group(1))
+
+
+def _stat_value(body: str, label: str) -> int:
+    """Pull a summary stat-card's value by its label (issue #91). Ties the label
+    to its adjacent value, so a card can't silently show the wrong figure."""
+    match = re.search(
+        rf'class="stat-label">{re.escape(label)}</dt>\s*'
+        rf'<dd class="stat-value"[^>]*>\s*(\d+)',
+        body,
+    )
+    assert match is not None, f"stat card {label!r} missing from dashboard render"
     return int(match.group(1))
 
 

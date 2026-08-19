@@ -1,22 +1,40 @@
-{# Operator dashboard metrics (issue #13). Rendered standalone on the htmx
-   15s poll (HX-Request) and included by dashboard.html for the full page.
-   Pure read-only render over a SystemStats snapshot — no aggregation here;
-   that all lives in stats_query.collect_stats(). #}
+{# Operator dashboard metrics (issue #13; summary cards + mini-bars #91).
+   Rendered standalone on the htmx 15s poll (HX-Request) and included by
+   dashboard.html for the full page. Pure read-only render over a SystemStats
+   snapshot — no aggregation here; that all lives in stats_query.collect_stats().
+   ALL markup stays in this fragment so the innerHTML poll swaps identical
+   structure (initial render == refresh). #}
 <p class="muted">
-  Snapshot at {{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}.
-  Throughput window since {{ stats.since.strftime("%Y-%m-%d %H:%M:%S UTC") }}.
+  Snapshot at <time>{{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
+  Throughput window since <time>{{ stats.since.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
 </p>
 {% if since_invalid %}
 <p class="notice">Unrecognized <code>?since=</code> value — showing the last 24 hours.</p>
 {% endif %}
 
-<dl class="settings">
-  <dt>Review backlog</dt>
-  <dd>{{ review_backlog }} run(s) awaiting adjudication</dd>
-  <dt>Runs created in window</dt>
-  <dd data-metric="runs-created">{{ stats.runs_created_count }}</dd>
-  <dt>Roster size</dt>
-  <dd>{{ stats.roster_size }} enrolled speaker(s)</dd>
+{# Summary-first stat cards (issue #91). The exact figures the tables below
+   detail, surfaced at a glance; each card keeps its unit as text. #}
+<dl class="stat-cards">
+  <div class="stat-card">
+    <dt class="stat-label">Review backlog</dt>
+    <dd class="stat-value">{{ review_backlog }}</dd>
+    <dd class="stat-note">run(s) awaiting adjudication</dd>
+  </div>
+  <div class="stat-card">
+    <dt class="stat-label">Runs in window</dt>
+    <dd class="stat-value" data-metric="runs-created">{{ stats.runs_created_count }}</dd>
+    <dd class="stat-note">created this window</dd>
+  </div>
+  <div class="stat-card">
+    <dt class="stat-label">Completed</dt>
+    <dd class="stat-value">{{ stats.status_counts.get("completed", 0) }}</dd>
+    <dd class="stat-note">run(s) transcribed</dd>
+  </div>
+  <div class="stat-card">
+    <dt class="stat-label">Roster</dt>
+    <dd class="stat-value">{{ stats.roster_size }}</dd>
+    <dd class="stat-note">enrolled speaker(s)</dd>
+  </div>
 </dl>
 
 <h2>Runs by status</h2>
@@ -38,6 +56,10 @@
 
 <h2>Stage timing</h2>
 {% if stats.stage_durations %}
+{# Relative mini-bar scaled to the slowest stage's average; the exact seconds +
+   attempt count stay visible so the bar is supplemental, never the only cue.
+   max_avg guards the width math against an all-zero set (no div-by-zero). #}
+{% set max_avg = stats.stage_durations | map(attribute="avg_seconds") | max %}
 <div class="table-wrap">
 <table>
   <thead><tr><th scope="col">Stage</th><th scope="col">Avg duration</th><th scope="col">Finished attempts</th></tr></thead>
@@ -45,7 +67,11 @@
     {% for d in stats.stage_durations %}
     <tr>
       <td>{{ humanize_stage(d.stage) }}</td>
-      <td>{{ "%.2f"|format(d.avg_seconds) }}s</td>
+      <td>
+        <span class="num">{{ "%.2f"|format(d.avg_seconds) }}s</span>
+        <span class="minibar" aria-hidden="true"><span
+          style="width: {{ (100.0 * d.avg_seconds / max_avg) if max_avg else 0 }}%"></span></span>
+      </td>
       <td>{{ d.attempt_count }}</td>
     </tr>
     {% endfor %}

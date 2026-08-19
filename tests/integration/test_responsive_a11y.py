@@ -61,7 +61,10 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     body = client.get("/dashboard").text
     # The focus ring actually draws an outline from a defined var, not nothing.
     assert re.search(r":focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus-ring\)", body)
-    assert re.search(r"--focus-ring:\s*#", body)  # the var is defined, not merely named
+    # The ring follows the teal brand accent (issue #91), which is itself a real
+    # colour — so the outline resolves to a hue, not to an undefined var.
+    assert re.search(r"--focus-ring:\s*var\(--accent\)", body)
+    assert re.search(r"--accent:\s*#", body)
     assert re.search(r"\.table-wrap\s*\{[^}]*overflow-x:\s*auto", body)
     # AC1 belt-and-braces: long unbroken paths/URLs outside a table-wrap can't
     # force horizontal PAGE overflow (they break instead).
@@ -77,8 +80,14 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
     forced-colors (high-contrast) system setting."""
     body = client.get("/dashboard").text
     assert "color-scheme: light dark;" in body
-    # Focus ring has a dark-scheme value and a forced-colors fallback.
-    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--focus-ring:\s*#58a6ff", body)
+    # The consolidated dark block (issue #91) redefines the themed tokens the ring
+    # and error colour follow: the teal accent gets a dark value, and the ring is
+    # bound to it, so keyboard focus stays visible on the dark canvas. A
+    # forced-colors fallback still overrides both.
+    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--accent:\s*#5eb8ae", body)
+    assert re.search(r"--focus-ring:\s*var\(--accent\)", body)
     assert "@media (forced-colors: active)" in body
-    # Dark-scheme error colour keeps error text legible on a dark canvas (AC4).
-    assert "#ff7b72" in body
+    # Dark-scheme error colour keeps error text legible on a dark canvas (AC4):
+    # .error reads --danger, which the dark block retargets to a lighter red.
+    assert re.search(r"\.error\s*\{[^}]*color:\s*var\(--danger\)", body)
+    assert re.search(r"prefers-color-scheme:\s*dark[^}]*--danger:\s*#f2685e", body)
