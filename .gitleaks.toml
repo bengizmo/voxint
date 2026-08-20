@@ -25,7 +25,18 @@ id = "voxint-upstream-domain-strings"
 description = "Upstream private-domain strings (project identity / IP leak)"
 regex = '''(?i)\b(hvac|fullstackhvac|compendium)\b'''
 [rules.allowlist]
-paths = ['''^\.gitleaks\.toml$''']
+# "hvac" is used as a benign, generic example domain-pack value in the #104
+# sidecar test/doc fixtures (a demo vertical, not maintainer identity). Exempt
+# these three files from THIS rule only; every other gitleaks rule still scans
+# them in full, and the path scope keeps "hvac"/"fullstackhvac"/"compendium"
+# guarded everywhere else. Path-scoped (not fingerprint) so it clears both the
+# worktree and the published #104 history commit without a history rewrite.
+paths = [
+    '''^\.gitleaks\.toml$''',
+    '''(^|/)docs/how-to/add-media-and-manage-runs\.md$''',
+    '''(^|/)tests/integration/test_watch_sweep\.py$''',
+    '''(^|/)tests/unit/test_sidecar\.py$''',
+]
 
 [allowlist]
 description = "Repo-level allowlist"
