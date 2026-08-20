@@ -768,9 +768,11 @@ enhancement gate). The bundle is **scoped**: it powers **only transcript
 enhancement and run-asset summaries + entity mentions**. Web research, LLM
 speaker-name suggestions, and run-asset **topics** stay on the BYO endpoint and
 never fall back to the bundle; #66 measured that a small local model isn't
-reliable at those. When the bundle is active for a run-asset job, topics is
-silently skipped rather than generated badly. The overlay publishes **no host
-port**: only the worker reaches `voxint-llm` by service DNS.
+reliable at those. When the bundle is active for a run-asset job and no distinct
+BYO endpoint is configured, topics is silently skipped rather than generated
+badly; when the bundle is active **and** a distinct BYO endpoint is also
+configured, topics generate on that BYO endpoint (#106). The overlay publishes
+**no host port**: only the worker reaches `voxint-llm` by service DNS.
 
 ⚠ CPU is a slow backstop for a dense 4B model: enhancement (~20 s) and
 small/medium run-assets are fine, but large transcripts are not, so the bundled
