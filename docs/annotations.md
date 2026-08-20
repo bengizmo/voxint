@@ -1,0 +1,235 @@
+# Operator annotations: the anchor contract
+
+Audience: contributors and integrators. Operator-facing usage lives in the
+console how-to once the feature ships. This document freezes the contracts
+behind the annotation layer (issue #86): how a selected transcript span is
+addressed, validated, stored, rendered, and detected as stale. Code must match
+this document; a deliberate change here is a schema-version event, not a drift.
+
+## What an annotation is
+
+An annotation is an operator-owned marker over a span of the reviewed
+transcript: a highlight color, zero or more flat tags, and an optional margin
+note. Annotations are a mutable workspace, not an adjudication record: they can
+be edited and soft-deleted, and they never modify pipeline evidence. The
+transcript columns `raw_text`, `enhanced_text`, and the review-state
+`corrected_text` are never written by any annotation code path. A contract test
+enforces this.
+
+## Coordinate system
+
+The console renders the transcript as the ordered line list produced by
+`attributed_transcript` (`src/voxint/adjudication/transcript.py`). Split
+parents expand into derived child lines at read time; children carry the
+immutable parent `segment_id` plus a half-open `[word_start, word_end)` window
+into the parent's word tokens. Annotations always address the immutable parent
+segment, in one of three anchor kinds. Rendered-line indices are never
+persisted; they are a per-render projection.
+
+Character offsets are Unicode code points, everywhere. The browser's DOM
+exposes UTF-16 code units; the client converts to code points exactly once, in
+`frontend/src/lib/selection.ts`, before anything touches the wire. The server
+never sees or stores UTF-16 units.
+
+## Anchor kinds (`anchor_schema_version` = 1)
+
+- `word_range`: parent segment endpoints plus half-open parent-word indices.
+  Granted only when every covered segment is word-faithful (see
+  Classification) and both selection endpoints fall exactly on token
+  boundaries. The only kind with precise, word-timing-derived seconds.
+- `text_range`: parent segment endpoints plus half-open code-point offsets
+  into each endpoint segment's effective text as it existed at capture.
+  Required whenever the displayed text is not word-faithful raw text
+  (enhanced or corrected).
+- `segment_range`: whole immutable parent segments, no offsets. The fallback
+  for whole-segment selections and for partial selections on segments with no
+  word timings (`words IS NULL`): the exact selected text is preserved as the
+  quote, but display and seek degrade honestly to whole-segment granularity.
+  Timing is never fabricated.
+
+All kinds capture, server-side, at write time: the derived `quote_text`, a
+`source_text_hash` over the covered effective texts, and (word_range only)
+precise `start_seconds` and `end_seconds`.
+
+## Wire schema for capture
+
+Create, re-anchor, and the live pull-quote request share one capture payload.
+Per selection endpoint (start and end):
+
+- `segment_id`: the immutable parent segment UUID.
+- `child_word_start`, `child_word_end`: a nullable pair. When present it must
+  exactly name a currently rendered split child of that parent (derived from
+  the current split boundaries); anything else is a 422. Null for unsplit
+  lines.
+- `offset`: a code-point index into that rendered line's text. Half-open
+  across the pair: the start offset is inclusive, the end offset exclusive.
+
+Plus one `client_quote` field: the client's own slice of its props text (never
+`Range.toString()`, whose whitespace behavior at block boundaries is not a
+stable protocol). The server derives the quote independently from stored text
+and compares; a mismatch is a 409 stale conflict. `client_quote` is a
+consistency assertion only. It never becomes stored text, and classification
+is exclusively server-side; the client never picks the anchor kind.
+
+Reverse selections are legal; the server normalizes direction by transcript
+position before validating.
+
+## Coordinate mapping (child-local to parent)
+
+Rendered child text is the child's tokens joined and outer-stripped
+(`splits.py`, `derive_children`). Parent coordinates are code-point offsets
+into the parent's effective text. The mapping from a child-local offset to a
+parent offset must account for two deltas:
+
+- the parent outer-trim delta: joined tokens may differ from `raw_text` by
+  outer whitespace only (`splittable_words` tolerates
+  `joined.strip() == raw_text.strip()`), so token positions are located
+  inside `raw_text` after skipping its leading whitespace;
+- the child left-trim delta: each child's rendered text strips the leading
+  whitespace of its own first token span.
+
+One pure function pair in `src/voxint/adjudication/annotations.py` owns this
+mapping and its inverse. An executable fixture table pins it: leading and
+trailing spaces, space-prefixed tokens, embedded newlines, emoji, combining
+marks, re-split, and un-split cases. Unsplit lines map one-to-one because the
+rendered text equals the effective text.
+
+## Classification (server-side truth table)
+
+Given validated, direction-normalized endpoints:
+
+1. If both offsets cover whole parent segments, the anchor is
+   `segment_range`. `segment_range` always means whole immutable parents; a
+   whole split-child selection is not a segment_range.
+2. Otherwise, if every covered segment is word-eligible and both offsets land
+   exactly on token boundaries, the anchor is `word_range`. Word-eligibility
+   is `splittable_words(segment) is not None` (tokens validate and
+   reconcatenate to raw, no fired correction-trace entry, `enhanced_text`
+   null or raw-equal) and additionally no operator review correction
+   (`SegmentReviewState.corrected_text` is null); the review-correction check
+   is route-owned for splits and must be applied here explicitly. A whole
+   split-child selection classifies as word_range.
+3. Otherwise the anchor is `text_range`, with offsets stored against the
+   parent effective text at capture.
+
+Segments with `words IS NULL` can never produce `word_range`. A partial
+selection on such a segment stores `segment_range` with the verbatim quote;
+the interface presents its display and seek as whole-segment, and never
+implies sub-segment precision.
+
+`text_range` offsets live in immutable parent coordinates. Split children are
+render projections; re-splitting or un-splitting a parent changes projections
+only and never rewrites stored anchors or hashes.
+
+## Source text hash
+
+`source_text_hash` is the full sha256 hex digest of a versioned,
+length-framed serialization of the covered segments in `segment_index` order:
+
+    "annv1" + for each segment: "{segment_id}:{code_point_length}:{text}"
+
+encoded UTF-8, where `text` is the segment's effective text (corrected, else
+enhanced, else raw) at capture and `code_point_length` is `len(text)` in code
+points. Length framing plus segment ids make the serialization injective; a
+segment containing a delimiter byte cannot collide with a different segment
+partition. There is no revision-kind salt: byte-identical visible text stays
+non-stale even if its source tier changed. A golden-hex unit test pins this
+definition; changing it would mark every existing annotation stale at once,
+so any change requires bumping `anchor_schema_version`.
+
+The hash is stored for every anchor kind. At read time the server recomputes
+the hash over current effective texts; a mismatch marks the annotation stale.
+
+## Timing honesty
+
+`start_seconds` and `end_seconds` are nullable. Only `word_range` stores them,
+derived from word timings. `text_range` and `segment_range` store null; the
+read path derives coarse segment-interval bounds for display and seek and
+labels every API and export shape with `timing_precision`: `"word"` or
+`"segment"`. Downstream consumers (the future clip extraction in #88) must
+treat `"segment"` bounds as jump targets, never as clip-accurate edges.
+
+## Staleness, refresh, re-anchor
+
+At read time each annotation reports `stale` (hash mismatch) and its speaker
+attribution is resolved from the current adjudication state, not from
+anything captured.
+
+Stale annotations render without inline highlight marks. Painting old offsets
+onto changed text would highlight words the operator never selected, so the
+transcript shows only a distinctly styled locator at the annotation's start
+line, labeled as approximate, and the panel shows the original captured quote
+with a "text changed" badge.
+
+Refresh (an explicit operator action) re-derives quote, hash, and seconds
+only when the anchor still identifies the same span deterministically:
+
+- `segment_range`: always refreshable (whole segments are stable identity).
+- `word_range`: refreshable only while every covered segment still grants
+  word-eligibility; otherwise refused.
+- `text_range`: a matching hash makes refresh a no-op; a stale hash means the
+  offsets are dead and refresh is refused.
+
+A refused refresh returns a 409 stale-anchor conflict. The recovery path is
+re-anchor: a PATCH carrying a complete fresh capture payload, validated
+exactly like a create, which atomically replaces the anchor and its snapshot.
+Refresh, re-anchor, and metadata edits are mutually exclusive PATCH
+operations.
+
+## Data model (migration 0031)
+
+Three tables; annotations are mutable with soft delete.
+
+- `annotation_tags` (global, flat): verbatim `name` plus a writer-computed
+  `name_normalized` (trimmed, casefolded) carrying the UNIQUE constraint, a
+  palette `color`, `created_at`, and nullable `archived_at`. Archived tags
+  disappear from pickers but remain visible on existing annotations. There is
+  no tag delete in v1.
+- `transcript_annotations`: endpoint parent-segment FKs (`ON DELETE
+  CASCADE`), captured `start_segment_index`/`end_segment_index` copies for
+  ordering, the anchor fields gated by per-kind CHECK constraints (word pair
+  present only for word_range, char pair only for text_range, neither for
+  segment_range; hash always present, lowercase hex, 64 chars), nullable
+  paired seconds, `quote_text`, `color_index`, `note`, `operator`,
+  `idempotency_key` (UNIQUE) with a `request_fingerprint` of the canonical
+  create payload, timestamps, and `deleted_at`. `pipeline_run_id` is
+  denormalized by the sole writer from the endpoint segments and cascade
+  deletes with the run.
+- `annotation_tag_links`: composite-key many-to-many, capped per annotation.
+
+Caps (server-enforced): 6 highlight colors, 100 segments per span, 50,000
+quote code points, 4,000 note code points, 8 tags per annotation.
+
+## API surface and error taxonomy
+
+Reads (list, exports, stored quotes) require operator auth and onboarding
+only. Run-scoped writes require the active review claim token; a lost claim
+is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a client nonce;
+replaying the same nonce with the same fingerprint returns the original row
+(including a soft-deleted one; replay never resurrects or duplicates), and
+the same nonce with a different payload is a 409 idempotency conflict.
+Metadata edits and deletes are naturally idempotent and carry no nonce. Tag
+writes have no run context and are CSRF-gated like run notes. The live
+pull-quote request persists nothing and therefore carries neither nonce nor
+CSRF; it enforces the same caps and validation as create.
+
+- 422: malformed anchors, out-of-bounds offsets, unknown child ranges,
+  violated caps, bad colors.
+- 404: unknown run, segment, annotation, or tag, including any cross-run or
+  forged id. Fail closed; do not distinguish forged from missing.
+- 409: claim loss (`X-Voxint-Conflict: claim`), archived run, stale quote or
+  stale anchor (`X-Voxint-Conflict: stale`), duplicate tag name, idempotency
+  payload mismatch (`X-Voxint-Conflict: idempotency`).
+
+Repeated `?tag=` filters are a union (OR), identically in the panel and in
+exports.
+
+## Pull-quote formatting
+
+Stored and live pull-quotes build clipped `TranscriptLine` values (line text
+sliced to the annotation span, speaker and seconds preserved) and pass them
+through the existing `to_markdown` in `src/voxint/export/__init__.py`, so
+quote bytes match the file export by construction. A thin wrapper adds the
+citation line (source title and a `format_timespan` range) and the escaped
+tag and note trailer. Annotation exports use their own media-type table; the
+transcript `TranscriptFormat`/`MEDIA_TYPES` tables are not extended.
