@@ -675,15 +675,33 @@ through a proxy on purpose). `YTDLP_COOKIES_FILE` is wired only when set. Both a
 treated as **credentials**, never surfaced in errors, so keep them out of logs
 and shared configs.
 
-Voxint applies two SSRF gates (string-level at submit, host re-resolution in the
-worker before download; see architecture.md) that reject non-public **resolved**
-addresses. They are **not** a sandbox: yt-dlp re-resolves independently and its
-generic extractor follows redirects, so a rebind-after-check, an HTTP redirect to
-a private address, or an extractor-constructed private URL is **not** covered.
-**For untrusted-URL ingestion, run the worker with restricted egress**: no route
-to RFC1918 / link-local / `169.254.169.254` (egress firewall or dedicated egress
-network). A blocked/refused download is a clean FAILED @ acquire the operator
-**Requeues**; it never loops.
+Voxint layers four controls, each closing what the one before it cannot. The
+first two are userland gates inside the app; the last two are network policy you
+deploy around it (see architecture.md for the gate internals):
+
+1. **Submit gate** (`ingest.validate_ingest_url`). Rejects a malformed URL or a
+   private IP *literal* at submit time, before a row exists. It does not resolve
+   DNS, so a name that looks public now can still rebind later.
+2. **Resolved-host gate** (`media.netcheck`, download time). Re-resolves the host
+   in the worker just before the download and refuses it if any resolved address
+   is non-public, closing the rebind-after-submit window for DNS names. It cannot
+   follow yt-dlp's own independent re-resolution, its redirects, or an
+   extractor-constructed URL.
+3. **Egress proxy overlay** (`compose.ytdlp-egress.yaml`, opt-in, below). Vets and
+   pins every yt-dlp connection at the connection boundary, so redirects and
+   extractor-built destinations that resolve to private space are refused too. It
+   cannot constrain a helper process that ignores the proxy.
+4. **Network policy** (a host egress firewall, or a Kubernetes `NetworkPolicy`,
+   below). Denies the download path any kernel-level route to RFC1918 /
+   link-local / `169.254.169.254`, covering even a proxy-ignoring helper.
+
+Gates 1 and 2 do not close the residual on their own, and no doc should read as if
+they do: a rebind between the worker's check and yt-dlp's fetch, an HTTP redirect
+to a private address, or an extractor-constructed private URL all slip past a
+userland check. The proxy overlay (3) closes them for yt-dlp's own HTTP(S)
+traffic, and the network-policy layer (4) is what closes the residual for
+genuinely untrusted URLs. A blocked or refused download is a clean FAILED @
+acquire the operator **Requeues**; it never loops.
 
 #### Restricted URL-download overlay (opt-in, recommended for untrusted URLs)
 
@@ -715,6 +733,95 @@ streaming formats), or the worker container's own routable network, is beyond it
 For that last mile, additionally deny the worker a route to RFC1918 / link-local /
 `169.254.169.254` with a host-level egress firewall. A refused destination is the
 same clean FAILED @ acquire you **Requeue**.
+
+#### Kubernetes: restricted egress with a NetworkPolicy
+
+On Kubernetes the layer-4 firewall above is a `NetworkPolicy`, and it has to bind
+to the pod where the download and any helper it spawns actually run: the
+**worker** pod. yt-dlp and an ffmpeg helper share the worker's network namespace,
+so a policy on any other pod (the proxy included) never sees the helper's traffic,
+and only a worker-scoped policy can stop a proxy-ignoring helper reaching private
+space. The catch is that the worker also needs its in-cluster dependencies
+(Postgres, Redis, the model services, the egress proxy, DNS), which sit on private
+addresses. Once any egress rule exists the pod is default-deny for everything
+else, and the public-internet rule below deliberately carves private space out, so
+those dependencies each need their own explicit allow. NetworkPolicy egress rules
+are additive: the allow rules and the public-internet rule combine, and their
+order does not matter.
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: voxint-worker-restricted-egress
+  namespace: voxint
+spec:
+  podSelector:
+    matchLabels:
+      app: voxint-worker
+  policyTypes:
+    - Egress
+  egress:
+    # 1. DNS. Shown for CoreDNS in kube-system; substitute your cluster's DNS
+    #    namespace and pod labels.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    # 2. The worker's in-cluster dependencies, on private ClusterIPs. Match the
+    #    real labels of your own pods.
+    - to:
+        - podSelector: { matchLabels: { app: voxint-postgres } }
+        - podSelector: { matchLabels: { app: voxint-redis } }
+        - podSelector: { matchLabels: { app: voxint-whisper } }
+        - podSelector: { matchLabels: { app: voxint-pyannote } }
+        - podSelector: { matchLabels: { app: voxint-titanet } }
+        - podSelector: { matchLabels: { app: voxint-egress-proxy } }
+    # 3. The public internet, with private and link-local space carved out. The
+    #    169.254.0.0/16 exclusion covers the cloud metadata endpoint
+    #    (169.254.169.254). A proxy-ignoring helper can still reach a public CDN
+    #    but not private space.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+        - ipBlock:
+            cidr: ::/0
+            except:
+              - fc00::/7
+              - fe80::/10
+```
+
+Caveats before you rely on it:
+
+- **The cluster needs a working `NetworkPolicy` implementation** (Calico, Cilium,
+  or Flannel with its policy controller enabled). Plain Flannel with no policy
+  controller accepts the manifest and enforces nothing, so confirm enforcement
+  before treating this as a control.
+- **Match every selector to your cluster, then test.** The DNS rule targets
+  CoreDNS in kube-system; the component labels are placeholders you replace with
+  your own pods' labels. Some CNIs evaluate a policy against a destination Service
+  ClusterIP differently from the backing pod, so after applying it, verify UDP and
+  TCP DNS and one real download from the worker.
+- **The `ipBlock` list is a coarse kernel-level backstop, not the precise policy.**
+  It denies the well-known private ranges by CIDR; the proxy overlay's own
+  `media.netcheck.ip_is_public` stays the authoritative per-address check and also
+  rejects site-local, IPv4-in-IPv6 embeddings, and carrier-grade NAT that a short
+  CIDR list omits. Run both.
+
+Keep the proxy overlay running alongside this policy. The proxy (layer 3) does the
+precise per-connection vetting and IP pinning for yt-dlp's own HTTP(S) traffic;
+this worker policy (layer 4) is what contains a helper that ignores the proxy.
 
 ### Web research retrieval (issue #39; off by default)
 
