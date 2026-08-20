@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  annotationsExportUrl,
   filterByTags,
   sortAnnotations,
   spansByLine,
@@ -79,7 +80,7 @@ describe("staleLocatorLines", () => {
 });
 
 describe("sortAnnotations", () => {
-  it("orders by segment, then first-span offset, then creation time", () => {
+  it("orders by rendered line index, then first-span offset, then id", () => {
     const order = sortAnnotations([
       annotation({
         id: "late",
@@ -98,6 +99,33 @@ describe("sortAnnotations", () => {
       }),
     ]).map((a) => a.id);
     expect(order).toEqual(["early-a", "early-b", "late"]);
+  });
+
+  it("sorts by rendered line, not captured segment index (split child)", () => {
+    // A split child moves a low-segment-index highlight to a later line: the
+    // panel must follow the line the operator sees, matching the server key.
+    const order = sortAnnotations([
+      annotation({
+        id: "seg0-line3",
+        startSegmentIndex: 0,
+        spans: [{ lineIndex: 3, start: 0, end: 1 }],
+      }),
+      annotation({
+        id: "seg5-line1",
+        startSegmentIndex: 5,
+        spans: [{ lineIndex: 1, start: 0, end: 1 }],
+      }),
+    ]).map((a) => a.id);
+    expect(order).toEqual(["seg5-line1", "seg0-line3"]);
+  });
+
+  it("orders a stale row by its locator line and puts an unresolvable row last", () => {
+    const order = sortAnnotations([
+      annotation({ id: "unresolvable", stale: true, spans: [], locatorLineIndex: null }),
+      annotation({ id: "stale-line1", stale: true, spans: [], locatorLineIndex: 1 }),
+      annotation({ id: "live-line0", spans: [{ lineIndex: 0, start: 0, end: 1 }] }),
+    ]).map((a) => a.id);
+    expect(order).toEqual(["live-line0", "stale-line1", "unresolvable"]);
   });
 
   it("does not mutate the input array", () => {
@@ -136,5 +164,20 @@ describe("filterByTags", () => {
       "a",
       "b",
     ]);
+  });
+});
+
+describe("annotationsExportUrl", () => {
+  it("is the bare route when no tag filter is active", () => {
+    expect(annotationsExportUrl("run-1", new Set())).toBe(
+      "/review/run-1/annotations/export.md",
+    );
+  });
+
+  it("appends a repeated ?tag= param per selected tag (OR-union)", () => {
+    const url = annotationsExportUrl("run-1", new Set(["t1", "t2"]));
+    expect(url.startsWith("/review/run-1/annotations/export.md?")).toBe(true);
+    const params = new URLSearchParams(url.split("?")[1]);
+    expect(params.getAll("tag").sort()).toEqual(["t1", "t2"]);
   });
 });

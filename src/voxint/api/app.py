@@ -59,15 +59,22 @@ from voxint.adjudication.annotations import (
     AnnotationValidationError,
     CaptureEndpoint,
     CapturePayload,
+    ResolvedAnnotation,
     annotations_for_run,
     capture_annotation,
+    clip_lines_for_export,
     create_tag,
+    derive_live_anchor,
     list_tags,
+    live_annotation_or_404,
     load_covered_segments,
     reanchor_annotation,
     refresh_annotation,
     resolve_annotation_spans,
+    resolve_tag_names,
+    resolved_order_key,
     soft_delete_annotation,
+    stored_anchor_from_derived,
     stored_anchor_from_row,
     tags_for_annotations,
     update_annotation,
@@ -330,8 +337,11 @@ from voxint.enrichment.triage import (
     score as triage_score,
 )
 from voxint.export import (
+    ANNOTATION_BULK_SEPARATOR,
+    ANNOTATION_MEDIA_TYPES,
     MEDIA_TYPES,
     TranscriptFormat,
+    annotation_pull_quote,
     format_timespan,
     render_transcript,
     to_rttm,
@@ -1428,8 +1438,12 @@ def _annotation_shapes(
     anchors = [stored_anchor_from_row(row) for row in rows]
     resolved = {r.annotation_id: r for r in resolve_annotation_spans(lines, covered, anchors)}
     tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    # Canonical transcript order is applied AFTER resolution — by rendered line index,
+    # not the captured start_segment_index annotations_for_run sorts by — so the panel
+    # and the bulk pull-quote export agree even when a split child reorders lines.
+    ordered_rows = sorted(rows, key=lambda row: resolved_order_key(resolved[row.id]))
     shapes: list[dict[str, Any]] = []
-    for row in rows:
+    for row in ordered_rows:
         res = resolved[row.id]
         shapes.append(
             {
@@ -1480,6 +1494,53 @@ def _annotations_payload(
         "annotations": _annotation_shapes(session, run_id, rows),
         "tags": [_tag_shape(t) for t in list_tags(session)],
     }
+
+
+def _run_source_title(run: PipelineRun) -> str:
+    """A non-blank, operator-recognizable source label for a pull-quote citation
+    (issue #86): the run's sidecar title (issue #104, operator intent), else the
+    acquisition-metadata title (issue #36), else a cleaned filename from the source
+    path — the same display precedence the run listing uses."""
+    title = title_from_snapshot(run.sidecar)
+    if title is None and run.media_item.source_metadata is not None:
+        title = run.media_item.source_metadata.title
+    return friendly_media_label(title, run.media_item.source_path)
+
+
+def _pull_quote_markdown(
+    resolved: ResolvedAnnotation,
+    lines: Sequence[TranscriptLine],
+    *,
+    source_title: str,
+    tags: Sequence[str],
+    note: str | None,
+) -> str:
+    """Assemble one highlight's pull-quote Markdown, refusing a stale or otherwise
+    unresolvable highlight with a 409 ``X-Voxint-Conflict: stale`` (docs/annotations.md):
+    the captured copy alone cannot reconstruct the live speaker attribution and
+    per-line geometry a faithful quote needs, so the export never fabricates it from
+    ``quote_text``."""
+    clipped = clip_lines_for_export(resolved, lines)
+    if (
+        resolved.stale
+        or not clipped
+        or resolved.start_seconds is None
+        or resolved.end_seconds is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="highlight is stale; refresh or re-anchor it before exporting",
+            headers=_ANNOTATION_STALE_HEADERS,
+        )
+    return annotation_pull_quote(
+        clipped,
+        source_title=source_title,
+        start_seconds=resolved.start_seconds,
+        end_seconds=resolved.end_seconds,
+        timing_precision=resolved.timing_precision,
+        tags=tags,
+        note=note,
+    )
 
 
 def _capture_payload_from_form(
@@ -5046,6 +5107,132 @@ def _register_routes(app: FastAPI) -> None:
         tag_ids = tag or []
         _require_filter_tags_exist(session, tag_ids)
         return JSONResponse(_annotations_payload(session, run_id, tag_ids))
+
+    @protected.get("/review/{run_id}/annotations/export.md")
+    def export_annotations_md(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+    ) -> Response:
+        """All (filtered) highlights as Markdown pull-quotes in canonical transcript
+        order (issue #86), joined by a thematic-break separator. Onboarding-auth only,
+        NO claim — Copy is a read, available in a read-only review tab. Repeated
+        ``?tag=`` is the same OR-union filter as the panel; an unknown tag id is 404.
+        Fails ATOMICALLY with 409 ``X-Voxint-Conflict: stale`` if ANY matched highlight
+        is stale (it is never silently omitted). An empty match is an empty body (200)."""
+        run = _run_or_404(session, run_id)
+        tag_ids = tag or []
+        _require_filter_tags_exist(session, tag_ids)
+        rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+        if not rows:
+            return Response(content="", media_type=ANNOTATION_MEDIA_TYPES["md"])
+        lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+        covered = load_covered_segments(session, run_id)
+        resolved = {
+            r.annotation_id: r
+            for r in resolve_annotation_spans(
+                lines, covered, [stored_anchor_from_row(row) for row in rows]
+            )
+        }
+        tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+        source_title = _run_source_title(run)
+        ordered = sorted(rows, key=lambda row: resolved_order_key(resolved[row.id]))
+        quotes = [
+            _pull_quote_markdown(
+                resolved[row.id],
+                lines,
+                source_title=source_title,
+                tags=[t.name for t in tags_by_id.get(row.id, [])],
+                note=row.note,
+            )
+            for row in ordered
+        ]
+        return Response(
+            content=ANNOTATION_BULK_SEPARATOR.join(quotes),
+            media_type=ANNOTATION_MEDIA_TYPES["md"],
+        )
+
+    @protected.get("/review/{run_id}/annotations/{annotation_id}/export.md")
+    def export_annotation_md(
+        run_id: uuid.UUID,
+        annotation_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+    ) -> Response:
+        """One highlight as a Markdown pull-quote (issue #86). Onboarding-auth only,
+        NO claim. A foreign, forged, or soft-deleted id is 404 (fail closed). A stale
+        highlight is refused 409 ``X-Voxint-Conflict: stale`` — the operator refreshes
+        or re-anchors it first."""
+        run = _run_or_404(session, run_id)
+        try:
+            row = live_annotation_or_404(session, run_id, annotation_id)
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+        covered = load_covered_segments(session, run_id)
+        resolved = resolve_annotation_spans(lines, covered, [stored_anchor_from_row(row)])[0]
+        tags = [t.name for t in tags_for_annotations(session, [row.id]).get(row.id, [])]
+        markdown = _pull_quote_markdown(
+            resolved,
+            lines,
+            source_title=_run_source_title(run),
+            tags=tags,
+            note=row.note,
+        )
+        return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
+
+    @protected.post("/review/{run_id}/annotations/export/live.md")
+    def export_live_pull_quote(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        start_segment_id: Annotated[uuid.UUID, Form()],
+        start_offset: Annotated[int, Form()],
+        end_segment_id: Annotated[uuid.UUID, Form()],
+        end_offset: Annotated[int, Form()],
+        client_quote: Annotated[str, Form()],
+        start_child_word_start: Annotated[int | None, Form()] = None,
+        start_child_word_end: Annotated[int | None, Form()] = None,
+        end_child_word_start: Annotated[int | None, Form()] = None,
+        end_child_word_end: Annotated[int | None, Form()] = None,
+        note: Annotated[str | None, Form()] = None,
+        tags: Annotated[list[uuid.UUID] | None, Form()] = None,
+    ) -> Response:
+        """A live pull-quote for an UNSAVED selection (issue #86, docs/annotations.md):
+        classify + validate exactly as create, but persist NOTHING and return the
+        Markdown. Onboarding-auth only — no claim, no nonce, no CSRF, because nothing is
+        written. Same caps/validation as create (422 on a bad anchor or cap; 409 stale on
+        a drifted client quote). The optional ``note``/``tags`` are echoed into the quote
+        trailer, never stored; unknown tag ids are 404."""
+        run = _run_or_404(session, run_id)
+        payload = _capture_payload_from_form(
+            start_segment_id,
+            start_offset,
+            start_child_word_start,
+            start_child_word_end,
+            end_segment_id,
+            end_offset,
+            end_child_word_start,
+            end_child_word_end,
+            client_quote,
+        )
+        try:
+            tag_names = resolve_tag_names(session, list(tags) if tags else [])
+            derived, covered = derive_live_anchor(session, run_id, payload)
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+        anchor = stored_anchor_from_derived(derived, uuid.uuid4())
+        resolved = resolve_annotation_spans(lines, covered, [anchor])[0]
+        markdown = _pull_quote_markdown(
+            resolved,
+            lines,
+            source_title=_run_source_title(run),
+            tags=tag_names,
+            note=note,
+        )
+        return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
 
     @protected.post("/review/{run_id}/annotations")
     def create_annotation(

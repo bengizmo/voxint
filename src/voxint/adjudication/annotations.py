@@ -23,7 +23,8 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -89,14 +90,20 @@ __all__ = [
     "annotation_source_hash",
     "annotations_for_run",
     "capture_annotation",
+    "clip_lines_for_export",
     "create_tag",
     "derive_anchor",
+    "derive_live_anchor",
     "list_tags",
+    "live_annotation_or_404",
     "load_covered_segments",
     "reanchor_annotation",
     "refresh_annotation",
     "resolve_annotation_spans",
+    "resolve_tag_names",
+    "resolved_order_key",
     "soft_delete_annotation",
+    "stored_anchor_from_derived",
     "stored_anchor_from_row",
     "tags_for_annotations",
     "update_annotation",
@@ -679,6 +686,26 @@ def _resolve_tag_ids(session: Session, tag_ids: list[uuid.UUID]) -> list[uuid.UU
     return deduped
 
 
+def resolve_tag_names(session: Session, tag_ids: list[uuid.UUID]) -> list[str]:
+    """Validate tag ids exactly as create does (dedup, per-annotation cap -> 422,
+    unknown id -> 404) and return their names in the panel's alphabetical display
+    order. The live pull-quote export uses this to decorate the quote trailer without
+    persisting any link (issue #86)."""
+    deduped = _resolve_tag_ids(session, tag_ids)
+    if not deduped:
+        return []
+    rows = (
+        session.execute(
+            select(AnnotationTag)
+            .where(AnnotationTag.id.in_(deduped))
+            .order_by(AnnotationTag.name_normalized)
+        )
+        .scalars()
+        .all()
+    )
+    return [t.name for t in rows]
+
+
 def _replace_tag_links(
     session: Session, annotation_id: uuid.UUID, tag_ids: list[uuid.UUID]
 ) -> None:
@@ -865,6 +892,31 @@ def _load_live_annotation(
     if row is None:
         raise AnnotationNotFoundError(f"annotation {annotation_id} not found in this run")
     return row
+
+
+def live_annotation_or_404(
+    session: Session, run_id: uuid.UUID, annotation_id: uuid.UUID
+) -> TranscriptAnnotation:
+    """Public read accessor for a run's live annotation (issue #86 export routes): a
+    foreign, forged, or soft-deleted id raises :class:`AnnotationNotFoundError` (404,
+    fail closed). Thin wrapper over the loader the writers share."""
+    return _load_live_annotation(session, run_id, annotation_id)
+
+
+def derive_live_anchor(
+    session: Session, run_id: uuid.UUID, payload: CapturePayload
+) -> tuple[DerivedAnchor, list[CoveredSegment]]:
+    """Classify + validate a capture payload against the run's CURRENT render WITHOUT
+    persisting anything (issue #86 live pull-quote). Mirrors the create path's
+    validation exactly (no second dialect): 404 on an empty run or a cross-run/forged
+    endpoint, then :func:`derive_anchor` (422 on a bad anchor or cap, 409 stale on a
+    client-quote mismatch). Returns the derived anchor and the covered segments, so the
+    caller can resolve it to spans against the same render."""
+    covered = load_covered_segments(session, run_id)
+    if not covered:
+        raise AnnotationNotFoundError(f"run {run_id} has no transcript")
+    _require_endpoints_in_run(covered, payload)
+    return derive_anchor(covered, payload), covered
 
 
 def update_annotation(
@@ -1221,6 +1273,73 @@ def stored_anchor_from_row(row: TranscriptAnnotation) -> StoredAnchor:
         source_text_hash=row.source_text_hash,
         start_seconds=row.start_seconds,
         end_seconds=row.end_seconds,
+    )
+
+
+def stored_anchor_from_derived(
+    derived: DerivedAnchor, annotation_id: uuid.UUID
+) -> StoredAnchor:
+    """Project a freshly :func:`derive_anchor`-classified anchor onto a
+    :class:`StoredAnchor` for the live (unsaved) pull-quote path (issue #86). The
+    hash was just derived against the current render, so resolving this anchor is
+    never stale. ``annotation_id`` is a synthetic id for the in-memory resolve; the
+    row is never persisted."""
+    return StoredAnchor(
+        annotation_id=annotation_id,
+        anchor_kind=derived.anchor_kind,
+        start_segment_id=derived.start_segment_id,
+        end_segment_id=derived.end_segment_id,
+        start_segment_index=derived.start_segment_index,
+        end_segment_index=derived.end_segment_index,
+        start_word_index=derived.start_word_index,
+        end_word_index=derived.end_word_index,
+        start_char_offset=derived.start_char_offset,
+        end_char_offset=derived.end_char_offset,
+        source_text_hash=derived.source_text_hash,
+        start_seconds=derived.start_seconds,
+        end_seconds=derived.end_seconds,
+    )
+
+
+def clip_lines_for_export(
+    resolved: ResolvedAnnotation, lines: Sequence[TranscriptLine]
+) -> list[TranscriptLine]:
+    """The clipped :class:`TranscriptLine` values a pull-quote renders (issue #86).
+
+    Each :class:`ResolvedSpan` is a code-point ``[start, end)`` slice of the current
+    render line at ``line_index``; the clip preserves that line's speaker and seconds
+    so the export passes through :func:`voxint.export.to_markdown` byte-identically to
+    the transcript file export by construction (docs/annotations.md). A stale
+    annotation carries no spans and yields ``[]`` — the caller refuses the export
+    rather than fabricating text from the captured copy."""
+    clipped: list[TranscriptLine] = []
+    for span in resolved.spans:
+        src = lines[span.line_index]
+        clipped.append(replace(src, text=src.text[span.start : span.end]))
+    return clipped
+
+
+# A live annotation with no painted line and no locator (defensively unresolvable)
+# sorts last, after everything with a real position.
+_ORDER_LINE_SENTINEL = 1_000_000_000
+
+
+def resolved_order_key(res: ResolvedAnnotation) -> tuple[int, int, str]:
+    """The canonical transcript-order key for a resolved annotation (issue #86): its
+    first painted line and code-point offset, falling back to the stale locator line,
+    then the annotation id as a stable tiebreak.
+
+    Shared by the Highlights-panel serialization and the bulk pull-quote export so the
+    two never disagree on order. Ordering by rendered LINE index (not the captured
+    ``start_segment_index``) is load-bearing: a split-child highlight can sort
+    differently by segment index than by the line the operator actually sees."""
+    if res.spans:
+        return (res.spans[0].line_index, res.spans[0].start, str(res.annotation_id))
+    locator = res.locator_line_index
+    return (
+        locator if locator is not None else _ORDER_LINE_SENTINEL,
+        0,
+        str(res.annotation_id),
     )
 
 

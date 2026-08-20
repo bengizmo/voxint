@@ -108,20 +108,43 @@ export function staleLocatorLines(annotations: AnnotationShape[]): Set<number> {
   return set;
 }
 
-// Transcript order for the Highlights panel: by start segment, then the first
-// resolved span's offset, then the id as a stable final tiebreak.
+// A live annotation with no painted line and no locator sorts last. Mirrors the
+// server's _ORDER_LINE_SENTINEL so client and server agree on the tail.
+const ORDER_LINE_SENTINEL = 1_000_000_000;
+
+function orderLine(a: AnnotationShape): number {
+  if (a.spans.length > 0) return a.spans[0].lineIndex;
+  return a.locatorLineIndex ?? ORDER_LINE_SENTINEL;
+}
+
+// Transcript order for the Highlights panel: by RENDERED line index (not the
+// captured start segment index, which a split child reorders against), then the
+// first span's offset, then the id as a stable final tiebreak. This is the exact
+// key the server's `resolved_order_key` applies, so the panel and the bulk
+// pull-quote export can never disagree on order (issue #86).
 export function sortAnnotations(
   annotations: AnnotationShape[],
 ): AnnotationShape[] {
   return [...annotations].sort((a, b) => {
-    if (a.startSegmentIndex !== b.startSegmentIndex) {
-      return a.startSegmentIndex - b.startSegmentIndex;
-    }
+    const al = orderLine(a);
+    const bl = orderLine(b);
+    if (al !== bl) return al - bl;
     const as = a.spans[0]?.start ?? 0;
     const bs = b.spans[0]?.start ?? 0;
     if (as !== bs) return as - bs;
     return a.id.localeCompare(b.id);
   });
+}
+
+// The bulk pull-quote export URL for the current OR-union tag filter (issue #86):
+// each selected tag becomes a repeated `?tag=` param, exactly the filter the panel
+// applies, so a "Copy all (filtered)" fetch returns the same set the operator sees.
+// An empty filter yields the bare route (all highlights).
+export function annotationsExportUrl(runId: string, tagIds: Set<string>): string {
+  const params = new URLSearchParams();
+  for (const t of tagIds) params.append("tag", t);
+  const qs = params.toString();
+  return `/review/${runId}/annotations/export.md${qs ? `?${qs}` : ""}`;
 }
 
 // OR-union tag filter for the panel: an empty filter keeps everything; otherwise a

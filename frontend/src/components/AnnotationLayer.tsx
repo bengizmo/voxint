@@ -8,7 +8,9 @@ import {
 } from "react";
 
 import { ApiError, apiFetch } from "../lib/api-client";
+import { writeClipboard } from "../lib/clipboard";
 import {
+  annotationsExportUrl,
   filterByTags,
   sortAnnotations,
   spansByLine,
@@ -112,6 +114,11 @@ export function useAnnotations({
   const [filterTags, setFilterTags] = useState<Set<string>>(() => new Set());
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  // Copy/export (issue #86 Landing 2): a transient aria-live status, and the exact
+  // fetched markdown to reveal in a selectable field when the clipboard is
+  // unavailable (a plain-http LAN context) so the operator can copy it by hand.
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [copyFallback, setCopyFallback] = useState<string | null>(null);
   // Synchronous re-entry guard (a double word/button click races two writes before
   // `busy` state re-renders), mirroring ReviewStepper's busyRef.
   const busyRef = useRef<boolean>(false);
@@ -433,6 +440,73 @@ export function useAnnotations({
     [onJump],
   );
 
+  // Copy one highlight as a Markdown pull-quote. The SERVER renders the quote (bytes
+  // match a file export by construction); the client only fetches and writes it, never
+  // reassembling markdown. A stale highlight is refused server-side (409 stale) and its
+  // Copy is disabled client-side, so this path normally sees only live rows. No claim.
+  const copyOne = useCallback(
+    async (id: string) => {
+      setCopyStatus(null);
+      setCopyFallback(null);
+      try {
+        const res = await apiFetch(`/review/${runId}/annotations/${id}/export.md`, {
+          method: "GET",
+        });
+        const md = await res.text();
+        if (await writeClipboard(md)) {
+          setCopyStatus("Highlight copied to the clipboard.");
+        } else {
+          setCopyFallback(md);
+          setCopyStatus(
+            "Couldn’t copy automatically. The highlight is shown below; select it and copy it manually.",
+          );
+        }
+      } catch (e) {
+        if (e instanceof ApiError && e.conflictKind === "stale") {
+          setCopyStatus("This highlight is stale. Refresh or re-anchor it, then copy.");
+        } else {
+          setCopyStatus("Couldn’t copy the highlight. Please try again.");
+        }
+      }
+    },
+    [runId],
+  );
+
+  // Copy every highlight matching the current tag filter, in transcript order. Honors
+  // the same OR-union `?tag=` filter as the panel. The bulk export fails atomically if
+  // any matched highlight is stale (409 stale); Copy all is also disabled client-side
+  // while the visible set contains one.
+  const copyAll = useCallback(async () => {
+    setCopyStatus(null);
+    setCopyFallback(null);
+    try {
+      const res = await apiFetch(annotationsExportUrl(runId, filterTags), {
+        method: "GET",
+      });
+      const md = await res.text();
+      if (md.trim() === "") {
+        setCopyStatus("No highlights to copy.");
+        return;
+      }
+      if (await writeClipboard(md)) {
+        setCopyStatus("All highlights copied to the clipboard.");
+      } else {
+        setCopyFallback(md);
+        setCopyStatus(
+          "Couldn’t copy automatically. The highlights are shown below; select them and copy them manually.",
+        );
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.conflictKind === "stale") {
+        setCopyStatus(
+          "Some highlights are stale. Refresh or re-anchor them, then copy all.",
+        );
+      } else {
+        setCopyStatus("Couldn’t copy the highlights. Please try again.");
+      }
+    }
+  }, [runId, filterTags]);
+
   const toolbarOpen = writable && (pending !== null || editingId !== null);
   const toolbar: ReactNode = toolbarOpen ? (
     <AnnotationToolbar
@@ -478,6 +552,10 @@ export function useAnnotations({
       onDelete={(id) => void deleteAnnotation(id)}
       onRefresh={(id) => void refresh(id)}
       onReanchor={(id) => void reanchor(id)}
+      onCopy={(id) => void copyOne(id)}
+      onCopyAll={() => void copyAll()}
+      copyStatus={copyStatus}
+      copyFallback={copyFallback}
     />
   );
 
@@ -670,11 +748,17 @@ interface HighlightsPanelProps {
   onDelete: (id: string) => void;
   onRefresh: (id: string) => void;
   onReanchor: (id: string) => void;
+  // Copy/export (issue #86 Landing 2): a read, so it renders for any viewer.
+  onCopy: (id: string) => void;
+  onCopyAll: () => void;
+  copyStatus: string | null;
+  copyFallback: string | null;
 }
 
 // The Highlights panel (issue #86): every annotation in transcript order, with an
 // OR-union tag filter, honest staleness, and click-to-jump. Read for any viewer;
-// the mutating actions render only when the tab holds the claim.
+// the mutating actions render only when the tab holds the claim, but Jump and Copy
+// (both reads) always render.
 function HighlightsPanel({
   annotations,
   total,
@@ -690,12 +774,35 @@ function HighlightsPanel({
   onDelete,
   onRefresh,
   onReanchor,
+  onCopy,
+  onCopyAll,
+  copyStatus,
+  copyFallback,
 }: HighlightsPanelProps): ReactNode {
+  // Copy all is refused (409) if any matched highlight is stale; disable it up front
+  // while the visible set contains one, and when there is nothing to copy.
+  const anyStale = annotations.some((a) => a.stale);
   return (
     <section className="highlights-panel my-2" aria-label="Highlights">
       <h2 className="text-sm">
         <strong>Highlights</strong> ({total})
       </h2>
+      {annotations.length > 0 && (
+        <div className="highlights-bulk my-1 text-sm">
+          <button
+            type="button"
+            onClick={onCopyAll}
+            disabled={anyStale}
+            title={
+              anyStale
+                ? "Some highlights are stale. Refresh or re-anchor them first."
+                : undefined
+            }
+          >
+            Copy all{filterTags.size > 0 ? " (filtered)" : ""}
+          </button>
+        </div>
+      )}
       {tags.length > 0 && (
         <div
           className="highlights-filter my-1 text-sm"
@@ -781,6 +888,18 @@ function HighlightsPanel({
                 <button type="button" onClick={() => onJump(a)}>
                   Jump
                 </button>
+                <button
+                  type="button"
+                  onClick={() => onCopy(a.id)}
+                  disabled={a.stale}
+                  title={
+                    a.stale
+                      ? "This highlight is stale. Refresh or re-anchor it first."
+                      : undefined
+                  }
+                >
+                  Copy
+                </button>
                 {writable && (
                   <button
                     type="button"
@@ -821,6 +940,22 @@ function HighlightsPanel({
             </li>
           ))}
         </ul>
+      )}
+      {copyStatus != null && (
+        <p role="status" aria-live="polite" className="highlight-copy-status text-sm">
+          {copyStatus}
+        </p>
+      )}
+      {copyFallback != null && (
+        <label className="highlight-copy-fallback text-sm">
+          Copy this text manually:
+          <textarea
+            readOnly
+            rows={6}
+            value={copyFallback}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+        </label>
       )}
     </section>
   );

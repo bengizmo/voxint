@@ -25,10 +25,14 @@ from voxint.adjudication.annotations import (
     CapturePayload,
     CoveredSegment,
     DerivedAnchor,
+    ResolvedAnnotation,
+    ResolvedSpan,
     StoredAnchor,
     annotation_source_hash,
+    clip_lines_for_export,
     derive_anchor,
     resolve_annotation_spans,
+    resolved_order_key,
     stored_anchor_from_row,
     word_eligible,
 )
@@ -810,3 +814,79 @@ def test_stored_anchor_from_row_round_trips() -> None:
     assert sa.anchor_kind == WORD_RANGE
     assert (sa.start_word_index, sa.end_word_index) == (1, 3)
     assert sa.source_text_hash == "0" * 64
+
+
+# --------------------------------------------------------------------------- #
+# Pull-quote projection + canonical order (issue #86 Landing 2)
+# --------------------------------------------------------------------------- #
+
+
+def _resolved(
+    *,
+    annotation_id: uuid.UUID,
+    spans: tuple[ResolvedSpan, ...],
+    stale: bool = False,
+    locator: int | None = None,
+) -> ResolvedAnnotation:
+    return ResolvedAnnotation(
+        annotation_id=annotation_id,
+        anchor_kind=WORD_RANGE,
+        stale=stale,
+        timing_precision=TIMING_WORD,
+        start_seconds=1.0,
+        end_seconds=2.0,
+        speakers=("S0",),
+        spans=spans,
+        locator_line_index=locator,
+    )
+
+
+def test_clip_lines_slices_to_span_and_preserves_speaker_seconds() -> None:
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0, end_seconds=3.0, speaker="Alice", text="Hello world there"
+        ),
+        TranscriptLine(start_seconds=3.0, end_seconds=6.0, speaker="Bob", text="how are you"),
+    ]
+    resolved = _resolved(
+        annotation_id=_A,
+        spans=(
+            ResolvedSpan(line_index=0, start=6, end=11),
+            ResolvedSpan(line_index=1, start=0, end=3),
+        ),
+    )
+    clipped = clip_lines_for_export(resolved, lines)
+    assert [(c.speaker, c.text, c.start_seconds, c.end_seconds) for c in clipped] == [
+        ("Alice", "world", 0.0, 3.0),
+        ("Bob", "how", 3.0, 6.0),
+    ]
+
+
+def test_clip_lines_stale_annotation_yields_nothing() -> None:
+    lines = [TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="S", text="x")]
+    resolved = _resolved(annotation_id=_A, spans=(), stale=True, locator=0)
+    assert clip_lines_for_export(resolved, lines) == []
+
+
+def test_resolved_order_key_by_line_then_offset_then_id() -> None:
+    later_line = _resolved(annotation_id=_A, spans=(ResolvedSpan(line_index=2, start=0, end=1),))
+    early_line = _resolved(annotation_id=_B, spans=(ResolvedSpan(line_index=0, start=5, end=6),))
+    same_line_earlier = _resolved(
+        annotation_id=_A, spans=(ResolvedSpan(line_index=0, start=1, end=2),)
+    )
+    ordered = sorted(
+        [later_line, early_line, same_line_earlier], key=resolved_order_key
+    )
+    # line 0 offset 1 (id _A) < line 0 offset 5 (id _B) < line 2.
+    assert [r.annotation_id for r in ordered] == [_A, _B, _A]
+
+
+def test_resolved_order_key_stale_uses_locator_then_sentinel() -> None:
+    stale_with_locator = _resolved(annotation_id=_A, spans=(), stale=True, locator=1)
+    unresolvable = _resolved(annotation_id=_B, spans=(), stale=True, locator=None)
+    live_line0 = _resolved(annotation_id=_A, spans=(ResolvedSpan(line_index=0, start=0, end=1),))
+    ordered = sorted(
+        [unresolvable, stale_with_locator, live_line0], key=resolved_order_key
+    )
+    # live line 0 < stale locator line 1 < unresolvable (sentinel last).
+    assert [r.annotation_id for r in ordered] == [_A, _A, _B]

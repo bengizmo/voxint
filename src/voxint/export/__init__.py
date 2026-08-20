@@ -42,6 +42,21 @@ MEDIA_TYPES: dict[str, str] = {
 }
 
 
+# Annotation pull-quotes (issue #86) carry their OWN media-type table: exporting a
+# highlight is a distinct surface from the transcript export, and the transcript
+# TranscriptFormat / MEDIA_TYPES tables above stay a frozen contract that annotation
+# export deliberately does not extend (docs/annotations.md, "Pull-quote formatting").
+ANNOTATION_MEDIA_TYPES: dict[str, str] = {
+    "md": "text/markdown; charset=utf-8",
+}
+
+# The separator joining highlights in a bulk (all-filtered) export: a thematic break
+# framed by blank lines, so each pull-quote renders as its own block. Each per-quote
+# block already ends in one newline, so joining with this yields a blank line, an
+# ``---`` rule, a blank line, then the next block.
+ANNOTATION_BULK_SEPARATOR = "\n---\n\n"
+
+
 class RttmTurn(Protocol):
     """A diarization turn as RTTM needs it: interval + raw local label.
 
@@ -333,6 +348,50 @@ def to_markdown(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> 
         quoted = "\n".join(f"> {line}" for line in body_lines)
         blocks.append(f"{heading}\n\n{quoted}\n")
     return "\n".join(blocks)
+
+
+def annotation_pull_quote(
+    clipped_lines: Sequence[TranscriptLine],
+    *,
+    source_title: str,
+    start_seconds: float,
+    end_seconds: float,
+    timing_precision: str,
+    tags: Sequence[str] = (),
+    note: str | None = None,
+) -> str:
+    """One highlight rendered as a Markdown pull-quote (issue #86).
+
+    The quote body is :func:`to_markdown` of the already-clipped lines (the reading
+    copy, ``timestamps=False``), so a pull-quote's quoted text is byte-identical to
+    the same span in a transcript file export by construction (docs/annotations.md,
+    "Pull-quote formatting"). Timing lives once, in the citation, so the body never
+    shows a whole-segment bracket that would misstate a sub-segment highlight's span.
+    The caller slices each covered line to the annotation span and preserves that
+    line's speaker; this function never touches spans (it stays a pure ``lines -> str``
+    formatter and does not import the resolver).
+
+    A metadata trailer follows the body: a ``**Source:**`` citation (the source
+    title and a :func:`format_timespan` range, prefixed with a ``≈`` marker when
+    timing is segment-coarse rather than per-word, mirroring the on-screen panel),
+    then an optional ``**Tags:**`` line (names in the panel's alphabetical order) and
+    an optional ``**Note:**`` line. Title, tag names, and the note are inline-escaped
+    with :func:`_md_escape` and their line breaks folded to spaces, so untrusted
+    annotation text renders literally and can never forge Markdown or raw HTML.
+    """
+    body = to_markdown(clipped_lines, timestamps=False)
+    approx = "≈ " if timing_precision != "word" else ""
+    title = _md_escape(_normalize_line_breaks(source_title).replace("\n", " "))
+    timespan = format_timespan(start_seconds, end_seconds)
+    meta_blocks = [f"**Source:** {title} {approx}{timespan}"]
+    if tags:
+        names = ", ".join(_md_escape(_normalize_line_breaks(t).replace("\n", " ")) for t in tags)
+        meta_blocks.append(f"**Tags:** {names}")
+    if note is not None and note.strip():
+        folded = _md_escape(_normalize_line_breaks(note).replace("\n", " "))
+        meta_blocks.append(f"**Note:** {folded}")
+    trailer = "\n\n".join(meta_blocks)
+    return f"{body}\n{trailer}\n"
 
 
 def to_rttm(turns: Sequence[RttmTurn], file_id: str) -> str:

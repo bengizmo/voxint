@@ -7,6 +7,7 @@ import {
   type AnnotationTagShape,
 } from "../lib/annotations";
 import { ApiError, apiFetch } from "../lib/api-client";
+import { writeClipboard } from "../lib/clipboard";
 import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
@@ -443,13 +444,9 @@ export function ReviewStepper({
     const raw = current?.rawText;
     if (raw == null) return;
     setRawOpen(true);
-    try {
-      if (!navigator.clipboard?.writeText) {
-        throw new Error("clipboard unavailable");
-      }
-      await navigator.clipboard.writeText(raw);
+    if (await writeClipboard(raw)) {
       setCopyStatus("Raw text copied to the clipboard.");
-    } catch {
+    } else {
       setCopyStatus(
         "Couldn’t copy automatically — select the raw text above and copy it manually.",
       );

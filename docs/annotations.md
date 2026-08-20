@@ -203,15 +203,23 @@ quote code points, 4,000 note code points, 8 tags per annotation.
 ## API surface and error taxonomy
 
 Reads (list, exports, stored quotes) require operator auth and onboarding
-only. Run-scoped writes require the active review claim token; a lost claim
-is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a client nonce;
+only, with no claim, so Copy works in a read-only review tab. The read routes
+are `GET /review/{run_id}/annotations` (the panel list), `GET
+/review/{run_id}/annotations/{annotation_id}/export.md` (one pull-quote), and
+`GET /review/{run_id}/annotations/export.md` (all filtered pull-quotes, honoring
+the same `?tag=` OR-union). Run-scoped writes require the active review claim
+token; a lost claim is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a
+client nonce;
 replaying the same nonce with the same fingerprint returns the original row
 (including a soft-deleted one; replay never resurrects or duplicates), and
 the same nonce with a different payload is a 409 idempotency conflict.
 Metadata edits and deletes are naturally idempotent and carry no nonce. Tag
 writes have no run context and are CSRF-gated like run notes. The live
-pull-quote request persists nothing and therefore carries neither nonce nor
-CSRF; it enforces the same caps and validation as create.
+pull-quote request (`POST /review/{run_id}/annotations/export/live.md`) persists
+nothing and therefore carries neither claim, nonce, nor CSRF; it classifies and
+validates an unsaved selection with the same caps and code path as create (422 on
+a bad anchor or cap, 409 stale on a drifted client quote) and returns the
+markdown. Its optional `note`/`tags` decorate the returned trailer only.
 
 - 422: malformed anchors, out-of-bounds offsets, unknown child ranges,
   violated caps, bad colors.
@@ -249,8 +257,14 @@ at its old start line; the panel row still shows the original quote verbatim.
 Creating and editing highlights are island-only. With JavaScript off,
 `review_transcript.html` renders a read-only Highlights list from the same props
 the island hydrates from, so the fallback and the live panel cannot disagree;
-hydration replaces the fallback wholesale. There is no Copy or export in Landing
-1 (that is Landing 2).
+hydration replaces the fallback wholesale.
+
+Landing 2 adds Copy to the panel: a per-row Copy button and a Copy-all action that
+honors the active tag filter. Both fetch the server-rendered markdown (the client
+never reassembles a quote) and write it to the clipboard, falling back to a
+selectable read-only field when the browser clipboard is unavailable (a plain-http
+LAN context). Copy is a read, so it stays available without the claim; a stale
+highlight's Copy is disabled until the operator refreshes or re-anchors it.
 
 The highlight palette size (`HIGHLIGHT_PALETTE_SIZE`) is pinned across the
 backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
@@ -258,10 +272,55 @@ backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
 
 ## Pull-quote formatting
 
-Stored and live pull-quotes build clipped `TranscriptLine` values (line text
-sliced to the annotation span, speaker and seconds preserved) and pass them
-through the existing `to_markdown` in `src/voxint/export/__init__.py`, so
-quote bytes match the file export by construction. A thin wrapper adds the
-citation line (source title and a `format_timespan` range) and the escaped
-tag and note trailer. Annotation exports use their own media-type table; the
-transcript `TranscriptFormat`/`MEDIA_TYPES` tables are not extended.
+Stored and live pull-quotes (issue #86 Landing 2) build clipped `TranscriptLine`
+values (line text sliced to the annotation span, speaker preserved) and pass them
+through the existing `to_markdown` in `src/voxint/export/__init__.py`, so the quote
+bytes match the file export by construction. The projection lives beside the
+resolver (`clip_lines_for_export`); the markdown wrapper (`annotation_pull_quote`)
+lives in the pure export module and never imports the resolver.
+
+The body renders as the reading copy (`to_markdown(..., timestamps=False)`): timing
+lives once, in the citation, so the body never shows a whole-segment bracket that
+would misstate a sub-segment highlight's span. A thin trailer follows the body:
+
+- `**Source:**` the escaped source title (sidecar title, else acquisition-metadata
+  title, else a cleaned filename) then a `format_timespan` range. The range carries
+  a leading `≈` marker when `timing_precision` is `segment` rather than `word`,
+  mirroring the on-screen panel.
+- `**Tags:**` the annotation's tag names in the panel's alphabetical order, when it
+  has any.
+- `**Note:**` the note, line breaks folded to spaces, when it has one.
+
+Title, tag names, and the note are untrusted, so each is inline-escaped with the
+same `_md_escape` the transcript body uses; folding the note to a single line means
+no physical line can sit at a block-leading position, so a leading `#` stays literal
+prose. The body and every trailer field are separated by blank lines, and the whole
+quote ends in exactly one newline. A single highlight (`content_start` at `world` in
+a `word_range`) renders:
+
+```markdown
+## Alice
+
+> world
+
+**Source:** Interview [00:00:01.000–00:00:02.000]
+
+**Tags:** Key Point
+
+**Note:** worth a look
+```
+
+A bulk export concatenates each highlight's block in the canonical transcript order
+(rendered line index, then code-point offset, then annotation id, so a split-child
+highlight orders by the line the operator sees, not by segment index) joined by the
+thematic-break separator `\n---\n\n`. An empty filtered result is an empty body.
+
+A stale highlight has no live spans, and the stored `quote_text` alone cannot
+reconstruct the live speaker attribution and per-line geometry a faithful quote
+needs. Exporting one is refused (409 `X-Voxint-Conflict: stale`) rather than
+fabricated; a bulk export fails atomically if any matched highlight is stale. The
+operator refreshes or re-anchors it first.
+
+Annotation exports use their own one-entry media-type table (`ANNOTATION_MEDIA_TYPES`,
+`text/markdown`); the transcript `TranscriptFormat`/`MEDIA_TYPES` tables are not
+extended.

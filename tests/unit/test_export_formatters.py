@@ -14,8 +14,11 @@ from voxint.adjudication.transcript import (
     paragraphize_transcript,
 )
 from voxint.export import (
+    ANNOTATION_BULK_SEPARATOR,
+    ANNOTATION_MEDIA_TYPES,
     MEDIA_TYPES,
     TranscriptFormat,
+    annotation_pull_quote,
     render_transcript,
     to_json,
     to_markdown,
@@ -422,3 +425,120 @@ def test_media_types_cover_every_cli_format() -> None:
     assert set(MEDIA_TYPES) == {"txt", "srt", "vtt", "json", "md", "rttm"}
     assert MEDIA_TYPES["json"].startswith("application/json")
     assert MEDIA_TYPES["md"].startswith("text/markdown")
+
+
+# --------------------------------------------------------------------------- #
+# Annotation pull-quotes (issue #86)
+# --------------------------------------------------------------------------- #
+
+_CLIP = [
+    TranscriptLine(start_seconds=1.0, end_seconds=2.0, speaker="Alice", text="world"),
+]
+
+
+def test_pull_quote_body_is_to_markdown_by_construction() -> None:
+    # The load-bearing invariant: the quote body is byte-identical to to_markdown of
+    # the same clipped lines, so a pull-quote and a file export can never drift.
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="Interview",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="word",
+    )
+    # The reading copy (timestamps in the citation, not the body) is the invariant.
+    assert quote.startswith(to_markdown(_CLIP, timestamps=False))
+    assert quote.startswith("## Alice\n\n> world\n")
+
+
+def test_pull_quote_word_timing_citation_no_approx() -> None:
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="Interview",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="word",
+    )
+    assert "**Source:** Interview [00:00:01.000\u201300:00:02.000]" in quote
+    assert "≈" not in quote
+    assert "**Tags:**" not in quote
+    assert "**Note:**" not in quote
+    assert quote.endswith("\n")
+    assert not quote.endswith("\n\n")
+
+
+def test_pull_quote_segment_timing_gets_approx_marker() -> None:
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="Interview",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="segment",
+    )
+    assert "**Source:** Interview ≈ [00:00:01.000\u201300:00:02.000]" in quote
+
+
+def test_pull_quote_tags_and_note_trailer() -> None:
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="Interview",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="word",
+        tags=["alpha", "beta"],
+        note="a margin note",
+    )
+    assert "**Tags:** alpha, beta" in quote
+    assert "**Note:** a margin note" in quote
+
+
+def test_pull_quote_escapes_hostile_markdown_in_trailer() -> None:
+    # Title, tags, and note are untrusted: markdown/HTML control syntax must render
+    # literally, never forge structure.
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="# Not A Heading <b>x</b>",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="word",
+        tags=["*bold*"],
+        note="line1\n# still not a heading",
+    )
+    assert "&lt;b&gt;" in quote
+    assert "\\*bold\\*" in quote
+    # The multiline note folds to one line, so no physical line ever sits at a
+    # block-leading position: the "#" stays inline prose, never a forged heading.
+    assert "**Note:** line1 # still not a heading" in quote
+    assert "\n# still not a heading" not in quote
+
+
+def test_pull_quote_whitespace_only_note_omitted() -> None:
+    quote = annotation_pull_quote(
+        _CLIP,
+        source_title="Interview",
+        start_seconds=1.0,
+        end_seconds=2.0,
+        timing_precision="word",
+        note="   ",
+    )
+    assert "**Note:**" not in quote
+
+
+def test_pull_quote_unicode_title_and_text_preserved() -> None:
+    clip = [TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="S", text="café ☕")]
+    quote = annotation_pull_quote(
+        clip,
+        source_title="Café Chat ☕",
+        start_seconds=0.0,
+        end_seconds=1.0,
+        timing_precision="word",
+    )
+    assert "café ☕" in quote
+    assert "Café Chat ☕" in quote
+
+
+def test_annotation_media_types_is_md_only() -> None:
+    # Annotation exports carry their OWN table; the transcript MEDIA_TYPES is untouched.
+    assert set(ANNOTATION_MEDIA_TYPES) == {"md"}
+    assert ANNOTATION_MEDIA_TYPES["md"].startswith("text/markdown")
+    assert ANNOTATION_BULK_SEPARATOR == "\n---\n\n"

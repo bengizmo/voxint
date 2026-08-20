@@ -19,7 +19,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   just an approximate locator where it was) and can be refreshed if the wording
   returns or re-anchored to a fresh selection. Creating and editing highlights
   needs the console; with JavaScript off the review page shows a read-only list of
-  the existing highlights. Exporting highlights is not part of this release.
+  the existing highlights.
+- **Copy highlights as pull-quotes (#86).** Each Highlights row has a Copy button,
+  and a Copy-all action lifts every highlight that matches the current tag filter,
+  in transcript order. A copied highlight is Markdown: the quoted text (byte-for-byte
+  what a transcript export would produce), then a source line with the recording name
+  and the timestamp range, and the highlight's tags and note. Copy works while just
+  viewing a run, without holding the review slot. When the browser blocks automatic
+  copying (which happens on a plain-http local network), the text appears in a box to
+  select and copy by hand, so a copy never silently fails. A stale highlight cannot be
+  copied until it is refreshed or re-anchored, so a quote is never built from text
+  that has since changed.
 - **YAML sidecar metadata for watch-folder media (#104).** A recording dropped
   into a watched folder can arrive with a companion sidecar file
   (`interview.wav.yaml`, or `interview.yaml` when the stem is unambiguous; the

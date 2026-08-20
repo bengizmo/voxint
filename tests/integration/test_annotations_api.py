@@ -29,6 +29,7 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     SegmentReviewState,
+    TranscriptAnnotation,
     TranscriptSegment,
 )
 
@@ -721,3 +722,260 @@ def test_routes_never_touch_transcript_evidence(
     client.request("DELETE", f"/review/{run_id}/annotations/{ann_id}", data={"token": token})
 
     assert _evidence_snapshot(session_factory, run_id) == before
+
+
+# --------------------------------------------------------------------------- #
+# Pull-quote export (issue #86 Landing 2): per-row, bulk, live
+# --------------------------------------------------------------------------- #
+
+
+def _live_form(
+    seg_id: uuid.UUID,
+    start_offset: int,
+    end_offset: int,
+    quote: str,
+    *,
+    note: str | None = None,
+    tags: list[uuid.UUID] | None = None,
+) -> dict[str, str | list[str]]:
+    form: dict[str, str | list[str]] = {
+        "start_segment_id": str(seg_id),
+        "start_offset": str(start_offset),
+        "end_segment_id": str(seg_id),
+        "end_offset": str(end_offset),
+        "client_quote": quote,
+    }
+    if note is not None:
+        form["note"] = note
+    if tags is not None:
+        form["tags"] = [str(t) for t in tags]
+    return form
+
+
+def test_export_single_word_range_markdown(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    ann = client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 6, 11, "world"),
+    ).json()
+    # A read, so no claim/token required.
+    resp = client.get(f"/review/{run_id}/annotations/{ann['id']}/export.md")
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/markdown")
+    body = resp.text
+    assert "## S0" in body
+    assert "> world" in body  # reading copy: no bracket in the body
+    assert "**Source:**" in body
+    assert "[00:00:01.000\u201300:00:02.000]" in body  # precise word timing in the citation
+    assert "≈" not in body  # word timing is precise, no approximate marker
+
+
+def test_export_single_includes_tags_and_note(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    tag_id = uuid.UUID(_make_tag(client, "Key Point"))
+    ann = client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 6, 11, "world", note="worth a look", tags=[tag_id]),
+    ).json()
+    body = client.get(f"/review/{run_id}/annotations/{ann['id']}/export.md").text
+    assert "**Tags:** Key Point" in body
+    assert "**Note:** worth a look" in body
+
+
+def test_export_single_unknown_id_404(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, _ = seed_word_run(session_factory)
+    resp = client.get(f"/review/{run_id}/annotations/{uuid.uuid4()}/export.md")
+    assert resp.status_code == 404
+
+
+def test_export_single_unknown_run_404(client: TestClient) -> None:
+    resp = client.get(f"/review/{uuid.uuid4()}/annotations/{uuid.uuid4()}/export.md")
+    assert resp.status_code == 404
+
+
+def test_export_single_stale_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    ann = client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 7, 11, "orld"),
+    ).json()
+    with session_factory() as session:
+        session.add(
+            SegmentReviewState(
+                transcript_segment_id=segs[0],
+                pipeline_run_id=run_id,
+                corrected_text="Totally different words entirely",
+                corrected_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    resp = client.get(f"/review/{run_id}/annotations/{ann['id']}/export.md")
+    assert resp.status_code == 409
+    assert resp.headers["X-Voxint-Conflict"] == "stale"
+
+
+def test_export_bulk_order_matches_panel(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    # Create out of transcript order; the panel and the bulk export must agree.
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[1], 0, 3, "how", nonce="nonce-02b"),
+    )
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 6, 11, "world", nonce="nonce-01a"),
+    )
+    listing = client.get(f"/review/{run_id}/annotations").json()["annotations"]
+    panel_quotes = [a["quote"] for a in listing]
+    assert panel_quotes == ["world", "how"]  # transcript (line) order, not creation
+    bulk = client.get(f"/review/{run_id}/annotations/export.md")
+    assert bulk.status_code == 200
+    # Each quote body appears, in the same order, separated by the thematic break.
+    blocks = bulk.text.split("\n---\n\n")
+    assert len(blocks) == 2
+    assert "world" in blocks[0] and "how" in blocks[1]
+
+
+def test_export_bulk_or_tag_filter(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    tag_a = uuid.UUID(_make_tag(client, "aaa"))
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 6, 11, "world", nonce="nonce-01a", tags=[tag_a]),
+    )
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[1], 0, 3, "how", nonce="nonce-02b"),
+    )
+    filtered = client.get(f"/review/{run_id}/annotations/export.md", params={"tag": str(tag_a)})
+    assert filtered.status_code == 200
+    assert "world" in filtered.text
+    assert "how" not in filtered.text
+    assert "\n---\n\n" not in filtered.text  # only one block matched
+
+
+def test_export_bulk_unknown_tag_404(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, _ = seed_word_run(session_factory)
+    resp = client.get(
+        f"/review/{run_id}/annotations/export.md", params={"tag": str(uuid.uuid4())}
+    )
+    assert resp.status_code == 404
+
+
+def test_export_bulk_empty_is_empty_body(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, _ = seed_word_run(session_factory)
+    resp = client.get(f"/review/{run_id}/annotations/export.md")
+    assert resp.status_code == 200
+    assert resp.text == ""
+
+
+def test_export_bulk_stale_fails_atomically(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    token = claim_token(client, run_id)
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[1], 0, 3, "how", nonce="nonce-02b"),
+    )
+    client.post(
+        f"/review/{run_id}/annotations",
+        data=_create_form(token, segs[0], 7, 11, "orld", nonce="nonce-01a"),
+    )
+    with session_factory() as session:
+        session.add(
+            SegmentReviewState(
+                transcript_segment_id=segs[0],
+                pipeline_run_id=run_id,
+                corrected_text="Totally different words entirely",
+                corrected_at=datetime.now(UTC),
+            )
+        )
+        session.commit()
+    resp = client.get(f"/review/{run_id}/annotations/export.md")
+    assert resp.status_code == 409
+    assert resp.headers["X-Voxint-Conflict"] == "stale"
+
+
+def _count_annotations(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> int:
+    with session_factory() as session:
+        return len(
+            session.execute(
+                select(TranscriptAnnotation).where(
+                    TranscriptAnnotation.pipeline_run_id == run_id
+                )
+            ).scalars().all()
+        )
+
+
+def test_live_pull_quote_persists_nothing_no_claim(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    # No claim, no nonce, no CSRF — a read-shaped POST that writes nothing.
+    resp = client.post(
+        f"/review/{run_id}/annotations/export/live.md",
+        data=_live_form(segs[0], 6, 11, "world", note="scratch"),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("text/markdown")
+    assert "> world" in resp.text
+    assert "[00:00:01.000\u201300:00:02.000]" in resp.text
+    assert "**Note:** scratch" in resp.text
+    assert _count_annotations(session_factory, run_id) == 0
+
+
+def test_live_pull_quote_stale_client_quote_409(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    resp = client.post(
+        f"/review/{run_id}/annotations/export/live.md",
+        data=_live_form(segs[0], 6, 11, "WRONG"),
+    )
+    assert resp.status_code == 409
+    assert resp.headers["X-Voxint-Conflict"] == "stale"
+
+
+def test_live_pull_quote_empty_selection_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, segs = seed_word_run(session_factory)
+    resp = client.post(
+        f"/review/{run_id}/annotations/export/live.md",
+        data=_live_form(segs[0], 6, 6, ""),
+    )
+    assert resp.status_code == 422
+
+
+def test_live_pull_quote_forged_segment_404(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id, _ = seed_word_run(session_factory)
+    resp = client.post(
+        f"/review/{run_id}/annotations/export/live.md",
+        data=_live_form(uuid.uuid4(), 6, 11, "world"),
+    )
+    assert resp.status_code == 404
+
