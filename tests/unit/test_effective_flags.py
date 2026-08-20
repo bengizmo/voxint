@@ -10,6 +10,7 @@ invariants live in exactly one validator shared with ``config.py``.
 from voxint.app_settings import (
     EffectiveFlags,
     build_bundled_llm_client,
+    byo_llm_configured,
     effective_web_search_key_source,
     feature_flag_state,
     llm_bundled_active,
@@ -28,7 +29,7 @@ from voxint.app_settings import (
     str_flag_form_field,
     validate_effective_flags,
 )
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings
 
 _BASE_URL = "http://searx.lan:8888"
@@ -407,6 +408,69 @@ def test_llm_bundled_active_row_wins_over_env() -> None:
     assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=True), eoff) is True
     env_on = _settings(llm_bundled_enabled=True, llm_bundled_base_url=url, llm_bundled_model=model)
     assert llm_bundled_active(AppSettings(id=1, llm_bundled_enabled=False), env_on) is False
+
+
+def test_byo_llm_configured_default_install_is_unconfigured() -> None:
+    # The untouched install default (OpenAI public base URL, no key) is the "no BYO"
+    # sentinel: a bundled install where the operator never pointed the BYO slot
+    # anywhere has no endpoint to run topics on, so the topics gate must still fire.
+    default = _settings(llm_enabled=True, llm_base_url=DEFAULT_LLM_BASE_URL, llm_api_key="")
+    assert byo_llm_configured(None, default) is False
+
+
+def test_byo_llm_configured_needs_enabled_and_endpoint() -> None:
+    lan = "http://byo.lan:8100/v1"
+    # LLM disabled ⇒ never configured, whatever the URL.
+    off = _settings(llm_enabled=False, llm_base_url=lan)
+    assert byo_llm_configured(None, off) is False
+    # A blank model ⇒ not usable.
+    no_model = _settings(llm_enabled=True, llm_base_url=lan, llm_model="")
+    assert byo_llm_configured(None, no_model) is False
+
+
+def test_byo_llm_configured_distinct_lan_endpoint_keyless() -> None:
+    # The scoped-bundle-plus-separate-BYO case: a bundle serves enhancement while a
+    # distinct, keyless LAN endpoint is configured for the BYO-only jobs. A
+    # non-default base URL alone signals a deliberate endpoint (LAN models are
+    # keyless), so topics can run there.
+    s = _settings(
+        llm_enabled=True,
+        llm_base_url="http://byo.lan:8100/v1",
+        llm_model="qwen3-27b",
+        llm_api_key="",
+        llm_bundled_enabled=True,
+        llm_bundled_base_url="http://bundle.lan:8100/v1",
+        llm_bundled_model="qwen3-27b",
+    )
+    assert byo_llm_configured(None, s) is True
+
+
+def test_byo_llm_configured_key_at_default_url_counts() -> None:
+    # A stored key at the default OpenAI URL is a real, deliberate BYO endpoint.
+    keyed = _settings(llm_enabled=True, llm_base_url=DEFAULT_LLM_BASE_URL, llm_api_key="sk-real")
+    assert byo_llm_configured(None, keyed) is True
+
+
+def test_byo_llm_configured_false_when_byo_equals_bundle() -> None:
+    # If the BYO endpoint IS the bundled endpoint, it is not a distinct place to run
+    # topics — the bundle is the only endpoint, so the gate must still fire.
+    same = _settings(
+        llm_enabled=True,
+        llm_base_url="http://bundle.lan:8100/v1",
+        llm_model="m",
+        llm_bundled_enabled=True,
+        llm_bundled_base_url="http://bundle.lan:8100/v1",
+        llm_bundled_model="m",
+    )
+    assert byo_llm_configured(None, same) is False
+
+
+def test_byo_llm_configured_row_override_wins() -> None:
+    # A UI-pinned BYO endpoint (row override) makes it configured even when the env
+    # default is the untouched OpenAI placeholder.
+    env_default = _settings(llm_enabled=True, llm_base_url=DEFAULT_LLM_BASE_URL, llm_api_key="")
+    row = AppSettings(id=1, llm_enabled=True, llm_base_url="http://row.lan:8100/v1", llm_model="m")
+    assert byo_llm_configured(row, env_default) is True
 
 
 def test_build_bundled_llm_client_keyless_greedy() -> None:

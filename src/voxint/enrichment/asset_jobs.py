@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.app_settings import (
+    byo_llm_configured,
     get_app_settings,
     llm_bundled_active,
     resolve_effective_enrichment_run_assets_enabled,
@@ -152,7 +153,13 @@ def create_jobs(
     # what guarantees the bundle never enqueues a kind it can't do. Topics stays
     # available on a BYO endpoint. Silent skip (not an error): "generate all"
     # degrades to summary+entities, exactly as an already-active kind is skipped.
-    if llm_bundled_active(row, settings):
+    #
+    # Drop topics ONLY when the bundle is active AND no distinct BYO endpoint is
+    # configured to run them on. A scoped bundle serving enhancement does not
+    # preclude a separate, capable BYO endpoint (e.g. a LAN model) that CAN do
+    # topics — ``byo_llm_configured`` is true in that case and topics flow through
+    # to their BYO endpoint (the execution gate already routes topics there).
+    if llm_bundled_active(row, settings) and not byo_llm_configured(row, settings):
         kinds = tuple(k for k in kinds if k is not RunAssetKind.TOPICS)
         if not kinds:
             # The request was non-empty (validated just above) but was ALL topics:
