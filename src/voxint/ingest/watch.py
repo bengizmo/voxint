@@ -301,7 +301,9 @@ def _paired_sidecar(
             "watch sweep: %s has keys Voxint doesn't recognize (kept for "
             "reference, not applied): %s",
             sidecar_path.name,
-            ", ".join(parsed.ignored_keys),
+            # repr-escaped: unknown key NAMES are untrusted text, and a raw
+            # newline/control char in one could forge extra log lines.
+            ", ".join(repr(key) for key in parsed.ignored_keys),
         )
     return parsed
 

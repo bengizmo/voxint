@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from voxint.config import Settings, llm_budget_fits_stage_lease
 from voxint.db.models import MediaItem
+from voxint.media.suffixes import MEDIA_SUFFIXES
 
 # Input-shape bounds. Module constants (not Settings env vars) — like
 # ingest.service's _MAX_URL_BYTES / _MAX_FILENAME_BYTES, these bound the shape of
@@ -56,16 +57,9 @@ MAX_BROWSE_ENTRIES = 500
 # operator registers the media root itself (".") as a folder.
 _RESERVED_TREES = frozenset({"incoming", "artifacts"})
 
-# Case-insensitive suffix allowlist for the scan. A convenience filter so the walk
-# does not queue READMEs or stray files; ffprobe is NOT run per candidate (the
-# PREPARE stage validates the actual media when the run executes).
-_MEDIA_SUFFIXES = frozenset(
-    {
-        ".wav", ".mp3", ".m4a", ".m4v", ".flac", ".ogg", ".oga", ".opus", ".aac",
-        ".wma", ".aiff", ".aif", ".alac", ".mp4", ".mkv", ".mov", ".webm", ".avi",
-        ".mpeg", ".mpg", ".ts", ".3gp",
-    }
-)
+# Case-insensitive suffix allowlist for the scan — shared policy, so sidecar
+# pairing (ingest.sidecar) can never diverge from what the scan calls media.
+_MEDIA_SUFFIXES = MEDIA_SUFFIXES
 
 
 class SetupValidationError(Exception):

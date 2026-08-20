@@ -870,3 +870,63 @@ def test_cancel_cas_loss_to_non_cancel_reraises(
     finally:
         first.close()
         second.close()
+
+
+# --- sidecar threading at the service seam (issue #104) --------------------------
+
+
+def test_submit_media_item_applies_sidecar(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    # The generic submit path (future CLI adoption) threads the sidecar exactly
+    # like the sweep's if_new path: pack from the sidecar's explicit name,
+    # speakers unioned into the frozen snapshot, notes seeded, raw stamped.
+    from voxint.ingest.sidecar import parse_sidecar
+
+    _write_pack(tmp_path, "podcast", name_seeds=["Pack Seed"])
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    sidecar = parse_sidecar(
+        "title: T\nspeakers: [Jane Doe]\ndomain_pack: podcast\n"
+        "notes: from sidecar\nextra: kept\n",
+        source_name="a.wav.yaml",
+    )
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/a.wav", settings=settings, sidecar=sidecar
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.domain_pack["name"] == "podcast"
+        assert stored.domain_pack["name_seeds"] == ["Pack Seed", "Jane Doe"]
+        assert stored.operator_notes == "from sidecar"
+        assert stored.sidecar["extra"] == "kept"
+
+
+def test_caller_pack_name_beats_sidecar_pack_name(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    # Precedence pin: caller explicit name > sidecar > folder mapping > default
+    # (explicit is-not-None tests, so this cannot regress to a boolean-or).
+    from voxint.ingest.sidecar import parse_sidecar
+
+    _write_pack(tmp_path, "podcast")
+    _write_pack(tmp_path, "lecture")
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    sidecar = parse_sidecar("domain_pack: podcast\n", source_name="a.wav.yaml")
+    with session_factory() as session:
+        run = submit_media_item(
+            session,
+            "incoming/a.wav",
+            settings=settings,
+            domain_pack_name="lecture",
+            sidecar=sidecar,
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        assert session.get(PipelineRun, run_id).domain_pack["name"] == "lecture"

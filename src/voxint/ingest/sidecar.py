@@ -36,7 +36,7 @@ from typing import Any
 
 import yaml
 
-from voxint.api.setup_wizard import _MEDIA_SUFFIXES
+from voxint.media.suffixes import MEDIA_SUFFIXES
 
 # The one recognized sidecar extension. ``.yml`` is deliberately not accepted
 # (mirrors the domain packs' single ``manifest.yaml`` spelling): one spelling
@@ -113,6 +113,19 @@ def _construct_mapping_no_duplicates(
 ) -> dict[Any, Any]:
     mapping: dict[Any, Any] = {}
     for key_node, value_node in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            # Stock SafeLoader expands `<<:` merge keys via flatten_mapping;
+            # this constructor deliberately does not, and letting the tag fall
+            # through would produce a cryptic "could not determine a
+            # constructor" error. Refuse plainly instead: merged-in keys with
+            # explicit overrides would also complicate the duplicate rule.
+            raise yaml.constructor.ConstructorError(
+                None,
+                None,
+                "merge keys (<<) are not supported in a sidecar; "
+                "write each key out on its own line",
+                key_node.start_mark,
+            )
         key = loader.construct_object(key_node, deep=True)
         try:
             duplicate = key in mapping
@@ -147,9 +160,19 @@ def parse_sidecar(text: str, *, source_name: str) -> Sidecar:
     try:
         data = yaml.load(text, Loader=_StrictKeyLoader)
     except yaml.YAMLError as exc:
-        raise SidecarError(f"{source_name} is not valid YAML: {exc}") from exc
+        raise SidecarError(
+            f"{source_name} is not valid YAML{_yaml_error_detail(exc)}"
+        ) from exc
     except RecursionError as exc:
         raise SidecarError(f"{source_name} is not valid YAML: nested too deeply") from exc
+    except (ValueError, OverflowError) as exc:
+        # PyYAML's scalar constructors raise plain ValueError for values that
+        # look valid but cannot be built (a date like 2020-99-99, an integer
+        # past the int-str digit limit). Escaping here would crash the whole
+        # recurring sweep over one file — convert to the normal hold instead.
+        raise SidecarError(
+            f"{source_name} contains a value that could not be read: {exc}"
+        ) from exc
     if data is None:
         data = {}
     if not isinstance(data, dict):
@@ -171,6 +194,22 @@ def parse_sidecar(text: str, *, source_name: str) -> Sidecar:
         raw=raw,
         ignored_keys=ignored,
     )
+
+
+def _yaml_error_detail(exc: yaml.YAMLError) -> str:
+    """A short, content-free description of a YAML parse failure.
+
+    ``str(exc)`` on a marked error embeds a snippet of the source buffer;
+    hold reasons are logged, and the sweep's contract is to log reasons and
+    key names, never sidecar VALUES — so only the problem phrase and the
+    line/column are surfaced.
+    """
+    problem = getattr(exc, "problem", None)
+    mark = getattr(exc, "problem_mark", None)
+    detail = f": {problem}" if problem else ""
+    if mark is not None:
+        detail += f" (line {mark.line + 1}, column {mark.column + 1})"
+    return detail
 
 
 def _type_word(value: Any) -> str:
@@ -352,9 +391,13 @@ def _json_safe(
             raise SidecarError(f"{source_name} contains a value that refers to itself")
         path.append(id(value))
         try:
+            # A YAML !!set has no order; sort it so the write-once snapshot is
+            # deterministic across processes (hash randomization would
+            # otherwise freeze a different order per run).
+            items = sorted(value, key=repr) if isinstance(value, set) else value
             return [
                 _json_safe(item, source_name, depth=depth + 1, path=path, budget=budget)
-                for item in value
+                for item in items
             ]
         finally:
             path.pop()
@@ -429,6 +472,22 @@ def read_sidecar(path: Path) -> Sidecar:
             f"{name} changed while it was being read; it will be retried on "
             f"the next check"
         )
+    # The fd-based compare above cannot see an atomic rename over the path
+    # (the fd stays on the OLD inode) — the normal editor/exporter save
+    # pattern. Re-stat the PATH and hold on any divergence, so the next sweep
+    # reads the replacement instead of freezing stale metadata.
+    try:
+        current = os.lstat(path)
+    except OSError as exc:
+        raise SidecarError(
+            f"{name} was removed while it was being read; it will be "
+            f"re-checked on the next sweep"
+        ) from exc
+    if (current.st_dev, current.st_ino) != (after.st_dev, after.st_ino):
+        raise SidecarError(
+            f"{name} was replaced while it was being read; it will be "
+            f"retried on the next check"
+        )
     payload = b"".join(chunks)
     if len(payload) > MAX_SIDECAR_BYTES:
         raise SidecarError(
@@ -466,28 +525,35 @@ def find_sidecar(media_path: Path) -> Path | None:
     stem_form = directory / (stem + SIDECAR_SUFFIX)
     if not _lexists(stem_form, media_path.name):
         return None
+    # Lazy iteration (the scan_media_folders posture): the check raises on the
+    # first ambiguous sibling, so materializing a huge directory buys nothing.
+    # Stems compare case-folded — the suffix check already is, and on the
+    # ambiguity side more conservative is safer (Clip.mp4 beside clip.wav is a
+    # human-identical stem even on a case-sensitive filesystem).
+    folded_stem = stem.casefold()
     try:
-        entries = list(os.scandir(directory))
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if entry.name == media_path.name:
+                    continue
+                candidate = Path(entry.name)
+                if candidate.stem.casefold() != folded_stem:
+                    continue
+                if candidate.suffix.lower() not in MEDIA_SUFFIXES:
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                raise SidecarError(
+                    f"{stem_form.name} could apply to more than one recording "
+                    f"({media_path.name} and {entry.name}) — rename it to "
+                    f"{media_path.name}{SIDECAR_SUFFIX} to say which one it "
+                    f"describes"
+                )
     except OSError as exc:
         raise SidecarError(
             f"{stem_form.name} could not be checked against the folder's other "
             f"files: {exc.strerror or exc}"
         ) from exc
-    for entry in entries:
-        if entry.name == media_path.name:
-            continue
-        candidate = Path(entry.name)
-        if candidate.stem != stem:
-            continue
-        if candidate.suffix.lower() not in _MEDIA_SUFFIXES:
-            continue
-        if not entry.is_file(follow_symlinks=False):
-            continue
-        raise SidecarError(
-            f"{stem_form.name} could apply to more than one recording "
-            f"({media_path.name} and {entry.name}) — rename it to "
-            f"{media_path.name}{SIDECAR_SUFFIX} to say which one it describes"
-        )
     return stem_form
 
 

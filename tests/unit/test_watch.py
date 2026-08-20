@@ -111,3 +111,20 @@ def test_summary_round_trips_values() -> None:
     assert d["already_known"] == 12
     assert d["settling"] == 2
     assert d["completed_at"] == "2026-08-18T10:42:00+00:00"
+
+
+def test_effective_pack_name_precedence() -> None:
+    # caller explicit name > sidecar > neither (folder mapping / default via
+    # the resolver). Explicit is-not-None tests: an empty caller string still
+    # WINS the precedence and reaches the resolver to fail loudly there.
+    from voxint.ingest.service import _effective_pack_name
+    from voxint.ingest.sidecar import parse_sidecar
+
+    sc = parse_sidecar("domain_pack: podcast\n", source_name="x.yaml")
+    assert _effective_pack_name("lecture", sc) == "lecture"
+    assert _effective_pack_name(None, sc) == "podcast"
+    assert _effective_pack_name(None, None) is None
+    assert _effective_pack_name("lecture", None) == "lecture"
+    no_pack = parse_sidecar("title: T\n", source_name="x.yaml")
+    assert _effective_pack_name(None, no_pack) is None
+    assert _effective_pack_name("", sc) == ""

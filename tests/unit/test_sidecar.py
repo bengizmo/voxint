@@ -478,3 +478,107 @@ def test_find_unreadable_directory_is_error(tmp_path: Path) -> None:
             find_sidecar(media)
     finally:
         sub.chmod(0o755)
+
+
+# --- review-pass regressions (3-engine review of 06f62ca) ----------------------
+
+
+def test_merge_keys_are_rejected_plainly() -> None:
+    # The duplicate-rejecting constructor does not expand `<<:` merge keys;
+    # they must fail with a plain-language message, never a cryptic
+    # "could not determine a constructor" or a silent literal "<<" key.
+    with pytest.raises(SidecarError, match="merge keys"):
+        parse_sidecar(
+            "defaults: &d\n  title: Merged\n<<: *d\n", source_name="x.yaml"
+        )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "published: 2020-99-99",  # date constructor raises ValueError
+        "count: " + "9" * 9999,  # int-str digit limit raises ValueError
+    ],
+)
+def test_constructor_value_errors_become_holds_not_crashes(text: str) -> None:
+    # PyYAML scalar constructors raise plain ValueError for these; escaping
+    # would crash the whole recurring sweep over one file (codex review HIGH).
+    with pytest.raises(SidecarError):
+        parse_sidecar(text, source_name="x.yaml")
+
+
+def test_snapshot_output_budget_bounds_alias_fanout() -> None:
+    # A 4 KiB anchored string aliased 300 times: tiny input, ~330 nodes (under
+    # the node budget), but ~1.2 MiB of normalized JSON — the output-size gate
+    # must hold it.
+    text = 'big: &b "' + "x" * 4096 + '"\nrefs: [' + ", ".join(["*b"] * 300) + "]\n"
+    assert len(text.encode()) < MAX_SIDECAR_BYTES
+    with pytest.raises(SidecarError, match="more data than can be stored"):
+        parse_sidecar(text, source_name="x.yaml")
+
+
+def test_yaml_set_normalizes_deterministically() -> None:
+    sc = parse_sidecar("tags: !!set\n  ? b\n  ? a\n  ? c\n", source_name="x.yaml")
+    assert sc.raw["tags"] == sorted(sc.raw["tags"], key=repr)
+
+
+def test_yaml_error_message_omits_source_snippet() -> None:
+    # Hold reasons are logged; they must carry the problem + position, never a
+    # snippet of the sidecar's content.
+    secret = "do-not-log-this-value"
+    try:
+        parse_sidecar(f"title: [{secret}\n", source_name="x.yaml")
+    except SidecarError as exc:
+        assert secret not in str(exc)
+        assert "line" in str(exc)
+    else:  # pragma: no cover - the parse must fail
+        raise AssertionError("expected SidecarError")
+
+
+def test_stem_ambiguity_is_case_insensitive_on_stems(tmp_path: Path) -> None:
+    # Clip.MP4 beside clip.wav is a human-identical stem; more conservative is
+    # safer on the ambiguity side even though the filesystem distinguishes them.
+    media = tmp_path / "clip.wav"
+    media.touch()
+    (tmp_path / "CLIP.mp4").touch()
+    (tmp_path / "clip.yaml").write_text("title: T\n", encoding="utf-8")
+    with pytest.raises(SidecarError):
+        find_sidecar(media)
+
+
+def test_read_sidecar_holds_when_path_replaced_after_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The fd-based before/after compare cannot see an atomic rename over the
+    # path (the fd stays on the OLD inode) — the path is re-stat'ed after the
+    # read and any divergence holds (codex review MEDIUM).
+    import os as os_mod
+    import types
+
+    p = tmp_path / "clip.wav.yaml"
+    p.write_text("title: original\n", encoding="utf-8")
+    real_lstat = os_mod.lstat
+
+    def _fake_lstat(path: object, *a: object, **kw: object) -> object:
+        st = real_lstat(path, *a, **kw)  # type: ignore[arg-type]
+        if str(path).endswith("clip.wav.yaml"):
+            return types.SimpleNamespace(st_dev=st.st_dev, st_ino=st.st_ino + 1)
+        return st
+
+    monkeypatch.setattr("voxint.ingest.sidecar.os.lstat", _fake_lstat)
+    with pytest.raises(SidecarError, match="replaced"):
+        read_sidecar(p)
+
+
+def test_read_sidecar_holds_when_path_removed_after_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = tmp_path / "clip.wav.yaml"
+    p.write_text("title: original\n", encoding="utf-8")
+
+    def _raise(*a: object, **kw: object) -> object:
+        raise FileNotFoundError("gone")
+
+    monkeypatch.setattr("voxint.ingest.sidecar.os.lstat", _raise)
+    with pytest.raises(SidecarError, match="removed"):
+        read_sidecar(p)

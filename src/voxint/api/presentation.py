@@ -66,8 +66,12 @@ def title_from_snapshot(snapshot: object) -> str | None:
     if not isinstance(snapshot, dict):
         return None
     title = snapshot.get("title")
-    if isinstance(title, str) and title.strip():
-        return title
+    if isinstance(title, str):
+        # Same cleaning as friendly_media_label: a tampered snapshot must not
+        # be the one console title path that skips the bidi/zero-width strip.
+        cleaned = _CONTROL_RUN.sub(" ", title).strip()
+        if cleaned:
+            return cleaned
     return None
 
 

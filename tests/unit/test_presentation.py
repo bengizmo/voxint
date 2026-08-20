@@ -208,3 +208,25 @@ def test_humanize_empty_string_is_returned_verbatim() -> None:
     # Degenerate input never raises — it round-trips to itself.
     assert humanize_stage("") == ""
     assert humanize_status("") == ""
+
+
+def test_title_from_snapshot_reads_and_cleans() -> None:
+    from voxint.api.presentation import title_from_snapshot
+
+    assert title_from_snapshot({"title": "Plain"}) == "Plain"
+    # Same cleaning as friendly_media_label: padding stripped, zero-width and
+    # bidi controls removed (a tampered snapshot must not be the one console
+    # title path that skips the strip).
+    assert title_from_snapshot({"title": "  padded  "}) == "padded"
+    assert title_from_snapshot({"title": "a​b‮c"}) == "a b c"
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [None, [], "str", 42, {}, {"title": None}, {"title": 7}, {"title": "   "},
+     {"title": "​"}],
+)
+def test_title_from_snapshot_tolerates_tampered_snapshots(snapshot: object) -> None:
+    from voxint.api.presentation import title_from_snapshot
+
+    assert title_from_snapshot(snapshot) is None

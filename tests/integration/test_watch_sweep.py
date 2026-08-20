@@ -608,3 +608,21 @@ def test_held_sidecar_cannot_starve_later_files_past_the_cap(
     assert summary.picked_up == 1
     assert summary.hit_file_cap is True
     assert _media_paths(session_factory) == {f"{FOLDER}/good.wav"}
+
+
+def test_blank_sidecar_file_ingests_and_stamps_empty_mapping(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A comment-only sidecar is a valid stub: the pair ingests, nothing is
+    # applied, and the run records {} — distinct from NULL (no sidecar at all).
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    _drop_sidecar(media_root, "talk.wav.yaml", "# nothing for Voxint yet\n")
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    assert summary.picked_up == 1
+    assert summary.sidecar_errors == 0
+    run = _run_for(session_factory, f"{FOLDER}/talk.wav")
+    assert run.sidecar == {}
+    assert run.operator_notes is None
