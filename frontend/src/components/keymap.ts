@@ -37,12 +37,22 @@ export const SAVE_EDIT_DESC = "Save the edit you’re typing (while the edit box
 
 // True for the key event that saves an in-progress edit from within the box. Accepts any
 // event exposing the modifier flags and `key`, so React synthetic and native events match.
+// Alt and Shift must be absent: the label advertises only Ctrl/⌘+↵, and it keeps parity
+// with the global keymap's strict modifier discipline (which no-ops on any ctrl/meta/alt).
+// IME composition is handled at the call site via nativeEvent.isComposing.
 export function isSaveEditChord(event: {
   ctrlKey: boolean;
   metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
   key: string;
 }): boolean {
-  return (event.ctrlKey || event.metaKey) && event.key === "Enter";
+  return (
+    (event.ctrlKey || event.metaKey) &&
+    !event.altKey &&
+    !event.shiftKey &&
+    event.key === "Enter"
+  );
 }
 
 export interface ShortcutCtx {

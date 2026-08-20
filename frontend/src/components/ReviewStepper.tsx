@@ -984,8 +984,10 @@ export function ReviewStepper({
                   // Ctrl/Cmd+Enter saves from within the box; Escape returns keys
                   // to the loop. Plain Enter stays a newline (multi-line edits).
                   // The chord matcher is shared with the on-screen hints and the
-                  // cheat-sheet (keymap.ts) so the three can never disagree.
-                  if (isSaveEditChord(e)) {
+                  // cheat-sheet (keymap.ts) so the three can never disagree. Skip
+                  // it mid-IME-composition, or an Enter that is committing a
+                  // candidate (CJK and others) would save half-composed text.
+                  if (isSaveEditChord(e) && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     void saveEdit();
                   } else if (e.key === "Escape") {
