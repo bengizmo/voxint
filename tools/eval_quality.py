@@ -8,7 +8,7 @@ change (#96). It is a **tripwire, not a benchmark**: the 14-file subset cannot
 prove non-regression, only catch gross breakage, and every threshold must be
 measured from a zero-change noise floor rather than reasoned.
 
-This module holds the two pieces that are testable without a worker:
+This module holds the three pieces that are testable without a worker:
 
 * the diarization scorer, built on the vetted ``pyannote.metrics`` (never a
   hand-rolled DER: optimal mapping + collar + overlap + UEM crop is a
@@ -16,7 +16,13 @@ This module holds the two pieces that are testable without a worker:
   number is a true micro-average, not a mean of per-file rates;
 * the ASR scorer, reused verbatim from the frozen bakeoff WER stack
   (``tests/parity/whisper_bakeoff_score.py`` + the sha-pinned Whisper
-  normalizer), applied to raw reference and raw hypothesis together.
+  normalizer), applied to raw reference and raw hypothesis together;
+* the ``report`` renderer, a pure metrics-JSON -> Markdown step that writes a
+  dated ``docs/reports/eval-quality-baseline-*.md`` in house style. It scores
+  each corpus separately (one metrics JSON per corpus, never a mixed
+  accumulator) so no single grand AMI+VoxConverse number is ever published, and
+  when a corpus is scored K times it renders the zero-change noise band
+  (max spread per metric) that thresholds must be measured from.
 
 The ``score`` subcommand is manifest-driven and corpus-layout-agnostic: it takes
 a JSON manifest mapping each recording to its hypothesis/reference file paths, so
@@ -49,6 +55,11 @@ Run:
 
     uv run --isolated --extra parity --extra eval-quality \\
         tools/eval_quality.py score --manifest <manifest.json> --out <metrics.json>
+
+    uv run --isolated --extra parity --extra eval-quality \\
+        tools/eval_quality.py report --date 2026-08-20 --out <report.md> \\
+        --run ami=<ami_run1.json> --run ami=<ami_run2.json> \\
+        --run voxconverse=<vc_run1.json>
 """
 
 from __future__ import annotations
@@ -207,6 +218,30 @@ class DiarResult:
     pooled_jer: float = 0.0
 
 
+def reference_metadata(reference: Annotation, uem: Timeline | None) -> dict[str, float]:
+    """Corpus-descriptive stats for the report table, taken from the reference.
+
+    Computed on the reference cropped to the scored region (the UEM), so the
+    speaker count and overlap fraction describe exactly what DER scored, not the
+    whole file. ``reference_overlap_pct`` is the share of reference *speech*
+    time (union of all speakers) where two or more speakers are simultaneously
+    active. These are descriptive only; they never enter a rate.
+    """
+    scoped = reference.crop(uem, mode="intersection") if uem is not None else reference
+    speech = scoped.get_timeline().support().duration()
+    overlap = scoped.get_overlap().duration()
+    # Wall-clock evaluated span: the UEM duration when one is applied, else the
+    # region the reference actually covers. This is NOT the DER ``total_s``
+    # denominator, which speaker-sums overlap and so exceeds wall-clock on
+    # multi-speaker meetings; the table shows real minutes, the rate keeps total_s.
+    evaluated = uem.duration() if uem is not None else speech
+    return {
+        "speaker_count": float(len(scoped.labels())),
+        "reference_overlap_pct": (overlap / speech * 100.0) if speech > 0.0 else 0.0,
+        "evaluated_s": float(evaluated),
+    }
+
+
 def score_diarization_set(
     items: list[DiarItem], *, collar: float, skip_overlap: bool, protocol: str
 ) -> DiarResult:
@@ -232,6 +267,7 @@ def score_diarization_set(
             "false_alarm_s": float(components["false alarm"]),
             "total_s": float(components["total"]),
             "uem_applied": item.uem is not None,
+            **reference_metadata(item.reference, uem),
         }
     result.pooled_der = abs(der)
     result.pooled_jer = abs(jer)
@@ -377,6 +413,236 @@ def _diar_json(result: DiarResult) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# `report` command: metrics JSON -> dated Markdown (house style, pure function)
+# --------------------------------------------------------------------------- #
+def _pct(fraction: float) -> str:
+    """A rate in [0, 1] as a percentage string (DER/JER/WER are fractions)."""
+    return f"{fraction * 100:.2f}%"
+
+
+def _pp(delta_fraction: float) -> str:
+    """A difference of two rate fractions as percentage points."""
+    return f"{delta_fraction * 100:.2f} pp"
+
+
+def _dur(seconds: float) -> str:
+    total = round(seconds)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def _spread(values: list[float]) -> float:
+    """The max-minus-min spread; the conservative zero-change noise band."""
+    return (max(values) - min(values)) if values else 0.0
+
+
+def _strict(run: dict[str, Any]) -> dict[str, Any]:
+    return run["diarization"]["strict"]
+
+
+def _diagnostic(run: dict[str, Any]) -> dict[str, Any]:
+    return run["diarization"]["diagnostic"]
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _corpus_recordings(runs: list[dict[str, Any]]) -> list[str]:
+    """Recording ids present in every run (stable, sorted), so a partial run
+    never silently drops or invents a row in the per-file table."""
+    common: set[str] | None = None
+    for run in runs:
+        ids = set(_strict(run)["per_recording"])
+        common = ids if common is None else (common & ids)
+    return sorted(common or set())
+
+
+def _report_header(date: str, runs: list[dict[str, Any]]) -> list[str]:
+    envs = [r.get("environment", {}) for r in runs]
+    shas = sorted({e.get("git_sha", "unknown") for e in envs})
+    manifests = sorted(
+        {e.get("manifest_sha256", "")[:12] for e in envs if e.get("manifest_sha256")}
+    )
+    pmvers = sorted({e.get("scorer_versions", {}).get("pyannote.metrics", "?") for e in envs})
+    normvers = sorted({e.get("normalizer_version", "?") for e in envs})
+    sha_txt = shas[0] if len(shas) == 1 else ", ".join(shas)
+    lines = [
+        f"> Eval-quality baseline. Generated {date}. "
+        f"Pipeline git sha `{sha_txt}`, Voxint {_pkg_version('voxint')}.",
+        f"> Scorer pyannote.metrics {', '.join(pmvers)}, "
+        f"Whisper normalizer {', '.join(normvers)}. "
+        f"Corpus manifest sha `{', '.join(manifests) or 'n/a'}`.",
+    ]
+    if len(shas) > 1:
+        lines.append(
+            "> Warning: the scored runs do not share one pipeline git sha, so the "
+            "noise band below mixes code states and is not a clean zero-change floor."
+        )
+    return lines
+
+
+def _corpus_section(corpus: str, runs: list[dict[str, Any]]) -> list[str]:
+    has_wer = all("wer" in r for r in runs)
+    n = len(runs)
+    strict_der = [_strict(r)["pooled_der"] for r in runs]
+    diag_der = [_diagnostic(r)["pooled_der"] for r in runs]
+    strict_jer = [_strict(r)["global_jer"] for r in runs]
+    diag_jer = [_diagnostic(r)["global_jer"] for r in runs]
+    wer = [r["wer"]["pooled_wer"] for r in runs] if has_wer else []
+
+    lines = [f"## {corpus}", ""]
+    lines.append(
+        f"Runs scored: {n}."
+        if n > 1
+        else "Runs scored: 1 (single run, no noise band)."
+    )
+    lines += [
+        "",
+        "| metric | strict | diagnostic |",
+        "| --- | --- | --- |",
+        f"| Pooled DER | {_pct(_mean(strict_der))} | {_pct(_mean(diag_der))} |",
+        f"| Global JER | {_pct(_mean(strict_jer))} | {_pct(_mean(diag_jer))} |",
+    ]
+    if has_wer:
+        lines.append(f"| Pooled WER | {_pct(_mean(wer))} | n/a |")
+    lines.append("")
+
+    if n > 1:
+        band = [
+            f"pooled DER {_pp(_spread(strict_der))}",
+            f"global JER {_pp(_spread(strict_jer))}",
+        ]
+        if has_wer:
+            band.append(f"pooled WER {_pp(_spread(wer))}")
+        lines += [
+            f"### Noise floor ({n} zero-change runs)",
+            "",
+            "Pooled max spread (strict protocol): " + ", ".join(band) + ".",
+            "",
+        ]
+        worst = _worst_file_spread(corpus, runs, has_wer)
+        if worst:
+            lines += [worst, ""]
+
+    lines += _per_recording_table(runs, has_wer)
+    return lines
+
+
+def _worst_file_spread(corpus: str, runs: list[dict[str, Any]], has_wer: bool) -> str:
+    recs = _corpus_recordings(runs)
+    der_worst = ("", 0.0)
+    for rec in recs:
+        spread = _spread([_strict(r)["per_recording"][rec]["der"] for r in runs])
+        if spread > der_worst[1]:
+            der_worst = (rec, spread)
+    parts = [f"DER {der_worst[0]} {_pp(der_worst[1])}"] if der_worst[0] else []
+    if has_wer:
+        wer_worst = ("", 0.0)
+        for rec in recs:
+            vals = [r["wer"]["per_recording"].get(rec, {}).get("wer") for r in runs]
+            vals = [v for v in vals if v is not None]
+            if len(vals) == len(runs):
+                spread = _spread(vals)
+                if spread > wer_worst[1]:
+                    wer_worst = (rec, spread)
+        if wer_worst[0]:
+            parts.append(f"WER {wer_worst[0]} {_pp(wer_worst[1])}")
+    return ("Worst single-file spread: " + "; ".join(parts) + ".") if parts else ""
+
+
+def _per_recording_table(runs: list[dict[str, Any]], has_wer: bool) -> list[str]:
+    recs = _corpus_recordings(runs)
+    header = "| recording | evaluated | speakers | ref overlap | strict DER | strict JER |"
+    rule = "| --- | --- | --- | --- | --- | --- |"
+    if has_wer:
+        header += " WER |"
+        rule += " --- |"
+    lines = ["Per recording:", "", header, rule]
+    for rec in recs:
+        per = [_strict(r)["per_recording"][rec] for r in runs]
+        dur = _mean([p["evaluated_s"] for p in per])
+        speakers = round(_mean([p["speaker_count"] for p in per]))
+        overlap = _mean([p["reference_overlap_pct"] for p in per])
+        der = _mean([p["der"] for p in per])
+        jer = _mean([p["jer"] for p in per])
+        row = (
+            f"| {rec} | {_dur(dur)} | {speakers} | {overlap:.1f}% "
+            f"| {_pct(der)} | {_pct(jer)} |"
+        )
+        if has_wer:
+            wvals = [r["wer"]["per_recording"].get(rec, {}).get("wer") for r in runs]
+            wvals = [v for v in wvals if v is not None]
+            row += f" {_pct(_mean(wvals))} |" if wvals else " n/a |"
+        lines.append(row)
+    lines.append("")
+    return lines
+
+
+def render_report(date: str, runs_by_corpus: dict[str, list[dict[str, Any]]]) -> str:
+    """Render one or more per-corpus metrics reports into a house-style doc.
+
+    Each corpus is a separate section with its own pooled numbers; there is
+    deliberately no combined figure. When a corpus carries K > 1 runs the
+    zero-change noise band (max spread per metric) is rendered so downstream
+    thresholds can be measured, not guessed.
+    """
+    all_runs = [run for runs in runs_by_corpus.values() for run in runs]
+    if not all_runs:
+        raise EvalError("report: no runs supplied")
+    lines = _report_header(date, all_runs)
+    lines += [
+        "",
+        f"# Eval-quality baseline ({date})",
+        "",
+        "This is a maintainer tripwire, not a benchmark. The AMI and VoxConverse "
+        "subsets are a known-condition regression corpus, not a held-out "
+        "generalization set: both corpora informed the pyannote 3.1 tuning that "
+        "Voxint pins, so these numbers catch gross pipeline breakage and gate the "
+        "single-GPU memory change (issue #96). They are not a claim about accuracy "
+        "on unseen recordings. Each corpus is scored separately; there is "
+        "deliberately no combined AMI plus VoxConverse figure.",
+        "",
+        "The strict protocol (collar 0.0, overlap scored) is the gate. The "
+        "diagnostic protocol (collar 0.5, overlap skipped) is a forgiving "
+        "cross-check only. JER uses the pyannote 4.1 co-occurrence mapping and is a "
+        "delta-only signal, never a DIHARD-comparable absolute; DER is the primary "
+        "metric.",
+        "",
+    ]
+    for corpus in sorted(runs_by_corpus):
+        lines += _corpus_section(corpus, runs_by_corpus[corpus])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _parse_run_specs(specs: list[str]) -> dict[str, list[dict[str, Any]]]:
+    runs_by_corpus: dict[str, list[dict[str, Any]]] = {}
+    for spec in specs:
+        if "=" not in spec:
+            raise EvalError(f"--run expects CORPUS=path.json, got {spec!r}")
+        corpus, _, path = spec.partition("=")
+        corpus = corpus.strip()
+        if not corpus:
+            raise EvalError(f"--run has an empty corpus label: {spec!r}")
+        data = json.loads(_read(Path(path)))
+        if data.get("kind") != "eval_quality_report":
+            raise EvalError(f"{path}: not an eval_quality_report metrics JSON")
+        if "diarization" not in data:
+            raise EvalError(f"{path}: metrics JSON has no 'diarization' block to report")
+        runs_by_corpus.setdefault(corpus, []).append(data)
+    return runs_by_corpus
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    runs_by_corpus = _parse_run_specs(args.run)
+    text = render_report(args.date, runs_by_corpus)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -384,6 +650,20 @@ def build_parser() -> argparse.ArgumentParser:
     score_p.add_argument("--manifest", required=True, help="paths manifest JSON")
     score_p.add_argument("--out", help="metrics JSON path (default: stdout)")
     score_p.set_defaults(fn=cmd_score)
+
+    report_p = sub.add_parser("report", help="render metrics JSON to a dated Markdown report")
+    report_p.add_argument(
+        "--run",
+        action="append",
+        required=True,
+        metavar="CORPUS=path.json",
+        help="a scored metrics JSON tagged by corpus; repeat for K runs / more corpora",
+    )
+    report_p.add_argument(
+        "--date", required=True, help="report date, YYYY-MM-DD (stamped in the header)"
+    )
+    report_p.add_argument("--out", help="Markdown path (default: stdout)")
+    report_p.set_defaults(fn=cmd_report)
     return parser
 
 

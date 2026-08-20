@@ -168,6 +168,47 @@ class TestNormalizerStripsPunctuation:
         assert normalize_text("hello . world , ok ?") == normalize_text("hello world ok")
 
 
+class TestReferenceMetadata:
+    def test_speaker_count_and_overlap_within_uem(self) -> None:
+        # ref A[0,5], B[5,15], C[3,10] -> support [0,15]=15s; overlap A&C[3,5]
+        # + B&C[5,10] = [3,10]=7s -> 46.67%. UEM covers the whole span.
+        ref = ev.parse_rttm(_rttm("r", [(0.0, 5.0, "A"), (5.0, 10.0, "B"), (3.0, 7.0, "C")]), "r")
+        uem = ev.parse_uem("r 1 0 15\n", "r")
+        meta = ev.reference_metadata(ref, uem)
+        assert meta["speaker_count"] == 3.0
+        assert meta["reference_overlap_pct"] == pytest.approx(46.6667, abs=1e-3)
+        assert meta["evaluated_s"] == pytest.approx(15.0)
+
+    def test_uem_crop_limits_speaker_count_and_evaluated_span(self) -> None:
+        # Same reference, but a UEM of [0,4] only sees A (and the [3,4] slice of
+        # C) -> 2 speakers, evaluated span 4s (the UEM duration, not the DER sum).
+        ref = ev.parse_rttm(_rttm("r", [(0.0, 5.0, "A"), (5.0, 10.0, "B"), (3.0, 7.0, "C")]), "r")
+        uem = ev.parse_uem("r 1 0 4\n", "r")
+        meta = ev.reference_metadata(ref, uem)
+        assert meta["speaker_count"] == 2.0
+        assert meta["evaluated_s"] == pytest.approx(4.0)
+
+    def test_null_uem_uses_reference_support_for_evaluated_span(self) -> None:
+        ref = ev.parse_rttm(_rttm("r", [(0.0, 5.0, "A"), (5.0, 10.0, "B")]), "r")
+        meta = ev.reference_metadata(ref, None)
+        assert meta["speaker_count"] == 2.0
+        assert meta["reference_overlap_pct"] == pytest.approx(0.0)
+        assert meta["evaluated_s"] == pytest.approx(15.0)
+
+    def test_metadata_rides_along_in_scored_per_recording(self) -> None:
+        item = ev.DiarItem(
+            "r",
+            ev.parse_rttm(_rttm("r", [(0.0, 10.0, "A")]), "r"),
+            ev.parse_rttm(_rttm("r", [(0.0, 10.0, "s")]), "r"),
+            ev.parse_uem("r 1 0 20\n", "r"),
+        )
+        res = ev.score_diarization_set([item], protocol="strict", **ev.STRICT)
+        rec = res.per_recording["r"]
+        assert rec["speaker_count"] == 1.0
+        assert rec["evaluated_s"] == pytest.approx(20.0)
+        assert "reference_overlap_pct" in rec
+
+
 class TestManifestValidation:
     def _entry(self, tmp_path: Path) -> dict:
         (tmp_path / "ref.rttm").write_text(_rttm("r", [(0.0, 10.0, "A")]))
