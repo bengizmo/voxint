@@ -409,9 +409,7 @@ class AudioArtifact(Base):
         Index(
             "ix_audio_artifacts_reclaimable",
             "pipeline_run_id",
-            postgresql_where=text(
-                "kind = 'preprocessed_audio' AND reclaimed_at IS NULL"
-            ),
+            postgresql_where=text("kind = 'preprocessed_audio' AND reclaimed_at IS NULL"),
         ),
         # One waveform-peaks cache row per run (issue #57): concurrent first
         # requests both compute, but INSERT … ON CONFLICT DO NOTHING against
@@ -1569,9 +1567,7 @@ class RunEnrichmentAsset(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("pipeline_runs.id"), index=True
-    )
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
     asset_kind: Mapped[str] = mapped_column(Text)
     generation: Mapped[int] = mapped_column(Integer)
     payload: Mapped[dict[str, Any]] = mapped_column()
@@ -1644,9 +1640,7 @@ class RunAssetJob(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("pipeline_runs.id"), index=True
-    )
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
     asset_kind: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, default=RunAssetJobStatus.QUEUED.value)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1656,9 +1650,7 @@ class RunAssetJob(Base):
     config: Mapped[dict[str, Any]] = mapped_column()
     # Bounded, redacted failure summary (closed vocabulary + safe detail only).
     error: Mapped[str | None] = mapped_column(Text)
-    asset_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("run_enrichment_assets.id")
-    )
+    asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("run_enrichment_assets.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1732,6 +1724,254 @@ class NotificationDelivery(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Bounded + redacted transport error (never the URL, secret, or payload).
     last_error: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# Operator annotation layer (issue #86). Caps are server-enforced (the route
+# validates, the DB CHECK is the backstop) and mirrored in docs/annotations.md,
+# the contract-of-record this schema must match. HIGHLIGHT_PALETTE_SIZE is the
+# fixed 6-color highlight palette; a color index is 0..HIGHLIGHT_PALETTE_SIZE-1.
+HIGHLIGHT_PALETTE_SIZE = 6
+MAX_ANNOTATION_SPAN_SEGMENTS = 100
+MAX_ANNOTATION_NOTE_CHARS = 4000
+MAX_TAGS_PER_ANNOTATION = 8
+MAX_ANNOTATION_QUOTE_CHARS = 50_000
+MAX_TAG_NAME_CHARS = 64
+
+
+class AnnotationTag(Base):
+    """A global, flat operator tag (issue #86): a name plus a palette color.
+
+    Tags are shared across runs (not run-scoped) and flat (no hierarchy —
+    scope guard). ``name_normalized`` (trimmed, casefolded by the sole writer)
+    carries the UNIQUE constraint, so "Key Point" and "key point" collide;
+    ``name`` preserves the operator's verbatim casing for display. There is no
+    tag delete in v1 — ``archived_at`` hides a tag from pickers while leaving it
+    visible on annotations that already carry it (archive/restore via PATCH).
+    """
+
+    __tablename__ = "annotation_tags"
+    __table_args__ = (
+        UniqueConstraint("name_normalized", name="annotation_tags_name_normalized_key"),
+        CheckConstraint("char_length(trim(name)) > 0", name="annotation_tags_name_nonempty_check"),
+        CheckConstraint(
+            f"char_length(name) <= {MAX_TAG_NAME_CHARS}",
+            name="annotation_tags_name_len_check",
+        ),
+        CheckConstraint(
+            f"color >= 0 AND color <= {HIGHLIGHT_PALETTE_SIZE - 1}",
+            name="annotation_tags_color_range_check",
+        ),
     )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # Verbatim operator casing, trimmed by the writer. Display source.
+    name: Mapped[str] = mapped_column(Text)
+    # Writer-computed trim+casefold; carries the uniqueness constraint so
+    # case/whitespace variants of one tag cannot both exist.
+    name_normalized: Mapped[str] = mapped_column(Text)
+    color: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # NULL = active (shown in pickers); a timestamp = archived (hidden from
+    # pickers, still rendered on existing annotations). No hard delete in v1.
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TranscriptAnnotation(Base):
+    """One operator annotation over a transcript span (issue #86): a highlight
+    color, an optional margin note, and zero or more tags (via
+    ``annotation_tag_links``).
+
+    A mutable operator workspace, NOT an adjudication record: rows are edited,
+    re-anchored, and soft-deleted, and no annotation code path ever writes
+    ``raw_text``/``enhanced_text``/``corrected_text`` (a contract test enforces
+    this). Anchors always address the IMMUTABLE parent ``transcript_segments``
+    id in one of three kinds (``docs/annotations.md``); split children are a
+    read-time projection, so re-split/un-split never rewrites a stored anchor
+    or hash.
+
+    ``pipeline_run_id`` is denormalized by the sole writer from the endpoint
+    segments (mirroring ``segment_review_states``) so the run listing loads
+    without a join; ``start_segment_index``/``end_segment_index`` are captured
+    copies of the endpoint segment positions (stable per run) that give the
+    transcript-order listing and span iteration without a segment join.
+    """
+
+    __tablename__ = "transcript_annotations"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="transcript_annotations_idempotency_key"),
+        CheckConstraint(
+            "anchor_schema_version = 1",
+            name="transcript_annotations_schema_version_check",
+        ),
+        CheckConstraint(
+            "anchor_kind IN ('word_range', 'text_range', 'segment_range')",
+            name="transcript_annotations_anchor_kind_check",
+        ),
+        # Hash is stored for every kind (staleness applies to all): full sha256,
+        # lowercase hex, 64 chars. Column is NOT NULL; this pins the shape.
+        CheckConstraint(
+            "source_text_hash ~ '^[0-9a-f]{64}$'",
+            name="transcript_annotations_source_hash_hex_check",
+        ),
+        # Paired nullability: each offset pair is set together or both NULL.
+        CheckConstraint(
+            "(start_word_index IS NULL) = (end_word_index IS NULL)",
+            name="transcript_annotations_word_pair_check",
+        ),
+        CheckConstraint(
+            "(start_char_offset IS NULL) = (end_char_offset IS NULL)",
+            name="transcript_annotations_char_pair_check",
+        ),
+        # Per-kind shape (the classification truth table, persistence backstop):
+        # word_range ⇒ word pair present, char pair absent; text_range ⇒ char
+        # pair present, word pair absent; segment_range ⇒ all four absent.
+        CheckConstraint(
+            "(anchor_kind = 'word_range'"
+            " AND start_word_index IS NOT NULL AND end_word_index IS NOT NULL"
+            " AND start_char_offset IS NULL AND end_char_offset IS NULL)"
+            " OR (anchor_kind = 'text_range'"
+            " AND start_char_offset IS NOT NULL AND end_char_offset IS NOT NULL"
+            " AND start_word_index IS NULL AND end_word_index IS NULL)"
+            " OR (anchor_kind = 'segment_range'"
+            " AND start_word_index IS NULL AND end_word_index IS NULL"
+            " AND start_char_offset IS NULL AND end_char_offset IS NULL)",
+            name="transcript_annotations_kind_shape_check",
+        ),
+        # Bounds: a present half-open range has start >= 0 and end >= 1.
+        CheckConstraint(
+            "start_word_index IS NULL OR (start_word_index >= 0 AND end_word_index >= 1)",
+            name="transcript_annotations_word_bounds_check",
+        ),
+        CheckConstraint(
+            "start_char_offset IS NULL OR (start_char_offset >= 0 AND end_char_offset >= 1)",
+            name="transcript_annotations_char_bounds_check",
+        ),
+        # Same-segment ordering: when both endpoints land in ONE parent segment,
+        # the range is a non-empty half-open interval (end > start). Across
+        # different segments the two offsets index different segments' texts and
+        # carry no ordering relation, so the check is scoped to equal endpoints.
+        CheckConstraint(
+            "start_word_index IS NULL"
+            " OR start_segment_id <> end_segment_id"
+            " OR end_word_index > start_word_index",
+            name="transcript_annotations_word_same_segment_order_check",
+        ),
+        CheckConstraint(
+            "start_char_offset IS NULL"
+            " OR start_segment_id <> end_segment_id"
+            " OR end_char_offset > start_char_offset",
+            name="transcript_annotations_char_same_segment_order_check",
+        ),
+        # Span iterates start_segment_index .. end_segment_index inclusive.
+        CheckConstraint(
+            "end_segment_index >= start_segment_index",
+            name="transcript_annotations_segment_index_order_check",
+        ),
+        # Timing (word_range only stores seconds): paired nullability + order.
+        CheckConstraint(
+            "(start_seconds IS NULL) = (end_seconds IS NULL)",
+            name="transcript_annotations_seconds_pair_check",
+        ),
+        CheckConstraint(
+            "start_seconds IS NULL OR end_seconds >= start_seconds",
+            name="transcript_annotations_seconds_order_check",
+        ),
+        # Timing honesty (docs/annotations.md): precise seconds exist for EXACTLY
+        # word_range (word-timing-derived, always derivable there) and are NULL
+        # for text_range / segment_range, whose read path labels coarse
+        # segment-interval bounds timing_precision="segment". Paired with the
+        # seconds_pair_check, this gates both endpoints on the kind.
+        CheckConstraint(
+            "(anchor_kind = 'word_range') = (start_seconds IS NOT NULL)",
+            name="transcript_annotations_seconds_kind_check",
+        ),
+        CheckConstraint(
+            f"char_length(quote_text) <= {MAX_ANNOTATION_QUOTE_CHARS}",
+            name="transcript_annotations_quote_len_check",
+        ),
+        CheckConstraint(
+            f"note IS NULL OR char_length(note) <= {MAX_ANNOTATION_NOTE_CHARS}",
+            name="transcript_annotations_note_len_check",
+        ),
+        CheckConstraint(
+            f"color_index >= 0 AND color_index <= {HIGHLIGHT_PALETTE_SIZE - 1}",
+            name="transcript_annotations_color_index_check",
+        ),
+        # Run listing in transcript order; skips soft-deleted rows.
+        Index(
+            "ix_transcript_annotations_run_order",
+            "pipeline_run_id",
+            "start_segment_index",
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+        Index("ix_transcript_annotations_start_segment", "start_segment_id"),
+        Index("ix_transcript_annotations_end_segment", "end_segment_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    anchor_schema_version: Mapped[int] = mapped_column(Integer)
+    anchor_kind: Mapped[str] = mapped_column(Text)
+    # Endpoint parent-segment ids (immutable). CASCADE so re-transcription (new
+    # segment ids) or run deletion cannot leak orphaned annotations.
+    start_segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE")
+    )
+    end_segment_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_segments.id", ondelete="CASCADE")
+    )
+    # Captured segment positions (stable per run): transcript-order key + span
+    # iteration without a join back to transcript_segments.
+    start_segment_index: Mapped[int] = mapped_column(Integer)
+    end_segment_index: Mapped[int] = mapped_column(Integer)
+    # word_range only: half-open parent-word indices at each endpoint.
+    start_word_index: Mapped[int | None] = mapped_column(Integer)
+    end_word_index: Mapped[int | None] = mapped_column(Integer)
+    # text_range only: half-open code-point offsets into each endpoint segment's
+    # effective text as it existed at capture (parent coordinates).
+    start_char_offset: Mapped[int | None] = mapped_column(Integer)
+    end_char_offset: Mapped[int | None] = mapped_column(Integer)
+    # sha256 hex over the covered effective texts at capture (see
+    # docs/annotations.md). Recomputed at read time; a mismatch = stale.
+    source_text_hash: Mapped[str] = mapped_column(Text)
+    # Precise only for word_range (word-timing-derived); NULL otherwise, and the
+    # read path labels coarse segment-interval bounds timing_precision="segment".
+    start_seconds: Mapped[float | None] = mapped_column(Float)
+    end_seconds: Mapped[float | None] = mapped_column(Float)
+    # Server-derived captured quote (never client text). Preserved verbatim even
+    # when the anchor later goes stale, so the panel can show the original.
+    quote_text: Mapped[str] = mapped_column(Text)
+    color_index: Mapped[int] = mapped_column(Integer)
+    note: Mapped[str | None] = mapped_column(Text)
+    operator: Mapped[str] = mapped_column(Text)
+    # Create idempotency: a replayed nonce with the SAME request_fingerprint
+    # returns the original row (including a soft-deleted one); a different
+    # fingerprint is a 409 idempotency conflict. NULL for non-create writes.
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    request_fingerprint: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    # NULL = live; a timestamp = soft-deleted (excluded from lists/exports;
+    # a nonce replay still returns the deleted row rather than resurrecting it).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AnnotationTagLink(Base):
+    """Many-to-many between annotations and tags (issue #86), capped per
+    annotation by the writer (cross-row cap, the splits precedent). Composite
+    PK makes a duplicate (annotation, tag) link a structural no-op (writer uses
+    ON CONFLICT DO NOTHING). Links cascade with their annotation."""
+
+    __tablename__ = "annotation_tag_links"
+    __table_args__ = (Index("ix_annotation_tag_links_tag", "tag_id"),)
+
+    annotation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("transcript_annotations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    tag_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("annotation_tags.id"), primary_key=True)

@@ -113,5 +113,6 @@ def test_single_alembic_head() -> None:
     # app_settings.llm_bundled_enabled, issue #67; 0028 = transcript_segments
     # correction trace + version, issue #82; 0029 = app_settings.corrections
     # operator-authored rules, issue #84; 0030 = pipeline_runs.sidecar frozen
-    # YAML sidecar snapshot, issue #104).
-    assert list(heads) == ["0030"]
+    # YAML sidecar snapshot, issue #104; 0031 = operator annotation layer
+    # (annotation_tags + transcript_annotations + annotation_tag_links), #86).
+    assert list(heads) == ["0031"]
