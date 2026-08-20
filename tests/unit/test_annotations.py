@@ -24,12 +24,19 @@ from voxint.adjudication.annotations import (
     CaptureEndpoint,
     CapturePayload,
     CoveredSegment,
+    DerivedAnchor,
+    StoredAnchor,
     annotation_source_hash,
     derive_anchor,
+    resolve_annotation_spans,
+    stored_anchor_from_row,
     word_eligible,
 )
+from voxint.adjudication.splits import derive_children
+from voxint.adjudication.transcript import TranscriptLine
 from voxint.db.models import (
     MAX_ANNOTATION_SPAN_SEGMENTS,
+    TranscriptAnnotation,
     TranscriptSegment,
 )
 
@@ -569,3 +576,223 @@ def test_split_child_mapping_with_emoji() -> None:
     assert d.anchor_kind == WORD_RANGE
     assert (d.start_word_index, d.end_word_index) == (1, 2)
     assert d.quote_text == "👍ok"
+
+
+# --------------------------------------------------------------------------- #
+# Read resolver (resolve_annotation_spans) — the inverse mapping
+# --------------------------------------------------------------------------- #
+
+
+def _lines_from_covered(
+    covered: list[CoveredSegment], speakers: dict[uuid.UUID, str] | None = None
+) -> list[TranscriptLine]:
+    """Render ``covered`` the way ``attributed_transcript`` does: a split parent
+    (>= 2 children) expands into per-child lines carrying the PARENT id + the
+    child's word window; every other segment is one whole line. This is the render
+    the resolver maps stored anchors back onto."""
+    names = speakers or {}
+    lines: list[TranscriptLine] = []
+    for cs in covered:
+        seg = cs.segment
+        spk = names.get(seg.id, "Speaker")
+        children = derive_children(seg, list(cs.cuts)) if cs.cuts else None
+        if children is not None and len(children) > 1:
+            for ch in children:
+                lines.append(
+                    TranscriptLine(
+                        start_seconds=ch.start_seconds,
+                        end_seconds=ch.end_seconds,
+                        speaker=spk,
+                        text=ch.text,
+                        segment_id=seg.id,
+                        source_segment_id=seg.id,
+                        word_start=ch.word_start,
+                        word_end=ch.word_end,
+                    )
+                )
+        else:
+            lines.append(
+                TranscriptLine(
+                    start_seconds=seg.start_seconds,
+                    end_seconds=seg.end_seconds,
+                    speaker=spk,
+                    text=cs.effective,
+                    segment_id=seg.id,
+                    source_segment_id=seg.id,
+                )
+            )
+    return lines
+
+
+def _stored(derived: DerivedAnchor, ann_id: uuid.UUID | None = None) -> StoredAnchor:
+    """Project a freshly-derived anchor onto a stored anchor (what capture persists),
+    so a resolve against the same render is the true capture inverse."""
+    return StoredAnchor(
+        annotation_id=ann_id or uuid.uuid4(),
+        anchor_kind=derived.anchor_kind,
+        start_segment_id=derived.start_segment_id,
+        end_segment_id=derived.end_segment_id,
+        start_segment_index=derived.start_segment_index,
+        end_segment_index=derived.end_segment_index,
+        start_word_index=derived.start_word_index,
+        end_word_index=derived.end_word_index,
+        start_char_offset=derived.start_char_offset,
+        end_char_offset=derived.end_char_offset,
+        source_text_hash=derived.source_text_hash,
+        start_seconds=derived.start_seconds,
+        end_seconds=derived.end_seconds,
+    )
+
+
+def _span_text(lines: list[TranscriptLine], resolved: object) -> list[str]:
+    """The literal rendered slices a resolved annotation's spans cover."""
+    return [lines[s.line_index].text[s.start : s.end] for s in resolved.spans]  # type: ignore[attr-defined]
+
+
+def test_resolve_word_range_single_segment() -> None:
+    seg = _seg3()
+    cov = [_covered(seg)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg, 6), _ep(seg, 11), "world"))
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert not r.stale
+    assert r.timing_precision == TIMING_WORD
+    assert r.start_seconds == pytest.approx(1.0) and r.end_seconds == pytest.approx(2.0)
+    assert _span_text(lines, r) == ["world"]
+
+
+def test_resolve_text_range_sub_word() -> None:
+    seg = _seg3()
+    cov = [_covered(seg)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg, 7), _ep(seg, 11), "orld"))
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert not r.stale
+    assert r.timing_precision == TIMING_SEGMENT
+    # Coarse seconds fall back to the covered segment interval.
+    assert r.start_seconds == pytest.approx(0.0) and r.end_seconds == pytest.approx(3.0)
+    assert _span_text(lines, r) == ["orld"]
+
+
+def test_resolve_segment_range_whole_lines() -> None:
+    seg0, seg1 = _two_segments()
+    cov = [_covered(seg0), _covered(seg1)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg0, 0), _ep(seg1, 12), "Hello world\nthere friend"))
+    assert d.anchor_kind == SEGMENT_RANGE
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert not r.stale
+    assert _span_text(lines, r) == ["Hello world", "there friend"]
+
+
+def test_resolve_cross_segment_word_range_head_and_tail() -> None:
+    seg0, seg1 = _two_segments()
+    cov = [_covered(seg0), _covered(seg1)]
+    # "world" (seg0 tail) .. "there" (seg1 head).
+    d = derive_anchor(cov, CapturePayload(_ep(seg0, 6), _ep(seg1, 5), "world\nthere"))
+    assert d.anchor_kind == WORD_RANGE
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert _span_text(lines, r) == ["world", "there"]
+
+
+def test_resolve_word_range_on_split_child() -> None:
+    seg = _seg3()
+    cov = [_covered(seg, cuts=(1,))]  # children "Hello" | "world there"
+    d = derive_anchor(
+        cov,
+        CapturePayload(_ep(seg, 0, (1, 3)), _ep(seg, len("world there"), (1, 3)), "world there"),
+    )
+    assert d.anchor_kind == WORD_RANGE
+    lines = _lines_from_covered(cov)  # 2 child lines
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    # The whole second child line is highlighted; the first child is untouched.
+    assert _span_text(lines, r) == ["world there"]
+    assert all(s.line_index == 1 for s in r.spans)
+
+
+def test_resolve_text_range_on_split_child_inverse_projection() -> None:
+    seg = _seg3()
+    cov = [_covered(seg, cuts=(1,))]  # children "Hello" | "world there"
+    # "orld there" -> child-local 1..len -> parent 7..17 -> text_range.
+    d = derive_anchor(
+        cov, CapturePayload(_ep(seg, 1, (1, 3)), _ep(seg, len("world there"), (1, 3)), "orld there")
+    )
+    assert d.anchor_kind == TEXT_RANGE
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert _span_text(lines, r) == ["orld there"]
+
+
+def test_resolve_stale_when_text_changed_no_spans_but_locator() -> None:
+    seg = _seg3()
+    cov = [_covered(seg)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg, 6), _ep(seg, 11), "world"))
+    stored = _stored(d)
+    # A later correction changes the effective text -> hash mismatch -> stale.
+    changed = [_covered(seg, corrected_text="Hello WORLD there")]
+    lines = _lines_from_covered(changed)
+    [r] = resolve_annotation_spans(lines, changed, [stored])
+    assert r.stale
+    assert r.spans == ()
+    assert r.locator_line_index == 0
+
+
+def test_resolve_word_range_lost_eligibility_is_stale() -> None:
+    seg = _seg3()
+    cov = [_covered(seg)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg, 6), _ep(seg, 11), "world"))
+    stored = _stored(d)
+    # A correction whose text still hashes differently AND removes word-eligibility;
+    # even if a pathological correction re-hit the hash, eligibility loss alone
+    # stales a word_range (never token-slice corrected text).
+    corrected = [_covered(seg, corrected_text="Hello world there (edited)")]
+    lines = _lines_from_covered(corrected)
+    [r] = resolve_annotation_spans(lines, corrected, [stored])
+    assert r.stale and r.spans == ()
+
+
+def test_resolve_speakers_are_live_not_captured() -> None:
+    seg0, seg1 = _two_segments()
+    cov = [_covered(seg0), _covered(seg1)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg0, 0), _ep(seg1, 12), "Hello world\nthere friend"))
+    lines = _lines_from_covered(cov, speakers={seg0.id: "Ada", seg1.id: "Bo"})
+    [r] = resolve_annotation_spans(lines, cov, [_stored(d)])
+    assert r.speakers == ("Ada", "Bo")
+
+
+def test_resolve_not_stale_across_split_projection_change() -> None:
+    # The SAME anchor stays live and highlights the same visible text whether the
+    # parent is currently split or not (projection-only change, hash unchanged).
+    seg = _seg3()
+    unsplit = [_covered(seg)]
+    d = derive_anchor(unsplit, CapturePayload(_ep(seg, 6), _ep(seg, 17), "world there"))
+    stored = _stored(d)
+    split = [_covered(seg, cuts=(1,))]
+    lines = _lines_from_covered(split)
+    [r] = resolve_annotation_spans(lines, split, [stored])
+    assert not r.stale
+    assert "".join(_span_text(lines, r)) == "world there"
+
+
+def test_stored_anchor_from_row_round_trips() -> None:
+    row = TranscriptAnnotation()
+    ann_id = uuid.uuid4()
+    row.id = ann_id
+    row.anchor_kind = WORD_RANGE
+    row.start_segment_id = _A
+    row.end_segment_id = _B
+    row.start_segment_index = 0
+    row.end_segment_index = 1
+    row.start_word_index = 1
+    row.end_word_index = 3
+    row.start_char_offset = None
+    row.end_char_offset = None
+    row.source_text_hash = "0" * 64
+    row.start_seconds = 1.0
+    row.end_seconds = 2.0
+    sa = stored_anchor_from_row(row)
+    assert sa.annotation_id == ann_id
+    assert sa.anchor_kind == WORD_RANGE
+    assert (sa.start_word_index, sa.end_word_index) == (1, 3)
+    assert sa.source_text_hash == "0" * 64
