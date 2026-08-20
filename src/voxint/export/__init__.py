@@ -246,6 +246,26 @@ def _md_escape(text: str) -> str:
     return "".join(out)
 
 
+def _normalize_line_breaks(text: str) -> str:
+    """Fold every character a Markdown renderer may treat as a line ending to LF.
+
+    CommonMark ends lines on LF / CR / CRLF only, so ``\\r\\n``/``\\r`` are the
+    load-bearing case (a lone ``\\r`` left in the text would let ``foo\\r# x``
+    break out of the blockquote to a top-level heading). U+2028 (line separator),
+    U+2029 (paragraph separator), and NEL (U+0085) are not CommonMark line endings,
+    but assorted non-compliant preview pipelines do break on them; folding them to
+    LF here is cheap defense in depth, so each becomes a real, ``> ``-prefixed,
+    block-defused physical line on those renderers too rather than an escape.
+    """
+    return (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\u2028", "\n")
+        .replace("\u2029", "\n")
+        .replace("\x85", "\n")
+    )
+
+
 def _md_defuse_block_start(line: str) -> str:
     """Backslash-escape a line-leading block marker so one physical line renders
     as literal prose inside the blockquote, never as a heading, list item, or
@@ -255,9 +275,11 @@ def _md_defuse_block_start(line: str) -> str:
     position-sensitive markers that escaper cannot see: leading ``#`` / ``=`` /
     ``-`` / ``+`` and an ordered-list ``1.`` / ``1)``. ``*``/``_`` are already
     escaped and ``>`` is entity-encoded, so a nested blockquote or emphasis break
-    cannot form.
+    cannot form. Leading indent is measured over spaces AND tabs, since a tab
+    before a marker (``\\t#``) is otherwise missed and the marker stays live; the
+    caller also strips leading horizontal whitespace, so this is belt-and-braces.
     """
-    stripped = line.lstrip(" ")
+    stripped = line.lstrip(" \t")
     indent = line[: len(line) - len(stripped)]
     if stripped[:1] in _MD_BLOCK_LEADERS:
         return f"{indent}\\{stripped}"
@@ -284,19 +306,25 @@ def to_markdown(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> 
     """
     blocks: list[str] = []
     for para in paragraphize_transcript(lines):
-        # A speaker name is a single heading line: fold any embedded newline so a
-        # crafted name cannot break out of the `##` and forge its own headings.
-        speaker = para.speaker.replace("\r", " ").replace("\n", " ")
+        # A speaker name is a single heading line: fold every line-break-ish char
+        # (see _normalize_line_breaks) to a space so a crafted name cannot break out
+        # of the `##` and forge its own headings.
+        speaker = _normalize_line_breaks(para.speaker).replace("\n", " ")
         heading = f"## {_md_escape(speaker)}"
-        # Normalize line endings before splitting so a bare CR (or CRLF) becomes a
-        # real, block-defused physical line rather than smuggling structure past
-        # ``.split("\n")``: CommonMark treats a lone ``\r`` as a line ending, so
-        # ``foo\r# x`` would otherwise emit ``> foo\r# x`` and break ``# x`` out of
-        # the blockquote to a top-level heading. Every physical line then gets the
-        # ``> `` prefix and _md_defuse_block_start, same as an ``\n``-split line.
-        body = para.text.replace("\r\n", "\n").replace("\r", "\n")
+        # Normalize line breaks before splitting so a bare CR (or a Unicode
+        # separator) becomes a real, block-defused physical line rather than
+        # smuggling structure past ``.split("\n")`` (``foo\r# x`` would otherwise
+        # break ``# x`` out of the quote). Each physical line is then stripped of
+        # leading/trailing horizontal whitespace before defusing: four leading
+        # spaces or a tab would otherwise open an indented code block inside the
+        # quote (forged block structure, and our own backslash escapes would render
+        # verbatim inside it), and a trailing double-space would force a ``<br>``.
+        # Leading/trailing whitespace is insignificant to a prose paragraph, so the
+        # strip is render-equivalent for real transcript text.
+        body = _normalize_line_breaks(para.text)
         body_lines = [
-            _md_defuse_block_start(line) for line in _md_escape(body).split("\n")
+            _md_defuse_block_start(_md_escape(line.strip(" \t")))
+            for line in body.split("\n")
         ]
         if timestamps:
             body_lines[0] = (

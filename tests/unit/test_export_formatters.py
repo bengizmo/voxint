@@ -295,6 +295,51 @@ def test_markdown_escapes_tilde_fence_and_table_pipe() -> None:
     )
 
 
+def test_markdown_defuses_tab_indented_block_leader() -> None:
+    # A tab (not a space) before a marker must not slip past the leader defuse and
+    # render as a heading/underline inside the blockquote — the `=` and `#` fixes
+    # above are otherwise defeated by one leading tab.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0, end_seconds=1.0, speaker="A", text="\t# Owned\nFoo\n\t==="
+        ),
+    ]
+    assert to_markdown(lines, timestamps=False) == (
+        "## A\n\n> \\# Owned\n> Foo\n> \\===\n"
+    )
+
+
+def test_markdown_strips_leading_indent_no_code_block() -> None:
+    # Four leading spaces would otherwise open an indented code block inside the
+    # quote, forging block structure AND leaking the backslash escapes verbatim.
+    # Leading indent is stripped, so the escapes render as intended prose.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="    *soft*"),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> \\*soft\\*\n"
+
+
+def test_markdown_strips_trailing_hard_break() -> None:
+    # A trailing double-space forces a Markdown <br>; transcript prose has no need
+    # for hard breaks, so trailing horizontal whitespace is stripped per line.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="one  \ntwo"),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> one\n> two\n"
+
+
+def test_markdown_folds_unicode_line_separators() -> None:
+    # U+2028/U+2029/NEL are line breaks to some non-CommonMark preview pipelines;
+    # folding them to real physical lines keeps each `> `-prefixed and defused so a
+    # heading cannot break out of the blockquote there, in both body and heading.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0, end_seconds=1.0, speaker="A\u2029B", text="foo\u2028# x"
+        ),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A B\n\n> foo\n> \\# x\n"
+
+
 def test_markdown_folds_speaker_newline_into_one_heading() -> None:
     # A crafted speaker name with an embedded newline cannot break out of the
     # `##` heading to forge its own structure; the name is folded to one line.

@@ -29,10 +29,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **The Markdown transcript export can no longer let transcript text forge
   document structure (#65 follow-up).** The `.md` escaper now defuses a `=`
   setext underline and a bare carriage return (each could forge a heading, and
-  the carriage return could break out of the quote to a top-level heading), and
-  escapes `~` and `|` (tilde code fences and GFM table pipes). On-screen read
-  mode was never affected, since it renders through Jinja autoescape; the plain
-  `.txt` and `.json` exports are unchanged.
+  the carriage return could break out of the quote to a top-level heading),
+  escapes `~` and `|` (tilde code fences and GFM table pipes), measures line-
+  leading markers over tabs as well as spaces (a leading tab previously slipped
+  a marker past the defuse), strips per-line indentation (four leading spaces or
+  a tab would otherwise open an indented code block inside the quote), and folds
+  Unicode line separators (U+2028/U+2029/NEL) to real physical lines for
+  non-CommonMark preview tools. On-screen read mode was never affected, since it
+  renders through Jinja autoescape; the plain `.txt` and `.json` exports are
+  unchanged.
 - **The review console's Save-edit shortcut (Ctrl/⌘+Enter) is now part of the
   keyboard-shortcut source of truth (#51 follow-up).** Its key chord, its two
   on-screen hints, and the `?` cheat-sheet now read one shared definition, so
