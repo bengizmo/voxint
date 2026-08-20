@@ -18,7 +18,7 @@ function annotation(over: Partial<AnnotationShape>): AnnotationShape {
     note: null,
     operator: "op",
     stale: false,
-    timingPrecision: "exact",
+    timingPrecision: "word",
     startSeconds: 0,
     endSeconds: 1,
     speakers: [],

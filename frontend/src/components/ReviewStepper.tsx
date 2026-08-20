@@ -190,6 +190,10 @@ export function ReviewStepper({
   // The annotation layer resolves a text selection relative to this root (an
   // ancestor of the transcript lines); attached to the outer div below.
   const annotationRootRef = useRef<HTMLDivElement>(null);
+  // A bridge to useAnnotations().reload — the hook is created AFTER the transcript
+  // write callbacks that must trigger it (text edit / split / relabel change the
+  // render, so annotations must re-resolve). The ref decouples that ordering.
+  const reloadAnnotationsRef = useRef<(() => Promise<void>) | null>(null);
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
@@ -415,6 +419,10 @@ export function ReviewStepper({
       if (!result) return;
       applyResult(index, result, { supersedeProvenance: true });
       setConfirmDiscard(false);
+      // The edited text moved: re-resolve annotations so their marks repaint (or
+      // drop to a stale locator) against the new wording instead of clinging to
+      // pre-edit offsets until a page reload (issue #86).
+      void reloadAnnotationsRef.current?.();
       // Stay on the segment after an edit (the operator likely wants to verify it
       // next); editing cleared its verified mark server-side, so it is a target
       // again and the counter reflects that.
@@ -553,6 +561,9 @@ export function ReviewStepper({
         setConfirmDiscard(false);
         setSegments(result.segments);
         setProgress(result.progress);
+        // The split rewrote the rendered lines: re-resolve annotations so their
+        // marks land on the correct new line indices, not the pre-split ones.
+        void reloadAnnotationsRef.current?.();
         const targetIdx = result.segments.findIndex(
           (s) => s.sourceSegmentId === sourceSegmentId && s.reviewTarget,
         );
@@ -610,6 +621,9 @@ export function ReviewStepper({
         if (!result) return;
         setSegments(result.segments);
         setProgress(result.progress);
+        // Relabel changed speaker attribution: re-resolve so the panel's per-row
+        // speaker labels follow the new assignment instead of going stale.
+        void reloadAnnotationsRef.current?.();
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -665,6 +679,9 @@ export function ReviewStepper({
         // text — this path needs no confirmDiscard guard.
         setSegments(result.segments);
         setProgress(result.progress);
+        // Relabel changed speaker attribution: re-resolve so the panel's per-row
+        // speaker labels follow the new assignment instead of going stale.
+        void reloadAnnotationsRef.current?.();
         // Announce the outcome (issue #51): the inline speaker name changes but is
         // not in a live region, so a screen-reader operator would otherwise hear
         // nothing on success while failures already speak via role="alert".
@@ -697,6 +714,7 @@ export function ReviewStepper({
     staleLines: annotationStaleLines,
     captureSelection: annotationCapture,
     annotateFromKeyboard: annotateHotkey,
+    reload: reloadAnnotations,
     toolbar: annotationToolbar,
     panel: annotationPanel,
   } = useAnnotations({
@@ -711,6 +729,10 @@ export function ReviewStepper({
     onJump: goTo,
     onClaimLost: onAnnotationClaimLost,
   });
+  // Keep the write callbacks' bridge pointed at the live reload (see the ref decl).
+  useEffect(() => {
+    reloadAnnotationsRef.current = reloadAnnotations;
+  }, [reloadAnnotations]);
 
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the

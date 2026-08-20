@@ -96,6 +96,7 @@ interface LineHit {
   childWordEnd: number | null;
   offset: number; // code points into the line's rendered text
   lineText: string;
+  wrapper: HTMLElement; // the [data-seg-text] element this boundary fell in
 }
 
 /** Resolve one Range boundary (a container node + a UTF-16 offset) to the line it
@@ -129,28 +130,46 @@ function resolveBoundary(
     return null;
   }
 
-  // Sum the code-point length of every text node inside the wrapper that precedes
-  // the boundary, plus the code points before the boundary within its own node.
-  const walker = document.createTreeWalker(wrapper, NodeFilter.SHOW_TEXT);
-  let offset = 0;
-  let landed = false;
-  let current: Node | null = walker.nextNode();
-  while (current) {
-    const text = current.textContent ?? "";
-    if (current === node || current.contains?.(node)) {
-      offset += utf16ToCodePoint(text, u16Offset);
-      landed = true;
-      break;
+  // The boundary's code-point offset within the wrapper's rendered text.
+  let offset: number;
+  if (node.nodeType === Node.TEXT_NODE) {
+    // Text container: DOM `u16Offset` is a UTF-16 index into this text node. Sum
+    // the code points of every preceding text node in the wrapper, plus the code
+    // points before the boundary within its own node.
+    const walker = document.createTreeWalker(wrapper, NodeFilter.SHOW_TEXT);
+    let acc = 0;
+    let landed = false;
+    let current: Node | null = walker.nextNode();
+    while (current) {
+      const text = current.textContent ?? "";
+      if (current === node) {
+        acc += utf16ToCodePoint(text, u16Offset);
+        landed = true;
+        break;
+      }
+      acc += utf16ToCodePoint(text, text.length);
+      current = walker.nextNode();
     }
-    // If the boundary's node is an element (offset addresses child index), a text
-    // node fully before it contributes its whole length.
-    offset += utf16ToCodePoint(text, text.length);
-    current = walker.nextNode();
-  }
-  // A boundary on the wrapper element itself (node === wrapper) lands past all its
-  // text; treat the summed length as the offset.
-  if (!landed && node !== wrapper && !wrapper.contains(node)) {
-    return null;
+    if (!landed) {
+      return null;
+    }
+    offset = acc;
+  } else {
+    // Element container (the wrapper itself, or an inner <mark> that
+    // renderAnnotatedText emits): `u16Offset` is a CHILD index, NOT a text offset.
+    // Measure the rendered text from the wrapper start to the boundary with a
+    // Range — correct for every child-index (start-of-line, mid-line at a mark
+    // edge, or end-of-line). Astral-safe via Array.from; within one inline wrapper
+    // Range.toString() equals the textContent slice, so no block-boundary
+    // whitespace is involved (the reason the cross-line quote is built from props).
+    const measure = document.createRange();
+    measure.selectNodeContents(wrapper);
+    try {
+      measure.setEnd(node, u16Offset);
+    } catch {
+      return null;
+    }
+    offset = Array.from(measure.toString()).length;
   }
 
   const ws = line.dataset.wordStart;
@@ -162,46 +181,31 @@ function resolveBoundary(
     childWordEnd: we !== undefined && we !== "" ? Number(we) : null,
     offset,
     lineText: wrapper.textContent ?? "",
+    wrapper,
   };
-}
-
-/** True when `a` precedes `b` in transcript order (segment index, then offset). */
-function endpointBefore(a: LineHit, b: LineHit): boolean {
-  if (a.segmentIndex !== b.segmentIndex) {
-    return a.segmentIndex < b.segmentIndex;
-  }
-  return a.offset <= b.offset;
 }
 
 /** Read the current window selection and build a normalized capture payload, or
  *  null when the selection is empty, collapsed, or touches non-transcript chrome.
- *  Direction is normalized to transcript order so `clientQuote` reads forward. */
+ *  A DOM Range always has its start boundary before its end boundary in document
+ *  (= render) order regardless of drag direction, so `start`/`end` already read
+ *  forward and `clientQuote` reads forward with them. */
 export function selectionToCapture(root: HTMLElement): CapturePayload | null {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
     return null;
   }
   const range = selection.getRangeAt(0);
-  const startHit = resolveBoundary(
-    root,
-    range.startContainer,
-    range.startOffset,
-  );
-  const endHit = resolveBoundary(root, range.endContainer, range.endOffset);
-  if (!startHit || !endHit) {
+  const first = resolveBoundary(root, range.startContainer, range.startOffset);
+  const second = resolveBoundary(root, range.endContainer, range.endOffset);
+  if (!first || !second) {
     return null;
   }
-  const [first, second] = endpointBefore(startHit, endHit)
-    ? [startHit, endHit]
-    : [endHit, startHit];
-  if (
-    first.segmentIndex === second.segmentIndex &&
-    first.offset === second.offset
-  ) {
-    return null; // zero-width after normalization
+  if (first.wrapper === second.wrapper && first.offset === second.offset) {
+    return null; // zero-width
   }
 
-  const clientQuote = buildClientQuote(first, second);
+  const clientQuote = buildClientQuote(root, first, second);
   return {
     start: {
       segmentId: first.segmentId,
@@ -220,28 +224,61 @@ export function selectionToCapture(root: HTMLElement): CapturePayload | null {
 }
 
 /** The client's own quote assertion: the selected text sliced from the RENDERED
- *  line texts (never `Range.toString()`). For a single line it is one slice; a
- *  cross-line selection joins the tail of the first line, the whole middle lines,
- *  and the head of the last with newlines (the server derives its quote the same
- *  way, so a byte match is the non-stale signal). The middle lines are not known
- *  to the client here, so a cross-line quote is the two endpoint slices joined —
- *  the server owns the authoritative multi-segment quote and a mismatch on the
- *  (rare) multi-line case degrades to a 409 the operator retries, never a wrong
- *  stored quote. */
-function buildClientQuote(first: LineHit, second: LineHit): string {
-  if (
-    first.segmentId === second.segmentId &&
-    first.childWordStart === second.childWordStart
-  ) {
+ *  line texts (never `Range.toString()`, whose whitespace behaviour across block
+ *  boundaries is not a stable protocol). A single rendered line is one slice; a
+ *  multi-line selection is the first line's tail, every whole line strictly
+ *  between the endpoints, and the last line's head, newline-joined — the same
+ *  shape the server derives (`_derive_quote`), so a byte match is the non-stale
+ *  signal. A selection that crosses a split parent's derived children still
+ *  degrades to a 409 the operator retries: the server joins the parent's
+ *  contiguous text with a space where the DOM renders separate child lines. */
+function buildClientQuote(
+  root: HTMLElement,
+  first: LineHit,
+  second: LineHit,
+): string {
+  if (first.wrapper === second.wrapper) {
     return sliceByCodePoints(first.lineText, first.offset, second.offset);
   }
-  const head = sliceByCodePoints(
+  const wrappers = Array.from(
+    root.querySelectorAll<HTMLElement>("[data-seg-text]"),
+  );
+  const firstIndex = wrappers.indexOf(first.wrapper);
+  const secondIndex = wrappers.indexOf(second.wrapper);
+  const middles =
+    firstIndex !== -1 && secondIndex > firstIndex + 1
+      ? wrappers
+          .slice(firstIndex + 1, secondIndex)
+          .map((w) => w.textContent ?? "")
+      : [];
+  return buildQuoteParts(
     first.lineText,
     first.offset,
-    Array.from(first.lineText).length,
+    middles,
+    second.lineText,
+    second.offset,
   );
-  const tail = sliceByCodePoints(second.lineText, 0, second.offset);
-  return `${head}\n${tail}`;
+}
+
+/** Pure assembly of a multi-line quote from the endpoint line texts + code-point
+ *  offsets and the whole texts of the lines strictly between them (unit-tested;
+ *  no DOM). The first line contributes its tail (from `firstOffset`), each middle
+ *  line its whole text, and the last line its head (to `secondOffset`); parts are
+ *  newline-joined to mirror the server's `_derive_quote`. */
+export function buildQuoteParts(
+  firstText: string,
+  firstOffset: number,
+  middleTexts: string[],
+  secondText: string,
+  secondOffset: number,
+): string {
+  const head = sliceByCodePoints(
+    firstText,
+    firstOffset,
+    Array.from(firstText).length,
+  );
+  const tail = sliceByCodePoints(secondText, 0, secondOffset);
+  return [head, ...middleTexts, tail].join("\n");
 }
 
 /** Flatten a capture payload to the POST/PATCH form field names (the server's

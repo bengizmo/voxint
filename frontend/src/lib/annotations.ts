@@ -44,7 +44,9 @@ export interface AnnotationShape {
   note: string | null;
   operator: string;
   stale: boolean;
-  timingPrecision: string;
+  // The server emits exactly one of these (annotations.py TIMING_WORD/SEGMENT):
+  // "word" is precise (word-timed), "segment" is approximate (whole-segment bounds).
+  timingPrecision: "word" | "segment";
   startSeconds: number | null;
   endSeconds: number | null;
   speakers: string[];

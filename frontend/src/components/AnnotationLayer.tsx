@@ -61,6 +61,10 @@ export interface UseAnnotationsResult {
   captureSelection: () => CapturePayload | null;
   // The `h` shortcut: same capture, but announces when there is nothing selected.
   annotateFromKeyboard: () => void;
+  // Re-fetch resolved annotations + tags after a transcript mutation (text edit /
+  // split / relabel) so marks re-resolve against the new render instead of going
+  // stale until a page reload.
+  reload: () => Promise<void>;
   toolbar: ReactNode;
   panel: ReactNode;
 }
@@ -153,15 +157,19 @@ export function useAnnotations({
     if (!root) return null;
     const cap = selectionToCapture(root);
     if (!cap) return null;
-    setPending((prev) => {
-      if (prev && selectionKey(prev) === selectionKey(cap)) return prev;
-      setEditingId(null);
-      resetDraft();
-      setError(null);
-      return cap;
-    });
+    // An open edit owns the toolbar; a stray transcript selection must not silently
+    // discard the operator's in-progress note/tags/colour — they Cancel to leave.
+    if (editingId !== null) return null;
+    // An unchanged selection (the mouseup from clicking a swatch or Save, which
+    // leaves the transcript text selected) keeps the operator's current draft.
+    if (pending && selectionKey(pending) === selectionKey(cap)) return pending;
+    // A genuinely new selection starts a fresh create draft. State setters run in
+    // sequence — never inside a setState updater, which React may replay.
+    resetDraft();
+    setError(null);
+    setPending(cap);
     return cap;
-  }, [rootRef, resetDraft]);
+  }, [rootRef, editingId, pending, resetDraft]);
 
   const annotateFromKeyboard = useCallback(() => {
     const cap = captureSelection();
@@ -296,8 +304,11 @@ export function useAnnotations({
   const reanchor = useCallback(
     async (id: string) => {
       if (!writable || reviewToken === null) return;
+      // Selecting the new location fired a mouseup, so the same selection is
+      // already the live create draft (`pending`); reuse it and fall back to a
+      // fresh read only if it is somehow gone.
       const root = rootRef.current;
-      const cap = root ? selectionToCapture(root) : null;
+      const cap = pending ?? (root ? selectionToCapture(root) : null);
       if (!cap) {
         setError(
           "Select the highlight's new location in the transcript, then click Re-anchor.",
@@ -315,11 +326,36 @@ export function useAnnotations({
       );
       if (ok && data) {
         upsert(data as AnnotationShape);
-        window.getSelection()?.removeAllRanges();
+        // Clear the create draft the re-anchor selection opened, so its toolbar
+        // cannot then Save a duplicate annotation over the same span.
+        closeToolbar();
       }
     },
-    [writable, reviewToken, rootRef, request, runId, upsert],
+    [writable, reviewToken, rootRef, pending, request, runId, upsert, closeToolbar],
   );
+
+  // Re-fetch the run's resolved annotations + tags. Call after a transcript
+  // mutation (text edit / split / relabel) that changes the rendered lines: the
+  // server re-derives quote/hash/seconds/line-index and staleness against the NEW
+  // text, so marks repaint correctly (or drop to a locator) instead of clinging to
+  // pre-edit offsets until a full page reload. No claim token needed (the GET is
+  // read-only). Best-effort — a failed refresh leaves the prior state, which the
+  // next reload or a page load reconciles.
+  const reload = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/review/${runId}/annotations`, {
+        method: "GET",
+      });
+      const data = (await res.json()) as {
+        annotations: AnnotationShape[];
+        tags: AnnotationTagShape[];
+      };
+      setAnnotations(data.annotations);
+      setTags(data.tags);
+    } catch {
+      // Leave the existing state; the next reload or page load reconciles.
+    }
+  }, [runId]);
 
   const createTag = useCallback(async () => {
     if (!writable) return;
@@ -387,8 +423,11 @@ export function useAnnotations({
 
   const jumpTo = useCallback(
     (a: AnnotationShape) => {
-      const line =
-        a.spans[0]?.lineIndex ?? a.locatorLineIndex ?? a.startSegmentIndex;
+      // A rendered-LINE index only: a span's line, else the stale locator's line.
+      // Never `startSegmentIndex` — that is a SEGMENT index, which diverges from
+      // the line index after any split above it (it would jump to the wrong line).
+      const line = a.spans[0]?.lineIndex ?? a.locatorLineIndex;
+      if (line == null) return;
       onJump(line);
     },
     [onJump],
@@ -447,6 +486,7 @@ export function useAnnotations({
     staleLines,
     captureSelection,
     annotateFromKeyboard,
+    reload,
     toolbar,
     panel,
   };
@@ -707,7 +747,7 @@ function HighlightsPanel({
               />
               <span className="highlight-time muted tabular-nums">
                 {a.startSeconds != null && a.endSeconds != null
-                  ? `${a.timingPrecision !== "exact" ? "≈ " : ""}${a.startSeconds.toFixed(2)}–${a.endSeconds.toFixed(2)}s`
+                  ? `${a.timingPrecision !== "word" ? "≈ " : ""}${a.startSeconds.toFixed(2)}–${a.endSeconds.toFixed(2)}s`
                   : "timing unavailable"}
               </span>
               {a.speakers.length > 0 && (

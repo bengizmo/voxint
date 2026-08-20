@@ -17,7 +17,6 @@ import {
 } from "../lib/playback";
 import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
 import { type AnnotationLineSpan } from "../lib/annotations";
-import { sliceByCodePoints } from "../lib/selection";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
 
@@ -123,7 +122,10 @@ function renderAnnotatedText(
   text: string,
   spans: AnnotationLineSpan[],
 ): ReactNode {
-  const len = Array.from(text).length;
+  // Build the code-point array ONCE (astral-safe), then slice pieces from it — the
+  // cut offsets are already code-point indices clamped into [0, len] and sorted.
+  const codePoints = Array.from(text);
+  const len = codePoints.length;
   const cuts = new Set<number>([0, len]);
   for (const s of spans) {
     cuts.add(Math.max(0, Math.min(s.start, len)));
@@ -135,7 +137,7 @@ function renderAnnotatedText(
     const a = points[k];
     const b = points[k + 1];
     if (a === b) continue;
-    const piece = sliceByCodePoints(text, a, b);
+    const piece = codePoints.slice(a, b).join("");
     // The last span covering this interval wins, so a highlight added later paints
     // over an earlier one rather than the two fighting for the same characters.
     let color: number | null = null;

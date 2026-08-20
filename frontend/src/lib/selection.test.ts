@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildQuoteParts,
   captureFormFields,
   codePointToUtf16,
   sliceByCodePoints,
@@ -112,5 +113,25 @@ describe("captureFormFields", () => {
     });
     expect(fields.start_child_word_start).toBe("0");
     expect(fields.start_child_word_end).toBe("2");
+  });
+});
+
+describe("buildQuoteParts", () => {
+  // Mirrors the server's `_derive_quote`: first line's tail + whole middles +
+  // last line's head, newline-joined. A byte match is the non-stale signal.
+  it("joins a two-line selection as head-tail with no middles", () => {
+    expect(buildQuoteParts("say two", 4, [], "three now", 5)).toBe("two\nthree");
+  });
+
+  it("includes every whole line between the endpoints (>= 3 segments)", () => {
+    expect(
+      buildQuoteParts("say two", 4, ["middle words", "and more"], "three now", 5),
+    ).toBe("two\nmiddle words\nand more\nthree");
+  });
+
+  it("is astral-safe: offsets and slices count code points, not UTF-16 units", () => {
+    // "a😀 two": code points a(0) 😀(1) space(2) t(3)... a code-point offset of 2
+    // is the space; a UTF-16 reading would land mid-surrogate.
+    expect(buildQuoteParts("a\u{1F600} two", 2, [], "end", 3)).toBe(" two\nend");
   });
 });

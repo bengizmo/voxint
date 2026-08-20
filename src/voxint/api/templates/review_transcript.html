@@ -76,7 +76,7 @@
         <span class="hl-swatch hl-{{ a.colorIndex }}" aria-hidden="true"></span>
         <span class="muted">
           {%- if a.startSeconds is not none and a.endSeconds is not none -%}
-            {% if a.timingPrecision != "exact" %}≈ {% endif %}{{ "%.2f"|format(a.startSeconds) }}–{{ "%.2f"|format(a.endSeconds) }}s
+            {% if a.timingPrecision != "word" %}≈ {% endif %}{{ "%.2f"|format(a.startSeconds) }}–{{ "%.2f"|format(a.endSeconds) }}s
           {%- else -%}timing unavailable{%- endif -%}
         </span>
         {% if a.speakers %}<span class="spk-badge">{{ a.speakers|join(", ") }}</span>{% endif %}

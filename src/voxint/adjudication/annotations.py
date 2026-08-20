@@ -641,8 +641,11 @@ def _validate_color(color_index: int) -> None:
 
 
 def _normalize_note(note: str | None) -> str | None:
-    """Empty is stored as NULL (no empty rendering); length is capped at 422."""
-    if not note:
+    """Empty or whitespace-only is stored as NULL (no empty rendering, and no
+    fingerprint drift between ``" "`` and absent); length is capped at 422. Content
+    notes are kept verbatim — only the all-blank case collapses to NULL, matching
+    the client, which omits a whitespace-only draft."""
+    if not note or not note.strip():
         return None
     if len(note) > MAX_ANNOTATION_NOTE_CHARS:
         raise AnnotationValidationError(

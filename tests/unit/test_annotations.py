@@ -527,6 +527,20 @@ def test_whitespace_only_token_falls_to_text_range() -> None:
     assert d.quote_text == "world"
 
 
+def test_normalize_note_collapses_whitespace_only_to_none() -> None:
+    # A whitespace-only note stores as NULL (no empty rendering; no fingerprint
+    # drift between " " and absent), matching the client, which omits a blank draft.
+    # Content notes — including intentional inner whitespace — are kept verbatim.
+    from voxint.adjudication.annotations import _normalize_note
+
+    assert _normalize_note(None) is None
+    assert _normalize_note("") is None
+    assert _normalize_note("   ") is None
+    assert _normalize_note("\t\n ") is None
+    assert _normalize_note("a note") == "a note"
+    assert _normalize_note("  keeps inner  spaces  ") == "  keeps inner  spaces  "
+
+
 def test_split_middle_child_no_leading_space_maps_correctly() -> None:
     # Tokens without leading spaces (reconcatenate to a space-free raw); a whole
     # middle child must map to the right parent word range.

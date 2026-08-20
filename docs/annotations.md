@@ -241,8 +241,8 @@ The Highlights panel lists every annotation in transcript order with an OR-union
 tag filter and per-row Jump, Edit, Delete, and, when a highlight is stale,
 Refresh and Re-anchor. Re-anchor reads the current selection as the new anchor.
 Speaker attribution and timing come from the read-time resolution, never the
-captured copy, and timing is labeled approximate when `timing_precision` is not
-`exact`.
+captured copy, and timing is labeled approximate (a leading `≈`) when
+`timing_precision` is `segment` rather than `word`.
 
 A stale annotation drops its inline marks and shows an approximate locator chip
 at its old start line; the panel row still shows the original quote verbatim.
