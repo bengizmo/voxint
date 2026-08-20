@@ -56,6 +56,12 @@
         {{ watch_folder_last_sweep.stat_errors }} file{{ "" if watch_folder_last_sweep.stat_errors == 1 else "s" }}
         disappeared or could not be read during the check.
       {% endif %}
+      {% if watch_folder_last_sweep.sidecar_errors %}
+        <span class="notice">{{ watch_folder_last_sweep.sidecar_errors }}
+        file{{ " is" if watch_folder_last_sweep.sidecar_errors == 1 else "s are" }}
+        waiting because a companion .yaml sidecar has a problem; fix the
+        sidecar and the next check will pick the recording up.</span>
+      {% endif %}
       {% if watch_folder_last_sweep.hit_file_cap %}
         <span class="notice">A lot of new recordings appeared at once, so
         only the first batch was queued this pass — the rest is

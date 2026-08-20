@@ -71,6 +71,8 @@ def submit(
     media_item_id: uuid.UUID,
     *,
     domain_pack: dict[str, Any],
+    sidecar: dict[str, Any] | None = None,
+    operator_notes: str | None = None,
 ) -> PipelineRun:
     """Queue a fresh run, freezing its resolved domain-pack snapshot (issue #11).
 
@@ -79,12 +81,24 @@ def submit(
     :func:`voxint.domain_packs.registry.resolve_run_domain_pack`). The snapshot is
     write-once run provenance — the pipeline and enrichment read it, never the
     live global env.
+
+    ``sidecar`` (issue #104) is the media file's parsed YAML sidecar mapping,
+    stamped write-once alongside the pack snapshot; ``operator_notes`` seeds the
+    run's notes at creation (the sidecar's ``notes`` field). Both stay optional so
+    submit paths without a sidecar are unchanged.
     """
     run = PipelineRun(
         media_item_id=media_item_id,
         status=RunStatus.QUEUED.value,
         domain_pack=domain_pack,
     )
+    # Set only when present: an explicit None on a JSON column serializes as a
+    # JSON null (jsonb_typeof 'null'), not SQL NULL, and would trip the
+    # sidecar object-shape check constraint.
+    if sidecar is not None:
+        run.sidecar = sidecar
+    if operator_notes is not None:
+        run.operator_notes = operator_notes
     session.add(run)
     session.flush()
     return run

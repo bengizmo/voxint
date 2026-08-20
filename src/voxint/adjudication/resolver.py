@@ -35,6 +35,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session, aliased, joinedload
 
+from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
     AdjudicationDecision,
     AssignmentMethod,
@@ -553,7 +554,8 @@ class QueueEntry:
     claimed_by: str | None
     # Operator-facing display context (issue #56); appended with defaults so
     # older positional/attribute construction stays valid. ``title`` is the
-    # acquisition-metadata title (issue #36) when present; ``duration_seconds``
+    # run's sidecar title (issue #104) when present, else the
+    # acquisition-metadata title (issue #36); ``duration_seconds``
     # is the PROBED media length (``media_items.duration_seconds``), the truth,
     # not the source-claimed metadata figure; ``created_at`` is the run's.
     title: str | None = None
@@ -615,7 +617,10 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
                 unresolved_labels=unresolved,
                 total_labels=len(states),
                 claimed_by=run.review_claimed_by if claim_live else None,
-                title=metadata.title if metadata is not None else None,
+                # Operator intent beats scraped context: a sidecar title
+                # (issue #104) wins over the acquisition-metadata title.
+                title=title_from_snapshot(run.sidecar)
+                or (metadata.title if metadata is not None else None),
                 duration_seconds=run.media_item.duration_seconds,
                 created_at=run.created_at,
             )

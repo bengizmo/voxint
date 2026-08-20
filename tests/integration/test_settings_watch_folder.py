@@ -188,3 +188,35 @@ def test_status_line_root_missing_warning(
         s.commit()
     body = client.get("/settings").text
     assert "media folder could not be found" in body
+
+
+def test_status_line_sidecar_errors_warning(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # Media held over a broken companion sidecar (issue #104): the line names
+    # the cause and the fix, and promises the retry.
+    client, _ = make_client(session_factory, media_root, watch_folder_enabled=True)
+    with session_factory() as s:
+        row = get_or_create(s, llm_enabled_default=False)
+        summary = _cap_summary()
+        summary["sidecar_errors"] = 2
+        row.watch_folder_last_sweep = summary
+        s.commit()
+    body = client.get("/settings").text
+    assert "companion .yaml sidecar has a problem" in body
+    assert "next check will pick the recording up" in body
+
+
+def test_status_line_pre_sidecar_blob_renders_safely(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A summary persisted BEFORE the sidecar feature has no sidecar_errors key;
+    # the page must render without the sidecar sentence and without erroring.
+    client, _ = make_client(session_factory, media_root, watch_folder_enabled=True)
+    with session_factory() as s:
+        row = get_or_create(s, llm_enabled_default=False)
+        row.watch_folder_last_sweep = _cap_summary()  # no sidecar_errors key
+        s.commit()
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert "companion .yaml sidecar" not in resp.text

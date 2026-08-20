@@ -130,6 +130,59 @@ Two things help it behave the way you expect:
   run's detail page. A file you **rename or move** looks new and will be picked up
   again.
 
+#### Describe a recording with a sidecar file
+
+When automatic ingest picks a recording up, you can hand Voxint some context
+along with it: a title, the names of the people speaking, working notes, or a
+domain pack. You do this with a **sidecar file**, a small text file that
+travels next to the recording and is written in a simple `key: value` format
+called YAML.
+
+Say your recording is `interview.wav`. Create a plain-text file named
+`interview.wav.yaml` in the same folder, with any of these lines:
+
+```yaml
+title: Interview with Jane Doe
+speakers:
+  - Jane Doe
+  - John Smith
+domain_pack: hvac
+notes: |
+  Recorded at the spring conference.
+  Audio is a little echoey after minute 40.
+```
+
+Every line is optional. Here is what each one does:
+
+| Key | What it does |
+|---|---|
+| `title` | Becomes the recording's display name in the queue and on the run page. |
+| `speakers` | Names of people likely in the recording. Voxint treats them as trusted name hints when it suggests speaker names during review, so these names surface sooner and more confidently. |
+| `domain_pack` | Picks the [domain pack](../domain-packs.md) for this one recording. It wins over the folder's pack setting. |
+| `notes` | Free text, saved as the run's operator notes. |
+
+A few rules worth knowing:
+
+- **Naming.** `interview.wav.yaml` (the full file name plus `.yaml`) always
+  works. The shorter `interview.yaml` also works, as long as only one recording
+  in the folder is named `interview.something`; with both a `interview.wav` and
+  an `interview.mp4` present, Voxint cannot tell which one you meant and will
+  wait until you rename the sidecar to the full form. If both forms exist, the
+  full-name one wins. The ending must be `.yaml`, not `.yml`.
+- **Drop the sidecar with or before the recording.** The sidecar is read once,
+  at the moment the recording is picked up, and its contents are frozen onto
+  that run. A sidecar that arrives after the recording was already picked up
+  does nothing, and editing the file later changes nothing.
+- **A broken sidecar never loses your recording.** If the sidecar has a
+  problem (a typo in the format, a wrong kind of value, an unknown domain
+  pack), Voxint holds the recording rather than guessing. The status line
+  under **Settings → Media folders** tells you a sidecar needs fixing; fix the
+  file and the next check picks the pair up.
+- **Extra lines are fine.** Keys Voxint does not recognize are kept with the
+  run for reference and otherwise ignored, so a sidecar written by another
+  tool can carry its own bookkeeping without getting in the way. Anything in
+  the file is stored with the run, so keep private things out of it.
+
 **Submit a single file (for people comfortable with the terminal).** If you would
 rather kick off one file by hand, Voxint has a command line. These commands are
 for the **Docker install**: they run inside the running `api` container. (On the

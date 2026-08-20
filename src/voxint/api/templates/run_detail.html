@@ -3,6 +3,11 @@
 {% block body %}
 <p><a href="/runs">← runs</a></p>
 <h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
+{% if sidecar_title %}
+{# The sidecar title (issue #104) is operator intent, shown as the run's
+   display name; the raw path below stays visible as ground truth. #}
+<p class="media-title">{{ sidecar_title }}</p>
+{% endif %}
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
 {% if provenance %}
 {# URL runs only: the acquisition source, shown as a bare host — never the raw

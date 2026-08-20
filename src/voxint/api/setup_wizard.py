@@ -344,7 +344,12 @@ def _under_reserved(path: Path, reserved: set[Path]) -> bool:
 
 
 def scan_media_folders(
-    session: Session, media_root: Path, folders: Iterable[str], settings: Settings
+    session: Session,
+    media_root: Path,
+    folders: Iterable[str],
+    settings: Settings,
+    *,
+    apply_file_cap: bool = True,
 ) -> ScanResult:
     """Walk the registered ``folders`` for net-new media, bounded and containment-safe.
 
@@ -361,6 +366,15 @@ def scan_media_folders(
     ``MediaItem.source_path`` in one query and the ``setup_scan_max_files`` cap is
     applied to the *net-new* result (so an already-ingested first batch can't mask
     genuinely new media). A missing media root yields ``root_missing=True``, not a raise.
+
+    ``apply_file_cap=False`` (issue #104) returns the whole net-new list — the
+    watch sweep needs it because it HOLDS some candidates (a malformed sidecar, a
+    still-settling file) across sweeps: capped here, a few permanently held files
+    at the front of the walk order would occupy every cap slot and starve every
+    file behind them forever. The sweep applies ``setup_scan_max_files`` to actual
+    submissions instead. The wizard's confirm path keeps the cap here (it submits
+    everything it lists, so pre-capping is exact for it). The entry cap always
+    applies — it bounds the walk itself.
     """
     root = media_root.resolve()
     if not root.is_dir():
@@ -431,7 +445,7 @@ def scan_media_folders(
         already_known = len(candidates) - len(net_new)
         # Apply the file cap to NET-NEW results (after the existence filter), so an
         # already-ingested first batch never fills the cap and hides new media.
-        if len(net_new) > max_files:
+        if apply_file_cap and len(net_new) > max_files:
             hit_file_cap = True
             net_new = net_new[:max_files]
         candidates = net_new

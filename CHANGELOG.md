@@ -5,6 +5,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **YAML sidecar metadata for watch-folder media (#104).** A recording dropped
+  into a watched folder can arrive with a companion sidecar file
+  (`interview.wav.yaml`, or `interview.yaml` when the stem is unambiguous; the
+  full-name form wins) whose fields feed the run at submit time: `title`
+  (display name in the queue and run detail), `speakers` (trusted name hints,
+  unioned into the run's frozen domain-pack `name_seeds`), `domain_pack` (wins
+  over the folder mapping), and `notes` (saved as the run's operator notes).
+  Keys Voxint does not recognize are kept with the run for reference and
+  otherwise ignored, so sidecars written by other tooling ingest as-is. A
+  sidecar with a problem (bad YAML, a bad value on a known key, an ambiguous
+  stem name, an unknown pack) holds its recording un-submitted with a
+  plain-language reason on the Settings status line, retried every check until
+  fixed; the pair also settles together, so a half-written sidecar is never
+  applied. Sidecar content is frozen at submit and stored write-once on the
+  run (`pipeline_runs.sidecar`, migration 0030); a sidecar arriving after its
+  recording was picked up deliberately does nothing. The sweep's net-new file
+  cap now applies to actual submissions rather than scan candidates, so held
+  recordings can never crowd new ones out of a check.
+
 ## [0.20.0] - 2026-08-19
 
 ### Added

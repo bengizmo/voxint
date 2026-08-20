@@ -112,5 +112,6 @@ def test_single_alembic_head() -> None:
     # app_settings watch-folder columns, issue #60; 0027 =
     # app_settings.llm_bundled_enabled, issue #67; 0028 = transcript_segments
     # correction trace + version, issue #82; 0029 = app_settings.corrections
-    # operator-authored rules, issue #84).
-    assert list(heads) == ["0029"]
+    # operator-authored rules, issue #84; 0030 = pipeline_runs.sidecar frozen
+    # YAML sidecar snapshot, issue #104).
+    assert list(heads) == ["0030"]

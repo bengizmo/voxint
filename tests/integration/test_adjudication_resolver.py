@@ -287,6 +287,65 @@ def test_queue_entry_carries_display_context(
         assert entry.created_at is not None
 
 
+def test_queue_sidecar_title_wins_over_scraped_title(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The frozen sidecar title (issue #104, operator intent) beats the
+    acquisition-metadata title; a tampered snapshot degrades to the scraped one."""
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        session.add(
+            MediaSourceMetadata(
+                media_item_id=media.id,
+                source_kind="ytdlp",
+                title="Scraped title",
+                raw={"id": "abc"},
+                raw_schema_version=1,
+                acquired_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            )
+        )
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.COMPLETED.value,
+            sidecar={"title": "Operator title", "content_item_id": 1},
+        )
+        session.add(run)
+        session.flush()
+        add_turn(session, run.id, 0, "S0")
+        session.commit()
+        entry = next(e for e in adjudication_queue(session) if e.run_id == run.id)
+        assert entry.title == "Operator title"
+
+    # A sidecar without a usable title falls back to the scraped one.
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        session.add(
+            MediaSourceMetadata(
+                media_item_id=media.id,
+                source_kind="ytdlp",
+                title="Scraped title",
+                raw={"id": "abc"},
+                raw_schema_version=1,
+                acquired_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            )
+        )
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.COMPLETED.value,
+            sidecar={"notes": "no title here"},
+        )
+        session.add(run)
+        session.flush()
+        add_turn(session, run.id, 0, "S0")
+        session.commit()
+        entry = next(e for e in adjudication_queue(session) if e.run_id == run.id)
+        assert entry.title == "Scraped title"
+
+
 def test_queue_sort_unresolved_orders_by_voice_count(
     session_factory: sessionmaker[Session],
 ) -> None:

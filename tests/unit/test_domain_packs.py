@@ -611,3 +611,48 @@ def test_from_mapping_rejects_non_mapping(bad: object) -> None:
     # DomainPackError, not a raw AttributeError.
     with pytest.raises(DomainPackError):
         DomainPack.from_mapping(bad)  # type: ignore[arg-type]
+
+
+# --- union_pack_name_seeds (issue #104) ----------------------------------------
+
+
+def test_union_name_seeds_appends_after_pack_seeds() -> None:
+    from voxint.domain_packs.base import union_pack_name_seeds
+
+    snapshot = {"name": "p", "name_seeds": ["Alice", "Bob"]}
+    merged = union_pack_name_seeds(snapshot, ["Carol", "Bob", "Dan"])
+    assert merged["name_seeds"] == ["Alice", "Bob", "Carol", "Dan"]
+    # The input snapshot is never mutated.
+    assert snapshot["name_seeds"] == ["Alice", "Bob"]
+    assert merged is not snapshot
+
+
+def test_union_name_seeds_empty_inputs() -> None:
+    from voxint.domain_packs.base import union_pack_name_seeds
+
+    assert union_pack_name_seeds({"name": "p"}, [])["name_seeds"] == []
+    assert union_pack_name_seeds({"name": "p"}, ["A"])["name_seeds"] == ["A"]
+
+
+def test_union_name_seeds_exact_string_dedupe_only() -> None:
+    from voxint.domain_packs.base import union_pack_name_seeds
+
+    merged = union_pack_name_seeds({"name": "p", "name_seeds": ["alice"]}, ["Alice"])
+    # Dedupe is exact-string: case variants are distinct entries.
+    assert merged["name_seeds"] == ["alice", "Alice"]
+
+
+def test_union_name_seeds_result_round_trips_from_mapping() -> None:
+    from voxint.domain_packs.base import union_pack_name_seeds
+
+    pack = load_default()
+    merged = union_pack_name_seeds(pack.to_mapping(), ["Jane Doe"])
+    restored = DomainPack.from_mapping(merged)
+    assert "Jane Doe" in restored.name_seeds
+
+
+def test_union_name_seeds_rejects_tampered_pack_seeds() -> None:
+    from voxint.domain_packs.base import union_pack_name_seeds
+
+    with pytest.raises(DomainPackError):
+        union_pack_name_seeds({"name": "p", "name_seeds": [1, 2]}, ["A"])

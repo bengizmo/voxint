@@ -95,6 +95,7 @@ def test_summary_defaults_all_zero_never_run() -> None:
         "settling": 0,
         "deferred": 0,
         "stat_errors": 0,
+        "sidecar_errors": 0,
         "hit_entry_cap": False,
         "hit_file_cap": False,
         "root_missing": False,

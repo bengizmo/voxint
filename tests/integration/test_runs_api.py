@@ -1083,3 +1083,42 @@ def test_export_md_route_bytes_and_media_type(
         f"/review/{run_id}/export.md", params={"timestamps": "false"}
     ).text
     assert ts0 not in clean and "hello" in clean
+
+
+def test_list_runs_sidecar_title_wins_over_scraped(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """/runs display title precedence (issue #104): the frozen sidecar title
+    beats the acquisition-metadata title; without one the scraped title holds."""
+    from voxint.db.models import MediaSourceMetadata
+
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        session.add(
+            MediaSourceMetadata(
+                media_item_id=media.id,
+                source_kind="ytdlp",
+                title="Scraped title",
+                raw={"id": "abc"},
+                raw_schema_version=1,
+                acquired_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            )
+        )
+        with_sidecar = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.COMPLETED.value,
+            sidecar={"title": "Operator title"},
+        )
+        without_sidecar = PipelineRun(
+            media_item_id=media.id, status=RunStatus.COMPLETED.value
+        )
+        session.add_all([with_sidecar, without_sidecar])
+        session.commit()
+        page = list_runs(
+            session, status=None, review=None, cursor=None, page_size=10
+        )
+        titles = {item.run_id: item.title for item in page.items}
+        assert titles[with_sidecar.id] == "Operator title"
+        assert titles[without_sidecar.id] == "Scraped title"

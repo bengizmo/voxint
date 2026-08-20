@@ -42,8 +42,10 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
 )
+from voxint.domain_packs.base import union_pack_name_seeds
 from voxint.domain_packs.corrections import union_pack_corrections
 from voxint.domain_packs.registry import resolve_run_domain_pack
+from voxint.ingest.sidecar import Sidecar
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
@@ -195,6 +197,7 @@ def _run_domain_pack_snapshot(
     *,
     settings: Settings | None,
     domain_pack_name: str | None,
+    extra_name_seeds: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Freeze the domain-pack snapshot for a NEW run (issue #11).
 
@@ -204,6 +207,11 @@ def _run_domain_pack_snapshot(
     folder and so take the default unless an explicit name is supplied. Raises
     :class:`~voxint.domain_packs.base.DomainPackError` on an unresolvable name —
     never a silent fallback.
+
+    ``extra_name_seeds`` (issue #104) are sidecar-supplied speaker names, unioned
+    onto the resolved pack's ``name_seeds`` after the corrections union — inside
+    THIS freeze point, so every downstream reader of ``pipeline_runs.domain_pack``
+    sees them with no changes.
     """
     resolved = settings or get_settings()
     row = get_app_settings(session)
@@ -221,7 +229,26 @@ def _run_domain_pack_snapshot(
     # same visible, never-silently-fall-back posture as an unresolvable pack name.
     if row is not None and row.corrections:
         pack_snapshot = union_pack_corrections(pack_snapshot, row.corrections)
+    if extra_name_seeds:
+        pack_snapshot = union_pack_name_seeds(pack_snapshot, extra_name_seeds)
     return pack_snapshot
+
+
+def _effective_pack_name(
+    domain_pack_name: str | None, sidecar: Sidecar | None
+) -> str | None:
+    """The explicit pack name for a submission (issue #104 precedence).
+
+    A caller-supplied name wins over the sidecar's, which wins over the folder
+    mapping and the default (the sidecar is the more specific intent than the
+    folder it sits in). Explicit ``is not None`` tests — an explicit empty
+    string still reaches the resolver and fails loudly, exactly as today.
+    """
+    if domain_pack_name is not None:
+        return domain_pack_name
+    if sidecar is not None and sidecar.domain_pack is not None:
+        return sidecar.domain_pack
+    return None
 
 
 def submit_media_item(
@@ -230,6 +257,7 @@ def submit_media_item(
     *,
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
+    sidecar: Sidecar | None = None,
 ) -> PipelineRun:
     """Create-or-reuse the MediaItem for ``source_path`` and queue a fresh run.
 
@@ -238,12 +266,29 @@ def submit_media_item(
     so a repeated local path reuses its MediaItem while every submission still
     mints a distinct run. The run's domain pack is frozen from the per-folder
     mapping (issue #11); ``domain_pack_name`` overrides it explicitly.
+
+    ``sidecar`` (issue #104) applies the file's parsed YAML sidecar at THIS
+    freeze point: speakers union into the pack snapshot's ``name_seeds``, notes
+    seed ``operator_notes``, the whole mapping is stamped write-once onto the
+    run, and the sidecar's ``domain_pack`` acts as the explicit name unless the
+    caller passed one. Frozen at submit — editing the sidecar file afterwards
+    changes nothing (the #84 posture).
     """
     domain_pack = _run_domain_pack_snapshot(
-        session, source_path, settings=settings, domain_pack_name=domain_pack_name
+        session,
+        source_path,
+        settings=settings,
+        domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
+        extra_name_seeds=sidecar.speakers if sidecar is not None else (),
     )
     media = _get_or_create_media(session, source_path)
-    return submit(session, media.id, domain_pack=domain_pack)
+    return submit(
+        session,
+        media.id,
+        domain_pack=domain_pack,
+        sidecar=sidecar.raw if sidecar is not None else None,
+        operator_notes=sidecar.notes if sidecar is not None else None,
+    )
 
 
 def submit_media_item_if_new(
@@ -252,6 +297,7 @@ def submit_media_item_if_new(
     *,
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
+    sidecar: Sidecar | None = None,
 ) -> PipelineRun | None:
     """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
 
@@ -268,9 +314,17 @@ def submit_media_item_if_new(
     DB-only, like the rest of this module: the caller commits the whole batch once,
     then lazily publishes ``voxint.run_pipeline`` for each returned run
     (commit-before-publish).
+
+    ``sidecar`` (issue #104) applies exactly as in :func:`submit_media_item`:
+    frozen at THIS submit — a sidecar edited (or first appearing) after the
+    media file is already known does nothing, by design.
     """
     domain_pack = _run_domain_pack_snapshot(
-        session, source_path, settings=settings, domain_pack_name=domain_pack_name
+        session,
+        source_path,
+        settings=settings,
+        domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
+        extra_name_seeds=sidecar.speakers if sidecar is not None else (),
     )
     media = MediaItem(source_path=source_path)
     try:
@@ -289,7 +343,13 @@ def submit_media_item_if_new(
         if existing is None:
             raise
         return None
-    return submit(session, media.id, domain_pack=domain_pack)
+    return submit(
+        session,
+        media.id,
+        domain_pack=domain_pack,
+        sidecar=sidecar.raw if sidecar is not None else None,
+        operator_notes=sidecar.notes if sidecar is not None else None,
+    )
 
 
 def _get_or_create_media(session: Session, source_path: str) -> MediaItem:

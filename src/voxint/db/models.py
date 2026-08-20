@@ -298,6 +298,10 @@ class PipelineRun(Base):
             " AND (review_claim_token IS NULL) = (review_claim_expires_at IS NULL)",
             name="pipeline_runs_review_claim_shape_check",
         ),
+        CheckConstraint(
+            "sidecar IS NULL OR jsonb_typeof(sidecar) = 'object'",
+            name="pipeline_runs_sidecar_object_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -334,6 +338,16 @@ class PipelineRun(Base):
     # before #11: resolve the current default pack at execution time (see
     # DomainPack.from_mapping / resolve_run_domain_pack).
     domain_pack: Mapped[dict[str, Any] | None] = mapped_column()
+    # The run's YAML sidecar, frozen write-once at submit (issue #104): the WHOLE
+    # parsed mapping (JSON-normalized), so reference-only keys other tooling wrote
+    # beside the media file survive for provenance. The machine-read fields
+    # (title/speakers/domain_pack/notes) were already APPLIED at submit — this
+    # column is the record, not a live input: editing the file after ingest
+    # changes nothing, and NULL = no sidecar existed when the media was picked up
+    # (one arriving later is deliberately too late). Title display reads this
+    # tolerantly (api.presentation.title_from_snapshot); nothing downstream
+    # re-parses it.
+    sidecar: Mapped[dict[str, Any] | None] = mapped_column()
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -32,6 +32,7 @@ from voxint.adjudication.resolver import (
     unresolved_label_count,
     unresolved_label_exists,
 )
+from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
     MediaItem,
     MediaSourceMetadata,
@@ -166,8 +167,9 @@ class RunListItem:
     claim_live: bool
     claimed_by: str | None
     snippet: Snippet | None = None
-    # Source title from the acquisition metadata snapshot (issue #36); None for
-    # uploads and pre-#36 URL runs — the template falls back to source_path.
+    # Display title: the run's sidecar title (issue #104, operator intent) when
+    # present, else the acquisition-metadata title (issue #36); None otherwise —
+    # the template falls back to source_path.
     title: str | None = None
     # Soft-archived (issue #5): True when this run carries an archived_at stamp.
     # Only ever True in the explicit archived view (?archived=1) — the default
@@ -385,6 +387,7 @@ def list_runs(
             PipelineRun.review_claimed_by,
             PipelineRun.archived_at,
             MediaItem.source_path,
+            PipelineRun.sidecar,
             MediaSourceMetadata.title.label("source_title"),
             unresolved_label_count(PipelineRun.id).label("unresolved_count"),
             label_count(PipelineRun.id).label("label_count"),
@@ -505,7 +508,9 @@ def list_runs(
             claim_live=row.claim_live,
             claimed_by=row.review_claimed_by if row.claim_live else None,
             snippet=snippets.get(row.id),
-            title=row.source_title,
+            # Operator intent beats scraped context: a sidecar title (issue
+            # #104) wins over the acquisition-metadata title. Display-only.
+            title=title_from_snapshot(row.sidecar) or row.source_title,
             archived=row.archived_at is not None,
         )
         for row in rows

@@ -375,3 +375,236 @@ def test_reserved_and_symlink_paths_are_not_ingested(
 
     assert _media_paths(session_factory) == {f"{FOLDER}/good.wav"}
     assert summary.picked_up == 1
+
+
+# --- YAML sidecars (issue #104) --------------------------------------------------
+
+
+def _drop_sidecar(media_root: Path, name: str, text: str, *, folder: str = FOLDER) -> Path:
+    f = media_root / folder / name
+    f.write_text(text, encoding="utf-8")
+    return f
+
+
+def _run_for(factory: sessionmaker[Session], source_path: str) -> PipelineRun:
+    with factory() as s:
+        media = s.query(MediaItem).filter_by(source_path=source_path).one()
+        return s.query(PipelineRun).filter_by(media_item_id=media.id).one()
+
+
+def test_sidecar_pair_ingests_with_all_fields_applied(
+    session_factory: sessionmaker[Session], media_root: Path, tmp_path: Path
+) -> None:
+    # A pack the sidecar can name explicitly, alongside the default.
+    packs = tmp_path / "packs"
+    (packs / "hvac").mkdir(parents=True)
+    (packs / "hvac" / "manifest.yaml").write_text(
+        "name: hvac\nname_seeds: [Pack Seed]\n", encoding="utf-8"
+    )
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    _drop_sidecar(
+        media_root,
+        "talk.wav.yaml",
+        "title: Spring keynote\n"
+        "speakers: [Jane Doe, Pack Seed]\n"
+        "domain_pack: hvac\n"
+        "notes: recorded on stage\n"
+        "content_item_id: 42\n",
+    )
+
+    summary = sweep_watch_folders(
+        session_factory,
+        _settings(media_root, domain_packs_dir=packs),
+        publish=_Publisher(),
+    )
+
+    assert summary.picked_up == 1
+    assert summary.sidecar_errors == 0
+    run = _run_for(session_factory, f"{FOLDER}/talk.wav")
+    # The whole mapping (reference keys included) is frozen on the run.
+    assert run.sidecar == {
+        "title": "Spring keynote",
+        "speakers": ["Jane Doe", "Pack Seed"],
+        "domain_pack": "hvac",
+        "notes": "recorded on stage",
+        "content_item_id": 42,
+    }
+    assert run.operator_notes == "recorded on stage"
+    # The sidecar's pack was resolved as the explicit name, and its speakers
+    # unioned into the frozen snapshot's name_seeds (pack seeds keep priority,
+    # exact-string dedupe drops the repeat of "Pack Seed").
+    assert run.domain_pack is not None
+    assert run.domain_pack["name"] == "hvac"
+    assert run.domain_pack["name_seeds"] == ["Pack Seed", "Jane Doe"]
+
+
+def test_malformed_sidecar_holds_then_fixed_file_ingests(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    bad = _drop_sidecar(media_root, "talk.wav.yaml", "title: [unclosed\n")
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    # The media is HELD, not dropped and not half-ingested.
+    assert summary.picked_up == 0
+    assert summary.sidecar_errors == 1
+    assert _media_paths(session_factory) == set()
+
+    # The operator fixes the sidecar; the next sweep ingests the pair.
+    bad.write_text("title: Fixed now\n", encoding="utf-8")
+    later = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    assert later.picked_up == 1
+    assert later.sidecar_errors == 0
+    assert _run_for(session_factory, f"{FOLDER}/talk.wav").sidecar == {"title": "Fixed now"}
+
+
+def test_unknown_pack_in_sidecar_is_a_sidecar_error(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    _drop_sidecar(media_root, "talk.wav.yaml", "domain_pack: no-such-pack\n")
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    # Attributed to the SIDECAR (fix that file), not the folder config.
+    assert summary.sidecar_errors == 1
+    assert summary.stat_errors == 0
+    assert _media_paths(session_factory) == set()
+
+
+def test_reference_only_sidecar_ingests_with_nothing_applied(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "ep.mp3")
+    _drop_sidecar(
+        media_root,
+        "ep.mp3.yaml",
+        "content_item_id: 7\nsource_type: rss_feed\npublished: 2026-01-15\n",
+    )
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    assert summary.picked_up == 1
+    run = _run_for(session_factory, f"{FOLDER}/ep.mp3")
+    # Preserved for provenance (dates ISO-normalized), nothing applied.
+    assert run.sidecar == {
+        "content_item_id": 7,
+        "source_type": "rss_feed",
+        "published": "2026-01-15",
+    }
+    assert run.operator_notes is None
+    assert run.domain_pack is not None and run.domain_pack["name"] == "generic"
+
+
+def test_stem_ambiguity_holds_both_while_full_name_pair_ingests(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    # Ambiguous: one stem sidecar, two same-stem media files.
+    _drop(media_root, "clip.wav")
+    _drop(media_root, "clip.mp4")
+    _drop_sidecar(media_root, "clip.yaml", "title: whose?\n")
+    # Unambiguous full-name pair beside them.
+    _drop(media_root, "other.wav")
+    _drop_sidecar(media_root, "other.wav.yaml", "title: mine\n")
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    # Both same-stem media files are held (the sidecar could describe either);
+    # the full-name pair ingests untouched.
+    assert summary.sidecar_errors == 2
+    assert summary.picked_up == 1
+    assert _media_paths(session_factory) == {f"{FOLDER}/other.wav"}
+
+
+def test_sidecar_still_settling_holds_media_as_settling(
+    session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Media settled, sidecar still being written → the PAIR waits (settling),
+    # never a half-applied ingest. ctime cannot be back-dated, so the settle
+    # classifier is faked per-file (the SKIP precedent above).
+    import voxint.ingest.watch as watch_mod
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    _drop_sidecar(media_root, "talk.wav.yaml", "title: T\n")
+
+    def _classify(path: Path, *, now: float, settle_seconds: float) -> watch_mod.SettleState:
+        if path.name.endswith(".yaml"):
+            return watch_mod.SettleState.TOO_FRESH
+        return watch_mod.SettleState.SETTLED
+
+    monkeypatch.setattr(watch_mod, "classify_settle", _classify)
+
+    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+
+    assert summary.picked_up == 0
+    assert summary.settling == 1
+    assert summary.sidecar_errors == 0
+    assert _media_paths(session_factory) == set()
+
+
+def test_sidecar_arriving_after_ingest_is_too_late(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "talk.wav")
+    first = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    assert first.picked_up == 1
+
+    # The sidecar shows up late: the media is already known, nothing re-triggers,
+    # and the run keeps its NULL sidecar (frozen at submit).
+    _drop_sidecar(media_root, "talk.wav.yaml", "title: too late\n")
+    later = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    assert later.picked_up == 0
+    assert later.already_known == 1
+    run = _run_for(session_factory, f"{FOLDER}/talk.wav")
+    assert run.sidecar is None
+    assert run.operator_notes is None
+
+
+def test_held_sidecar_cannot_starve_later_files_past_the_cap(
+    session_factory: sessionmaker[Session], media_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The net-new cap applies to SUBMISSIONS, not scan candidates: a permanently
+    # held pair at the FRONT of the walk order must not occupy the only cap slot
+    # forever. The scan is faked to pin the walk order (scandir order is
+    # arbitrary); the files are real.
+    import voxint.ingest.watch as watch_mod
+
+    _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
+    _drop(media_root, "bad.wav")
+    _drop_sidecar(media_root, "bad.wav.yaml", "title: [unclosed\n")
+    _drop(media_root, "good.wav")
+    _drop(media_root, "extra.wav")
+
+    def _scan(*a: object, **kw: object) -> ScanResult:
+        assert kw.get("apply_file_cap") is False  # the sweep must opt out
+        return ScanResult(
+            candidates=[f"{FOLDER}/bad.wav", f"{FOLDER}/good.wav", f"{FOLDER}/extra.wav"],
+            inspected=3,
+            hit_entry_cap=False,
+            hit_file_cap=False,
+            root_missing=False,
+            already_known=0,
+        )
+
+    monkeypatch.setattr(watch_mod, "scan_media_folders", _scan)
+
+    summary = sweep_watch_folders(
+        session_factory,
+        _settings(media_root, setup_scan_max_files=1),
+        publish=_Publisher(),
+    )
+
+    # bad is held WITHOUT consuming the single cap slot; good takes it; extra
+    # waits for the next sweep behind the honest hit_file_cap flag.
+    assert summary.sidecar_errors == 1
+    assert summary.picked_up == 1
+    assert summary.hit_file_cap is True
+    assert _media_paths(session_factory) == {f"{FOLDER}/good.wav"}

@@ -11,6 +11,16 @@ The feature auto-submits new media dropped into the operator's registered folder
 already claims the ``source_path``. "Already known" is exactly that: it includes a
 file whose prior run failed (the operator requeues those from the run detail), so
 user-facing copy says "already known", never "already transcribed".
+
+Sidecars (issue #104): a media file may arrive with a companion YAML sidecar
+(``clip.wav.yaml`` or ``clip.yaml``; see :mod:`voxint.ingest.sidecar`). The pair
+settles together — a settled media file whose sidecar is still being written
+waits for the next sweep — and a sidecar with a problem (bad YAML, a bad value
+on a known key, an ambiguous stem name, an unknown ``domain_pack``) HOLDS its
+media file un-submitted, counted ``sidecar_errors`` and retried every sweep
+until the operator fixes the file. The sidecar is frozen at submit: one that
+first appears (or is edited) after its media file is already known does
+nothing, by design — the run keeps the snapshot it was submitted with.
 """
 
 from __future__ import annotations
@@ -22,7 +32,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
-from enum import StrEnum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +44,9 @@ from voxint.api.setup_wizard import scan_media_folders
 from voxint.config import Settings
 from voxint.db.models import AppSettings
 from voxint.domain_packs.base import DomainPackError
+from voxint.domain_packs.registry import resolve_domain_pack_by_name
 from voxint.ingest.service import submit_media_item_if_new
+from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +106,8 @@ class WatchSweepSummary:
     deferred: int = 0  # runs committed but not published (broker down)
     stat_errors: int = 0  # candidates that couldn't be picked up (vanished/unreadable,
     # or a domain-pack collision that made the run un-submittable — see the sweep log)
+    sidecar_errors: int = 0  # media held because its companion .yaml sidecar has a
+    # problem (malformed, ambiguous stem, unknown pack) — retried every sweep
     hit_entry_cap: bool = False  # the walk stopped at setup_scan_max_entries
     hit_file_cap: bool = False  # net-new stopped at setup_scan_max_files
     root_missing: bool = False  # the configured media root was absent/unmounted this sweep
@@ -130,7 +144,13 @@ def sweep_watch_folders(
         if not app_settings.resolve_effective_watch_folder_enabled(row, settings):
             return WatchSweepSummary()
         folders = list(row.media_folders) if row and row.media_folders else []
-        result = scan_media_folders(session, settings.media_root, folders, settings)
+        # The net-new file cap is applied to SUBMISSIONS below, not to the scan:
+        # capped at the scan, a few permanently held files (a malformed sidecar
+        # is held every sweep until fixed) at the front of the walk order would
+        # occupy every cap slot and starve the files behind them forever.
+        result = scan_media_folders(
+            session, settings.media_root, folders, settings, apply_file_cap=False
+        )
         media_root = settings.media_root.resolve()
         now = datetime.now(tz=UTC).timestamp()
         settling = 0
@@ -148,9 +168,30 @@ def sweep_watch_folders(
                 stat_errors += 1
         run_ids: list[uuid.UUID] = []
         raced_known = 0
+        sidecar_errors = 0
+        hit_file_cap = result.hit_file_cap
         for rel in settled:
+            if len(run_ids) >= settings.setup_scan_max_files:
+                # The submission cap: everything beyond it simply waits for the
+                # next sweep (same operator-facing meaning hit_file_cap always had).
+                hit_file_cap = True
+                break
+            outcome = _paired_sidecar(
+                media_root / rel,
+                now=now,
+                settle_seconds=settings.watch_folder_settle_seconds,
+                settings=settings,
+            )
+            if outcome is _SidecarHold.SETTLING:
+                settling += 1
+                continue
+            if outcome is _SidecarHold.HELD:
+                sidecar_errors += 1
+                continue
             try:
-                submitted = submit_media_item_if_new(session, rel, settings=settings)
+                submitted = submit_media_item_if_new(
+                    session, rel, settings=settings, sidecar=outcome
+                )
             except DomainPackError:
                 # A freeze-time domain-pack collision (issue #84) / unresolvable pack
                 # (issue #11) is a PERSISTENT operator config error, not a transient
@@ -158,6 +199,8 @@ def sweep_watch_folders(
                 # crash the recurring beat sweep (which would otherwise silently stop
                 # ingesting every other folder). The operator sees the same collision,
                 # with a plain-language fix, the moment they submit via the console/CLI.
+                # (A sidecar naming an UNKNOWN pack never reaches here — it is
+                # pre-validated in _paired_sidecar and counted sidecar_errors.)
                 logger.warning(
                     "watch sweep skipped %s: domain pack could not be applied "
                     "(check Settings → Corrections and this folder's pack)",
@@ -193,13 +236,74 @@ def sweep_watch_folders(
         settling=settling,
         deferred=deferred,
         stat_errors=stat_errors,
+        sidecar_errors=sidecar_errors,
         hit_entry_cap=result.hit_entry_cap,
-        hit_file_cap=result.hit_file_cap,
+        hit_file_cap=hit_file_cap,
         root_missing=result.root_missing,
         completed_at=datetime.now(tz=UTC).isoformat(),
     )
     _store_summary(factory, settings, summary)
     return summary
+
+
+class _SidecarHold(Enum):
+    """_paired_sidecar outcomes that are not a Sidecar: the pair is not ready
+    yet (retry next sweep as "settling"), or the sidecar has a problem (hold,
+    counted ``sidecar_errors``). A distinct type keeps the helper's return
+    honest without overloading None (which means "no sidecar — submit plain")."""
+
+    SETTLING = "settling"
+    HELD = "held"
+
+
+def _paired_sidecar(
+    media_path: Path, *, now: float, settle_seconds: float, settings: Settings
+) -> Sidecar | _SidecarHold | None:
+    """Locate, settle-gate, read, and pre-validate ``media_path``'s sidecar.
+
+    Returns the parsed :class:`Sidecar`, ``None`` when the media file has no
+    sidecar (submit plain — a sidecar arriving later is deliberately too late),
+    :data:`_SidecarHold.SETTLING` when the sidecar is still within its settle
+    window (never ingest a half-written sidecar; the media waits with it), or
+    :data:`_SidecarHold.HELD` after logging why the pair must wait for the
+    operator.
+
+    A sidecar-named ``domain_pack`` is pre-validated here so an unknown name is
+    attributed to the SIDECAR (fix that file), while a resolution failure inside
+    the submit path itself (a corrections collision, a broken folder mapping)
+    keeps its existing config-error classification.
+    """
+    try:
+        sidecar_path = find_sidecar(media_path)
+        if sidecar_path is None:
+            return None
+        state = classify_settle(sidecar_path, now=now, settle_seconds=settle_seconds)
+        if state is SettleState.TOO_FRESH:
+            return _SidecarHold.SETTLING
+        if state is SettleState.SKIP:
+            raise SidecarError(
+                f"{sidecar_path.name} disappeared or could not be read during the check"
+            )
+        parsed = read_sidecar(sidecar_path)
+        if parsed.domain_pack is not None:
+            try:
+                resolve_domain_pack_by_name(parsed.domain_pack, settings)
+            except DomainPackError as exc:
+                raise SidecarError(f"{sidecar_path.name}: {exc}") from exc
+    except SidecarError as exc:
+        # Plain-language hold: the reason names the file and the fix; the media
+        # file stays un-submitted and is retried every sweep until it's fixed.
+        # Only key NAMES/reasons are logged, never sidecar values.
+        logger.warning("watch sweep held %s: %s", media_path.name, exc)
+        return _SidecarHold.HELD
+    if parsed.ignored_keys:
+        logger.info(
+            "watch sweep: %s has keys Voxint doesn't recognize (kept for "
+            "reference, not applied): %s",
+            sidecar_path.name,
+            ", ".join(parsed.ignored_keys),
+        )
+    return parsed
 
 
 def _store_summary(

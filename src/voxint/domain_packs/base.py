@@ -17,7 +17,7 @@ snapshot is a deterministic run/enrichment error, never a silent fallback.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -148,3 +148,27 @@ class DomainPack:
 
 def load_default() -> DomainPack:
     return DomainPack.load(Path(__file__).parent / "generic")
+
+
+def union_pack_name_seeds(
+    pack_mapping: Mapping[str, Any], seeds: Sequence[str]
+) -> dict[str, Any]:
+    """Union extra operator-supplied name seeds onto a resolved pack snapshot.
+
+    The sidecar-ingest sibling of ``union_pack_corrections`` (issue #104):
+    appends ``seeds`` AFTER the pack's own ``name_seeds`` (pack entries keep
+    priority), skipping exact-string duplicates, and returns a NEW snapshot
+    mapping — the input is never mutated. The combined list is re-validated
+    through the same strict coercion the snapshot restore uses, so a
+    malformed entry surfaces at submit-time freeze, never downstream.
+    """
+    merged = dict(pack_mapping)
+    existing = _str_tuple(pack_mapping.get("name_seeds"), "name_seeds")
+    combined = list(existing)
+    seen = set(existing)
+    for seed in _str_tuple(list(seeds), "name_seeds"):
+        if seed not in seen:
+            seen.add(seed)
+            combined.append(seed)
+    merged["name_seeds"] = combined
+    return merged

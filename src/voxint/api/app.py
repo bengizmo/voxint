@@ -142,6 +142,7 @@ from voxint.api.presentation import (
     friendly_media_label,
     humanize_stage,
     humanize_status,
+    title_from_snapshot,
 )
 from voxint.api.runs_query import (
     Cursor,
@@ -3495,6 +3496,10 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "run": run,
                 "stage_runs": stage_runs,
+                # The frozen sidecar title (issue #104), shown as the run's
+                # display name above the raw path. Tolerant read: None when the
+                # run has no sidecar (or a tampered one).
+                "sidecar_title": title_from_snapshot(run.sidecar),
                 # Provenance for a URL run, reduced to a bare host — the raw
                 # source_url (which can carry a signed token in its query) is
                 # NEVER passed to the template; None for a local/uploaded run

@@ -54,6 +54,23 @@ def _clean_basename(source_path: str) -> str:
     return cleaned or source_path.strip() or source_path
 
 
+def title_from_snapshot(snapshot: object) -> str | None:
+    """The ``title`` of a run's frozen sidecar snapshot, read tolerantly.
+
+    ``pipeline_runs.sidecar`` (issue #104) stores the whole sidecar mapping;
+    the title was validated at submit, but this reader stays tamper-tolerant
+    (an out-of-band-edited snapshot yields ``None``, never a crash): only a
+    mapping with a non-blank string ``title`` produces a value. Display-only —
+    enrichment keeps reading the scraped source-metadata title.
+    """
+    if not isinstance(snapshot, dict):
+        return None
+    title = snapshot.get("title")
+    if isinstance(title, str) and title.strip():
+        return title
+    return None
+
+
 def friendly_media_label(title: str | None, source_path: str) -> str:
     """A human name for a recording: the source title, else a cleaned filename.
 

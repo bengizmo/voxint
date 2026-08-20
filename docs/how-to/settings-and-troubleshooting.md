@@ -108,8 +108,13 @@ starts a run for each **new** recording, skipping files it already knows, so you
 can drop a batch in and let it queue itself. A status line shows the last check.
 It waits until a file has stopped changing before ingesting it, so add files with
 a move/rename rather than a slow copy; a file whose earlier run failed counts as
-"already known" and is not retried by the watcher. See
-[Add media and manage runs → automatic ingest](add-media-and-manage-runs.md).
+"already known" and is not retried by the watcher. If the status line says
+recordings are **waiting because a companion .yaml sidecar has a problem**, one
+or more sidecar files next to your recordings could not be applied; the
+recordings are held safely, and fixing the sidecar lets the next check pick
+them up. See
+[Add media and manage runs → automatic ingest](add-media-and-manage-runs.md),
+which also explains sidecar files.
 
 To learn what domain packs are and how to choose one, see
 [domain-packs.md](../domain-packs.md).
