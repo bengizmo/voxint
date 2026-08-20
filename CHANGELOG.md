@@ -76,8 +76,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   with the finished stage, so the durable queued row survives any crash or
   broker outage between the handoff and its publication and the recovery
   sweep re-publishes it to the correct queue by `current_stage`. The LLM-bound
-  post-run jobs (`voxint.generate_run_asset`, `voxint.research_speaker`) are
-  routed to the `post` queue as well. Default deployments are unchanged: both
+  post-run jobs (`voxint.generate_run_asset`, `voxint.research_speaker`) and
+  the beat sweeps (recovery, GC, notify, watch) are routed to the `post` queue
+  as well, so crash recovery and housekeeping never wait behind GPU work. Default deployments are unchanged: both
   queues are declared on the Celery app and a worker started without `-Q`
   consumes both. Deployments that pin the worker to `--concurrency=1` for a
   shared GPU can now run a second worker on the `post` queue so one run's LLM

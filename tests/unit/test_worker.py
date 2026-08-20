@@ -32,6 +32,12 @@ def test_worker_reliability_settings() -> None:
         "voxint.finish_pipeline": {"queue": POST_QUEUE},
         "voxint.generate_run_asset": {"queue": POST_QUEUE},
         "voxint.research_speaker": {"queue": POST_QUEUE},
+        # The sweeps must never queue behind a GPU segment on a split
+        # deployment — the recovery sweep is the lost-handoff fallback.
+        "voxint.recovery_sweep": {"queue": POST_QUEUE},
+        "voxint.gc_sweep": {"queue": POST_QUEUE},
+        "voxint.notify_sweep": {"queue": POST_QUEUE},
+        "voxint.watch_sweep": {"queue": POST_QUEUE},
     }
 
 

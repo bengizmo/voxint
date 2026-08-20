@@ -102,7 +102,10 @@ entry CAS and creates no claims.
 
 The LLM-bound post-run jobs (`voxint.generate_run_asset`,
 `voxint.research_speaker`) are also routed to the `post` queue, so they never
-serialize behind GPU work.
+serialize behind GPU work. So are the beat sweeps (recovery, GC, notify,
+watch): the recovery sweep is the fallback that republishes a handed-off run
+whose finish publication was lost, so on a split deployment it must never sit
+queued behind a multi-hour GPU segment.
 
 Both queues are declared in the Celery app (`task_queues`), and a worker
 started without `-Q` consumes both. The default single-worker deployment

@@ -64,11 +64,22 @@ app.conf.worker_prefetch_multiplier = 1
 app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE))
 app.conf.task_default_queue = "celery"
 # Run assets and speaker research are LLM-bound too: they must not serialize
-# behind GPU work on a concurrency-1 GPU-lane worker.
+# behind GPU work on a concurrency-1 GPU-lane worker. The beat sweeps route to
+# the post lane for the same reason, and one more: the recovery sweep is the
+# fallback that republishes a handed-off run whose finish publication was lost,
+# so on a split deployment it must never sit queued behind a multi-hour GPU
+# segment (observed on maintainer hardware: a sweep parked behind hundreds of
+# backlogged GPU-lane messages). Sweeps are DB/broker-bound, never GPU-bound.
+# Flagless single-worker deployments are unaffected: one worker drains both
+# queues either way.
 app.conf.task_routes = {
     "voxint.finish_pipeline": {"queue": POST_QUEUE},
     "voxint.generate_run_asset": {"queue": POST_QUEUE},
     "voxint.research_speaker": {"queue": POST_QUEUE},
+    "voxint.recovery_sweep": {"queue": POST_QUEUE},
+    "voxint.gc_sweep": {"queue": POST_QUEUE},
+    "voxint.notify_sweep": {"queue": POST_QUEUE},
+    "voxint.watch_sweep": {"queue": POST_QUEUE},
 }
 # Acks-late + Redis: an unacked task is redelivered after this horizon, so it
 # must exceed the longest single lane-task execution (run_pipeline or
