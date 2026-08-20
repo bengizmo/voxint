@@ -61,7 +61,9 @@ def client(
 def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     """Capture commit-before-publish enqueues without a live broker."""
     calls: list[uuid.UUID] = []
-    monkeypatch.setattr("voxint.api.app._publish_run", calls.append)
+    monkeypatch.setattr(
+        "voxint.api.app._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
+    )
     return calls
 
 

@@ -278,7 +278,9 @@ def test_onboard_is_idempotent(
 def test_submit_returns_run_id(
     session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("voxint.api.app._publish_run", lambda run_id: None)  # broker up
+    monkeypatch.setattr(
+        "voxint.api.app._publish_run", lambda run_id, **_kwargs: None
+    )  # broker up
     client = _client(session_factory, tmp_path)
     run_id = _submit(client, _config(), _wav_bytes(), "clip.wav")  # type: ignore[arg-type]
     parsed = uuid.UUID(run_id)
@@ -289,7 +291,7 @@ def test_submit_returns_run_id(
 def test_submit_fails_when_enqueue_deferred(
     session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _broker_down(run_id: uuid.UUID) -> None:
+    def _broker_down(run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("broker down")
 
     monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)
