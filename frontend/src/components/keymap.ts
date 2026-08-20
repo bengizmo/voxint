@@ -26,6 +26,25 @@ export const REVIEW_KEY = {
 export const ASSIGN_DIGIT_MIN = 1;
 export const ASSIGN_DIGIT_MAX = 9;
 
+// Save-edit is the one shortcut that is a modifier *chord* (Ctrl/⌘+Enter), not an
+// unmodified global key, and it fires only while the correction textarea is focused —
+// exactly where the global keymap above is deliberately suppressed. It therefore lives
+// here as its own primitive rather than in REVIEW_KEY: the textarea handler, the two
+// on-screen hints ("Save edit", the unsaved-edit warning), and the cheat-sheet row all
+// read this one label + matcher, so they can never drift the way they used to.
+export const SAVE_EDIT_LABEL = "Ctrl/⌘+↵";
+export const SAVE_EDIT_DESC = "Save the edit you’re typing (while the edit box is focused)";
+
+// True for the key event that saves an in-progress edit from within the box. Accepts any
+// event exposing the modifier flags and `key`, so React synthetic and native events match.
+export function isSaveEditChord(event: {
+  ctrlKey: boolean;
+  metaKey: boolean;
+  key: string;
+}): boolean {
+  return (event.ctrlKey || event.metaKey) && event.key === "Enter";
+}
+
 export interface ShortcutCtx {
   // Whether the run has a speaker roster yet. The digit-assign shortcut only fires when
   // there are speakers to assign, so the cheat-sheet says so honestly rather than

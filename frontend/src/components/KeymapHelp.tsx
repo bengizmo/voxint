@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
-import { REVIEW_SHORTCUTS, shortcutDesc } from "./keymap";
+import {
+  REVIEW_SHORTCUTS,
+  SAVE_EDIT_DESC,
+  SAVE_EDIT_LABEL,
+  shortcutDesc,
+} from "./keymap";
 
 export interface KeymapHelpProps {
   open: boolean;
@@ -149,8 +154,8 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
         </div>
         <p className="muted text-sm">
           Shortcuts work while reviewing and never fire while you are typing in a
-          text box or menu. Every action also has a clickable equivalent on the
-          page.
+          text box or menu — apart from saving an edit, listed last. Every action
+          also has a clickable equivalent on the page.
         </p>
         <dl
           style={{
@@ -167,6 +172,10 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
               desc={shortcutDesc(shortcut, { hasRoster })}
             />
           ))}
+          {/* The edit-box save chord (issue #51): listed here so the one shortcut
+              that fires *while* typing is discoverable via `?`, not just the
+              inline hints. Same label as the handler + hints (keymap.ts). */}
+          <Row keys={SAVE_EDIT_LABEL} desc={SAVE_EDIT_DESC} />
         </dl>
         <p className="muted text-sm" style={{ marginBottom: 0 }}>
           Space plays or pauses and the arrow keys scroll — these stay with the

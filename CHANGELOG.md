@@ -26,6 +26,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   recordings can never crowd new ones out of a check.
 
 ### Fixed
+- **The Markdown transcript export can no longer let transcript text forge
+  document structure (#65 follow-up).** The `.md` escaper now defuses a `=`
+  setext underline and a bare carriage return (each could forge a heading, and
+  the carriage return could break out of the quote to a top-level heading), and
+  escapes `~` and `|` (tilde code fences and GFM table pipes). On-screen read
+  mode was never affected, since it renders through Jinja autoescape; the plain
+  `.txt` and `.json` exports are unchanged.
+- **The review console's Save-edit shortcut (Ctrl/⌘+Enter) is now part of the
+  keyboard-shortcut source of truth (#51 follow-up).** Its key chord, its two
+  on-screen hints, and the `?` cheat-sheet now read one shared definition, so
+  they can no longer drift apart; the save chord is also listed in the
+  cheat-sheet for the first time.
 - **Topics enrichment now runs on a distinct BYO endpoint even when a scoped
   bundle is active (#106).** Previously any active bundle dropped the `topics`
   run-asset kind at enqueue, on the assumption that the bundle was the only (and

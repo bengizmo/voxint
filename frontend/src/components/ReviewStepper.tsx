@@ -4,7 +4,13 @@ import { ApiError, apiFetch } from "../lib/api-client";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
 import { KeymapHelp } from "./KeymapHelp";
-import { ASSIGN_DIGIT_MAX, ASSIGN_DIGIT_MIN, REVIEW_KEY } from "./keymap";
+import {
+  ASSIGN_DIGIT_MAX,
+  ASSIGN_DIGIT_MIN,
+  isSaveEditChord,
+  REVIEW_KEY,
+  SAVE_EDIT_LABEL,
+} from "./keymap";
 import {
   type ReconciliationEntry,
   type Segment,
@@ -977,7 +983,9 @@ export function ReviewStepper({
                 onKeyDown={(e) => {
                   // Ctrl/Cmd+Enter saves from within the box; Escape returns keys
                   // to the loop. Plain Enter stays a newline (multi-line edits).
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                  // The chord matcher is shared with the on-screen hints and the
+                  // cheat-sheet (keymap.ts) so the three can never disagree.
+                  if (isSaveEditChord(e)) {
                     e.preventDefault();
                     void saveEdit();
                   } else if (e.key === "Escape") {
@@ -1087,7 +1095,7 @@ export function ReviewStepper({
                   disabled={busy || isSplitParent}
                   className="mr-2"
                 >
-                  Save edit <kbd>Ctrl/⌘+↵</kbd>
+                  Save edit <kbd>{SAVE_EDIT_LABEL}</kbd>
                 </button>
                 <button
                   type="button"
@@ -1153,7 +1161,7 @@ export function ReviewStepper({
               )}
               {confirmDiscard && (
                 <p role="alert" className="text-sm">
-                  You have an unsaved edit. Press <kbd>Ctrl/⌘+↵</kbd> to save
+                  You have an unsaved edit. Press <kbd>{SAVE_EDIT_LABEL}</kbd> to save
                   it, or repeat the action (<kbd>{REVIEW_KEY.verify}</kbd> to
                   verify, or click the
                   word again to split) to discard the edit and continue.
