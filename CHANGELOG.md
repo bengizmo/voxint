@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-08-20
+
 ### Added
 - **Operator annotation layer for the review console (#86).** An operator can now
   select a span of transcript text and save it as a highlight in one of six
