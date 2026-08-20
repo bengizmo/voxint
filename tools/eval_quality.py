@@ -34,7 +34,16 @@ Correctness invariants baked in here (from the plan's 3-model consult):
   total width: NIST +/-250 ms is ``collar=0.5``. Validated by a fixture.
 * **Primary metric is strict** (``collar=0.0``, ``skip_overlap=False``); the
   forgiving ``collar=0.5`` / skip-overlap number is a labelled diagnostic only.
-* **UEMs are applied**; reference and hypothesis are cropped consistently.
+* **UEMs are applied**; reference and hypothesis are cropped consistently, and a
+  UEM is an explicit choice per recording (a path, or a deliberate null), never
+  an omission that silently changes the protocol.
+* **JER is a delta-only signal.** pyannote 4.1's speaker mapping maximizes raw
+  co-occurrence, not the official DIHARD Jaccard-optimal assignment, so its
+  absolute JER is never DIHARD-comparable (see ``JER_MAPPING``); DER is the
+  gate-bearing primary. A true DIHARD JER is a deferred follow-up.
+* Every report stamps a scorer-side environment manifest (git sha, scorer
+  versions, the frozen normalizer fingerprint, the manifest hash, the scored
+  cohort) so an aggregate can never move without the report explaining why.
 
 Run:
 
@@ -45,7 +54,10 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.metadata
 import json
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,13 +70,53 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 # Frozen WER stack (parity extra): jiwer + the sha-pinned Whisper normalizer.
+from tests.parity.bakeoff.normalize import (  # noqa: E402
+    NORMALIZER_VERSION,
+    runtime_fingerprint,
+)
 from tests.parity.whisper_bakeoff_score import score_pooled  # noqa: E402
 
 # The strict, gate-bearing diarization protocol vs the forgiving diagnostic one.
 STRICT = {"collar": 0.0, "skip_overlap": False}
 DIAGNOSTIC = {"collar": 0.5, "skip_overlap": True}
 
+# pyannote 4.1's JaccardErrorRate maps hypothesis to reference speakers by
+# MAXIMIZING raw co-occurrence duration, whereas the official DIHARD/dscore JER
+# MINIMIZES the pairwise Jaccard-error assignment. The two disagree materially
+# under severe miss/false-alarm imbalance (a valid fixture gives pyannote 0.962
+# vs Jaccard-optimal 0.773). So this harness's JER is a SELF-CONSISTENT delta
+# signal only — never a DIHARD-comparable absolute. Recorded in the report as
+# ``jer_mapping`` so no reader mistakes it for the official metric; a true
+# DIHARD JER is a deferred follow-up if an absolute claim is ever needed.
+JER_MAPPING = "pyannote-4.1-cooccurrence (delta-only; not DIHARD Jaccard-optimal)"
+
 SCHEMA_VERSION = 1
+
+
+def _git_sha() -> str:
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "-C", str(REPO), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        return f"{head}-dirty" if dirty else head
+    except (subprocess.SubprocessError, OSError):  # pragma: no cover - env dependent
+        return "unknown"
+
+
+def _pkg_version(name: str) -> str:
+    try:
+        return importlib.metadata.version(name)
+    except importlib.metadata.PackageNotFoundError:  # pragma: no cover
+        return "unknown"
 
 
 class EvalError(Exception):
@@ -100,7 +152,12 @@ def parse_rttm(text: str, recording_id: str) -> Annotation:
         label = parts[7]
         if duration <= 0.0:
             raise EvalError(f"RTTM line {lineno}: non-positive duration {duration}")
-        annotation[Segment(start, start + duration)] = label
+        segment = Segment(start, start + duration)
+        # A unique track per line, NOT the ``annotation[segment] = label``
+        # shorthand (which reuses the default track "_"): two speakers with
+        # exactly-coincident boundaries would otherwise overwrite one another,
+        # silently deleting overlap and moving DER/JER.
+        annotation[segment, annotation.new_track(segment)] = label
     return annotation
 
 
@@ -174,6 +231,7 @@ def score_diarization_set(
             "missed_s": float(components["missed detection"]),
             "false_alarm_s": float(components["false alarm"]),
             "total_s": float(components["total"]),
+            "uem_applied": item.uem is not None,
         }
     result.pooled_der = abs(der)
     result.pooled_jer = abs(jer)
@@ -215,40 +273,87 @@ def _read(path: Path) -> str:
 
 def _load_diar_items(entries: list[dict[str, Any]]) -> list[DiarItem]:
     items: list[DiarItem] = []
+    seen: set[str] = set()
     for entry in entries:
         rec_id = entry["recording_id"]
+        if rec_id in seen:
+            raise EvalError(f"duplicate diarization recording_id {rec_id!r}")
+        seen.add(rec_id)
+        # A UEM must be an explicit choice: a path, or null to score the whole
+        # recording. Omitting the key would let pyannote silently approximate the
+        # scoring region from the reference+hypothesis extents (only a runtime
+        # warning), changing the protocol without the report showing it.
+        if "uem" not in entry:
+            raise EvalError(
+                f"{rec_id}: diarization entry must set 'uem' explicitly "
+                "(a UEM path, or null to score the whole recording)"
+            )
         reference = parse_rttm(_read(Path(entry["reference_rttm"])), rec_id)
         hypothesis = parse_rttm(_read(Path(entry["hypothesis_rttm"])), rec_id)
-        uem = parse_uem(_read(Path(entry["uem"])), rec_id) if entry.get("uem") else None
+        uem_path = entry["uem"]
+        uem = parse_uem(_read(Path(uem_path)), rec_id) if uem_path is not None else None
         items.append(DiarItem(rec_id, reference, hypothesis, uem))
     return items
 
 
+def _environment_manifest(
+    manifest_bytes: bytes, diar_ids: list[str], wer_ids: list[str]
+) -> dict[str, Any]:
+    """Bind a report to exactly what produced it (the plan's env manifest).
+
+    The scorer-side half: git sha (dirty-marked), scorer package versions, the
+    frozen normalizer fingerprint, the manifest bytes hash, and the sorted
+    scored cohort. The pipeline-side half (model-weight shas, GPU/driver/CUDA,
+    decode params) is stamped by the ``run`` step that produces the hypotheses.
+    """
+    return {
+        "git_sha": _git_sha(),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "diarization_cohort": sorted(diar_ids),
+        "wer_cohort": sorted(wer_ids),
+        "scorer_versions": {
+            "pyannote.metrics": _pkg_version("pyannote.metrics"),
+            "pyannote.core": _pkg_version("pyannote.core"),
+            "jiwer": _pkg_version("jiwer"),
+        },
+        "normalizer_version": NORMALIZER_VERSION,
+        "normalizer_runtime": runtime_fingerprint(),
+    }
+
+
 def cmd_score(args: argparse.Namespace) -> int:
-    manifest = json.loads(_read(Path(args.manifest)))
+    manifest_bytes = Path(args.manifest).read_bytes()
+    manifest = json.loads(manifest_bytes)
     diar_entries = manifest.get("diarization", [])
     wer_entries = manifest.get("wer", [])
+    if not diar_entries and not wer_entries:
+        raise EvalError(f"{args.manifest}: manifest has no 'diarization' or 'wer' entries")
 
     report: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "kind": "eval_quality_report"}
+
+    diar_ids = [e["recording_id"] for e in diar_entries]
+    wer_ids = [e["recording_id"] for e in wer_entries]
 
     if diar_entries:
         items = _load_diar_items(diar_entries)
         strict = score_diarization_set(items, protocol="strict", **STRICT)
         diagnostic = score_diarization_set(items, protocol="diagnostic", **DIAGNOSTIC)
         report["diarization"] = {
+            "jer_mapping": JER_MAPPING,
             "strict": _diar_json(strict),
             "diagnostic": _diar_json(diagnostic),
         }
 
     if wer_entries:
+        if len(set(wer_ids)) != len(wer_ids):
+            raise EvalError("duplicate recording_id in 'wer' entries")
         triples = [
             (e["recording_id"], _read(Path(e["reference_text"])), _read(Path(e["hypothesis_text"])))
             for e in wer_entries
         ]
         report["wer"] = score_wer(triples)
 
-    if not diar_entries and not wer_entries:
-        raise EvalError(f"{args.manifest}: manifest has no 'diarization' or 'wer' entries")
+    report["environment"] = _environment_manifest(manifest_bytes, diar_ids, wer_ids)
 
     out = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.out:
@@ -259,11 +364,15 @@ def cmd_score(args: argparse.Namespace) -> int:
 
 
 def _diar_json(result: DiarResult) -> dict[str, Any]:
+    # pooled_der is a duration micro-average; global_jer is reference-speaker
+    # weighted (sum of per-speaker Jaccard errors / total reference speakers) —
+    # they aggregate differently, so they are named differently on purpose. See
+    # JER_MAPPING for why the JER absolute is delta-only.
     return {
         "collar": result.collar,
         "skip_overlap": result.skip_overlap,
         "pooled_der": result.pooled_der,
-        "pooled_jer": result.pooled_jer,
+        "global_jer": result.pooled_jer,
         "per_recording": result.per_recording,
     }
 

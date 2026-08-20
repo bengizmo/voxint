@@ -132,6 +132,93 @@ class TestWer:
         assert out2["pooled_wer"] == pytest.approx(0.25, abs=1e-6)  # 1 sub / 4 words
 
 
+class TestOverlapTracks:
+    def test_exactly_coincident_speakers_both_survive(self) -> None:
+        # Two speakers on the identical [0,10] interval must both be retained;
+        # the default-track shorthand would keep only the last (silent overlap loss).
+        ann = ev.parse_rttm(_rttm("r", [(0.0, 10.0, "A"), (0.0, 10.0, "B")]), "r")
+        assert sorted(ann.labels()) == ["A", "B"]
+        assert len(list(ann.itertracks())) == 2
+
+
+class TestJerFaithfulSurfacing:
+    def test_global_jer_matches_direct_pyannote_call(self) -> None:
+        # The harness must surface pyannote's JER faithfully (its co-occurrence
+        # mapping is NOT DIHARD Jaccard-optimal — documented in JER_MAPPING — but
+        # a delta signal must at least equal a direct call). Two ref speakers so
+        # JER is non-trivially distinct from DER.
+        from pyannote.metrics.diarization import JaccardErrorRate
+
+        ref = ev.parse_rttm(_rttm("r", [(0.0, 10.0, "A"), (10.0, 20.0, "B")]), "r")
+        hyp = ev.parse_rttm(_rttm("r", [(0.0, 10.0, "s0"), (10.0, 18.0, "s1")]), "r")
+        uem = ev.parse_uem("r 1 0 20\n", "r")
+        item = ev.DiarItem("r", ref, hyp, uem)
+        res = ev.score_diarization_set([item], protocol="strict", **ev.STRICT)
+        direct = JaccardErrorRate(**ev.STRICT)(ref, hyp, uem=uem)
+        assert res.pooled_jer == pytest.approx(float(direct), abs=1e-9)
+
+
+class TestNormalizerStripsPunctuation:
+    def test_ami_style_punctuation_tokens_normalize_away(self) -> None:
+        # The AMI WER builder keeps punctuation as separate raw tokens (. , ?);
+        # this contract confirms the frozen Whisper normalizer removes them, so
+        # retaining them raw is a scoring-time no-op (per build_ami_wer_reference).
+        from tests.parity.bakeoff.normalize import normalize_text
+
+        assert normalize_text("hello . world , ok ?") == normalize_text("hello world ok")
+
+
+class TestManifestValidation:
+    def _entry(self, tmp_path: Path) -> dict:
+        (tmp_path / "ref.rttm").write_text(_rttm("r", [(0.0, 10.0, "A")]))
+        (tmp_path / "hyp.rttm").write_text(_rttm("r", [(0.0, 10.0, "s")]))
+        (tmp_path / "f.uem").write_text("r 1 0 20\n")
+        return {
+            "recording_id": "r",
+            "reference_rttm": str(tmp_path / "ref.rttm"),
+            "hypothesis_rttm": str(tmp_path / "hyp.rttm"),
+            "uem": str(tmp_path / "f.uem"),
+        }
+
+    def _run(self, tmp_path: Path, manifest: dict) -> tuple[int, Path]:
+        mpath = tmp_path / "m.json"
+        mpath.write_text(json.dumps(manifest))
+        out = tmp_path / "o.json"
+        return ev.main(["score", "--manifest", str(mpath), "--out", str(out)]), out
+
+    def test_duplicate_diarization_id_rejected(self, tmp_path: Path) -> None:
+        entry = self._entry(tmp_path)
+        rc, _ = self._run(tmp_path, {"diarization": [entry, dict(entry)]})
+        assert rc == 2
+
+    def test_omitted_uem_key_rejected(self, tmp_path: Path) -> None:
+        entry = self._entry(tmp_path)
+        del entry["uem"]
+        rc, _ = self._run(tmp_path, {"diarization": [entry]})
+        assert rc == 2
+
+    def test_explicit_null_uem_allowed_and_recorded(self, tmp_path: Path) -> None:
+        entry = self._entry(tmp_path)
+        entry["uem"] = None
+        rc, out = self._run(tmp_path, {"diarization": [entry]})
+        assert rc == 0
+        rec = json.loads(out.read_text())["diarization"]["strict"]["per_recording"]["r"]
+        assert rec["uem_applied"] is False
+
+    def test_environment_manifest_is_stamped(self, tmp_path: Path) -> None:
+        rc, out = self._run(tmp_path, {"diarization": [self._entry(tmp_path)]})
+        assert rc == 0
+        env = json.loads(out.read_text())["environment"]
+        assert env["diarization_cohort"] == ["r"]
+        assert env["scorer_versions"]["pyannote.metrics"] != "unknown"
+        assert env["normalizer_version"]
+        assert len(env["manifest_sha256"]) == 64
+
+    def test_jer_mapping_caveat_present(self, tmp_path: Path) -> None:
+        _, out = self._run(tmp_path, {"diarization": [self._entry(tmp_path)]})
+        assert "cooccurrence" in json.loads(out.read_text())["diarization"]["jer_mapping"]
+
+
 class TestScoreCommand:
     def test_end_to_end_manifest(self, tmp_path: Path) -> None:
         (tmp_path / "ref.rttm").write_text(_rttm("r", [(0.0, 10.0, "A")]))
