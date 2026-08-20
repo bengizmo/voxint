@@ -50,6 +50,29 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from voxint import __version__
+from voxint.adjudication.annotations import (
+    AnnotationError,
+    AnnotationIdempotencyError,
+    AnnotationNotFoundError,
+    AnnotationStaleError,
+    AnnotationTagConflictError,
+    AnnotationValidationError,
+    CaptureEndpoint,
+    CapturePayload,
+    annotations_for_run,
+    capture_annotation,
+    create_tag,
+    list_tags,
+    load_covered_segments,
+    reanchor_annotation,
+    refresh_annotation,
+    resolve_annotation_spans,
+    soft_delete_annotation,
+    stored_anchor_from_row,
+    tags_for_annotations,
+    update_annotation,
+    update_tag,
+)
 from voxint.adjudication.corrections_view import (
     DeclaredRuleIndex,
     build_declared_rule_index,
@@ -105,6 +128,7 @@ from voxint.adjudication.transcript import (
 )
 from voxint.api.auth import require_operator
 from voxint.api.csrf import (
+    CSRF_ANNOTATION_TAGS,
     CSRF_ASSETS_CANCEL,
     CSRF_ASSETS_GENERATE,
     CSRF_CANCEL,
@@ -213,7 +237,14 @@ from voxint.app_settings import (
 )
 from voxint.config import Settings, get_settings, llm_budget_fits_stage_lease
 from voxint.db.models import (
+    HIGHLIGHT_PALETTE_SIZE,
+    MAX_ANNOTATION_NOTE_CHARS,
+    MAX_ANNOTATION_QUOTE_CHARS,
+    MAX_ANNOTATION_SPAN_SEGMENTS,
     MAX_CORRECTED_TEXT_CHARS,
+    MAX_TAG_NAME_CHARS,
+    MAX_TAGS_PER_ANNOTATION,
+    AnnotationTag,
     AppSettings,
     AssignmentMethod,
     ClaimField,
@@ -233,6 +264,7 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
     StageRun,
+    TranscriptAnnotation,
     TranscriptSegment,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
@@ -1324,6 +1356,175 @@ def _wants_html(request: Request) -> bool:
 # loop and prompt a re-claim; a state conflict shows an inline reason and keeps
 # the claim. The value is opaque; only presence + "claim" matters to the client.
 _CLAIM_CONFLICT_HEADERS = {"X-Voxint-Conflict": "claim"}
+
+# Annotation-layer 409 markers (issue #86), mirroring _CLAIM_CONFLICT_HEADERS so
+# the console can tell a stale-quote/anchor conflict, a replayed-nonce idempotency
+# conflict, and a duplicate tag name apart from a lost claim. The taxonomy lives in
+# docs/annotations.md ("API surface and error taxonomy").
+_ANNOTATION_STALE_HEADERS = {"X-Voxint-Conflict": "stale"}
+_ANNOTATION_IDEMPOTENCY_HEADERS = {"X-Voxint-Conflict": "idempotency"}
+_ANNOTATION_TAG_CONFLICT_HEADERS = {"X-Voxint-Conflict": "duplicate-tag"}
+
+
+def _annotation_http_error(exc: AnnotationError) -> HTTPException:
+    """Map an annotation-domain error to its HTTP shape (docs/annotations.md error
+    taxonomy). 422 validation, 404 not-found (fail closed — forged is not
+    distinguished from missing), and three distinctly-marked 409s."""
+    if isinstance(exc, AnnotationValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, AnnotationNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, AnnotationStaleError):
+        return HTTPException(status_code=409, detail=str(exc), headers=_ANNOTATION_STALE_HEADERS)
+    if isinstance(exc, AnnotationIdempotencyError):
+        return HTTPException(
+            status_code=409, detail=str(exc), headers=_ANNOTATION_IDEMPOTENCY_HEADERS
+        )
+    if isinstance(exc, AnnotationTagConflictError):
+        return HTTPException(
+            status_code=409, detail=str(exc), headers=_ANNOTATION_TAG_CONFLICT_HEADERS
+        )
+    # Defensive: an unmapped AnnotationError is a validation-class failure, never a 500.
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+def _annotation_limits() -> dict[str, int]:
+    """The server-enforced annotation caps, echoed to the island so the client can
+    pre-validate (the server stays the source of truth). Names mirror the constants
+    in docs/annotations.md."""
+    return {
+        "paletteSize": HIGHLIGHT_PALETTE_SIZE,
+        "maxSpanSegments": MAX_ANNOTATION_SPAN_SEGMENTS,
+        "maxNoteChars": MAX_ANNOTATION_NOTE_CHARS,
+        "maxTagsPerAnnotation": MAX_TAGS_PER_ANNOTATION,
+        "maxQuoteChars": MAX_ANNOTATION_QUOTE_CHARS,
+        "maxTagNameChars": MAX_TAG_NAME_CHARS,
+    }
+
+
+def _tag_shape(tag: AnnotationTag) -> dict[str, Any]:
+    """One tag's island/JSON shape (camelCase, matching the frontend islands)."""
+    return {
+        "id": str(tag.id),
+        "name": tag.name,
+        "color": tag.color,
+        "archived": tag.archived_at is not None,
+    }
+
+
+def _annotation_shapes(
+    session: Session, run_id: uuid.UUID, rows: list[TranscriptAnnotation]
+) -> list[dict[str, Any]]:
+    """Resolve a set of stored annotations against the CURRENT render into the island
+    JSON shape (camelCase): highlight spans, staleness, honest timing precision and
+    seconds, live speakers, and the row metadata (colour/quote/note/tags). Shared by
+    the list GET and the single-row create/patch responses so one row can never
+    serialize two ways. Reads render the CORRECTED variant, exactly as the review
+    surface does."""
+    if not rows:
+        return []
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    anchors = [stored_anchor_from_row(row) for row in rows]
+    resolved = {r.annotation_id: r for r in resolve_annotation_spans(lines, covered, anchors)}
+    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    shapes: list[dict[str, Any]] = []
+    for row in rows:
+        res = resolved[row.id]
+        shapes.append(
+            {
+                "id": str(row.id),
+                "anchorKind": row.anchor_kind,
+                "colorIndex": row.color_index,
+                "quote": row.quote_text,
+                "note": row.note,
+                "operator": row.operator,
+                "stale": res.stale,
+                "timingPrecision": res.timing_precision,
+                "startSeconds": res.start_seconds,
+                "endSeconds": res.end_seconds,
+                "speakers": list(res.speakers),
+                "spans": [
+                    {"lineIndex": s.line_index, "start": s.start, "end": s.end} for s in res.spans
+                ],
+                "locatorLineIndex": res.locator_line_index,
+                "startSegmentIndex": row.start_segment_index,
+                "endSegmentIndex": row.end_segment_index,
+                "tags": [_tag_shape(t) for t in tags_by_id.get(row.id, [])],
+            }
+        )
+    return shapes
+
+
+def _require_filter_tags_exist(session: Session, tag_ids: list[uuid.UUID]) -> None:
+    """Fail closed (404) when a ``?tag=`` filter names a tag that does not exist — a
+    mistyped or forged id (docs/annotations.md: an unknown tag is a 404, never
+    silently indistinguishable from a valid filter that matched nothing)."""
+    if not tag_ids:
+        return
+    found = set(
+        session.execute(select(AnnotationTag.id).where(AnnotationTag.id.in_(tag_ids))).scalars()
+    )
+    missing = [t for t in tag_ids if t not in found]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"unknown tag id {missing[0]}")
+
+
+def _annotations_payload(
+    session: Session, run_id: uuid.UUID, tag_ids: list[uuid.UUID]
+) -> dict[str, Any]:
+    """The GET /annotations body: the run's live annotations (optionally OR-filtered
+    by tag) as island shapes, plus the full tag universe for the panel/picker."""
+    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+    return {
+        "annotations": _annotation_shapes(session, run_id, rows),
+        "tags": [_tag_shape(t) for t in list_tags(session)],
+    }
+
+
+def _capture_payload_from_form(
+    start_segment_id: uuid.UUID,
+    start_offset: int,
+    start_child_word_start: int | None,
+    start_child_word_end: int | None,
+    end_segment_id: uuid.UUID,
+    end_offset: int,
+    end_child_word_start: int | None,
+    end_child_word_end: int | None,
+    client_quote: str,
+) -> CapturePayload:
+    """Assemble a :class:`CapturePayload` from the flat form sextuple (x2). The service
+    normalizes direction and classifies; the route never picks the anchor kind."""
+    return CapturePayload(
+        start=CaptureEndpoint(
+            segment_id=start_segment_id,
+            offset=start_offset,
+            child_word_start=start_child_word_start,
+            child_word_end=start_child_word_end,
+        ),
+        end=CaptureEndpoint(
+            segment_id=end_segment_id,
+            offset=end_offset,
+            child_word_start=end_child_word_start,
+            child_word_end=end_child_word_end,
+        ),
+        client_quote=client_quote,
+    )
+
+
+def _verify_annotation_claim(session: Session, run_id: uuid.UUID, token: uuid.UUID) -> PipelineRun:
+    """Gate a run-scoped annotation write. An unknown run is a 404 (docs/annotations.md
+    fail-closed taxonomy, checked before the claim so a missing run never masquerades
+    as a claim conflict); a lost claim is a 409 marked ``X-Voxint-Conflict: claim`` so
+    the island stops the loop and re-claims. Holds the row lock (``for_update``) so a
+    concurrent re-claim serializes against the write."""
+    _run_or_404(session, run_id)
+    try:
+        return verify_claim(session, run_id, token, for_update=True)
+    except ClaimMismatchError as exc:
+        raise HTTPException(
+            status_code=409, detail=str(exc), headers=_CLAIM_CONFLICT_HEADERS
+        ) from exc
 
 
 def _wants_island_json(request: Request) -> bool:
@@ -3712,6 +3913,18 @@ def _register_routes(app: FastAPI) -> None:
             island_props["reconciliation"] = run_reconciliation(rule_index, raw_texts)
         else:
             island_props["reconciliation"] = []
+        # Operator annotation layer (issue #86): the annotations to render + the tag
+        # universe + a tag-CRUD CSRF token + the server caps. Hydrated for the
+        # review-stepper only (annotation authoring is claim-gated); the read-only
+        # transcript-player never gets these. The list mirrors GET /annotations so a
+        # write's JSON reconciles against the same shape the page hydrated with.
+        annotations_payload = _annotations_payload(session, run_id, [])
+        island_props["annotations"] = annotations_payload["annotations"]
+        island_props["annotationTags"] = annotations_payload["tags"]
+        island_props["annotationLimits"] = _annotation_limits()
+        island_props["tagCsrf"] = mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
+        )
         return templates.TemplateResponse(
             request,
             "review_transcript.html",
@@ -4809,6 +5022,229 @@ def _register_routes(app: FastAPI) -> None:
             .all()
         )
         return Response(content=to_rttm(turns, str(run_id)), media_type=MEDIA_TYPES["rttm"])
+
+    # ---- Operator annotation layer (issue #86) --------------------------------
+    # Thin handlers over voxint.adjudication.annotations: the service owns all
+    # coordinate math, classification, idempotency, and staleness; routes only
+    # parse the wire shape, gate auth/claim/CSRF, and map AnnotationError to HTTP
+    # (docs/annotations.md). Reads need onboarding only; run-scoped writes need the
+    # live review claim; global tag writes are CSRF-gated like run notes.
+
+    @protected.get("/review/{run_id}/annotations")
+    def list_annotations(
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+    ) -> JSONResponse:
+        """The run's live annotations (transcript order) resolved against the current
+        render, plus the tag universe. Onboarding-auth only — no claim, so a reviewer
+        can read annotations without holding the slot. Repeated ``?tag=`` is an
+        OR-union filter, identically in the panel and exports; an unknown tag id in
+        the filter fails closed (404)."""
+        _run_or_404(session, run_id)
+        tag_ids = tag or []
+        _require_filter_tags_exist(session, tag_ids)
+        return JSONResponse(_annotations_payload(session, run_id, tag_ids))
+
+    @protected.post("/review/{run_id}/annotations")
+    def create_annotation(
+        run_id: uuid.UUID,
+        session: SessionDep,
+        operator: OperatorDep,
+        token: Annotated[uuid.UUID, Form()],
+        nonce: Annotated[str, Form(min_length=8, max_length=64)],
+        start_segment_id: Annotated[uuid.UUID, Form()],
+        start_offset: Annotated[int, Form()],
+        end_segment_id: Annotated[uuid.UUID, Form()],
+        end_offset: Annotated[int, Form()],
+        client_quote: Annotated[str, Form()],
+        color_index: Annotated[int, Form()],
+        start_child_word_start: Annotated[int | None, Form()] = None,
+        start_child_word_end: Annotated[int | None, Form()] = None,
+        end_child_word_start: Annotated[int | None, Form()] = None,
+        end_child_word_end: Annotated[int | None, Form()] = None,
+        note: Annotated[str | None, Form()] = None,
+        tags: Annotated[list[uuid.UUID] | None, Form()] = None,
+    ) -> JSONResponse:
+        """Create an annotation (the sole create path). Claim-gated and idempotent by
+        the client ``nonce``: a same-payload replay returns the original row, a
+        different payload is a 409 idempotency conflict. The server classifies the
+        anchor kind and derives the quote/hash/seconds; the client never picks the
+        kind. Returns the created annotation's island shape (201)."""
+        run = _verify_annotation_claim(session, run_id, token)
+        _reject_if_archived(run)
+        payload = _capture_payload_from_form(
+            start_segment_id,
+            start_offset,
+            start_child_word_start,
+            start_child_word_end,
+            end_segment_id,
+            end_offset,
+            end_child_word_start,
+            end_child_word_end,
+            client_quote,
+        )
+        try:
+            row = capture_annotation(
+                session,
+                run_id=run_id,
+                payload=payload,
+                operator=operator,
+                nonce=nonce,
+                color_index=color_index,
+                note=note,
+                tag_ids=list(tags) if tags else None,
+            )
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        return JSONResponse(_annotation_shapes(session, run_id, [row])[0], status_code=201)
+
+    @protected.patch("/review/{run_id}/annotations/{annotation_id}")
+    def patch_annotation(
+        run_id: uuid.UUID,
+        annotation_id: uuid.UUID,
+        session: SessionDep,
+        operator: OperatorDep,
+        token: Annotated[uuid.UUID, Form()],
+        op: Annotated[str, Form()],
+        color_index: Annotated[int | None, Form()] = None,
+        note: Annotated[str | None, Form()] = None,
+        tags: Annotated[list[uuid.UUID] | None, Form()] = None,
+        start_segment_id: Annotated[uuid.UUID | None, Form()] = None,
+        start_offset: Annotated[int | None, Form()] = None,
+        end_segment_id: Annotated[uuid.UUID | None, Form()] = None,
+        end_offset: Annotated[int | None, Form()] = None,
+        start_child_word_start: Annotated[int | None, Form()] = None,
+        start_child_word_end: Annotated[int | None, Form()] = None,
+        end_child_word_start: Annotated[int | None, Form()] = None,
+        end_child_word_end: Annotated[int | None, Form()] = None,
+        client_quote: Annotated[str | None, Form()] = None,
+    ) -> JSONResponse:
+        """Mutate an existing annotation. ``op`` is one of three mutually-exclusive
+        operations (docs/annotations.md): ``edit`` replaces metadata (colour/note/
+        tags), ``refresh`` re-derives the quote/hash/seconds when the anchor still
+        deterministically identifies its span, and ``reanchor`` atomically replaces
+        the anchor from a fresh capture payload. Claim-gated; a deleted or foreign id
+        is 404. Returns the updated annotation's island shape."""
+        run = _verify_annotation_claim(session, run_id, token)
+        _reject_if_archived(run)
+        try:
+            if op == "edit":
+                if color_index is None:
+                    raise HTTPException(status_code=422, detail="edit requires color_index")
+                row = update_annotation(
+                    session,
+                    run_id=run_id,
+                    annotation_id=annotation_id,
+                    color_index=color_index,
+                    note=note,
+                    tag_ids=list(tags) if tags else None,
+                )
+            elif op == "refresh":
+                row = refresh_annotation(session, run_id=run_id, annotation_id=annotation_id)
+            elif op == "reanchor":
+                if (
+                    start_segment_id is None
+                    or start_offset is None
+                    or end_segment_id is None
+                    or end_offset is None
+                    or client_quote is None
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="reanchor requires a full capture payload",
+                    )
+                payload = _capture_payload_from_form(
+                    start_segment_id,
+                    start_offset,
+                    start_child_word_start,
+                    start_child_word_end,
+                    end_segment_id,
+                    end_offset,
+                    end_child_word_start,
+                    end_child_word_end,
+                    client_quote,
+                )
+                row = reanchor_annotation(
+                    session,
+                    run_id=run_id,
+                    annotation_id=annotation_id,
+                    payload=payload,
+                )
+            else:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown op {op!r}; expected edit, refresh, or reanchor",
+                )
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        return JSONResponse(_annotation_shapes(session, run_id, [row])[0])
+
+    @protected.delete("/review/{run_id}/annotations/{annotation_id}")
+    def delete_annotation(
+        run_id: uuid.UUID,
+        annotation_id: uuid.UUID,
+        session: SessionDep,
+        operator: OperatorDep,
+        token: Annotated[uuid.UUID, Form()],
+    ) -> Response:
+        """Soft-delete an annotation (idempotent): a repeat DELETE of an already-
+        deleted row is a no-op 204, never a 404 — the row still exists and a create
+        replay still finds it. An unknown/foreign id is 404. Claim-gated."""
+        run = _verify_annotation_claim(session, run_id, token)
+        _reject_if_archived(run)
+        try:
+            soft_delete_annotation(session, run_id=run_id, annotation_id=annotation_id)
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        return Response(status_code=204)
+
+    @protected.get("/annotations/tags")
+    def list_annotation_tags(operator: OperatorDep, session: SessionDep) -> JSONResponse:
+        """The global tag universe (all tags, archived included), in display order.
+        Onboarding-auth only; tags are not run-scoped."""
+        return JSONResponse({"tags": [_tag_shape(t) for t in list_tags(session)]})
+
+    @protected.post("/annotations/tags")
+    def create_annotation_tag(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        name: Annotated[str, Form()],
+        color: Annotated[int, Form()],
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> JSONResponse:
+        """Create a global tag (name + palette colour). CSRF-gated like run notes —
+        tag writes have no run or claim context. A normalized-name duplicate is a 409;
+        a blank/over-cap name or bad colour is a 422. Returns the created tag (201)."""
+        _require_csrf(request, CSRF_ANNOTATION_TAGS, csrf_token)
+        try:
+            tag = create_tag(session, name=name, color=color)
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        return JSONResponse(_tag_shape(tag), status_code=201)
+
+    @protected.patch("/annotations/tags/{tag_id}")
+    def update_annotation_tag(
+        tag_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        name: Annotated[str | None, Form()] = None,
+        color: Annotated[int | None, Form()] = None,
+        archived: Annotated[bool | None, Form()] = None,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> JSONResponse:
+        """Rename / recolour / archive / restore a tag. Each field is independently
+        optional (absent leaves it untouched; ``archived`` is a tri-state). CSRF-gated.
+        A rename colliding with a different tag is a 409; an unknown id is 404."""
+        _require_csrf(request, CSRF_ANNOTATION_TAGS, csrf_token)
+        try:
+            tag = update_tag(session, tag_id=tag_id, name=name, color=color, archived=archived)
+        except AnnotationError as exc:
+            raise _annotation_http_error(exc) from exc
+        return JSONResponse(_tag_shape(tag))
 
     # ---- Prometheus metrics ----------------------------------------------------
     # Read-only aggregate exposition on the *protected* router: Prometheus scrapes

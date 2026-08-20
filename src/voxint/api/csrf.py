@@ -101,6 +101,11 @@ CSRF_ASSETS_CANCEL = "assets-cancel"
 CSRF_RUN_ARCHIVE = "run-archive"
 CSRF_RUN_UNARCHIVE = "run-unarchive"
 CSRF_RUN_MEDIA_DELETE = "run-media-delete"
+# Operator annotation tags (issue #86): global, run-less tag CRUD (create /
+# rename / recolour / archive). Its own action — tag writes have no run or claim
+# context, so they are CSRF-gated like run notes and never share a token with a
+# run-scoped mutation.
+CSRF_ANNOTATION_TAGS = "annotation-tags"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

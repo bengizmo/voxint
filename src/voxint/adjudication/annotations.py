@@ -40,6 +40,7 @@ from voxint.db.models import (
     MAX_ANNOTATION_NOTE_CHARS,
     MAX_ANNOTATION_QUOTE_CHARS,
     MAX_ANNOTATION_SPAN_SEGMENTS,
+    MAX_TAG_NAME_CHARS,
     MAX_TAGS_PER_ANNOTATION,
     AnnotationTag,
     AnnotationTagLink,
@@ -76,6 +77,7 @@ __all__ = [
     "AnnotationIdempotencyError",
     "AnnotationNotFoundError",
     "AnnotationStaleError",
+    "AnnotationTagConflictError",
     "AnnotationValidationError",
     "CaptureEndpoint",
     "CapturePayload",
@@ -87,14 +89,18 @@ __all__ = [
     "annotation_source_hash",
     "annotations_for_run",
     "capture_annotation",
+    "create_tag",
     "derive_anchor",
+    "list_tags",
     "load_covered_segments",
     "reanchor_annotation",
     "refresh_annotation",
     "resolve_annotation_spans",
     "soft_delete_annotation",
     "stored_anchor_from_row",
+    "tags_for_annotations",
     "update_annotation",
+    "update_tag",
     "word_eligible",
 ]
 
@@ -123,6 +129,12 @@ class AnnotationIdempotencyError(AnnotationError):
     """A create nonce was replayed with a DIFFERENT payload than the row it already
     keys -> 409 ``X-Voxint-Conflict: idempotency``. A same-payload replay is not an
     error (it returns the original row); only a fingerprint mismatch is."""
+
+
+class AnnotationTagConflictError(AnnotationError):
+    """A tag create/rename whose normalized (trim+casefold) name already names a
+    different tag -> 409 ``X-Voxint-Conflict: duplicate-tag`` (the UNIQUE constraint
+    made visible before the flush)."""
 
 
 # --------------------------------------------------------------------------- #
@@ -992,6 +1004,132 @@ def annotations_for_run(
         )
     stmt = stmt.order_by(TranscriptAnnotation.start_segment_index, TranscriptAnnotation.created_at)
     return list(session.execute(stmt).scalars())
+
+
+# --------------------------------------------------------------------------- #
+# Tag writers (global, flat) + read-side batch loading
+# --------------------------------------------------------------------------- #
+
+
+def _normalize_tag_name(name: str) -> str:
+    """Trim + casefold — the uniqueness key, so "Key Point" and "key point" collide.
+    Mirrors the ``name_normalized`` the DB UNIQUE constraint carries."""
+    return name.strip().casefold()
+
+
+def _validate_tag_name(name: str) -> str:
+    """Return the trimmed display name, or 422 for a blank / over-cap name (mirrors
+    the ``annotation_tags`` name CHECK constraints)."""
+    trimmed = name.strip()
+    if not trimmed:
+        raise AnnotationValidationError("tag name is empty")
+    if len(trimmed) > MAX_TAG_NAME_CHARS:
+        raise AnnotationValidationError(
+            f"tag name is {len(trimmed)} code points, exceeds {MAX_TAG_NAME_CHARS}"
+        )
+    return trimmed
+
+
+def create_tag(session: Session, *, name: str, color: int) -> AnnotationTag:
+    """Create a global tag. ``name`` is trimmed for display; ``name_normalized``
+    (trim+casefold) carries uniqueness, so a case/whitespace variant of an existing
+    tag is a 409 duplicate. ``color`` is a palette index (422 out of range).
+
+    The pre-check catches the common duplicate before the flush; a savepoint-guarded
+    flush turns the rare concurrent-create race into the same 409 rather than
+    poisoning the caller's transaction."""
+    trimmed = _validate_tag_name(name)
+    _validate_color(color)
+    normalized = _normalize_tag_name(name)
+    existing = session.execute(
+        select(AnnotationTag.id).where(AnnotationTag.name_normalized == normalized)
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise AnnotationTagConflictError(f"a tag named {trimmed!r} already exists")
+    tag = AnnotationTag(name=trimmed, name_normalized=normalized, color=color)
+    try:
+        with session.begin_nested():
+            session.add(tag)
+            session.flush()
+    except IntegrityError as exc:
+        raise AnnotationTagConflictError(f"a tag named {trimmed!r} already exists") from exc
+    return tag
+
+
+def update_tag(
+    session: Session,
+    *,
+    tag_id: uuid.UUID,
+    name: str | None = None,
+    color: int | None = None,
+    archived: bool | None = None,
+) -> AnnotationTag:
+    """Rename / recolour / archive / restore a tag. Each argument is independently
+    optional — ``None`` leaves that facet untouched, and ``archived`` is a tri-state
+    (True archives, False restores, None no-ops). A rename whose normalized name
+    collides with a DIFFERENT tag is a 409 duplicate; an unknown id is 404."""
+    tag = session.get(AnnotationTag, tag_id)
+    if tag is None:
+        raise AnnotationNotFoundError(f"unknown tag id {tag_id}")
+    trimmed: str | None = None
+    normalized: str | None = None
+    if name is not None:
+        trimmed = _validate_tag_name(name)
+        normalized = _normalize_tag_name(name)
+        clash = session.execute(
+            select(AnnotationTag.id).where(
+                AnnotationTag.name_normalized == normalized,
+                AnnotationTag.id != tag_id,
+            )
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise AnnotationTagConflictError(f"a tag named {trimmed!r} already exists")
+    if color is not None:
+        _validate_color(color)
+    try:
+        with session.begin_nested():
+            if trimmed is not None and normalized is not None:
+                tag.name = trimmed
+                tag.name_normalized = normalized
+            if color is not None:
+                tag.color = color
+            if archived is not None:
+                tag.archived_at = datetime.now(UTC) if archived else None
+            session.flush()
+    except IntegrityError as exc:
+        raise AnnotationTagConflictError("tag name collides with an existing tag") from exc
+    return tag
+
+
+def list_tags(session: Session, *, include_archived: bool = True) -> list[AnnotationTag]:
+    """All tags in display order (by normalized name). ``include_archived=False``
+    drops archived tags for the picker; the panel/list view keeps them so an
+    annotation's archived tag still renders."""
+    stmt = select(AnnotationTag)
+    if not include_archived:
+        stmt = stmt.where(AnnotationTag.archived_at.is_(None))
+    stmt = stmt.order_by(AnnotationTag.name_normalized)
+    return list(session.execute(stmt).scalars())
+
+
+def tags_for_annotations(
+    session: Session, annotation_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[AnnotationTag]]:
+    """Batch-load each annotation's tags in display order — one join keyed by
+    annotation id, no N+1 and no ORM relationship. Annotations carrying no tags are
+    absent from the map (callers default to ``[]``)."""
+    result: dict[uuid.UUID, list[AnnotationTag]] = {}
+    if not annotation_ids:
+        return result
+    rows = session.execute(
+        select(AnnotationTagLink.annotation_id, AnnotationTag)
+        .join(AnnotationTag, AnnotationTag.id == AnnotationTagLink.tag_id)
+        .where(AnnotationTagLink.annotation_id.in_(annotation_ids))
+        .order_by(AnnotationTag.name_normalized)
+    ).all()
+    for annotation_id, tag in rows:
+        result.setdefault(annotation_id, []).append(tag)
+    return result
 
 
 def _covered_span_for_row(
