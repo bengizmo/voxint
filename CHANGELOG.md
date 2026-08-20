@@ -24,6 +24,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   recording was picked up deliberately does nothing. The sweep's net-new file
   cap now applies to actual submissions rather than scan candidates, so held
   recordings can never crowd new ones out of a check.
+- **Operator guidance for GPU memory on a single, modest GPU (#96).**
+  `docs/operations.md` now documents why the stock GPU overlay can exhaust VRAM
+  on one small card and cascade into an `invalid device ordinal` from a poisoned
+  CUDA context, and how to tune it down: worker `--concurrency`, whisper
+  `BATCH_SIZE`, and `MAX_PENDING_REQUESTS`, with a conservative
+  `compose.override.yaml` profile. Documents existing knobs; the safe-by-default
+  sizing itself is still tracked in #96.
 
 ### Fixed
 - **The Markdown transcript export can no longer let transcript text forge

@@ -222,6 +222,59 @@ expect:
   port collisions (a leftover CPU-tier stack on 8021/8022/8024 is the
   classic one), the MPS probe, ORT providers, and worker→host loopback.
 
+### GPU memory on a single, modest GPU (issue #96)
+
+The default GPU overlay is tuned for headroom, not for the smallest card. On a
+host with one modest GPU (for example a single 12 GB consumer card shared by
+whisper, pyannote, titanet, and any co-resident LLM), the stock settings can
+exhaust VRAM. The first out-of-memory error can poison that service's CUDA
+context, so every request after it fails with a cascade of
+`CUDA error: out of memory` and then `invalid device ordinal` until the service
+is restarted. Shrinking that first allocation is the fix.
+
+> ⚠ A poisoned CUDA context does not recover on its own. If a GPU service starts
+> reporting `invalid device ordinal`, restart it (`docker compose restart
+> whisper`) to clear the context, then apply the settings below so it does not
+> recur.
+
+Three settings drive peak VRAM. Lower them when a single card is the constraint;
+raise them for throughput when the card has room.
+
+| Setting | Where | Default | What it does |
+|---|---|---|---|
+| Worker concurrency | worker `command:` (`--concurrency=N`) | host CPU count | How many runs the Celery worker processes at once. The stock command sets no `--concurrency`, so it defaults to the host CPU count and can drive many runs onto the GPU services in parallel. |
+| `BATCH_SIZE` | whisper service `environment:` | `16` | whisper's CTranslate2 decode batch. Peak transcription VRAM is set by this, not by recording length, so it is the largest single lever. |
+| `MAX_PENDING_REQUESTS` | whisper service `environment:` | `8` | How many requests whisper queues before refusing new work with `503`. A lower cap bounds how much the worker can pile onto whisper at once (see [gpu-contracts.md](gpu-contracts.md)). |
+
+whisper reads `BATCH_SIZE` and `MAX_PENDING_REQUESTS` from the environment at
+startup, so a compose `environment:` override changes them without rebuilding the
+image. Worker concurrency is a command-line flag, so it is set by overriding the
+worker `command:`.
+
+A conservative profile for one modest GPU, as a compose override
+(`compose.override.yaml`, which `docker compose` merges automatically):
+
+```yaml
+services:
+  worker:
+    command: celery -A voxint.worker.app worker --loglevel=INFO --concurrency=1
+  whisper:
+    environment:
+      BATCH_SIZE: "4"
+      MAX_PENDING_REQUESTS: "1"
+```
+
+`--concurrency=1` serializes runs so the GPU services are never asked to hold
+several transcriptions at once; `BATCH_SIZE=4` and `MAX_PENDING_REQUESTS=1` cap
+whisper's own peak and queue. This trades throughput for stability: a run that
+would have shared the card now waits its turn. whisper already serializes
+inference behind a single model lock, so lowering `--concurrency` changes
+scheduling, not the transcription result. On a card with spare VRAM, raise the
+batch and concurrency back up.
+
+Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
+lands, tune these settings by hand when the stock overlay runs out of memory.
+
 ### Schema migrations
 
 A one-shot `migrate` service runs `alembic upgrade head` after Postgres is
