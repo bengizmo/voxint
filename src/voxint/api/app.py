@@ -271,6 +271,7 @@ from voxint.db.models import (
     SegmentSplitBoundary,
     Speaker,
     SpeakerAssignment,
+    Stage,
     StageRun,
     TranscriptAnnotation,
     TranscriptSegment,
@@ -810,7 +811,7 @@ def _get_session(request: Request) -> Iterator[Session]:
         yield session
 
 
-def _publish_run(run_id: uuid.UUID) -> None:
+def _publish_run(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
     """Enqueue the pipeline for a freshly-committed run (commit-before-publish).
 
     The Celery/broker import stays out of the module top level so the read path
@@ -824,12 +825,12 @@ def _publish_run(run_id: uuid.UUID) -> None:
     consumer's reconnect loop, whereas ignoring the result surfaces the broker
     connect failure itself as ``kombu.exceptions.OperationalError`` — the exact
     exception ``_publish_or_defer`` catches."""
-    from voxint.worker.tasks import run_pipeline
+    from voxint.worker.tasks import pipeline_task_for_stage
 
-    run_pipeline.apply_async((str(run_id),), ignore_result=True)
+    pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
 
 
-def _publish_or_defer(run_id: uuid.UUID) -> bool:
+def _publish_or_defer(run_id: uuid.UUID, *, stage: Stage | None = None) -> bool:
     """Publish the run's task, returning ``False`` (never raising) if the broker
     is unreachable so the request can degrade cleanly.
 
@@ -844,7 +845,12 @@ def _publish_or_defer(run_id: uuid.UUID) -> bool:
     from celery.exceptions import OperationalError
 
     try:
-        _publish_run(run_id)
+        if stage is None:
+            # Keep fresh-run publication's historical one-argument seam intact;
+            # only resumptions need to carry an explicit routing stage.
+            _publish_run(run_id)
+        else:
+            _publish_run(run_id, stage=stage)
     except OperationalError:
         logger.warning(
             "pipeline enqueue deferred (broker unavailable); run %s stays QUEUED "
@@ -4016,7 +4022,9 @@ def _register_routes(app: FastAPI) -> None:
         _require_csrf(request, CSRF_REQUEUE, csrf_token)
         # An archived run is read-only — refuse before touching pipeline state so
         # a stale tab can't drive a hidden run live (issue #5).
-        _reject_if_archived(_run_or_404(session, run_id))
+        run = _run_or_404(session, run_id)
+        _reject_if_archived(run)
+        failed_stage = Stage(run.current_stage) if run.current_stage else None
         # Exact-revision CAS from the form's hidden field: a stale browser tab
         # holding an older revision 409s rather than requeuing a run that already
         # moved on. FAILED-only, at the failed stage (the service enforces both).
@@ -4035,7 +4043,9 @@ def _register_routes(app: FastAPI) -> None:
         # exist before the enqueue, and a broker outage leaves it QUEUED for the
         # recovery sweep rather than failing the request.
         session.commit()
-        return _run_redirect(run_id, published=_publish_or_defer(run_id))
+        return _run_redirect(
+            run_id, published=_publish_or_defer(run_id, stage=failed_stage)
+        )
 
     @protected.post("/runs/{run_id}/cancel")
     def cancel_run_route(

@@ -48,10 +48,14 @@ def client(session_factory: sessionmaker[Session]) -> TestClient:
 
 
 @pytest.fixture()
-def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
+def published(monkeypatch: pytest.MonkeyPatch) -> list[tuple[uuid.UUID, Stage | None]]:
     """Capture commit-before-publish enqueues without a live broker."""
-    calls: list[uuid.UUID] = []
-    monkeypatch.setattr("voxint.api.app._publish_run", calls.append)
+    calls: list[tuple[uuid.UUID, Stage | None]] = []
+
+    def capture(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
+        calls.append((run_id, stage))
+
+    monkeypatch.setattr("voxint.api.app._publish_run", capture)
     return calls
 
 
@@ -90,7 +94,7 @@ def _make_failed_run(
 def test_requeue_failed_run_returns_queued_and_publishes(
     client: TestClient,
     session_factory: sessionmaker[Session],
-    published: list[uuid.UUID],
+    published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
     run_id, revision = _make_failed_run(session_factory, stage=Stage.TRANSCRIBE)
 
@@ -107,7 +111,43 @@ def test_requeue_failed_run_returns_queued_and_publishes(
         assert run is not None
         assert run.status == RunStatus.QUEUED.value
         assert run.current_stage == Stage.TRANSCRIBE.value  # requeued at its failed stage
-    assert published == [run_id]  # commit-before-publish fired exactly once
+    assert published == [(run_id, Stage.TRANSCRIBE)]
+
+
+@pytest.mark.parametrize(
+    ("stage", "expected_lane"),
+    [(Stage.TRANSCRIBE, "gpu"), (Stage.ENHANCE_MATCH, "post")],
+)
+def test_requeue_routes_to_stage_owner(
+    client: TestClient,
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    stage: Stage,
+    expected_lane: str,
+) -> None:
+    from voxint.worker import tasks
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "apply_async",
+        lambda args, **kwargs: calls.append(("gpu", args[0])),
+    )
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: calls.append(("post", args[0])),
+    )
+    run_id, revision = _make_failed_run(session_factory, stage=stage)
+
+    response = client.post(
+        f"/runs/{run_id}/requeue",
+        data=_rd(revision=str(revision)),
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert calls == [(expected_lane, str(run_id))]
 
 
 # --- exact-revision CAS guard -------------------------------------------------
@@ -116,7 +156,7 @@ def test_requeue_failed_run_returns_queued_and_publishes(
 def test_requeue_with_stale_revision_conflicts_and_leaves_run_failed(
     client: TestClient,
     session_factory: sessionmaker[Session],
-    published: list[uuid.UUID],
+    published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
     # A stale browser tab submitting an older revision must 409 and change nothing.
     run_id, revision = _make_failed_run(session_factory)
@@ -138,7 +178,7 @@ def test_requeue_with_stale_revision_conflicts_and_leaves_run_failed(
 def test_requeue_non_failed_run_conflicts(
     client: TestClient,
     session_factory: sessionmaker[Session],
-    published: list[uuid.UUID],
+    published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
     # A QUEUED run carries a real revision but is not requeuable → 409, not 5xx.
     with session_factory() as session:
@@ -156,7 +196,7 @@ def test_requeue_non_failed_run_conflicts(
 
 
 def test_requeue_missing_run_is_404(
-    client: TestClient, published: list[uuid.UUID]
+    client: TestClient, published: list[tuple[uuid.UUID, Stage | None]]
 ) -> None:
     resp = client.post(
         f"/runs/{uuid.uuid4()}/requeue",
@@ -173,7 +213,7 @@ def test_requeue_missing_run_is_404(
 def test_requeue_rejected_without_csrf_token(
     client: TestClient,
     session_factory: sessionmaker[Session],
-    published: list[uuid.UUID],
+    published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
     # No csrf_token ⇒ 403 before the CAS runs; the run stays FAILED, untouched.
     run_id, revision = _make_failed_run(session_factory)
@@ -193,7 +233,7 @@ def test_requeue_rejected_without_csrf_token(
 def test_requeue_rejected_with_wrong_action_token(
     client: TestClient,
     session_factory: sessionmaker[Session],
-    published: list[uuid.UUID],
+    published: list[tuple[uuid.UUID, Stage | None]],
 ) -> None:
     # A token minted for /fetch is not valid on /requeue (action binding).
     run_id, revision = _make_failed_run(session_factory)
@@ -237,7 +277,7 @@ def test_broker_down_requeue_stays_queued_and_flags_banner(
 
     run_id, revision = _make_failed_run(session_factory)
 
-    def _broker_down(_run_id: uuid.UUID) -> None:
+    def _broker_down(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("Error 111 connecting to redis. Connection refused.")
 
     monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)

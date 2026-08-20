@@ -1,12 +1,17 @@
 """Celery tasks: thin wrappers over the stage engine.
 
-Orchestration philosophy (design-gated with codex, P3):
+Orchestration philosophy (two execution lanes over the P1 stage engine):
 
-- One ``run_pipeline`` task drives a run through ALL stages via
-  ``execute_run``. Task-per-stage would open an unclaimed window between
-  stage handoffs that the recovery sweep misreads as a crash; the P1 engine
-  already resumes an interrupted run at its current stage, so the finer
-  granularity buys nothing on a single box.
+- ``run_pipeline`` drives the GPU segment through DIARIZE_EMBED;
+  ``finish_pipeline`` drives ENHANCE_MATCH + FINALIZE. This one boundary lets
+  remote LLM work overlap the next run's GPU work without turning every stage
+  into a broker-level task.
+- The boundary is durable DB state: completion of DIARIZE_EMBED and parking at
+  QUEUED/ENHANCE_MATCH commit together. That is exactly the state the existing
+  stale-QUEUED sweep already republishes, so a crash after commit cannot create
+  the unclaimed RUNNING window that originally ruled out task-per-stage.
+- Task-per-stage remains rejected: five additional handoffs add recovery and
+  routing ceremony without a demonstrated scheduling benefit on one box.
 - Transient failures (a saturated service, a dead socket) leave an honest
   FAILED stage attempt in the ledger; the task then CAS-requeues the run and
   retries itself with backoff. The attempt budget is counted from the
@@ -30,7 +35,15 @@ from voxint import app_settings
 from voxint.clients.errors import ServiceError
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings, get_settings
-from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
+from voxint.db.models import (
+    GPU_SEGMENT,
+    POST_SEGMENT,
+    PipelineRun,
+    RunStatus,
+    Stage,
+    StageRun,
+    StageStatus,
+)
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.enrichment import asset_jobs
@@ -139,9 +152,8 @@ def requeue_failed_stage(factory: sessionmaker[Session], failed: RunSnapshot) ->
 # Setting it on the task (not just per apply_async) makes self.retry(), the CLI's
 # .delay(), and the recovery sweep's re-publish all inherit the policy — a
 # per-call flag is not propagated by Celery's Task.retry().
-@app.task(bind=True, name="voxint.run_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
-def run_pipeline(self: object, run_id_str: str) -> str:
-    """Advance one run to COMPLETED (or park it FAILED / adjudication-paused)."""
+def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> str:
+    """Drive exactly one execution lane with the shared retry/settings policy."""
     factory, base_ctx = _runtime()
     settings = get_settings()
     run_id = uuid.UUID(run_id_str)
@@ -170,7 +182,7 @@ def run_pipeline(self: object, run_id_str: str) -> str:
     )
     stage_fns = build_stage_fns(ctx)
     try:
-        final = execute_run(factory, run_id, stage_fns, settings=settings)
+        final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)
     except StageFailedError as exc:
         if not retryable_cause(exc) or exc.failed_snapshot is None:
             raise  # deterministic — the failure lane owns it now
@@ -185,12 +197,20 @@ def run_pipeline(self: object, run_id_str: str) -> str:
             settings.retry_backoff_base_seconds,
             settings.retry_backoff_max_seconds,
         )
-        raise self.retry(  # type: ignore[attr-defined]  # noqa: B904 — celery Retry carries exc=
+        raise task.retry(  # type: ignore[attr-defined]  # noqa: B904 — celery Retry carries exc=
             exc=exc, countdown=delay + random.uniform(0, delay * 0.1)
         )
     else:
-        if final.status is RunStatus.COMPLETED:
+        if final.status is RunStatus.COMPLETED and segment == POST_SEGMENT:
+            # Only the owning post lane performs completion side effects. A
+            # late/redelivered GPU task may observe an already-COMPLETED row;
+            # treating that observation as completion would enqueue assets twice.
             _autogenerate_run_assets(factory, run_id, settings)
+        elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
+            # This covers both the first GPU→post handoff and a duplicate GPU
+            # delivery observing an already-parked run. Re-publishing is safe:
+            # the post task's entry CAS + stage claim arbitrate duplicates.
+            _publish_finish_or_defer(run_id)
         return final.status.value
     finally:
         # apply_run_preferences may build a per-run HttpLLMClient that owns its
@@ -199,6 +219,41 @@ def run_pipeline(self: object, run_id_str: str) -> str:
         # re-enters run_pipeline and builds a fresh one.
         if isinstance(ctx.llm, HttpLLMClient):
             ctx.llm.close()
+
+
+@app.task(bind=True, name="voxint.run_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def run_pipeline(self: object, run_id_str: str) -> str:
+    """Advance one run through the GPU execution segment."""
+    return _drive_segment(self, run_id_str, GPU_SEGMENT)
+
+
+@app.task(bind=True, name="voxint.finish_pipeline", max_retries=None, ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def finish_pipeline(self: object, run_id_str: str) -> str:
+    """Advance one run through enhancement/matching and finalization."""
+    return _drive_segment(self, run_id_str, POST_SEGMENT)
+
+
+def pipeline_task_for_stage(stage: Stage | None) -> Any:
+    """Return the lane task for ``stage`` — the single routing decision every
+    publisher (API, CLI, sweep, and handoff) must share."""
+    return finish_pipeline if stage in POST_SEGMENT else run_pipeline
+
+
+def _publish_finish_or_defer(run_id: uuid.UUID) -> bool:
+    """Publish a durable post-lane handoff; defer only on broker outage."""
+    from celery.exceptions import OperationalError
+
+    try:
+        finish_pipeline.apply_async((str(run_id),), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "post-pipeline enqueue deferred (broker unavailable); run %s stays "
+            "QUEUED for the recovery sweep",
+            run_id,
+            exc_info=True,
+        )
+        return False
+    return True
 
 
 @app.task(name="voxint.recovery_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
@@ -235,8 +290,21 @@ def recovery_sweep() -> dict[str, int]:
             .scalars()
             .all()
         )
-    for rid in {*recovered, *stale_queued}:
-        run_pipeline.delay(str(rid))
+    publish_ids = {*recovered, *stale_queued}
+    if publish_ids:
+        # Re-read after recovery commits: routing from an earlier snapshot can
+        # send QUEUED/ENHANCE_MATCH to the GPU lane, whose entry guard would
+        # correctly no-op forever while every later sweep repeated the mistake.
+        with factory() as session:
+            resumable = session.execute(
+                select(PipelineRun.id, PipelineRun.current_stage).where(
+                    PipelineRun.id.in_(publish_ids),
+                    PipelineRun.status == RunStatus.QUEUED.value,
+                )
+            ).all()
+        for rid, stage_value in resumable:
+            stage = Stage(stage_value) if stage_value else None
+            pipeline_task_for_stage(stage).delay(str(rid))
     return {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),

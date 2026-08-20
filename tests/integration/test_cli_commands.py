@@ -246,6 +246,40 @@ def test_requeue_only_failed_runs(
         assert run.current_stage == Stage.TRANSCRIBE.value
 
 
+def test_requeue_routes_post_stage_to_finish_pipeline(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from voxint.worker import tasks
+
+    with session_factory() as session:
+        media = MediaItem(source_path="incoming/requeue-post.wav")
+        session.add(media)
+        session.flush()
+        run = submit(session, media.id, domain_pack=load_default().to_mapping())
+        run.status = RunStatus.FAILED.value
+        run.current_stage = Stage.ENHANCE_MATCH.value
+        run_id = run.id
+        session.commit()
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "apply_async",
+        lambda args, **kwargs: calls.append(("gpu", args[0])),
+    )
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: calls.append(("post", args[0])),
+    )
+
+    assert main(["requeue", str(run_id)]) == 0
+    assert capsys.readouterr().out.strip() == f"requeued {run_id}"
+    assert calls == [("post", str(run_id))]
+
+
 def test_requeue_unknown_run_errors_without_enqueue(
     session_factory: sessionmaker[Session],
     enqueued: list[str],

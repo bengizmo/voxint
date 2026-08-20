@@ -3,10 +3,13 @@
 from typing import Any
 
 from celery import Celery
+from kombu import Queue  # type: ignore[import-untyped]
 
 from voxint.config import Settings, get_settings
 
 settings = get_settings()
+
+POST_QUEUE = "post"
 
 
 def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
@@ -54,6 +57,19 @@ app = Celery(
 )
 app.conf.task_acks_late = True
 app.conf.worker_prefetch_multiplier = 1
+# Declare both lanes explicitly while retaining Celery's conventional default
+# queue. A worker started without ``-Q`` therefore consumes BOTH queues, keeping
+# the base Compose command and native launcher unchanged; GPU deployments alone
+# split the lanes into separate workers with overlay-level ``-Q`` flags.
+app.conf.task_queues = (Queue("celery"), Queue(POST_QUEUE))
+app.conf.task_default_queue = "celery"
+# Run assets and speaker research are LLM-bound too: they must not serialize
+# behind GPU work on a concurrency-1 GPU-lane worker.
+app.conf.task_routes = {
+    "voxint.finish_pipeline": {"queue": POST_QUEUE},
+    "voxint.generate_run_asset": {"queue": POST_QUEUE},
+    "voxint.research_speaker": {"queue": POST_QUEUE},
+}
 # Acks-late + Redis: an unacked task is redelivered after this horizon, so it
 # must exceed the longest run_pipeline execution. Stage claims make an early
 # redelivery harmless (the duplicate sees an active claim and returns), but a

@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
     from voxint.app_settings import EffectiveWebResearch
     from voxint.config import Settings
+    from voxint.db.models import Stage
 
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
@@ -95,7 +96,7 @@ def _effective_web_or_report(
         engine.dispose()
 
 
-def _publish_or_defer(run_id: uuid.UUID) -> bool:
+def _publish_or_defer(run_id: uuid.UUID, *, stage: "Stage | None" = None) -> bool:
     """Enqueue the run's pipeline task, degrading cleanly on a broker outage.
 
     Mirrors the HTTP API's contract (``voxint.api.app._publish_or_defer``):
@@ -113,10 +114,10 @@ def _publish_or_defer(run_id: uuid.UUID) -> bool:
     # exception this guard catches. See voxint.api.app._publish_run.
     from celery.exceptions import OperationalError
 
-    from voxint.worker.tasks import run_pipeline
+    from voxint.worker.tasks import pipeline_task_for_stage
 
     try:
-        run_pipeline.apply_async((str(run_id),), ignore_result=True)
+        pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
     except OperationalError:
         print(
             f"warning: broker unavailable; run {run_id} stays QUEUED for the "
@@ -360,6 +361,7 @@ def _watch(args: argparse.Namespace) -> int:
 
 
 def _requeue(args: argparse.Namespace) -> int:
+    from voxint.db.models import PipelineRun, Stage
     from voxint.db.session import build_engine, build_session_factory, session_scope
     from voxint.ingest import IngestError, requeue_failed_run
     from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
@@ -368,6 +370,8 @@ def _requeue(args: argparse.Namespace) -> int:
     run_id = uuid.UUID(args.run_id)
     try:
         with session_scope(factory) as session:
+            run = session.get(PipelineRun, run_id)
+            failed_stage = Stage(run.current_stage) if run and run.current_stage else None
             requeue_failed_run(session, run_id)
     # InvalidTransitionError can't arise on this FAILED->QUEUED-same-stage path,
     # but cas_update_run's contract permits it — caught as defense-in-depth so a
@@ -378,7 +382,7 @@ def _requeue(args: argparse.Namespace) -> int:
     # Confirm the durable requeue BEFORE publishing so a broker outage never
     # hides the fact that the run was re-queued; publish degrades cleanly.
     print(f"requeued {run_id}")
-    _publish_or_defer(run_id)
+    _publish_or_defer(run_id, stage=failed_stage)
     return 0
 
 

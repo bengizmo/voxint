@@ -23,14 +23,14 @@ def test_healthz() -> None:
 def test_publish_or_defer_returns_true_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_publish_run", lambda _run_id: None)
+    monkeypatch.setattr(app_module, "_publish_run", lambda _run_id, **_kwargs: None)
     assert app_module._publish_or_defer(uuid.uuid4()) is True
 
 
 def test_publish_or_defer_swallows_broker_outage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _down(_run_id: uuid.UUID) -> None:
+    def _down(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("Error 111 connecting to redis. Connection refused.")
 
     monkeypatch.setattr(app_module, "_publish_run", _down)
@@ -42,7 +42,7 @@ def test_publish_or_defer_swallows_broker_outage(
 def test_publish_or_defer_reraises_unexpected_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _bug(_run_id: uuid.UUID) -> None:
+    def _bug(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise RuntimeError("a real bug in the publish path")
 
     monkeypatch.setattr(app_module, "_publish_run", _bug)

@@ -1,12 +1,14 @@
 """Retry bookkeeping against real Postgres: the ledger-bounded requeue path."""
 
 import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.clients.errors import ServiceError
-from voxint.db.models import MediaItem, PipelineRun, RunStatus, Stage
+from voxint.db.models import GPU_SEGMENT, MediaItem, PipelineRun, RunStatus, Stage
 from voxint.domain_packs.base import load_default
 from voxint.pipeline.engine import (
     StageFailedError,
@@ -226,3 +228,102 @@ def test_recovery_respects_attempt_budget(
         recovered = recover_interrupted_runs(session)
         session.commit()
     assert recovered == [run_id]
+
+
+def test_recovery_sweep_routes_stale_runs_by_current_stage(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery must publish each durable QUEUED row to its owning lane."""
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    gpu_run_id = submit_run(session_factory)
+    post_run_id = submit_run(session_factory)
+    stale_at = datetime.now(UTC) - timedelta(hours=2)
+    with session_factory() as session:
+        gpu_run = session.get(PipelineRun, gpu_run_id)
+        post_run = session.get(PipelineRun, post_run_id)
+        assert gpu_run is not None and post_run is not None
+        gpu_run.current_stage = Stage.TRANSCRIBE.value
+        gpu_run.updated_at = stale_at
+        post_run.current_stage = Stage.ENHANCE_MATCH.value
+        post_run.updated_at = stale_at
+        session.commit()
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: Settings(_env_file=None, queued_run_stale_seconds=60)
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    published: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "delay",
+        lambda run_id: published.append(("gpu", run_id)),
+    )
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "delay",
+        lambda run_id: published.append(("post", run_id)),
+    )
+
+    result = tasks.recovery_sweep()
+
+    assert result["stale_queued"] == 2
+    assert set(published) == {
+        ("gpu", str(gpu_run_id)),
+        ("post", str(post_run_id)),
+    }
+
+
+def test_finish_pipeline_retries_its_own_transient_failure(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A retry from ENHANCE_MATCH stays attached to the routed post task."""
+    from celery.exceptions import Retry
+
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    run_id = submit_run(session_factory)
+    noops = {stage: (lambda session, rid: None) for stage in Stage}
+    handed_off = execute_run(session_factory, run_id, noops, stages=GPU_SEGMENT)
+    assert handed_off.current_stage is Stage.ENHANCE_MATCH
+
+    def fail_enhance(session: Session, rid: uuid.UUID) -> None:
+        raise ServiceError("saturated", "busy", retryable=True)
+
+    post_fns = dict(noops)
+    post_fns[Stage.ENHANCE_MATCH] = fail_enhance
+    settings = Settings(_env_file=None)
+    ctx = SimpleNamespace(llm=None)
+    monkeypatch.setattr(tasks, "get_settings", lambda: settings)
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, ctx))
+    monkeypatch.setattr(tasks.app_settings, "get_app_settings", lambda session: None)
+    monkeypatch.setattr(tasks, "resolve_run_preferences", lambda row, resolved: object())
+    monkeypatch.setattr(
+        tasks.app_settings, "resolve_effective_llm_api_key", lambda row, resolved: ""
+    )
+    monkeypatch.setattr(tasks.app_settings, "llm_bundled_active", lambda row, resolved: False)
+    monkeypatch.setattr(tasks, "apply_run_preferences", lambda *args, **kwargs: ctx)
+    monkeypatch.setattr(tasks, "build_stage_fns", lambda applied: post_fns)
+    retry_calls: list[dict[str, object]] = []
+
+    def retry(**kwargs: object) -> None:
+        retry_calls.append(kwargs)
+        raise Retry()
+
+    monkeypatch.setattr(tasks.finish_pipeline, "retry", retry)
+    monkeypatch.setattr(
+        tasks.run_pipeline,
+        "retry",
+        lambda **kwargs: pytest.fail("GPU task must not own a post-stage retry"),
+    )
+
+    with pytest.raises(Retry):
+        tasks.finish_pipeline.run(str(run_id))
+    assert len(retry_calls) == 1
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        assert run.status == RunStatus.QUEUED.value
+        assert run.current_stage == Stage.ENHANCE_MATCH.value

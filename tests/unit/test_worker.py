@@ -1,9 +1,19 @@
+import pytest
+
 from voxint.clients.errors import ProtocolError, ServiceError
 from voxint.config import Settings
-from voxint.db.models import Stage
+from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, Stage
 from voxint.pipeline.engine import StageFailedError
-from voxint.worker.app import app, build_beat_schedule
-from voxint.worker.tasks import backoff_seconds, gc_sweep, notify_sweep, retryable_cause
+from voxint.worker.app import POST_QUEUE, app, build_beat_schedule
+from voxint.worker.tasks import (
+    backoff_seconds,
+    finish_pipeline,
+    gc_sweep,
+    notify_sweep,
+    pipeline_task_for_stage,
+    retryable_cause,
+    run_pipeline,
+)
 
 
 def test_worker_reliability_settings() -> None:
@@ -12,6 +22,40 @@ def test_worker_reliability_settings() -> None:
     assert "voxint.worker.tasks" in app.conf.include
     assert app.conf.broker_transport_options["visibility_timeout"] >= 21600
     assert "recovery-sweep" in app.conf.beat_schedule
+    assert app.conf.task_default_queue == "celery"
+    assert {queue.name for queue in app.conf.task_queues} == {"celery", POST_QUEUE}
+    assert app.conf.task_routes == {
+        "voxint.finish_pipeline": {"queue": POST_QUEUE},
+        "voxint.generate_run_asset": {"queue": POST_QUEUE},
+        "voxint.research_speaker": {"queue": POST_QUEUE},
+    }
+
+
+def test_pipeline_task_for_stage_routes_both_segments() -> None:
+    assert pipeline_task_for_stage(None) is run_pipeline
+    assert all(pipeline_task_for_stage(stage) is run_pipeline for stage in GPU_SEGMENT)
+    assert all(pipeline_task_for_stage(stage) is finish_pipeline for stage in POST_SEGMENT)
+
+
+def test_publish_finish_defers_only_broker_errors(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    import uuid
+
+    from celery.exceptions import OperationalError
+
+    import voxint.worker.tasks as tasks_mod
+
+    def broker_down(args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OperationalError("broker down")
+
+    monkeypatch.setattr(tasks_mod.finish_pipeline, "apply_async", broker_down)
+    assert tasks_mod._publish_finish_or_defer(uuid.uuid4()) is False
+
+    def bug(args, **kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("publisher bug")
+
+    monkeypatch.setattr(tasks_mod.finish_pipeline, "apply_async", bug)
+    with pytest.raises(RuntimeError, match="publisher bug"):
+        tasks_mod._publish_finish_or_defer(uuid.uuid4())
 
 
 def test_gc_sweep_beat_entry_is_opt_in() -> None:

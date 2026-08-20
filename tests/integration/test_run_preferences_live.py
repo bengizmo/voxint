@@ -165,6 +165,7 @@ def test_run_pipeline_reapplies_settings_each_invocation(
         stage_fns: dict[Stage, object],
         *,
         settings: object = None,
+        stages: object = None,
     ) -> object:
         # partial(transcribe.run, ctx) — arg 0 is the applied StageContext.
         captured.append(stage_fns[Stage.TRANSCRIBE].args[0])  # type: ignore[attr-defined]
@@ -207,7 +208,7 @@ def test_run_pipeline_closes_per_run_llm_client(
     monkeypatch.setattr(
         worker_tasks,
         "execute_run",
-        lambda factory, run_id, stage_fns, *, settings=None: SimpleNamespace(
+        lambda factory, run_id, stage_fns, *, settings=None, stages=None: SimpleNamespace(
             status=RunStatus.COMPLETED
         ),
     )
