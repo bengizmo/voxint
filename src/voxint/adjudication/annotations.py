@@ -97,6 +97,7 @@ __all__ = [
     "list_tags",
     "live_annotation_or_404",
     "load_covered_segments",
+    "normalize_note",
     "reanchor_annotation",
     "refresh_annotation",
     "resolve_annotation_spans",
@@ -659,6 +660,15 @@ def _normalize_note(note: str | None) -> str | None:
             f"note is {len(note)} code points, exceeds {MAX_ANNOTATION_NOTE_CHARS}"
         )
     return note
+
+
+def normalize_note(note: str | None) -> str | None:
+    """Public seam over :func:`_normalize_note` for the live pull-quote export route
+    (issue #86): the live endpoint has no ``capture_annotation`` call to run the note
+    through, so it validates the posted note here to enforce the SAME cap (422 over
+    ``MAX_ANNOTATION_NOTE_CHARS``) and blank-to-``None`` collapse as create/update,
+    keeping the documented create-parity honest."""
+    return _normalize_note(note)
 
 
 def _resolve_tag_ids(session: Session, tag_ids: list[uuid.UUID]) -> list[uuid.UUID]:
@@ -1348,11 +1358,15 @@ def _project_interval_to_lines(
     p1: int,
     parent_lines: list[tuple[int, TranscriptLine]],
     grid: _WordGrid | None,
-) -> list[ResolvedSpan]:
+) -> list[ResolvedSpan] | None:
     """Map a parent-effective code-point interval ``[p0, p1)`` onto the render
     lines of that parent. An unsplit line's text IS the effective text (1:1); a
     split child covers a contiguous parent-offset window ``[A, B)`` (linear map,
-    slope 1), so the overlap projects back to child-local by subtracting ``A``."""
+    slope 1), so the overlap projects back to child-local by subtracting ``A``.
+
+    Returns ``None`` if a split child is met without a word grid — a broken
+    invariant (a split child exists only for a word-eligible parent), signalled up
+    so the caller degrades the anchor to stale rather than raising on a read path."""
     spans: list[ResolvedSpan] = []
     for line_index, ln in parent_lines:
         if ln.word_start is None or ln.word_end is None:
@@ -1361,8 +1375,11 @@ def _project_interval_to_lines(
             if start < end:
                 spans.append(ResolvedSpan(line_index, start, end))
             continue
-        # Split child: its stripped text spans parent offsets [A, B).
-        assert grid is not None  # a split child exists only for a word-eligible parent
+        # Split child: its stripped text spans parent offsets [A, B). A split child
+        # exists only for a word-eligible parent, so the grid is present; guard
+        # rather than assert so a broken invariant degrades to stale, not a 500.
+        if grid is None:
+            return None
         a = _child_local_to_parent_offset(grid, ln.word_start, ln.word_end, 0)
         b = a + len(ln.text)
         start = max(p0, a)
@@ -1467,7 +1484,14 @@ def resolve_annotation_spans(
 
         spans: list[ResolvedSpan] = []
         if not stale:
-            spans = _resolve_live_spans(anc, span, lines_by_parent, grid_for)
+            live_spans = _resolve_live_spans(anc, span, lines_by_parent, grid_for)
+            if live_spans is None:
+                # A stored index no longer fits the current token grid — a broken
+                # invariant, not reachable under an identical source hash. Degrade to
+                # stale (no spans) so a read route answers 409/omits, never a 500.
+                stale = True
+            else:
+                spans = live_spans
 
         results.append(
             ResolvedAnnotation(
@@ -1490,11 +1514,15 @@ def _resolve_live_spans(
     span: list[CoveredSegment],
     lines_by_parent: dict[uuid.UUID, list[tuple[int, TranscriptLine]]],
     grid_for: Any,
-) -> list[ResolvedSpan]:
+) -> list[ResolvedSpan] | None:
     """Per-parent interval projection for a non-stale anchor. word_range and
     text_range compute a code-point interval per covered parent (whole middles,
     the endpoint's offset at each end) and project it onto that parent's lines;
-    segment_range highlights each covered line whole."""
+    segment_range highlights each covered line whole.
+
+    Returns ``None`` if a stored index no longer fits the current token grid (a
+    broken invariant, unreachable under an identical source hash): the caller
+    degrades the anchor to stale, so a read route answers cleanly instead of 500ing."""
     n = len(span)
     spans: list[ResolvedSpan] = []
     for j, cs in enumerate(span):
@@ -1510,8 +1538,11 @@ def _resolve_live_spans(
         grid = grid_for(cs)
         effective_len = len(cs.effective)
         if anc.anchor_kind == WORD_RANGE:
-            assert anc.start_word_index is not None and anc.end_word_index is not None
-            assert grid is not None
+            # A non-stale word_range implies every covered parent kept word
+            # eligibility (grid built) and stored indices still in range; guard
+            # rather than assert/index so a broken invariant degrades to stale.
+            if anc.start_word_index is None or anc.end_word_index is None or grid is None:
+                return None
             token_count = len(grid.content_start)
             if n == 1:
                 w0, w1 = anc.start_word_index, anc.end_word_index
@@ -1521,9 +1552,12 @@ def _resolve_live_spans(
                 w0, w1 = 0, anc.end_word_index
             else:
                 w0, w1 = 0, token_count
+            if not (0 <= w0 < w1 <= token_count):
+                return None
             p0, p1 = _word_interval(grid, w0, w1)
         else:  # TEXT_RANGE
-            assert anc.start_char_offset is not None and anc.end_char_offset is not None
+            if anc.start_char_offset is None or anc.end_char_offset is None:
+                return None
             if n == 1:
                 p0, p1 = anc.start_char_offset, anc.end_char_offset
             elif j == 0:
@@ -1533,5 +1567,8 @@ def _resolve_live_spans(
             else:
                 p0, p1 = 0, effective_len
 
-        spans.extend(_project_interval_to_lines(p0, p1, parent_lines, grid))
+        projected = _project_interval_to_lines(p0, p1, parent_lines, grid)
+        if projected is None:
+            return None
+        spans.extend(projected)
     return spans

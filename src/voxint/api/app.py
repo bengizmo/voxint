@@ -68,6 +68,7 @@ from voxint.adjudication.annotations import (
     list_tags,
     live_annotation_or_404,
     load_covered_segments,
+    normalize_note,
     reanchor_annotation,
     refresh_annotation,
     resolve_annotation_spans,
@@ -5219,6 +5220,7 @@ def _register_routes(app: FastAPI) -> None:
         )
         try:
             tag_names = resolve_tag_names(session, list(tags) if tags else [])
+            normalized_note = normalize_note(note)
             derived, covered = derive_live_anchor(session, run_id, payload)
         except AnnotationError as exc:
             raise _annotation_http_error(exc) from exc
@@ -5230,7 +5232,7 @@ def _register_routes(app: FastAPI) -> None:
             lines,
             source_title=_run_source_title(run),
             tags=tag_names,
-            note=note,
+            note=normalized_note,
         )
         return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
 

@@ -25,6 +25,7 @@ from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_ANNOTATION_TAGS, mint_csrf_token
 from voxint.config import Settings
 from voxint.db.models import (
+    MAX_ANNOTATION_NOTE_CHARS,
     MediaItem,
     PipelineRun,
     RunStatus,
@@ -978,4 +979,19 @@ def test_live_pull_quote_forged_segment_404(
         data=_live_form(uuid.uuid4(), 6, 11, "world"),
     )
     assert resp.status_code == 404
+
+
+def test_live_pull_quote_over_cap_note_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Create-parity: the live route must enforce the same note cap as create
+    # (via normalize_note), so an over-cap note is 422 and nothing is written —
+    # never a full-length quote returned (issue #86 review fix).
+    run_id, segs = seed_word_run(session_factory)
+    resp = client.post(
+        f"/review/{run_id}/annotations/export/live.md",
+        data=_live_form(segs[0], 6, 11, "world", note="x" * (MAX_ANNOTATION_NOTE_CHARS + 1)),
+    )
+    assert resp.status_code == 422, resp.text
+    assert _count_annotations(session_factory, run_id) == 0
 

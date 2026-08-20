@@ -132,7 +132,12 @@ export function sortAnnotations(
     const as = a.spans[0]?.start ?? 0;
     const bs = b.spans[0]?.start ?? 0;
     if (as !== bs) return as - bs;
-    return a.id.localeCompare(b.id);
+    // Ordinal (code-point) id compare, NOT localeCompare: the server tiebreak is
+    // Python `str(annotation_id)` tuple ordering, a fixed code-point compare. A
+    // locale-sensitive compare could order two same-line/offset highlights
+    // differently than the bulk export, desyncing the panel from "Copy all".
+    if (a.id === b.id) return 0;
+    return a.id < b.id ? -1 : 1;
   });
 }
 

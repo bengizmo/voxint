@@ -8,6 +8,7 @@ whitespace, reverse selections, emoji/combining marks, words-NULL degrade). The
 hash has golden and framing-sensitivity pins.
 """
 
+import dataclasses
 import uuid
 from typing import Any
 
@@ -768,6 +769,24 @@ def test_resolve_word_range_lost_eligibility_is_stale() -> None:
     lines = _lines_from_covered(corrected)
     [r] = resolve_annotation_spans(lines, corrected, [stored])
     assert r.stale and r.spans == ()
+
+
+def test_resolve_word_index_out_of_grid_degrades_to_stale_not_500() -> None:
+    # Defensive: a stored word index that no longer fits the current token grid is a
+    # broken invariant (unreachable under an identical source hash, since identical
+    # text tokenizes identically). The read resolver must degrade it to stale with no
+    # spans rather than IndexError-ing into a 500 on a read route (issue #86 review).
+    seg = _seg3()
+    cov = [_covered(seg)]
+    d = derive_anchor(cov, CapturePayload(_ep(seg, 6), _ep(seg, 11), "world"))
+    # Keep the source hash intact (so it is NOT stale by hash) but push end_word_index
+    # past the 3-token grid — the exact case the old `assert`/direct-index would crash.
+    stored = dataclasses.replace(_stored(d), end_word_index=99)
+    lines = _lines_from_covered(cov)
+    [r] = resolve_annotation_spans(lines, cov, [stored])
+    assert r.stale
+    assert r.spans == ()
+    assert r.locator_line_index == 0
 
 
 def test_resolve_speakers_are_live_not_captured() -> None:

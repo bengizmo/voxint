@@ -136,6 +136,20 @@ describe("sortAnnotations", () => {
     sortAnnotations(input);
     expect(input.map((a) => a.id)).toEqual(["b", "a"]);
   });
+
+  it("breaks id ties by ordinal code point, matching the server's str(id)", () => {
+    // Same line + offset: the tiebreak must be an ordinal (code-point) compare, not
+    // a locale-sensitive one, so it matches Python's `str(annotation_id)` tuple order
+    // and the panel can never disagree with the bulk export. Ids chosen to cross the
+    // digit/letter boundary ('9' 0x39 < 'a' 0x61), the case a locale compare can bend.
+    const span = [{ lineIndex: 0, start: 0, end: 1 }];
+    const order = sortAnnotations([
+      annotation({ id: "a0000000-0000-0000-0000-000000000000", spans: span }),
+      annotation({ id: "90000000-0000-0000-0000-000000000000", spans: span }),
+      annotation({ id: "10000000-0000-0000-0000-000000000000", spans: span }),
+    ]).map((a) => a.id[0]);
+    expect(order).toEqual(["1", "9", "a"]);
+  });
 });
 
 describe("filterByTags", () => {
