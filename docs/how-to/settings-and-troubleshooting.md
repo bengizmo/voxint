@@ -77,7 +77,9 @@ The optional features are:
 - **Use the bundled local model**: routes transcript enhancement and run-asset
   summaries + entities to a local model that ships with Voxint, so they work
   with **no external API key**. It powers only those; topics, web research, and
-  LLM name suggestions still need your own endpoint. Needs LLM enhancement on and
+  LLM name suggestions still need your own endpoint. If you configure both the
+  bundled model and your own endpoint, topics run on your endpoint automatically.
+  Needs LLM enhancement on and
   the bundled model service running (the `compose.llm.yaml` overlay; see
   [setup.md](../setup.md#optional-bundled-local-llm-no-api-key)).
 - **Auto-generate run assets**: starts that run-asset generation automatically
