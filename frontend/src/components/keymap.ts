@@ -18,6 +18,7 @@ export const REVIEW_KEY = {
   next: "j",
   previous: "k",
   resetSpeaker: "0",
+  annotate: "h",
   help: "?",
 } as const;
 
@@ -88,6 +89,7 @@ export const REVIEW_SHORTCUTS: readonly ReviewShortcut[] = [
         : "Assign this segment to a speaker (no speakers on this run yet)",
   },
   { keys: REVIEW_KEY.resetSpeaker, desc: "Reset this segment to its detected speaker" },
+  { keys: REVIEW_KEY.annotate, desc: "Highlight the selected transcript text" },
   { keys: REVIEW_KEY.help, desc: "Show this list of shortcuts" },
 ];
 

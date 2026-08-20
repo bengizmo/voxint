@@ -5,6 +5,7 @@ import {
   useImperativeHandle,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 
 import {
@@ -15,6 +16,8 @@ import {
   type PlaybackCapability,
 } from "../lib/playback";
 import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
+import { type AnnotationLineSpan } from "../lib/annotations";
+import { sliceByCodePoints } from "../lib/selection";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
 
@@ -111,6 +114,47 @@ export interface Segment {
   rawText: string | null;
 }
 
+// Paint a line's text with its annotation highlights (issue #86). A sweep over the
+// spans' boundaries emits a <mark class="hl-N"> for every covered elementary
+// interval and a bare string for every gap, so the concatenation is byte-identical
+// to `text` (selection offsets never drift) and overlapping highlights paint the
+// LATER color deterministically without ever duplicating a character.
+function renderAnnotatedText(
+  text: string,
+  spans: AnnotationLineSpan[],
+): ReactNode {
+  const len = Array.from(text).length;
+  const cuts = new Set<number>([0, len]);
+  for (const s of spans) {
+    cuts.add(Math.max(0, Math.min(s.start, len)));
+    cuts.add(Math.max(0, Math.min(s.end, len)));
+  }
+  const points = [...cuts].sort((a, b) => a - b);
+  const pieces: ReactNode[] = [];
+  for (let k = 0; k + 1 < points.length; k += 1) {
+    const a = points[k];
+    const b = points[k + 1];
+    if (a === b) continue;
+    const piece = sliceByCodePoints(text, a, b);
+    // The last span covering this interval wins, so a highlight added later paints
+    // over an earlier one rather than the two fighting for the same characters.
+    let color: number | null = null;
+    for (const s of spans) {
+      if (s.start <= a && s.end >= b) color = s.colorIndex;
+    }
+    if (color === null) {
+      pieces.push(piece);
+    } else {
+      pieces.push(
+        <mark key={k} className={`hl-${color}`}>
+          {piece}
+        </mark>,
+      );
+    }
+  }
+  return pieces;
+}
+
 // One word token of a segment (issue #59), from the lazy `/words` endpoint. The
 // server names the string field `word`; timings are seconds into the media.
 export interface SplitWord {
@@ -170,6 +214,15 @@ export interface TranscriptPlayerProps {
   reassignSpeakers?: { id: string; displayName: string }[];
   onReassign?: (seg: Segment, speakerId: string | null) => void;
   reassignBusy?: boolean;
+  // Operator annotation layer (issue #86). annotationSpans maps a line index to the
+  // resolved highlight ranges painted on it; staleLocators is the set of line
+  // indices carrying a stale annotation's approximate locator chip (which gets no
+  // marks, since its text has moved). onTextSelect fires on mouseup so a driver
+  // (ReviewStepper) can read the current selection and offer the annotate toolbar.
+  // All absent on the read-only transcript surface, which stays byte-identical.
+  annotationSpans?: Map<number, AnnotationLineSpan[]>;
+  staleLocators?: Set<number>;
+  onTextSelect?: () => void;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -232,6 +285,9 @@ export const TranscriptPlayer = forwardRef<
     reassignSpeakers,
     onReassign,
     reassignBusy,
+    annotationSpans,
+    staleLocators,
+    onTextSelect,
   },
   ref,
 ) {
@@ -365,6 +421,23 @@ export const TranscriptPlayer = forwardRef<
     };
   }, [peaksUrl]);
 
+  // Operator annotation selection (issue #86): a driver that passes onTextSelect is
+  // notified on every mouseup so it can read the current window selection and open
+  // the annotate toolbar. Gated on the prop so the read-only surface adds no
+  // listener. The Selection/Range resolution and the code-unit ↔ code-point math
+  // live in lib/selection.ts — this effect only forwards the "selection may have
+  // changed" signal.
+  useEffect(() => {
+    if (!onTextSelect) return;
+    const onMouseUp = () => {
+      onTextSelect();
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+  }, [onTextSelect]);
+
   const seek = capability.seekEnabled;
   const play = (seg: Segment) => {
     const audio = audioRef.current;
@@ -496,6 +569,13 @@ export const TranscriptPlayer = forwardRef<
               key={`${seg.sourceSegmentId ?? "x"}-${seg.wordStart ?? "u"}-${seg.wordEnd ?? "u"}-${seg.start}-${i}`}
               ref={active ? activeLineRef : undefined}
               data-seg-index={i}
+              // Selection anchors for the annotation layer (issue #86): the
+              // IMMUTABLE parent id every capture endpoint addresses, plus the
+              // split child's word range when this line is one. selection.ts reads
+              // these off the line the Range boundary lands in.
+              data-seg-id={seg.sourceSegmentId ?? undefined}
+              data-word-start={seg.wordStart ?? undefined}
+              data-word-end={seg.wordEnd ?? undefined}
               className={classes.join(" ")}
               aria-current={active ? "true" : undefined}
               // Click-the-line-to-seek (issue #49). Only a hint when seeking is
@@ -564,7 +644,25 @@ export const TranscriptPlayer = forwardRef<
                   ))}
                 </span>
               ) : (
-                seg.text
+                // [data-seg-text] is the stable anchor selection.ts walks to for a
+                // code-point offset; the wrapper's text stays byte-identical to
+                // seg.text whether or not it carries highlight marks.
+                <span data-seg-text>
+                  {(() => {
+                    const lineSpans = annotationSpans?.get(i);
+                    return lineSpans && lineSpans.length > 0
+                      ? renderAnnotatedText(seg.text, lineSpans)
+                      : seg.text;
+                  })()}
+                </span>
+              )}
+              {staleLocators?.has(i) && (
+                <span
+                  className="hl-stale-locator"
+                  title="A highlight anchored near here is stale; the text it covered has changed. Re-anchor or refresh it from the Highlights panel."
+                >
+                  stale highlight ≈ here
+                </span>
               )}
               {onReassign != null &&
                 reassignSpeakers != null &&

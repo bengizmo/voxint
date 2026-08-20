@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  FALLBACK_ANNOTATION_LIMITS,
+  type AnnotationLimits,
+  type AnnotationShape,
+  type AnnotationTagShape,
+} from "../lib/annotations";
 import { ApiError, apiFetch } from "../lib/api-client";
+import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
+import { useAnnotations } from "./AnnotationLayer";
 import { KeymapHelp } from "./KeymapHelp";
 import {
   ASSIGN_DIGIT_MAX,
@@ -46,17 +54,15 @@ export interface ReviewStepperProps {
   // (a run with no pack, or a pack with no corrections, sends []). Computed once
   // server-side over the immutable raw_text — never recomputed on the client.
   reconciliation: ReconciliationEntry[];
-}
-
-// A fresh idempotency nonce for a /relabel write (issue #59 slice 3). Uses
-// crypto.getRandomValues — NOT crypto.randomUUID — deliberately: this is a
-// self-hosted tool an operator may reach over plain HTTP on a LAN, where
-// randomUUID (secure-context only) is undefined, while getRandomValues works
-// everywhere. 16 bytes → a 32-char hex string, inside the route's [8, 64] bound.
-function makeNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  // Operator annotation layer (issue #86). The run's existing annotations + the
+  // global tag list (both the byte-identical GET /review/{id}/annotations shape),
+  // the server-enforced caps the toolbar mirrors, and the per-action CSRF token for
+  // creating a global tag. Reads hydrate for every viewer; creation is claim-gated
+  // client-side. Defaulted so a props payload without them simply shows no layer.
+  annotations?: AnnotationShape[];
+  annotationTags?: AnnotationTagShape[];
+  annotationLimits?: AnnotationLimits;
+  tagCsrf?: string | null;
 }
 
 // A segment is a REVIEW TARGET when it is the queue entry for its parent and is
@@ -111,6 +117,12 @@ export function ReviewStepper({
   // Default to empty: only the review route computes reconciliation, and a defensive
   // default keeps the panel simply absent (never a crash) if a props payload omits it.
   reconciliation = [],
+  // Annotation layer (issue #86): defaulted so an older props payload just shows an
+  // empty layer rather than crashing. The review route always sends real values.
+  annotations: initialAnnotations = [],
+  annotationTags: initialAnnotationTags = [],
+  annotationLimits = FALLBACK_ANNOTATION_LIMITS,
+  tagCsrf = null,
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
   // the (pure) player. Verify/correct responses patch this array in place.
@@ -175,6 +187,9 @@ export function ReviewStepper({
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
+  // The annotation layer resolves a text selection relative to this root (an
+  // ancestor of the transcript lines); attached to the outer div below.
+  const annotationRootRef = useRef<HTMLDivElement>(null);
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
@@ -669,6 +684,34 @@ export function ReviewStepper({
     [postForm, runId, focusParentId, isSplitParent, speakers],
   );
 
+  // A claim-loss during an annotation write bubbles here so the whole surface stops
+  // as one, exactly as a verify/correct claim loss would.
+  const onAnnotationClaimLost = useCallback(() => setClaimLost(true), []);
+
+  // Operator annotation layer (issue #86): owns the highlights/tags state, the
+  // selection toolbar, and the Highlights panel. It feeds the player its per-line
+  // highlight spans + stale locators + the mouseup selection signal, and jumps
+  // reuse the same goTo the review loop uses.
+  const {
+    spansByLine: annotationSpans,
+    staleLines: annotationStaleLines,
+    captureSelection: annotationCapture,
+    annotateFromKeyboard: annotateHotkey,
+    toolbar: annotationToolbar,
+    panel: annotationPanel,
+  } = useAnnotations({
+    runId,
+    reviewToken,
+    writable,
+    rootRef: annotationRootRef,
+    initialAnnotations,
+    initialTags: initialAnnotationTags,
+    limits: annotationLimits,
+    tagCsrf,
+    onJump: goTo,
+    onClaimLost: onAnnotationClaimLost,
+  });
+
   // Global keymap — typing-guarded. No firing when focus is in an input/textarea
   // or with modifiers; Space and the scroll arrows are deliberately left to the
   // native <audio> and the player's own scroll handling (never rebound here).
@@ -747,6 +790,12 @@ export function ReviewStepper({
           event.preventDefault();
           setHelpOpen(true);
           break;
+        case REVIEW_KEY.annotate:
+          // Highlight the selected transcript text (issue #86). An honest no-op
+          // status shows when nothing is selected — the toolbar needs a selection.
+          event.preventDefault();
+          annotateHotkey();
+          break;
         default:
           // Digit-assign (issue #51): 1–9 → the Nth roster speaker. Only fires on
           // a real roster slot, so a run with fewer speakers never writes a
@@ -778,6 +827,7 @@ export function ReviewStepper({
     segments,
     reassignSegment,
     speakers,
+    annotateHotkey,
   ]);
 
   const done = remaining === 0;
@@ -806,7 +856,7 @@ export function ReviewStepper({
   ).length;
 
   return (
-    <div>
+    <div ref={annotationRootRef}>
       {/* The unclaimed notice is server-rendered OUTSIDE this island (the
           template owns it, JS on or off) — rendering a copy here doubled it up
           after hydration (review finding). */}
@@ -909,6 +959,10 @@ export function ReviewStepper({
           >
             ⌨ Shortcuts <kbd>{REVIEW_KEY.help}</kbd>
           </button>
+          {/* Annotation selection toolbar (issue #86): rendered by the layer only
+              while a transcript selection (or an edit) is active. Select text — or
+              press `h` — to highlight it; no Copy (export is Landing 2). */}
+          {annotationToolbar}
           {current && current.segmentId !== null && (
             <div>
               <p className="muted text-sm">
@@ -1235,7 +1289,17 @@ export function ReviewStepper({
           writable ? (seg, speakerId) => void reassignChild(seg, speakerId) : undefined
         }
         reassignBusy={busy}
+        // Operator annotation layer (issue #86): per-line highlight spans + stale
+        // locator lines to paint, and the mouseup selection signal (only when this
+        // tab holds the claim — the read-only surface gets no listener).
+        annotationSpans={annotationSpans}
+        staleLocators={annotationStaleLines}
+        onTextSelect={writable ? annotationCapture : undefined}
       />
+      {/* Highlights panel (issue #86): read for every viewer; the mutating actions
+          render only when this tab holds the claim. Placed after the transcript so
+          "Jump" moves the cursor into the list above. */}
+      {annotationPanel}
     </div>
   );
 }

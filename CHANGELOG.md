@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Operator annotation layer for the review console (#86).** An operator can now
+  select a span of transcript text and save it as a highlight in one of six
+  colors, with optional flat tags and a margin note. A Highlights panel lists
+  every annotation in transcript order with a tag filter (any selected tag
+  matches), and each row jumps to and plays its place in the transcript. The `h`
+  shortcut highlights the current selection, and says so honestly when nothing is
+  selected. Speaker and timing on each highlight are read live from the current
+  transcript so they stay correct as the review changes; timing is labeled
+  approximate when a span cannot be tied to exact word times. When an edit moves
+  the text a highlight covered, the highlight is marked stale (no colored mark,
+  just an approximate locator where it was) and can be refreshed if the wording
+  returns or re-anchored to a fresh selection. Creating and editing highlights
+  needs the console; with JavaScript off the review page shows a read-only list of
+  the existing highlights. Exporting highlights is not part of this release.
 - **YAML sidecar metadata for watch-folder media (#104).** A recording dropped
   into a watched folder can arrive with a companion sidecar file
   (`interview.wav.yaml`, or `interview.yaml` when the stem is unambiguous; the

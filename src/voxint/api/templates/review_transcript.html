@@ -62,6 +62,33 @@
     {% endif %}
   </p>
   {% endfor %}
+  {# Highlights fallback (issue #86): a read-only list of the run's annotations for
+     JS-off / pre-hydration. Sits INSIDE the island wrapper, so hydration replaces
+     it with the interactive Highlights panel. Creating and editing highlights
+     needs the island — stated honestly, never faked. #}
+  {% if island_props.annotations %}
+  <section class="highlights-fallback" aria-label="Highlights">
+    <h2>Highlights ({{ island_props.annotations|length }})</h2>
+    <p class="muted">Read-only list. Creating and editing highlights needs JavaScript.</p>
+    <ul>
+      {% for a in island_props.annotations %}
+      <li>
+        <span class="hl-swatch hl-{{ a.colorIndex }}" aria-hidden="true"></span>
+        <span class="muted">
+          {%- if a.startSeconds is not none and a.endSeconds is not none -%}
+            {% if a.timingPrecision != "exact" %}≈ {% endif %}{{ "%.2f"|format(a.startSeconds) }}–{{ "%.2f"|format(a.endSeconds) }}s
+          {%- else -%}timing unavailable{%- endif -%}
+        </span>
+        {% if a.speakers %}<span class="spk-badge">{{ a.speakers|join(", ") }}</span>{% endif %}
+        {% if a.stale %}<span class="hl-stale-locator">stale</span>{% endif %}
+        <blockquote class="highlight-quote">“{{ a.quote }}”</blockquote>
+        {% if a.tags %}<span class="highlight-tags">{% for t in a.tags %}<span class="tag-pill hl-{{ t.color }}">{{ t.name }}</span>{% endfor %}</span>{% endif %}
+        {% if a.note %}<p class="highlight-note">{{ a.note }}</p>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
 </div>
 {% endif %}
 {% endblock %}

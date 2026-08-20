@@ -75,6 +75,20 @@
       --splitword-rgb: 245 158 11;  /* split-word hover — bg-splitword/30 */
       --wave-neutral: #88888c;      /* waveform bars/strokes with no speaker turn */
 
+      /* Operator annotation highlight palette (issue #86). Six functional tint
+         channels, theme-agnostic like --seg-rgb: mark.hl-N paints them at a low
+         alpha so the ink keeps AA contrast on BOTH paper and dark ground (the
+         one definition; a future per-theme tune would add them to both dark
+         blocks and this parity is contract-tested). Pinned across the backend
+         HIGHLIGHT_PALETTE_SIZE and the mark.hl-N rules by
+         test_highlight_palette_parity. */
+      --hl-0-rgb: 240 208 92;   /* yellow  */
+      --hl-1-rgb: 126 205 140;  /* green   */
+      --hl-2-rgb: 122 184 240;  /* blue    */
+      --hl-3-rgb: 240 150 194;  /* pink    */
+      --hl-4-rgb: 242 168 104;  /* orange  */
+      --hl-5-rgb: 190 160 235;  /* purple  */
+
       /* Status vars reference tokens so they re-theme with one dark block */
       --uncertain: var(--warn);     /* low-confidence dashed underline + chip (#53) */
       --corrected: var(--ok);       /* domain-pack correction chip (#83) */
@@ -441,6 +455,80 @@
                border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
                margin-left: .5rem; }
     .minibar > span { display: block; height: 100%; background: var(--accent); opacity: .55; }
+    /* Operator annotation layer (issue #86). A highlight mark paints one of the six
+       --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
+       `color: inherit` keeps the segment's own text color. The swatches and tag
+       pills reuse the same channels (opaque for a swatch, tinted for a pill) so one
+       token layer drives the mark, the picker, and the panel. */
+    mark.hl-0, mark.hl-1, mark.hl-2, mark.hl-3, mark.hl-4, mark.hl-5 {
+      color: inherit; border-radius: .15em; padding: 0 .05em; }
+    mark.hl-0 { background: rgb(var(--hl-0-rgb) / .34); }
+    mark.hl-1 { background: rgb(var(--hl-1-rgb) / .34); }
+    mark.hl-2 { background: rgb(var(--hl-2-rgb) / .34); }
+    mark.hl-3 { background: rgb(var(--hl-3-rgb) / .34); }
+    mark.hl-4 { background: rgb(var(--hl-4-rgb) / .34); }
+    mark.hl-5 { background: rgb(var(--hl-5-rgb) / .34); }
+    /* Stale locator chip: a highlight whose text moved gets NO mark, just this
+       approximate "it was near here" pointer at its old start line (honest UX). */
+    .hl-stale-locator { font-size: .68rem; letter-spacing: .02em; color: var(--ink-3);
+                 border: 1px dashed var(--line-strong); border-radius: var(--r-sm);
+                 padding: 0 .35rem; margin-left: .4rem; white-space: nowrap; }
+    /* Colour swatches (toolbar picker). Square, opaque tint; the selected one gets
+       a ring. Reset from the base button chrome via the (0,1,0) class. */
+    .hl-swatches { display: inline-flex; gap: .3rem; vertical-align: middle; }
+    .hl-swatch { display: inline-block; width: 1.1rem; height: 1.1rem; padding: 0;
+                 border-radius: var(--r-sm); border: 1px solid var(--line-strong); cursor: pointer; }
+    .hl-swatch.hl-0 { background: rgb(var(--hl-0-rgb)); }
+    .hl-swatch.hl-1 { background: rgb(var(--hl-1-rgb)); }
+    .hl-swatch.hl-2 { background: rgb(var(--hl-2-rgb)); }
+    .hl-swatch.hl-3 { background: rgb(var(--hl-3-rgb)); }
+    .hl-swatch.hl-4 { background: rgb(var(--hl-4-rgb)); }
+    .hl-swatch.hl-5 { background: rgb(var(--hl-5-rgb)); }
+    .hl-swatch.is-selected { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+    /* Tag pills — both the toolbar toggles and the panel labels. A bare pill is
+       neutral; .hl-N tints it. .is-selected marks an active toggle/filter. */
+    .tag-pill { display: inline-block; border-radius: var(--r-full); padding: .05rem .55rem;
+                margin: .15rem .3rem .15rem 0; font-size: var(--t-xs);
+                border: 1px solid var(--line); background: var(--surface-2); cursor: pointer; }
+    .tag-pill.hl-0 { border-color: rgb(var(--hl-0-rgb)); background: rgb(var(--hl-0-rgb) / .22); }
+    .tag-pill.hl-1 { border-color: rgb(var(--hl-1-rgb)); background: rgb(var(--hl-1-rgb) / .22); }
+    .tag-pill.hl-2 { border-color: rgb(var(--hl-2-rgb)); background: rgb(var(--hl-2-rgb) / .22); }
+    .tag-pill.hl-3 { border-color: rgb(var(--hl-3-rgb)); background: rgb(var(--hl-3-rgb) / .22); }
+    .tag-pill.hl-4 { border-color: rgb(var(--hl-4-rgb)); background: rgb(var(--hl-4-rgb) / .22); }
+    .tag-pill.hl-5 { border-color: rgb(var(--hl-5-rgb)); background: rgb(var(--hl-5-rgb) / .22); }
+    .tag-pill.is-selected { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+    /* Selection toolbar: an inset panel that appears while a selection (or an edit)
+       is active. Tonal, no shadow (elevation is reserved for the header cards). */
+    .annotation-toolbar { background: var(--surface-2); border: 1px solid var(--line);
+                 border-radius: var(--r-md); padding: .7rem .9rem; }
+    .annotation-toolbar p { margin: .2rem 0; }
+    .annotation-quote { font-style: italic; }
+    .annotation-new-tag { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; }
+    .annotation-new-tag input { flex: 1 1 8rem; }
+    /* Highlights panel: the run's annotations in transcript order, read for every
+       viewer; the mutating actions render only for the claim holder. */
+    .highlights-panel { border-top: 1px solid var(--line); padding-top: .8rem; }
+    .highlights-filter { display: flex; flex-wrap: wrap; align-items: center; }
+    .highlights-list { list-style: none; padding: 0; margin: .5rem 0; }
+    .highlight-row { padding: .6rem 0; border-top: 1px solid var(--line);
+                 display: flex; flex-wrap: wrap; gap: .3rem .5rem; align-items: baseline; }
+    .highlight-row:first-child { border-top: 0; }
+    .highlight-row.is-stale { opacity: .85; }
+    .highlight-row .hl-swatch { width: .9rem; height: .9rem; flex: none; align-self: center; }
+    .highlight-time { font-size: var(--t-xs); flex: none; }
+    .highlight-quote { flex-basis: 100%; margin: .2rem 0; padding-left: .6rem;
+                 border-left: 2px solid var(--line-strong); color: var(--ink); }
+    .highlight-tags { flex-basis: 100%; }
+    .highlight-note { flex-basis: 100%; margin: .1rem 0; color: var(--ink-2); }
+    .highlight-stale { flex-basis: 100%; margin: .1rem 0; color: var(--warn); }
+    .highlight-actions { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: .4rem;
+                 margin-top: .2rem; }
+    /* JS-off fallback list of highlights (read-only; creation needs the island). */
+    .highlights-fallback { border-top: 1px solid var(--line); margin-top: 1rem;
+                 padding-top: .8rem; }
+    .highlights-fallback ul { list-style: none; padding: 0; margin: .5rem 0; }
+    .highlights-fallback li { padding: .5rem 0; border-top: 1px solid var(--line); }
+    .highlights-fallback li:first-child { border-top: 0; }
     /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
        desktop screen for the single operator: a keyboard skip-link + main landmark,
        a visible focus ring, wide tables that scroll inside their own container

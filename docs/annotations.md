@@ -224,6 +224,38 @@ CSRF; it enforces the same caps and validation as create.
 Repeated `?tag=` filters are a union (OR), identically in the panel and in
 exports.
 
+## Console surface (Landing 1)
+
+The review console (the `review-stepper` island) is the sole create path.
+Selecting transcript text opens a toolbar with six color swatches, a tag picker
+plus an inline new-tag field, and a note field; the `h` shortcut opens it for
+the current selection, and an empty selection reports that rather than doing
+nothing. Saving POSTs the capture to `/review/{run_id}/annotations`. The server
+owns the anchor, so a client quote that no longer matches comes back as a 409 the
+operator retries; the code-unit to code-point conversion happens once, in
+`frontend/src/lib/selection.ts`, before anything reaches the wire.
+
+Highlights paint as `<mark class="hl-N">` pieces byte-identical to the line text,
+so the marks never alter a character and the DOM selection offsets stay aligned.
+The Highlights panel lists every annotation in transcript order with an OR-union
+tag filter and per-row Jump, Edit, Delete, and, when a highlight is stale,
+Refresh and Re-anchor. Re-anchor reads the current selection as the new anchor.
+Speaker attribution and timing come from the read-time resolution, never the
+captured copy, and timing is labeled approximate when `timing_precision` is not
+`exact`.
+
+A stale annotation drops its inline marks and shows an approximate locator chip
+at its old start line; the panel row still shows the original quote verbatim.
+Creating and editing highlights are island-only. With JavaScript off,
+`review_transcript.html` renders a read-only Highlights list from the same props
+the island hydrates from, so the fallback and the live panel cannot disagree;
+hydration replaces the fallback wholesale. There is no Copy or export in Landing
+1 (that is Landing 2).
+
+The highlight palette size (`HIGHLIGHT_PALETTE_SIZE`) is pinned across the
+backend caps, the `--hl-N` design tokens, and the `mark.hl-N` rules by
+`tests/contracts/test_highlight_palette_parity.py`.
+
 ## Pull-quote formatting
 
 Stored and live pull-quotes build clipped `TranscriptLine` values (line text
