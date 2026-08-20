@@ -677,12 +677,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _celery_visibility_covers_all_leases(self) -> "Settings":
         # acks-late redelivery must not fire while a run is still legitimately
-        # working. run_pipeline is a single task that advances through every
-        # stage, so the visibility horizon has to outlast all stage leases held
-        # back to back. Mirror default_stage_leases() (engine.py) inline —
-        # importing it would cycle config <- engine <- config. ACQUIRE and
-        # DIARIZE_EMBED carry dedicated leases; PREPARE, TRANSCRIBE,
-        # ENHANCE_MATCH and FINALIZE (four stages) each use stage_lease_seconds.
+        # working, so the visibility horizon has to outlast every stage lease a
+        # single task can hold back to back. Since the two-lane split each task
+        # holds at most its own segment's leases (run_pipeline: ACQUIRE through
+        # DIARIZE_EMBED; finish_pipeline: ENHANCE_MATCH + FINALIZE), so the
+        # all-six-stage sum below is a deliberately conservative floor: it stays
+        # valid for both lanes and for any future re-partition with no new
+        # setting. Mirror default_stage_leases() (engine.py) inline — importing
+        # it would cycle config <- engine <- config. ACQUIRE and DIARIZE_EMBED
+        # carry dedicated leases; PREPARE, TRANSCRIBE, ENHANCE_MATCH and
+        # FINALIZE (four stages) each use stage_lease_seconds.
         all_stage_leases = (
             self.acquire_lease_seconds
             + self.diarize_embed_lease_seconds

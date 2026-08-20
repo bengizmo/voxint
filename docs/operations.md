@@ -272,6 +272,27 @@ inference behind a single model lock, so lowering `--concurrency` changes
 scheduling, not the transcription result. On a card with spare VRAM, raise the
 batch and concurrency back up.
 
+`--concurrency=1` on a single worker also serializes the stages that never
+touch the GPU: while one run's LLM enhancement is in flight, the card sits
+idle and the next run cannot start transcribing. The two execution lanes (see
+[architecture.md](architecture.md#execution-lanes-and-queues)) remove that
+cost. Split the worker in the same override: the GPU lane keeps
+`--concurrency=1`, and a second worker drains the `post` queue (LLM
+enhancement, finalize, and the LLM-bound asset/research jobs) concurrently:
+
+```yaml
+services:
+  worker:
+    command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
+  worker-post:
+    # Same image/env/volumes as the worker service; it talks only to the LLM
+    # endpoint and the database, never the GPU services.
+    command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
+```
+
+With no `-Q` flag at all (the stock command), one worker consumes both queues
+and behavior is unchanged; the split is purely a deployment choice.
+
 Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
 lands, tune these settings by hand when the stock overlay runs out of memory.
 

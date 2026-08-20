@@ -65,6 +65,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   DNS and Service scoping, and the coarse `ipBlock` list versus the precise
   `ip_is_public` policy. Documentation only; no behavior change.
 
+### Changed
+- **The pipeline now runs as two execution lanes, so a GPU-serialized
+  deployment no longer idles the card during LLM enhancement.** The six stages
+  are partitioned into a GPU lane (`acquire` through `diarize_embed`, the
+  default `celery` queue, task `voxint.run_pipeline`) and a post lane
+  (`enhance_match` and `finalize`, new `post` queue, new task
+  `voxint.finish_pipeline`). The engine hands a run between lanes with a
+  validated `running -> queued(next stage)` transition committed atomically
+  with the finished stage, so the durable queued row survives any crash or
+  broker outage between the handoff and its publication and the recovery
+  sweep re-publishes it to the correct queue by `current_stage`. The LLM-bound
+  post-run jobs (`voxint.generate_run_asset`, `voxint.research_speaker`) are
+  routed to the `post` queue as well. Default deployments are unchanged: both
+  queues are declared on the Celery app and a worker started without `-Q`
+  consumes both. Deployments that pin the worker to `--concurrency=1` for a
+  shared GPU can now run a second worker on the `post` queue so one run's LLM
+  enhancement overlaps the next run's transcription; see the override recipe
+  in `docs/operations.md`.
+
 ### Fixed
 - **The Markdown transcript export can no longer let transcript text forge
   document structure (#65 follow-up).** The `.md` escaper now defuses a `=`

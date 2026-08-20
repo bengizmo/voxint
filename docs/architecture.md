@@ -22,6 +22,12 @@ should not care about: state transitions, per-stage transactions, attempt
 bookkeeping, and crash recovery. Stage bodies own the science. Celery tasks are
 thin wrappers around the engine, with no orchestration logic hiding in task code.
 
+The stages are partitioned into two execution lanes (see
+[Execution lanes and queues](#execution-lanes-and-queues)): a GPU lane
+(`acquire` through `diarize_embed`) and a post lane (`enhance_match`,
+`finalize`), so a deployment that must serialize GPU work can still overlap one
+run's LLM enhancement with the next run's transcription.
+
 **ACQUIRE** (`STAGE_ORDER[0]`) is the universal first stage: a successful no-op for
 local or uploaded media (`source_url IS NULL`), and a yt-dlp download for URL runs
 (`voxint fetch` / `POST /fetch`). Making it the first stage, rather than a special
@@ -39,19 +45,24 @@ Lost updates are structurally impossible.
 
 ```text
 queued ──▶ running ──▶ completed
-  ▲          │ ▲  │
-  │          │ │  └──▶ awaiting_adjudication ──▶ running   (human pause = DB state)
-  │          │ └──── running (stage advance)
+  ▲ ▲        │ ▲  │
+  │ │        │ │  └──▶ awaiting_adjudication ──▶ running   (human pause = DB state)
+  │ │        │ └──── running (stage advance)
+  │ └────────┤          (lane handoff: running ──▶ queued, parked at the NEXT stage)
   │          ▼
   └──── failed          (requeue is explicit: failed ──▶ queued, keeping current_stage)
 ```
 
 `completed` and `cancelled` are terminal. A requeued run **retries the stage it was
-interrupted in**: earlier stages are not re-run and nothing is skipped.
+interrupted in**: earlier stages are not re-run and nothing is skipped. A
+lane handoff is the one deliberate exception to "queued keeps the stage": the
+stage that just committed is complete, so the run parks queued at its
+**successor**, waiting for the other lane's worker to pick it up.
 
 Validation covers the full `(status, stage)` tuple, not status membership alone: a
 run cannot start at the wrong stage, advance backwards or by more than one stage,
-complete mid-pipeline, or requeue at an unrelated stage.
+complete mid-pipeline, or requeue at an unrelated stage. The handoff transition
+is validated to park at exactly `next_stage(current)`.
 
 ### Stage claims and recovery
 
@@ -67,6 +78,40 @@ healthy worker three hours into a transcription is never robbed), marks the
 interrupted attempt `failed`, and requeues the run through the same transition
 rules. Stage bodies remain at-least-once for non-transactional effects
 (filesystem, GPU services) and must be idempotent.
+
+### Execution lanes and queues
+
+The six stages are partitioned into two lanes (`GPU_SEGMENT` / `POST_SEGMENT`
+in `voxint.db.models`, a contiguous split of `STAGE_ORDER`):
+
+| Lane | Stages | Queue | Task | Bound by |
+|---|---|---|---|---|
+| GPU | `acquire`, `prepare`, `transcribe`, `diarize_embed` | `celery` (default) | `voxint.run_pipeline` | the ASR / diarization / embedding services |
+| Post | `enhance_match`, `finalize` | `post` | `voxint.finish_pipeline` | the LLM endpoint and the database |
+
+Both tasks drive the same engine; each passes its lane as
+`execute_run(stages=...)`. When the GPU lane completes `diarize_embed`, the
+engine commits the finished claim and the `running ──▶ queued(enhance_match)`
+handoff in one transaction, then the task publishes `voxint.finish_pipeline`.
+The durable queued row **is** the handoff: if the worker dies (or the broker is
+down) after the commit but before the publish, the recovery sweep finds a stale
+queued run and re-publishes it, routing by `current_stage` through the shared
+`pipeline_task_for_stage` helper that every publisher (API, CLI, sweep,
+handoff) uses. A task delivered to the wrong lane is a pure no-op: it takes no
+entry CAS and creates no claims.
+
+The LLM-bound post-run jobs (`voxint.generate_run_asset`,
+`voxint.research_speaker`) are also routed to the `post` queue, so they never
+serialize behind GPU work.
+
+Both queues are declared in the Celery app (`task_queues`), and a worker
+started without `-Q` consumes both. The default single-worker deployment
+therefore behaves exactly as before; splitting the lanes is an opt-in
+deployment choice. A deployment whose model services share one GPU runs two
+workers: the GPU lane at `--concurrency=1` (only one run touches the GPU at a
+time) and the post lane at a small concurrency of its own, so the GPU no
+longer idles while a previous run's LLM enhancement is in flight. See
+[operations.md](operations.md) for the override recipe.
 
 ## Data model (alembic revisions 0001–0029)
 

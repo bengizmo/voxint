@@ -38,11 +38,16 @@ Why each link exists:
   `diarization_call + ceil(windows / 512) × embed_call` for your longest media,
   and raise `DIARIZE_EMBED_LEASE_SECONDS` if you routinely process very long
   recordings on a slow tier.
-- **Sum of leases ≤ visibility horizon.** `run_pipeline` is one acks-late
-  Celery task that advances through all six stages. If Redis redelivered it
-  while a worker legitimately held a late stage, a second worker would start
-  the same run from its current stage. The horizon must therefore outlast every
-  lease held back to back (enforced by `_celery_visibility_covers_all_leases`).
+- **Sum of leases ≤ visibility horizon.** The pipeline tasks are acks-late
+  Celery tasks. If Redis redelivered one while a worker legitimately held a
+  late stage, a second worker would start the same run from its current stage.
+  The horizon must therefore outlast every lease a single task can hold back to
+  back (enforced by `_celery_visibility_covers_all_leases`). Since the
+  two-lane split, each task holds at most its own lane's leases
+  (`voxint.run_pipeline`: acquire through diarize_embed;
+  `voxint.finish_pipeline`: enhance_match and finalize), so the enforced
+  all-six-stage floor is deliberately conservative: it stays valid for both
+  lanes and for any future re-partition without new configuration.
 - **acquire is download-bound, not inference-bound.** Its chain
   (`acquire_timeout_seconds` + kill/hash/publish tail < `acquire_lease_seconds`)
   is validated separately and is *not* scaled by compute tier, because network speed

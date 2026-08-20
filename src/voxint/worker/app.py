@@ -71,9 +71,10 @@ app.conf.task_routes = {
     "voxint.research_speaker": {"queue": POST_QUEUE},
 }
 # Acks-late + Redis: an unacked task is redelivered after this horizon, so it
-# must exceed the longest run_pipeline execution. Stage claims make an early
-# redelivery harmless (the duplicate sees an active claim and returns), but a
-# too-small value still churns the queue.
+# must exceed the longest single lane-task execution (run_pipeline or
+# finish_pipeline). Stage claims make an early redelivery harmless (the
+# duplicate sees an active claim and returns), but a too-small value still
+# churns the queue.
 app.conf.broker_transport_options = {
     "visibility_timeout": settings.celery_visibility_timeout_seconds
 }

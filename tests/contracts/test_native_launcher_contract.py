@@ -74,6 +74,9 @@ def test_core_commands_match_compose(tmp_path: Path) -> None:
     api = native_argv("native_program_args api", tmp_path)
     assert api[0].endswith("/bin/voxint") and api[-1] == "serve"
 
+    # No -Q flag is load-bearing since the two-lane split: a worker started
+    # without one consumes every queue declared in task_queues (celery + post),
+    # which is what keeps single-worker deployments whole-pipeline by default.
     assert compose_cmd("worker") == [
         "celery",
         "-A",
