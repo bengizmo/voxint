@@ -171,14 +171,14 @@ def to_json(lines: Sequence[TranscriptLine]) -> str:
 
 
 # Inline Markdown control characters backslash-escaped so transcript text renders
-# literally: no injected emphasis, code spans, or link syntax. HTML-significant
-# characters (&, <, >) are entity-encoded separately in _md_escape so raw HTML in
-# the text can never activate. Line-leading block markers (#, -, +, ordered
-# lists) are neutralized per physical line by _md_defuse_block_start, since those
-# are position-sensitive and _md_escape cannot see them. A bare URL is left as
-# text; a GFM renderer may still autolink it, which is cosmetic and safe.
-# TXT/JSON stay verbatim; only Markdown (like SRT/VTT's --> neutralization)
-# mutates content, and only to defuse it.
+# literally: no injected emphasis, code spans, strikethrough/tilde fences, link
+# syntax, or table pipes. HTML-significant characters (&, <, >) are entity-encoded
+# separately in _md_escape so raw HTML in the text can never activate. Line-leading
+# block markers (#, =, -, +, ordered lists) are neutralized per physical line by
+# _md_defuse_block_start, since those are position-sensitive and _md_escape cannot
+# see them. A bare URL is left as text; a GFM renderer may still autolink it, which
+# is cosmetic and safe. TXT/JSON stay verbatim; only Markdown (like SRT/VTT's -->
+# neutralization) mutates content, and only to defuse it.
 _MD_INLINE_ESCAPES = {
     "\\": "\\\\",
     "`": "\\`",
@@ -186,6 +186,8 @@ _MD_INLINE_ESCAPES = {
     "_": "\\_",
     "[": "\\[",
     "]": "\\]",
+    "~": "\\~",
+    "|": "\\|",
 }
 
 # A line-leading ordered-list marker (``1.`` / ``12)``) followed by whitespace or
@@ -195,9 +197,10 @@ _MD_ORDERED_LIST = re.compile(r"^(\s*)(\d+)([.)])(?=\s|$)")
 
 # Line-leading block markers CommonMark reads at the start of a physical line:
 # ``#`` (ATX heading), ``-`` / ``+`` (bullet, and ``-`` also a thematic break or
-# setext underline). ``*``/``_`` are already inline-escaped; ``>`` is entity-
-# encoded; so those need no line-position handling here.
-_MD_BLOCK_LEADERS = frozenset({"#", "-", "+"})
+# setext underline), and ``=`` (the setext H1 underline). ``*``/``_`` are already
+# inline-escaped; ``>`` is entity-encoded; so those need no line-position handling
+# here.
+_MD_BLOCK_LEADERS = frozenset({"#", "=", "-", "+"})
 
 
 # EN DASH for the Markdown time range, matching the on-screen transcript view's
@@ -249,9 +252,10 @@ def _md_defuse_block_start(line: str) -> str:
     thematic break.
 
     Runs on an already inline-escaped line (see :func:`_md_escape`), closing the
-    position-sensitive markers that escaper cannot see: leading ``#`` / ``-`` /
-    ``+`` and an ordered-list ``1.`` / ``1)``. ``*``/``_`` are already escaped and
-    ``>`` is entity-encoded, so a nested blockquote or emphasis break cannot form.
+    position-sensitive markers that escaper cannot see: leading ``#`` / ``=`` /
+    ``-`` / ``+`` and an ordered-list ``1.`` / ``1)``. ``*``/``_`` are already
+    escaped and ``>`` is entity-encoded, so a nested blockquote or emphasis break
+    cannot form.
     """
     stripped = line.lstrip(" ")
     indent = line[: len(line) - len(stripped)]
@@ -284,8 +288,15 @@ def to_markdown(lines: Sequence[TranscriptLine], *, timestamps: bool = True) -> 
         # crafted name cannot break out of the `##` and forge its own headings.
         speaker = para.speaker.replace("\r", " ").replace("\n", " ")
         heading = f"## {_md_escape(speaker)}"
+        # Normalize line endings before splitting so a bare CR (or CRLF) becomes a
+        # real, block-defused physical line rather than smuggling structure past
+        # ``.split("\n")``: CommonMark treats a lone ``\r`` as a line ending, so
+        # ``foo\r# x`` would otherwise emit ``> foo\r# x`` and break ``# x`` out of
+        # the blockquote to a top-level heading. Every physical line then gets the
+        # ``> `` prefix and _md_defuse_block_start, same as an ``\n``-split line.
+        body = para.text.replace("\r\n", "\n").replace("\r", "\n")
         body_lines = [
-            _md_defuse_block_start(line) for line in _md_escape(para.text).split("\n")
+            _md_defuse_block_start(line) for line in _md_escape(body).split("\n")
         ]
         if timestamps:
             body_lines[0] = (

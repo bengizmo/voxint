@@ -251,6 +251,50 @@ def test_markdown_timestamp_prefix_keeps_first_line_defused() -> None:
     )
 
 
+def test_markdown_defuses_setext_equals_underline() -> None:
+    # A body line of ``===`` under a text line is a CommonMark setext H1 underline;
+    # it must be defused so transcript content cannot forge a heading (the ``-``
+    # setext form was already covered by the thematic-break case above).
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="Foo\n==="),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> Foo\n> \\===\n"
+
+
+def test_markdown_normalizes_bare_carriage_return_breakout() -> None:
+    # A lone ``\r`` is a CommonMark line ending; without normalization
+    # ``foo\r# Owned`` would emit ``> foo\r# Owned`` and break ``# Owned`` out of
+    # the blockquote to a top-level heading. It must become a defused physical line.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="foo\r# Owned"),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> foo\n> \\# Owned\n"
+
+
+def test_markdown_crlf_collapses_to_one_line_break() -> None:
+    # CRLF must not double up into a blank blockquote line; it is one line ending.
+    lines = [
+        TranscriptLine(start_seconds=0.0, end_seconds=1.0, speaker="A", text="foo\r\nbar"),
+    ]
+    assert to_markdown(lines, timestamps=False) == "## A\n\n> foo\n> bar\n"
+
+
+def test_markdown_escapes_tilde_fence_and_table_pipe() -> None:
+    # Tilde code fences (``~~~``) and GFM table pipes (``|``) are structure a
+    # blockquote body could otherwise forge; both are inline-escaped literal.
+    lines = [
+        TranscriptLine(
+            start_seconds=0.0,
+            end_seconds=1.0,
+            speaker="A",
+            text="~~~\nh1 | h2\n--- | ---",
+        )
+    ]
+    assert to_markdown(lines, timestamps=False) == (
+        "## A\n\n> \\~\\~\\~\n> h1 \\| h2\n> \\--- \\| ---\n"
+    )
+
+
 def test_markdown_folds_speaker_newline_into_one_heading() -> None:
     # A crafted speaker name with an embedded newline cannot break out of the
     # `##` heading to forge its own structure; the name is folded to one line.
