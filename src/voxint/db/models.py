@@ -107,6 +107,17 @@ STAGE_ORDER: tuple[Stage, ...] = (
     Stage.FINALIZE,
 )
 
+# The two execution lanes are an explicit partition of the canonical pipeline.
+# POST_SEGMENT must remain a contiguous suffix of STAGE_ORDER: the engine hands a
+# run from one lane to the other by parking it at the next stage, so an interleaved
+# lane assignment would require repeated handoffs and defeat the deliberately small
+# two-queue topology. Any future stage must consciously join exactly one segment
+# (and preserve that suffix contract), rather than silently inheriting a queue.
+GPU_SEGMENT: frozenset[Stage] = frozenset(
+    {Stage.ACQUIRE, Stage.PREPARE, Stage.TRANSCRIBE, Stage.DIARIZE_EMBED}
+)
+POST_SEGMENT: frozenset[Stage] = frozenset({Stage.ENHANCE_MATCH, Stage.FINALIZE})
+
 
 class StageStatus(enum.StrEnum):
     RUNNING = "running"

@@ -8,6 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.db.models import (
+    GPU_SEGMENT,
+    POST_SEGMENT,
     STAGE_ORDER,
     MediaItem,
     PipelineRun,
@@ -67,6 +69,83 @@ def advance_to(
 
 
 NOOP_FNS: dict[Stage, StageFn] = {stage: (lambda s, r: None) for stage in Stage}
+
+
+def test_two_segments_handoff_and_resume_without_wrong_lane_claims(
+    session_factory: sessionmaker[Session],
+) -> None:
+    run_id = make_run(session_factory, "/data/media/two-segments.wav")
+
+    handed_off = execute_run(session_factory, run_id, NOOP_FNS, stages=GPU_SEGMENT)
+    assert handed_off.status is RunStatus.QUEUED
+    assert handed_off.current_stage is Stage.ENHANCE_MATCH
+
+    with session_factory() as session:
+        claims = (
+            session.execute(
+                select(StageRun)
+                .where(StageRun.pipeline_run_id == run_id)
+                .order_by(StageRun.started_at, StageRun.id)
+            )
+            .scalars()
+            .all()
+        )
+        assert [Stage(claim.stage) for claim in claims] == list(STAGE_ORDER[:4])
+        assert all(claim.status == StageStatus.COMPLETED.value for claim in claims)
+
+    wrong_lane = execute_run(session_factory, run_id, NOOP_FNS, stages=GPU_SEGMENT)
+    assert wrong_lane == handed_off
+    with session_factory() as session:
+        claims = (
+            session.execute(
+                select(StageRun).where(StageRun.pipeline_run_id == run_id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(claims) == 4
+
+    completed = execute_run(session_factory, run_id, NOOP_FNS, stages=POST_SEGMENT)
+    assert completed.status is RunStatus.COMPLETED
+    assert completed.current_stage is None
+
+    with session_factory() as session:
+        claims = (
+            session.execute(
+                select(StageRun).where(StageRun.pipeline_run_id == run_id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(claims) == len(STAGE_ORDER)
+        assert all(claim.status == StageStatus.COMPLETED.value for claim in claims)
+
+
+def test_cancel_between_segments_prevents_post_lane_resurrection(
+    session_factory: sessionmaker[Session],
+) -> None:
+    run_id = make_run(session_factory, "/data/media/cancel-between-segments.wav")
+    handed_off = execute_run(session_factory, run_id, NOOP_FNS, stages=GPU_SEGMENT)
+    assert handed_off.status is RunStatus.QUEUED
+    assert handed_off.current_stage is Stage.ENHANCE_MATCH
+
+    with session_factory() as session:
+        cancel_run(session, run_id)
+        session.commit()
+
+    result = execute_run(session_factory, run_id, NOOP_FNS, stages=POST_SEGMENT)
+    assert result.status is RunStatus.CANCELLED
+    assert result.current_stage is Stage.ENHANCE_MATCH
+
+    with session_factory() as session:
+        claims = (
+            session.execute(
+                select(StageRun).where(StageRun.pipeline_run_id == run_id)
+            )
+            .scalars()
+            .all()
+        )
+        assert len(claims) == len(GPU_SEGMENT)
 
 
 def test_cas_conflict_raises_stale_revision(

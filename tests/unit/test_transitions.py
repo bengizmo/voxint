@@ -2,7 +2,7 @@ import uuid
 
 import pytest
 
-from voxint.db.models import STAGE_ORDER, RunStatus, Stage
+from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, STAGE_ORDER, RunStatus, Stage
 from voxint.pipeline.transitions import (
     ALLOWED_TRANSITIONS,
     InvalidTransitionError,
@@ -97,6 +97,29 @@ def test_requeue_from_failed_keeps_stage() -> None:
     validate_transition(held, RunStatus.QUEUED, Stage.TRANSCRIBE)
     with pytest.raises(InvalidTransitionError):
         validate_transition(held, RunStatus.QUEUED, Stage.FINALIZE)
+
+
+def test_running_handoff_parks_at_exactly_next_stage() -> None:
+    held = snap(RunStatus.RUNNING, Stage.DIARIZE_EMBED)
+    validate_transition(held, RunStatus.QUEUED, Stage.ENHANCE_MATCH)
+
+    for bad in (Stage.DIARIZE_EMBED, Stage.FINALIZE):
+        with pytest.raises(InvalidTransitionError, match="must park at next stage"):
+            validate_transition(held, RunStatus.QUEUED, bad)
+
+
+def test_running_final_stage_cannot_handoff_past_pipeline_end() -> None:
+    held = snap(RunStatus.RUNNING, Stage.FINALIZE)
+    with pytest.raises(InvalidTransitionError, match="must park at next stage"):
+        validate_transition(held, RunStatus.QUEUED, None)
+
+
+def test_execution_segments_partition_pipeline_with_post_as_suffix() -> None:
+    assert GPU_SEGMENT.isdisjoint(POST_SEGMENT)
+    assert set(Stage) == GPU_SEGMENT | POST_SEGMENT
+    assert tuple(stage for stage in STAGE_ORDER if stage in POST_SEGMENT) == tuple(
+        STAGE_ORDER[-len(POST_SEGMENT) :]
+    )
 
 
 def test_resume_from_adjudication_keeps_stage() -> None:

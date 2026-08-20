@@ -14,6 +14,10 @@ Concurrency contract:
   two workers can never both believe they own an attempt.
 - Success and failure update that exact claim row and CAS-advance the run in
   one transaction with the stage's own DB effects.
+- A lane-limited executor completes its last owned claim and CAS-parks the run
+  QUEUED at the next stage in that SAME transaction. Publication may happen
+  later: the durable QUEUED row is the handoff, and stale-queue recovery can
+  always rehydrate a broker message lost after the commit.
 - Recovery touches only runs whose claim lease has expired — a healthy worker
   mid-transcription is never swept. Stage bodies remain at-least-once for
   non-transactional effects (filesystem, GPU calls) and must be idempotent.
@@ -23,6 +27,7 @@ import os
 import socket
 import uuid
 from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -240,14 +245,18 @@ def execute_run(
     worker_id: str | None = None,
     lease_seconds: int | Mapping[Stage, int] | None = None,
     settings: "Settings | None" = None,
+    stages: AbstractSet[Stage] | None = None,
 ) -> RunSnapshot:
-    """Advance a QUEUED (or requeued) run through all stages to COMPLETED.
+    """Advance a QUEUED (or requeued) run through its stages.
 
     Returns the run snapshot as this worker last saw it; if another worker holds
     an active claim, returns immediately without executing anything. Each stage
     executes in its own transaction: stage effects, the claim update, and the
     CAS advance commit atomically, so a crash between stages leaves a
-    consistent, resumable run.
+    consistent, resumable run. ``stages=None`` preserves the original all-stage
+    execution. A restricted stage set returns without mutation on wrong-lane
+    delivery and parks QUEUED at the first stage outside its lane after a
+    successful owned stage.
     """
     worker = worker_id or default_worker_id()
     if lease_seconds is None:
@@ -263,6 +272,12 @@ def execute_run(
         if held.status is RunStatus.QUEUED:
             # A requeued run retries its interrupted stage; a fresh run starts at the top.
             stage = held.current_stage or next_stage(None)
+            assert stage is not None
+            # A message delivered to the wrong lane is a pure no-op: in
+            # particular, do not take the QUEUED -> RUNNING entry CAS and leave
+            # an ownerless RUNNING run for lease recovery to repair.
+            if stages is not None and stage not in stages:
+                return held
             try:
                 held = cas_update_run(
                     session, held, status=RunStatus.RUNNING, current_stage=stage
@@ -283,6 +298,11 @@ def execute_run(
             if held.status is not RunStatus.RUNNING or held.current_stage is None:
                 return held
             stage = held.current_stage
+            # Defensive counterpart to the entry guard. It covers a lane-limited
+            # invocation that observes a RUNNING run already advanced by another
+            # worker; it must never claim work assigned to the other lane.
+            if stages is not None and stage not in stages:
+                return held
 
         lease = leases[stage] if isinstance(leases, Mapping) else leases
         claim_id = _claim_stage(session_factory, held, stage, worker, lease)
@@ -337,6 +357,19 @@ def execute_run(
                         status=RunStatus.COMPLETED,
                         current_stage=None,
                         settings=settings,
+                    )
+                    session.commit()
+                    return held
+                if stages is not None and upcoming not in stages:
+                    # The completed claim, all stage-owned DB effects, and the
+                    # durable QUEUED handoff commit atomically. A crash after
+                    # this commit can lose only the broker publication, never
+                    # the knowledge of which stage the other lane must resume.
+                    held = cas_update_run(
+                        session,
+                        held,
+                        status=RunStatus.QUEUED,
+                        current_stage=upcoming,
                     )
                     session.commit()
                     return held

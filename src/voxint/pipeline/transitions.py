@@ -30,6 +30,7 @@ ALLOWED_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     RunStatus.RUNNING: frozenset(
         {
             RunStatus.RUNNING,  # stage-to-stage advance
+            RunStatus.QUEUED,  # segment handoff parks the run for the other lane
             RunStatus.AWAITING_ADJUDICATION,
             RunStatus.COMPLETED,
             RunStatus.FAILED,
@@ -110,6 +111,16 @@ def validate_transition(
     elif current is RunStatus.RUNNING and status is RunStatus.RUNNING:
         if held_stage is None or stage is not next_stage(held_stage):
             raise reject(f"advance from {held_stage!r} must go to {next_stage(held_stage)!r}")
+    elif current is RunStatus.RUNNING and status is RunStatus.QUEUED:
+        # A lane handoff differs deliberately from a failure retry: the stage
+        # that just committed is complete, so the other lane resumes at its
+        # successor. FAILED -> QUEUED below must instead keep the failed stage.
+        handoff_stage = next_stage(held_stage) if held_stage is not None else None
+        if handoff_stage is None or stage is not handoff_stage:
+            raise reject(
+                f"segment handoff from {held_stage!r} must park at next stage "
+                f"{handoff_stage!r}, got {stage!r}"
+            )
     elif status in (RunStatus.AWAITING_ADJUDICATION, RunStatus.FAILED):
         if held_stage is None or stage is not held_stage:
             raise reject(f"must keep stage {held_stage!r}, got {stage!r}")
