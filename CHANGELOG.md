@@ -46,14 +46,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `compose.override.yaml` profile. Documents existing knobs; the safe-by-default
   sizing itself is still tracked in #96.
 - **Operator guidance for restricted URL-ingestion egress (#16).**
-  `docs/operations.md` now lays out the four egress controls as an explicit,
-  skimmable stack (submit gate, resolved-host gate, proxy overlay, network policy)
-  and states plainly that the two userland gates do not close the SSRF residual on
-  their own. It adds a copy-pasteable Kubernetes `NetworkPolicy` for the egress
-  layer, bound to the worker pod (where yt-dlp and any helper run) with explicit
-  allows for the in-cluster dependencies, plus honest caveats about CNI
-  enforcement, DNS and Service scoping, and the coarse `ipBlock` list versus the
-  precise `ip_is_public` policy. Documentation only; no behavior change.
+  `docs/operations.md` now lays out the four egress controls in order (submit gate,
+  resolved-host gate, proxy overlay, network policy) and states plainly that the
+  two userland gates do not close the SSRF residual on their own. It adds a
+  ready-to-adapt Kubernetes `NetworkPolicy` example for the egress layer, bound to
+  the worker pod (where yt-dlp and any helper run) with explicit allows for the
+  worker's private-address dependencies, plus honest caveats about CNI enforcement,
+  DNS and Service scoping, and the coarse `ipBlock` list versus the precise
+  `ip_is_public` policy. Documentation only; no behavior change.
 
 ### Fixed
 - **The Markdown transcript export can no longer let transcript text forge

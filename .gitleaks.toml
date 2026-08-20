@@ -18,13 +18,15 @@ regex = '''\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6
 # does not weaken the leak guard. Named individually per the anti-broad-pattern
 # doctrine; a bare host address in any range is still flagged everywhere.
 # regexTarget = "line": the rule captures only the bare address as the secret, so
-# match the full CIDR (address + prefix) on the line. A bare host without a
-# /prefix therefore stays flagged.
+# the allowlist must match on the whole line. Each pattern is anchored to a YAML
+# list item that is ONLY the range identifier (as at docs/operations.md), so a
+# real host is still flagged even on a line that also mentions a range: a mid-line
+# prose CIDR is deliberately fail-closed and must be re-exempted on purpose.
 regexTarget = "line"
 regexes = [
-    '''10\.0\.0\.0/8''',
-    '''172\.16\.0\.0/12''',
-    '''192\.168\.0\.0/16''',
+    '''^\s*-\s*10\.0\.0\.0/8\s*$''',
+    '''^\s*-\s*172\.16\.0\.0/12\s*$''',
+    '''^\s*-\s*192\.168\.0\.0/16\s*$''',
 ]
 
 [[rules]]
