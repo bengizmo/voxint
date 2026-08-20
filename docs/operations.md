@@ -285,13 +285,32 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    # Same image/env/volumes as the worker service; it talks only to the LLM
-    # endpoint and the database, never the GPU services.
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.20.0}
+    pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-voxint}:${POSTGRES_PASSWORD:-voxint}@postgres:5432/${POSTGRES_DB:-voxint}
+      REDIS_URL: redis://redis:6379/0
+      MEDIA_ROOT: /data/media
+    volumes:
+      - ${MEDIA_ROOT:-./media}:/data/media
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 ```
 
+The new `worker-post` service inherits nothing from the base `worker` service,
+so the override must repeat its image, environment, volume, and dependencies.
 With no `-Q` flag at all (the stock command), one worker consumes both queues
 and behavior is unchanged; the split is purely a deployment choice.
+If your existing worker command sets `-Q`, drop the flag or use
+`-Q celery,post`; otherwise the `post` queue has no consumer.
 
 Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
 lands, tune these settings by hand when the stock overlay runs out of memory.

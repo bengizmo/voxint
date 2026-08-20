@@ -302,9 +302,24 @@ def recovery_sweep() -> dict[str, int]:
                     PipelineRun.status == RunStatus.QUEUED.value,
                 )
             ).all()
+        # One unavailable broker must not abort the sweep midway through this
+        # durable set. Each row stays QUEUED and becomes eligible again after the
+        # stale grace, while the remaining rows still get their publish attempt.
+        from celery.exceptions import OperationalError
+
         for rid, stage_value in resumable:
             stage = Stage(stage_value) if stage_value else None
-            pipeline_task_for_stage(stage).delay(str(rid))
+            try:
+                pipeline_task_for_stage(stage).apply_async(
+                    (str(rid),), ignore_result=True
+                )
+            except OperationalError:
+                logger.warning(
+                    "recovery enqueue deferred (broker unavailable); run %s stays "
+                    "QUEUED for a later sweep",
+                    rid,
+                    exc_info=True,
+                )
     return {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),
@@ -372,8 +387,10 @@ def _publish_watch_run(run_id: uuid.UUID) -> bool:
     """
     from celery.exceptions import OperationalError
 
+    # Watch submissions are fresh runs, so stage=None mechanically selects the
+    # default GPU lane through the same routing decision as every other publisher.
     try:
-        run_pipeline.apply_async((str(run_id),), ignore_result=True)
+        pipeline_task_for_stage(None).apply_async((str(run_id),), ignore_result=True)
     except OperationalError:
         logger.warning(
             "watch_sweep enqueue deferred (broker unavailable); run %s stays QUEUED "

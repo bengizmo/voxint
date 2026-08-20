@@ -82,7 +82,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   consumes both. Deployments that pin the worker to `--concurrency=1` for a
   shared GPU can now run a second worker on the `post` queue so one run's LLM
   enhancement overlaps the next run's transcription; see the override recipe
-  in `docs/operations.md`.
+  in `docs/operations.md`. Existing worker commands with an explicit `-Q` must
+  drop that flag or use `-Q celery,post`, or handed-off runs remain queued at
+  `enhance_match` while recovery republishes them to an unconsumed `post` queue.
 
 ### Fixed
 - **The Markdown transcript export can no longer let transcript text forge

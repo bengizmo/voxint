@@ -257,13 +257,13 @@ def test_recovery_sweep_routes_stale_runs_by_current_stage(
     published: list[tuple[str, str]] = []
     monkeypatch.setattr(
         tasks.run_pipeline,
-        "delay",
-        lambda run_id: published.append(("gpu", run_id)),
+        "apply_async",
+        lambda args, **kwargs: published.append(("gpu", args[0])),
     )
     monkeypatch.setattr(
         tasks.finish_pipeline,
-        "delay",
-        lambda run_id: published.append(("post", run_id)),
+        "apply_async",
+        lambda args, **kwargs: published.append(("post", args[0])),
     )
 
     result = tasks.recovery_sweep()
@@ -273,6 +273,50 @@ def test_recovery_sweep_routes_stale_runs_by_current_stage(
         ("gpu", str(gpu_run_id)),
         ("post", str(post_run_id)),
     }
+
+
+def test_recovery_sweep_continues_after_one_publish_outage(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broker failure for one durable row must not skip another lane's row."""
+    from celery.exceptions import OperationalError
+
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    gpu_run_id = submit_run(session_factory)
+    post_run_id = submit_run(session_factory)
+    stale_at = datetime.now(UTC) - timedelta(hours=2)
+    with session_factory() as session:
+        gpu_run = session.get(PipelineRun, gpu_run_id)
+        post_run = session.get(PipelineRun, post_run_id)
+        assert gpu_run is not None and post_run is not None
+        gpu_run.current_stage = Stage.TRANSCRIBE.value
+        gpu_run.updated_at = stale_at
+        post_run.current_stage = Stage.ENHANCE_MATCH.value
+        post_run.updated_at = stale_at
+        session.commit()
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: Settings(_env_file=None, queued_run_stale_seconds=60)
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+
+    def broker_down(args: tuple[str], **kwargs: object) -> None:
+        raise OperationalError("broker down")
+
+    published: list[str] = []
+    monkeypatch.setattr(tasks.run_pipeline, "apply_async", broker_down)
+    monkeypatch.setattr(
+        tasks.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append(args[0]),
+    )
+
+    result = tasks.recovery_sweep()
+
+    assert result["stale_queued"] == 2
+    assert published == [str(post_run_id)]
 
 
 def test_finish_pipeline_retries_its_own_transient_failure(

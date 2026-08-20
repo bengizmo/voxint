@@ -371,6 +371,8 @@ def _requeue(args: argparse.Namespace) -> int:
     try:
         with session_scope(factory) as session:
             run = session.get(PipelineRun, run_id)
+            # Stable across this operation: FAILED -> QUEUED keeps the stage, and
+            # QUEUED can leave only for RUNNING at that same stage or CANCELLED.
             failed_stage = Stage(run.current_stage) if run and run.current_stage else None
             requeue_failed_run(session, run_id)
     # InvalidTransitionError can't arise on this FAILED->QUEUED-same-stage path,

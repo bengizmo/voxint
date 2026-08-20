@@ -1,8 +1,12 @@
+import uuid
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 
 from voxint.clients.errors import ProtocolError, ServiceError
 from voxint.config import Settings
-from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, Stage
+from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, RunStatus, Stage
 from voxint.pipeline.engine import StageFailedError
 from voxint.worker.app import POST_QUEUE, app, build_beat_schedule
 from voxint.worker.tasks import (
@@ -38,8 +42,6 @@ def test_pipeline_task_for_stage_routes_both_segments() -> None:
 
 
 def test_publish_finish_defers_only_broker_errors(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    import uuid
-
     from celery.exceptions import OperationalError
 
     import voxint.worker.tasks as tasks_mod
@@ -56,6 +58,91 @@ def test_publish_finish_defers_only_broker_errors(monkeypatch) -> None:  # type:
     monkeypatch.setattr(tasks_mod.finish_pipeline, "apply_async", bug)
     with pytest.raises(RuntimeError, match="publisher bug"):
         tasks_mod._publish_finish_or_defer(uuid.uuid4())
+
+
+def _stub_segment_driver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[object, SimpleNamespace, uuid.UUID]:
+    """Remove DB/context construction so lane-result behavior is isolated."""
+    import voxint.worker.tasks as tasks_mod
+
+    factory = MagicMock()
+    factory.return_value.__enter__.return_value.get.return_value = None
+    ctx = SimpleNamespace(llm=None)
+    monkeypatch.setattr(tasks_mod, "_runtime", lambda: (factory, ctx))
+    monkeypatch.setattr(tasks_mod, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(tasks_mod.app_settings, "get_app_settings", lambda session: None)
+    monkeypatch.setattr(
+        tasks_mod.app_settings,
+        "resolve_effective_llm_api_key",
+        lambda row, settings: "",
+    )
+    monkeypatch.setattr(
+        tasks_mod.app_settings, "llm_bundled_active", lambda row, settings: False
+    )
+    monkeypatch.setattr(tasks_mod, "resolve_run_preferences", lambda row, settings: object())
+    monkeypatch.setattr(tasks_mod, "domain_pack_from_snapshot", lambda snapshot, settings: object())
+    monkeypatch.setattr(tasks_mod, "apply_run_preferences", lambda *args, **kwargs: ctx)
+    monkeypatch.setattr(tasks_mod, "build_stage_fns", lambda applied: {})
+    return factory, ctx, uuid.uuid4()
+
+
+def test_gpu_segment_publishes_only_a_post_lane_handoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voxint.worker.tasks as tasks_mod
+
+    _factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
+    results = iter(
+        (
+            SimpleNamespace(
+                status=RunStatus.QUEUED, current_stage=Stage.ENHANCE_MATCH
+            ),
+            SimpleNamespace(status=RunStatus.QUEUED, current_stage=Stage.TRANSCRIBE),
+        )
+    )
+    monkeypatch.setattr(tasks_mod, "execute_run", lambda *args, **kwargs: next(results))
+    published: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    monkeypatch.setattr(
+        tasks_mod.finish_pipeline,
+        "apply_async",
+        lambda args, **kwargs: published.append((args, kwargs)),
+    )
+
+    assert tasks_mod.run_pipeline.run(str(run_id)) == RunStatus.QUEUED.value
+    assert published == [((str(run_id),), {"ignore_result": True})]
+
+    assert tasks_mod.run_pipeline.run(str(run_id)) == RunStatus.QUEUED.value
+    assert published == [((str(run_id),), {"ignore_result": True})]
+
+
+def test_only_post_segment_runs_completion_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import voxint.worker.tasks as tasks_mod
+
+    factory, _ctx, run_id = _stub_segment_driver(monkeypatch)
+    monkeypatch.setattr(
+        tasks_mod,
+        "execute_run",
+        lambda *args, **kwargs: SimpleNamespace(status=RunStatus.COMPLETED),
+    )
+    generated: list[tuple[object, uuid.UUID, Settings]] = []
+    monkeypatch.setattr(
+        tasks_mod,
+        "_autogenerate_run_assets",
+        lambda received_factory, received_id, settings: generated.append(
+            (received_factory, received_id, settings)
+        ),
+    )
+
+    assert tasks_mod.finish_pipeline.run(str(run_id)) == RunStatus.COMPLETED.value
+    assert len(generated) == 1
+    assert generated[0][0] is factory
+    assert generated[0][1] == run_id
+
+    assert tasks_mod.run_pipeline.run(str(run_id)) == RunStatus.COMPLETED.value
+    assert len(generated) == 1
 
 
 def test_gc_sweep_beat_entry_is_opt_in() -> None:

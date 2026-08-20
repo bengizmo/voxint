@@ -812,7 +812,7 @@ def _get_session(request: Request) -> Iterator[Session]:
 
 
 def _publish_run(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
-    """Enqueue the pipeline for a freshly-committed run (commit-before-publish).
+    """Enqueue a fresh submission or stage-routed resumption (commit-before-publish).
 
     The Celery/broker import stays out of the module top level so the read path
     — and any DB-less import — never pulls in the broker.
@@ -845,12 +845,7 @@ def _publish_or_defer(run_id: uuid.UUID, *, stage: Stage | None = None) -> bool:
     from celery.exceptions import OperationalError
 
     try:
-        if stage is None:
-            # Keep fresh-run publication's historical one-argument seam intact;
-            # only resumptions need to carry an explicit routing stage.
-            _publish_run(run_id)
-        else:
-            _publish_run(run_id, stage=stage)
+        _publish_run(run_id, stage=stage)
     except OperationalError:
         logger.warning(
             "pipeline enqueue deferred (broker unavailable); run %s stays QUEUED "
@@ -4024,6 +4019,8 @@ def _register_routes(app: FastAPI) -> None:
         # a stale tab can't drive a hidden run live (issue #5).
         run = _run_or_404(session, run_id)
         _reject_if_archived(run)
+        # Stable across this operation: FAILED -> QUEUED keeps the stage, and
+        # QUEUED can leave only for RUNNING at that same stage or CANCELLED.
         failed_stage = Stage(run.current_stage) if run.current_stage else None
         # Exact-revision CAS from the form's hidden field: a stale browser tab
         # holding an older revision 409s rather than requeuing a run that already
