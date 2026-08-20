@@ -42,6 +42,12 @@ GPU_CALL_PERSISTENCE_MARGIN_SECONDS = 600.0
 # short cap, so unreachable endpoints still fail fast.
 DEFAULT_LLM_TIMEOUT_SECONDS = 300.0
 
+# The BYO LLM endpoint's install default: the OpenAI public API, which is inert
+# without a key. Treated as the "unconfigured BYO" sentinel — an operator who
+# never touched llm_base_url has no usable BYO endpoint (see
+# ``voxint.app_settings.byo_llm_configured``).
+DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
+
 # The CPU tier's scaling factor over the GPU-tier timing defaults. CPU
 # inference for these models is roughly 5-20x slower than GPU depending on
 # stage and cores; 4x on top of the already-generous GPU defaults (which carry
@@ -197,7 +203,7 @@ class Settings(BaseSettings):
     # Enhancement is best-effort: failures degrade to NULL enhanced_text and
     # never fail the run, so these budgets bound wasted time, not correctness.
     llm_enabled: bool = False
-    llm_base_url: str = "https://api.openai.com/v1"
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
     llm_model: str = "gpt-4o-mini"
     llm_api_key: str = ""
     llm_timeout_seconds: PositiveSeconds = DEFAULT_LLM_TIMEOUT_SECONDS  # per attempt (read/write)

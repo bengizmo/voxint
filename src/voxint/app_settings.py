@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from voxint.config import Settings
+from voxint.config import DEFAULT_LLM_BASE_URL, Settings
 from voxint.db.models import AppSettings, PipelineRun
 
 if TYPE_CHECKING:
@@ -252,6 +252,35 @@ def llm_bundled_active(row: AppSettings | None, settings: Settings) -> bool:
         and bool(settings.llm_bundled_base_url)
         and bool(settings.llm_bundled_model)
     )
+
+
+def byo_llm_configured(row: AppSettings | None, settings: Settings) -> bool:
+    """Whether a DISTINCT, operator-configured BYO LLM endpoint exists.
+
+    Topics and agentic research run ONLY on the BYO ``llm_*`` endpoint, never the
+    bundle (#66). The bundle being active does not mean the operator lacks a
+    capable BYO endpoint: with a scoped bundle serving enhancement AND a separate
+    BYO endpoint configured (e.g. a capable LAN model), topics can still run on the
+    BYO endpoint. This predicate is what the enqueue gate consults so it drops
+    topics only when there is genuinely nowhere to run them.
+
+    True iff LLM work is enabled, the effective BYO ``(base_url, model)`` is set,
+    that base URL is not the bundled endpoint, and the endpoint is not the untouched
+    install default (a stored key OR a non-default base URL signals the operator
+    pointed it somewhere deliberate; the default :data:`DEFAULT_LLM_BASE_URL` is
+    inert without a key). A misconfigured-but-deliberate endpoint still passes here
+    and fails honestly at execution, which is the existing run-asset posture.
+    """
+    if not resolve_effective_llm_enabled(row, settings):
+        return False
+    base_url, model = resolve_effective_llm_endpoint(row, settings)
+    if not base_url or not model:
+        return False
+    if settings.llm_bundled_base_url and base_url == settings.llm_bundled_base_url:
+        return False
+    if resolve_effective_llm_api_key(row, settings):
+        return True
+    return base_url != DEFAULT_LLM_BASE_URL
 
 
 def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":

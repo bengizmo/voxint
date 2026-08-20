@@ -25,6 +25,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   cap now applies to actual submissions rather than scan candidates, so held
   recordings can never crowd new ones out of a check.
 
+### Fixed
+- **Topics enrichment now runs on a distinct BYO endpoint even when a scoped
+  bundle is active (#106).** Previously any active bundle dropped the `topics`
+  run-asset kind at enqueue, on the assumption that the bundle was the only (and
+  too weak) LLM. When the bundle serves enhancement AND a separate BYO endpoint
+  is configured (for example a capable LAN model), topics now flow to that BYO
+  endpoint instead of being refused. The default bundled install (no BYO
+  endpoint configured) still shows the same guidance, unchanged.
+
 ## [0.20.0] - 2026-08-19
 
 ### Added
