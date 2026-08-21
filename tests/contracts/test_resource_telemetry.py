@@ -14,6 +14,7 @@ Coverage:
 import hashlib
 import sys
 from types import SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -74,6 +75,37 @@ class TestVendoredIdentity:
         for line in src.splitlines():
             if line.startswith(("import torch", "import pynvml", "from torch", "from pynvml")):
                 raise AssertionError(f"module-level GPU import in sampler: {line!r}")
+
+
+class TestPython310Compatibility:
+    """The model-service images build on ``nvidia/cuda:*-ubuntu22.04`` (system
+    Python 3.10). A 3.11+-only construct in the service app code crash-loops the
+    CUDA image at import: v0.22.0 shipped ``from datetime import UTC`` in
+    ``resource_probe.py`` and every CUDA model service failed to boot. The
+    ``-cpu``/``-rocm`` bases are 3.11+ so only the CUDA lane broke, and the host
+    test runner is 3.12 so importing the module here never caught it. Guard the
+    source statically instead. When a new 3.11+-only name bites, add it here.
+    """
+
+    # substring -> why it is 3.11+-only
+    _BANNED: ClassVar[dict[str, str]] = {
+        "from datetime import UTC": "datetime.UTC is 3.11+; use timezone.utc",
+        "datetime.UTC": "datetime.UTC is 3.11+; use timezone.utc",
+    }
+
+    @pytest.mark.parametrize("svc", SERVICES)
+    def test_service_app_is_py310_safe(self, svc: str) -> None:
+        app_dir = REPO_ROOT / "services" / svc / "app"
+        offenders = [
+            f"{path.relative_to(REPO_ROOT)}: {needle!r} ({reason})"
+            for path in sorted(app_dir.rglob("*.py"))
+            for needle, reason in self._BANNED.items()
+            if needle in path.read_text()
+        ]
+        assert not offenders, (
+            "model-service code must stay Python 3.10-compatible (CUDA base):\n"
+            + "\n".join(offenders)
+        )
 
 
 class TestTorchFreeImport:

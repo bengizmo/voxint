@@ -37,7 +37,7 @@ import threading
 import time
 import uuid as uuidlib
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from app.resource_models import Admission, CpuTelemetry, GpuTelemetry, Resources
 
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Captured once at import ~= process start; the admission block reports it so a
 # consumer can rate ``rejected_since_start``.
-PROCESS_STARTED_AT = datetime.now(tz=UTC).isoformat()
+PROCESS_STARTED_AT = datetime.now(tz=timezone.utc).isoformat()
 
 # Service-env knobs (fail-soft; a malformed value must never crash-loop a
 # service or fail /healthz -- it falls back to the default).

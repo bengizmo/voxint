@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **CUDA model-service images crash-looped on startup (regression in 0.22.0).**
+  The hardware-telemetry code added in 0.22.0 imported `datetime.UTC`, which
+  exists only on Python 3.11 and later. The `voxint-whisper`, `voxint-pyannote`,
+  and `voxint-titanet` CUDA images build on `nvidia/cuda:*-ubuntu22.04` (system
+  Python 3.10), so every one of them failed to import and never served. The
+  `-cpu` (Python 3.11) and `-rocm` (Python 3.12) images were unaffected. The
+  three vendored `resource_probe.py` files now use `timezone.utc`, ruff no longer
+  rewrites them back to `datetime.UTC` under the py311 target (a per-file `UP017`
+  ignore for `services/*/app/*.py`), and a contract test rejects 3.11+-only
+  constructs in the model-service code so this cannot regress silently.
 - **The whisper decode identity now includes the compute device.** The
   `decode_config_hash` reported on the whisper service `/healthz` folds the
   effective decode config into one digest so a numerics-relevant change is
