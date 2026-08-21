@@ -111,8 +111,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **A visual-polish pass over the review console: consistent spacing, clearer
   button hierarchy, and completed interactive states.** Card padding, section
   margins, and gaps now come from one spacing scale instead of ad-hoc values, so
-  surfaces share a rhythm, and the eight hand-written card recipes fold onto a
-  single `.card` primitive with flat and small modifiers. Each screen now has one
+  surfaces share a rhythm, and the eight hand-written card recipes now share a
+  single `.card` primitive recipe. Each screen now has one
   dominant primary action: Assign on the speaker workbench, Submit on the runs
   page, Review on a finished run, Confirm on the merge prompt, with the quieter
   alternatives de-emphasized. Genuinely destructive actions (delete derived

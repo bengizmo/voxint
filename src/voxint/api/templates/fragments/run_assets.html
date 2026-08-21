@@ -2,7 +2,7 @@
    controls. Included on the run detail page AND served standalone by
    GET /runs/{id}/assets — the div re-polls itself only while a job is
    active, so a terminal render stops the polling. #}
-<div id="run-assets-{{ assets.run_id }}"
+<div id="run-assets-{{ assets.run_id }}" class="card"
      {% if assets.any_active %}hx-get="/runs/{{ assets.run_id }}/assets"
      hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 <h2>Run assets</h2>

@@ -175,7 +175,7 @@
       }
     }
 
-    body { font-family: var(--font-ui); margin: 2rem auto; max-width: 72rem;
+    body { font-family: var(--font-ui); margin: var(--space-7) auto; max-width: 72rem;
            padding: 0 1rem; line-height: 1.55; overflow-wrap: break-word;
            background: var(--paper); color: var(--ink);
            -webkit-font-smoothing: antialiased; }
@@ -209,7 +209,7 @@
       border: 1px solid var(--line); border-radius: var(--r-md);
       padding: .3rem .7rem; cursor: pointer;
       transition: background 160ms ease, border-color 160ms ease; }
-    button:not(:where(.tp-split-word, .tp-corrected-chip)):hover { background: var(--surface-2);
+    button:not(:where(.tp-split-word, .tp-corrected-chip)):hover:not(:disabled) { background: var(--surface-2);
       border-color: var(--line-strong); }
     button:not(:where(.tp-split-word, .tp-corrected-chip)):disabled { opacity: .55; cursor: not-allowed; }
     /* #100: neutral TYPED buttons — match Preflight's `[type=…]` reset at
@@ -221,7 +221,6 @@
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
-    @media (prefers-reduced-motion: reduce) { button, .task-link { transition: none; } }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])),
     select, textarea {
       font: inherit; color: var(--ink); background: var(--surface);
@@ -254,11 +253,11 @@
     /* Definition grid (visual-polish pass): a compact two-column dl for run
        metadata; the .settings dt/dd rules are scoped to .settings, so run-detail
        previously rendered its dl with default indentation. */
-    .def-grid { display: grid; grid-template-columns: max-content 1fr;
+    .def-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr);
                 gap: var(--space-1) var(--space-4); margin: var(--space-4) 0; align-items: baseline; }
     .def-grid dt { color: var(--ink-2); font-size: var(--t-sm); }
-    .def-grid dd { margin: 0; }
-    nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;
+    .def-grid dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: var(--space-6);
               padding-bottom: .6rem; border-bottom: 1px solid var(--line); font-size: .95rem; }
     nav.top a { color: var(--ink-2); text-decoration: none; }
     nav.top a:hover { color: var(--accent-ink); }
@@ -309,20 +308,20 @@
     /* Shared elevated-panel primitive (visual-polish pass). ONE recipe for the
        card family; the flow surfaces opt in by name here so padding/radius/shadow
        live once (issue #93 set up .setup/.review-head/.review-stepper/.settings
-       section identically by hand). Modifiers: .card--flat drops elevation for
-       in-context media panels, .card--sm is the tighter dashboard stat tile.
-       Margin stays a per-surface concern (grid tiles carry none, flow cards get
-       --space-4), so it is not in this recipe. */
+       section identically by hand). The elevation rule is applied per surface:
+       header and list-row cards float with --shadow-1; in-context media surfaces
+       (.player-surface, .annotation-toolbar) stay flat; .stat-card is the tighter
+       dashboard tile. Margin stays a per-surface concern (grid tiles carry none,
+       flow cards get --space-4), so it is not in this recipe. */
     .card, .setup, .review-head, .review-stepper {
       background: var(--surface); border: 1px solid var(--line);
       border-radius: var(--r-lg); box-shadow: var(--shadow-1);
       padding: var(--card-pad); }
-    .card--flat { box-shadow: none; }
-    .card--sm { border-radius: var(--r-md); padding: var(--space-3) var(--space-4); }
     .card { margin: var(--space-4) 0; }
     .card > :first-child { margin-top: 0; }
     .card > :last-child { margin-bottom: 0; }
     .setup { margin: var(--space-4) 0; }
+    .review-stepper { margin: var(--space-4) 0; }
     .setup > h1:first-child, .setup .notice + h1 { margin-top: 0; }
     .setup textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: .95rem; }
     .setup .field { margin: 1rem 0; }
@@ -488,9 +487,11 @@
        neutral button without shouting; hover flips to a solid danger fill.
        Measured AA as button text: 5.0:1 light (#b3261e on #f6dcd9), 5.5:1 dark
        (#f2685e on #301715); hover text (--accent-contrast on --danger) clears AA
-       in both themes too. */
+       in both themes too. transition:none because the fill and ink invert
+       together on hover, and the base button's background-only transition would
+       otherwise leave a few frames of light ink on the un-darkened soft fill. */
     button.danger, .btn-danger { background: var(--danger-soft); color: var(--danger);
-                   border: 1px solid var(--danger); }
+                   border: 1px solid var(--danger); transition: none; }
     button.danger:hover:not(:disabled), .btn-danger:hover { background: var(--danger);
                    color: var(--accent-contrast); border-color: var(--danger); }
     .btn-danger { display: inline-block; border-radius: var(--r-md);
@@ -646,12 +647,16 @@
     /* Hover affordances (visual-polish pass): pointer elements that previously
        relied only on the focus ring now get a resting hover cue. Placed after
        their base rules so equal-specificity :hover ties resolve in favour of
-       these. */
-    .tag-pill:hover { border-color: var(--line-strong); }
-    .hl-swatch:hover { border-color: var(--ink-3); }
+       these. Tag pills and highlight swatches are deliberately excluded: those
+       classes are ALSO used on read-only spans (the highlights panel), so a
+       hover cue there would fake an affordance on non-interactive text. */
     .tp-corrected-chip:hover { background: var(--ok-soft); }
     details summary:hover { color: var(--accent-ink); }
     .sort-control a:hover, .breadcrumbs a:hover { color: var(--accent-strong); }
+    /* Reduced motion: null the button and task-card hover transitions. Placed
+       here, AFTER the .task-link rule, so it wins the equal-specificity tie (a
+       media query adds no specificity, so source order decides). */
+    @media (prefers-reduced-motion: reduce) { button, .task-link { transition: none; } }
     /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
        desktop screen for the single operator: a keyboard skip-link + main landmark,
        a visible focus ring, wide tables that scroll inside their own container

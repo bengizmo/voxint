@@ -6,7 +6,7 @@
 <h1>Transcript <code>{{ run.id.hex[:8] }}</code></h1>
 <p class="muted"><code>{{ run.media_item.source_path }}</code></p>
 
-<nav class="top tab-strip">
+<nav class="top tab-strip" aria-label="Transcript version">
   {% for v in variants %}
   <a href="/runs/{{ run.id }}/transcript?text={{ v.value }}{% if read %}&read=1&timestamps={{ 'true' if read_timestamps else 'false' }}{% endif %}"
      {% if text == v %}aria-current="page"{% endif %}>{{ v.value }}</a>
@@ -17,7 +17,7 @@
    current text variant so switching views never loses the reading position. The
    reading-view entry deliberately opens timestamp-free (the shareable "reading
    copy"); a within-mode toggle brings timestamps back. #}
-<nav class="top tab-strip">
+<nav class="top tab-strip" aria-label="Reading view options">
   {% if read %}
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}">Exit reading view</a>
   <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}&read=1&timestamps={{ 'false' if read_timestamps else 'true' }}">{% if read_timestamps %}Hide timestamps{% else %}Show timestamps{% endif %}</a>
