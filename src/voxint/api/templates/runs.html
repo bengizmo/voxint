@@ -12,6 +12,11 @@
   {% endif %}
 </p>
 
+{# Add-media affordance (issue #117 Phase C): a named section the dashboard "Add
+   audio" task card links to (/runs#add-media). Both ways in live here — an upload
+   and, when enabled, a URL fetch — so elevating one never demotes the other. #}
+<section id="add-media" class="add-media">
+<h2>Add media</h2>
 <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
   <input type="hidden" name="submission_id" value="{{ submission_id }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
@@ -41,6 +46,7 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 {% else %}
 <p class="muted">URL ingestion is disabled.</p>
 {% endif %}
+</section>
 
 <form method="get" action="/runs" class="filters">
   {# Preserve the archived view across a filter submit (issue #5). #}

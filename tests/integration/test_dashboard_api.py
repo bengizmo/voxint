@@ -135,13 +135,11 @@ def test_dashboard_renders_aggregated_numbers(
     body = resp.text
     # Full page: nav chrome present, active tab marked.
     assert 'href="/dashboard" aria-current="page"' in body
-    # Review backlog (1 COMPLETED run with an unresolved label — NOT the 2
-    # awaiting_adjudication runs) and roster (2 speakers) surface as summary stat
-    # cards (issue #91); the value is tied to its label, and each card keeps its
-    # unit as text so the number is never bare. The count shares the /review
-    # queue's own predicate (issue #117), so the headline can't drift from it.
-    assert _stat_value(body, "Review backlog") == 1
-    assert "run(s) awaiting adjudication" in body
+    # Roster (2 speakers) surfaces as a summary stat card (issue #91); the value
+    # is tied to its label, and each card keeps its unit as text so the number is
+    # never bare. (The review backlog is no longer a stat card — issue #117 Phase C
+    # promoted it to the static "Continue review (N)" task card, and a dedicated
+    # test pins that count against the queue eligibility.)
     assert _stat_value(body, "Roster") == 2
     assert "enrolled speaker(s)" in body
     # Status table zero-fills the enum: a status with no runs renders a 0 row.
@@ -189,11 +187,16 @@ def test_dashboard_htmx_returns_fragment_without_chrome(
     resp = client.get("/dashboard", headers={"HX-Request": "true"})
     assert resp.status_code == 200
     body = resp.text
-    # Fragment carries the numbers but not the page chrome / nav.
-    assert _stat_value(body, "Review backlog") == 1
-    assert "run(s) awaiting adjudication" in body
+    # Fragment carries the metric numbers but not the page chrome / nav.
+    assert _stat_value(body, "Roster") == 2
+    assert "enrolled speaker(s)" in body
     assert "<nav" not in body
     assert "<h1>Dashboard</h1>" not in body
+    # Consistency policy (issue #117 Phase C): the review backlog is NOT in the
+    # 15s-polled fragment — it lives only on the static task card — so the poll can
+    # never refresh a count that contradicts the "Continue review (N)" card.
+    assert "Review backlog" not in body
+    assert 'class="task-cards"' not in body
     # The fragment must NOT re-emit the polling container or its hx-get: the
     # outer #dashboard-metrics div lives in the full page and persists across
     # innerHTML swaps, so a nested one would duplicate the id and the 15s timer.
@@ -277,9 +280,9 @@ def test_dashboard_matches_metrics_snapshot(
     # review backlog: the backlog is the /review queue's eligibility count —
     # COMPLETED runs with unresolved labels (issue #117), one here. The two
     # numbers are different by design; /metrics exposes the raw status, the
-    # dashboard headline the actionable queue.
+    # dashboard's "Continue review (N)" task card the actionable queue.
     assert 'voxint_runs{status="awaiting_adjudication"} 2' in metrics
-    assert _stat_value(dash, "Review backlog") == 1
+    assert re.search(r'<span class="task-title">Continue review \(1\)', dash)
 
 
 def test_dashboard_malformed_since_degrades_to_default(
@@ -309,6 +312,98 @@ def _stat_value(body: str, label: str) -> int:
     )
     assert match is not None, f"stat card {label!r} missing from dashboard render"
     return int(match.group(1))
+
+
+def _completed_run_id(session_factory: sessionmaker[Session]) -> uuid.UUID:
+    """The single COMPLETED, non-archived run the snapshot seed creates."""
+    from sqlalchemy import select
+
+    with session_factory() as session:
+        return session.execute(
+            select(PipelineRun.id).where(
+                PipelineRun.status == RunStatus.COMPLETED.value,
+                PipelineRun.archived_at.is_(None),
+            )
+        ).scalar_one()
+
+
+def test_dashboard_task_cards_render_first(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Phase C (issue #117): three task cards open the dashboard, above the
+    demoted metrics — the first-run operator sees what to do before any numbers."""
+    seed_snapshot(session_factory)
+    completed = _completed_run_id(session_factory)
+    body = client.get("/dashboard").text
+    # The task list carries exactly the three first-run tasks, as links.
+    assert 'class="task-cards"' in body
+    assert 'href="/runs#add-media"' in body  # Add audio -> Runs Add-media section
+    assert 'href="/review"' in body  # Continue review -> the queue
+    assert f'href="/runs/{completed}"' in body  # Last finished run -> run detail
+    # Task cards sit ABOVE the demoted metrics disclosure, not below it.
+    cards_at = body.index('class="task-cards"')
+    details_at = body.index('<details class="run-details">')
+    assert cards_at < details_at
+    # And above the metrics polling container specifically.
+    assert cards_at < body.index('id="dashboard-metrics"')
+
+
+def test_dashboard_continue_review_count_matches_queue(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """The Continue-review headline shares the /review queue's own eligibility
+    count (issue #117): it cannot drift from adjudication_queue, and the seed's one
+    unresolved COMPLETED run makes it 1 (not the 2 awaiting_adjudication runs)."""
+    from voxint.adjudication.resolver import adjudication_queue
+
+    seed_snapshot(session_factory)
+    with session_factory() as session:
+        eligible = len(adjudication_queue(session))
+    assert eligible == 1
+    body = client.get("/dashboard").text
+    # The task-card count equals the queue eligibility — the single source of this
+    # number, shown once, statically.
+    assert re.search(
+        rf'href="/review">\s*<span class="task-title">Continue review \({eligible}\)',
+        body,
+    )
+
+
+def test_dashboard_last_finished_run_empty_state(client: TestClient) -> None:
+    """With nothing completed, the Last-finished card is honest, quiet text — not a
+    dead link (issue #117 Phase C)."""
+    # No snapshot: the onboarded client has no completed runs.
+    body = client.get("/dashboard").text
+    # The empty card is a non-interactive .is-empty block carrying the honest copy.
+    assert re.search(
+        r'<div class="task-link is-empty">\s*'
+        r'<span class="task-title">Last finished run</span>\s*'
+        r'<span class="task-note">No recordings have finished yet\.</span>',
+        body,
+    )
+    # It is not rendered as a run-detail link (nothing to point at).
+    assert 'href="/runs/None"' not in body
+
+
+def test_dashboard_metrics_behind_disclosure_with_carveouts(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Metrics move inside a "Show run details" <details>, but the ?since= error
+    and the window <select> stay OUTSIDE it — an error and an input are never
+    hidden (issue #117 Phase C, codex carve-outs)."""
+    seed_snapshot(session_factory)
+    body = client.get("/dashboard", params={"since": "not-a-window"}).text
+    details_at = body.index('<details class="run-details">')
+    assert '<summary>Show run details</summary>' in body
+    # The stat cards and detail tables are inside the disclosure.
+    assert body.index('id="dashboard-metrics"') > details_at
+    assert body.index('class="stat-cards"') > details_at
+    assert body.index('<h2>Runs by status</h2>') > details_at
+    # The invalid-?since= notice renders OUTSIDE (before) the disclosure.
+    assert "Unrecognized" in body
+    assert body.index("Unrecognized") < details_at
+    # The time-window control renders OUTSIDE (before) the disclosure too.
+    assert body.index('<select name="since"') < details_at
 
 
 def test_stats_exclude_archived_runs(session_factory: sessionmaker[Session]) -> None:

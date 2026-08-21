@@ -181,6 +181,7 @@ from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
     ReviewFilter,
+    latest_completed_run,
     list_runs,
     parse_review_filter,
     parse_search_filters,
@@ -5523,6 +5524,11 @@ def _register_routes(app: FastAPI) -> None:
                 # page never silently shows a different window than was asked for.
                 since_invalid = True
         stats = collect_stats(session, since=since, now=now)
+        # The 15s htmx poll re-requests this route and swaps ONLY the metrics
+        # fragment; the task-card queries (issue #117 Phase C) feed the static full
+        # page, never that fragment, so skip them on the poll rather than paying for
+        # two queries whose results would be discarded.
+        is_htmx = bool(request.headers.get("HX-Request"))
         context = {
             "request": request,
             "stats": stats,
@@ -5531,12 +5537,6 @@ def _register_routes(app: FastAPI) -> None:
             # table renders in a stable order and zero-fills empty statuses, the
             # same contract format_stats_text/render_prometheus hold.
             "run_statuses": list(RunStatus),
-            # The count of runs actually eligible for review, sharing the queue's
-            # own predicate (issue #117). The prior value counted
-            # AWAITING_ADJUDICATION runs, a status a successful pipeline never
-            # ends in, so the card was structurally wrong; review_backlog_count
-            # derives from adjudication_queue and cannot drift from it.
-            "review_backlog": review_backlog_count(session),
             # Carry the accepted window through the 15s htmx poll so a custom
             # ?since= isn't lost on the first refresh. Only echo a value we
             # actually honored (an invalid one falls back to the default, so we
@@ -5544,11 +5544,17 @@ def _register_routes(app: FastAPI) -> None:
             "since_param": "" if since_invalid or not raw_since else raw_since,
             "since_invalid": since_invalid,
         }
-        template = (
-            "fragments/dashboard_metrics.html"
-            if request.headers.get("HX-Request")
-            else "dashboard.html"
-        )
+        if not is_htmx:
+            # The count of runs actually eligible for review, sharing the queue's
+            # own predicate (issue #117). It powers the static "Continue review (N)"
+            # task card; review_backlog_count derives from adjudication_queue and
+            # cannot drift from it. It is deliberately the ONLY copy of this number
+            # on the page — no live stat-card duplicate that could contradict it.
+            context["review_backlog"] = review_backlog_count(session)
+            # The "Last finished run" task card: newest run by terminal-stage
+            # completion, None when nothing has finished (honest empty state).
+            context["last_completed"] = latest_completed_run(session)
+        template = "fragments/dashboard_metrics.html" if is_htmx else "dashboard.html"
         return templates.TemplateResponse(request, template, context)
 
     # ---- Settings + guided-tutorial lifecycle (issue #3, slice 6) --------------

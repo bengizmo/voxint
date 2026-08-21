@@ -8,18 +8,19 @@
   Snapshot at <time>{{ stats.generated_at.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
   Throughput window since <time>{{ stats.since.strftime("%Y-%m-%d %H:%M:%S UTC") }}</time>.
 </p>
-{% if since_invalid %}
-<p class="notice">Unrecognized <code>?since=</code> value — showing the last 24 hours.</p>
-{% endif %}
+{# The invalid-?since= notice is rendered by dashboard.html OUTSIDE the "Show run
+   details" disclosure (issue #117 Phase C): an error the operator must see is
+   never hidden, and it must not vanish on the 15s poll (the poll drops the bad
+   value and re-takes the default, so the fragment never carries the notice). #}
 
 {# Summary-first stat cards (issue #91). The exact figures the tables below
-   detail, surfaced at a glance; each card keeps its unit as text. #}
+   detail, surfaced at a glance; each card keeps its unit as text. The review
+   backlog is deliberately NOT here (issue #117 Phase C): it is promoted to the
+   static "Continue review (N)" task card on the full page. A second copy inside
+   this 15s-polled fragment would refresh independently and could show a count
+   that contradicts the static card, so this fragment carries throughput and
+   stage detail only. #}
 <dl class="stat-cards">
-  <div class="stat-card">
-    <dt class="stat-label">Review backlog</dt>
-    <dd class="stat-value">{{ review_backlog }}</dd>
-    <dd class="stat-note">run(s) awaiting adjudication</dd>
-  </div>
   <div class="stat-card">
     <dt class="stat-label">Runs in window</dt>
     <dd class="stat-value" data-metric="runs-created">{{ stats.runs_created_count }}</dd>

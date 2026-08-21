@@ -1122,3 +1122,45 @@ def test_list_runs_sidecar_title_wins_over_scraped(
         titles = {item.run_id: item.title for item in page.items}
         assert titles[with_sidecar.id] == "Operator title"
         assert titles[without_sidecar.id] == "Scraped title"
+
+
+def _add_media_section(body: str) -> str:
+    """The rendered "Add media" section (issue #117 Phase C), start to close."""
+    start = body.index('id="add-media"')
+    end = body.index("</section>", start)
+    return body[start:end]
+
+
+def test_runs_add_media_section_wraps_upload_and_url_fetch(client: TestClient) -> None:
+    """Phase C (issue #117): the Runs header exposes a named "Add media" section —
+    the dashboard "Add audio" card's link target — holding both ways in, so
+    elevating the upload never demotes the URL/video workflow."""
+    body = client.get("/runs").text
+    # The anchor the dashboard task card points at (/runs#add-media).
+    assert 'id="add-media"' in body
+    section = _add_media_section(body)
+    assert "<h2>Add media</h2>" in section
+    # Both affordances live inside the section: the upload form...
+    assert 'action="/submit"' in section
+    # ...and, with URL ingestion enabled (the default), the fetch form.
+    assert 'action="/fetch"' in section
+
+
+def test_runs_add_media_section_holds_upload_when_url_fetch_disabled(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """With URL ingestion off the section still holds the upload; the fetch form is
+    gone but its honest disabled notice stays inside the section (issue #117)."""
+    settings = Settings(
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        media_root=tmp_path,
+        ytdlp_enabled=False,
+    )
+    test_client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    test_client.auth = CREDS
+    seed_onboarded(session_factory)
+    section = _add_media_section(test_client.get("/runs").text)
+    assert 'action="/submit"' in section
+    assert 'action="/fetch"' not in section
+    assert "URL ingestion is disabled." in section

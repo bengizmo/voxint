@@ -473,6 +473,38 @@
     .stat-card .stat-label { font-size: var(--t-xs); text-transform: uppercase;
                  letter-spacing: .05em; color: var(--ink-3); margin-top: .1rem; }
     .stat-card .stat-note { font-size: var(--t-xs); color: var(--ink-2); }
+    /* Task-first dashboard entry (issue #117 Phase C). The three things a
+       first-run operator does, rendered first as inviting clickable cards above
+       the demoted metrics. Tokens only; the accent is reserved for the
+       interactive (hover/focus) cue so a resting card never competes with a real
+       primary action. */
+    .task-cards { list-style: none; display: grid;
+                  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+                  gap: .8rem; margin: 1rem 0 1.5rem; padding: 0; }
+    .task-link { display: flex; flex-direction: column; gap: .3rem; height: 100%;
+                 border: 1px solid var(--line); border-radius: var(--r-lg);
+                 background: var(--surface); box-shadow: var(--shadow-1);
+                 padding: 1rem 1.1rem; text-decoration: none; color: var(--ink);
+                 transition: border-color .12s ease, box-shadow .12s ease,
+                             background .12s ease; }
+    a.task-link:hover, a.task-link:focus-visible { border-color: var(--accent);
+                 background: var(--accent-soft); box-shadow: var(--shadow-2); }
+    /* The empty "Last finished run" state is not a link — it reads as quiet,
+       non-interactive text, never inviting a click that goes nowhere. */
+    .task-link.is-empty { background: var(--surface-2); box-shadow: none;
+                 color: var(--ink-2); }
+    .task-title { font-weight: 600; font-size: var(--t-md); overflow-wrap: anywhere; }
+    .task-note { font-size: var(--t-sm); color: var(--ink-2); }
+    a.task-link:hover .task-note, a.task-link:focus-visible .task-note { color: var(--ink); }
+    /* "Show run details" disclosure that demotes the metrics (issue #117 Phase C). */
+    details.run-details { margin: .5rem 0 1rem; }
+    details.run-details > summary { cursor: pointer; font-weight: 600;
+                 color: var(--ink-2); padding: .3rem 0; }
+    /* Runs "Add media" section (issue #117 Phase C): a named landing target for
+       the dashboard "Add audio" card; its H2 anchors the section without a nav
+       item. */
+    .add-media { margin: 0 0 1rem; }
+    .add-media > h2 { margin: .6rem 0 .8rem; font-size: var(--t-md); }
     .minibar { display: inline-block; vertical-align: middle; width: 6rem; height: .5rem;
                border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
                margin-left: .5rem; }
