@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-08-21
+
 ### Fixed
 - **CUDA model-service images crash-looped on startup (regression in 0.22.0).**
   The hardware-telemetry code added in 0.22.0 imported `datetime.UTC`, which
