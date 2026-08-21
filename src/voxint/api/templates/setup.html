@@ -3,8 +3,8 @@
   "welcome": "Welcome",
   "media": "Media folders",
   "vocabulary": "Vocabulary",
-  "llm": "LLM enhancement",
-  "services": "Model services",
+  "llm": "Text clean-up and name hints (optional)",
+  "services": "Readiness",
   "finish": "Finish",
 } %}
 {% block title %}Voxint setup — {{ labels[step.value] }}{% endblock %}
@@ -26,7 +26,7 @@
 {% if step.value == "welcome" %}
   <h1>Welcome to Voxint</h1>
   <p>Voxint transcribes your audio and video, separates who spoke when, and lets you
-     attribute each voice to a real person — so you get a searchable, speaker-labelled
+     attribute each voice to a real person, so you get a searchable, speaker-labelled
      transcript you can trust.</p>
   <p class="muted">This quick setup takes about two minutes. Every step is optional and
      you can revisit it later.</p>
@@ -74,9 +74,9 @@
   </div>
 
 {% elif step.value == "llm" %}
-  <h1>LLM transcript enhancement <span class="muted">(optional)</span></h1>
+  <h1>Text clean-up and name hints <span class="muted">(optional)</span></h1>
   <p>When enabled, Voxint sends transcript segments to an OpenAI-compatible model to
-     clean them up and surface likely speaker names. It's best-effort — a slow or failing
+     clean them up and surface likely speaker names. It's best-effort. A slow or failing
      model never blocks a run; enhancement is simply skipped.</p>
   {% if llm_key_present %}
     {% if llm_key_source == "stored" %}
@@ -97,7 +97,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_setup }}">
     <div class="field">
       <label><input type="checkbox" name="enabled" value="true"{% if llm_enabled %} checked{% endif %}>
-        Enable LLM enhancement</label>
+        Enable text clean-up and name hints</label>
     </div>
     <div class="field">
       <label for="llm_base_url">Endpoint base URL <span class="muted">(blank = use the installation setting)</span></label>
@@ -133,7 +133,7 @@
   <h1>Readiness checks</h1>
   <p>Voxint's transcription, diarization, and speaker-embedding run as separate model
      services (GPU or CPU tier), backed by Postgres and Redis. Here's whether each
-     dependency is reachable right now — <strong>ready</strong> means good to go,
+     dependency is reachable right now: <strong>ready</strong> means good to go,
      <strong>failed</strong> means the pipeline can't run until you fix it, and
      <strong>unverified</strong> means an optional feature couldn't be confirmed:</p>
   {% for check in doctor_checks %}

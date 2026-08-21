@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Voxint — review transcript {{ run.id.hex[:8] }}{% endblock %}
+{% block title %}Voxint — check the words: {{ run_source_title(run) }}{% endblock %}
 {% block body %}
 <p><a href="/review/{{ run.id }}{% if token %}?token={{ token }}{% endif %}">← workbench</a></p>
-<h1>Review transcript <code>{{ run.id.hex[:8] }}</code></h1>
-<p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+<h1 title="{{ run.media_item.source_path }}">{{ run_source_title(run) }}</h1>
+<p class="muted">Check the words · <code>{{ run.id.hex[:8] }}</code></p>
 
 {# This server-rendered line OWNS the claim state, JS on or off — the island
    deliberately renders no unclaimed notice of its own (review finding: the two
@@ -17,8 +17,8 @@
   to review.</span></p>
 {% endif %}
 
-<p class="muted"><a href="/runs/{{ run.id }}/transcript">Read-only transcript</a>
-  (raw ASR evidence, all variants).</p>
+<p class="muted"><a href="/runs/{{ run.id }}/transcript">Read the full transcript</a>
+  (you can switch between versions there).</p>
 
 {% if not lines %}
 <p>No transcript segments for this run.</p>

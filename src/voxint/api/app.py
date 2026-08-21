@@ -1510,6 +1510,14 @@ def _run_source_title(run: PipelineRun) -> str:
     return friendly_media_label(title, run.media_item.source_path)
 
 
+# Register the friendly-title helper as a Jinja global (issue #117): every console
+# surface that names a run (queue, workbench, transcript, dashboard) resolves the
+# title through the one precedence, so the pages never disagree. Registered here,
+# after the definition, rather than in the globals block above (the function is
+# not yet defined there).
+templates.env.globals["run_source_title"] = _run_source_title
+
+
 def _pull_quote_markdown(
     resolved: ResolvedAnnotation,
     lines: Sequence[TranscriptLine],

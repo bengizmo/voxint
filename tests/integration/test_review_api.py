@@ -260,6 +260,13 @@ def test_queue_renders_operator_ergonomics(
 
     body = client.get("/review").text
     assert str(run_id) in body
+    # Task-first vocabulary pass (issue #117): the page is titled "Review" (matching
+    # the nav), not the internal term "Adjudication queue". The queue *table* keeps
+    # its structural aria-label "Review queue" (asserted below) — the H1 rename is
+    # display copy only.
+    assert "<h1>Review</h1>" in body
+    assert "Adjudication queue" not in body
+    assert "confirm who is speaking" in body
     # Friendly label leads; the raw path stays as muted ground truth beneath.
     assert 'class="media-title"' in body
     # No probed duration on this upload → the honest em-dash, not "0:00".
@@ -343,6 +350,98 @@ def test_queue_and_runs_escape_hostile_media_metadata(
         # The quote in source_path cannot break out of the title="..." attribute.
         assert 'onmouseover="alert(1)' not in body
         assert "&#34;" in body or "&quot;" in body
+
+
+def _label_card(body: str, needle: str) -> str:
+    """Return the single ``.label-card`` fragment that contains ``needle`` — a
+    coarse DOM slice so the voice-match assertions test hierarchy (the float lives
+    inside the disclosure, not the visible line) rather than a brittle full string."""
+    fragments = body.split('<div class="label-card')
+    for frag in fragments[1:]:
+        card = frag.split('<div class="label-card')[0]
+        if needle in card:
+            return card
+    raise AssertionError(f"no label card contains {needle!r}")
+
+
+def _seed_ungrounded_cosine(session: Session, media_root: Path) -> uuid.UUID:
+    """A completed run with one label carrying an UNGROUNDED cosine candidate: a
+    named suggestion the grounding gate did not clear (issue #117 fixture)."""
+    media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+    session.add(media)
+    session.flush()
+    run = PipelineRun(media_item_id=media.id, status=RunStatus.COMPLETED.value)
+    session.add(run)
+    session.flush()
+    session.add(
+        DiarizationTurn(
+            pipeline_run_id=run.id,
+            turn_index=0,
+            start_seconds=0.0,
+            end_seconds=8.0,
+            label="S0",
+            embedding=unit(0),
+            embedding_space=SPACE,
+        )
+    )
+    maybe = Speaker(display_name="Maybe Voice")
+    session.add(maybe)
+    session.flush()
+    session.add(
+        SpeakerAssignment(
+            pipeline_run_id=run.id,
+            diarization_label="S0",
+            speaker_id=maybe.id,
+            method="cosine",
+            confidence=0.55,
+            grounded=False,
+        )
+    )
+    session.commit()
+    return run.id
+
+
+def test_workbench_grounded_match_leads_plain_and_hides_raw_score(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Issue #117: a grounded cosine match reads "Strong voice match: <name>" up
+    front; the raw similarity float is tucked inside a CLOSED "Why this match?"
+    disclosure, not the visible evidence line. The honest taxonomy still renders."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)  # S0 grounded → Known Voice @ 0.92
+
+    body = client.get(f"/review/{run_id}").text
+    card = _label_card(body, "Strong voice match: Known Voice")
+
+    # Plain-language match leads; the grounded machine-match pill still renders.
+    assert "Strong voice match: Known Voice" in card
+    assert "machine: Known Voice" in card
+    # The raw float sits inside a closed <details> with a useful accessible name.
+    assert '<details class="match-why">' in card
+    assert "<summary>Why this match?</summary>" in card
+    assert '<details class="match-why" open' not in card  # closed by default
+    visible, _, rest = card.partition('<details class="match-why">')
+    assert "0.92" not in visible  # not in the visible evidence line…
+    assert "0.92" in rest.split("</details>")[0]  # …only behind the reveal.
+
+
+def test_workbench_ungrounded_match_never_claims_strong(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Issue #117: an ungrounded cosine candidate must never say "strong" — it reads
+    "Possible voice match", with the weak score still tucked behind the reveal."""
+    with session_factory() as session:
+        run_id = _seed_ungrounded_cosine(session, media_root)  # S0 ungrounded @ 0.55
+
+    body = client.get(f"/review/{run_id}").text
+    card = _label_card(body, "Possible voice match: Maybe Voice")
+
+    assert "Possible voice match: Maybe Voice" in card
+    assert "Strong voice match" not in card
+    assert '<details class="match-why">' in card
+    visible = card.partition('<details class="match-why">')[0]
+    assert "0.55" not in visible
+    assert "not strong enough to confirm" in card
 
 
 def test_full_review_flow(

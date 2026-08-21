@@ -40,9 +40,9 @@ Everything lives on your own machine. Open the console at
 during install (`VOXINT_USER`, default `admin`, and `VOXINT_PASSWORD`). Nothing
 leaves your computer.
 
-### 1. Open the Review queue and claim a run
+### 1. Open Review and claim a run
 
-Click **Review** in the top navigation. The **adjudication queue** lists every
+Click **Review** in the top navigation. The **Review** page lists every
 completed run that still has voices needing a human ruling. Each row shows:
 
 - a **friendly title** (the recording's own title when it has one, otherwise a
@@ -79,10 +79,12 @@ it took and how many seconds it spoke) plus whatever evidence it could gather
 about the person's identity. Read the evidence carefully, because there are
 **three very different kinds**, and Voxint labels them honestly:
 
-- **A grounded machine match.** "Cosine suggestion: *Jordan* (0.86,
-  grounded)." Voxint compared this voice's sound to speakers you enrolled
-  before and found a close match against real voice evidence. This is the
-  strongest signal, but it is still a suggestion for **you** to accept.
+- **A grounded machine match.** "Strong voice match: *Jordan*." Voxint compared
+  this voice's sound to speakers you enrolled before and found a close match
+  against real voice evidence. Open **Why this match?** to see the exact
+  similarity score behind it. A weaker match reads "Possible voice match"
+  instead. This is the strongest signal, but it is still a suggestion for
+  **you** to accept.
 - **A heard name (a guess).** "Heard name (unverified): *"Alex"*" or
   "Self-introduced (unverified): *"…this is Alex…"*." Someone in the audio said
   a name. That tells you a name is *probably* in the room; it does **not** tell
@@ -328,7 +330,7 @@ A few deliberate rules:
 A run is done when **every voice has a ruling** (the workbench cards all show a
 decision, not "needs ruling") and the **transcript reads right** (the lines you
 care about are verified and corrected). At that point the run drops off the
-Review queue.
+**Review** page.
 
 Now read or export it. The **Download transcript** menu on either the workbench
 or the transcript page offers plain text, Markdown, subtitles (SubRip / WebVTT),

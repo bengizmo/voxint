@@ -144,14 +144,29 @@
   </h2>
   <p class="muted">
     {{ s.turn_count }} turns, {{ "%.0f"|format(s.total_seconds) }}s.
+    {# Plain-language voice match (issue #117). "Strong" is conditional on the
+       grounded flag: an ungrounded candidate must never claim strong evidence. #}
     {% if s.cosine_speaker_name %}
-      Cosine suggestion: {{ s.cosine_speaker_name }}
-      ({{ "%.2f"|format(s.cosine_confidence or 0) }}{{ ", grounded" if s.cosine_grounded }}).
+      {% if s.cosine_grounded %}Strong voice match: {{ s.cosine_speaker_name }}.
+      {% else %}Possible voice match: {{ s.cosine_speaker_name }}.{% endif %}
     {% endif %}
     {% if s.llm_hint_name %}
       Heard name (unverified): “{{ s.llm_hint_name }}”.
     {% endif %}
   </p>
+  {% if s.cosine_speaker_name %}
+  {# The raw similarity and the grounded flag are evidence, not the headline: tuck
+     them behind a closed disclosure so the card leads with the plain match (issue
+     #117). Rendered as a sibling block — <details> is flow content and cannot nest
+     inside the <p> above. Only shown when cosine evidence exists. #}
+  <details class="match-why">
+    <summary>Why this match?</summary>
+    <p class="muted">
+      Voice similarity {{ "%.2f"|format(s.cosine_confidence or 0) }} to
+      {{ s.cosine_speaker_name }}{% if s.cosine_grounded %}, strong enough to trust on its own{% else %}, not strong enough to confirm without your check{% endif %}.
+    </p>
+  </details>
+  {% endif %}
   {# "Preview this speaker" (issue #49): seeks a CLEAN diarization turn for this
      label (longest non-overlap, fallback longest), NOT the longest transcript
      segment — a transcript segment may contain other voices. Rendered disabled;

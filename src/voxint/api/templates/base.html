@@ -337,6 +337,11 @@
     details.embeddings, details.roster-inactive { margin: .6rem 0; }
     details.embeddings summary, details.roster-inactive summary {
       cursor: pointer; font-size: .9rem; color: var(--ink-2); }
+    /* Voice-match evidence reveal (issue #117): the raw similarity + grounded flag,
+       tucked under the plain-language match on a label card. */
+    details.match-why { margin: .2rem 0 .4rem; }
+    details.match-why summary { cursor: pointer; font-size: .85rem; color: var(--ink-2); }
+    details.match-why p { margin: .3rem 0 0; font-size: .85rem; }
     /* Export picker (issue #52) */
     details.export-menu { margin: 1rem 0; }
     details.export-menu summary { cursor: pointer; font-weight: 600; }
@@ -552,7 +557,7 @@
   <nav class="top">
     <a href="/dashboard"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
-    <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review queue</a>
+    <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review</a>
     <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
     <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
   </nav>

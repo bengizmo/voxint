@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %}Voxint — adjudication queue{% endblock %}
+{% block title %}Voxint — review{% endblock %}
 {% block body %}
-<h1>Adjudication queue</h1>
-<p class="muted">Completed runs with voices still needing a human ruling. Signed in as {{ operator }}.</p>
+<h1>Review</h1>
+<p class="muted">Recordings that finished and still need you to confirm who is speaking. Signed in as {{ operator }}.</p>
 {% if not entries %}
 <p>Nothing to review — every completed run is fully resolved. 🎉</p>
 {% else %}

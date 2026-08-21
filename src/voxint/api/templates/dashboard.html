@@ -2,10 +2,7 @@
 {% block title %}Voxint — dashboard{% endblock %}
 {% block body %}
 <h1>Dashboard</h1>
-<p class="muted">
-  Run health and throughput at a glance — the same figures as
-  <code>GET /metrics</code> and <code>voxint stats</code>, refreshed automatically.
-</p>
+<p class="muted">A quick look at your recordings.</p>
 {# In-page window picker (issue #56). Options are exactly the strings parse_since
    already accepts, so this needs no new parsing; an empty ?since= defaults to
    24h, so "24h" is selected then too. A plain GET reloads the page, which
