@@ -247,6 +247,35 @@ Response:
   (the two rules score on different scales), `suspect_span` is an example
   offending substring (≤120 chars). Both are `null` when `suspect` is false.
 
+### ROCm `BATCH_SIZE=16` VRAM soak (measured, RX 9060 XT 16 GB, 2026-08-21)
+
+The shipped ROCm default is `BATCH_SIZE=16`. This records the measured VRAM cost
+of that default on the maintainer AMD hardware, so the "keep 16 on ROCm" stance
+rests on evidence rather than the ordinal argument that 16 GB beats 12 GB.
+
+- **Setup**: whisper `0.22.0-rocm` (`device: rocm`, large-v2, int8), one
+  speech-dense 761-second file (25 concatenated LibriSpeech clips producing 28
+  output segments, so more than 16 VAD windows and past the batch-16 boundary),
+  `concurrency=1`. VRAM read two ways that reconcile: the per-process amdgpu
+  `fdinfo` `drm-memory-vram` on the render node (isolates whisper from the
+  desktop compositor) and the card-total `mem_info_vram_used` sysfs counter. The
+  local LLM was stopped first so whisper had the card, matching the shipped ROCm
+  deployment where only whisper is GPU-resident.
+- **Result (`vad_filter=true`, the batched pipeline `BATCH_SIZE` governs)**:
+  whisper sat at 1.97 GiB idle-loaded and peaked at **13.06 GiB** during decode
+  (a batch-driven rise of about 11.1 GiB). Peak VRAM is bounded by the batch, not
+  the file length. No out-of-memory, no container restart (restart count 0), zero
+  admission rejects, transcript correct.
+- **`vad_filter=false`** bypasses the batched pipeline (raw
+  `WhisperModel.transcribe`), so it does not exercise the `BATCH_SIZE` path; it
+  ran as a functional smoke only and passed (229 raw segments, transcript
+  correct, no OOM).
+- **Verdict**: `BATCH_SIZE=16` fits a 16 GB AMD card with roughly 2.9 GiB of
+  headroom and is safe to ship there. It is adequate, not ample: a 12 GB AMD card
+  would exceed VRAM at batch 16 (13.06 GiB peak) and must lower `BATCH_SIZE` by
+  hand (see [setup.md](setup.md) and the tuning table below). This is
+  infrastructure evidence for the shipped default, not a numerics oracle.
+
 ## pyannote: `POST /v1/diarize` (port 8024)
 
 Model: **pyannote/speaker-diarization-3.1** on pyannote.audio **3.1.1**
