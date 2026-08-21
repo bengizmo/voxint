@@ -203,6 +203,12 @@ offline harness: name accuracy against ground truth, acoustic agreement
 verdicts, two-voter fusion, regression gate metrics. It is documented in
 [harness.md](harness.md) and exposed as `voxint score …` (file-based, DB-free).
 
+The `match_candidates` evidence (issue #113) is what closes the loop: the
+maintainer driver `tools/export_match_evidence.py` renders live runs, including
+those near-miss decisions, into the harness input files, so the gates above can
+be measured and a first attribution baseline produced (epic #112). See the
+"Feeding the harness from live runs" section of [harness.md](harness.md).
+
 ## See also
 
 - [architecture.md](architecture.md): where these gates sit in the pipeline and
