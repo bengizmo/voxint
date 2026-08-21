@@ -213,6 +213,28 @@ def test_mixed_version_old_service_without_resources(
     body = resp.text
     assert "GPU aaaaaaaa" in body  # aggregated card still shown
     assert "transcription" in body  # the telemetry-bearing service's queue row
+    # The old/down service is NOT hidden: it appears in the queue table with its
+    # telemetry marked unavailable rather than silently dropped.
+    assert "speaker embedding" in body
+    assert "unavailable" in body
+
+
+def test_dashboard_strip_names_partial_telemetry_loss(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One service reports, another reported nothing: the strip must not claim
+    # "no hardware warnings" without qualifying that a service is unavailable.
+    snap = ResourceSnapshot(
+        gpus=(_gpu(util=30),),
+        services=(
+            _view("transcription", _admission(pending=1)),
+            _view("speaker embedding", None),
+        ),
+        collected_age_seconds=0.0,
+    )
+    _patch_snapshot(monkeypatch, snap)
+    body = client.get("/dashboard").text
+    assert "Telemetry unavailable for: speaker embedding" in body
 
 
 def test_resources_page_renders_unknown_readings(

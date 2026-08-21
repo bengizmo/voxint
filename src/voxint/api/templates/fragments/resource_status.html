@@ -45,8 +45,9 @@
 {% endif %}
 
 <h2>Service queues</h2>
-{% set admissions = snapshot.services | selectattr("admission") | list %}
-{% if admissions %}
+{% if snapshot.services %}
+{# Every probed service is listed, even one that reported no telemetry, so a
+   down or older service is never silently dropped from the view. #}
 <div class="table-wrap">
 <table>
   <thead><tr>
@@ -54,13 +55,18 @@
     <th scope="col">Queue (now)</th><th scope="col">Rejected (since restart)</th>
   </tr></thead>
   <tbody>
-    {% for v in admissions %}
+    {% for v in snapshot.services %}
     <tr>
       <td>{{ v.name }}</td>
       <td>{{ "yes" if v.up else "no" }}</td>
       <td>{{ v.device or "unknown" }}</td>
+      {% if v.admission is not none %}
       <td>{{ v.admission.pending }}/{{ v.admission.max_pending }}</td>
       <td>{{ v.admission.rejected_since_start }}</td>
+      {% else %}
+      <td>unavailable</td>
+      <td>unavailable</td>
+      {% endif %}
     </tr>
     {% endfor %}
   </tbody>

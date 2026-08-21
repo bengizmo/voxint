@@ -374,6 +374,9 @@ class ResourceStripView:
     telemetry_present: bool
     gpus: tuple[GpuActivity, ...]
     warnings: tuple[ResourceWarning, ...]
+    # Services that reported no telemetry block at all (down, or an older build):
+    # surfaced neutrally so a partial loss is never rendered as an all-clear.
+    unavailable_services: tuple[str, ...]
     collected_age_seconds: float
 
 
@@ -435,7 +438,10 @@ def build_resource_strip(snapshot: ResourceSnapshot) -> ResourceStripView:
             )
     for view in snapshot.services:
         adm = view.admission
-        if adm is not None and adm.max_pending > 0 and adm.pending >= adm.max_pending:
+        # `pending >= max_pending` means the queue is turning work away right now.
+        # No `max_pending > 0` guard: a service configured to accept nothing
+        # (max_pending 0) rejects every request and must not read as all-clear.
+        if adm is not None and adm.pending >= adm.max_pending:
             warnings.append(
                 ResourceWarning(
                     kind="queue_full",
@@ -444,6 +450,10 @@ def build_resource_strip(snapshot: ResourceSnapshot) -> ResourceStripView:
                     remedy="Wait for the current work to finish before adding more audio.",
                 )
             )
+    # A service that reported no resources block at all (down, or an older build
+    # without telemetry): neither a GPU nor an admission reading. Surfaced as a
+    # neutral qualifier so a partial loss never renders as "no warnings".
+    unavailable_services = tuple(v.name for v in snapshot.services if v.admission is None)
     telemetry_present = bool(snapshot.gpus) or any(
         v.admission is not None for v in snapshot.services
     )
@@ -451,6 +461,7 @@ def build_resource_strip(snapshot: ResourceSnapshot) -> ResourceStripView:
         telemetry_present=telemetry_present,
         gpus=gpus,
         warnings=tuple(warnings),
+        unavailable_services=unavailable_services,
         collected_age_seconds=snapshot.collected_age_seconds,
     )
 
@@ -535,11 +546,11 @@ def render_resource_prometheus(snapshot: ResourceSnapshot) -> str:
     Series are keyed by GPU uuid / service name, discovered at runtime, so unlike
     the DB metrics there is no fixed label set to zero-fill; a metric line is
     emitted only when its value is present (a null reading omits the sample rather
-    than inventing a zero). All gauges: every value is a current reading or a
-    counter that resets on service restart, so none carries a monotonic-counter
-    ``_total`` suffix (``promtool check metrics`` would flag that on these).
-    Returns an empty string when no telemetry is present so ``/metrics`` appends
-    nothing rather than empty metric families.
+    than inventing a zero). The instantaneous readings and the max-merged
+    throttle-event count are gauges; only ``voxint_service_admission_rejected_total``
+    is a genuine per-process monotonic counter. Returns an empty string when no
+    telemetry is present so ``/metrics`` appends nothing rather than empty metric
+    families.
     """
     out: list[str] = []
 
@@ -592,25 +603,32 @@ def render_resource_prometheus(snapshot: ResourceSnapshot) -> str:
 
     admission_services = [v for v in snapshot.services if v.admission is not None]
     if admission_services:
-        for metric, help_text, field in (
+        # pending / max_pending are instantaneous (gauges); rejected_since_start
+        # is monotonic within a process, so it is a counter — a service restart
+        # is a normal counter reset Prometheus handles, and the `_total` name lets
+        # rate()/increase() work.
+        for metric, mtype, help_text, field in (
             (
                 "voxint_service_admission_pending",
+                "gauge",
                 "In-flight and queued requests at the service.",
                 "pending",
             ),
             (
                 "voxint_service_admission_max_pending",
+                "gauge",
                 "Admission ceiling before the service rejects.",
                 "max_pending",
             ),
             (
-                "voxint_service_admission_rejected_since_start",
-                "Requests rejected since service start.",
+                "voxint_service_admission_rejected_total",
+                "counter",
+                "Requests rejected by the service since it started.",
                 "rejected_since_start",
             ),
         ):
             out.append(f"# HELP {metric} {help_text}")
-            out.append(f"# TYPE {metric} gauge")
+            out.append(f"# TYPE {metric} {mtype}")
             for v in admission_services:
                 assert v.admission is not None  # narrowed by the filter above
                 value = getattr(v.admission, field)

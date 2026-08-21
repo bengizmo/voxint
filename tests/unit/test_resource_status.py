@@ -486,9 +486,23 @@ class TestStrip:
         svc = _view("transcription", admission=_admission(pending=1, max_pending=8, rejected=42))
         assert rs.build_resource_strip(_snapshot(services=(svc,))).warnings == ()
 
-    def test_zero_max_pending_never_warns(self) -> None:
+    def test_zero_capacity_queue_warns(self) -> None:
+        # max_pending 0 means the service accepts nothing and rejects every
+        # request; a 0/0 queue is turning work away and must not read as calm.
         svc = _view("transcription", admission=_admission(pending=0, max_pending=0))
-        assert rs.build_resource_strip(_snapshot(services=(svc,))).warnings == ()
+        strip = rs.build_resource_strip(_snapshot(services=(svc,)))
+        assert [w.kind for w in strip.warnings] == ["queue_full"]
+
+    def test_partial_telemetry_loss_is_named_not_all_clear(self) -> None:
+        # One service reports, another reported nothing (down or older build).
+        # The reporting service keeps telemetry_present true, but the missing one
+        # is named as unavailable rather than swallowed into "no warnings".
+        present = _view("transcription", admission=_admission(pending=1))
+        missing = _view("speaker embedding", admission=None)
+        strip = rs.build_resource_strip(_snapshot(services=(present, missing)))
+        assert strip.telemetry_present is True
+        assert strip.warnings == ()
+        assert strip.unavailable_services == ("speaker embedding",)
 
 
 class TestJsonRenderer:
@@ -525,6 +539,17 @@ class TestPrometheusRenderer:
         assert 'voxint_service_admission_max_pending{service="transcription"} 8' in text
         assert "# TYPE voxint_gpu_utilization_percent gauge" in text
         assert text.endswith("\n")
+
+    def test_rejected_is_a_counter_not_a_gauge(self) -> None:
+        # rejected_since_start is monotonic within a process, so it is exposed as
+        # a counter (a restart is a normal reset) with the `_total` name.
+        snap = _snapshot(
+            services=(_view("transcription", admission=_admission(rejected=5)),),
+        )
+        text = rs.render_resource_prometheus(snap)
+        assert "# TYPE voxint_service_admission_rejected_total counter" in text
+        assert 'voxint_service_admission_rejected_total{service="transcription"} 5' in text
+        assert "voxint_service_admission_rejected_since_start" not in text
 
     def test_throttle_active_bool_becomes_one_zero(self) -> None:
         on = rs.render_resource_prometheus(_snapshot(gpus=(_gpu(throttle_active=True),)))

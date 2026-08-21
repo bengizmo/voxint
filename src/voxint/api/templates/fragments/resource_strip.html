@@ -9,8 +9,10 @@
   {% if not resource_strip.telemetry_present %}
   <p class="muted">Hardware status unavailable. No model service reported telemetry.</p>
   {% else %}
+    {# No role="status": the whole strip is re-swapped every 15s poll, so a live
+       region would re-announce a standing warning on every refresh. #}
     {% for w in resource_strip.warnings %}
-    <div class="notice resource-warning" role="status">
+    <div class="notice resource-warning">
       <strong>{{ w.message }}</strong>
       <span class="remedy">{{ w.remedy }}</span>
     </div>
@@ -23,5 +25,10 @@
       <span class="muted">No hardware warnings.</span>
       {% endif %}
     </div>
+    {# Partial telemetry loss: name the services we heard nothing from rather
+       than letting "no warnings" imply everything reported. Neutral, not amber. #}
+    {% if resource_strip.unavailable_services %}
+    <p class="muted">Telemetry unavailable for: {{ resource_strip.unavailable_services | join(", ") }}.</p>
+    {% endif %}
   {% endif %}
 </section>
