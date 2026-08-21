@@ -403,3 +403,315 @@ def test_update_env_keys_dedupes_duplicate_tier_lines(repo: Path) -> None:
     assert "-f compose.cpu.yaml" in log
 
 
+# --------------------------------------------------------------------------- #
+# Hardware-aware conservative defaults (issue #96): host GPU detection, profile
+# selection, compose.hardware.yaml generation, and compose-chain wiring. All via
+# the library seam with a fake nvidia-smi on PATH -- no GPU or Docker daemon.
+# --------------------------------------------------------------------------- #
+NO_NVIDIA = {"VOXINT_NVIDIA_SMI": "/nonexistent/nvidia-smi"}
+
+
+def _fake_nvidia_smi(repo: Path, body: str) -> None:
+    # A fake nvidia-smi in fakebin shadows any real one (fakebin is prepended to
+    # PATH), so these tests are deterministic on GPU and GPU-less hosts alike.
+    p = repo / "fakebin" / "nvidia-smi"
+    p.write_text("#!/usr/bin/env bash\n" + body + "\n")
+    p.chmod(0o755)
+
+
+def run_script(
+    repo: Path, args: list[str], extra_env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    """Run install.sh as a real program (main runs), not via the library seam."""
+    env = os.environ.copy()
+    env["PATH"] = f"{repo / 'fakebin'}:{env['PATH']}"
+    env["FAKE_DOCKER_LOG"] = str(repo / "docker.log")
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        ["bash", str(repo / "scripts" / "install.sh"), *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("NVIDIA GeForce RTX 3060", "nvidia_geforce_rtx_3060"),
+        ("  NVIDIA   GeForce  RTX 3060  ", "nvidia_geforce_rtx_3060"),
+        ("Quadro RTX 4000", "quadro_rtx_4000"),
+        ("Tesla T4", "tesla_t4"),
+        ("weird!!name@@here", "weirdnamehere"),
+        ("", ""),
+    ],
+)
+def test_normalize_gpu_name(repo: Path, raw: str, expected: str) -> None:
+    proc = run_lib(repo, f'normalize_gpu_name "{raw}"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == expected
+
+
+def test_detect_nvidia_gpu_single_card(repo: Path) -> None:
+    _fake_nvidia_smi(repo, "printf 'NVIDIA GeForce RTX 3060, 12288\\n'")
+    proc = run_lib(
+        repo,
+        'detect_nvidia_gpu\nprintf "%s|%s|%s" "$GPU_NAME" "$GPU_VRAM_MIB" "$GPU_SIGNATURE"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "NVIDIA GeForce RTX 3060|12288|nvidia_geforce_rtx_3060|12288"
+
+
+def test_detect_nvidia_gpu_absent_is_unknown(repo: Path) -> None:
+    proc = run_lib(
+        repo,
+        'detect_nvidia_gpu\nprintf "[%s]" "$GPU_SIGNATURE"',
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[]"
+
+
+def test_detect_nvidia_gpu_command_failure_is_unknown(repo: Path) -> None:
+    _fake_nvidia_smi(repo, "exit 9")
+    proc = run_lib(repo, 'detect_nvidia_gpu\nprintf "[%s]" "$GPU_SIGNATURE"')
+    assert proc.returncode == 0, proc.stderr  # set -eu must survive the failure
+    assert proc.stdout == "[]"
+
+
+def test_detect_nvidia_gpu_mixed_multi_gpu_is_unknown(repo: Path) -> None:
+    _fake_nvidia_smi(
+        repo,
+        "printf 'NVIDIA GeForce RTX 3060, 12288\\nQuadro RTX 4000, 8192\\n'",
+    )
+    proc = run_lib(repo, 'detect_nvidia_gpu\nprintf "[%s]" "$GPU_SIGNATURE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[]"  # differing signatures -> we do not guess
+
+
+def test_detect_nvidia_gpu_identical_multi_gpu_shares_signature(repo: Path) -> None:
+    _fake_nvidia_smi(
+        repo,
+        "printf 'NVIDIA GeForce RTX 3060, 12288\\nNVIDIA GeForce RTX 3060, 12288\\n'",
+    )
+    proc = run_lib(repo, 'detect_nvidia_gpu\nprintf "%s" "$GPU_SIGNATURE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "nvidia_geforce_rtx_3060|12288"
+
+
+def test_detect_nvidia_gpu_mig_is_unknown(repo: Path) -> None:
+    _fake_nvidia_smi(repo, "printf 'NVIDIA A100-SXM4-40GB MIG 1g.5gb, 4864\\n'")
+    proc = run_lib(repo, 'detect_nvidia_gpu\nprintf "[%s]" "$GPU_SIGNATURE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[]"
+
+
+def test_detect_nvidia_gpu_malformed_vram_is_unknown(repo: Path) -> None:
+    _fake_nvidia_smi(repo, "printf 'NVIDIA GeForce RTX 3060, N/A\\n'")
+    proc = run_lib(repo, 'detect_nvidia_gpu\nprintf "[%s]" "$GPU_SIGNATURE"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "[]"
+
+
+def test_select_hardware_profile_unknown_fallback(repo: Path) -> None:
+    # No detection -> empty signature -> conservative fallback: cap concurrency
+    # and pending queue, and NEVER set BATCH_SIZE (a numerics knob).
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\n"
+        'printf "%s|%s|%s|[%s]" "$PROFILE_ID" "$PROFILE_CONCURRENCY" '
+        '"$PROFILE_MAX_PENDING" "$PROFILE_BATCH_SIZE"',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == "nvidia-unknown-v1|1|1|[]"
+
+
+def test_render_hardware_override_has_no_batch_size(repo: Path) -> None:
+    proc = run_lib(repo, "select_hardware_profile\nrender_hardware_override")
+    assert proc.returncode == 0, proc.stderr
+    out = proc.stdout
+    assert out.startswith("# voxint:hardware-override v1\n")
+    assert "# profile: nvidia-unknown-v1" in out
+    assert "--concurrency=1" in out
+    assert 'MAX_PENDING_REQUESTS: "1"' in out
+    assert "BATCH_SIZE" not in out  # the load-bearing numerics guarantee
+
+
+def test_render_hardware_override_is_deterministic(repo: Path) -> None:
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\na=$(render_hardware_override)\n"
+        'b=$(render_hardware_override)\n[ "$a" = "$b" ] && echo SAME || echo DIFF',
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "SAME"
+
+
+def test_generated_worker_command_matches_base_compose(repo: Path) -> None:
+    # DRIFT GUARD: the override restates the whole worker command (Compose
+    # replaces command: wholesale), so WORKER_BASE_COMMAND must stay byte-equal
+    # to compose.yaml's worker command. If the base command ever changes, this
+    # fails and forces the generator to move in lockstep.
+    import yaml
+
+    compose = yaml.safe_load((repo / "compose.yaml").read_text())
+    base_command = compose["services"]["worker"]["command"]
+
+    proc = run_lib(repo, 'printf "%s" "$WORKER_BASE_COMMAND"')
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout == base_command, (
+        "compose.yaml worker command drifted from WORKER_BASE_COMMAND in install.sh"
+    )
+
+    rendered = run_lib(repo, "select_hardware_profile\nrender_hardware_override")
+    assert f"command: {base_command} --concurrency=1" in rendered.stdout
+
+
+def test_write_hardware_override_first_write(repo: Path) -> None:
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nwrite_hardware_override\necho RC=$?",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=0" in proc.stdout
+    target = repo / "compose.hardware.yaml"
+    assert target.exists()
+    assert target.read_text().startswith("# voxint:hardware-override v1\n")
+    assert stat.S_IMODE(target.stat().st_mode) == 0o644
+    assert "BATCH_SIZE" not in target.read_text()
+
+
+def test_write_hardware_override_idempotent(repo: Path) -> None:
+    # Writing twice leaves identical content and, crucially, the second call
+    # returns BEFORE re-validating (only one docker invocation is logged).
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nwrite_hardware_override\nwrite_hardware_override\necho RC=$?",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=0" in proc.stdout
+    log = (repo / "docker.log").read_text()
+    assert log.count("config --quiet") == 1  # second write was a no-op
+
+
+def test_write_hardware_override_refuses_unmarked_operator_file(repo: Path) -> None:
+    operator = "services:\n  worker:\n    command: my own thing\n"
+    (repo / "compose.hardware.yaml").write_text(operator)
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nif write_hardware_override; then echo RC=0; else echo RC=$?; fi",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=1" in proc.stdout  # deliberately declined, not a hard failure
+    assert (repo / "compose.hardware.yaml").read_text() == operator  # untouched
+    assert "was not generated by the installer" in proc.stderr
+
+
+def test_write_hardware_override_refuses_symlink(repo: Path, tmp_path: Path) -> None:
+    victim = tmp_path / "victim.yaml"
+    victim.write_text("services: {}\n")
+    (repo / "compose.hardware.yaml").symlink_to(victim)
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nif write_hardware_override; then echo RC=0; else echo RC=$?; fi",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=1" in proc.stdout
+    assert victim.read_text() == "services: {}\n"  # symlink target unharmed
+
+
+def test_write_hardware_override_validation_failure_is_atomic(repo: Path) -> None:
+    # A failing compose validation must abort the write with a clear error and
+    # leave no target and no temp file behind.
+    (repo / "fakebin" / "docker").write_text("#!/usr/bin/env bash\nexit 1\n")
+    (repo / "fakebin" / "docker").chmod(0o755)
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nwrite_hardware_override",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode != 0
+    assert "failed Compose validation" in proc.stderr
+    assert not (repo / "compose.hardware.yaml").exists()
+    assert not list(repo.glob(".compose.hardware.tmp.*"))  # temp cleaned up
+
+
+def _write_managed_hardware_file(repo: Path) -> None:
+    run_lib(
+        repo,
+        "select_hardware_profile\nwrite_hardware_override",
+        extra_env=NO_NVIDIA,
+    )
+
+
+def test_compose_file_args_appends_hardware_for_gpu_only(repo: Path) -> None:
+    _write_managed_hardware_file(repo)
+    assert (repo / "compose.hardware.yaml").exists()
+    gpu = run_lib(repo, "compose_file_args_for_tier gpu")
+    assert gpu.stdout == "-f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml"
+    for tier, base in [
+        ("cpu", "-f compose.yaml -f compose.cpu.yaml"),
+        ("rocm", "-f compose.yaml -f compose.rocm.yaml"),
+        ("metal", "-f compose.yaml -f compose.metal.yaml"),
+        ("none", "-f compose.yaml"),
+    ]:
+        proc = run_lib(repo, f"compose_file_args_for_tier {tier}")
+        assert proc.stdout == base, f"{tier} must not fold in the GPU hardware file"
+
+
+def test_compose_file_args_ignores_unmarked_hardware_file(repo: Path) -> None:
+    (repo / "compose.hardware.yaml").write_text("services: {}\n")  # no marker
+    proc = run_lib(repo, "compose_file_args_for_tier gpu")
+    assert proc.stdout == "-f compose.yaml -f compose.gpu.yaml"
+
+
+def test_compose_file_args_appends_operator_override_last(repo: Path) -> None:
+    _write_managed_hardware_file(repo)
+    (repo / "compose.override.yaml").write_text(
+        'services:\n  api:\n    environment:\n      FOO: "bar"\n'
+    )
+    gpu = run_lib(repo, "compose_file_args_for_tier gpu")
+    assert gpu.stdout == (
+        "-f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml -f compose.override.yaml"
+    )
+    cpu = run_lib(repo, "compose_file_args_for_tier cpu")
+    assert cpu.stdout == "-f compose.yaml -f compose.cpu.yaml -f compose.override.yaml"
+
+
+def test_dc_passes_hardware_file_to_docker(repo: Path) -> None:
+    _write_managed_hardware_file(repo)
+    proc = run_lib(
+        repo,
+        "COMPOSE_FILE_ARGS=$(compose_file_args_for_tier gpu)\ndc config --quiet",
+    )
+    assert proc.returncode == 0, proc.stderr
+    log = (repo / "docker.log").read_text()
+    assert "-f compose.gpu.yaml -f compose.hardware.yaml config --quiet" in log
+
+
+def test_hardware_dry_run_prints_yaml_and_writes_nothing(repo: Path) -> None:
+    _fake_nvidia_smi(repo, "printf 'NVIDIA GeForce RTX 3060, 12288\\n'")
+    proc = run_script(repo, ["--hardware-dry-run"])
+    assert proc.returncode == 0, proc.stderr
+    # YAML body on stdout (so `2>/dev/null` yields just the file).
+    assert "# voxint:hardware-override v1" in proc.stdout
+    assert 'MAX_PENDING_REQUESTS: "1"' in proc.stdout
+    assert "BATCH_SIZE" not in proc.stdout
+    # Human annotations on stderr; nothing written or started.
+    assert "dry run" in proc.stderr
+    assert not (repo / "compose.hardware.yaml").exists()
+    assert not (repo / ".env").exists()
+
+
+def test_hardware_dry_run_unknown_gpu_is_conservative(repo: Path) -> None:
+    proc = run_script(repo, ["--hardware-dry-run"], extra_env=NO_NVIDIA)
+    assert proc.returncode == 0, proc.stderr
+    assert "# profile: nvidia-unknown-v1" in proc.stdout
+    assert "--concurrency=1" in proc.stdout

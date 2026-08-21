@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Installer-generated, per-host GPU sizing (issue #96); regenerated on install.
+compose.hardware.yaml
+
 # Python
 __pycache__/
 *.py[cod]

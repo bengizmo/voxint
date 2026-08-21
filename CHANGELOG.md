@@ -78,6 +78,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   export from an unchanged database is byte-for-byte identical, and it refuses to
   run on a working tree with uncommitted tracked changes so the recorded code
   version means what it says.
+- **Hardware-aware conservative install defaults (#96).** On the GPU tier,
+  `scripts/install.sh` now reads the host GPU with `nvidia-smi`, matches it
+  against a tested-profile table, and writes a generated, marker-owned
+  `compose.hardware.yaml` that it merges into the stack it launches. For a GPU
+  with no measured profile yet, it applies a safe fallback that only serializes
+  scheduling: worker `--concurrency=1` and whisper `MAX_PENDING_REQUESTS=1`. It
+  deliberately leaves `BATCH_SIZE` untouched, since that value moves whisper's
+  output and so must come from a parity-gated profile plus a real-GPU
+  out-of-memory soak, not the installer. The generated file is regenerated each
+  run and refreshed on a GPU swap; a hand-written one (no marker) is left alone.
+  The installer also now merges an operator's own `compose.override.yaml` last of
+  all, so it wins over the base stack, the tier overlay, and the hardware
+  baseline. `./scripts/install.sh --hardware-dry-run` previews the detection and
+  the file without writing or starting anything. See `docs/operations.md` (#96).
 
 ### Fixed
 - **The titanet and pyannote CUDA images no longer enable the PyTorch

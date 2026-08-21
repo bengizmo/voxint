@@ -237,6 +237,50 @@ is restarted. Shrinking that first allocation is the fix.
 > whisper`) to clear the context, then apply the settings below so it does not
 > recur.
 
+#### What the installer applies automatically
+
+On the GPU tier, `scripts/install.sh` reads the host GPU with `nvidia-smi`,
+writes a generated `compose.hardware.yaml` with a conservative baseline, and
+merges it into the compose chain it launches. For any GPU it does not yet have a
+measured profile for, that baseline caps two schedule-only levers:
+
+```yaml
+services:
+  worker:
+    command: celery -A voxint.worker.app worker --loglevel=INFO --concurrency=1
+  whisper:
+    environment:
+      MAX_PENDING_REQUESTS: "1"
+```
+
+`--concurrency=1` serializes runs at the worker so the GPU services are never
+asked to hold several transcriptions at once, and `MAX_PENDING_REQUESTS=1`
+bounds whisper's own admission queue. Neither changes transcription output:
+whisper serializes inference behind a single model lock, so concurrency and
+queue depth set scheduling, not numerics. The baseline deliberately does **not**
+set `BATCH_SIZE`, which does move whisper's output (it feeds the decode config),
+so an automatic value has to come from a per-GPU profile that has passed the
+parity gate and an out-of-memory soak on real hardware. Until such a profile
+exists for your card, `BATCH_SIZE` stays at the image default and you tune it by
+hand (below) if a run exhausts VRAM.
+
+The file is installer-owned: its first line carries a `# voxint:hardware-override`
+marker, it is regenerated on every install run, and it is refreshed if you swap
+cards. A `compose.hardware.yaml` you wrote yourself (no marker) is left untouched
+and is not loaded. To preview what the installer would write, changing nothing,
+run:
+
+```bash
+./scripts/install.sh --hardware-dry-run
+```
+
+Put your own hand-tuning in `compose.override.yaml`, not in the generated file.
+The installer launches with an explicit file list, so it now merges your
+`compose.override.yaml` last of all, letting it win over the base stack, the tier
+overlay, and the hardware baseline. Precedence runs lowest to highest:
+`compose.yaml`, the tier overlay (`compose.gpu.yaml`), `compose.hardware.yaml`,
+then `compose.override.yaml`.
+
 To watch the pressure these settings fight, run `voxint doctor` or read a
 service's `/healthz`: both surface live per-GPU VRAM used against total,
 temperature, and throttle state (see "Metrics & monitoring"). A card sitting
@@ -257,8 +301,9 @@ startup, so a compose `environment:` override changes them without rebuilding th
 image. Worker concurrency is a command-line flag, so it is set by overriding the
 worker `command:`.
 
-A conservative profile for one modest GPU, as a compose override
-(`compose.override.yaml`, which `docker compose` merges automatically):
+To go beyond the installer's baseline, put your own settings in
+`compose.override.yaml` (it merges last, so it wins). A fuller conservative
+profile for one very small card also lowers `BATCH_SIZE`:
 
 ```yaml
 services:
@@ -318,8 +363,10 @@ and behavior is unchanged; the split is purely a deployment choice.
 If your existing worker command sets `-Q`, drop the flag or use
 `-Q celery,post`; otherwise the `post` queue has no consumer.
 
-Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
-lands, tune these settings by hand when the stock overlay runs out of memory.
+The installer's conservative baseline (above) is the safe-by-default sizing from
+issue #96 for the two schedule-only levers. Measured per-GPU `BATCH_SIZE` profiles
+are still landing behind the parity gate; until one exists for your card, tune
+`BATCH_SIZE` by hand when the stock overlay runs out of memory.
 
 #### PyTorch allocator assert on a shared GPU (issue #111)
 

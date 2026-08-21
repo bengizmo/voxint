@@ -82,6 +82,29 @@ EFFECTIVE_TIER="none"
 RENDER_GID_VALUE=""
 COMPOSE_FILE_ARGS="-f compose.yaml"
 
+# Installer-managed hardware defaults (issue #96). A generated, marker-headed
+# compose.hardware.yaml carries conservative single-GPU sizing; it is wired into
+# the compose chain only for the GPU tier and only when WE generated it. The
+# operator's own overrides belong in compose.override.yaml (honored separately).
+HARDWARE_OVERRIDE_FILE="compose.hardware.yaml"
+HARDWARE_OVERRIDE_MARKER="# voxint:hardware-override"  # first-line ownership marker
+
+# Base Celery worker command, kept in ONE place. The generated hardware override
+# must restate the whole command (Compose replaces command: wholesale, never
+# merges it), so a unit test pins this to compose.yaml's worker command: if the
+# base ever changes, that test fails and forces this to move in lockstep.
+WORKER_BASE_COMMAND="celery -A voxint.worker.app worker --loglevel=INFO"
+
+# True only when compose.hardware.yaml is a regular file whose first line is our
+# ownership marker -- i.e. the installer generated it. A prefix match keeps a
+# future format-version bump (…-override v2) still recognizable as managed.
+hardware_override_is_managed() {
+  [ -f "$HARDWARE_OVERRIDE_FILE" ] || return 1
+  local first
+  IFS= read -r first < "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true
+  case $first in "$HARDWARE_OVERRIDE_MARKER"*) return 0 ;; *) return 1 ;; esac
+}
+
 # ROCm tier: the gid owning /dev/kfd + /dev/dri/renderD* is allocated per
 # host, so the rocm overlay interpolates it from .env (VOXINT_RENDER_GID).
 # Prefer the ACTUAL owner of /dev/kfd (ground truth) over the "render" group
@@ -112,13 +135,30 @@ normalize_tier() {
 # invocation goes through dc(), so pull/up/ps/logs/port can never disagree
 # about which overlay is active.
 compose_file_args_for_tier() {
-  case $(normalize_tier "${1:-}") in
-    cpu)  printf '%s' '-f compose.yaml -f compose.cpu.yaml' ;;
-    gpu)  printf '%s' '-f compose.yaml -f compose.gpu.yaml' ;;
-    rocm) printf '%s' '-f compose.yaml -f compose.rocm.yaml' ;;
-    metal) printf '%s' '-f compose.yaml -f compose.metal.yaml' ;;
-    *)   printf '%s' '-f compose.yaml' ;;
+  local tier args
+  tier=$(normalize_tier "${1:-}")
+  case $tier in
+    cpu)  args='-f compose.yaml -f compose.cpu.yaml' ;;
+    gpu)  args='-f compose.yaml -f compose.gpu.yaml' ;;
+    rocm) args='-f compose.yaml -f compose.rocm.yaml' ;;
+    metal) args='-f compose.yaml -f compose.metal.yaml' ;;
+    *)   args='-f compose.yaml' ;;
   esac
+  # Conservative GPU sizing (issue #96): fold in the installer-generated
+  # compose.hardware.yaml, after the tier overlay so it wins. GPU tier only
+  # (the other tiers have no NVIDIA sizing), and only when we generated it --
+  # an unmarked hand-written file is left alone and never auto-loaded here.
+  if [ "$tier" = "gpu" ] && hardware_override_is_managed; then
+    args="$args -f $HARDWARE_OVERRIDE_FILE"
+  fi
+  # An operator's own compose.override.yaml is NOT auto-merged when explicit -f
+  # args are passed (as we always do), so honor it explicitly and LAST, so it
+  # wins over base, the tier overlay, and the hardware defaults -- matching what
+  # a bare `docker compose up` would merge.
+  if [ -f compose.override.yaml ]; then
+    args="$args -f compose.override.yaml"
+  fi
+  printf '%s' "$args"
 }
 
 dc() {
@@ -669,6 +709,220 @@ configure() {
 }
 
 # ---------------------------------------------------------------------------
+# Hardware-aware conservative defaults (issue #96). The HOST can see the GPU
+# (via nvidia-smi); the app container cannot. Detection is PROFILE MATCHING on
+# GPU identity, never a VRAM formula. Only the conservative unknown fallback
+# ships today: it caps worker concurrency and whisper's pending queue and NEVER
+# touches BATCH_SIZE (which feeds whisper's decode_config_hash and can move
+# transcription outputs -- any auto BATCH_SIZE must come from a tests/parity-
+# passed profile + a real-GPU OOM soak). All functions here are pure/offline so
+# the library-mode test seam can exercise them with a fake nvidia-smi.
+# ---------------------------------------------------------------------------
+GPU_NAME=""
+GPU_VRAM_MIB=""
+GPU_SIGNATURE=""
+
+# Lowercase, collapse whitespace to single underscores, drop everything but
+# [a-z0-9_], and trim leading/trailing underscores -- a stable signature token.
+normalize_gpu_name() {
+  local s
+  s=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | tr -s '[:space:]' '_' | tr -cd 'a-z0-9_')
+  s=${s#"${s%%[!_]*}"}   # strip a leading run of underscores
+  s=${s%"${s##*[!_]}"}   # strip a trailing run of underscores
+  printf '%s' "$s"
+}
+
+# Query the host NVIDIA driver for ONE unambiguous GPU signature. Sets GPU_NAME/
+# GPU_VRAM_MIB/GPU_SIGNATURE, or leaves them empty ("unknown") when nvidia-smi is
+# absent or fails, the output is malformed, MIG is enabled, or more than one
+# DISTINCT GPU signature is present -- we do not guess for mixed cards.
+detect_nvidia_gpu() {
+  GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""
+  # VOXINT_NVIDIA_SMI overrides the tool path (a test seam, like VOXINT_INSTALL_LIB;
+  # also lets an operator point at a non-default location). Defaults to nvidia-smi.
+  local smi=${VOXINT_NVIDIA_SMI:-nvidia-smi}
+  command -v "$smi" >/dev/null 2>&1 || return 0
+  local out
+  out=$("$smi" --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null) || return 0
+  [ -n "$out" ] || return 0
+
+  local line trimmed name vram sig first_sig="" count=0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    trimmed=${line#"${line%%[![:blank:]]*}"}
+    trimmed=${trimmed%"${trimmed##*[![:blank:]]}"}
+    [ -n "$trimmed" ] || continue
+    name=${line%%,*}
+    vram=${line#*,}
+    name=${name#"${name%%[![:blank:]]*}"}; name=${name%"${name##*[![:blank:]]}"}
+    vram=${vram#"${vram%%[![:blank:]]*}"}; vram=${vram%"${vram##*[![:blank:]]}"}
+    # nounits means a plain integer; MIG rows carry "N/A" or "[MIG …]" names.
+    case $vram in ''|*[!0-9]*) GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0 ;; esac
+    case $name in *MIG*|*mig*) GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0 ;; esac
+    sig="$(normalize_gpu_name "$name")|$vram"
+    count=$((count + 1))
+    if [ "$count" -eq 1 ]; then
+      first_sig=$sig; GPU_NAME=$name; GPU_VRAM_MIB=$vram
+    elif [ "$sig" != "$first_sig" ]; then
+      GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0
+    fi
+  done <<EOF
+$out
+EOF
+  [ -n "$GPU_NAME" ] && GPU_SIGNATURE=$first_sig
+  return 0
+}
+
+PROFILE_ID=""
+PROFILE_CONCURRENCY=""
+PROFILE_MAX_PENDING=""
+PROFILE_BATCH_SIZE=""
+
+# Map a detected GPU signature to a TESTED sizing profile. Profile matching,
+# never a VRAM formula. Only the conservative unknown fallback ships today;
+# concrete per-GPU arms (which may set BATCH_SIZE) are added ONLY after they pass
+# tests/parity + a real-GPU OOM soak. The empty-schema case statement is trivial
+# to extend and locks no premature schema.
+select_hardware_profile() {
+  local compute_type=${1:-int8}
+  case "${GPU_SIGNATURE}|${compute_type}" in
+    # Parity-gated tested profiles go here, e.g.:
+    #   nvidia_geforce_rtx_3060|12288|int8) PROFILE_ID='rtx-3060-12g-int8-v1'; PROFILE_CONCURRENCY=1; PROFILE_MAX_PENDING=1; PROFILE_BATCH_SIZE='8' ;;
+    *)
+      PROFILE_ID="nvidia-unknown-v1"
+      PROFILE_CONCURRENCY=1
+      PROFILE_MAX_PENDING=1
+      PROFILE_BATCH_SIZE=""   # never auto-set without a parity-passed profile
+      ;;
+  esac
+}
+
+# Emit the compose.hardware.yaml body on stdout for the selected PROFILE_*.
+# Deterministic. The worker command is the base command + --concurrency; whisper
+# gets MAX_PENDING_REQUESTS (additive env merge). BATCH_SIZE is emitted ONLY when
+# a profile set it -- never for the unknown fallback.
+render_hardware_override() {
+  printf '%s\n' "${HARDWARE_OVERRIDE_MARKER} v1"
+  printf '%s\n' "# profile: ${PROFILE_ID}"
+  printf '%s\n' "# Generated by scripts/install.sh -- regenerated on every install run."
+  printf '%s\n' "# Do not edit; put your own overrides in compose.override.yaml instead."
+  printf '%s\n' "services:"
+  printf '%s\n' "  worker:"
+  printf '%s\n' "    command: ${WORKER_BASE_COMMAND} --concurrency=${PROFILE_CONCURRENCY}"
+  printf '%s\n' "  whisper:"
+  printf '%s\n' "    environment:"
+  printf '%s\n' "      MAX_PENDING_REQUESTS: \"${PROFILE_MAX_PENDING}\""
+  if [ -n "$PROFILE_BATCH_SIZE" ]; then
+    printf '%s\n' "      BATCH_SIZE: \"${PROFILE_BATCH_SIZE}\""
+  fi
+}
+
+# Ownership-safe atomic write of compose.hardware.yaml. Refuses a non-regular or
+# operator-authored (unmarked) target; no-ops when the managed content is already
+# identical; otherwise renders to a temp, validates it as part of the FULL
+# effective GPU chain + .env, then moves it into place. Returns non-zero (without
+# failing the install) when it deliberately left an existing file untouched.
+write_hardware_override() {
+  if { [ -e "$HARDWARE_OVERRIDE_FILE" ] || [ -L "$HARDWARE_OVERRIDE_FILE" ]; } && [ ! -f "$HARDWARE_OVERRIDE_FILE" ]; then
+    say "  NOTE: $HARDWARE_OVERRIDE_FILE exists but is not a regular file -- leaving it untouched."
+    return 1
+  fi
+  if [ -f "$HARDWARE_OVERRIDE_FILE" ] && ! hardware_override_is_managed; then
+    say "  NOTE: $HARDWARE_OVERRIDE_FILE exists and was not generated by the installer;"
+    say "  leaving it untouched (put custom overrides in compose.override.yaml)."
+    return 1
+  fi
+
+  local candidate current
+  candidate=$(render_hardware_override)
+  if hardware_override_is_managed; then
+    current=$(cat "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true)
+    if [ "$current" = "$candidate" ]; then
+      return 0  # idempotent: nothing changed
+    fi
+  fi
+
+  local tmp old_umask vargs
+  old_umask=$(umask); umask 077
+  tmp=$(mktemp "$REPO_ROOT/.compose.hardware.tmp.XXXXXX") || { umask "$old_umask"; fail "Could not create a temp file in $REPO_ROOT."; }
+  _CLEANUP_TMP=$tmp
+  printf '%s\n' "$candidate" >"$tmp" || { umask "$old_umask"; fail "Failed writing candidate hardware override."; }
+  umask "$old_umask"
+
+  # Validate against the file set that will actually run (base + gpu overlay +
+  # this candidate + any operator override), so a bad render fails here, not at up.
+  vargs="-f compose.yaml -f compose.gpu.yaml -f $tmp"
+  if [ -f compose.override.yaml ]; then vargs="$vargs -f compose.override.yaml"; fi
+  # shellcheck disable=SC2086  # intentional word-splitting of the -f arguments
+  if ! docker compose $vargs --env-file .env config --quiet >/dev/null 2>&1; then
+    rm -f "$tmp"; _CLEANUP_TMP=""
+    fail "Generated $HARDWARE_OVERRIDE_FILE failed Compose validation. This is a bug -- please report it."
+  fi
+
+  mv -f "$tmp" "$HARDWARE_OVERRIDE_FILE" || fail "Could not move $HARDWARE_OVERRIDE_FILE into place."
+  _CLEANUP_TMP=""
+  chmod 644 "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true
+  return 0
+}
+
+# GPU tier only: detect the card, pick the conservative profile, generate/refresh
+# compose.hardware.yaml, then refold COMPOSE_FILE_ARGS so pull/up/ps/handoff all
+# agree on the effective chain. Requires .env in place (the write validates it).
+configure_hardware_defaults() {
+  [ "$EFFECTIVE_TIER" = "gpu" ] || return 0
+  step "Applying conservative GPU defaults (issue #96)"
+  detect_nvidia_gpu
+  select_hardware_profile
+  if [ -n "$GPU_NAME" ]; then
+    say "  Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)."
+  else
+    say "  Could not read a single, unambiguous NVIDIA GPU from nvidia-smi;"
+    say "  applying the conservative default that suits any modest card."
+  fi
+  say "  Profile '$PROFILE_ID': worker --concurrency=$PROFILE_CONCURRENCY, whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING."
+  if [ -z "$PROFILE_BATCH_SIZE" ]; then
+    say "  Transcription batch size stays at the image default (unchanged): auto-tuning"
+    say "  it needs a measured per-GPU profile, so the installer does not set it."
+  fi
+  if write_hardware_override; then
+    say "  Wrote $HARDWARE_OVERRIDE_FILE. Conservative mode is slower but steadier under"
+    say "  load; it is not a guarantee against out-of-memory. See docs/operations.md (#96)."
+  else
+    say "  Kept the existing $HARDWARE_OVERRIDE_FILE as-is."
+  fi
+  COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
+  if [ -f compose.override.yaml ]; then
+    say "  Note: your compose.override.yaml is merged last -- it wins over these defaults."
+  fi
+}
+
+# `install.sh --hardware-dry-run`: report the detected GPU, the selected profile,
+# the effective GPU compose chain, and the exact compose.hardware.yaml that WOULD
+# be written -- without touching Docker, .env, or any file. The YAML goes to
+# stdout so `--hardware-dry-run 2>/dev/null` yields just the file body.
+hardware_dry_run() {
+  detect_nvidia_gpu
+  select_hardware_profile
+  if [ -n "$GPU_NAME" ]; then
+    say "Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)"
+  else
+    say "No single, unambiguous NVIDIA GPU detected (or nvidia-smi unavailable)."
+  fi
+  say "Profile: $PROFILE_ID (worker --concurrency=$PROFILE_CONCURRENCY, whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING)"
+  if [ -z "$PROFILE_BATCH_SIZE" ]; then
+    say "BATCH_SIZE: unchanged (needs a measured per-GPU profile before it is auto-set)."
+  fi
+  say "Effective GPU compose chain would be:"
+  say "  docker compose $(compose_file_args_for_tier gpu)"
+  say ""
+  say "$HARDWARE_OVERRIDE_FILE would contain:"
+  say "----------------------------------------------------------------------"
+  render_hardware_override
+  say "----------------------------------------------------------------------"
+  say "(dry run -- nothing was written or started.)"
+}
+
+# ---------------------------------------------------------------------------
 # Pull + start. Compose is authoritative for port binds and config errors; we
 # do not parse its messages or auto-retry with different ports.
 # ---------------------------------------------------------------------------
@@ -894,6 +1148,12 @@ main() {
   trap '_cleanup; exit 143' TERM HUP
   trap _cleanup EXIT
 
+  # Read-only advisory mode: show what the hardware defaults would do, touch
+  # nothing. No Docker daemon or .env required.
+  case ${1:-} in
+    --hardware-dry-run) hardware_dry_run; return 0 ;;
+  esac
+
   say "Voxint installer"
   preflight
   decide_existing_env
@@ -903,6 +1163,7 @@ main() {
     say "Keeping the existing .env."
     resolve_kept_env_tier
   fi
+  configure_hardware_defaults
   pull_and_start
   wait_for_health
   print_handoff
