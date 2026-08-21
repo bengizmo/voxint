@@ -627,7 +627,19 @@ def test_worker_client_uses_the_snapshotted_llm_timeout(
     recorded: list[float] = []
 
     class _RecordingClient:
-        def __init__(self, base_url: str, model: str, api_key: str, timeout: float) -> None:
+        def __init__(
+            self,
+            base_url: str,
+            model: str,
+            api_key: str,
+            timeout: float,
+            client: object = None,
+            *,
+            sampling: object = None,
+            disable_thinking: bool = False,
+        ) -> None:
+            # Mirror the real HttpLLMClient signature so the production call site
+            # (which now passes disable_thinking=) constructs the stand-in cleanly.
             recorded.append(timeout)
 
         def chat_json(self, messages: object) -> dict[str, object]:

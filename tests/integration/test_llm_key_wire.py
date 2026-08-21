@@ -130,12 +130,22 @@ def _capturing_factory(
             client: object = None,
             *,
             sampling: object = None,
+            disable_thinking: bool = False,
         ) -> None:
             # Mirror the real HttpLLMClient signature: run-asset routing (#67) now
-            # always passes sampling= (None on the BYO path), so the stand-in must
-            # accept and forward it.
+            # always passes sampling= (None on the BYO path), and the reasoning-off
+            # switch (LLM_DISABLE_THINKING) passes disable_thinking=, so the stand-in
+            # must accept and forward both.
             http = httpx.Client(base_url=base_url, transport=httpx.MockTransport(handler))
-            super().__init__(base_url, model, api_key, timeout, client=http, sampling=sampling)  # type: ignore[arg-type]
+            super().__init__(
+                base_url,
+                model,
+                api_key,
+                timeout,
+                client=http,
+                sampling=sampling,  # type: ignore[arg-type]
+                disable_thinking=disable_thinking,
+            )
 
     return _CapturingClient
 
