@@ -52,6 +52,14 @@ def _per_rec(der: float, jer: float, evaluated: float, speakers: float, overlap:
     }
 
 
+# Distinct synthetic cohort identities. `report` never recomputes the hash (that
+# is `score`'s job from the scored bytes); it only requires every run of a corpus
+# to be cohort-bound and to share ONE identity, so the fixtures set the hash by
+# hand. Runs that form a noise-floor pair carry the same value.
+AMI_COHORT = "a" * 64
+VC_COHORT = "b" * 64
+
+
 def _report(
     *,
     strict_der: float,
@@ -60,6 +68,10 @@ def _report(
     wer: dict[str, Any] | None = None,
     git_sha: str = "abc123",
     manifest_sha: str = "d" * 64,
+    corpus: str = "ami",
+    cohort_sha256: str | None = AMI_COHORT,
+    scorer_versions: dict[str, str] | None = None,
+    normalizer_version: str = "openai-whisper@deadbeef/voxint-wrapper-v1",
 ) -> dict:
     strict = {
         "collar": 0.0,
@@ -75,6 +87,21 @@ def _report(
         "global_jer": diag_der,
         "per_recording": per_recording,
     }
+    environment: dict[str, Any] = {
+        "git_sha": git_sha,
+        "manifest_sha256": manifest_sha,
+        "corpus": corpus,
+        "diarization_cohort": sorted(per_recording),
+        "wer_cohort": sorted(wer["per_recording"]) if wer else [],
+        "scorer_versions": scorer_versions
+        or {"pyannote.metrics": "4.1", "pyannote.core": "5.0.0", "jiwer": "3.0"},
+        "normalizer_version": normalizer_version,
+        "normalizer_runtime": "py3.12",
+    }
+    # A cohort-less run is possible from `score` but unreportable; None omits the
+    # key so the fail-closed negative tests can exercise that path.
+    if cohort_sha256 is not None:
+        environment["cohort_sha256"] = cohort_sha256
     report: dict[str, Any] = {
         "schema_version": 1,
         "kind": "eval_quality_report",
@@ -83,19 +110,7 @@ def _report(
             "strict": strict,
             "diagnostic": diagnostic,
         },
-        "environment": {
-            "git_sha": git_sha,
-            "manifest_sha256": manifest_sha,
-            "diarization_cohort": sorted(per_recording),
-            "wer_cohort": sorted(wer["per_recording"]) if wer else [],
-            "scorer_versions": {
-                "pyannote.metrics": "4.1",
-                "pyannote.core": "5.0.0",
-                "jiwer": "3.0",
-            },
-            "normalizer_version": "openai-whisper@deadbeef/voxint-wrapper-v1",
-            "normalizer_runtime": "py3.12",
-        },
+        "environment": environment,
     }
     if wer is not None:
         report["wer"] = wer
@@ -118,6 +133,8 @@ VC_RUN1 = _report(
     strict_der=0.085,
     diag_der=0.060,
     per_recording={"abjxc": _per_rec(0.085, 0.15, 900.0, 3.0, 46.7)},
+    corpus="voxconverse",
+    cohort_sha256=VC_COHORT,
 )
 
 
@@ -187,6 +204,91 @@ class TestRenderReport:
     def test_empty_raises(self) -> None:
         with pytest.raises(ev.EvalError):
             ev.render_report("2026-08-20", {})
+
+
+class TestFailClosed:
+    """report must refuse to render runs that are not genuinely comparable."""
+
+    def test_rejects_a_cohort_less_run_even_at_k1(self) -> None:
+        loose = _report(
+            strict_der=0.12,
+            diag_der=0.08,
+            per_recording={"EN2002c": _per_rec(0.12, 0.2, 2970.0, 4.0, 12.1)},
+            cohort_sha256=None,
+        )
+        with pytest.raises(ev.EvalError, match="not cohort-bound"):
+            ev.render_report("2026-08-20", {"ami": [loose]})
+
+    def test_rejects_unequal_cohort_hashes(self) -> None:
+        other = _report(
+            strict_der=0.126,
+            diag_der=0.082,
+            per_recording={"EN2002c": _per_rec(0.126, 0.21, 2970.0, 4.0, 12.1)},
+            wer={"pooled_wer": 0.1, "per_recording": {"EN2002c": {"wer": 0.1, "ref_words": 12665}}},
+            cohort_sha256="f" * 64,
+        )
+        with pytest.raises(ev.EvalError, match="do not share one cohort_sha256"):
+            ev.render_report("2026-08-20", {"ami": [AMI_RUN1, other]})
+
+    def test_rejects_corpus_label_mismatch(self) -> None:
+        # A voxconverse-labelled metrics JSON supplied as --run ami=...
+        with pytest.raises(ev.EvalError, match="corpus label mismatch"):
+            ev.render_report("2026-08-20", {"ami": [VC_RUN1]})
+
+    def test_rejects_non_identical_diarization_sets(self) -> None:
+        other = _report(
+            strict_der=0.126,
+            diag_der=0.082,
+            per_recording={"IS1009a": _per_rec(0.126, 0.21, 1800.0, 4.0, 10.0)},
+            wer={"pooled_wer": 0.1, "per_recording": {"IS1009a": {"wer": 0.1, "ref_words": 9000}}},
+        )
+        with pytest.raises(ev.EvalError, match="different diarization recording sets"):
+            ev.render_report("2026-08-20", {"ami": [AMI_RUN1, other]})
+
+    def test_rejects_mixed_wer_presence(self) -> None:
+        no_wer = _report(
+            strict_der=0.126,
+            diag_der=0.082,
+            per_recording={"EN2002c": _per_rec(0.126, 0.21, 2970.0, 4.0, 12.1)},
+        )
+        with pytest.raises(ev.EvalError, match="some runs carry WER and some do not"):
+            ev.render_report("2026-08-20", {"ami": [AMI_RUN1, no_wer]})
+
+    def test_rejects_strict_diagnostic_set_disagreement(self) -> None:
+        run = _report(
+            strict_der=0.12,
+            diag_der=0.08,
+            per_recording={"EN2002c": _per_rec(0.12, 0.2, 2970.0, 4.0, 12.1)},
+        )
+        # Corrupt only the diagnostic per_recording so it disagrees with strict.
+        run["diarization"]["diagnostic"]["per_recording"] = {
+            "OTHER": _per_rec(0.0, 0.0, 1.0, 1.0, 0.0)
+        }
+        with pytest.raises(ev.EvalError, match="diarization sets disagree"):
+            ev.render_report("2026-08-20", {"ami": [run]})
+
+    def test_rejects_multi_run_scorer_version_mix(self) -> None:
+        other = _report(
+            strict_der=0.126,
+            diag_der=0.082,
+            per_recording={"EN2002c": _per_rec(0.126, 0.21, 2970.0, 4.0, 12.1)},
+            wer={"pooled_wer": 0.1, "per_recording": {"EN2002c": {"wer": 0.1, "ref_words": 12665}}},
+            scorer_versions={"pyannote.metrics": "4.2", "pyannote.core": "5.0.0", "jiwer": "3.0"},
+        )
+        with pytest.raises(ev.EvalError, match="mixes scorer versions"):
+            ev.render_report("2026-08-20", {"ami": [AMI_RUN1, other]})
+
+    def test_git_sha_mix_is_a_warning_not_an_error(self) -> None:
+        # git_sha alone (same scorer_versions + normalizer) must NOT be fatal.
+        other = _report(
+            strict_der=0.126,
+            diag_der=0.082,
+            per_recording={"EN2002c": _per_rec(0.126, 0.21, 2970.0, 4.0, 12.1)},
+            wer={"pooled_wer": 0.1, "per_recording": {"EN2002c": {"wer": 0.1, "ref_words": 12665}}},
+            git_sha="different99",
+        )
+        text = ev.render_report("2026-08-20", {"ami": [AMI_RUN1, other]})
+        assert "do not share one pipeline git sha" in text
 
 
 class TestReportCommand:

@@ -10,6 +10,7 @@ and — the invariant most likely to be silently wrong — collar semantics
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import sys
@@ -297,3 +298,176 @@ class TestScoreCommand:
         mpath = tmp_path / "m.json"
         mpath.write_text("{}")
         assert ev.main(["score", "--manifest", str(mpath)]) == 2
+
+
+def _sha(path: Path) -> tuple[int, str]:
+    data = path.read_bytes()
+    return len(data), hashlib.sha256(data).hexdigest()
+
+
+def _pipeline_env() -> dict:
+    """A fully-populated pipeline_environment the strict schema accepts."""
+    return {
+        "schema_version": 1,
+        "code": {"git_sha": "abc123", "image_digest": "sha256:dead"},
+        "model_weights": {
+            "whisper_ct2_dir_sha256": "w" * 64,
+            "pyannote_pipeline_sha256": "p" * 64,
+            "titanet_sha256": "t" * 64,
+        },
+        "gpu": {"name": "RTX 3060", "driver": "555.0", "cuda": "12.4"},
+        "runtime": {"ctranslate2": "4.3.1", "torch": "2.3.0", "pyannote_audio": "3.1.1"},
+        "decode": {"beam_size": 5, "batch_size": 8, "word_timestamps": True},
+        "flags": {"tf32": False, "deterministic": True},
+    }
+
+
+def _input(rid: str, role: str, obs: tuple[int, str] | None, split: str = "test") -> dict:
+    byte_len, sha = (None, None) if obs is None else obs
+    return {"id": rid, "split": split, "role": role, "byte_len": byte_len, "sha256": sha}
+
+
+class TestCohortBinding:
+    """`score` recomputes the #97 cohort identity from the bytes it actually
+    scored, stamps it, and fails closed on any drift (the plan's phase 4)."""
+
+    def _ami_manifest(self, tmp_path: Path) -> tuple[dict, dict]:
+        """An AMI-style manifest (diar + wer + cohort) and its cohort block."""
+        ref = tmp_path / "ref.rttm"
+        ref.write_text(_rttm("r", [(0.0, 10.0, "A")]))
+        hyp = tmp_path / "hyp.rttm"
+        hyp.write_text(_rttm("r", [(0.0, 9.8, "s")]))
+        uem = tmp_path / "f.uem"
+        uem.write_text("r 1 0 20\n")
+        rtxt = tmp_path / "ref.txt"
+        rtxt.write_text("hello world")
+        htxt = tmp_path / "hyp.txt"
+        htxt.write_text("hello world")
+        cohort = {
+            "corpus": "ami",
+            "inputs": [
+                _input("r", "audio", (1000, "0" * 64)),
+                _input("r", "reference_rttm", _sha(ref)),
+                _input("r", "uem", _sha(uem)),
+                _input("r", "wer_reference", _sha(rtxt)),
+            ],
+            "pipeline_environment": _pipeline_env(),
+        }
+        manifest = {
+            "diarization": [
+                {
+                    "recording_id": "r",
+                    "reference_rttm": str(ref),
+                    "hypothesis_rttm": str(hyp),
+                    "uem": str(uem),
+                }
+            ],
+            "wer": [
+                {"recording_id": "r", "reference_text": str(rtxt), "hypothesis_text": str(htxt)}
+            ],
+            "cohort": cohort,
+        }
+        return manifest, cohort
+
+    def _score(self, tmp_path: Path, manifest: dict) -> tuple[int, Path]:
+        mpath = tmp_path / "manifest.json"
+        mpath.write_text(json.dumps(manifest))
+        out = tmp_path / "metrics.json"
+        return ev.main(["score", "--manifest", str(mpath), "--out", str(out)]), out
+
+    def test_stamps_recomputed_cohort_identity(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        rc, out = self._score(tmp_path, manifest)
+        assert rc == 0
+        env = json.loads(out.read_text())["environment"]
+        assert env["corpus"] == "ami"
+        assert len(env["cohort_sha256"]) == 64
+        assert env["pipeline_environment"]["gpu"]["name"] == "RTX 3060"
+
+    def test_supplied_matching_hash_accepted(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        rc, out = self._score(tmp_path, manifest)
+        assert rc == 0
+        good = json.loads(out.read_text())["environment"]["cohort_sha256"]
+        manifest["cohort"]["cohort_sha256"] = good
+        rc2, out2 = self._score(tmp_path, manifest)
+        assert rc2 == 0
+        assert json.loads(out2.read_text())["environment"]["cohort_sha256"] == good
+
+    def test_rejects_tampered_supplied_hash(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        manifest["cohort"]["cohort_sha256"] = "d" * 64
+        rc, _ = self._score(tmp_path, manifest)
+        assert rc == 2
+
+    def test_rejects_reference_bytes_that_disagree_with_cohort(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        # Attest a reference_rttm sha that is not the bytes score will read.
+        for rec in manifest["cohort"]["inputs"]:
+            if rec["role"] == "reference_rttm":
+                rec["sha256"] = "e" * 64
+        rc, _ = self._score(tmp_path, manifest)
+        assert rc == 2
+
+    def test_rejects_wer_set_not_matching_non_null_wer_reference(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        # Null the wer_reference role but keep the WER entry: the scored WER set
+        # (r) no longer equals the non-null wer_reference set (empty).
+        for rec in manifest["cohort"]["inputs"]:
+            if rec["role"] == "wer_reference":
+                rec["byte_len"], rec["sha256"] = None, None
+        rc, _ = self._score(tmp_path, manifest)
+        assert rc == 2
+
+    def test_rejects_missing_role(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        manifest["cohort"]["inputs"] = [
+            rec for rec in manifest["cohort"]["inputs"] if rec["role"] != "audio"
+        ]
+        rc, _ = self._score(tmp_path, manifest)
+        assert rc == 2
+
+    def test_rejects_invalid_pipeline_environment(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        del manifest["cohort"]["pipeline_environment"]["gpu"]
+        rc, _ = self._score(tmp_path, manifest)
+        assert rc == 2
+
+    def test_voxconverse_style_null_uem_and_wer(self, tmp_path: Path) -> None:
+        ref = tmp_path / "ref.rttm"
+        ref.write_text(_rttm("v", [(0.0, 10.0, "A")]))
+        hyp = tmp_path / "hyp.rttm"
+        hyp.write_text(_rttm("v", [(0.0, 9.9, "s")]))
+        cohort = {
+            "corpus": "voxconverse",
+            "inputs": [
+                _input("v", "audio", (2000, "1" * 64), split="dev"),
+                _input("v", "reference_rttm", _sha(ref), split="dev"),
+                _input("v", "uem", None, split="dev"),
+                _input("v", "wer_reference", None, split="dev"),
+            ],
+            "pipeline_environment": _pipeline_env(),
+        }
+        manifest = {
+            "diarization": [
+                {
+                    "recording_id": "v",
+                    "reference_rttm": str(ref),
+                    "hypothesis_rttm": str(hyp),
+                    "uem": None,
+                }
+            ],
+            "cohort": cohort,
+        }
+        rc, out = self._score(tmp_path, manifest)
+        assert rc == 0
+        env = json.loads(out.read_text())["environment"]
+        assert env["corpus"] == "voxconverse"
+        assert len(env["cohort_sha256"]) == 64
+
+    def test_cohort_less_score_emits_no_cohort_sha256(self, tmp_path: Path) -> None:
+        manifest, _ = self._ami_manifest(tmp_path)
+        del manifest["cohort"]
+        rc, out = self._score(tmp_path, manifest)
+        assert rc == 0
+        assert "cohort_sha256" not in json.loads(out.read_text())["environment"]
