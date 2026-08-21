@@ -114,6 +114,45 @@ def test_request_carries_auth_model_context_and_segments() -> None:
     ]
 
 
+def _thinking_client(seen: dict[str, Any], *, disable_thinking: bool) -> HttpLLMClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return reply([{"index": 0, "text": "a"}, {"index": 1, "text": "b"}])
+
+    http = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    return HttpLLMClient(
+        "http://test", "test-model", "sk-test", 5.0, client=http, disable_thinking=disable_thinking
+    )
+
+
+def test_thinking_on_by_default_omits_chat_template_kwargs() -> None:
+    # Default body stays byte-compatible with BYO/OpenAI endpoints that reject the
+    # unknown field: no chat_template_kwargs unless disable_thinking is set.
+    seen: dict[str, Any] = {}
+    _thinking_client(seen, disable_thinking=False).enhance_segments(SEGMENTS, "")
+    assert "chat_template_kwargs" not in seen["body"]
+
+
+def test_disable_thinking_sends_switch_on_enhance_and_chat_json() -> None:
+    # enhance_segments carries the vLLM thinking-off switch...
+    seen: dict[str, Any] = {}
+    _thinking_client(seen, disable_thinking=True).enhance_segments(SEGMENTS, "")
+    assert seen["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+    # ...and so does the generic chat_json path (research / run-asset topics).
+    seen_chat: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_chat["body"] = json.loads(request.content)
+        return completion({"ok": True})
+
+    http = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    HttpLLMClient("http://test", "m", "", 5.0, client=http, disable_thinking=True).chat_json(
+        [ChatMessage(role="user", content="go")]
+    )
+    assert seen_chat["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def _sent_system(handler_seen: dict[str, Any]) -> str:
     return str(handler_seen["body"]["messages"][0]["content"])
 

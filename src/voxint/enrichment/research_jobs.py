@@ -388,6 +388,7 @@ def execute_job(
                     live_model,
                     effective_key,
                     _snapshot_llm_timeout(job.budget),
+                    disable_thinking=settings.llm_disable_thinking,
                 )
             except Exception:
                 # Building the client can fail before any request: a malformed

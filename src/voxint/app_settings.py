@@ -300,6 +300,7 @@ def build_bundled_llm_client(settings: Settings) -> "HttpLLMClient":
         "",
         settings.llm_timeout_seconds,
         sampling=SamplingProfile(),
+        disable_thinking=settings.llm_disable_thinking,
     )
 
 

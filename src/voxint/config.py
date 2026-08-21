@@ -224,6 +224,13 @@ class Settings(BaseSettings):
     # Consecutive failed batches before the stage stops calling the LLM for
     # this run (remaining segments stay NULL; matching still runs).
     llm_consecutive_failure_limit: int = Field(default=3, ge=1)
+    # Send the vLLM chat-template switch that disables a reasoning model's
+    # chain-of-thought (chat_template_kwargs.enable_thinking=false) on EVERY LLM
+    # request (BYO and bundled alike). Off by default so BYO/OpenAI bodies are
+    # unchanged. Enable only when both endpoints honor the field (e.g. Qwen3 on
+    # vLLM): a thinking model otherwise emits long traces that waste tokens and
+    # can blow llm_timeout_seconds on the heavy entity_mentions/research jobs.
+    llm_disable_thinking: bool = False
 
     # Optional bundled local LLM (issue #67, SCOPED). When enabled AND a bundled
     # base URL is compose-injected, transcript enhancement + run-asset

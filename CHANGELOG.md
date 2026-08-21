@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Optional reasoning-off switch for LLM calls (`LLM_DISABLE_THINKING`).** When
+  enabled, every LLM request (BYO and bundled, across enhancement, the name pass,
+  run assets, and web research) carries the vLLM chat-template switch
+  `chat_template_kwargs.enable_thinking=false`, which turns off a reasoning
+  model's chain-of-thought. Off by default so BYO/OpenAI request bodies are
+  unchanged. This fixes read-timeouts on the heavy entity-mention and
+  research calls when pointing at a thinking model such as Qwen3 on vLLM, where
+  the reasoning traces alone could exceed `LLM_TIMEOUT_SECONDS`. See
+  `docs/operations.md` and `.env.example`.
 - **Model-service hardware telemetry on `/healthz`.** Each GPU model service
   (whisper, pyannote, titanet) now samples its hardware in a background thread
   and reports an additive, optional nested `resources` block on `/healthz`:

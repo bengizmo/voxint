@@ -1195,6 +1195,19 @@ Two ceilings the client timeout **cannot** override:
   in the 180–300 s-per-call range, raise the deadline to several multiples
   of your typical call time if you want multi-round research.
 
+### Reasoning models: turning thinking off
+
+A reasoning model (Qwen3 and similar) emits a chain-of-thought before its
+answer. On the heavy calls, entity-mention extraction and multi-round research,
+those traces can consume the whole `LLM_TIMEOUT_SECONDS` window before any answer
+begins, so the call fails with a read timeout even on a fast local GPU. Set
+`LLM_DISABLE_THINKING=true` to send the vLLM chat-template switch
+(`chat_template_kwargs.enable_thinking=false`) on every request, BYO and bundled
+alike, which skips the thinking phase. It is off by default because a BYO or
+OpenAI endpoint rejects the unknown field, so enable it only when both endpoints
+honor it (vLLM does). If a heavy job times out against a reasoning model, prefer
+this over raising the timeout.
+
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your

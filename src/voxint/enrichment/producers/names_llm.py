@@ -248,6 +248,7 @@ def run_llm_name_producer(
                     exec_settings.llm_model,
                     effective_key,
                     exec_settings.llm_timeout_seconds,
+                    disable_thinking=exec_settings.llm_disable_thinking,
                 )
             except Exception as exc:
                 # Building the client can fail before any request: a malformed
