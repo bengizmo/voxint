@@ -209,6 +209,11 @@ those near-miss decisions, into the harness input files, so the gates above can
 be measured and a first attribution baseline produced (epic #112). See the
 "Feeding the harness from live runs" section of [harness.md](harness.md).
 
+The structural numerics the doctrine leans on (DER/JER/WER/cpWER against
+annotated corpora) are measured separately by the maintainer eval-quality
+tripwire in [eval-quality.md](eval-quality.md). It is a manual smoke test run by
+hand when the GPU knobs change (#96), not a pipeline-time gate.
+
 ## See also
 
 - [architecture.md](architecture.md): where these gates sit in the pipeline and

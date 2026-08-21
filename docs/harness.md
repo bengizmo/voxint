@@ -6,6 +6,11 @@ settings, the database, or the worker. `voxint score …` runs on any machine
 against plain JSON/JSONL files (`pip install voxint` is all it needs; no
 Docker stack).
 
+Not to be confused with the diarization/ASR eval-quality harness in
+[eval-quality.md](eval-quality.md): that one (`tools/eval_quality.py`, issue
+#97) grades structural numerics (DER/JER/WER/cpWER) against annotated corpora.
+`voxint score` here grades speaker-name accuracy on your own runs.
+
 All JSON documents (aliases, enrollment, thresholds) and all *output* records
 carry `"schema_version": 1`; *input* JSONL streams (name-accuracy items,
 agreement slots) are versioned by their command's contract rather than per

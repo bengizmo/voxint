@@ -105,7 +105,10 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   ONNX/pyannote provenance discipline; each new npm dep is justified in its PR.
 - **`parity-gate`** runs the strict titanet ONNX parity harness
   (`VOXINT_PARITY_REQUIRED=1`) natively on both amd64 and arm64 runners, and
-  blocks every multi-arch build. This covers the ONNX `-cpu` lane. The CUDA
+  blocks every multi-arch build. This covers the ONNX `-cpu` lane. (The
+diarization/ASR eval-quality tripwire in [eval-quality.md](eval-quality.md) is a
+separate, manual maintainer check and is deliberately NOT a release or CI gate:
+it needs a live worker, a large corpus, and GPU time no runner has.) The CUDA
   image's baked `.nemo` gets a build-time sha256 gate (drift detection) but no
   behavioral parity gate here, because CI has no GPU runner. Confirming its
   embedding space is a **hard tagging precondition**: re-run the

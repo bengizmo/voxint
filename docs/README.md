@@ -17,6 +17,7 @@ Reference & internals:
 | `domain-packs.md` | Domain packs: manifest, resolution, the per-run frozen snapshot, and which fields shape which stages |
 | `gpu-contracts.md` | Versioned HTTP contracts for the ASR / diarizer / embedder services |
 | `gpu-smoke.md` | Build + real-inference smoke procedure for the GPU service images |
+| `eval-quality.md` | Maintainer diarization/ASR tripwire (issue #97): `tools/eval_quality.py` `run`/`score`/`report`, DER/JER/WER+cpWER against AMI/VoxConverse, cohort fail-closed fingerprint, zero-change noise floor |
 | `quality-gates.md` | Enhancement failure semantics, matching eligibility + grounding gates, confidence semantics |
 | `enrichment-triage.md` | Draft triage: the read-time, explainable review-priority score, its components, and the source-authority allowlist |
 | `interpreting-diarization.md` | Reading the output: segment labels vs the turn ledger, short-clip over-splitting |
