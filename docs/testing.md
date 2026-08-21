@@ -278,3 +278,46 @@ Keep it **serial / low concurrency**: the pipeline is heavy and the lane is not
 built for parallel fan-out. The suite stages audio under `MEDIA_ROOT` (the same
 host directory the containers mount at `/data/media`) and cleans up after
 itself.
+
+## Eval-quality harness (offline, maintainer)
+
+`tools/eval_quality.py` (issue #97) scores the pipeline's diarization and
+transcript output against public, hand-annotated ground truth (AMI and
+VoxConverse): Diarization Error Rate (DER) and Jaccard Error Rate (JER) via the
+vetted `pyannote.metrics` accumulators, pooled Word Error Rate reusing the frozen
+Whisper-bakeoff WER stack, and concatenated minimum-permutation WER (cpWER) via
+`meeteval`. It is a **tripwire, not a benchmark**: the small subset can catch
+gross breakage when the GPU knobs change, but it cannot prove non-regression, so
+every threshold is measured from a zero-change noise floor rather than reasoned.
+It is a maintainer instrument, never shipped to users and never installed into a
+service image. No baseline-scores report is committed to `docs/reports/` yet.
+
+The harness lives in its own **`eval-quality`** dependency extra, kept isolated
+from `dev` because `pyannote.metrics` 4.1 pulls a `pyannote.core`/`numpy`/`scipy`
+set that conflicts with the diarizer service's pinned `pyannote.core==5.0.0`. The
+two never share an environment (the service is containerized; this harness runs in
+the host `uv` env), and `tests/contracts/test_eval_quality_extra.py` asserts the
+isolation and the dependency closure. Run it with the extra isolated, alongside
+`parity` (which carries the frozen `jiwer` WER stack):
+
+```bash
+# Score a prepared hypotheses+reference manifest into metrics JSON:
+uv run --isolated --extra parity --extra eval-quality \
+  tools/eval_quality.py score --manifest paths.json --out metrics.json
+
+# Render one or more scored metrics JSONs to a dated Markdown report (house style):
+uv run --isolated --extra parity --extra eval-quality \
+  tools/eval_quality.py report --run ami=metrics.json --date YYYY-MM-DD \
+  --out docs/reports/eval-quality-baseline-YYYY-MM-DD.md
+```
+
+The `score` and `report` steps need no worker, database, or GPU. The `run`
+subcommand is the live driver (submit to the real pipeline, poll, read the DB,
+export the relabelled hypothesis RTTM/text that `score` consumes); it needs an
+idle worker and a disposable database, the same way the E2E lanes do. Ground
+truth is prepared off-repo: `tools/build_ami_wer_reference.py` freezes AMI's
+per-speaker word-aligned XML into one chronological, UEM-cropped raw reference
+stream once, so the harness never re-parses the XML. Nothing here is normalized
+at rest; per the numerics doctrine, WER normalization is applied to raw reference
+and raw hypothesis together at scoring time, and the harness records which
+normalizer scored it.
