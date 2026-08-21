@@ -58,7 +58,7 @@
     <input type="hidden" name="display_name" value="{{ target_name }}">
     {% endif %}
     <input type="hidden" name="expected" value="{{ expected_json }}">
-    <button type="submit">Confirm merge</button>
+    <button type="submit" class="primary">Confirm merge</button>
     <button type="button" class="secondary"
             onclick="this.closest('#merge-confirm').innerHTML=''">Cancel</button>
   </form>

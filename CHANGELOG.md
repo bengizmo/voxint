@@ -107,6 +107,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   baseline. `./scripts/install.sh --hardware-dry-run` previews the detection and
   the file without writing or starting anything. See `docs/operations.md` (#96).
 
+### Changed
+- **A visual-polish pass over the review console: consistent spacing, clearer
+  button hierarchy, and completed interactive states.** Card padding, section
+  margins, and gaps now come from one spacing scale instead of ad-hoc values, so
+  surfaces share a rhythm, and the eight hand-written card recipes fold onto a
+  single `.card` primitive with flat and small modifiers. Each screen now has one
+  dominant primary action: Assign on the speaker workbench, Submit on the runs
+  page, Review on a finished run, Confirm on the merge prompt, with the quieter
+  alternatives de-emphasized. Genuinely destructive actions (delete derived
+  audio, merge a speaker, remove an enrollment) get a distinct danger style,
+  measured to pass WCAG AA contrast in both themes. The run detail page, the only
+  screen with no card grouping, now matches the rest: its sections sit in cards
+  and its metadata reads as an aligned two-column list. Buttons gained a pressed
+  state, several pointer elements gained a hover cue, and the input focus ring is
+  wired to the same token as everything else. No numerics change and no new
+  configuration.
+
 ### Fixed
 - **The dashboard's Review backlog now counts the recordings actually waiting
   for review (#117).** It previously counted runs in a transient

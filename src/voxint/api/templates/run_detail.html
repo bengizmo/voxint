@@ -36,7 +36,7 @@ The original source recording was kept.</p>
 list and the review queue. All its data is intact; un-archive to restore it.</p>
 {% endif %}
 
-<dl>
+<dl class="def-grid">
   <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span>
     {% if run_archived %}<span class="pill skipped">archived</span>{% endif %}</dd>
   <dt>Current stage</dt><dd>{{ run.current_stage or "—" }}</dd>
@@ -68,7 +68,7 @@ up, then requeue.</p>
 {% endif %}
 
 {% if run.status in ("queued", "running", "awaiting_adjudication") %}
-<form method="post" action="/runs/{{ run.id }}/cancel" class="cancel">
+<form method="post" action="/runs/{{ run.id }}/cancel" class="cancel action-row">
   {# Carry the rendered revision so a stale tab's cancel 409s (exact-revision CAS). #}
   <input type="hidden" name="revision" value="{{ run.revision }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
@@ -88,7 +88,7 @@ up, then requeue.</p>
 <p>
   {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
   {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
-  {% if run.status == "completed" %}<a href="/review/{{ run.id }}">Review</a>{% endif %}
+  {% if run.status == "completed" %}<a href="/review/{{ run.id }}" class="btn-primary">Review</a>{% endif %}
   <a href="/runs/{{ run.id }}/export.json">Complete run archive (JSON)</a>
   {% if transcript_available %}<span class="muted">(transcript &amp; subtitle exports are on the
     <a href="/runs/{{ run.id }}/transcript">Transcript</a> page)</span>{% endif %}
@@ -103,27 +103,29 @@ up, then requeue.</p>
 {% if run_terminal %}
 {# Archive / un-archive + derived-media deletion (issue #5). Only terminal runs
    (completed / failed / cancelled) — a live run must be cancelled first. #}
+<section class="card">
 <h2>Manage</h2>
 {% if run_archived %}
-<form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive">
+<form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_unarchive }}">
   <button type="submit">Un-archive run</button>
   <span class="muted">Restores this run to the runs list and review queue.</span>
 </form>
 {% else %}
-<form method="post" action="/runs/{{ run.id }}/archive" class="archive">
+<form method="post" action="/runs/{{ run.id }}/archive" class="archive action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_archive }}">
   <button type="submit">Archive run</button>
   <span class="muted">Hides this run from the runs list and review queue. Keeps
     all its data; reversible.</span>
 </form>
 {% endif %}
-<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete">
+<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete action-row">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_media_delete }}">
-  <button type="submit">Delete derived audio files</button>
+  <button type="submit" class="danger">Delete derived audio files</button>
   <span class="muted">Frees disk by removing this run's preprocessed and chunked
     audio. <strong>Irreversible</strong>; the original source recording is kept.</span>
 </form>
+</section>
 {% endif %}
 
 {% if source_metadata %}
@@ -131,8 +133,9 @@ up, then requeue.</p>
    operator's own notes so human and scraped input are never conflated. The
    URLs here are sanitized allowlist values (absolute http(s), no userinfo),
    unlike the raw source_url, which never reaches a template. #}
+<section class="card">
 <h2>Source metadata</h2>
-<dl>
+<dl class="def-grid">
   {% if source_metadata.title %}<dt>Title</dt><dd>{{ source_metadata.title }}</dd>{% endif %}
   {% if source_metadata.uploader or source_metadata.channel %}
   <dt>Uploader</dt>
@@ -167,8 +170,10 @@ up, then requeue.</p>
   <p class="muted">{{ source_metadata.description }}</p>
 </details>
 {% endif %}
+</section>
 {% endif %}
 
+<section class="card">
 <h2>Operator notes</h2>
 <form method="post" action="/runs/{{ run.id }}/notes" class="notes">
   <input type="hidden" name="csrf_token" value="{{ csrf_notes }}">
@@ -176,9 +181,13 @@ up, then requeue.</p>
             placeholder="Your notes for this run (who is speaking, context, follow-ups…)">{{ run.operator_notes or "" }}</textarea>
   <button type="submit">Save notes</button>
 </form>
+</section>
 
+<section class="card">
 {% include "fragments/run_assets.html" %}
+</section>
 
+<section class="card">
 <h2>Stage ledger</h2>
 {% if not stage_runs %}
 <p class="muted">No stage attempts recorded yet.</p>
@@ -208,4 +217,5 @@ up, then requeue.</p>
 </table>
 </div>
 {% endif %}
+</section>
 {% endblock %}

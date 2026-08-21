@@ -258,7 +258,7 @@
       <option value="{{ sp.id }}">{{ sp.display_name }}</option>
       {% endfor %}
     </select>
-    <button type="submit">Assign</button>
+    <button type="submit" class="primary">Assign</button>
   </form>
   <form class="inline" method="post"
         action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/enroll"
@@ -278,7 +278,7 @@
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="nonce" value="{{ nonce() }}">
     <input type="hidden" name="action" value="exclude">
-    <button type="submit">Exclude</button>
+    <button type="submit" class="secondary">Exclude</button>
   </form>
   <form class="inline" method="post"
         action="/review/{{ run.id }}/labels/{{ s.label | urlencode }}/decision"
@@ -287,7 +287,7 @@
     <input type="hidden" name="token" value="{{ token }}">
     <input type="hidden" name="nonce" value="{{ nonce() }}">
     <input type="hidden" name="action" value="unknown">
-    <button type="submit">Unknown</button>
+    <button type="submit" class="secondary">Unknown</button>
   </form>
   </div>
   {% endif %}

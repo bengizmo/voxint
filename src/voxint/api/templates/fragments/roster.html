@@ -54,7 +54,7 @@
         <option value="{{ other.speaker.id }}">{{ other.speaker.display_name }}</option>
         {% endfor %}
       </select>
-      <button type="submit">Merge</button>
+      <button type="submit" class="danger">Merge</button>
     </form>
     {% endif %}
 
@@ -92,7 +92,7 @@
             hx-target="#roster" hx-swap="innerHTML"
             hx-confirm="Remove this enrollment of {{ entry.speaker.display_name }}? All of its machine proposals are removed with it. The decision history stays.">
         <input type="hidden" name="csrf_token" value="{{ csrf_embedding_delete }}">
-        <button type="submit">Remove</button>
+        <button type="submit" class="danger">Remove</button>
       </form>
     </div>
     {% endfor %}

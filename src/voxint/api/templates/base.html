@@ -109,6 +109,14 @@
       --shadow-1: 0 1px 2px rgba(40,32,18,.05), 0 2px 8px rgba(40,32,18,.06);
       --shadow-2: 0 4px 14px rgba(40,32,18,.09), 0 14px 34px rgba(40,32,18,.10);
 
+      /* Spacing rhythm (theme-agnostic; light :root only, no dark override).
+         A 4px-based scale so card padding, section margins, and action-row gaps
+         share one rhythm instead of ad-hoc rem literals. --card-pad is the one
+         elevated-panel padding, consumed by the .card primitive below. */
+      --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem;
+      --space-5: 1.25rem; --space-6: 1.5rem; --space-7: 2rem;
+      --card-pad: var(--space-4) var(--space-5);
+
       /* Primary-action pair (issue #92): text on an --accent fill, and the kbd
          chip overlay inside it. White fails AA on the LIGHTER dark-theme accent,
          so the contrast color flips with the theme rather than hardcoding white.
@@ -213,13 +221,13 @@
     button.secondary { background: transparent; border-color: transparent;
       color: var(--accent-ink); padding-left: .35rem; padding-right: .35rem; }
     button.secondary:hover { background: var(--accent-soft); border-color: transparent; }
-    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+    @media (prefers-reduced-motion: reduce) { button, .task-link { transition: none; } }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])),
     select, textarea {
       font: inherit; color: var(--ink); background: var(--surface);
       border: 1px solid var(--line); border-radius: var(--r-sm); padding: .3rem .45rem; }
     input:not(:where([type=checkbox], [type=radio], [type=file], [type=hidden])):focus-visible,
-    select:focus-visible, textarea:focus-visible { border-color: var(--accent); }
+    select:focus-visible, textarea:focus-visible { border-color: var(--focus-ring); }
     .label-card { border: 1px solid var(--line); border-radius: var(--r-md);
                   padding: .8rem 1rem; margin: .8rem 0; background: var(--surface); }
     .pill { display: inline-block; border-radius: var(--r-full); padding: .05rem .6rem;
@@ -238,11 +246,28 @@
     .notice { border: 1px solid var(--warn); background: var(--warn-soft);
               border-radius: var(--r-md); padding: .6rem .9rem; margin: 1rem 0; }
     form.requeue { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin: 1rem 0; }
+    /* Shared action row (visual-polish pass): a control and its inline helper
+       text on one aligned baseline. Models form.requeue so the run-detail Manage
+       forms stop falling back to default block layout. */
+    .action-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3);
+                  align-items: baseline; margin: var(--space-3) 0; }
+    /* Definition grid (visual-polish pass): a compact two-column dl for run
+       metadata; the .settings dt/dd rules are scoped to .settings, so run-detail
+       previously rendered its dl with default indentation. */
+    .def-grid { display: grid; grid-template-columns: max-content 1fr;
+                gap: var(--space-1) var(--space-4); margin: var(--space-4) 0; align-items: baseline; }
+    .def-grid dt { color: var(--ink-2); font-size: var(--t-sm); }
+    .def-grid dd { margin: 0; }
     nav.top { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 1.5rem;
               padding-bottom: .6rem; border-bottom: 1px solid var(--line); font-size: .95rem; }
     nav.top a { color: var(--ink-2); text-decoration: none; }
     nav.top a:hover { color: var(--accent-ink); }
     nav.top a[aria-current="page"] { font-weight: 600; color: var(--ink); }
+    /* In-page tab strip (visual-polish pass): nav.top's link styling without the
+       section border/margin, for transcript version + read-mode toggles that sit
+       inside a page rather than the global nav. `nav.tab-strip` matches nav.top's
+       specificity and, as the later source, wins. Replaces two inline styles. */
+    nav.tab-strip { border-bottom: 0; margin: var(--space-2) 0; padding-bottom: 0; }
     form.upload { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;
                   margin: 1rem 0; padding: .8rem 1rem; border: 1px solid var(--line);
                   border-radius: var(--r-md); background: var(--surface); }
@@ -281,10 +306,23 @@
                             margin-right: .3rem; }
     ol.wizard-steps li.done .n { border-color: var(--line-strong); }
     ol.wizard-steps li.current .n { border-color: var(--accent); color: var(--accent-ink); }
-    /* Setup wizard step body as one card (issue #93), matching .review-stepper. */
-    .setup { background: var(--surface); border: 1px solid var(--line);
-             border-radius: var(--r-lg); box-shadow: var(--shadow-1);
-             padding: 1.2rem 1.4rem; margin: 1rem 0; }
+    /* Shared elevated-panel primitive (visual-polish pass). ONE recipe for the
+       card family; the flow surfaces opt in by name here so padding/radius/shadow
+       live once (issue #93 set up .setup/.review-head/.review-stepper/.settings
+       section identically by hand). Modifiers: .card--flat drops elevation for
+       in-context media panels, .card--sm is the tighter dashboard stat tile.
+       Margin stays a per-surface concern (grid tiles carry none, flow cards get
+       --space-4), so it is not in this recipe. */
+    .card, .setup, .review-head, .review-stepper {
+      background: var(--surface); border: 1px solid var(--line);
+      border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+      padding: var(--card-pad); }
+    .card--flat { box-shadow: none; }
+    .card--sm { border-radius: var(--r-md); padding: var(--space-3) var(--space-4); }
+    .card { margin: var(--space-4) 0; }
+    .card > :first-child { margin-top: 0; }
+    .card > :last-child { margin-bottom: 0; }
+    .setup { margin: var(--space-4) 0; }
     .setup > h1:first-child, .setup .notice + h1 { margin-top: 0; }
     .setup textarea { width: 100%; min-height: 6rem; font-family: inherit; font-size: .95rem; }
     .setup .field { margin: 1rem 0; }
@@ -324,7 +362,7 @@
        the card frames only its outer <section>. */
     .settings > section:not(.tutorial-banner) { background: var(--surface);
                       border: 1px solid var(--line); border-radius: var(--r-lg);
-                      box-shadow: var(--shadow-1); padding: 1rem 1.2rem; margin: 1.2rem 0; }
+                      box-shadow: var(--shadow-1); padding: var(--card-pad); margin: var(--space-5) 0; }
     .settings > section:not(.tutorial-banner) > h2:first-child { margin-top: 0; }
     /* Speaker roster cards (issue #93): the .review-head card family, applied
        via the compound .label-card.roster-card ((0,2,0), order-independent) so
@@ -334,7 +372,7 @@
        its stripe was neutral --line anyway — restated as a clean full border. */
     .label-card.roster-card { background: var(--surface); border: 1px solid var(--line);
                       border-left: 1px solid var(--line); border-radius: var(--r-lg);
-                      box-shadow: var(--shadow-1); padding: .9rem 1.1rem; margin: 1rem 0; }
+                      box-shadow: var(--shadow-1); padding: var(--card-pad); margin: var(--space-4) 0; }
     .roster-card h2 { display: flex; align-items: center; gap: .5rem; margin: .1rem 0 .3rem; }
     .voiceprint { width: 6rem; height: 1.1rem; flex: none; color: var(--ink-3); }
     .voiceprint rect { fill: currentColor; }
@@ -396,9 +434,7 @@
        never replace — a custom transport is the separately-gated #95), primary
        actions, and kbd chips. Tokens only; the number/text stays the primary
        signal wherever a bar or dot appears (non-color cue). */
-    .review-head { background: var(--surface); border: 1px solid var(--line);
-                   border-radius: var(--r-lg); padding: .9rem 1.1rem; margin: 1rem 0;
-                   box-shadow: var(--shadow-1); }
+    .review-head { margin: var(--space-4) 0; }
     .review-head h1 { margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
     /* Two-step review sequence (issue #117 Phase B): a quiet orientation strip
        under the run name on both review screens. The current step is emphasized
@@ -434,11 +470,10 @@
     /* Tonal on purpose — no shadow: elevation is reserved for the review header
        cards (report §9.5); the player reads as an inset panel, not a float. */
     .player-surface { background: var(--surface); border: 1px solid var(--line);
-                      border-radius: var(--r-lg); padding: .6rem .9rem; margin: 1rem 0; }
-    /* The island's own stepper panel is the review-transcript header card. */
-    .review-stepper { background: var(--surface); border: 1px solid var(--line);
-                      border-radius: var(--r-lg); padding: .9rem 1.1rem;
-                      box-shadow: var(--shadow-1); }
+                      border-radius: var(--r-lg); padding: var(--space-2) var(--space-4);
+                      margin: var(--space-4) 0; }
+    /* The island's own stepper panel is the review-transcript header card; its
+       recipe is the shared .card group above. */
     /* Primary action: ONE per surface (Verify & next; Claim). `button.primary`
        is (0,1,1) on purpose — it must beat the tokenized base button AND any
        island utility. Links get the same look via .btn-primary. */
@@ -448,8 +483,24 @@
                       border-color: var(--accent-strong); }
     .btn-primary { display: inline-block; border-radius: var(--r-md);
                    padding: .3rem .7rem; text-decoration: none; }
+    /* Destructive-action variant (visual-polish pass). Soft danger fill + danger
+       ink + danger border so a destructive action reads distinct from a benign
+       neutral button without shouting; hover flips to a solid danger fill.
+       Measured AA as button text: 5.0:1 light (#b3261e on #f6dcd9), 5.5:1 dark
+       (#f2685e on #301715); hover text (--accent-contrast on --danger) clears AA
+       in both themes too. */
+    button.danger, .btn-danger { background: var(--danger-soft); color: var(--danger);
+                   border: 1px solid var(--danger); }
+    button.danger:hover:not(:disabled), .btn-danger:hover { background: var(--danger);
+                   color: var(--accent-contrast); border-color: var(--danger); }
+    .btn-danger { display: inline-block; border-radius: var(--r-md);
+                  padding: .3rem .7rem; text-decoration: none; }
+    /* Pressed feedback for every button variant (visual-polish pass): a 1px
+       nudge, no transition, so it also reads under prefers-reduced-motion. */
+    button:not(:where(.tp-split-word, .tp-corrected-chip)):active:not(:disabled) {
+      transform: translateY(1px); }
     kbd { font-family: var(--font-mono); font-size: .85em; background: var(--surface-2);
-          border: 1px solid var(--line); border-radius: .3rem; padding: 0 .3rem; }
+          border: 1px solid var(--line); border-radius: var(--r-sm); padding: 0 .3rem; }
     button.primary kbd { background: var(--kbd-overlay); border-color: transparent;
           color: inherit; }
     /* Line hover as a reading aid. :where() keeps this at (0,0,0) so the active
@@ -477,7 +528,7 @@
     .stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
                   gap: .8rem; margin: 1rem 0 1.5rem; }
     .stat-card { border: 1px solid var(--line); border-radius: var(--r-md);
-                 background: var(--surface); padding: .7rem .9rem; box-shadow: var(--shadow-1); }
+                 background: var(--surface); padding: var(--space-3) var(--space-4); box-shadow: var(--shadow-1); }
     .stat-card .stat-value { font-size: var(--t-xl); line-height: 1.1; font-variant-numeric: tabular-nums; }
     .stat-card .stat-label { font-size: var(--t-xs); text-transform: uppercase;
                  letter-spacing: .05em; color: var(--ink-3); margin-top: .1rem; }
@@ -490,10 +541,10 @@
     .task-cards { list-style: none; display: grid;
                   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
                   gap: .8rem; margin: 1rem 0 1.5rem; padding: 0; }
-    .task-link { display: flex; flex-direction: column; gap: .3rem; height: 100%;
+    .task-link { display: flex; flex-direction: column; gap: var(--space-1); height: 100%;
                  border: 1px solid var(--line); border-radius: var(--r-lg);
                  background: var(--surface); box-shadow: var(--shadow-1);
-                 padding: 1rem 1.1rem; text-decoration: none; color: var(--ink);
+                 padding: var(--card-pad); text-decoration: none; color: var(--ink);
                  transition: border-color .12s ease, box-shadow .12s ease,
                              background .12s ease; }
     a.task-link:hover, a.task-link:focus-visible { border-color: var(--accent);
@@ -592,13 +643,22 @@
     .highlights-fallback ul { list-style: none; padding: 0; margin: .5rem 0; }
     .highlights-fallback li { padding: .5rem 0; border-top: 1px solid var(--line); }
     .highlights-fallback li:first-child { border-top: 0; }
+    /* Hover affordances (visual-polish pass): pointer elements that previously
+       relied only on the focus ring now get a resting hover cue. Placed after
+       their base rules so equal-specificity :hover ties resolve in favour of
+       these. */
+    .tag-pill:hover { border-color: var(--line-strong); }
+    .hl-swatch:hover { border-color: var(--ink-3); }
+    .tp-corrected-chip:hover { background: var(--ok-soft); }
+    details summary:hover { color: var(--accent-ink); }
+    .sort-control a:hover, .breadcrumbs a:hover { color: var(--accent-strong); }
     /* Responsive + accessibility polish (issue #64). Baseline usability beyond a
        desktop screen for the single operator: a keyboard skip-link + main landmark,
        a visible focus ring, wide tables that scroll inside their own container
        (no horizontal PAGE overflow), and one small-screen breakpoint. */
     .skip-link { position: absolute; left: -999px; top: .5rem; background: Canvas;
                  color: CanvasText; padding: .5rem .8rem; border: 1px solid;
-                 border-radius: .4rem; z-index: 10; }
+                 border-radius: var(--r-sm); z-index: 10; }
     .skip-link:focus { left: .5rem; }
     :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
     @media (forced-colors: active) { :focus-visible { outline-color: Highlight; } }
