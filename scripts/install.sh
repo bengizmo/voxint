@@ -99,8 +99,13 @@ WORKER_BASE_COMMAND="celery -A voxint.worker.app worker --loglevel=INFO"
 # ownership marker -- i.e. the installer generated it. A prefix match keeps a
 # future format-version bump (…-override v2) still recognizable as managed.
 hardware_override_is_managed() {
+  # A symlink is never installer-managed: we never create one, and following it
+  # would let a link decide what gets folded into the compose chain.
+  [ -L "$HARDWARE_OVERRIDE_FILE" ] && return 1
   [ -f "$HARDWARE_OVERRIDE_FILE" ] || return 1
-  local first
+  # Initialized so an unreadable-but-present file (e.g. root-owned mode 600 from a
+  # prior sudo run) degrades to "unmanaged" instead of tripping set -u on $first.
+  local first=""
   IFS= read -r first < "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true
   case $first in "$HARDWARE_OVERRIDE_MARKER"*) return 0 ;; *) return 1 ;; esac
 }
@@ -135,8 +140,12 @@ normalize_tier() {
 # invocation goes through dc(), so pull/up/ps/logs/port can never disagree
 # about which overlay is active.
 compose_file_args_for_tier() {
-  local tier args
+  local tier args skip_hardware
   tier=$(normalize_tier "${1:-}")
+  # $2 == "skip-hardware" omits the managed compose.hardware.yaml even on the GPU
+  # tier -- used when validating a kept .env, so a stale managed file cannot
+  # masquerade as a bad .env before configure_hardware_defaults regenerates it.
+  skip_hardware=${2:-}
   case $tier in
     cpu)  args='-f compose.yaml -f compose.cpu.yaml' ;;
     gpu)  args='-f compose.yaml -f compose.gpu.yaml' ;;
@@ -148,7 +157,7 @@ compose_file_args_for_tier() {
   # compose.hardware.yaml, after the tier overlay so it wins. GPU tier only
   # (the other tiers have no NVIDIA sizing), and only when we generated it --
   # an unmarked hand-written file is left alone and never auto-loaded here.
-  if [ "$tier" = "gpu" ] && hardware_override_is_managed; then
+  if [ "$tier" = "gpu" ] && [ "$skip_hardware" != "skip-hardware" ] && hardware_override_is_managed; then
     args="$args -f $HARDWARE_OVERRIDE_FILE"
   fi
   # An operator's own compose.override.yaml is NOT auto-merged when explicit -f
@@ -368,7 +377,7 @@ resolve_port() {
 prompt_compute_tier() {
   local def=c label ans
   if [ -e /dev/kfd ]; then def=a; fi
-  if command -v nvidia-smi >/dev/null 2>&1; then def=g; fi
+  if command -v "${VOXINT_NVIDIA_SMI:-nvidia-smi}" >/dev/null 2>&1; then def=g; fi
   # Checked LAST so it wins on a Mac even if a stray nvidia-smi is on PATH:
   # Apple Silicon cannot run the CUDA containers, and the metal tier is what
   # actually uses the Apple GPU.
@@ -644,9 +653,16 @@ resolve_kept_env_tier() {
   fi
   EFFECTIVE_TIER=$tier
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
-  # Validate the kept .env against the file set that will actually start, so
-  # a hand-edited .env fails here with a clear message instead of mid-`up`.
-  if ! dc config --quiet >/dev/null 2>&1; then
+  # Validate the kept .env against the file set that will actually start, so a
+  # hand-edited .env fails here with a clear message instead of mid-`up`. Exclude
+  # any installer-managed compose.hardware.yaml from THIS check: a stale managed
+  # file (e.g. left by an older voxint whose compose changed) would otherwise fail
+  # validation here and be reported as a bad .env, blocking the very regeneration
+  # that configure_hardware_defaults performs (and re-validates) right after.
+  local validate_args
+  validate_args=$(compose_file_args_for_tier "$EFFECTIVE_TIER" skip-hardware)
+  # shellcheck disable=SC2086  # intentional word-splitting of the -f arguments
+  if ! docker compose $validate_args config --quiet >/dev/null 2>&1; then
     fail "The existing .env failed Compose validation for the recorded tier ($tier). Fix it or re-run and choose to regenerate."
   fi
 }
@@ -746,6 +762,9 @@ detect_nvidia_gpu() {
   out=$("$smi" --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null) || return 0
   [ -n "$out" ] || return 0
 
+  # Process substitution (not a pipe) keeps this loop in the current shell so the
+  # GPU_* assignments persist; feeding "$out" through printf avoids the here-doc
+  # re-expansion of driver-supplied names (no `$(...)`/backtick evaluation).
   local line trimmed name vram sig first_sig="" count=0
   while IFS= read -r line || [ -n "$line" ]; do
     line=${line%$'\r'}
@@ -757,6 +776,11 @@ detect_nvidia_gpu() {
     name=${name#"${name%%[![:blank:]]*}"}; name=${name%"${name##*[![:blank:]]}"}
     vram=${vram#"${vram%%[![:blank:]]*}"}; vram=${vram%"${vram##*[![:blank:]]}"}
     # nounits means a plain integer; MIG rows carry "N/A" or "[MIG …]" names.
+    # NOTE: this name-substring check catches MIG-instance rows but not a physical
+    # card with MIG merely enabled (that needs mig.mode.current). Harmless today --
+    # every unknown card gets the same conservative fallback -- but a future
+    # per-GPU BATCH_SIZE profile (gated on parity + an OOM soak) must query
+    # mig.mode.current before it can trust the name+VRAM signature.
     case $vram in ''|*[!0-9]*) GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0 ;; esac
     case $name in *MIG*|*mig*) GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0 ;; esac
     sig="$(normalize_gpu_name "$name")|$vram"
@@ -766,9 +790,7 @@ detect_nvidia_gpu() {
     elif [ "$sig" != "$first_sig" ]; then
       GPU_NAME=""; GPU_VRAM_MIB=""; GPU_SIGNATURE=""; return 0
     fi
-  done <<EOF
-$out
-EOF
+  done < <(printf '%s\n' "$out")
   [ -n "$GPU_NAME" ] && GPU_SIGNATURE=$first_sig
   return 0
 }
@@ -777,6 +799,10 @@ PROFILE_ID=""
 PROFILE_CONCURRENCY=""
 PROFILE_MAX_PENDING=""
 PROFILE_BATCH_SIZE=""
+# Set by write_hardware_override so the caller can report what actually happened:
+# "written" (created/refreshed), "unchanged" (already current), or "refused"
+# (a non-managed/non-regular/symlinked target left untouched).
+HARDWARE_WRITE_RESULT=""
 
 # Map a detected GPU signature to a TESTED sizing profile. Profile matching,
 # never a VRAM formula. Only the conservative unknown fallback ships today;
@@ -823,7 +849,13 @@ render_hardware_override() {
 # effective GPU chain + .env, then moves it into place. Returns non-zero (without
 # failing the install) when it deliberately left an existing file untouched.
 write_hardware_override() {
-  if { [ -e "$HARDWARE_OVERRIDE_FILE" ] || [ -L "$HARDWARE_OVERRIDE_FILE" ]; } && [ ! -f "$HARDWARE_OVERRIDE_FILE" ]; then
+  HARDWARE_WRITE_RESULT="refused"
+  if [ -L "$HARDWARE_OVERRIDE_FILE" ]; then
+    say "  NOTE: $HARDWARE_OVERRIDE_FILE is a symlink -- leaving it untouched"
+    say "  (put custom overrides in compose.override.yaml instead)."
+    return 1
+  fi
+  if [ -e "$HARDWARE_OVERRIDE_FILE" ] && [ ! -f "$HARDWARE_OVERRIDE_FILE" ]; then
     say "  NOTE: $HARDWARE_OVERRIDE_FILE exists but is not a regular file -- leaving it untouched."
     return 1
   fi
@@ -838,11 +870,12 @@ write_hardware_override() {
   if hardware_override_is_managed; then
     current=$(cat "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true)
     if [ "$current" = "$candidate" ]; then
+      HARDWARE_WRITE_RESULT="unchanged"
       return 0  # idempotent: nothing changed
     fi
   fi
 
-  local tmp old_umask vargs
+  local tmp old_umask rc
   old_umask=$(umask); umask 077
   tmp=$(mktemp "$REPO_ROOT/.compose.hardware.tmp.XXXXXX") || { umask "$old_umask"; fail "Could not create a temp file in $REPO_ROOT."; }
   _CLEANUP_TMP=$tmp
@@ -851,10 +884,14 @@ write_hardware_override() {
 
   # Validate against the file set that will actually run (base + gpu overlay +
   # this candidate + any operator override), so a bad render fails here, not at up.
-  vargs="-f compose.yaml -f compose.gpu.yaml -f $tmp"
-  if [ -f compose.override.yaml ]; then vargs="$vargs -f compose.override.yaml"; fi
-  # shellcheck disable=SC2086  # intentional word-splitting of the -f arguments
-  if ! docker compose $vargs --env-file .env config --quiet >/dev/null 2>&1; then
+  # $tmp is an absolute path (REPO_ROOT can contain spaces on macOS), so pass every
+  # -f as a discrete quoted argument rather than word-splitting one string.
+  if [ -f compose.override.yaml ]; then
+    docker compose -f compose.yaml -f compose.gpu.yaml -f "$tmp" -f compose.override.yaml --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
+  else
+    docker compose -f compose.yaml -f compose.gpu.yaml -f "$tmp" --env-file .env config --quiet >/dev/null 2>&1 && rc=0 || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
     rm -f "$tmp"; _CLEANUP_TMP=""
     fail "Generated $HARDWARE_OVERRIDE_FILE failed Compose validation. This is a bug -- please report it."
   fi
@@ -862,6 +899,7 @@ write_hardware_override() {
   mv -f "$tmp" "$HARDWARE_OVERRIDE_FILE" || fail "Could not move $HARDWARE_OVERRIDE_FILE into place."
   _CLEANUP_TMP=""
   chmod 644 "$HARDWARE_OVERRIDE_FILE" 2>/dev/null || true
+  HARDWARE_WRITE_RESULT="written"
   return 0
 }
 
@@ -877,18 +915,30 @@ configure_hardware_defaults() {
     say "  Detected GPU: $GPU_NAME (${GPU_VRAM_MIB} MiB)."
   else
     say "  Could not read a single, unambiguous NVIDIA GPU from nvidia-smi;"
-    say "  applying the conservative default that suits any modest card."
+    say "  using the conservative default that suits any modest card."
   fi
-  say "  Profile '$PROFILE_ID': worker --concurrency=$PROFILE_CONCURRENCY, whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING."
-  if [ -z "$PROFILE_BATCH_SIZE" ]; then
-    say "  Transcription batch size stays at the image default (unchanged): auto-tuning"
-    say "  it needs a measured per-GPU profile, so the installer does not set it."
-  fi
+  # Announce what actually took effect: the caps are only "applied" when the file
+  # is written (or was already current). A refused (operator-owned/symlinked)
+  # target is NOT merged into the compose chain, so do not imply the caps are on.
   if write_hardware_override; then
-    say "  Wrote $HARDWARE_OVERRIDE_FILE. Conservative mode is slower but steadier under"
-    say "  load; it is not a guarantee against out-of-memory. See docs/operations.md (#96)."
+    say "  Profile '$PROFILE_ID' applied: worker --concurrency=$PROFILE_CONCURRENCY,"
+    say "  whisper MAX_PENDING_REQUESTS=$PROFILE_MAX_PENDING. This is a scheduling-only"
+    say "  baseline: it reduces overlapping GPU load but does not lower peak per-request"
+    say "  memory, so a card too small for a single job can still run out of memory."
+    if [ -z "$PROFILE_BATCH_SIZE" ]; then
+      say "  Transcription batch size stays at the image default (unchanged): auto-tuning"
+      say "  it needs a measured per-GPU profile, so the installer does not set it. If a"
+      say "  run hits out-of-memory, lower BATCH_SIZE by hand in compose.override.yaml."
+    fi
+    if [ "$HARDWARE_WRITE_RESULT" = "unchanged" ]; then
+      say "  $HARDWARE_OVERRIDE_FILE was already current. See docs/operations.md (#96)."
+    else
+      say "  Wrote $HARDWARE_OVERRIDE_FILE. See docs/operations.md (#96)."
+    fi
   else
-    say "  Kept the existing $HARDWARE_OVERRIDE_FILE as-is."
+    say "  Conservative GPU defaults were NOT applied: $HARDWARE_OVERRIDE_FILE is present"
+    say "  but not installer-managed, so it is left as-is and is NOT merged into the"
+    say "  compose chain. Put your own overrides in compose.override.yaml instead."
   fi
   COMPOSE_FILE_ARGS=$(compose_file_args_for_tier "$EFFECTIVE_TIER")
   if [ -f compose.override.yaml ]; then
@@ -912,8 +962,13 @@ hardware_dry_run() {
   if [ -z "$PROFILE_BATCH_SIZE" ]; then
     say "BATCH_SIZE: unchanged (needs a measured per-GPU profile before it is auto-set)."
   fi
+  # Show the chain a real install WOULD use, i.e. WITH the hardware file folded in.
+  # compose_file_args_for_tier only includes it once it exists on disk, so build
+  # the prospective chain explicitly here rather than reporting the current one.
+  local chain="-f compose.yaml -f compose.gpu.yaml -f $HARDWARE_OVERRIDE_FILE"
+  if [ -f compose.override.yaml ]; then chain="$chain -f compose.override.yaml"; fi
   say "Effective GPU compose chain would be:"
-  say "  docker compose $(compose_file_args_for_tier gpu)"
+  say "  docker compose $chain"
   say ""
   say "$HARDWARE_OVERRIDE_FILE would contain:"
   say "----------------------------------------------------------------------"
@@ -1072,25 +1127,27 @@ print_handoff() {
       say " The CPU-tier model services were STARTED alongside the core stack."
       say " They may still be booting and loading models on a first run --"
       say " check their status before submitting audio:"
-      say "   docker compose -f compose.yaml -f compose.cpu.yaml ps"
+      say "   docker compose $COMPOSE_FILE_ARGS ps"
       say " Expect CPU inference to be much slower than a GPU -- a long recording"
       say " can take hours. Slow-but-healthy runs are protected by the CPU timing"
       say " profile (COMPUTE_TIER=cpu)."
       say ""
       say " Stop the stack with:"
-      say "   docker compose -f compose.yaml -f compose.cpu.yaml down"
+      say "   docker compose $COMPOSE_FILE_ARGS down"
       ;;
     gpu)
       say " The GPU-tier model services were STARTED alongside the core stack."
       say " They may still be booting and loading models on a first run --"
       say " check their status before submitting audio:"
-      say "   docker compose -f compose.yaml -f compose.gpu.yaml ps"
+      say "   docker compose $COMPOSE_FILE_ARGS ps"
       say " A run submitted before they are ready retries with backoff, so a"
       say " brief warmup is harmless; if a run does land failed, requeue it from"
       say " the run's page once the services are up."
       say ""
+      say " These commands include the conservative compose.hardware.yaml the"
+      say " installer generated; keep the full flag list so re-runs stay capped."
       say " Stop the stack with:"
-      say "   docker compose -f compose.yaml -f compose.gpu.yaml down"
+      say "   docker compose $COMPOSE_FILE_ARGS down"
       ;;
     metal)
       say " IMPORTANT -- the core stack is wired for the metal tier, but the"
@@ -1108,7 +1165,7 @@ print_handoff() {
       say ""
       say " Stop everything with:"
       say "   ./scripts/metal/voxint-metal.sh down"
-      say "   docker compose -f compose.yaml -f compose.metal.yaml down"
+      say "   docker compose $COMPOSE_FILE_ARGS down"
       ;;
     rocm)
       say " The AMD (ROCm) model services were STARTED alongside the core stack."
@@ -1116,12 +1173,12 @@ print_handoff() {
       say " run on CPU (see docs/operations.md for why). Services may still be"
       say " booting and loading models on a first run -- check their status"
       say " before submitting audio:"
-      say "   docker compose -f compose.yaml -f compose.rocm.yaml ps"
+      say "   docker compose $COMPOSE_FILE_ARGS ps"
       say " The CPU-bound stages are protected by the rocm timing profile"
       say " (COMPUTE_TIER=rocm)."
       say ""
       say " Stop the stack with:"
-      say "   docker compose -f compose.yaml -f compose.rocm.yaml down"
+      say "   docker compose $COMPOSE_FILE_ARGS down"
       ;;
     *)
       say " IMPORTANT -- this is the CORE control plane only. You can open the"

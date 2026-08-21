@@ -27,6 +27,27 @@ printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
 exit 0
 """
 
+# Like FAKE_DOCKER but, for `config`, asserts every `-f` argument names a real
+# file. A word-split absolute path (e.g. a repo dir with a space) reaches this as
+# a broken token and fails -- so it catches quoting regressions the always-pass
+# fake cannot.
+VALIDATING_FAKE_DOCKER = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG:?}"
+is_config=0
+for a in "$@"; do [ "$a" = "config" ] && is_config=1; done
+if [ "$is_config" = "1" ]; then
+  prev=""
+  for a in "$@"; do
+    if [ "$prev" = "-f" ] && [ ! -f "$a" ]; then
+      printf 'no such compose file: %s\\n' "$a" >&2
+      exit 1
+    fi
+    prev="$a"
+  done
+fi
+exit 0
+"""
+
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / "scripts").mkdir()
@@ -58,6 +79,9 @@ def run_lib(
     env["VOXINT_INSTALL_LIB"] = "1"
     env["PATH"] = f"{repo / 'fakebin'}:{env['PATH']}"
     env["FAKE_DOCKER_LOG"] = str(repo / "docker.log")
+    # A developer's own VOXINT_NVIDIA_SMI must not override the fakebin/NO_NVIDIA
+    # seam these tests rely on; each test sets it explicitly when it wants one.
+    env.pop("VOXINT_NVIDIA_SMI", None)
     if extra_env:
         env.update(extra_env)
     full = f'source "{repo}/scripts/install.sh"\n{script}'
@@ -426,6 +450,8 @@ def run_script(
     env = os.environ.copy()
     env["PATH"] = f"{repo / 'fakebin'}:{env['PATH']}"
     env["FAKE_DOCKER_LOG"] = str(repo / "docker.log")
+    # See run_lib: keep an ambient VOXINT_NVIDIA_SMI from leaking into the seam.
+    env.pop("VOXINT_NVIDIA_SMI", None)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
@@ -559,6 +585,18 @@ def test_generated_worker_command_matches_base_compose(repo: Path) -> None:
 
     compose = yaml.safe_load((repo / "compose.yaml").read_text())
     base_command = compose["services"]["worker"]["command"]
+    # The override restates the command as a single YAML scalar; a list/folded
+    # form would need different handling, so pin the shape too.
+    assert isinstance(base_command, str), (
+        "worker command must stay a single YAML string for wholesale override restatement"
+    )
+    # The generated override is applied on top of compose.gpu.yaml, but it restates
+    # only compose.yaml's command. If the gpu overlay ever sets its own worker
+    # command, the override would silently clobber it -- fail loudly if that lands.
+    gpu = yaml.safe_load((repo / "compose.gpu.yaml").read_text())
+    assert "command" not in gpu.get("services", {}).get("worker", {}), (
+        "compose.gpu.yaml worker gained a command; WORKER_BASE_COMMAND must account for it"
+    )
 
     proc = run_lib(repo, 'printf "%s" "$WORKER_BASE_COMMAND"')
     assert proc.returncode == 0, proc.stderr
@@ -587,16 +625,26 @@ def test_write_hardware_override_first_write(repo: Path) -> None:
 
 def test_write_hardware_override_idempotent(repo: Path) -> None:
     # Writing twice leaves identical content and, crucially, the second call
-    # returns BEFORE re-validating (only one docker invocation is logged).
+    # returns BEFORE re-validating (only one docker invocation is logged) and
+    # reports "unchanged" rather than "written".
     proc = run_lib(
         repo,
-        "select_hardware_profile\nwrite_hardware_override\nwrite_hardware_override\necho RC=$?",
+        "select_hardware_profile\nwrite_hardware_override\n"
+        'printf "R1=%s\\n" "$HARDWARE_WRITE_RESULT"\n'
+        "write_hardware_override\necho RC=$?\n"
+        'printf "R2=%s\\n" "$HARDWARE_WRITE_RESULT"',
         extra_env=NO_NVIDIA,
     )
     assert proc.returncode == 0, proc.stderr
     assert "RC=0" in proc.stdout
+    assert "R1=written" in proc.stdout  # first call created the file
+    assert "R2=unchanged" in proc.stdout  # second call was a content no-op
     log = (repo / "docker.log").read_text()
-    assert log.count("config --quiet") == 1  # second write was a no-op
+    assert log.count("config --quiet") == 1  # second write skipped re-validation
+    # The validation line names the temp candidate and passes --env-file .env,
+    # so a regression that validated the wrong file set would be caught here.
+    assert ".compose.hardware.tmp." in log
+    assert "--env-file .env" in log
 
 
 def test_write_hardware_override_refuses_unmarked_operator_file(repo: Path) -> None:
@@ -614,9 +662,35 @@ def test_write_hardware_override_refuses_unmarked_operator_file(repo: Path) -> N
 
 
 def test_write_hardware_override_refuses_symlink(repo: Path, tmp_path: Path) -> None:
+    # A symlink -- even one pointing at a regular file -- is refused outright via
+    # the -L guard, BEFORE the -f/marker checks (which follow the link). The
+    # target is never written through, and the link is left in place.
     victim = tmp_path / "victim.yaml"
     victim.write_text("services: {}\n")
     (repo / "compose.hardware.yaml").symlink_to(victim)
+    proc = run_lib(
+        repo,
+        "select_hardware_profile\nif write_hardware_override; then echo RC=0; else echo RC=$?; fi\n"
+        'printf "RESULT=%s\\n" "$HARDWARE_WRITE_RESULT"',
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=1" in proc.stdout
+    assert "RESULT=refused" in proc.stdout
+    assert "is a symlink" in proc.stderr  # the dedicated symlink branch fired
+    assert (repo / "compose.hardware.yaml").is_symlink()  # link untouched
+    assert victim.read_text() == "services: {}\n"  # symlink target unharmed
+    # A symlinked file is never treated as installer-managed, so it is not folded
+    # into the compose chain either.
+    chain = run_lib(repo, "compose_file_args_for_tier gpu")
+    assert chain.stdout == "-f compose.yaml -f compose.gpu.yaml"
+
+
+def test_write_hardware_override_refuses_non_regular_file(repo: Path) -> None:
+    # A broken symlink (target missing) is not a regular file: -L catches it, and
+    # even without that the "exists-but-not-regular" branch would. Either way the
+    # installer must decline rather than try to write.
+    (repo / "compose.hardware.yaml").symlink_to(repo / "nonexistent-target.yaml")
     proc = run_lib(
         repo,
         "select_hardware_profile\nif write_hardware_override; then echo RC=0; else echo RC=$?; fi",
@@ -624,7 +698,49 @@ def test_write_hardware_override_refuses_symlink(repo: Path, tmp_path: Path) -> 
     )
     assert proc.returncode == 0, proc.stderr
     assert "RC=1" in proc.stdout
-    assert victim.read_text() == "services: {}\n"  # symlink target unharmed
+    assert not (repo / "compose.hardware.yaml").exists()  # broken link still there, unresolved
+    assert (repo / "compose.hardware.yaml").is_symlink()
+
+
+def test_write_hardware_override_survives_repo_path_with_spaces(tmp_path: Path) -> None:
+    # Regression: the compose-validation call embeds the absolute temp path. A repo
+    # directory containing a space (e.g. macOS "~/My Projects/voxint") must not
+    # word-split that -f argument. The validating fake docker fails if any -f path
+    # does not resolve, so a split token would be caught here.
+    spaced = tmp_path / "dir with spaces"
+    (spaced / "scripts").mkdir(parents=True)
+    shutil.copy(REAL_REPO / "scripts" / "install.sh", spaced / "scripts" / "install.sh")
+    for name in ("compose.yaml", "compose.gpu.yaml", ".env.example"):
+        shutil.copy(REAL_REPO / name, spaced / name)
+    fakebin = spaced / "fakebin"
+    fakebin.mkdir()
+    docker = fakebin / "docker"
+    docker.write_text(VALIDATING_FAKE_DOCKER)
+    docker.chmod(0o755)
+
+    env = os.environ.copy()
+    env["VOXINT_INSTALL_LIB"] = "1"
+    env["PATH"] = f"{fakebin}:{env['PATH']}"
+    env["FAKE_DOCKER_LOG"] = str(spaced / "docker.log")
+    env["VOXINT_NVIDIA_SMI"] = "/nonexistent/nvidia-smi"
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'source "{spaced}/scripts/install.sh"\n'
+            "select_hardware_profile\nwrite_hardware_override\necho RC=$?",
+        ],
+        cwd=spaced,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "RC=0" in proc.stdout
+    assert (spaced / "compose.hardware.yaml").exists()
+    log = (spaced / "docker.log").read_text()
+    assert "config --quiet" in log  # validation actually ran and passed
 
 
 def test_write_hardware_override_validation_failure_is_atomic(repo: Path) -> None:
@@ -704,8 +820,14 @@ def test_hardware_dry_run_prints_yaml_and_writes_nothing(repo: Path) -> None:
     assert "# voxint:hardware-override v1" in proc.stdout
     assert 'MAX_PENDING_REQUESTS: "1"' in proc.stdout
     assert "BATCH_SIZE" not in proc.stdout
-    # Human annotations on stderr; nothing written or started.
+    # Human annotations on stderr; nothing written or started. The advertised
+    # "effective chain" must include the hardware file a real install would fold
+    # in -- even though it does not exist yet on this dry run.
     assert "dry run" in proc.stderr
+    assert (
+        "docker compose -f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml"
+        in proc.stderr
+    )
     assert not (repo / "compose.hardware.yaml").exists()
     assert not (repo / ".env").exists()
 
@@ -715,3 +837,62 @@ def test_hardware_dry_run_unknown_gpu_is_conservative(repo: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert "# profile: nvidia-unknown-v1" in proc.stdout
     assert "--concurrency=1" in proc.stdout
+
+
+def test_compose_file_args_skip_hardware_excludes_managed_file(repo: Path) -> None:
+    # The kept-.env validation path asks for the chain WITHOUT the hardware file so
+    # a stale managed file cannot fail that check before it is regenerated.
+    _write_managed_hardware_file(repo)
+    with_hw = run_lib(repo, "compose_file_args_for_tier gpu")
+    assert with_hw.stdout == "-f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml"
+    without_hw = run_lib(repo, "compose_file_args_for_tier gpu skip-hardware")
+    assert without_hw.stdout == "-f compose.yaml -f compose.gpu.yaml"
+
+
+def test_configure_hardware_defaults_folds_hardware_into_chain(repo: Path) -> None:
+    # End-to-end: on a first GPU install, configure_hardware_defaults must write the
+    # hardware file AND refold COMPOSE_FILE_ARGS so pull/up/handoff use it. This
+    # pins the single line that wires the generated file into the effective chain;
+    # the component tests recompute the args by hand and would not catch its loss.
+    proc = run_lib(
+        repo,
+        "EFFECTIVE_TIER=gpu\nCOMPOSE_FILE_ARGS=$(compose_file_args_for_tier gpu)\n"
+        "configure_hardware_defaults\n"
+        'printf "ARGS=%s" "$COMPOSE_FILE_ARGS"',
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (repo / "compose.hardware.yaml").exists()
+    assert proc.stdout == "ARGS=-f compose.yaml -f compose.gpu.yaml -f compose.hardware.yaml"
+    # Honest UX: caps are announced as applied only after a successful write.
+    assert "Profile 'nvidia-unknown-v1' applied" in proc.stderr
+
+
+def test_configure_hardware_defaults_reports_not_applied_when_refused(repo: Path) -> None:
+    # An operator-authored (unmarked) file is left as-is, is NOT folded into the
+    # chain, and the copy must say so rather than implying the caps are active.
+    (repo / "compose.hardware.yaml").write_text("services: {}\n")
+    proc = run_lib(
+        repo,
+        "EFFECTIVE_TIER=gpu\nCOMPOSE_FILE_ARGS=$(compose_file_args_for_tier gpu)\n"
+        "configure_hardware_defaults\n"
+        'printf "ARGS=%s" "$COMPOSE_FILE_ARGS"',
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "were NOT applied" in proc.stderr
+    assert "Profile 'nvidia-unknown-v1' applied" not in proc.stderr  # no false claim
+    assert proc.stdout == "ARGS=-f compose.yaml -f compose.gpu.yaml"
+
+
+def test_configure_hardware_defaults_noop_on_non_gpu_tier(repo: Path) -> None:
+    # Non-GPU tiers must not detect, write, or announce anything.
+    proc = run_lib(
+        repo,
+        "EFFECTIVE_TIER=cpu\nconfigure_hardware_defaults\necho DONE",
+        extra_env=NO_NVIDIA,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "DONE" in proc.stdout
+    assert not (repo / "compose.hardware.yaml").exists()
+    assert "conservative GPU defaults" not in proc.stderr.lower()
