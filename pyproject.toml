@@ -79,6 +79,29 @@ parity = [
     "more-itertools==11.1.0",
     "regex==2026.7.19",
 ]
+# Diarization/ASR quality harness (tools/eval_quality.py, issue #97): scores
+# hypothesis RTTM against public ground truth (AMI + VoxConverse). Maintainer
+# instrument only, NEVER shipped to users and NEVER installed into a service
+# image. Kept in its own extra, isolated from `dev`, because pyannote.metrics
+# 4.1 pulls pyannote.core>=6.0 (with numpy>=2.2.2 / scipy>=1.15.1) which
+# CONFLICTS with the diarizer service's pinned pyannote.core==5.0.0
+# (services/pyannote/requirements.txt) — the two never share an environment
+# (the service is containerized; this harness runs in the host uv env). Do the
+# optimal-mapping/collar/overlap/UEM-crop DER math with a vetted scorer, not by
+# hand. Run: `uv run --isolated --extra parity --extra eval-quality
+# tools/eval_quality.py …` (parity carries the frozen jiwer WER stack).
+eval-quality = [
+    "pyannote.metrics==4.1",
+    # cpWER (concatenated minimum-permutation WER) for AMI, issue #97 commit 3.
+    # meeteval brings the vetted Hungarian speaker-assignment + pooled edit
+    # counts; we import only its low-level `meeteval.wer.wer.{cp,siso,error_rate}`
+    # helpers (the api/CLI layer misreads a flat {speaker: text} dict as
+    # {session: text} and pulls extra optional deps). Its runtime deps are
+    # kaldialign/numpy/scipy/Cython/packaging — NO torch/TF/CUDA (dep-closure
+    # asserted in tests/contracts/test_eval_quality_extra.py); kaldialign + Cython
+    # are compiled extensions with wheels for linux-x86_64 and macos-arm64.
+    "meeteval==0.4.3",
+]
 
 [project.scripts]
 voxint = "voxint.cli:main"
