@@ -391,6 +391,23 @@
                    border-radius: var(--r-lg); padding: .9rem 1.1rem; margin: 1rem 0;
                    box-shadow: var(--shadow-1); }
     .review-head h1 { margin: .2rem 0 .5rem; overflow-wrap: anywhere; }
+    /* Two-step review sequence (issue #117 Phase B): a quiet orientation strip
+       under the run name on both review screens. The current step is emphasized
+       with the accent; the other stays muted. Static — it carries NO live
+       progress (step 1's lives in #labels, step 2's in the stepper island), so
+       nothing here goes stale after an action. */
+    .review-steps { list-style: none; display: flex; flex-wrap: wrap; gap: .5rem;
+                    margin: .6rem 0 0; padding: 0; }
+    .review-steps .review-step { display: flex; flex-direction: column;
+                    border: 1px solid var(--line); border-radius: var(--r-md);
+                    padding: .35rem .7rem; min-width: 9rem;
+                    background: var(--surface-2); color: var(--ink-2); }
+    .review-steps .review-step.is-current { border-color: var(--accent);
+                    background: var(--surface); color: var(--ink); }
+    .review-step-n { font-size: var(--t-xs); text-transform: uppercase;
+                    letter-spacing: .05em; color: var(--ink-3); }
+    .review-steps .review-step.is-current .review-step-n { color: var(--accent-strong); }
+    .review-step-name { font-weight: 600; font-size: var(--t-sm); }
     .claim-state { display: inline-flex; align-items: center; gap: .45rem;
                    font-size: var(--t-sm); font-weight: 600; color: var(--ok); }
     .claim-state::before { content: ""; width: .5rem; height: .5rem; flex: none;

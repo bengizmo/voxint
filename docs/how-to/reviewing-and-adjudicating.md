@@ -8,13 +8,18 @@ when, and what they said. Those guesses are **proposals**. This
 guide walks you through the review console, where **you have the final say**: you
 confirm or overrule every proposal, and nothing is settled until you say so.
 
-Adjudication has two halves, and you can do them in either order:
+Review has two steps: start with the people, then check the words.
 
-- **[Workflow A: Identify the voices](#workflow-a-identify-the-voices):**
-  decide who each detected voice really is (or that they should be left out).
-- **[Workflow B: Verify and correct the transcript](#workflow-b-verify-and-correct-the-transcript):**
-  read through the words, confirm the ones that are right, and fix the ones
-  that are wrong.
+- **Step 1, [Identify the voices](#workflow-a-identify-the-voices):** decide who
+  each detected voice really is (or that they should be left out). Claiming a run
+  opens here.
+- **Step 2, [Verify and correct the transcript](#workflow-b-verify-and-correct-the-transcript):**
+  read through the words, confirm the ones that are right, and fix the ones that
+  are wrong.
+
+The console leads you from Step 1 to Step 2, and you can go back to the people at
+any time. Checking the words is recommended, not required: your speaker rulings
+are what settle a run.
 
 New to Voxint? The bundled [guided tutorial](../onboarding.md#3-guided-tutorial)
 walks this whole loop on a sample recording before you use your own audio; a
@@ -158,10 +163,12 @@ afterward.
 
 ## Workflow B: Verify and correct the transcript
 
-From the workbench, follow **Review transcript →** to open the transcript review
-page (`/review/{id}/transcript`). This is where you read the words, mark the
-right ones as checked, and fix the wrong ones. It works as a steady loop: **read
-a line → confirm it → move to the next.**
+From the workbench, follow **Continue to checking the words →** to open the
+transcript review page (`/review/{id}/transcript`). This is where you read the
+words, mark the right ones as checked, and fix the wrong ones. It works as a
+steady loop: **read a line → confirm it → move to the next.** When you have been
+through every line, the page says so and offers to export or go back to Review.
+To return to the speakers, use **← Back to the people** at the top.
 
 At the top you'll always see a live count, **"7 of 32 segments verified"**, so
 you know how far you are.

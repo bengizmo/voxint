@@ -444,6 +444,82 @@ def test_workbench_ungrounded_match_never_claims_strong(
     assert "not strong enough to confirm" in card
 
 
+def test_workbench_shows_review_sequence_and_continue(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Issue #117 Phase B: the workbench carries the two-step sequence (Step 1 is
+    current) and one dominant Continue reframed toward checking the words."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+
+    body = client.get(f"/review/{run_id}", params={"token": token}).text
+    # The shared sequence strip shows both steps, with Step 1 marked current.
+    assert "Step 1 of 2" in body
+    assert "Who is speaking" in body
+    assert "Step 2 of 2" in body
+    assert "Check the words" in body
+    # The one dominant Continue is reframed and carries the live claim token; the
+    # old implementation-flavoured label is gone.
+    assert "Continue to checking the words" in body
+    assert f'href="/review/{run_id}/transcript?token={token}"' in body
+    assert "Review transcript →" not in body
+    # Release claim is preserved.
+    assert "Release claim" in body
+
+
+def test_transcript_shows_review_sequence_and_back(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Issue #117 Phase B: the transcript page carries the matching sequence (Step 2
+    current) and a backward "Back to the people" link, not "workbench"."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+
+    body = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
+    assert "Step 1 of 2" in body
+    assert "Step 2 of 2" in body
+    assert "Back to the people" in body
+    assert "← workbench" not in body
+
+
+def test_transcript_terminal_state_appears_only_when_all_verified(
+    client: TestClient, session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    """Issue #117 Phase B: the Step 2 terminal state shows only at all-lines-verified
+    and offers plain next actions (export, back to Review), setting no durable flag."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+        segment_ids = [
+            s.id
+            for s in session.execute(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.pipeline_run_id == run_id
+                )
+            ).scalars()
+        ]
+    token = claim_token(client, run_id)
+
+    # Fresh: nothing verified yet, so the terminal state is absent.
+    fresh = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
+    assert "You have checked every line" not in fresh
+
+    # Verify every segment through the real JS-off form path.
+    for segment_id in segment_ids:
+        resp = client.post(
+            f"/review/{run_id}/segments/{segment_id}/verify",
+            data={"token": token, "verified": "true"},
+            headers={"accept": "application/json"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    done = client.get(f"/review/{run_id}/transcript", params={"token": token}).text
+    assert "You have checked every line" in done
+    assert f'href="/runs/{run_id}/transcript"' in done  # export from the finished view
+    assert 'href="/review"' in done  # back to Review
+
+
 def test_full_review_flow(
     client: TestClient, session_factory: sessionmaker[Session], media_root: Path
 ) -> None:

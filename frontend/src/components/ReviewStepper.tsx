@@ -849,7 +849,10 @@ export function ReviewStepper({
     annotateHotkey,
   ]);
 
-  const done = remaining === 0;
+  // "All lines checked" requires a non-empty transcript: a 0-of-0 run has nothing
+  // to check, so it must not read as complete (matches the server fallback's
+  // all_checked guard). Issue #117 Phase B.
+  const done = progress.total > 0 && remaining === 0;
 
   // Issue #83 derived view state for the current segment. `corrections` is the
   // pipeline provenance (null once superseded by an operator edit — see
@@ -902,7 +905,7 @@ export function ReviewStepper({
           <p aria-live="polite" aria-atomic="true">
             <strong>{progress.verified}</strong> of{" "}
             <strong>{progress.total}</strong> segments verified
-            {done ? " — all done" : ` · ${remaining} left`}
+            {done ? ". You have checked every line." : ` · ${remaining} left`}
           </p>
           <span className="progress-track" aria-hidden="true">
             <span
@@ -912,6 +915,19 @@ export function ReviewStepper({
             />
           </span>
         </div>
+        {done && (
+          // Step 2 terminal action (issue #117 Phase B): checking the words is
+          // recommended navigation, never a durable whole-run completion flag
+          // (Phase 0 contract). It only navigates, and stays neutral — checking
+          // the words does not prove speaker labels are resolved, so it never
+          // calls the run "finished". Mirrors the server fallback.
+          <div className="review-done card-actions">
+            <a className="btn-primary" href={`/runs/${runId}/transcript`}>
+              Open the transcript to export
+            </a>
+            <a href="/review">Back to Review</a>
+          </div>
+        )}
         {writable && (
           <div>
           {/* Run-level declared-rule reconciliation (issue #83): a collapsible

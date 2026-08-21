@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "fragments/export_menu.html" import export_menu %}
+{% from "fragments/review_journey.html" import review_journey %}
 {% block title %}Voxint — review {{ run_source_title(run) }}{% endblock %}
 {% block body %}
 <p><a href="/review">← queue</a></p>
@@ -8,17 +9,17 @@
    journey's actions in one surface. The claim wording is contract text the
    integration tests assert on — keep it verbatim. #}
 <header class="review-head">
-  {# Friendly run identity (issue #117): the recognizable title, with the raw
-     source path on hover and the short run id kept copyable below. #}
-  <h1 title="{{ run.media_item.source_path }}">{{ run_source_title(run) }}</h1>
-  <p class="muted">Added {{ run.created_at.strftime("%Y-%m-%d") }} · <code>{{ run.id.hex[:8] }}</code></p>
+  {# Friendly run identity + the two-step sequence (issue #117 Phase B). This is
+     Step 1 ("who is speaking"); the fragment is static and shared with the
+     transcript page — it owns no progress counter and no actions. #}
+  {{ review_journey(run, 1) }}
   {% if token %}
   <p class="claim-state">Claimed by you.</p>
   <div class="card-actions">
-    {# Verify-and-advance transcript review (issue #53): carries the live claim
-       token so the linear player writes without re-claiming (a fresh claim would
-       kill this tab's token). #}
-    <a class="btn-primary" href="/review/{{ run.id }}/transcript?token={{ token }}">Review transcript →</a>
+    {# Step 1 → Step 2 (issue #117 Phase B): the one dominant Continue. Carries
+       the live claim token so the transcript stepper writes without re-claiming
+       (a fresh claim would kill this tab's token). #}
+    <a class="btn-primary" href="/review/{{ run.id }}/transcript?token={{ token }}">Continue to checking the words →</a>
     <form method="post" action="/review/{{ run.id }}/release" class="inline">
       <input type="hidden" name="token" value="{{ token }}">
       <button type="submit">Release claim</button>

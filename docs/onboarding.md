@@ -130,18 +130,25 @@ console pages via a `?tutorial=<step>` query parameter, not client-side
 coach-marks (which are brittle under htmx fragment swaps). A banner renders only
 when the query step matches the page it is on *and* the run is the configured
 tutorial run, so a stray or typo'd `?tutorial=` value never breaks the underlying
-page. Four numbered steps ("step N of 4"):
+page. Five numbered steps ("step N of 5") walk the two-step review sequence,
+who is speaking then check the words, end to end:
 
 1. **Run** (`/runs/{id}?tutorial=run`): the sample, already transcribed and split
    by voice. Look over the stage ledger and the transcript.
 2. **Review** (`/review?tutorial=review`): claim the run so only you can rule on
    its voices.
-3. **Adjudicate** (`/review/{id}?tutorial=adjudicate`): attribute the three
-   voices. One has a grounded machine match to accept; one shows a *heard* name
-   that is only a guess (you decide); one has no name at all. Assign, enroll,
-   exclude, or mark unknown.
-4. **Export** (`/review/{id}?tutorial=export`): open the speaker-labelled
-   transcript. That is the whole loop: submit → review → attribute → export.
+3. **Adjudicate** (`/review/{id}?tutorial=adjudicate`), Step 1 of the review
+   sequence: attribute the three voices. One has a grounded machine match to
+   accept; one shows a *heard* name that is only a guess (you decide); one has no
+   name at all. Assign, enroll, exclude, or mark unknown, then continue to
+   checking the words.
+4. **Check the words** (`/review/{id}/transcript?tutorial=check_words`), Step 2:
+   read through the transcript and confirm the words, fixing any the transcriber
+   got wrong. This is recommended, not required; your speaker rulings are what
+   settle a run.
+5. **Export** (`/review/{id}/transcript?tutorial=export`): open the transcript
+   and save it in whichever format you need. That is the whole loop: submit →
+   review → attribute → check the words → export.
 
 A terminal completion note then appears on the Settings page.
 

@@ -2852,8 +2852,9 @@ def _tutorial_banner(
 
     The returned dict is a flat bag the banner partial reads; each step populates
     only the action fields it needs (a next-link, a claim form, or the export +
-    finish controls). The adjudicate→export next-link carries the verified claim
-    ``token`` so the workbench stays writable; the export link never does.
+    finish controls). The adjudicate→check_words→export next-links carry the
+    verified claim ``token`` so the workbench and transcript stepper stay writable;
+    the export link never does.
     """
     step = parse_tutorial_step(request.query_params.get("tutorial"))
     if step is None or STEP_PAGE[step] is not page:
@@ -2863,7 +2864,10 @@ def _tutorial_banner(
         return None
     # Run-scoped pages must be showing THE tutorial run; the queue page carries no
     # run_id and only needs the tutorial run to exist (checked above).
-    if page in (TutorialPage.RUN_DETAIL, TutorialPage.WORKBENCH) and run_id != tutorial_run_id:
+    if (
+        page in (TutorialPage.RUN_DETAIL, TutorialPage.WORKBENCH, TutorialPage.TRANSCRIPT)
+        and run_id != tutorial_run_id
+    ):
         return None
 
     copy = STEP_COPY[step]
@@ -2890,11 +2894,29 @@ def _tutorial_banner(
         banner["csrf_claim"] = mint_csrf_token(secret, CSRF_CLAIM)
     elif step is TutorialStep.ADJUDICATE:
         if token is not None:
-            banner["next_href"] = f"/review/{tutorial_run_id}?token={token}&tutorial=export"
-            banner["next_label"] = "I've attributed the voices →"
+            # Step 1 → Step 2: hand off to the transcript stepper (issue #117 Phase
+            # B), carrying the live claim token so verify/edit stay enabled there.
+            banner["next_href"] = (
+                f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=check_words"
+            )
+            banner["next_label"] = "Continue to checking the words →"
         else:
             # No live claim on this tab — offer to (re)claim and continue rather
             # than a dead next-link that would land on a read-only workbench.
+            banner["claim_run_id"] = tutorial_run_id
+            banner["csrf_claim"] = mint_csrf_token(secret, CSRF_CLAIM)
+    elif step is TutorialStep.CHECK_WORDS:
+        if token is not None:
+            # Step 2 → export: stay on the transcript page (both steps share it),
+            # keeping the claim token so a returning tab is still writable.
+            banner["next_href"] = (
+                f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=export"
+            )
+            banner["next_label"] = "I've checked the words →"
+        else:
+            # A stale/absent token here means the workbench claim is gone; recover
+            # by re-claiming (which re-enters the walkthrough on run identity)
+            # rather than offering a dead read-only next-link.
             banner["claim_run_id"] = tutorial_run_id
             banner["csrf_claim"] = mint_csrf_token(secret, CSRF_CLAIM)
     elif step is TutorialStep.EXPORT:
@@ -4010,6 +4032,18 @@ def _register_routes(app: FastAPI) -> None:
                 "token": token,
                 "progress": {"verified": verified_n, "total": total},
                 "csrf_claim": mint_csrf_token(request.app.state.csrf_secret, CSRF_CLAIM),
+                # Guided-tutorial banner (issue #117 Phase B): CHECK_WORDS and EXPORT
+                # both bind this transcript page. The banner lives above the body
+                # (base.html), outside the island, so a stepper re-render never
+                # clobbers it. The claim token flows through so the export step's
+                # onward link stays writable.
+                "tutorial": _tutorial_banner(
+                    request,
+                    session,
+                    page=TutorialPage.TRANSCRIPT,
+                    run_id=run_id,
+                    token=token,
+                ),
                 "active_nav": "runs",
             },
         )

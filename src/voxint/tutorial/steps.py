@@ -12,10 +12,10 @@ run and builds the per-step next-links/tokens; here we only say which step maps 
 which page and how it is worded.
 
 A banner renders only when BOTH the ``?tutorial=<step>`` value parses AND the page
-the request hit is the step's bound page. ``ADJUDICATE`` and ``EXPORT`` share the
-workbench page (``/review/{id}``), so a page identity — not the run id alone —
-disambiguates them; the API layer additionally requires the route's run id to be
-the configured ``tutorial_run_id`` before rendering anything.
+the request hit is the step's bound page. ``CHECK_WORDS`` and ``EXPORT`` share the
+transcript page (``/review/{id}/transcript``), so a page identity — not the run id
+alone — disambiguates them; the API layer additionally requires the route's run id
+to be the configured ``tutorial_run_id`` before rendering anything.
 """
 
 from __future__ import annotations
@@ -30,17 +30,21 @@ class TutorialStep(StrEnum):
     RUN = "run"
     REVIEW = "review"
     ADJUDICATE = "adjudicate"
+    CHECK_WORDS = "check_words"
     EXPORT = "export"
     DONE = "done"
 
 
-# The four numbered walkthrough steps, in order ("step N of 4"). DONE is terminal
+# The five numbered walkthrough steps, in order ("step N of 5"). DONE is terminal
 # (a completion celebration on the Settings page), not a numbered walkthrough step,
-# so it is deliberately excluded from the count.
+# so it is deliberately excluded from the count. CHECK_WORDS (issue #117 Phase B)
+# sits between attributing the voices and export, so the guided tour teaches the
+# two-step review sequence — who is speaking, then check the words — end to end.
 WALKTHROUGH_STEPS: tuple[TutorialStep, ...] = (
     TutorialStep.RUN,
     TutorialStep.REVIEW,
     TutorialStep.ADJUDICATE,
+    TutorialStep.CHECK_WORDS,
     TutorialStep.EXPORT,
 )
 
@@ -56,12 +60,15 @@ class TutorialPage(StrEnum):
     RUN_DETAIL = "run_detail"
     REVIEW_QUEUE = "review_queue"
     WORKBENCH = "workbench"
+    TRANSCRIPT = "transcript"
     SETTINGS = "settings"
 
 
-# Which page each step is allowed to render on. ADJUDICATE and EXPORT both bind to
-# the workbench (the same ``/review/{id}`` page, two banners); the API layer keys
-# the run identity check off ``tutorial_run_id`` so neither renders on another run.
+# Which page each step is allowed to render on. ADJUDICATE binds to the workbench
+# ("who is speaking"); CHECK_WORDS and EXPORT both bind to the transcript stepper
+# (the same ``/review/{id}/transcript`` page, two banners) — "check the words" then
+# export from the finished result. The API layer keys the run identity check off
+# ``tutorial_run_id`` so none render on another run.
 #
 # DONE binds to SETTINGS, but the Settings page renders its terminal completion
 # celebration INLINE (it needs a "submit your own media" link the walkthrough
@@ -72,7 +79,8 @@ STEP_PAGE: dict[TutorialStep, TutorialPage] = {
     TutorialStep.RUN: TutorialPage.RUN_DETAIL,
     TutorialStep.REVIEW: TutorialPage.REVIEW_QUEUE,
     TutorialStep.ADJUDICATE: TutorialPage.WORKBENCH,
-    TutorialStep.EXPORT: TutorialPage.WORKBENCH,
+    TutorialStep.CHECK_WORDS: TutorialPage.TRANSCRIPT,
+    TutorialStep.EXPORT: TutorialPage.TRANSCRIPT,
     TutorialStep.DONE: TutorialPage.SETTINGS,
 }
 
@@ -112,17 +120,28 @@ STEP_COPY: dict[TutorialStep, StepCopy] = {
         title="Attribute the three voices",
         body=(
             "Each voice below shows its evidence. One has a grounded machine match "
-            "you can accept; one shows a heard name that is only a guess — you "
+            "you can accept; one shows a heard name that is only a guess, and you "
             "decide whether to trust it; one has no name at all. Assign an existing "
             "speaker, enroll a new one, or mark a voice excluded or unknown. Your "
-            "rulings update the list below as you go."
+            "rulings update the list below as you go, then continue to checking the "
+            "words."
+        ),
+    ),
+    TutorialStep.CHECK_WORDS: StepCopy(
+        title="Check the words",
+        body=(
+            "Now read through the transcript and confirm the words are right. Verify "
+            "each line, and fix any the transcriber got wrong. Your speaker "
+            "attributions are already saved, so this step is recommended, not "
+            "required. When you have been through the lines, continue to export."
         ),
     ),
     TutorialStep.EXPORT: StepCopy(
-        title="Export the attributed transcript",
+        title="Export the transcript",
         body=(
-            "Open the speaker-labelled transcript to see the finished result — "
-            "that is the whole loop: submit, review, attribute, export. Finish the "
+            "This is the last step of the tour. Open the transcript to see the "
+            "result, then save it in whichever format you need. That is the whole "
+            "loop: submit, review, attribute, check the words, export. Finish the "
             "tutorial when you are ready."
         ),
     ),
@@ -152,7 +171,7 @@ def parse_tutorial_step(raw: str | None) -> TutorialStep | None:
 
 
 def walkthrough_number(step: TutorialStep) -> int | None:
-    """1-based position of ``step`` among the four numbered steps, else ``None``."""
+    """1-based position of ``step`` among the five numbered steps, else ``None``."""
     if step in WALKTHROUGH_STEPS:
         return WALKTHROUGH_STEPS.index(step) + 1
     return None

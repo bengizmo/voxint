@@ -1,21 +1,30 @@
 {% extends "base.html" %}
+{% from "fragments/review_journey.html" import review_journey %}
 {% block title %}Voxint — check the words: {{ run_source_title(run) }}{% endblock %}
 {% block body %}
-<p><a href="/review/{{ run.id }}{% if token %}?token={{ token }}{% endif %}">← workbench</a></p>
-<h1 title="{{ run.media_item.source_path }}">{{ run_source_title(run) }}</h1>
-<p class="muted">Check the words · <code>{{ run.id.hex[:8] }}</code></p>
+{# Backward nav only (issue #117 Phase B): "the people" is Step 1, the workbench.
+   The sequence never promotes a sideways jump; a step's own Continue moves it
+   forward. #}
+<p><a href="/review/{{ run.id }}{% if token %}?token={{ token }}{% endif %}">← Back to the people</a></p>
 
-{# This server-rendered line OWNS the claim state, JS on or off — the island
-   deliberately renders no unclaimed notice of its own (review finding: the two
-   copies used to double up after hydration). The inner span keeps the text one
-   flex item so it wraps normally beside the status dot. #}
-{% if token %}
-<p class="claim-state">Claimed by you — verify and edit are enabled.</p>
-{% else %}
-<p class="claim-state off"><span>Not claimed by this tab — verifying and editing
-  are disabled. <a href="/review/{{ run.id }}">Claim this run in the workbench</a>
-  to review.</span></p>
-{% endif %}
+{# Shared identity + two-step sequence (issue #117 Phase B); this is Step 2
+   ("check the words"), matching the workbench header so the two screens read as
+   one journey. The fragment is static; the claim-state line below OWNS the claim
+   state. #}
+<header class="review-head">
+  {{ review_journey(run, 2) }}
+  {# This server-rendered line OWNS the claim state, JS on or off — the island
+     deliberately renders no unclaimed notice of its own (review finding: the two
+     copies used to double up after hydration). The inner span keeps the text one
+     flex item so it wraps normally beside the status dot. #}
+  {% if token %}
+  <p class="claim-state">Claimed by you — verify and edit are enabled.</p>
+  {% else %}
+  <p class="claim-state off"><span>Not claimed by this tab — verifying and editing
+    are disabled. <a href="/review/{{ run.id }}">Claim this run in the workbench</a>
+    to review.</span></p>
+  {% endif %}
+</header>
 
 <p class="muted"><a href="/runs/{{ run.id }}/transcript">Read the full transcript</a>
   (you can switch between versions there).</p>
@@ -32,15 +41,28 @@
 <div data-island="review-stepper" data-props='{{ island_props|tojson }}'>
   {# Same card the hydrated island renders, so JS-off/island-failure does not
      drop the flagship surface (hydration replaces this innerHTML wholesale). #}
+  {% set all_checked = progress.total > 0 and progress.verified >= progress.total %}
   <div class="review-stepper">
     <div class="progress-wrap">
       <p><strong>{{ progress.verified }}</strong> of <strong>{{ progress.total }}</strong>
-        segments verified.</p>
+        segments verified.{% if all_checked %} You have checked every line.{% endif %}</p>
       {% if progress.total > 0 %}
       <span class="progress-track" aria-hidden="true"><span
         style="width: {{ "%.1f"|format(progress.verified / progress.total * 100) }}%"></span></span>
       {% endif %}
     </div>
+    {# Step 2 terminal action (issue #117 Phase B). Checking the words is
+       recommended navigation, never a durable whole-run completion flag (Phase 0
+       contract), so this offers plain next actions and sets no state. It stays
+       neutral: checking the words does not prove speaker labels are resolved, so
+       it never calls the run "finished". The island renders the live equivalent
+       once JS is on. #}
+    {% if all_checked %}
+    <div class="review-done card-actions">
+      <a class="btn-primary" href="/runs/{{ run.id }}/transcript">Open the transcript to export</a>
+      <a href="/review">Back to Review</a>
+    </div>
+    {% endif %}
   </div>
   {% for ln in lines %}
   {% set idx = palette.get(ln.diarization_label) %}
