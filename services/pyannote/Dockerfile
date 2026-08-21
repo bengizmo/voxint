@@ -66,7 +66,10 @@ ENV TORCH_HOME=/app/models
 ENV HF_HOME=/app/models
 ENV HUGGINGFACE_HUB_CACHE=/app/models
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
-ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,expandable_segments:True,garbage_collection_threshold:0.8"
+# No expandable_segments: under co-tenant VRAM pressure it trips torch's
+# "!block->expandable_segment_" allocator assert (upstream PyTorch bug) and
+# hard-fails inference requests. See docs/operations.md, GPU memory tuning.
+ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512,garbage_collection_threshold:0.8"
 
 USER voxint
 ENV HOME=/app

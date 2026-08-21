@@ -315,6 +315,49 @@ If your existing worker command sets `-Q`, drop the flag or use
 Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
 lands, tune these settings by hand when the stock overlay runs out of memory.
 
+#### PyTorch allocator assert on a shared GPU (issue #111)
+
+Under heavy VRAM pressure (for example a card that also serves another CUDA
+workload), a titanet or pyannote request can fail with an internal PyTorch
+assert instead of a plain out-of-memory error:
+
+```text
+RuntimeError: !block->expandable_segment_ INTERNAL ASSERT FAILED at "../c10/cuda/CUDACachingAllocator.cpp"
+```
+
+The service returns `500` for that request and the run fails at its current
+stage. This is an upstream PyTorch bug in the `expandable_segments` allocator
+mode, which both CUDA images enabled through 0.20.0. The reproduced case was
+titanet on a card shared with another CUDA workload, where long recordings hit
+the assert on every retry; pyannote shipped the same allocator mode and
+carries the same exposure. Retrying the run or restarting the service does not
+help while the mode is enabled.
+
+Releases after 0.20.0 drop `expandable_segments` from both images and keep
+the rest of each image's allocator tuning. On an affected image, apply the
+same change without rebuilding by overriding the allocator mode in your
+compose override:
+
+```yaml
+services:
+  titanet:
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: "max_split_size_mb:256,garbage_collection_threshold:0.7"
+  pyannote:
+    environment:
+      PYTORCH_CUDA_ALLOC_CONF: "max_split_size_mb:512,garbage_collection_threshold:0.8"
+```
+
+Then recreate the two services with your full compose file chain (the GPU
+services are defined in `compose.gpu.yaml`, and using `-f` at all means the
+override must be listed explicitly):
+
+```bash
+docker compose -f compose.yaml -f compose.gpu.yaml -f compose.override.yaml up -d titanet pyannote
+```
+
+and requeue the failed run.
+
 ### Schema migrations
 
 A one-shot `migrate` service runs `alembic upgrade head` after Postgres is
