@@ -444,6 +444,57 @@ def measure_wav_seconds(path: Path) -> float:
     return read / rate
 
 
+def rttm_max_end_seconds(text: str) -> float:
+    """Latest end time (start+duration) over an RTTM's ``SPEAKER`` rows.
+
+    A pure text scan (no pyannote), so the ``run`` lane can preflight that a
+    reference does not extend past the decoded audio without pulling the scoring
+    stack in. Malformed rows raise rather than being silently skipped.
+    """
+    latest = 0.0
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith(";;"):
+            continue
+        parts = line.split()
+        if parts[0] != "SPEAKER":
+            continue
+        if len(parts) < 9:
+            raise RunError(f"RTTM line {lineno}: expected >=9 fields, got {len(parts)}")
+        try:
+            start = float(parts[3])
+            duration = float(parts[4])
+        except ValueError as exc:
+            raise RunError(f"RTTM line {lineno}: bad start/duration: {exc}") from exc
+        latest = max(latest, start + duration)
+    return latest
+
+
+def uem_max_end_seconds(text: str, recording_id: str) -> float | None:
+    """Latest UEM region end for ``recording_id`` (None if the UEM has no rows).
+
+    Pure text scan matching ``eval_quality.parse_uem``'s column layout, for the
+    same preflight; ``None`` lets the caller pass it straight to
+    :func:`check_duration` for a corpus/recording with no UEM.
+    """
+    latest: float | None = None
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith(";;"):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            raise RunError(f"UEM line {lineno}: expected 4 fields, got {parts!r}")
+        if parts[0] != recording_id:
+            continue
+        try:
+            end = float(parts[3])
+        except ValueError as exc:
+            raise RunError(f"UEM line {lineno}: bad end: {exc}") from exc
+        latest = end if latest is None else max(latest, end)
+    return latest
+
+
 def check_duration(
     measured_s: float,
     extent_s: float,

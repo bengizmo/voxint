@@ -87,25 +87,61 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from pyannote.core import Annotation, Segment, Timeline
-from pyannote.metrics.diarization import DiarizationErrorRate, JaccardErrorRate
-
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-
-# Frozen WER stack (parity extra): jiwer + the sha-pinned Whisper normalizer.
-from tests.parity.bakeoff.normalize import (  # noqa: E402
-    NORMALIZER_VERSION,
-    runtime_fingerprint,
-)
-from tests.parity.whisper_bakeoff_score import score_pooled  # noqa: E402
 
 # The frozen `run`-step contracts (pure, unit-covered): pipeline-environment
 # identity + the domain-separated cohort descriptor/hash. `score` reuses them so
 # a metrics JSON carries the SAME cohort identity `run` will stamp, recomputed
 # here from the bytes actually scored rather than trusted from the manifest.
+# ``eval_run`` imports only the bakeoff ``_us`` helper (no pyannote/jiwer), so it
+# is safe to import at module load in every lane, including ``run``/``report``.
 sys.path.insert(0, str(REPO / "tools"))
 import eval_run  # noqa: E402
+
+# The heavy scoring stack (pyannote.core/metrics + the frozen jiwer WER stack) is
+# loaded LAZILY by ``_load_scoring`` and used ONLY by ``score``. ``report`` is a
+# pure metrics-JSON -> Markdown renderer and ``run`` is a submit/poll/export
+# driver: neither needs pyannote or jiwer, so importing this module (and running
+# those two subcommands) must succeed with the scoring extras absent. The names
+# below are module globals populated on first ``_load_scoring()`` call; the
+# scoring functions reference them at call time (after ``cmd_score`` loads them).
+Annotation: Any = None
+Segment: Any = None
+Timeline: Any = None
+DiarizationErrorRate: Any = None
+JaccardErrorRate: Any = None
+NORMALIZER_VERSION: str = ""
+runtime_fingerprint: Any = None
+score_pooled: Any = None
+
+
+def _load_scoring() -> None:
+    """Import the pyannote + jiwer scoring stack into module globals (once).
+
+    Called at the top of ``cmd_score`` only. A missing extra raises the normal
+    ``ImportError`` here rather than at module import, so ``import eval_quality``,
+    ``run``, and ``report`` all work in the dev lane without the parity/
+    eval-quality extras installed.
+    """
+    global Annotation, Segment, Timeline, DiarizationErrorRate, JaccardErrorRate
+    global NORMALIZER_VERSION, runtime_fingerprint, score_pooled
+    if Annotation is not None:
+        return
+    from pyannote.core import Annotation as _Annotation
+    from pyannote.core import Segment as _Segment
+    from pyannote.core import Timeline as _Timeline
+    from pyannote.metrics.diarization import DiarizationErrorRate as _DER
+    from pyannote.metrics.diarization import JaccardErrorRate as _JER
+
+    # Frozen WER stack (parity extra): jiwer + the sha-pinned Whisper normalizer.
+    from tests.parity.bakeoff.normalize import NORMALIZER_VERSION as _NV
+    from tests.parity.bakeoff.normalize import runtime_fingerprint as _rf
+    from tests.parity.whisper_bakeoff_score import score_pooled as _sp
+
+    Annotation, Segment, Timeline = _Annotation, _Segment, _Timeline
+    DiarizationErrorRate, JaccardErrorRate = _DER, _JER
+    NORMALIZER_VERSION, runtime_fingerprint, score_pooled = _NV, _rf, _sp
 
 # The strict, gate-bearing diarization protocol vs the forgiving diagnostic one.
 STRICT = {"collar": 0.0, "skip_overlap": False}
@@ -178,6 +214,7 @@ def parse_rttm(text: str, recording_id: str) -> Annotation:
     id so DER aligns them. Non-positive and malformed intervals are rejected
     rather than silently dropped.
     """
+    _load_scoring()
     annotation = Annotation(uri=recording_id)
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
@@ -207,6 +244,7 @@ def parse_rttm(text: str, recording_id: str) -> Annotation:
 
 def parse_uem(text: str, recording_id: str) -> Timeline:
     """Parse a NIST UEM into a Timeline, keeping only ``recording_id`` rows."""
+    _load_scoring()
     segments: list[Segment] = []
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
@@ -260,6 +298,7 @@ def reference_metadata(reference: Annotation, uem: Timeline | None) -> dict[str,
     time (union of all speakers) where two or more speakers are simultaneously
     active. These are descriptive only; they never enter a rate.
     """
+    _load_scoring()
     scoped = reference.crop(uem, mode="intersection") if uem is not None else reference
     speech = scoped.get_timeline().support().duration()
     overlap = scoped.get_overlap().duration()
@@ -285,6 +324,7 @@ def score_diarization_set(
     components (not a mean of per-file rates, which would over-weight short
     files). Per-recording detailed components are captured for the report table.
     """
+    _load_scoring()
     der = DiarizationErrorRate(collar=collar, skip_overlap=skip_overlap)
     jer = JaccardErrorRate(collar=collar, skip_overlap=skip_overlap)
     result = DiarResult(protocol=protocol, collar=collar, skip_overlap=skip_overlap)
@@ -316,6 +356,7 @@ def score_wer(items: list[tuple[str, str, str]]) -> dict[str, Any]:
     ``score_pooled`` normalizes raw reference and raw hypothesis together with
     the frozen Whisper normalizer, then pools integer edit counts.
     """
+    _load_scoring()
     pooled = score_pooled(items)
     return {
         "pooled_wer": pooled.wer,
@@ -359,13 +400,26 @@ def _observe(data: bytes) -> tuple[int, str]:
     return len(data), hashlib.sha256(data).hexdigest()
 
 
+def _resolve(base_dir: Path, path_str: str) -> Path:
+    """Resolve a manifest entry path against the manifest directory.
+
+    A relative path is taken relative to ``base_dir`` (the manifest's own
+    directory) so a self-contained bundle scores wherever it is moved; an
+    absolute path is honored unchanged.
+    """
+    p = Path(path_str)
+    return p if p.is_absolute() else base_dir / p
+
+
 # A per-recording map of the OBSERVED bytes for cohort-input roles score can see:
 # reference_rttm (always), uem (None when the entry scores the whole file), and
 # wer_reference (filled in during WER load). None means an explicit null role.
 Observed = dict[str, dict[str, tuple[int, str] | None]]
 
 
-def _load_diar_items(entries: list[dict[str, Any]]) -> tuple[list[DiarItem], Observed]:
+def _load_diar_items(
+    entries: list[dict[str, Any]], manifest_dir: Path
+) -> tuple[list[DiarItem], Observed]:
     items: list[DiarItem] = []
     observed: Observed = {}
     seen: set[str] = set()
@@ -387,12 +441,12 @@ def _load_diar_items(entries: list[dict[str, Any]]) -> tuple[list[DiarItem], Obs
         # buffer, so the cohort hash provably covers what was scored (not a
         # re-read that could bind different bytes). The hypothesis is an output,
         # never a cohort input, so it needs no observation.
-        ref_bytes = _read_bytes(Path(entry["reference_rttm"]))
+        ref_bytes = _read_bytes(_resolve(manifest_dir, entry["reference_rttm"]))
         reference = parse_rttm(_decode(ref_bytes, entry["reference_rttm"]), rec_id)
-        hypothesis = parse_rttm(_read(Path(entry["hypothesis_rttm"])), rec_id)
+        hypothesis = parse_rttm(_read(_resolve(manifest_dir, entry["hypothesis_rttm"])), rec_id)
         uem_path = entry["uem"]
         if uem_path is not None:
-            uem_bytes = _read_bytes(Path(uem_path))
+            uem_bytes = _read_bytes(_resolve(manifest_dir, uem_path))
             uem: Timeline | None = parse_uem(_decode(uem_bytes, uem_path), rec_id)
             uem_obs: tuple[int, str] | None = _observe(uem_bytes)
         else:
@@ -603,8 +657,16 @@ def _bind_cohort(
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    manifest_bytes = Path(args.manifest).read_bytes()
+    _load_scoring()
+    manifest_path = Path(args.manifest)
+    manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
+    # Manifest entry paths resolve against the MANIFEST'S directory, not the
+    # process CWD, so a self-contained bundle (the `run` step copies the
+    # references + hypotheses beside the manifest and writes relative paths)
+    # scores identically wherever it is moved — host, container, or a clean
+    # checkout. An absolute path in a manifest is honored as-is.
+    manifest_dir = manifest_path.resolve().parent
     diar_entries = manifest.get("diarization", [])
     wer_entries = manifest.get("wer", [])
     if not diar_entries and not wer_entries:
@@ -618,7 +680,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     wer_observed: dict[str, tuple[int, str]] = {}
 
     if diar_entries:
-        items, diar_observed = _load_diar_items(diar_entries)
+        items, diar_observed = _load_diar_items(diar_entries, manifest_dir)
         strict = score_diarization_set(items, protocol="strict", **STRICT)
         diagnostic = score_diarization_set(items, protocol="diagnostic", **DIAGNOSTIC)
         report["diarization"] = {
@@ -634,9 +696,9 @@ def cmd_score(args: argparse.Namespace) -> int:
         for e in wer_entries:
             rid = e["recording_id"]
             # Read the WER reference once, then hash and decode the same buffer.
-            ref_bytes = _read_bytes(Path(e["reference_text"]))
+            ref_bytes = _read_bytes(_resolve(manifest_dir, e["reference_text"]))
             ref_text = _decode(ref_bytes, e["reference_text"])
-            triples.append((rid, ref_text, _read(Path(e["hypothesis_text"]))))
+            triples.append((rid, ref_text, _read(_resolve(manifest_dir, e["hypothesis_text"]))))
             wer_observed[rid] = _observe(ref_bytes)
         report["wer"] = score_wer(triples)
 
@@ -971,9 +1033,604 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+# --------------------------------------------------------------------------- #
+# `run` command: live driver (submit -> poll -> read DB -> export a bundle)
+# --------------------------------------------------------------------------- #
+# The driver imports NO pyannote/jiwer (Step 0): it submits the subset, polls the
+# DB, exports the relabelled hypothesis RTTM + AMI WER text, and writes a
+# SELF-CONTAINED score bundle (references + hypotheses copied in, manifest paths
+# relative to the manifest). ``score`` consumes that bundle later, in the parity
+# lane. All live seams (voxint.db / voxint.export / voxint.ingest / the CLI
+# publish path) are imported lazily inside ``cmd_run`` so ``import eval_quality``
+# and this subcommand load without a scoring stack installed.
+
+# Bundle layout under --out-dir: copied ground-truth inputs and exported
+# hypotheses live in fixed subdirectories so the manifest can reference them by
+# relative path and the whole directory is portable (host <-> container).
+BUNDLE_INPUTS = "inputs"
+BUNDLE_HYPS = "hypotheses"
+JOURNAL_NAME = "journal.json"
+
+# The container/worker images whose digests fingerprint the pipeline identity.
+FINGERPRINT_CONTAINERS = ("api", "worker", "whisper", "pyannote", "titanet")
+
+
+def _load_driver() -> Any:
+    """Import the live voxint seams the driver needs (lazy; no scoring stack)."""
+    from types import SimpleNamespace
+
+    from sqlalchemy import select
+
+    from voxint.cli import _publish_or_defer
+    from voxint.config import get_settings
+    from voxint.db.models import DiarizationTurn, MediaItem, PipelineRun, TranscriptSegment
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.export import to_rttm
+    from voxint.ingest.service import submit_media_item_if_new
+
+    return SimpleNamespace(
+        select=select,
+        publish=_publish_or_defer,
+        get_settings=get_settings,
+        DiarizationTurn=DiarizationTurn,
+        MediaItem=MediaItem,
+        PipelineRun=PipelineRun,
+        TranscriptSegment=TranscriptSegment,
+        build_engine=build_engine,
+        build_session_factory=build_session_factory,
+        session_scope=session_scope,
+        to_rttm=to_rttm,
+        submit_media_item_if_new=submit_media_item_if_new,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Pure export shaping (testable with duck-typed rows; no worker, no pyannote)
+# --------------------------------------------------------------------------- #
+def assert_monotonic_unique(indices: list[int], what: str) -> None:
+    """Reject a non-monotonic or duplicated index sequence (ordering guard)."""
+    seen: set[int] = set()
+    prev: int | None = None
+    for idx in indices:
+        if idx in seen:
+            raise EvalError(f"{what}: duplicate index {idx}")
+        if prev is not None and idx < prev:
+            raise EvalError(f"{what}: index {idx} is out of order after {prev}")
+        seen.add(idx)
+        prev = idx
+
+
+def segments_to_word_lists(segments: list[Any]) -> list[list[dict[str, Any]]]:
+    """Ordered per-segment word lists for the AMI WER hypothesis (strict nulls).
+
+    ``segments`` are ``TranscriptSegment`` rows ALREADY ordered by
+    ``segment_index`` (the caller supplies the DB order). A segment whose
+    ``words`` is NULL but whose ``raw_text`` is non-empty is a hard error: the
+    run lost its word timing, and silently treating it as ``[]`` would fabricate
+    a perfect-empty hypothesis and move WER. A genuinely empty segment (no
+    ``raw_text``) contributes an empty list.
+    """
+    assert_monotonic_unique([s.segment_index for s in segments], "transcript segment_index")
+    out: list[list[dict[str, Any]]] = []
+    for s in segments:
+        if s.words is None:
+            if (s.raw_text or "").strip():
+                raise EvalError(
+                    f"transcript segment {s.segment_index} has non-empty text but NULL word "
+                    "timing; cannot build a WER hypothesis (word timestamps missing)"
+                )
+            out.append([])
+        else:
+            out.append(list(s.words))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Cohort observation + self-contained bundle (pure file IO; round-trippable)
+# --------------------------------------------------------------------------- #
+def observe_role_files(resolved: list[Any]) -> dict[str, dict[str, tuple[int, str] | None]]:
+    """Hash the four cohort role files per recording (explicit null for absent)."""
+    observed: dict[str, dict[str, tuple[int, str] | None]] = {}
+    for r in resolved:
+        observed[r.recording_id] = {
+            "audio": _observe(_read_bytes(r.audio)),
+            "reference_rttm": _observe(_read_bytes(r.reference_rttm)),
+            "uem": _observe(_read_bytes(r.uem)) if r.uem is not None else None,
+            "wer_reference": (
+                _observe(_read_bytes(r.wer_reference)) if r.wer_reference is not None else None
+            ),
+        }
+    return observed
+
+
+def build_cohort_inputs(
+    resolved: list[Any], observed: dict[str, dict[str, tuple[int, str] | None]]
+) -> tuple[dict[str, str], list[eval_run.CohortInput]]:
+    """The single (split_by_id, CohortInput[]) builder reused for journal + manifest."""
+    split_by_id = {r.recording_id: r.split for r in resolved}
+    inputs: list[eval_run.CohortInput] = []
+    for r in resolved:
+        roles = observed[r.recording_id]
+        for role in COHORT_ROLES:
+            inputs.append(_role_input(r.recording_id, role, roles[role]))
+    return split_by_id, inputs
+
+
+def _copy_bytes(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(_read_bytes(src))
+
+
+def write_bundle(
+    out_dir: Path,
+    resolved: list[Any],
+    hyp_rttm_by_id: dict[str, str],
+    wer_hyp_by_id: dict[str, str],
+    cohort_block: dict[str, Any],
+) -> Path:
+    """Write a self-contained score bundle; return the manifest path.
+
+    Copies each recording's reference RTTM/UEM (and WER reference for AMI) into
+    ``<out_dir>/inputs`` and writes the exported hypothesis RTTM (and AMI WER
+    text) into ``<out_dir>/hypotheses``, then emits ``manifest.json`` with paths
+    RELATIVE to the manifest directory. ``score`` (which now resolves relative
+    paths against the manifest's directory) can therefore score the bundle
+    wherever it is moved.
+    """
+    out_dir = Path(out_dir)
+    diar_entries: list[dict[str, Any]] = []
+    wer_entries: list[dict[str, Any]] = []
+    for r in resolved:
+        rid = r.recording_id
+        ref_rel = f"{BUNDLE_INPUTS}/{rid}.reference.rttm"
+        hyp_rel = f"{BUNDLE_HYPS}/{rid}.hypothesis.rttm"
+        _copy_bytes(r.reference_rttm, out_dir / ref_rel)
+        (out_dir / hyp_rel).parent.mkdir(parents=True, exist_ok=True)
+        (out_dir / hyp_rel).write_text(hyp_rttm_by_id[rid], encoding="utf-8")
+        if r.uem is not None:
+            uem_rel: str | None = f"{BUNDLE_INPUTS}/{rid}.uem"
+            _copy_bytes(r.uem, out_dir / uem_rel)
+        else:
+            uem_rel = None
+        diar_entries.append(
+            {
+                "recording_id": rid,
+                "reference_rttm": ref_rel,
+                "hypothesis_rttm": hyp_rel,
+                "uem": uem_rel,
+            }
+        )
+        if r.wer_reference is not None:
+            wref_rel = f"{BUNDLE_INPUTS}/{rid}.wer_reference.txt"
+            whyp_rel = f"{BUNDLE_HYPS}/{rid}.wer_hypothesis.txt"
+            _copy_bytes(r.wer_reference, out_dir / wref_rel)
+            (out_dir / whyp_rel).write_text(wer_hyp_by_id[rid], encoding="utf-8")
+            wer_entries.append(
+                {"recording_id": rid, "reference_text": wref_rel, "hypothesis_text": whyp_rel}
+            )
+    manifest: dict[str, Any] = {"diarization": diar_entries, "cohort": cohort_block}
+    if wer_entries:
+        manifest["wer"] = wer_entries
+    manifest_path = out_dir / "manifest.json"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    manifest_path.write_text(manifest_text, encoding="utf-8")
+    return manifest_path
+
+
+# --------------------------------------------------------------------------- #
+# Host-side environment fingerprint (probe shells out; refusal logic is pure)
+# --------------------------------------------------------------------------- #
+def _probe(cmd: list[str]) -> str | None:
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return out.stdout.strip()
+
+
+def probe_fingerprint(container_prefix: str, cuda_visible: str | None) -> dict[str, Any]:
+    """Probe the running deploy host-side (docker image digests + nvidia-smi).
+
+    Best-effort: any leg that cannot be observed (docker/nvidia-smi absent, a
+    container not running) is recorded as ``probe_failed`` and drops the mode to
+    ``degraded``. A ``degraded`` fingerprint never yields a score-ready manifest
+    (the refusal is in :func:`require_verified_fingerprints`), so a partial probe
+    fails closed rather than silently attesting an unknown environment.
+    """
+    images: dict[str, str | None] = {}
+    status: dict[str, str] = {}
+    for svc in FINGERPRINT_CONTAINERS:
+        name = f"{container_prefix}-{svc}-1"
+        digest = _probe(["docker", "inspect", "--format", "{{.Image}}", name])
+        images[svc] = digest
+        status[svc] = "observed" if digest else "probe_failed"
+    gpu_raw = _probe(
+        ["nvidia-smi", "--query-gpu=name,uuid,driver_version", "--format=csv,noheader"]
+    )
+    if gpu_raw:
+        first = gpu_raw.splitlines()[0].split(",")
+        gpu: dict[str, str] | None = {
+            "name": first[0].strip(),
+            "uuid": first[1].strip() if len(first) > 1 else "",
+            "driver": first[2].strip() if len(first) > 2 else "",
+        }
+        status["gpu"] = "observed"
+    else:
+        gpu = None
+        status["gpu"] = "probe_failed"
+    mode = "full" if all(v == "observed" for v in status.values()) else "degraded"
+    return {
+        "mode": mode,
+        "images": images,
+        "gpu": gpu,
+        "cuda_visible_devices": cuda_visible,
+        "probe_status": status,
+    }
+
+
+def require_verified_fingerprints(
+    before: dict[str, Any], after: dict[str, Any], static_env: dict[str, Any]
+) -> None:
+    """Refuse a manifest unless the environment is fully, consistently observed.
+
+    Fails closed on: a degraded probe (something unobservable), a mid-batch
+    change (``before`` != ``after``), or a live probe that disagrees with the
+    static ``--pipeline-env`` identity (the running whisper image digest must
+    equal the static ``code.image_digest``, and the live GPU name the static
+    ``gpu.name``). Passing means the run's hypotheses were produced under exactly
+    the attested identity.
+    """
+    if before.get("mode") != "full":
+        raise EvalError(f"environment fingerprint is degraded before the batch: {before}")
+    if after.get("mode") != "full":
+        raise EvalError(f"environment fingerprint is degraded after the batch: {after}")
+    if before != after:
+        raise EvalError("environment fingerprint changed during the batch (before != after)")
+    static_digest = static_env.get("code", {}).get("image_digest")
+    live_digest = before.get("images", {}).get("whisper")
+    if static_digest and live_digest and static_digest != live_digest:
+        raise EvalError(
+            f"static pipeline-env image_digest {static_digest!r} disagrees with the running "
+            f"whisper image {live_digest!r}"
+        )
+    static_gpu = static_env.get("gpu", {}).get("name")
+    live_gpu = (before.get("gpu") or {}).get("name")
+    if static_gpu and live_gpu and static_gpu != live_gpu:
+        raise EvalError(
+            f"static pipeline-env gpu.name {static_gpu!r} disagrees with the live GPU {live_gpu!r}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# The live orchestration (crash-safe; validated on the maintainer host, worker idle)
+# --------------------------------------------------------------------------- #
+def _load_subset_entries(path: Path) -> list[dict[str, Any]]:
+    data = json.loads(_read(path))
+    if isinstance(data, dict) and "items" in data:
+        data = data["items"]
+    if not isinstance(data, list):
+        raise EvalError(f"{path}: subset must be a JSON array or an object with an 'items' array")
+    return data
+
+
+def _staged_source_path(media_subdir: str, batch_id: str, recording_id: str) -> str:
+    """The MEDIA_ROOT-relative, unique-per-(batch, recording) staged path."""
+    return f"{media_subdir.strip('/')}/{batch_id}/{recording_id}.wav"
+
+
+def _reconcile_run(driver: Any, session: Any, staged_rel: str) -> Any:
+    """Adopt the single run for a staged source_path (the idempotency join)."""
+    rows = (
+        session.execute(
+            driver.select(driver.PipelineRun)
+            .join(driver.MediaItem, driver.PipelineRun.media_item_id == driver.MediaItem.id)
+            .where(driver.MediaItem.source_path == staged_rel)
+        )
+        .scalars()
+        .all()
+    )
+    if len(rows) != 1:
+        raise EvalError(
+            f"reconcile for {staged_rel!r} found {len(rows)} runs (expected exactly 1); "
+            "refusing to guess"
+        )
+    return rows[0]
+
+
+def _export_completed(
+    driver: Any, session: Any, run_id: Any, resolved: Any
+) -> tuple[str, str | None]:
+    """Read a completed run's DB rows and return (hypothesis_rttm, wer_text|None)."""
+    turns = (
+        session.execute(
+            driver.select(driver.DiarizationTurn)
+            .where(driver.DiarizationTurn.pipeline_run_id == run_id)
+            .order_by(driver.DiarizationTurn.turn_index)
+        )
+        .scalars()
+        .all()
+    )
+    assert_monotonic_unique([t.turn_index for t in turns], "diarization turn_index")
+    hyp_rttm = driver.to_rttm(turns, resolved.recording_id)
+
+    wer_text: str | None = None
+    if resolved.wer_reference is not None:
+        segments = (
+            session.execute(
+                driver.select(driver.TranscriptSegment)
+                .where(driver.TranscriptSegment.pipeline_run_id == run_id)
+                .order_by(driver.TranscriptSegment.segment_index)
+            )
+            .scalars()
+            .all()
+        )
+        word_lists = segments_to_word_lists(segments)
+        uem_text = _read(resolved.uem)
+        uem_regions = _uem_regions_us(uem_text, resolved.recording_id)
+        wer_text = eval_run.ami_hypothesis_text(word_lists, uem_regions)
+    return hyp_rttm, wer_text
+
+
+def _uem_regions_us(text: str, recording_id: str) -> list[tuple[int, int]]:
+    """UEM regions in integer microseconds (same _us rule as the reference)."""
+    import prepare_bakeoff_corpus as bake
+
+    regions: list[tuple[int, int]] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(";;"):
+            continue
+        parts = line.split()
+        if len(parts) < 4 or parts[0] != recording_id:
+            continue
+        regions.append((bake._us(float(parts[2])), bake._us(float(parts[3]))))
+    if not regions:
+        raise EvalError(f"UEM has no region for {recording_id!r}")
+    return regions
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    import uuid as _uuid
+
+    driver = _load_driver()
+    corpus = args.corpus
+    corpus_root = Path(args.corpus_root or _require_env("EVAL_CORPUS_ROOT", args.corpus_root))
+    database_url = args.database_url or _require_env("DATABASE_URL", args.database_url)
+    batch_id = args.batch_id or _uuid.uuid4().hex
+    media_root = Path(args.media_root) if args.media_root else driver.get_settings().media_root
+    tol = float(args.duration_tol)
+
+    items = eval_run.load_subset(_load_subset_entries(Path(args.subset)), corpus)
+    only = [s for s in args.only.split(",") if s] if args.only else None
+    items = eval_run.select_only(items, only)
+    resolved = [eval_run.resolve_item(corpus_root, it) for it in items]
+    by_id = {r.recording_id: r for r in resolved}
+
+    # Preflight every recording BEFORE any submission (catches a truncated file).
+    for it, r in zip(items, resolved, strict=True):
+        measured = eval_run.measure_wav_seconds(r.audio)
+        ref_end = eval_run.rttm_max_end_seconds(_read(r.reference_rttm))
+        uem_end = (
+            eval_run.uem_max_end_seconds(_read(r.uem), r.recording_id)
+            if r.uem is not None
+            else None
+        )
+        problems = eval_run.check_duration(measured, it.extent_s, ref_end, uem_end, tol)
+        if problems:
+            raise EvalError(f"{r.recording_id}: preflight failed: {'; '.join(problems)}")
+
+    pipeline_env = eval_run.validate_pipeline_environment(
+        json.loads(_read(Path(args.pipeline_env)))
+    )
+
+    observed = observe_role_files(resolved)
+    split_by_id, cohort_inputs = build_cohort_inputs(resolved, observed)
+    descriptor = eval_run.cohort_descriptor(
+        corpus,
+        split_by_id,
+        cohort_inputs,
+        eval_run.pipeline_environment_hash(pipeline_env),
+        HARNESS_PROTOCOL,
+    )
+    cohort_hash = eval_run.cohort_sha256(descriptor)
+
+    fp_before = probe_fingerprint(args.container_prefix, args.cuda_visible_devices)
+
+    out_dir = Path(args.out_dir)
+    with eval_run.out_dir_lock(out_dir):
+        journal = _load_or_init_journal(out_dir, corpus, cohort_hash, pipeline_env, batch_id)
+        # A non-empty journal must be honored ONLY under an explicit --resume, so a
+        # re-run into a stale out-dir cannot silently SKIP_DONE into a fake
+        # zero-change pass (each noise-floor pass gets a fresh out-dir + batch-id).
+        if journal.get("items") and not args.resume:
+            raise EvalError(
+                f"{out_dir} already holds a journal with results; pass --resume to continue it "
+                "or use a fresh --out-dir (noise-floor passes must not share an out-dir)"
+            )
+        decisions = eval_run.plan_resume(
+            journal, [r.recording_id for r in resolved],
+            resume=args.resume, retry_failed=args.retry_failed,
+        )
+        for decision in decisions:
+            _drive_one(
+                driver, journal, out_dir, by_id[decision.recording_id], decision,
+                database_url=database_url, media_root=media_root,
+                media_subdir=args.media_subdir, batch_id=batch_id,
+                interval=float(args.interval), timeout=float(args.timeout),
+            )
+
+        fp_after = probe_fingerprint(args.container_prefix, args.cuda_visible_devices)
+        require_verified_fingerprints(fp_before, fp_after, pipeline_env)
+
+        # All-or-nothing: score needs the full cohort, so refuse a partial bundle.
+        missing = [r.recording_id for r in resolved
+                   if (journal["items"].get(r.recording_id) or {}).get("status") != "completed"]
+        if missing:
+            raise EvalError(f"cannot write a scoreable bundle; not completed: {sorted(missing)}")
+
+        hyp_rttm_by_id = {rid: journal["items"][rid]["hypothesis_rttm"] for rid in by_id}
+        wer_hyp_by_id = {
+            rid: journal["items"][rid]["wer_text"]
+            for rid in by_id
+            if by_id[rid].wer_reference is not None
+        }
+        cohort_block = {
+            "schema_version": eval_run.COHORT_SCHEMA_VERSION,
+            "corpus": corpus,
+            "pipeline_environment": pipeline_env,
+            "inputs": descriptor["inputs"],
+            "cohort_sha256": cohort_hash,
+            "batch_id": batch_id,
+        }
+        manifest_path = write_bundle(out_dir, resolved, hyp_rttm_by_id, wer_hyp_by_id, cohort_block)
+    print(manifest_path)
+    return 0
+
+
+def _require_env(name: str, override: str | None) -> str:
+    import os
+
+    if override:
+        return override
+    value = os.environ.get(name)
+    if not value:
+        raise EvalError(f"{name} is required (pass the flag or set the environment variable)")
+    return value
+
+
+def _journal_path(out_dir: Path) -> Path:
+    return Path(out_dir) / JOURNAL_NAME
+
+
+def _load_or_init_journal(
+    out_dir: Path, corpus: str, cohort_hash: str, pipeline_env: dict[str, Any], batch_id: str
+) -> dict[str, Any]:
+    path = _journal_path(out_dir)
+    if path.exists():
+        journal = json.loads(_read(path))
+        try:
+            eval_run.validate_journal(journal, corpus=corpus, cohort_hash=cohort_hash)
+        except eval_run.RunError as exc:
+            raise EvalError(str(exc)) from exc
+        return journal
+    journal = eval_run.new_journal(corpus, cohort_hash, pipeline_env)
+    journal["batch_id"] = batch_id
+    eval_run.write_json_atomic(path, journal)
+    return journal
+
+
+def _record(out_dir: Path, journal: dict[str, Any], rid: str, patch: dict[str, Any]) -> None:
+    """Merge a patch into one journal item and durably persist (write-ahead)."""
+    item = journal["items"].setdefault(rid, {})
+    item.update(patch)
+    eval_run.write_json_atomic(_journal_path(out_dir), journal)
+
+
+def _drive_one(
+    driver: Any, journal: dict[str, Any], out_dir: Path, resolved: Any,
+    decision: Any, *, database_url: str, media_root: Path, media_subdir: str,
+    batch_id: str, interval: float, timeout: float,
+) -> None:
+    """Submit/reconcile/poll/export ONE recording, crash-safe by the journal."""
+    import time
+
+    rid = resolved.recording_id
+    if decision.action == eval_run.ACTION_SKIP_DONE:
+        return
+    if decision.action == eval_run.ACTION_STOP:
+        raise EvalError(f"{rid}: {decision.reason}")
+
+    staged_rel = _staged_source_path(media_subdir, batch_id, rid)
+    engine = driver.build_engine(database_url)
+    try:
+        factory = driver.build_session_factory(engine)
+        run_uuid = (journal["items"].get(rid) or {}).get("run_uuid")
+
+        if decision.action in (eval_run.ACTION_SUBMIT, eval_run.ACTION_RETRY):
+            audio_sha = observe_role_files([resolved])[rid]["audio"]
+            staged = media_root / staged_rel
+            staged.parent.mkdir(parents=True, exist_ok=True)
+            staged.write_bytes(_read_bytes(resolved.audio))
+            if _observe(_read_bytes(staged)) != audio_sha:
+                raise EvalError(f"{rid}: staged audio sha != corpus audio sha")
+            _record(out_dir, journal, rid,
+                    {"status": "submitting", "source_path": staged_rel, "batch_id": batch_id})
+            with driver.session_scope(factory) as session:
+                run = driver.submit_media_item_if_new(session, staged_rel)
+            if run is None:
+                with factory() as session:
+                    run = _reconcile_run(driver, session, staged_rel)
+            run_uuid = str(run.id)
+            _record(out_dir, journal, rid, {"status": "queued", "run_uuid": run_uuid})
+            driver.publish(run.id)
+
+        if run_uuid is None:
+            raise EvalError(f"{rid}: no run to poll (internal invariant)")
+
+        deadline = time.monotonic() + timeout
+        while True:
+            with factory() as session:
+                run = session.get(driver.PipelineRun, _as_uuid(run_uuid))
+                if run is None:
+                    raise EvalError(f"{rid}: run {run_uuid} vanished from the DB")
+                status = eval_run.map_db_status(str(run.status))
+                if status == "completed":
+                    hyp_rttm, wer_text = _export_completed(driver, session, run.id, resolved)
+                    break
+                if status in eval_run.FAILURE_STATES:
+                    _record(out_dir, journal, rid, {"status": status})
+                    raise EvalError(f"{rid}: run {run_uuid} ended {status}")
+            if time.monotonic() >= deadline:
+                _record(out_dir, journal, rid, {"status": status})
+                raise EvalError(f"{rid}: timed out after {timeout}s in status {status}")
+            time.sleep(interval)
+
+        artifacts = {"hypothesis_rttm_sha256": _observe(hyp_rttm.encode())[1]}
+        patch: dict[str, Any] = {"status": "completed", "hypothesis_rttm": hyp_rttm}
+        if wer_text is not None:
+            artifacts["wer_text_sha256"] = _observe(wer_text.encode())[1]
+            patch["wer_text"] = wer_text
+        patch["artifacts"] = artifacts
+        _record(out_dir, journal, rid, patch)
+    finally:
+        engine.dispose()
+
+
+def _as_uuid(value: str) -> Any:
+    import uuid as _uuid
+
+    return _uuid.UUID(value)
+
+
+def _add_run_parser(sub: Any) -> None:
+    run_p = sub.add_parser(
+        "run", help="drive the live pipeline over a corpus subset and emit a score bundle"
+    )
+    run_p.add_argument("--corpus", required=True, choices=("ami", "voxconverse"))
+    run_p.add_argument("--corpus-root", help="ground-truth root (or EVAL_CORPUS_ROOT)")
+    run_p.add_argument("--subset", required=True, help="scoring-subset JSON (array or {items:[]})")
+    run_p.add_argument("--only", help="comma-separated recording ids to restrict to")
+    run_p.add_argument("--out-dir", required=True, help="bundle + journal output directory")
+    run_p.add_argument("--pipeline-env", required=True, help="static pipeline-environment JSON")
+    run_p.add_argument("--database-url", help="postgres URL (or DATABASE_URL)")
+    run_p.add_argument("--media-root", help="host path to stage audio into (default: settings)")
+    run_p.add_argument("--media-subdir", default="eval", help="MEDIA_ROOT subdir for staged audio")
+    run_p.add_argument("--container-prefix", default="voxint", help="docker compose project prefix")
+    run_p.add_argument("--cuda-visible-devices", help="record CUDA_VISIBLE_DEVICES in fingerprint")
+    run_p.add_argument("--interval", default="10", help="poll interval seconds (default 10)")
+    run_p.add_argument("--timeout", default="3600", help="per-run poll timeout seconds (def 3600)")
+    run_p.add_argument("--duration-tol", default="2.0", help="WAV duration tolerance seconds")
+    run_p.add_argument("--batch-id", help="batch id (default: a fresh uuid per pass)")
+    run_p.add_argument("--resume", action="store_true", help="honor an existing --out-dir journal")
+    run_p.add_argument("--retry-failed", action="store_true", help="re-submit failed recordings")
+    run_p.set_defaults(fn=cmd_run)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
+    _add_run_parser(sub)
     score_p = sub.add_parser("score", help="score a hypotheses+reference manifest")
     score_p.add_argument("--manifest", required=True, help="paths manifest JSON")
     score_p.add_argument("--out", help="metrics JSON path (default: stdout)")

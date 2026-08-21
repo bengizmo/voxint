@@ -310,6 +310,23 @@ class TestWavPreflight:
         assert len(problems) == 3  # extent mismatch + reference past end + uem past end
         assert er.check_duration(100.0, 100.0, 99.0, None, tol_s=1.0) == []
 
+    def test_rttm_and_uem_max_end_are_pure_text_scans(self) -> None:
+        rttm = (
+            ";; comment\n"
+            "SPEAKER file 1 1.000 2.000 <NA> <NA> A <NA> <NA>\n"
+            "SPEAKER file 1 5.500 1.250 <NA> <NA> B <NA> <NA>\n"
+        )
+        assert abs(er.rttm_max_end_seconds(rttm) - 6.75) < 1e-9
+        uem = "rec 1 0.00 30.00\nother 1 0.00 99.00\nrec 1 40.00 55.00\n"
+        assert er.uem_max_end_seconds(uem, "rec") == 55.0
+        assert er.uem_max_end_seconds("other 1 0 9\n", "rec") is None
+
+    def test_rttm_max_end_rejects_malformed_rows(self) -> None:
+        with pytest.raises(er.RunError):
+            er.rttm_max_end_seconds("SPEAKER file 1 x 2.0 <NA> <NA> A <NA> <NA>\n")
+        with pytest.raises(er.RunError):
+            er.rttm_max_end_seconds("SPEAKER too few fields\n")
+
 
 # --------------------------------------------------------------------------- #
 # 5. pipeline_environment identity
