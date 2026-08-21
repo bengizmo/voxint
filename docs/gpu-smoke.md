@@ -34,6 +34,13 @@ Expect: model loads from the baked cache in seconds (no multi-GB download in
 the logs), a coherent `transcript`, `duration_seconds` ≈ 60, and well over
 real-time throughput (reference: 60 s clip in ~1.7 s wall on a 3090).
 
+Because this runs on a real NVIDIA GPU, `/healthz` also carries a `resources`
+block: expect `gpu.availability: "ok"` with non-null utilization, VRAM, and
+temperature (see [gpu-contracts.md](gpu-contracts.md)). `disabled` or
+`unsupported` there means the sampler is off (`VOXINT_TELEMETRY_ENABLED=0`) or
+`nvidia-ml-py`/NVML is missing from the image, so a smoke is the natural place to
+confirm telemetry is live.
+
 ## pyannote
 
 No token needed. The diarization weights are vendored into the image.

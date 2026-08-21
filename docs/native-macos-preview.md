@@ -48,6 +48,15 @@ scripts/native/voxint-native.sh up
 # 3. Check readiness (supervision state, /healthz, datastore reachability, and
 #    the delegated model-service status).
 scripts/native/voxint-native.sh status
+```
+
+> Hardware GPU telemetry (the `/healthz` `resources` block and the `voxint
+> doctor` resource readout) is NVIDIA/NVML-only. Apple Silicon has no NVML, so
+> the GPU telemetry reports `unsupported` and `voxint doctor` shows the GPU as
+> unavailable. That is expected on this path, not a failure; CPU and admission
+> telemetry still report normally.
+
+```bash
 
 # 4. Stop everything (data is left intact).
 scripts/native/voxint-native.sh down
