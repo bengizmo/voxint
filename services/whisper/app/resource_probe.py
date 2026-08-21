@@ -146,16 +146,34 @@ def _cuda_driver_uuid(ordinal: int) -> str | None:
         except OSError:
             return None
     try:
-        if lib.cuInit(0) != 0:
+        # Declare ctypes signatures. Without argtypes/restype, ctypes guesses the
+        # marshalling of these pointer arguments, which is undefined behaviour: it
+        # can return a garbage UUID or fault natively (a native crash would take
+        # the whole process down, breaking the "sampler never dies" invariant).
+        # CUresult is a C int; CUdevice is a C int.
+        uuid16 = ctypes.c_ubyte * 16
+        get_uuid = getattr(lib, "cuDeviceGetUuid_v2", None) or getattr(
+            lib, "cuDeviceGetUuid", None
+        )
+        if get_uuid is None:
             return None
+        lib.cuInit.restype = ctypes.c_int
+        lib.cuInit.argtypes = [ctypes.c_uint]
+        lib.cuDeviceGet.restype = ctypes.c_int
+        lib.cuDeviceGet.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_int]
+        get_uuid.restype = ctypes.c_int
+        get_uuid.argtypes = [ctypes.POINTER(uuid16), ctypes.c_int]
+        # cuInit is idempotent: torch initialises the driver at model load, well
+        # before the sampler starts, so this just no-ops. Do NOT gate on its
+        # return code (a repeated init does not reliably report plain success and
+        # the exact "already initialised" code varies) -- rely on the typed
+        # cuDeviceGet / UUID calls below for the real error signal.
+        lib.cuInit(0)
         dev = ctypes.c_int(0)
         if lib.cuDeviceGet(ctypes.byref(dev), int(ordinal)) != 0:
             return None
-        raw = (ctypes.c_ubyte * 16)()
-        get_v2 = getattr(lib, "cuDeviceGetUuid_v2", None)
-        get_v1 = getattr(lib, "cuDeviceGetUuid", None)
-        fn = get_v2 or get_v1
-        if fn is None or fn(ctypes.byref(raw), dev) != 0:
+        raw = uuid16()
+        if get_uuid(ctypes.byref(raw), dev) != 0:
             return None
         return _canonical_uuid(bytes(raw))
     except (OSError, AttributeError, ValueError):
@@ -242,7 +260,7 @@ class ResourceSampler:
         self._interval = (
             _parse_interval(os.getenv(_INTERVAL_ENV))
             if interval_seconds is None
-            else interval_seconds
+            else _parse_interval(str(interval_seconds))
         )
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -297,7 +315,11 @@ class ResourceSampler:
             return _GpuSample(availability="unsupported", monotonic_at=now)
         try:
             handle, gpu_uuid = self._resolve_handle(pynvml)
-            if handle is None:
+            if handle is None or gpu_uuid is None:
+                # No resolvable UUID: the app dedups a shared card by UUID, so an
+                # "ok" sample without one would be dropped by aggregation while
+                # still claiming telemetry is available. Report unsupported so the
+                # wire stays honest end to end.
                 return _GpuSample(availability="unsupported", monotonic_at=now)
             util = self._read_util(pynvml, handle)
             used, total = self._read_memory(pynvml, handle)

@@ -28,7 +28,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from voxint.api.health_probe import ServiceHealth, _probe_one, _service_targets
 from voxint.config import Settings
@@ -53,6 +53,15 @@ class GpuInfo(BaseModel):
     max_temperature_celsius: int | None = None
     throttle_events_since_start: int | None = Field(default=None, ge=0)
     sample_age_seconds: float | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _drop_impossible_used(self) -> "GpuInfo":
+        # Mirror the service-side backstop: a stale or buggy upstream must not
+        # paint used>total into the UI. Drop the used figure, never raise.
+        used, total = self.vram_used_bytes, self.vram_total_bytes
+        if used is not None and total is not None and used > total:
+            object.__setattr__(self, "vram_used_bytes", None)
+        return self
 
 
 class CpuInfo(BaseModel):
@@ -239,8 +248,8 @@ def collect_resource_status(
     """
     global _cache
     ttl = settings.resource_status_ttl_seconds
-    now = time.monotonic()
     with _cache_lock:
+        now = time.monotonic()
         if not force and _cache is not None and (now - _cache[1]) < ttl:
             snap, ts = _cache
             return replace(snap, collected_age_seconds=now - ts)
@@ -253,8 +262,11 @@ def collect_resource_status(
         finally:
             if own_client:
                 probe_client.close()
+        # Stamp AFTER probing, so the cache age counts from when the data was
+        # actually collected, not from before a multi-second probe.
+        ts = time.monotonic()
         snap = _build_snapshot(healths)
-        _cache = (snap, now)
+        _cache = (snap, ts)
         return snap
 
 
@@ -288,7 +300,9 @@ def format_resource_status_text(snapshot: ResourceSnapshot) -> str:
             if gpu.max_temperature_celsius is not None
             else ""
         )
-        if gpu.throttle_active:
+        if gpu.throttle_active is None:
+            throttle = "throttle unknown"
+        elif gpu.throttle_active:
             reasons = ", ".join(gpu.throttle_reasons) if gpu.throttle_reasons else "unknown"
             throttle = f"throttling ({reasons})"
         else:

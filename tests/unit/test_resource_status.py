@@ -136,6 +136,25 @@ class TestHealthProbeTelemetry:
         by_name = {r.name: r for r in probe_services(_settings(), client=client)}
         assert by_name["transcription"].resources is None
 
+    def test_resources_kept_on_parseable_not_ready_2xx(self) -> None:
+        # A 200 body that is neither "ok" nor model_loaded=false (e.g. still
+        # starting) must still surface the telemetry it carried.
+        not_ready = httpx.Response(
+            200, json={"status": "starting", "model_loaded": None, "resources": _resources(UUID_A)}
+        )
+        client = _client(
+            {
+                _ASR_PORT: not_ready,
+                _DIARIZER_PORT: _healthy("pyannote", _resources(UUID_A)),
+                _EMBEDDER_PORT: _healthy("titanet", _resources(UUID_A)),
+            }
+        )
+        by_name = {r.name: r for r in probe_services(_settings(), client=client)}
+        asr = by_name["transcription"]
+        assert asr.up is False
+        assert asr.detail == "not ready"
+        assert asr.resources is not None and asr.resources["gpu"]["gpu_uuid"] == UUID_A
+
 
 # --------------------------------------------------------------------------- #
 # Defensive parse.
@@ -168,6 +187,15 @@ class TestParseResources:
         assert parsed is not None
         assert parsed.gpu.utilization_percent == 33
         assert parsed.cpu is not None and parsed.cpu.logical_cores == 24
+
+    def test_used_over_total_dropped_on_app_parse(self) -> None:
+        # Defence in depth: a stale/buggy upstream sending used>total must not
+        # paint the impossible pair into the UI.
+        body = _resources(UUID_A, used=99, total=10)
+        parsed = rs.parse_resources(body)
+        assert parsed is not None
+        assert parsed.gpu.vram_used_bytes is None
+        assert parsed.gpu.vram_total_bytes == 10
 
 
 # --------------------------------------------------------------------------- #

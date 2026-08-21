@@ -167,4 +167,6 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
         return outcome(
             up=True, detail="ready", latency_ms=latency_ms, device=device, resources=resources
         )
-    return outcome(up=False, detail="not ready", latency_ms=latency_ms)
+    # A parseable-but-not-ready 2xx (e.g. status="starting"): keep any telemetry
+    # the body carried, exactly as the degraded paths above do.
+    return outcome(up=False, detail="not ready", latency_ms=latency_ms, resources=resources)

@@ -283,6 +283,17 @@ class TestSamplerResolution:
         smp._sample_once()
         assert smp.gpu().availability == "unsupported"
 
+    def test_single_gpu_but_unresolvable_uuid_is_unsupported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Single card, but NVML returns a UUID we cannot canonicalize: an "ok"
+        # sample with no UUID would be dropped by the app's dedup while still
+        # claiming telemetry is available, so the source reports unsupported.
+        _install(monkeypatch, _fake_pynvml(uuids=["not-a-uuid"]), _fake_torch(None))
+        smp = probe.ResourceSampler(enabled=True, interval_seconds=999)
+        smp._sample_once()
+        assert smp.gpu().availability == "unsupported"
+
     def test_nvml_absent_is_unsupported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setitem(sys.modules, "pynvml", None)  # import raises
         smp = probe.ResourceSampler(enabled=True, interval_seconds=999)
@@ -294,6 +305,15 @@ class TestSamplerResolution:
         smp.start()
         assert smp._thread is None
         assert smp.gpu().availability == "disabled"
+
+    def test_injected_interval_is_clamped(self) -> None:
+        # A caller/test passing 0 (or NaN) must not make the loop busy-spin: the
+        # injected value runs through the same fail-soft clamp as the env value.
+        assert probe.ResourceSampler(interval_seconds=0)._interval == probe._DEFAULT_INTERVAL
+        assert probe.ResourceSampler(interval_seconds=float("nan"))._interval == (
+            probe._DEFAULT_INTERVAL
+        )
+        assert probe.ResourceSampler(interval_seconds=0.01)._interval == probe._MIN_INTERVAL
 
 
 class TestSamplerSanitation:
