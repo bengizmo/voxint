@@ -40,12 +40,15 @@ services:
       # "unsupported"; CPU + admission telemetry still work.
       VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
       VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
-      # Optional ASR override: the default large-v2 is baked and offline. An
-      # alternate model is an unvalidated opt-in and must be fully gated
+      # Optional ASR override. WHISPER_MODEL defaults to the baked, offline
+      # large-v2 and is never empty (the startup resolver rejects a blank model).
+      # An alternate model is an unvalidated opt-in and must be fully gated
       # (WHISPER_ALLOW_DOWNLOAD=1 + a 40-char WHISPER_REVISION) or the service
-      # refuses to start. HF_HUB_OFFLINE is NOT passed through: an empty value
-      # would flip the baked default. HF_TOKEN is only used for a gated model.
-      WHISPER_MODEL: ${WHISPER_MODEL:-}
+      # refuses to start. WHISPER_REVISION empty-defaults for that override path;
+      # on the default path the resolver restores the baked revision so the empty
+      # pass-through never shadows the bake. HF_HUB_OFFLINE is NOT passed through
+      # (an empty value would flip the baked default); HF_TOKEN gates only.
+      WHISPER_MODEL: ${WHISPER_MODEL:-large-v2}
       WHISPER_REVISION: ${WHISPER_REVISION:-}
       WHISPER_ALLOW_DOWNLOAD: ${WHISPER_ALLOW_DOWNLOAD:-}
       HF_TOKEN: ${HF_TOKEN:-}

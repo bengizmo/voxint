@@ -5,6 +5,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **Whisper model services no longer fail to start under the configurable-model
+  compose pass-throughs.** The whisper overlays forward
+  `WHISPER_MODEL: ${WHISPER_MODEL:-}` and `WHISPER_REVISION: ${WHISPER_REVISION:-}`,
+  which set those container variables to the empty string when an operator does
+  not override them, shadowing the image's baked values. An empty model made the
+  fail-closed startup resolver refuse to start ("Invalid model size"), and an
+  empty revision made the offline load resolve the absent "main" ref and raise
+  `LocalEntryNotFoundError`. The model overlay now defaults to `large-v2`, and on
+  the default path the resolver restores the baked revision from
+  `WHISPER_BAKED_REVISION` (baked from the same ARG, never compose-forwarded), so
+  a stock deployment stays byte-identical and offline while an explicit override
+  still works. The default `-cpu`/`-rocm` deployments were unaffected only by
+  accident of an older compose; this closes the gap for all three overlays.
+
 ### Added
 - **Run detail shows which models ran ("Pipeline models").** The run-detail page
   now renders the per-attempt model identity recorded for the transcription and
