@@ -293,6 +293,102 @@ def test_write_env_keeps_hf_token_template_line(repo: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Advanced alternate-model overrides (B2): the one skippable advanced entry
+# --------------------------------------------------------------------------- #
+def test_write_env_omits_model_keys_when_not_opted_in(repo: Path) -> None:
+    # A default install sets none of the advanced globals, so no uncommented model
+    # key is written and the optional HF_TOKEN template line stays commented.
+    proc = run_lib(repo, WRITE_ENV_PREAMBLE + "COMPUTE_TIER_VALUE=none\nwrite_env")
+    assert proc.returncode == 0, proc.stderr
+    content = (repo / ".env").read_text()
+    for key in (
+        "WHISPER_MODEL=",
+        "WHISPER_REVISION=",
+        "WHISPER_ALLOW_DOWNLOAD=",
+        "DIARIZER_MODEL_NAME=",
+        "DIARIZER_REVISION=",
+    ):
+        assert f"\n{key}" not in content  # never written uncommented
+    assert "# HF_TOKEN=\n" in content
+
+
+def test_write_env_writes_advanced_model_overrides(repo: Path) -> None:
+    sha = "a" * 40
+    proc = run_lib(
+        repo,
+        WRITE_ENV_PREAMBLE
+        + "COMPUTE_TIER_VALUE=gpu\n"
+        "WHISPER_MODEL_VALUE=large-v3\n"
+        f"WHISPER_REVISION_VALUE={sha}\n"
+        "WHISPER_ALLOW_DOWNLOAD_VALUE=1\n"
+        "DIARIZER_MODEL_NAME_VALUE=pyannote/community-1\n"
+        "DIARIZER_REVISION_VALUE=abc123\n"
+        "HF_TOKEN_VALUE='hf_s3cret'\n"
+        "write_env",
+    )
+    assert proc.returncode == 0, proc.stderr
+    content = (repo / ".env").read_text()
+    assert "WHISPER_MODEL=large-v3" in content
+    assert f"WHISPER_REVISION={sha}" in content
+    assert "WHISPER_ALLOW_DOWNLOAD=1" in content
+    assert "DIARIZER_MODEL_NAME=pyannote/community-1" in content
+    assert "DIARIZER_REVISION=abc123" in content
+    # HF_TOKEN is single-quoted like the password so an odd character is dotenv-safe.
+    assert "HF_TOKEN='hf_s3cret'" in content
+
+
+def test_prompt_advanced_models_skip_writes_nothing(repo: Path) -> None:
+    # Answering 'no' (or just pressing enter) leaves every override global empty.
+    proc = run_lib(
+        repo,
+        "prompt_advanced_models\n"
+        'echo "M=${WHISPER_MODEL_VALUE}"\n'
+        'echo "D=${DIARIZER_MODEL_NAME_VALUE}"\n'
+        'echo "T=${HF_TOKEN_VALUE}"\n',
+        stdin="\n",
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "M=\n" in proc.stdout
+    assert "D=\n" in proc.stdout
+    assert "T=\n" in proc.stdout
+
+
+def test_prompt_advanced_models_collects_values_and_hides_token(repo: Path) -> None:
+    sha = "b" * 40
+    stdin = f"y\nlarge-v3\n{sha}\npyannote/community-1\nrev9\nhf_topsecret\n"
+    proc = run_lib(
+        repo,
+        "prompt_advanced_models\n"
+        'echo "M=${WHISPER_MODEL_VALUE}"\n'
+        'echo "R=${WHISPER_REVISION_VALUE}"\n'
+        'echo "A=${WHISPER_ALLOW_DOWNLOAD_VALUE}"\n'
+        'echo "D=${DIARIZER_MODEL_NAME_VALUE}"\n'
+        'echo "DR=${DIARIZER_REVISION_VALUE}"\n'
+        'echo "T=${HF_TOKEN_VALUE}"\n',
+        stdin=stdin,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "M=large-v3\n" in proc.stdout
+    assert f"R={sha}\n" in proc.stdout
+    assert "A=1\n" in proc.stdout  # opting in auto-records the download permission
+    assert "D=pyannote/community-1\n" in proc.stdout
+    assert "DR=rev9\n" in proc.stdout
+    assert "T=hf_topsecret\n" in proc.stdout
+    # The token is never echoed by the installer's own prompts (only surfaced by
+    # the test's explicit echo above, which prints once).
+    assert proc.stderr.count("hf_topsecret") == 0
+    assert proc.stdout.count("hf_topsecret") == 1
+
+
+def test_prompt_advanced_models_rejects_unsafe_value(repo: Path) -> None:
+    # A model id with a space cannot be written into dotenv safely: reject it here
+    # with a clear message rather than fail opaquely at Compose validation.
+    proc = run_lib(repo, "prompt_advanced_models\n", stdin="y\nbad model\n")
+    assert proc.returncode != 0
+    assert "must not contain spaces" in proc.stderr
+
+
+# --------------------------------------------------------------------------- #
 # Kept-.env update path (legacy migration)
 # --------------------------------------------------------------------------- #
 LEGACY_ENV = "VOXINT_PASSWORD='old-pw'\nMEDIA_ROOT='/data'\nHF_TOKEN=\n"
