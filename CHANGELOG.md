@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-08-21
+
 ### Added
 - **A task-first "first 30 minutes" flow for the review console (#117).** The
   console now guides a first-run operator instead of only presenting controls.
@@ -106,6 +108,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   all, so it wins over the base stack, the tier overlay, and the hardware
   baseline. `./scripts/install.sh --hardware-dry-run` previews the detection and
   the file without writing or starting anything. See `docs/operations.md` (#96).
+- **Offline eval-quality harness (#97).** A maintainer-facing scorer
+  (`tools/eval_quality.py`, `tools/eval_run.py`) measures transcription and
+  diarization quality against a reference: word error rate, diarization and
+  Jaccard error rates, and concatenated-minimum-permutation WER for
+  speaker-attributed text. A companion tool
+  (`tools/build_ami_wer_reference.py`) freezes an AMI WER reference so scores are
+  reproducible across runs. Its dependencies live in an isolated `eval-quality`
+  extra so a normal install does not carry them, and its parity and contract
+  tests keep the metrics pinned.
 
 ### Changed
 - **A visual-polish pass over the review console: consistent spacing, clearer

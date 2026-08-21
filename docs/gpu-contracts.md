@@ -787,6 +787,68 @@ slices.
 Browser Gate E green and A/R/M carried at `c111308`; the real-pipeline lane gap
 above is a deliberate, recorded deferral. Clear to tag v0.21.0.
 
+#### Verdict: v0.22.0, Gates A/R/E run fresh (all PASS), Gate M carries from v0.21.0 (2026-08-21)
+
+Cut at `8ac53a2`: the #117 task-first review console, the #96/#118 hardware-aware
+install defaults plus model-service resource telemetry, the #113 match-evidence
+exporter, the #111 CUDA allocator fix, and the #97 offline eval-quality harness.
+`git diff v0.21.0..main -- services/` is non-empty (+2026 lines), so the
+model-service numerics gates re-run.
+
+- **Gate A (CUDA parity) run fresh at `8ac53a2` on the titanet and pyannote CUDA
+  images (maintainer NVIDIA hardware, RTX 3060) - PASS.** The #111 change drops
+  `expandable_segments:True` from both images' `PYTORCH_CUDA_ALLOC_CONF` and adds
+  `NVIDIA_DRIVER_CAPABILITIES=compute,utility` (NVML for the telemetry sampler);
+  no weights, sha ARG, or `provenance.json` moved, so no provenance bump. The
+  titanet/pyannote inference code is unchanged since v0.20.0 (only telemetry
+  wiring plus a `nvidia-ml-py` dep), so the shipped 0.20.0 images run under the
+  exact new allocator/caps env are faithful graph proxies. Measured against the
+  committed CUDA references: titanet embeddings min cosine 0.9999998 / p50
+  1.0000000 (92 windows), pyannote diarize response byte-identical (3 speakers, 7
+  turns). The allocator change is numerically inert.
+- **Gate R (ROCm smoke) run fresh at `8ac53a2` (maintainer AMD hardware, RX 9060 XT, render gid
+  990) - PASS.** `Dockerfile.rocm` is unchanged since v0.21.0; the image was
+  rebuilt to carry the new telemetry app code (nvml imported lazily, fail-soft on
+  ROCm). `/healthz`: `device: rocm`, `engine: faster-whisper`, `model: large-v2`,
+  rev `f0fe815`. `vad_true` transcript byte-identical to the committed CUDA
+  reference; `vad_false` fully coherent, differing from the CUDA reference by one
+  word ("harbour" vs "Haber", nearer the "harbor" ground truth) plus casing, the
+  expected ROCm-vs-CUDA engine-level divergence.
+- **Gate E does NOT carry** (pipeline-aware scope non-empty:
+  `pipeline/`, `api/`, `enrichment/`, `clients/`, `db/`, `frontend/`, `services/`).
+  Both lanes run fresh at `8ac53a2`:
+  - **Pipeline lane (maintainer AMD/ROCm hardware, real ROCm whisper + CPU pyannote/titanet, serial)
+    - PASS.** `VOXINT_E2E=1 pytest tests/e2e/test_real_pipeline.py`: 2 passed, no
+    service restarts, persistence invariants intact. The 0.22.0 pipeline code runs
+    in-process against real services carrying the same pinned models; the 0.22.0
+    service-image numerics are certified by Gates A and R above.
+  - **Browser review lane (maintainer hardware, Playwright, seed-only disposable DB) -
+    PASS.** Asserted on the #117 two-step console: the confidence signal (exactly
+    2 uncertain chips at indexes 1 & 3; 0/2/4 not flagged); verify-and-advance
+    with the replay teardown-guard (`play()` fires at the segment start after the
+    verify's segment-array patch); skip; keymap suppression on a focused
+    `<select>` (confirmed with a real key press); click-to-edit; edit+save
+    (`Ctrl/⌘+Enter`) which flips the header chip to "edited" and un-verifies the
+    segment (operator edit supersedes the #83 pack-correction provenance); the
+    unsaved-edit discard warning (warn-then-verify, discarding the edit); the #51
+    cheat-sheet dialog opened by `?` and by button, with behind-modal keymap
+    suppression and all three dismissal paths (Escape confirmed with a real key
+    press, ✕, backdrop); the full #83 provenance affordances (marker distinct from
+    "edited", rule trace `everyone → everybody`, raw disclosure + reset-to-raw with
+    no write, the "1 of 2 applied, 1 never fired" reconciliation panel); and the
+    #57 waveform strip (single `/peaks` fetch, region-click → selection + seek into
+    `[10,15)` with playhead at 40%, no write). Final reconcile against
+    `segment_review_states`: `RECONCILE PASS` - 1 of 5 verified at `[2]`,
+    correction on segment 0 (un-verified by the operator-supersede save, per
+    design).
+- **Gate M (Metal tier) carries from v0.21.0.** The metal-lane trigger paths
+  (`scripts/metal/`, the metal parity lanes, `metal-lane.yml`,
+  `requirements.metal.txt`, `requirements.cpu.txt`) are unchanged since v0.21.0,
+  and the new `nvidia-ml-py` telemetry dep is CUDA-only (the cpu/rocm/metal
+  flavors omit it), so the metal numerics substrate is byte-identical.
+
+Gates A/R/E green fresh and Gate M carried at `8ac53a2`. Clear to tag v0.22.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
