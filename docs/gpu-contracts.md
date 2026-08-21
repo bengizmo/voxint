@@ -653,6 +653,69 @@ supply-chain F1-F4 including the new F3 CUDA titanet sha-verify).
 
 All maintainer GPU/E2E gates green at `bc4bd12`; clear to tag v0.20.0.
 
+#### Verdict: v0.21.0, Gate A/R/M carry from v0.20.0; Gate E browser lane run fresh (PASS), pipeline lane deferred (2026-08-20)
+
+Cut at `c111308`: the #86 operator annotation layer (highlights + tags + notes)
+plus Copy/export of highlights as Markdown pull-quotes, #104 YAML sidecar
+metadata for watch-folder media (migration 0030), the two-lane Celery execution
+topology (#109: a GPU lane `acquire`..`diarize_embed` and a `post` lane
+`enhance_match`..`finalize`, with `src/voxint/pipeline/transitions.py`), and the
+#96/#16 operations docs, #65 escaper, #51 shortcut chord, and #106 topics-on-BYO
+slices.
+
+- **Gate A (CUDA byte-parity), Gate R (ROCm / RX 9060 XT), and Gate M (Metal
+  tier) all carry their v0.20.0 verdicts.** `git diff v0.20.0..c111308 --
+  services/whisper services/pyannote services/titanet tests/parity` is **empty**
+  over the numerics scope (no `Dockerfile*`, `provenance.json`, engine, or
+  parity-reference change), so the model-service numerics gates carry with no
+  maintainer GPU re-run. CI's parity + smoke jobs still run unconditionally on
+  the release digests.
+- **Gate E does NOT carry** (the pipeline-aware scope is non-empty: the two-lane
+  `worker/tasks.py`, `worker/app.py`, `pipeline/engine.py`, the new
+  `pipeline/transitions.py`, plus all of the #86 `api/`, `frontend/`, and
+  `db/models.py`). It was split this release:
+  - **Browser review lane run fresh at `c111308` — PASS.** Islands served via
+    `tools/e2e_browser_lifecycle.py` (seed-only, disposable DB) and driven with a
+    real browser (Playwright) on maintainer hardware. Asserted: the confidence
+    signal (exactly 2 low-confidence chips at indexes 1 & 3; segments 0/2/4 not
+    flagged); verify-and-advance; the replay teardown-guard (the `<audio>`
+    element survives the verify's segment-array patch — `play()` fires with
+    `currentTime` at the segment start and playback advances); skip; replay;
+    click-to-edit; the unsaved-edit discard warning (warn-then-verify, discarding
+    the edit); edit+save (`Ctrl/⌘+Enter`); keymap suppression on a focused
+    `<select>`; the #51 cheat-sheet dialog opened by `?` and by button, with
+    behind-modal keymap suppression and all three dismissal paths (Escape, ✕,
+    backdrop) each restoring focus to the opener; the full #83 provenance
+    affordances (per-segment "corrected by domain pack" marker distinct from
+    "edited", expandable rule trace `everyone → everybody`, raw disclosure +
+    reset-to-raw with no write, honest copy-raw status, the "1 of 2 applied, 1
+    never fired" reconciliation panel, provenance absent on an untouched segment,
+    and operator-edit-supersedes-provenance which clears the marker and
+    un-verifies the segment); the #57 waveform strip (single `/peaks` fetch,
+    region-click → selection + seek into `[10,15)`, keymap↔strip playhead sync);
+    and a #86 annotation-layer smoke (selection toolbar with six colors, Save
+    highlight → Highlights(1) + a `<mark>`, row Copy → honest success). Final
+    reconcile against `segment_review_states`: `RECONCILE PASS` — 1 of 5 verified
+    at `[4]`, corrections on segments 0 and 1 (segment 0 was un-verified by the
+    operator-supersede save, per design). The #86 Copy/export browser assertions
+    were also verified against the same tree earlier in the day.
+  - **Real-pipeline lane (`tests/e2e/test_real_pipeline.py`, real ROCm whisper)
+    deliberately deferred, NOT run this release.** Maintainer decision: the sole
+    AMD host that can run the ROCm-pinned lane is under the standing issue-#23
+    sustained-CPU-burst hard-reset hazard, and the lane was accepted as covered
+    by (a) the two-lane topology's own unit + integration coverage green in CI
+    (the stage-routed handoff and `finish_pipeline` publishing are integration-
+    tested without live models), (b) the carried A/R/M numerics gates (service
+    code unchanged over the range), and (c) CI's unconditional parity + smoke
+    jobs on the release digests. **Residual risk recorded:** the full real-model
+    pipeline through the new two-lane worker was not exercised on real GPU
+    hardware for this tag; the first real handed-off run on maintainer hardware
+    should be watched, and the operational `-Q celery,post` note in the CHANGELOG
+    applies.
+
+Browser Gate E green and A/R/M carried at `c111308`; the real-pipeline lane gap
+above is a deliberate, recorded deferral. Clear to tag v0.21.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
