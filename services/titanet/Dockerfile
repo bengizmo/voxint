@@ -64,7 +64,10 @@ COPY --chown=voxint:voxint app/ /app/app/
 RUN chown -R voxint:voxint /app
 
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
-ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:256,expandable_segments:True,garbage_collection_threshold:0.7"
+# No expandable_segments: under co-tenant VRAM pressure it trips torch's
+# "!block->expandable_segment_" allocator assert (upstream PyTorch bug) and
+# hard-fails embedding requests. See docs/operations.md, GPU memory tuning.
+ENV PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:256,garbage_collection_threshold:0.7"
 
 USER voxint
 ENV HOME=/app

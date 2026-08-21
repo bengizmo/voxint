@@ -25,6 +25,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   measurement loop so a first speaker-attribution baseline can be produced; it
   reads the database and never re-runs the models or the matcher.
 
+### Fixed
+- **The titanet and pyannote CUDA images no longer enable the PyTorch
+  `expandable_segments` allocator mode (#111).** Under heavy VRAM pressure
+  (observed with titanet on a GPU shared with another CUDA workload), that mode
+  can trip an upstream PyTorch allocator bug
+  (`!block->expandable_segment_ INTERNAL ASSERT FAILED`), hard-failing the
+  request and the run's current stage; retries and service restarts do not
+  clear it while the mode is enabled. Each image keeps the rest of its allocator tuning.
+  For older already-pulled images, the same fix works as a compose environment
+  override; see the GPU memory section of
+  [docs/operations.md](docs/operations.md).
+
 ## [0.21.0] - 2026-08-20
 
 ### Added

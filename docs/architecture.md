@@ -689,10 +689,17 @@ subsystem and adds no page routing.
 
 ## Worker orchestration (P3)
 
-One Celery task, `voxint.run_pipeline`, drives a run through all stages via
-the engine (task-per-stage would open an unclaimed window between handoffs
-that recovery misreads as a crash; the engine already resumes an interrupted
-run at its current stage). Failure handling is two-lane:
+Two Celery tasks drive a run through the engine: `voxint.run_pipeline` owns
+the GPU segment (acquire through diarize_embed) and `voxint.finish_pipeline`
+owns the post segment (enhance_match, finalize), with a validated
+RUNNING -> QUEUED handoff between them (see
+[Execution lanes and queues](#execution-lanes-and-queues)). Within its
+segment each task drives every stage itself rather than task-per-stage
+(task-per-stage would open an unclaimed window between handoffs that
+recovery misreads as a crash; the engine already resumes an interrupted
+run at its current stage, and the single segment boundary is covered by the
+same claim validation and recovery sweep as a crash). Failure handling is
+two-lane:
 
 - **Transient** (`retryable` service errors: `saturated`, `model_unavailable`,
   transport failures): the failed attempt stays in the `stage_runs` ledger,
