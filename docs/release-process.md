@@ -328,7 +328,10 @@ model assets) voids it for the gate it feeds.
    prints `Uploaded <file>` progress lines even when the server then rejects
    the upload (observed with a 403 on a bad token), so never judge a publish
    by its log output. (The token also lives in `~/.pypirc` `[pypi]`; export it
-   as `UV_PUBLISH_TOKEN` if not passing `--token`.)
+   as `UV_PUBLISH_TOKEN` if not passing `--token`.) If you are building on a
+   maintainer box that also holds large git-ignored data, read the clean-checkout
+   gotcha under [Gotchas](#gotchas) first: `uv build` copies the whole working
+   tree and can exhaust RAM on a dirty host.
 7. **GitHub Release**: `gh release create vX.Y.Z --title "Voxint vX.Y.Z" --notes …`
    and update `CHANGELOG.md` in the next commit if it wasn't part of the
    release commit.
@@ -348,3 +351,17 @@ model assets) voids it for the gate it feeds.
   previous release.
 - PyPI publishing is deliberately manual (no long-lived token in CI). If that
   changes, prefer PyPI trusted publishing over a stored secret.
+- **Build the wheel from a clean checkout.** `uv build` copies the entire working
+  directory into a build-isolation temp copy before the backend runs, and that
+  copy is NOT filtered by `.gitignore` (only hatchling's *output* respects the
+  ignore rules, which is why the published wheel and sdist are still correct). On
+  a maintainer machine whose tree also holds large git-ignored data (vendored
+  model weights under `services/*/models/`, a `local/` or `corpus-src/` spike
+  dir, a populated `.venv`), that copy can be many GB. If `TMPDIR` points at a
+  RAM-backed tmpfs (the default `/tmp` on some Linux hosts), the copy can exhaust
+  RAM and kill the build (and any shell forked afterward). Two fixes, use both on
+  a dirty host: point `TMPDIR` at a disk-backed path with room
+  (`TMPDIR=~/build-tmp uv build`), and move the large git-ignored trees out of
+  the working directory for the build, then restore them. A fresh clone of the
+  tag never hits this, so building on a clean checkout (or a box that only holds
+  the release source) sidesteps it entirely.
