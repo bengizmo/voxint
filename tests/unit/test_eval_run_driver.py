@@ -426,3 +426,53 @@ class TestJournalCrashSafety:
         reloaded = json.loads(eq._journal_path(tmp_path).read_text())
         [d] = er.plan_resume(reloaded, ["EN2002c"], resume=True, retry_failed=False)
         assert d.action == er.ACTION_STOP
+
+
+class TestGitShaDirty:
+    """``_git_sha`` marks dirty only on TRACKED modifications (``git describe
+    --dirty`` semantics): an untracked runtime file (the driver's
+    ``pipeline-env.json``, an out-dir, a journal) must NOT stamp the committed
+    baseline report's provenance ``-dirty``, or the report lies about the code
+    state. A staged addition or a tracked edit still counts."""
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> None:
+        import subprocess
+
+        subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True)
+
+    def _repo(self, tmp_path: Path) -> Path:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._git(repo, "init", "-q")
+        self._git(repo, "config", "user.email", "t@t")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "tracked.py").write_text("x = 1\n", encoding="utf-8")
+        self._git(repo, "add", "tracked.py")
+        self._git(repo, "commit", "-qm", "init")
+        return repo
+
+    def test_clean_tree_has_no_dirty_suffix(self, tmp_path, monkeypatch) -> None:
+        repo = self._repo(tmp_path)
+        monkeypatch.setattr(eq, "REPO", repo)
+        assert not eq._git_sha().endswith("-dirty")
+
+    def test_untracked_runtime_file_is_not_dirty(self, tmp_path, monkeypatch) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "pipeline-env.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(eq, "REPO", repo)
+        assert not eq._git_sha().endswith("-dirty")
+
+    def test_tracked_modification_is_dirty(self, tmp_path, monkeypatch) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "tracked.py").write_text("x = 2\n", encoding="utf-8")
+        monkeypatch.setattr(eq, "REPO", repo)
+        assert eq._git_sha().endswith("-dirty")
+
+    def test_staged_addition_is_dirty(self, tmp_path, monkeypatch) -> None:
+        repo = self._repo(tmp_path)
+        (repo / "new.py").write_text("y = 1\n", encoding="utf-8")
+        self._git(repo, "add", "new.py")
+        monkeypatch.setattr(eq, "REPO", repo)
+        assert eq._git_sha().endswith("-dirty")

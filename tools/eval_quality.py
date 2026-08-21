@@ -222,8 +222,13 @@ def _git_sha() -> str:
             text=True,
             check=True,
         ).stdout.strip()
+        # Only TRACKED modifications mark the code dirty (``git describe --dirty``
+        # semantics). Untracked files under the repo -- the driver's runtime
+        # ``pipeline-env.json``, out-dirs, journals -- are not the harness code
+        # identity, and counting them would stamp an honest committed code state
+        # as ``-dirty`` in the baseline report's provenance.
         dirty = subprocess.run(
-            ["git", "-C", str(REPO), "status", "--porcelain"],
+            ["git", "-C", str(REPO), "status", "--porcelain", "--untracked-files=no"],
             capture_output=True,
             text=True,
             check=True,
