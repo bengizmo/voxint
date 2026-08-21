@@ -92,8 +92,21 @@ def resolve_whisper_startup(env: Mapping[str, str]) -> WhisperStartup:
             )
 
     if model in DEFAULT_MODELS:
+        # The whisper compose overlays forward ``WHISPER_REVISION: ${WHISPER_REVISION:-}``,
+        # which sets the container's WHISPER_REVISION to an EMPTY string whenever the
+        # operator does not override it. An empty (revision-less) load resolves the
+        # "main" ref, which HF_HUB_OFFLINE cannot satisfy for the baked snapshot (the
+        # bake writes the commit snapshot, not refs/main), so the default path would
+        # fail to load offline. Restore the baked revision from WHISPER_BAKED_REVISION
+        # (baked from the same ARG and never compose-forwarded) so the shipped default
+        # stays byte-identical and network-free even under the empty pass-through.
+        overrides: dict[str, str] = {}
+        if not _clean(env, "WHISPER_REVISION"):
+            baked = _clean(env, "WHISPER_BAKED_REVISION")
+            if baked:
+                overrides["WHISPER_REVISION"] = baked
         return WhisperStartup(
-            model_name=model, is_override=False, env_overrides={}, warning=None
+            model_name=model, is_override=False, env_overrides=overrides, warning=None
         )
 
     # A local path or a deep repo id would bypass the download-and-pin policy

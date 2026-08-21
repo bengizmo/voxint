@@ -856,6 +856,26 @@ class TestWhisperStartupResolution:
         with pytest.raises(whisper_startup.WhisperStartupError, match="empty"):
             self._resolve(WHISPER_MODEL="   ")
 
+    def test_default_path_restores_baked_revision_when_env_blank(self) -> None:
+        # The compose overlays forward ${WHISPER_REVISION:-}, so an operator who
+        # does not override gets WHISPER_REVISION="" — which shadows the image's
+        # baked revision and would make the offline load resolve "main" and fail.
+        # On the default path the resolver restores the baked revision so the
+        # shipped path stays offline-clean.
+        d = self._resolve(
+            WHISPER_MODEL="large-v2", WHISPER_REVISION="", WHISPER_BAKED_REVISION=self.BAKED
+        )
+        assert d.is_override is False
+        assert d.env_overrides == {"WHISPER_REVISION": self.BAKED}
+
+    def test_default_path_leaves_operator_revision_untouched(self) -> None:
+        # A non-empty WHISPER_REVISION on the default path is already correct;
+        # the resolver must not clobber it with the baked reference.
+        d = self._resolve(
+            WHISPER_MODEL="large-v2", WHISPER_REVISION=self.ALT, WHISPER_BAKED_REVISION=self.BAKED
+        )
+        assert d.env_overrides == {}
+
     @pytest.mark.parametrize("model", ["/models/local", "./rel", "~/m", "a/b/c"])
     def test_path_like_model_rejected(self, model: str) -> None:
         with pytest.raises(whisper_startup.WhisperStartupError, match=r"repo id|path"):

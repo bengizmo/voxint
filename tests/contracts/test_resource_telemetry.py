@@ -530,8 +530,13 @@ class TestWhisperOverridePassthrough:
     deliberately NOT a pass-through: an empty compose default would flip the baked
     offline behavior, so the resolver owns that flag instead."""
 
-    # Empty-defaulted so an unset .env leaves the baked default untouched.
-    _OVERRIDE_KEYS = ("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD", "HF_TOKEN")
+    # A compose ``${KEY:-}`` pass-through does NOT leave a baked image ENV
+    # untouched: it SETS the container var to the empty string, shadowing the
+    # bake. That is why WHISPER_MODEL carries a real ``large-v2`` default (the
+    # startup resolver rejects an empty model), and why the resolver restores the
+    # baked revision when WHISPER_REVISION comes through empty. WHISPER_ALLOW_DOWNLOAD
+    # and HF_TOKEN are genuine opt-ins whose correct default IS empty.
+    _EMPTY_DEFAULTED_KEYS = ("WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD", "HF_TOKEN")
     _ALT_CACHE = "/app/model-cache/whisper"
 
     @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
@@ -540,9 +545,13 @@ class TestWhisperOverridePassthrough:
 
         config = yaml.safe_load((REPO_ROOT / overlay).read_text())
         env = config["services"]["whisper"]["environment"]
-        for key in self._OVERRIDE_KEYS:
+        # The model must default to the validated large-v2, never empty: an empty
+        # ${WHISPER_MODEL:-} fails the startup resolver closed (blank != baked default).
+        assert env.get("WHISPER_MODEL") == "${WHISPER_MODEL:-large-v2}", (
+            f"{overlay}:whisper WHISPER_MODEL must default to large-v2, not empty"
+        )
+        for key in self._EMPTY_DEFAULTED_KEYS:
             assert key in env, f"{overlay}:whisper missing {key} pass-through"
-            # Empty default: KEY: ${KEY:-} — never a hardcoded value.
             assert env[key] == f"${{{key}:-}}", f"{overlay}:whisper {key} not empty-defaulted"
         # HF_HUB_OFFLINE must not leak in as a pass-through (would flip the baked
         # default when unset in .env).
