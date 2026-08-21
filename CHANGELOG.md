@@ -33,6 +33,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   version means what it says.
 
 ### Fixed
+- **The dashboard's Review backlog now counts the recordings actually waiting
+  for review (#117).** It previously counted runs in a transient
+  `awaiting_adjudication` status that a finished pipeline never ends in, so the
+  figure sat at zero even while recordings were waiting. It now shares the
+  review queue's own definition (a finished recording with at least one speaker
+  still unconfirmed), so the headline can no longer disagree with the queue it
+  links to.
 - **The titanet and pyannote CUDA images no longer enable the PyTorch
   `expandable_segments` allocator mode (#111).** Under heavy VRAM pressure
   (observed with titanet on a GPU shared with another CUDA workload), that mode

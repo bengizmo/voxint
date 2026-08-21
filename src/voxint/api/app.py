@@ -105,6 +105,7 @@ from voxint.adjudication.resolver import (
     Resolution,
     adjudication_queue,
     label_states,
+    review_backlog_count,
     segment_states,
 )
 from voxint.adjudication.review_state import (
@@ -5488,9 +5489,12 @@ def _register_routes(app: FastAPI) -> None:
             # table renders in a stable order and zero-fills empty statuses, the
             # same contract format_stats_text/render_prometheus hold.
             "run_statuses": list(RunStatus),
-            # Backlog keyed off the enum, not a literal, so a status rename can't
-            # silently zero the headline number.
-            "review_backlog": stats.status_counts.get(RunStatus.AWAITING_ADJUDICATION.value, 0),
+            # The count of runs actually eligible for review, sharing the queue's
+            # own predicate (issue #117). The prior value counted
+            # AWAITING_ADJUDICATION runs, a status a successful pipeline never
+            # ends in, so the card was structurally wrong; review_backlog_count
+            # derives from adjudication_queue and cannot drift from it.
+            "review_backlog": review_backlog_count(session),
             # Carry the accepted window through the 15s htmx poll so a custom
             # ?since= isn't lost on the first refresh. Only echo a value we
             # actually honored (an invalid one falls back to the default, so we

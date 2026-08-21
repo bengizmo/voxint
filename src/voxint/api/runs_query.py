@@ -39,6 +39,8 @@ from voxint.db.models import (
     PipelineRun,
     RunStatus,
     SegmentReviewState,
+    Stage,
+    StageRun,
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
@@ -521,3 +523,80 @@ def list_runs(
         else None
     )
     return RunsPage(items=items, next_cursor=next_cursor)
+
+
+@dataclass(frozen=True)
+class LatestCompletedRun:
+    """The most recently finished run, for the dashboard's "last finished" card."""
+
+    run_id: uuid.UUID
+    source_path: str
+    # Same display-title precedence as RunListItem: sidecar title (operator
+    # intent, issue #104) over the acquisition-metadata title; None otherwise,
+    # and the template falls back to source_path.
+    title: str | None
+    # When the run finished. There is no run-level completion timestamp
+    # (PipelineRun has only created_at/updated_at), so this is the terminal
+    # stage's (FINALIZE) StageRun.finished_at when stage rows exist, falling back
+    # to the run's updated_at for seeded or legacy runs that have none. Never
+    # None — updated_at is always set.
+    completed_at: datetime
+
+
+def latest_completed_run(session: Session) -> LatestCompletedRun | None:
+    """The newest COMPLETED, non-archived run, for the dashboard entry card.
+
+    "Newest" is by completion, not submission: a run's meaningful finish is when
+    its terminal FINALIZE stage completed. ``PipelineRun`` carries no
+    ``finished_at`` (only ``created_at`` / ``updated_at``); ``StageRun`` does
+    (``models.py``). So order by the latest FINALIZE ``finished_at`` for the run
+    (``MAX`` over attempts, so a retried finalize takes its successful,
+    last-finishing attempt), coalescing to ``updated_at`` for seeded or legacy
+    runs that predate stage rows. Ties break on ``(created_at, id)`` descending,
+    matching the ``/runs`` keyset discipline, so the pick is deterministic.
+
+    Returns ``None`` when no run has completed yet — the card renders an honest
+    empty state. The destination is the run-detail page (which already carries
+    the export menu); a first-class "export as an end state" surface is a
+    separate opportunity (report #9), out of scope here.
+    """
+    finalize_finished = (
+        sa_select(func.max(StageRun.finished_at))
+        .where(
+            StageRun.pipeline_run_id == PipelineRun.id,
+            StageRun.stage == Stage.FINALIZE.value,
+        )
+        .correlate(PipelineRun)
+        .scalar_subquery()
+    )
+    completed_at = func.coalesce(finalize_finished, PipelineRun.updated_at)
+    row = session.execute(
+        sa_select(
+            PipelineRun.id,
+            MediaItem.source_path,
+            PipelineRun.sidecar,
+            MediaSourceMetadata.title.label("source_title"),
+            completed_at.label("completed_at"),
+        )
+        .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
+        # Outer: most media has no metadata snapshot (uploads, pre-#36 runs).
+        .outerjoin(MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id)
+        .where(
+            PipelineRun.status == RunStatus.COMPLETED.value,
+            PipelineRun.archived_at.is_(None),
+        )
+        .order_by(
+            completed_at.desc(),
+            PipelineRun.created_at.desc(),
+            PipelineRun.id.desc(),
+        )
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    return LatestCompletedRun(
+        run_id=row.id,
+        source_path=row.source_path,
+        title=title_from_snapshot(row.sidecar) or row.source_title,
+        completed_at=row.completed_at,
+    )

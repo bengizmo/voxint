@@ -22,6 +22,8 @@ from voxint.api.app import create_app
 from voxint.api.presentation import humanize_status
 from voxint.config import Settings
 from voxint.db.models import (
+    EMBEDDING_DIM,
+    DiarizationTurn,
     MediaItem,
     PipelineRun,
     RunStatus,
@@ -74,11 +76,17 @@ def seed_snapshot(session_factory: sessionmaker[Session]) -> None:
     now = datetime.now(UTC)
     old = now - timedelta(days=3)
     with session_factory() as session:
-        # Two awaiting adjudication -> review backlog == 2.
+        # Two runs in the transient AWAITING_ADJUDICATION status. These exercise
+        # the status table and the raw voxint_runs gauge, but they are NOT the
+        # review backlog: a successful pipeline terminates COMPLETED, so the queue
+        # (issue #117) is keyed on COMPLETED runs with unresolved speaker labels,
+        # not on this status.
         make_run(session, status=RunStatus.AWAITING_ADJUDICATION)
         make_run(session, status=RunStatus.AWAITING_ADJUDICATION)
         # One completed run with a finished transcribe (30s) and a failed diarize.
-        make_run(
+        # It carries an unresolved diarization label, so it is the one genuine
+        # review-backlog entry -> review_backlog_count == 1.
+        completed = make_run(
             session,
             status=RunStatus.COMPLETED,
             stages=[
@@ -96,6 +104,20 @@ def seed_snapshot(session_factory: sessionmaker[Session]) -> None:
                 },
             ],
         )
+        vector = [0.0] * EMBEDDING_DIM
+        vector[0] = 1.0
+        session.add(
+            DiarizationTurn(
+                pipeline_run_id=completed,
+                turn_index=0,
+                start_seconds=0.0,
+                end_seconds=8.0,
+                label="S0",
+                embedding=vector,
+                embedding_space="titanet-large-v1",
+            )
+        )
+        session.commit()
         # One old run outside a short window (for the ?since= narrowing test).
         make_run(session, status=RunStatus.FAILED, created_at=old)
         # Two enrolled speakers -> roster size == 2.
@@ -113,10 +135,12 @@ def test_dashboard_renders_aggregated_numbers(
     body = resp.text
     # Full page: nav chrome present, active tab marked.
     assert 'href="/dashboard" aria-current="page"' in body
-    # Review backlog (2 awaiting_adjudication) and roster (2 speakers) surface as
-    # summary stat cards (issue #91); the value is tied to its label, and each
-    # card keeps its unit as text so the number is never bare.
-    assert _stat_value(body, "Review backlog") == 2
+    # Review backlog (1 COMPLETED run with an unresolved label — NOT the 2
+    # awaiting_adjudication runs) and roster (2 speakers) surface as summary stat
+    # cards (issue #91); the value is tied to its label, and each card keeps its
+    # unit as text so the number is never bare. The count shares the /review
+    # queue's own predicate (issue #117), so the headline can't drift from it.
+    assert _stat_value(body, "Review backlog") == 1
     assert "run(s) awaiting adjudication" in body
     assert _stat_value(body, "Roster") == 2
     assert "enrolled speaker(s)" in body
@@ -166,7 +190,7 @@ def test_dashboard_htmx_returns_fragment_without_chrome(
     assert resp.status_code == 200
     body = resp.text
     # Fragment carries the numbers but not the page chrome / nav.
-    assert _stat_value(body, "Review backlog") == 2
+    assert _stat_value(body, "Review backlog") == 1
     assert "run(s) awaiting adjudication" in body
     assert "<nav" not in body
     assert "<h1>Dashboard</h1>" not in body
@@ -246,11 +270,16 @@ def test_dashboard_matches_metrics_snapshot(
     # runs_created (default 24h window) — same figure on both surfaces.
     assert _created_count(dash) == 3
     assert "voxint_runs_created_24h 3" in metrics
-    # roster + backlog line up with their Prometheus gauges.
+    # Roster lines up with its Prometheus gauge.
     assert "voxint_roster_speakers 2" in metrics
     assert _stat_value(dash, "Roster") == 2
+    # The raw awaiting_adjudication status gauge (2) is deliberately NOT the
+    # review backlog: the backlog is the /review queue's eligibility count —
+    # COMPLETED runs with unresolved labels (issue #117), one here. The two
+    # numbers are different by design; /metrics exposes the raw status, the
+    # dashboard headline the actionable queue.
     assert 'voxint_runs{status="awaiting_adjudication"} 2' in metrics
-    assert _stat_value(dash, "Review backlog") == 2
+    assert _stat_value(dash, "Review backlog") == 1
 
 
 def test_dashboard_malformed_since_degrades_to_default(

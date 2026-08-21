@@ -630,3 +630,20 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
     if sort == "unresolved":
         entries.sort(key=lambda e: e.unresolved_labels, reverse=True)
     return entries
+
+
+def review_backlog_count(session: Session) -> int:
+    """How many runs are eligible for review — the queue's length, by construction.
+
+    The dashboard's "Continue review (N)" affordance and the review queue it
+    links to must never disagree (issue #117). Deriving the count from
+    :func:`adjudication_queue` rather than a parallel status tally makes that
+    drift impossible: both share the one predicate (``COMPLETED``, not archived,
+    at least one unresolved label). The old dashboard counted
+    ``AWAITING_ADJUDICATION`` runs — a status a successful pipeline never ends
+    in — so its "Review backlog" card was structurally wrong. At single-operator
+    scale the handful of ``QueueEntry`` objects this materializes costs nothing;
+    correctness of the invariant beats a separate ``COUNT(*)`` that could rot
+    away from the queue predicate again.
+    """
+    return len(adjudication_queue(session))

@@ -11,6 +11,7 @@ from voxint.adjudication.resolver import (
     adjudication_queue,
     effective_decisions,
     label_states,
+    review_backlog_count,
 )
 from voxint.adjudication.slots import claim_run
 from voxint.db.models import (
@@ -382,3 +383,61 @@ def test_queue_sort_unresolved_orders_by_voice_count(
             two,
             one_b,
         ]
+
+
+def test_review_backlog_count_matches_queue_length(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The dashboard headline (issue #117) equals the queue it links to, by
+    construction, across every eligibility outcome — completed-and-unresolved,
+    fully-ruled, still-running, and archived-with-unresolved."""
+    # Empty system: no runs, no backlog.
+    with session_factory() as session:
+        assert review_backlog_count(session) == len(adjudication_queue(session)) == 0
+
+    with session_factory() as session:
+        # Eligible: completed with an unresolved voice.
+        eligible = make_completed_run(session)
+        add_turn(session, eligible, 0, "S0")
+        # Completed but fully ruled: not eligible.
+        ruled = make_completed_run(session)
+        add_turn(session, ruled, 0, "S0")
+        record_decision(
+            session,
+            pipeline_run_id=ruled,
+            diarization_label="S0",
+            decision=Decision.EXCLUDE,
+            operator="ben",
+            idempotency_key="k-ruled-backlog",
+        )
+        # Unresolved but still running: not eligible.
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        running = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.RUNNING.value,
+            current_stage="prepare",
+        )
+        session.add(running)
+        session.flush()
+        add_turn(session, running.id, 0, "S0")
+        # Archived completed run with an unresolved voice: hidden from the queue.
+        archived = make_completed_run(session)
+        add_turn(session, archived, 0, "S0")
+        session.get(PipelineRun, archived).archived_at = datetime.now(tz=UTC)
+        session.commit()
+
+        assert review_backlog_count(session) == len(adjudication_queue(session)) == 1
+
+        # Resolving the one eligible run drops the backlog to zero, still in step.
+        record_decision(
+            session,
+            pipeline_run_id=eligible,
+            diarization_label="S0",
+            decision=Decision.EXCLUDE,
+            operator="ben",
+            idempotency_key="k-eligible-backlog",
+        )
+        session.commit()
+        assert review_backlog_count(session) == len(adjudication_queue(session)) == 0
