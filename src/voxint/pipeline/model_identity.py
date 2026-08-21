@@ -66,7 +66,7 @@ def stage_has_model_identity(stage: Stage) -> bool:
     return stage in _STAGE_MODEL_SERVICES
 
 
-def _probe_identity_one(client: httpx.Client, base_url: str) -> dict[str, Any]:
+def probe_identity_one(client: httpx.Client, base_url: str) -> dict[str, Any]:
     """Read one service's ``/healthz`` identity. Never raises.
 
     Returns a role payload: ``reachable: true`` with the identity fields on a
@@ -126,7 +126,7 @@ def observe_stage_model_identity(
         roles = [role for role, _ in targets]
         urls = [getattr(settings, url_attr) for _, url_attr in targets]
         with ThreadPoolExecutor(max_workers=max(1, len(targets))) as pool:
-            payloads = list(pool.map(lambda u: _probe_identity_one(probe_client, u), urls))
+            payloads = list(pool.map(lambda u: probe_identity_one(probe_client, u), urls))
     except Exception:
         # Defence in depth: the probe is advisory, so any unexpected failure of the
         # probe machinery itself must never propagate into the stage.

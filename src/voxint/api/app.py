@@ -199,6 +199,7 @@ from voxint.api.runs_query import (
     parse_status_filter,
     runs_url,
 )
+from voxint.api.service_identity import collect_service_identity
 from voxint.api.setup_wizard import (
     MAX_MEDIA_FOLDERS,
     STEP_ORDER,
@@ -5798,6 +5799,12 @@ def _register_routes(app: FastAPI) -> None:
         # Initialized like every sibling error (llm_error, watch_folder_error) so the
         # template never leans on Jinja's lenient Undefined; overridden on a rejected save.
         context["corrections_error"] = None
+        # Pipeline models panel (issue: configurable pipeline models). Live,
+        # read-only identity of the three model services, probed concurrently on
+        # each render (no cache: an operator who just changed .env reloads to
+        # confirm). Best-effort; an unreachable service renders "unavailable",
+        # never breaking the page.
+        context["pipeline_models"] = collect_service_identity(settings)
         context.update(overrides)
         return context
 

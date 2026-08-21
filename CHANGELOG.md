@@ -21,6 +21,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   accident of an older compose; this closes the gap for all three overlays.
 
 ### Added
+- **Settings shows which models are running ("Pipeline models").** The settings
+  page now has a read-only panel that reads each model service live as the page
+  loads and shows the transcription, diarization, and speaker-embedding model
+  actually running, with its engine and revision where the service reports them.
+  A service running the validated default is marked as such; a transcription or
+  diarization service running anything else is flagged as an unvalidated override
+  with an honest accuracy caveat, distinct from a service that is simply
+  unavailable. The speaker-embedding model is fixed and shown without a warning.
+  The panel changes nothing itself: model selection is deployment-owned, so it
+  lists the `.env` keys to change and notes that only the affected service
+  restarts. It never displays `HF_TOKEN`.
 - **Run detail shows which models ran ("Pipeline models").** The run-detail page
   now renders the per-attempt model identity recorded for the transcription and
   diarization stages, taken from each stage's latest completed attempt, so a
