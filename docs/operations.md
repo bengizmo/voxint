@@ -237,6 +237,56 @@ is restarted. Shrinking that first allocation is the fix.
 > whisper`) to clear the context, then apply the settings below so it does not
 > recur.
 
+#### What the installer applies automatically
+
+On the GPU tier, `scripts/install.sh` reads the host GPU with `nvidia-smi`,
+writes a generated `compose.hardware.yaml` with a conservative baseline, and
+merges it into the compose chain it launches. For any GPU it does not yet have a
+measured profile for, that baseline caps two schedule-only levers:
+
+```yaml
+services:
+  worker:
+    command: celery -A voxint.worker.app worker --loglevel=INFO --concurrency=1
+  whisper:
+    environment:
+      MAX_PENDING_REQUESTS: "1"
+```
+
+`--concurrency=1` serializes runs at the worker so the GPU services are never
+asked to hold several transcriptions at once, and `MAX_PENDING_REQUESTS=1`
+bounds whisper's own admission queue. Neither changes transcription output:
+whisper serializes inference behind a single model lock, so concurrency and
+queue depth set scheduling, not numerics. The baseline deliberately does **not**
+set `BATCH_SIZE`, which does move whisper's output (it feeds the decode config),
+so an automatic value has to come from a per-GPU profile that has passed the
+parity gate and an out-of-memory soak on real hardware. Until such a profile
+exists for your card, `BATCH_SIZE` stays at the image default and you tune it by
+hand (below) if a run exhausts VRAM.
+
+The file is installer-owned: its first line carries a `# voxint:hardware-override`
+marker, it is regenerated on every install run, and it is refreshed if you swap
+cards. A `compose.hardware.yaml` you wrote yourself (no marker) is left untouched
+and is not loaded. To preview what the installer would write, changing nothing,
+run:
+
+```bash
+./scripts/install.sh --hardware-dry-run
+```
+
+Put your own hand-tuning in `compose.override.yaml`, not in the generated file.
+The installer launches with an explicit file list, so it now merges your
+`compose.override.yaml` last of all, letting it win over the base stack, the tier
+overlay, and the hardware baseline. Precedence runs lowest to highest:
+`compose.yaml`, the tier overlay (`compose.gpu.yaml`), `compose.hardware.yaml`,
+then `compose.override.yaml`.
+
+To watch the pressure these settings fight, run `voxint doctor` or read a
+service's `/healthz`: both surface live per-GPU VRAM used against total,
+temperature, and throttle state (see "Metrics & monitoring"). A card sitting
+near its VRAM limit, or reporting a thermal or power throttle during a run, is
+the signal to lower the levers below.
+
 Three settings drive peak VRAM. Lower them when a single card is the constraint;
 raise them for throughput when the card has room.
 
@@ -251,8 +301,9 @@ startup, so a compose `environment:` override changes them without rebuilding th
 image. Worker concurrency is a command-line flag, so it is set by overriding the
 worker `command:`.
 
-A conservative profile for one modest GPU, as a compose override
-(`compose.override.yaml`, which `docker compose` merges automatically):
+To go beyond the installer's baseline, put your own settings in
+`compose.override.yaml` (it merges last, so it wins). A fuller conservative
+profile for one very small card also lowers `BATCH_SIZE`:
 
 ```yaml
 services:
@@ -312,8 +363,10 @@ and behavior is unchanged; the split is purely a deployment choice.
 If your existing worker command sets `-Q`, drop the flag or use
 `-Q celery,post`; otherwise the `post` queue has no consumer.
 
-Safe-by-default sizing for a single modest GPU is tracked in issue #96; until it
-lands, tune these settings by hand when the stock overlay runs out of memory.
+The installer's conservative baseline (above) is the safe-by-default sizing from
+issue #96 for the two schedule-only levers. Measured per-GPU `BATCH_SIZE` profiles
+are still landing behind the parity gate; until one exists for your card, tune
+`BATCH_SIZE` by hand when the stock overlay runs out of memory.
 
 #### PyTorch allocator assert on a shared GPU (issue #111)
 
@@ -417,7 +470,11 @@ compute `device`, e.g. `rocm`/`cpu`) are **hard** checks, and the command exits
 non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
 whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
 but never failing the exit code, because the default install needs neither. No
-credentials, tokens, or connection URLs are printed.
+credentials, tokens, or connection URLs are printed. After the checks it prints
+an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
+temperature and throttle state, plus each service's admission depth) read from
+the same `/healthz` `resources` block described under "Metrics & monitoring". A
+telemetry failure never changes the doctor verdict.
 
 **`voxint watch <run-id>`** follows a run until it stops advancing, printing a
 live status line to **stderr** (so the run id stays clean on stdout). It exits
@@ -477,7 +534,9 @@ than stalling). See `docs/domain-packs.md` for the rule schema and semantics.
 failed stage *attempts* per stage, average per-stage duration over finished
 attempts, roster size, and runs created within a window. `--since` accepts a
 relative span (`24h`, `7d`) or an ISO-8601 datetime (default 24h); `--json`
-emits a stable object for scripting.
+emits a stable object for scripting. It also appends the aggregated hardware
+snapshot (see "Hardware resource telemetry" below), under a `resources` key in
+`--json`.
 
 ```bash
 docker compose exec api voxint stats --since 7d          # human table
@@ -529,6 +588,65 @@ auto-refreshes every 15 seconds (an htmx fragment poll, no external assets). The
 throughput window is a **24h / 7d / 30d picker on the page**; the same `?since=`
 query param still overrides it directly (any span/ISO-8601 syntax `voxint stats
 --since` accepts), degrading to 24h if malformed.
+
+#### Hardware resource telemetry
+
+Separately from the database aggregates above, each model service reports its own
+hardware state on `GET /healthz` as an additive `resources` block: GPU
+utilization, VRAM used against total, temperature, throttle state and decoded
+reasons, an `admission` block (in-flight and rejected request counts), and a
+host-visible CPU advisory. The full wire shape and its guarantees are in
+[gpu-contracts.md](gpu-contracts.md); the two service-side knobs are:
+
+| Env var | Where | Default | What it does |
+|---|---|---|---|
+| `VOXINT_TELEMETRY_ENABLED` | model service `environment:` | `1` | Set to `0` to turn the background sampler off; GPU telemetry then reports `disabled`. |
+| `VOXINT_TELEMETRY_INTERVAL_SECONDS` | model service `environment:` | `5` | Background sample cadence, clamped to 0.5-3600. `/healthz` always serves the cached sample, never a live probe. |
+
+Telemetry is fail-soft and never affects readiness: with no NVIDIA GPU or no NVML
+the GPU fields report `unsupported`, and a healthy model still answers `200`. The
+GPU is resolved by UUID, so three services sharing one physical card report the
+same device rather than three.
+
+The app aggregates the three services' blocks into one view (deduplicating a
+shared GPU by UUID) behind a short single-flight cache, so a browser poll across
+several tabs never fans out concurrent live probes. One app-side knob controls
+the cache:
+
+| Env var | Default | What it does |
+|---|---|---|
+| `RESOURCE_STATUS_TTL_SECONDS` | `10` | How long the aggregated resource view is cached before the app re-probes the services. `0` probes live on every read. |
+
+This one aggregated snapshot renders on every surface: `voxint doctor` and
+`voxint stats` print it (the per-GPU readout plus each service's admission
+depth), `voxint stats --json` carries it under a `resources` key, `GET /metrics`
+appends `voxint_gpu_*` and `voxint_service_admission_*` gauges, and the console
+renders it in two places.
+
+The **Dashboard** carries a compact hardware strip, refreshed on the same 15s
+poll as the run figures. It is deliberately quiet: it shows each GPU's activity
+(idle / working / busy, never an alarm, since 100% during a transcription is
+healthy) and raises an amber warning only for the two conditions an operator can
+act on, each with one plain-language remedy:
+
+- The driver reports the GPU is thermally throttling (improve airflow, let it
+  cool). A high temperature that is not throttling is shown on the resource page
+  but does not warn.
+- A service's admission queue is currently full (wait for current work to
+  finish). A past rejection with a now-idle queue does not warn.
+
+High VRAM is not a warning: the models hold a resident footprint, so a
+percentage is not an honest predictor of an out-of-memory failure. When no
+service reports telemetry the strip says "hardware status unavailable" rather
+than claiming all-clear.
+
+The **Resources** page (`GET /resources`, authenticated, 15s htmx refresh) is the
+fuller live view behind the strip: the aggregated per-GPU card with utilization,
+VRAM, and temperature labeled as instantaneous (now) readings, peak temperature
+and throttle-event counts labeled as cumulative-since-restart, and each service's
+admission depth and rejected-since-restart count. Warnings are warn-only in v1;
+the NVIDIA driver already protects the hardware, so Voxint advises rather than
+pausing work.
 
 ### Exporting transcripts
 
@@ -1133,6 +1251,19 @@ Two ceilings the client timeout **cannot** override:
   in the 180–300 s-per-call range, raise the deadline to several multiples
   of your typical call time if you want multi-round research.
 
+### Reasoning models: turning thinking off
+
+A reasoning model (Qwen3 and similar) emits a chain-of-thought before its
+answer. On the heavy calls, entity-mention extraction and multi-round research,
+those traces can consume the whole `LLM_TIMEOUT_SECONDS` window before any answer
+begins, so the call fails with a read timeout even on a fast local GPU. Set
+`LLM_DISABLE_THINKING=true` to send the vLLM chat-template switch
+(`chat_template_kwargs.enable_thinking=false`) on every request, BYO and bundled
+alike, which skips the thinking phase. It is off by default because a BYO or
+OpenAI endpoint rejects the unknown field, so enable it only when both endpoints
+honor it (vLLM does). If a heavy job times out against a reasoning model, prefer
+this over raising the timeout.
+
 ## Adjudication workflow
 
 The review console is served by the API at `http://127.0.0.1:8080/` (or your
@@ -1168,8 +1299,9 @@ mutations are gated by their per-run claim token.
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access; schema readiness is the migrate gate's job) |
-| `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated, scrape with `basic_auth`) |
-| `GET /dashboard` | Operator dashboard: task cards (add audio, continue review, last finished run) over the `/metrics` aggregates behind a "Show run details" disclosure; optional `?since=` window, 15s htmx auto-refresh of the metrics fragment |
+| `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth`) |
+| `GET /dashboard` | Operator dashboard: task cards (add audio, continue review, last finished run) plus the curated hardware strip, with the throughput and stage metrics behind a "Show run details" disclosure; optional `?since=` window, 15s htmx auto-refresh of the metrics fragment |
+| `GET /resources` | Hardware resource page: the fuller live GPU + admission view behind the dashboard strip; 15s htmx auto-refresh |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |

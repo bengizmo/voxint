@@ -43,6 +43,16 @@ class ServiceHealth:
     detail: str  # stable, plain-language outcome ("ready", "timeout", …)
     latency_ms: float | None  # round-trip for a completed attempt; None if none
     device: str | None = None  # the service's reported compute device, when it says
+    # Additive, optional hardware telemetry (docs/gpu-contracts.md ``resources``
+    # block). The raw parsed object when the service reports one, else None
+    # (tolerated exactly as ``device`` is). Captured on the degraded 503 path
+    # too, since telemetry is most useful when a service is struggling.
+    resources: dict[str, object] | None = None
+
+
+def _service_targets(settings: Settings) -> list[tuple[str, str]]:
+    """(human label, base URL) for each model service, in stage order."""
+    return [(name, getattr(settings, url_attr)) for name, url_attr in _SERVICES]
 
 
 def probe_services(
@@ -53,7 +63,9 @@ def probe_services(
     Pass ``client`` to inject a transport in tests (the caller then owns it);
     otherwise a short-timeout client is created and closed here. Probes run
     sequentially — three localhost services under a few-second timeout each is a
-    bounded worst case, and the wizard step is not latency-critical.
+    bounded worst case, and the wizard step is not latency-critical. The
+    concurrent, cached aggregation for the live resource view lives in
+    ``voxint.api.resource_status``.
     """
     own_client = client is None
     probe_client = client or httpx.Client(
@@ -61,20 +73,48 @@ def probe_services(
     )
     try:
         return [
-            _probe_one(probe_client, name, getattr(settings, url_attr))
-            for name, url_attr in _SERVICES
+            _probe_one(probe_client, name, base_url)
+            for name, base_url in _service_targets(settings)
         ]
     finally:
         if own_client:
             probe_client.close()
 
 
+def _extract_resources(body: object) -> dict[str, object] | None:
+    """The additive ``resources`` block, if the body carries one as an object."""
+    if isinstance(body, dict):
+        resources = body.get("resources")
+        if isinstance(resources, dict):
+            return resources
+    return None
+
+
+def _read_body(response: httpx.Response) -> object | None:
+    try:
+        data: object = response.json()
+    except ValueError:
+        return None
+    return data
+
+
 def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     def outcome(
-        *, up: bool, detail: str, latency_ms: float | None, device: str | None = None
+        *,
+        up: bool,
+        detail: str,
+        latency_ms: float | None,
+        device: str | None = None,
+        resources: dict[str, object] | None = None,
     ) -> ServiceHealth:
         return ServiceHealth(
-            name=name, url=base_url, up=up, detail=detail, latency_ms=latency_ms, device=device
+            name=name,
+            url=base_url,
+            up=up,
+            detail=detail,
+            latency_ms=latency_ms,
+            device=device,
+            resources=resources,
         )
 
     url = f"{base_url.rstrip('/')}/healthz"
@@ -94,25 +134,39 @@ def _probe_one(client: httpx.Client, name: str, base_url: str) -> ServiceHealth:
     latency_ms = (time.monotonic() - start) * 1000.0
     if response.status_code == 503:
         # Reachable, but the model is not loaded (the contract's degraded state) —
-        # distinct from an unreachable service so the wizard can say so.
-        return outcome(up=False, detail="degraded (model not loaded)", latency_ms=latency_ms)
+        # distinct from an unreachable service so the wizard can say so. Parse the
+        # body for telemetry: a struggling service is exactly when the operator
+        # most wants its resource numbers.
+        resources = _extract_resources(_read_body(response))
+        return outcome(
+            up=False,
+            detail="degraded (model not loaded)",
+            latency_ms=latency_ms,
+            resources=resources,
+        )
     if not response.is_success:
         return outcome(up=False, detail=f"HTTP {response.status_code}", latency_ms=latency_ms)
-    try:
-        body = response.json()
-    except ValueError:
+    body = _read_body(response)
+    if body is None:
         return outcome(up=False, detail="invalid response", latency_ms=latency_ms)
     # Enforce the documented readiness shape (docs/gpu-contracts.md) rather than
     # trusting any 2xx — some other server answering 200 on that port must not read
     # as "ready". Additive fields are tolerated: only these two keys are inspected.
     if not isinstance(body, dict):
         return outcome(up=False, detail="invalid response", latency_ms=latency_ms)
+    resources = _extract_resources(body)
     if body.get("model_loaded") is False:
-        return outcome(up=False, detail="model not loaded", latency_ms=latency_ms)
+        return outcome(
+            up=False, detail="model not loaded", latency_ms=latency_ms, resources=resources
+        )
     if body.get("status") == "ok" and body.get("model_loaded") is True:
         # ``device`` is an additive, optional field (docs/gpu-contracts.md); surface
         # it only when the service reports a string so `doctor` can show cpu/cuda/rocm.
         raw_device = body.get("device")
         device = raw_device if isinstance(raw_device, str) else None
-        return outcome(up=True, detail="ready", latency_ms=latency_ms, device=device)
-    return outcome(up=False, detail="not ready", latency_ms=latency_ms)
+        return outcome(
+            up=True, detail="ready", latency_ms=latency_ms, device=device, resources=resources
+        )
+    # A parseable-but-not-ready 2xx (e.g. status="starting"): keep any telemetry
+    # the body carried, exactly as the degraded paths above do.
+    return outcome(up=False, detail="not ready", latency_ms=latency_ms, resources=resources)

@@ -427,6 +427,7 @@ def execute_job(
                     effective_key,
                     exec_settings.llm_timeout_seconds,
                     sampling=SamplingProfile() if bundled else None,
+                    disable_thinking=exec_settings.llm_disable_thinking,
                 )
             except Exception:
                 # Building the client can fail before any request: a malformed

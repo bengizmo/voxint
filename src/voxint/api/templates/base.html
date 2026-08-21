@@ -261,6 +261,15 @@
     .pill.queued, .pill.awaiting_adjudication { background: var(--surface-2); }
     .pill.cancelled { background: var(--surface-2); color: var(--ink-3); }
     .pill.skipped { background: var(--surface-2); color: var(--ink-3); }
+    /* Device-activity pills (W3): neutral/informational, never an alarm colour. */
+    .pill.idle, .pill.unknown { background: var(--surface-2); color: var(--ink-3); }
+    .pill.working, .pill.busy { background: var(--info-soft); border-color: var(--info); }
+    /* Curated hardware strip: a calm band above the run figures. */
+    .resource-strip { margin: 0 0 1rem; }
+    .resource-strip .gpu-states { display: flex; flex-wrap: wrap; gap: .5rem;
+                                  align-items: center; margin: .3rem 0; }
+    .resource-strip .remedy { display: block; color: var(--ink-2); font-size: var(--t-xs); }
+    .resource-warning { margin: .4rem 0; }
     ol.wizard-steps { display: flex; flex-wrap: wrap; gap: .4rem 1rem; list-style: none;
                       padding: 0; margin: 0 0 1.5rem; border-bottom: 1px solid var(--line);
                       padding-bottom: .6rem; font-size: .9rem; }
@@ -605,6 +614,7 @@
   {% block nav %}
   <nav class="top">
     <a href="/dashboard"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
+    <a href="/resources"{% if active_nav == "resources" %} aria-current="page"{% endif %}>Resources</a>
     <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
     <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review</a>
     <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>

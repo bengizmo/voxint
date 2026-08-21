@@ -286,6 +286,7 @@ def apply_run_preferences(
                     prefs.llm_model,
                     llm_api_key,
                     settings.llm_timeout_seconds,
+                    disable_thinking=settings.llm_disable_thinking,
                 )
             )
         except (httpx.InvalidURL, httpx.HTTPError) as exc:

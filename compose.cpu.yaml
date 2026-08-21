@@ -34,6 +34,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
+      # Hardware telemetry for the /healthz resources block (hardware-aware
+      # processing). Fail-soft: disabling it or a bad interval degrades
+      # telemetry, never readiness. No NVIDIA GPU here, so GPU telemetry reports
+      # "unsupported"; CPU + admission telemetry still work.
+      VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
+      VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:
@@ -45,6 +51,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
+      # Hardware telemetry for the /healthz resources block (hardware-aware
+      # processing). Fail-soft: disabling it or a bad interval degrades
+      # telemetry, never readiness. No NVIDIA GPU here, so GPU telemetry reports
+      # "unsupported"; CPU + admission telemetry still work.
+      VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
+      VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
       # Optional overrides: the default vendored pipeline is baked into the
       # image; DIARIZER_MODEL_NAME selects a different (HF) pipeline, and
       # HF_TOKEN is only used when that pipeline is gated.
@@ -63,6 +75,12 @@ services:
     restart: unless-stopped
     environment:
       MEDIA_ROOT: /data/media
+      # Hardware telemetry for the /healthz resources block (hardware-aware
+      # processing). Fail-soft: disabling it or a bad interval degrades
+      # telemetry, never readiness. No NVIDIA GPU here, so GPU telemetry reports
+      # "unsupported"; CPU + admission telemetry still work.
+      VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
+      VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
     ports:

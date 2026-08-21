@@ -20,6 +20,53 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   setup step is "Text clean-up and name hints (optional)". The guided tutorial
   now walks both review steps (five steps: run, review, attribute the voices,
   check the words, export). No numerics change and no new configuration.
+- **Optional reasoning-off switch for LLM calls (`LLM_DISABLE_THINKING`).** When
+  enabled, every LLM request (BYO and bundled, across enhancement, the name pass,
+  run assets, and web research) carries the vLLM chat-template switch
+  `chat_template_kwargs.enable_thinking=false`, which turns off a reasoning
+  model's chain-of-thought. Off by default so BYO/OpenAI request bodies are
+  unchanged. This fixes read-timeouts on the heavy entity-mention and
+  research calls when pointing at a thinking model such as Qwen3 on vLLM, where
+  the reasoning traces alone could exceed `LLM_TIMEOUT_SECONDS`. See
+  `docs/operations.md` and `.env.example`.
+- **Model-service hardware telemetry on `/healthz`.** Each GPU model service
+  (whisper, pyannote, titanet) now samples its hardware in a background thread
+  and reports an additive, optional nested `resources` block on `/healthz`:
+  GPU utilization, VRAM, temperature, throttle state and decoded reasons,
+  cumulative peak-temperature and throttle-event counters, plus an `admission`
+  block (pending, max-pending, rejects-since-start) and a host-visible CPU
+  advisory. The GPU is resolved by UUID rather than device index, so a shared
+  card is reported honestly and three services aggregate into one device. It is
+  fail-soft by construction: telemetry is served from the cache, never probed on
+  the request path, and any NVML or driver failure degrades the affected fields
+  to null with a tri-state `availability`, never changing a service's readiness.
+  Off or a bad interval falls back safely (`VOXINT_TELEMETRY_ENABLED`,
+  `VOXINT_TELEMETRY_INTERVAL_SECONDS`; see `docs/gpu-contracts.md`). This is the
+  telemetry foundation for the operator resource view and safe hardware-aware
+  defaults.
+- **App-side resource-telemetry aggregation.** The app now collects the three
+  services' `/healthz` telemetry into one operator view: it parses each block
+  defensively (an older service or a malformed value degrades to "unavailable",
+  never an error), deduplicates a shared GPU by UUID into a single device
+  (freshest reading wins; cumulative counters take the max), and reads the
+  degraded 503 body too so a struggling service still reports its numbers.
+  Probes run concurrently behind a short single-flight cache
+  (`RESOURCE_STATUS_TTL_SECONDS`, default 10) so a browser poll across tabs
+  never fans out live probes. `voxint doctor` now prints the aggregated GPU and
+  per-service admission state.
+- **Operator resource visibility.** The aggregated hardware snapshot now renders
+  everywhere from one cached source: a curated **Dashboard** strip, a dedicated
+  **Resources** page (`GET /resources`), `voxint stats` (text and, under a
+  `resources` key, `--json`), and `voxint_gpu_*` / `voxint_service_admission_*`
+  gauges on `GET /metrics`. The strip is deliberately quiet to avoid alarm
+  fatigue: it shows each GPU's activity (idle / working / busy, never an alarm,
+  since full utilization during a transcription is healthy) and warns, with one
+  plain remedy each, only when the driver reports thermal throttling or a service
+  queue is currently full. High VRAM and cumulative-since-restart counts are not
+  warnings; the resource page shows them as instantaneous or cumulative context.
+  When no service reports telemetry the surfaces say so rather than claiming
+  all-clear. Warnings are advisory in v1: the driver already protects the
+  hardware, so Voxint never pauses work on its own.
 - **Speaker-matching decision evidence (#113).** Every pipeline run now records,
   for each diarized voice, what the matcher decided and the numbers behind it:
   the top roster candidate, cosine similarity, top-1 vs top-2 margin,
@@ -45,6 +92,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   export from an unchanged database is byte-for-byte identical, and it refuses to
   run on a working tree with uncommitted tracked changes so the recorded code
   version means what it says.
+- **Hardware-aware conservative install defaults (#96).** On the GPU tier,
+  `scripts/install.sh` now reads the host GPU with `nvidia-smi`, matches it
+  against a tested-profile table, and writes a generated, marker-owned
+  `compose.hardware.yaml` that it merges into the stack it launches. For a GPU
+  with no measured profile yet, it applies a safe fallback that only serializes
+  scheduling: worker `--concurrency=1` and whisper `MAX_PENDING_REQUESTS=1`. It
+  deliberately leaves `BATCH_SIZE` untouched, since that value moves whisper's
+  output and so must come from a parity-gated profile plus a real-GPU
+  out-of-memory soak, not the installer. The generated file is regenerated each
+  run and refreshed on a GPU swap; a hand-written one (no marker) is left alone.
+  The installer also now merges an operator's own `compose.override.yaml` last of
+  all, so it wins over the base stack, the tier overlay, and the hardware
+  baseline. `./scripts/install.sh --hardware-dry-run` previews the detection and
+  the file without writing or starting anything. See `docs/operations.md` (#96).
 
 ### Fixed
 - **The dashboard's Review backlog now counts the recordings actually waiting

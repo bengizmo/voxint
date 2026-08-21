@@ -25,3 +25,9 @@ pyannote.pipeline==3.0.1
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
+
+# Pure-ctypes NVML bindings for the /healthz hardware-telemetry sampler
+# (temperature + throttle reasons, which torch alone cannot report). Fail-soft:
+# absent/older bindings degrade telemetry to "unsupported", never affect
+# readiness. NVIDIA CUDA images only; the cpu/rocm/metal flavors omit it.
+nvidia-ml-py==12.560.30

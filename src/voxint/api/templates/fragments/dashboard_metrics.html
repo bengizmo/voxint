@@ -13,6 +13,11 @@
    never hidden, and it must not vanish on the 15s poll (the poll drops the bad
    value and re-takes the default, so the fragment never carries the notice). #}
 
+{# Curated hardware strip (W3): warnings + neutral GPU activity, refreshed on the
+   same 15s poll as the run figures below. The fuller live view is one click away. #}
+{% include "fragments/resource_strip.html" %}
+<p class="muted"><a href="/resources">View hardware resources</a></p>
+
 {# Summary-first stat cards (issue #91). The exact figures the tables below
    detail, surfaced at a glance; each card keeps its unit as text. The review
    backlog is deliberately NOT here (issue #117 Phase C): it is promoted to the

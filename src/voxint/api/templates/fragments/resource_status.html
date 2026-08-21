@@ -1,0 +1,77 @@
+{# Fuller hardware view (hardware-aware W3), htmx-polled. Renders the curated
+   strip (warnings) then the aggregated per-GPU detail and per-service admission
+   over one cached ResourceSnapshot. Instantaneous readings are labelled "now";
+   cumulative-since-restart figures (peak temperature, throttle events, rejects)
+   are labelled separately so a peak is never read as the current value. ALL
+   markup lives in this fragment so the innerHTML poll swaps identical structure
+   (initial render == refresh). #}
+{% include "fragments/resource_strip.html" %}
+
+<p class="muted">
+  Snapshot age {{ "%.0f"|format(snapshot.collected_age_seconds) }}s. Readings marked
+  <em>now</em> are instantaneous; <em>since restart</em> figures accumulate until the
+  reporting service restarts.
+</p>
+
+<h2>GPUs</h2>
+{% if snapshot.gpus %}
+{% for g in snapshot.gpus %}
+{% set pct = vram_percent(g.vram_used_bytes, g.vram_total_bytes) %}
+{% set state = device_state(g.utilization_percent) %}
+<h3>GPU {{ short_uuid(g.gpu_uuid) }}
+  <span class="pill {{ state }}">{{ state }}</span></h3>
+<p class="muted">Shared by: {{ g.services | join(", ") }}</p>
+<div class="table-wrap">
+<table>
+  <tbody>
+    <tr><th scope="row">Utilization (now)</th>
+      <td>{% if g.utilization_percent is not none %}{{ g.utilization_percent }}%{% else %}unknown{% endif %}</td></tr>
+    <tr><th scope="row">Memory (now)</th>
+      <td>{% if g.vram_total_bytes is not none %}{{ gib(g.vram_used_bytes) }} / {{ gib(g.vram_total_bytes) }} GiB{% if pct is not none %} ({{ pct }}%){% endif %}{% else %}unknown{% endif %}</td></tr>
+    <tr><th scope="row">Temperature (now)</th>
+      <td>{% if g.temperature_celsius is not none %}{{ g.temperature_celsius }}&deg;C{% else %}unknown{% endif %}</td></tr>
+    <tr><th scope="row">Peak temperature (since restart)</th>
+      <td>{% if g.max_temperature_celsius is not none %}{{ g.max_temperature_celsius }}&deg;C{% else %}unknown{% endif %}</td></tr>
+    <tr><th scope="row">Throttling (now)</th>
+      <td>{% if g.throttle_active is none %}unknown{% elif g.throttle_active %}yes{% if g.throttle_reasons %} ({{ g.throttle_reasons | join(", ") }}){% endif %}{% else %}no{% endif %}</td></tr>
+    <tr><th scope="row">Throttle events (since restart)</th>
+      <td>{% if g.throttle_events_since_start is not none %}{{ g.throttle_events_since_start }}{% else %}unknown{% endif %}</td></tr>
+  </tbody>
+</table>
+</div>
+{% endfor %}
+{% else %}
+<p class="muted">No GPU telemetry reported. On a CPU-only install this is expected.</p>
+{% endif %}
+
+<h2>Service queues</h2>
+{% if snapshot.services %}
+{# Every probed service is listed, even one that reported no telemetry, so a
+   down or older service is never silently dropped from the view. #}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th scope="col">Service</th><th scope="col">Reachable</th><th scope="col">Device</th>
+    <th scope="col">Queue (now)</th><th scope="col">Rejected (since restart)</th>
+  </tr></thead>
+  <tbody>
+    {% for v in snapshot.services %}
+    <tr>
+      <td>{{ v.name }}</td>
+      <td>{{ "yes" if v.up else "no" }}</td>
+      <td>{{ v.device or "unknown" }}</td>
+      {% if v.admission is not none %}
+      <td>{{ v.admission.pending }}/{{ v.admission.max_pending }}</td>
+      <td>{{ v.admission.rejected_since_start }}</td>
+      {% else %}
+      <td>unavailable</td>
+      <td>unavailable</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No service reported queue telemetry.</p>
+{% endif %}

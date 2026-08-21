@@ -101,6 +101,77 @@ same contract.
     plan version), `vad_plan_version`, `vad_params`, and `model_revision`
     (the pinned HF snapshot). It never hashes weights per request; it exists so
     two deployments are distinguishable and a numerics change is visible.
+  - **All services** additionally carry an optional nested `resources` block
+    (additive within `v1`; absent on older services, always present on an
+    upgraded one). It reports the hardware this service sees so the operator has
+    a live resource view. It is built from a background sample, never a live
+    probe on the request path, and a telemetry failure never changes readiness:
+    a healthy model stays `200` and the affected fields go null. Shape:
+
+    ```json
+    {
+      "resources": {
+        "gpu": {
+          "availability": "ok",
+          "gpu_uuid": "GPU-1a2b3c4d-...",
+          "utilization_percent": 55,
+          "vram_used_bytes": 4000000000,
+          "vram_total_bytes": 12000000000,
+          "temperature_celsius": 61,
+          "throttle_active": false,
+          "throttle_reasons": [],
+          "max_temperature_celsius": 74,
+          "throttle_events_since_start": 0,
+          "sample_age_seconds": 1.4
+        },
+        "admission": {
+          "pending": 0,
+          "max_pending": 8,
+          "rejected_since_start": 0,
+          "process_started_at": "2026-08-21T00:00:00+00:00"
+        },
+        "cpu": {
+          "availability": "ok",
+          "logical_cores": 24,
+          "load_average_1m": 3.2
+        }
+      }
+    }
+    ```
+
+    - `gpu.availability` is a tri-state: `disabled` (operator set
+      `VOXINT_TELEMETRY_ENABLED=0`), `unsupported` (no NVIDIA GPU, no NVML, or
+      the GPU could not be resolved by UUID), or `ok`. A consumer reads it
+      first; every hardware field is null unless it is `ok`, and a null means
+      "not measured", never zero.
+    - The GPU is resolved by UUID, not by device index: NVML physical indices
+      differ from torch's `CUDA_VISIBLE_DEVICES`-remapped ordinals, so an
+      index-based read can report the wrong card. Three services on one host
+      commonly report the same physical GPU, so a consumer aggregates by
+      `gpu_uuid` into one device. NVML memory is device-global, never one
+      service's usage.
+    - Bytes are integers on the wire (convert for display). `utilization_percent`
+      is bounded 0-100, `vram_used_bytes <= vram_total_bytes`, and NaN/inf are
+      rejected at the source. `throttle_reasons` are normalized labels
+      (`thermal_sw`, `thermal_hw`, `power`, `clock`, `idle`), never a raw
+      bitmask; an unknown future throttle bit still sets `throttle_active` but
+      adds no label. `throttle_events_since_start` counts rising edges of a real
+      (non-idle) slowdown, and `max_temperature_celsius` is the peak since the
+      process started; both are cumulative counters the sampler owns.
+      `sample_age_seconds` is the staleness of the cached read.
+    - `admission` sources contention honestly from the service's own bounded
+      admission (`pending` admitted-plus-waiting calls, `max_pending` the
+      `503 saturated` threshold, `rejected_since_start` a monotonic reject
+      count). It is read instantaneously under the admission lock, not sampled,
+      and stays present even when GPU telemetry is `disabled`/`unsupported`.
+    - `cpu` is a host-visible advisory from the stdlib; it ignores any cgroup
+      CPU quota on the container, so it never drives a sizing decision alone.
+    - Config is service env, fail-soft: `VOXINT_TELEMETRY_ENABLED` (default on)
+      and `VOXINT_TELEMETRY_INTERVAL_SECONDS` (default 5, clamped 0.5-3600). A
+      malformed value falls back to the default and never fails `/healthz`. NVML
+      needs the container's NVIDIA `utility` driver capability (set in the CUDA
+      images); the cpu/rocm/metal flavors omit `nvidia-ml-py` and report GPU
+      telemetry as `unsupported`.
 
 ## whisper: `POST /v1/transcribe` (port 8022)
 

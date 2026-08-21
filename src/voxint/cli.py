@@ -893,6 +893,25 @@ def _doctor(args: argparse.Namespace) -> int:
     for result in results:
         tag = "ok  " if result.ok else ("FAIL" if result.hard else "warn")
         print(f"[{tag}] {result.name}: {result.detail}")
+
+    # Advisory hardware telemetry from the services' /healthz. Never gates the
+    # verdict and never raises into the command: a probe failure just omits it.
+    try:
+        from voxint.api.resource_status import (
+            collect_resource_status,
+            format_resource_status_text,
+        )
+
+        with httpx.Client(
+            timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
+        ) as client:
+            snapshot = collect_resource_status(settings, client=client, force=True)
+        print()
+        print(format_resource_status_text(snapshot))
+    except Exception:
+        # Telemetry is advisory; a probe failure must never fail doctor.
+        pass
+
     code = diagnostics.exit_code(results)
     verdict = "all hard dependencies OK" if code == 0 else "a hard dependency is down"
     print(f"\ndoctor: {verdict}")
@@ -929,10 +948,37 @@ def _stats(args: argparse.Namespace) -> int:
     finally:
         engine.dispose()
 
+    # Advisory hardware telemetry from the services' /healthz, rendered from the
+    # same snapshot the dashboard and /metrics use. A one-shot CLI, so force a
+    # fresh probe; a probe failure omits the section rather than failing stats.
+    snapshot = None
+    try:
+        import httpx
+
+        from voxint.api.resource_status import collect_resource_status
+        from voxint.config import get_settings
+
+        with httpx.Client(
+            timeout=httpx.Timeout(get_settings().health_probe_timeout_seconds)
+        ) as client:
+            snapshot = collect_resource_status(get_settings(), client=client, force=True)
+    except Exception:
+        snapshot = None
+
     if args.json:
-        print(json.dumps(stats_to_json(stats), indent=2, ensure_ascii=False))
+        data = stats_to_json(stats)
+        if snapshot is not None:
+            from voxint.api.resource_status import resource_snapshot_to_json
+
+            data["resources"] = resource_snapshot_to_json(snapshot)
+        print(json.dumps(data, indent=2, ensure_ascii=False))
     else:
         sys.stdout.write(format_stats_text(stats))
+        if snapshot is not None:
+            from voxint.api.resource_status import format_resource_status_text
+
+            print()
+            print(format_resource_status_text(snapshot))
     return 0
 
 

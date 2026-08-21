@@ -1,0 +1,34 @@
+{# Curated hardware strip (hardware-aware W3). Pure render over a
+   ResourceStripView. It warns ONLY on driver thermal throttling or a
+   currently-full service queue, each with one plain-language remedy; high VRAM
+   and 100% utilization are deliberately not warnings (they are normal during a
+   run). It distinguishes "no warnings" (calm) from "status unavailable" (no
+   telemetry) so it never claims all-clear on missing data. Shared by the
+   dashboard strip and the resource page; carries no page-specific link. #}
+<section class="resource-strip" aria-label="Hardware status">
+  {% if not resource_strip.telemetry_present %}
+  <p class="muted">Hardware status unavailable. No model service reported telemetry.</p>
+  {% else %}
+    {# No role="status": the whole strip is re-swapped every 15s poll, so a live
+       region would re-announce a standing warning on every refresh. #}
+    {% for w in resource_strip.warnings %}
+    <div class="notice resource-warning">
+      <strong>{{ w.message }}</strong>
+      <span class="remedy">{{ w.remedy }}</span>
+    </div>
+    {% endfor %}
+    <div class="gpu-states">
+      {% for g in resource_strip.gpus %}
+      <span class="pill {{ g.state }}">GPU {{ g.short_uuid }}: {{ g.state }}</span>
+      {% endfor %}
+      {% if not resource_strip.warnings %}
+      <span class="muted">No hardware warnings.</span>
+      {% endif %}
+    </div>
+    {# Partial telemetry loss: name the services we heard nothing from rather
+       than letting "no warnings" imply everything reported. Neutral, not amber. #}
+    {% if resource_strip.unavailable_services %}
+    <p class="muted">Telemetry unavailable for: {{ resource_strip.unavailable_services | join(", ") }}.</p>
+    {% endif %}
+  {% endif %}
+</section>

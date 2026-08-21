@@ -172,12 +172,22 @@ class HttpLLMClient:
         client: httpx.Client | None = None,
         *,
         sampling: SamplingProfile | None = None,
+        disable_thinking: bool = False,
     ) -> None:
         self._model = model
         # The sampling profile is fixed for the client's lifetime and sent on
         # every request. Default = greedy (byte-identical to the pre-#67 body);
         # the bundled local model (#67) passes its measured, pinned profile.
         self._sampling = sampling or SamplingProfile()
+        # Off by default so BYO/OpenAI endpoints keep the byte-identical body. When
+        # enabled (LLM_DISABLE_THINKING) the request carries the vLLM chat-template
+        # switch that turns OFF a reasoning model's chain-of-thought (Qwen3 emits
+        # long thinking traces that blow the read timeout on the heavy jobs). Only
+        # enable it for an endpoint that honors chat_template_kwargs; OpenAI rejects
+        # the unknown field.
+        self._extra_body: dict[str, object] = (
+            {"chat_template_kwargs": {"enable_thinking": False}} if disable_thinking else {}
+        )
         self._owns_client = client is None
         # Kept only to scrub it from error bodies (see _http_error): an endpoint
         # that echoes the Authorization header back in a 4xx/5xx body must not
@@ -228,6 +238,7 @@ class HttpLLMClient:
         payload = {
             "model": self._model,
             **self._sampling.as_payload(),
+            **self._extra_body,
             "messages": [
                 {"role": "system", "content": system},
                 {
@@ -274,6 +285,7 @@ class HttpLLMClient:
         payload = {
             "model": self._model,
             **self._sampling.as_payload(),
+            **self._extra_body,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
         }
         try:

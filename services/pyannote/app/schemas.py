@@ -6,6 +6,11 @@ pydantic-only. See docs/gpu-contracts.md for the authoritative contract.
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+# Torch-free by design: import ONLY the pydantic models, never the sampler
+# (app.resource_probe pulls in the lazy torch/NVML machinery). The contract
+# tests import this module without a GPU stack present.
+from app.resource_models import Resources
+
 SERVICE_NAME = "pyannote"
 CONTRACT_VERSION = "v1"
 
@@ -64,3 +69,8 @@ class HealthResponse(BaseModel):
     runtime: str | None = None
     runtime_version: str | None = None
     model_loaded: bool
+    # Additive v1 field (hardware-aware processing, W1): optional nested
+    # hardware telemetry. Absent on older services; an upgraded service always
+    # emits it (GPU tri-state + always-present admission). Consumers tolerate
+    # absence exactly as they do the engine/runtime fields.
+    resources: Resources | None = None
