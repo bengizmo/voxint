@@ -237,6 +237,12 @@ is restarted. Shrinking that first allocation is the fix.
 > whisper`) to clear the context, then apply the settings below so it does not
 > recur.
 
+To watch the pressure these settings fight, run `voxint doctor` or read a
+service's `/healthz`: both surface live per-GPU VRAM used against total,
+temperature, and throttle state (see "Metrics & monitoring"). A card sitting
+near its VRAM limit, or reporting a thermal or power throttle during a run, is
+the signal to lower the levers below.
+
 Three settings drive peak VRAM. Lower them when a single card is the constraint;
 raise them for throughput when the card has room.
 
@@ -417,7 +423,11 @@ compute `device`, e.g. `rocm`/`cpu`) are **hard** checks, and the command exits
 non-zero if any is down. The Hugging Face token (`HF_TOKEN`, validated via
 whoami) and the LLM endpoint (only when `LLM_ENABLED`) are **advisory**: reported
 but never failing the exit code, because the default install needs neither. No
-credentials, tokens, or connection URLs are printed.
+credentials, tokens, or connection URLs are printed. After the checks it prints
+an advisory hardware-telemetry section (aggregated GPU utilization, VRAM,
+temperature and throttle state, plus each service's admission depth) read from
+the same `/healthz` `resources` block described under "Metrics & monitoring". A
+telemetry failure never changes the doctor verdict.
 
 **`voxint watch <run-id>`** follows a run until it stops advancing, printing a
 live status line to **stderr** (so the run id stays clean on stdout). It exits
@@ -520,6 +530,38 @@ The page auto-refreshes every 15 seconds (an htmx fragment poll, no external
 assets). The throughput window is a **24h / 7d / 30d picker on the page**; the
 same `?since=` query param still overrides it directly (any span/ISO-8601 syntax
 `voxint stats --since` accepts), degrading to 24h if malformed.
+
+#### Hardware resource telemetry
+
+Separately from the database aggregates above, each model service reports its own
+hardware state on `GET /healthz` as an additive `resources` block: GPU
+utilization, VRAM used against total, temperature, throttle state and decoded
+reasons, an `admission` block (in-flight and rejected request counts), and a
+host-visible CPU advisory. The full wire shape and its guarantees are in
+[gpu-contracts.md](gpu-contracts.md); the two service-side knobs are:
+
+| Env var | Where | Default | What it does |
+|---|---|---|---|
+| `VOXINT_TELEMETRY_ENABLED` | model service `environment:` | `1` | Set to `0` to turn the background sampler off; GPU telemetry then reports `disabled`. |
+| `VOXINT_TELEMETRY_INTERVAL_SECONDS` | model service `environment:` | `5` | Background sample cadence, clamped to 0.5-3600. `/healthz` always serves the cached sample, never a live probe. |
+
+Telemetry is fail-soft and never affects readiness: with no NVIDIA GPU or no NVML
+the GPU fields report `unsupported`, and a healthy model still answers `200`. The
+GPU is resolved by UUID, so three services sharing one physical card report the
+same device rather than three.
+
+The app aggregates the three services' blocks into one view (deduplicating a
+shared GPU by UUID) behind a short single-flight cache, so a browser poll across
+several tabs never fans out concurrent live probes. One app-side knob controls
+the cache:
+
+| Env var | Default | What it does |
+|---|---|---|
+| `RESOURCE_STATUS_TTL_SECONDS` | `10` | How long the aggregated resource view is cached before the app re-probes the services. `0` probes live on every read. |
+
+`voxint doctor` prints this aggregated view today (the per-GPU readout plus each
+service's admission depth). A compact dashboard resource strip and a dedicated
+resource page are planned but not yet shipped.
 
 ### Exporting transcripts
 
