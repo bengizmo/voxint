@@ -22,6 +22,7 @@ from app.errors import (
     saturated,
 )
 from app.paths import PathNotFound, PathViolation, resolve_media_path
+from app.resource_probe import ResourceSampler, build_admission, build_resources
 from app.schemas import (
     CONTRACT_VERSION,
     SERVICE_NAME,
@@ -54,14 +55,23 @@ transcriber = create_transcriber(
 
 # Bounded admission: single-flight inference means requests queue; past this
 # depth we refuse with a retryable 503 rather than outliving caller leases.
+# ``_rejected`` counts those refusals so /healthz can source contention
+# honestly instead of the app inferring it from opaque 503s.
 _pending = 0
+_rejected = 0
 _pending_lock = threading.Lock()
+
+# Background hardware sampler; /healthz serves its cache (never probes NVML per
+# request). Constructed at import (import-time torch/NVML-free), started/stopped
+# in the lifespan.
+sampler = ResourceSampler()
 
 
 def _admit() -> bool:
-    global _pending
+    global _pending, _rejected
     with _pending_lock:
         if _pending >= MAX_PENDING_REQUESTS:
+            _rejected += 1
             return False
         _pending += 1
         return True
@@ -73,11 +83,20 @@ def _release() -> None:
         _pending -= 1
 
 
+def _admission_snapshot() -> tuple[int, int]:
+    with _pending_lock:
+        return _pending, _rejected
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("Loading Whisper model at startup")
     await run_in_threadpool(transcriber.load_model)
-    yield
+    sampler.start()
+    try:
+        yield
+    finally:
+        sampler.stop()
 
 
 app = FastAPI(
@@ -94,6 +113,10 @@ async def healthz() -> HealthResponse | JSONResponse:
     # Decode identity is null until load (versions unresolved); computed once
     # and cached by the facade, so healthz never recomputes it per request.
     identity = transcriber.decode_identity() if loaded else {}
+    # Telemetry is most useful when a service is degraded, so the resources
+    # block is built on both paths from the cached snapshot (never a live probe).
+    _pending_now, _rejected_now = _admission_snapshot()
+    admission = build_admission(_pending_now, MAX_PENDING_REQUESTS, _rejected_now)
     body = HealthResponse(
         status="ok" if loaded else "degraded",
         service=SERVICE_NAME,
@@ -110,6 +133,7 @@ async def healthz() -> HealthResponse | JSONResponse:
         vad_params=identity.get("vad_params"),
         decode_config_hash=identity.get("decode_config_hash"),
         model_revision=identity.get("model_revision"),
+        resources=build_resources(sampler, admission),
     )
     if not loaded:
         return JSONResponse(status_code=503, content=body.model_dump())

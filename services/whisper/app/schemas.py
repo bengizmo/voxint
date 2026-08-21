@@ -8,6 +8,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Torch-free by design: import ONLY the pydantic models, never the sampler
+# (app.resource_probe pulls in the lazy torch/NVML machinery). The contract
+# tests import this module without a GPU stack present.
+from app.resource_models import Resources
+
 SERVICE_NAME = "whisper"
 CONTRACT_VERSION = "v1"
 
@@ -82,3 +87,8 @@ class HealthResponse(BaseModel):
     vad_params: dict[str, Any] | None = None
     decode_config_hash: str | None = None
     model_revision: str | None = None
+    # Additive v1 field (hardware-aware processing, W1): optional nested
+    # hardware telemetry. Absent on older services; an upgraded service always
+    # emits it (GPU tri-state + always-present admission). Consumers tolerate
+    # absence exactly as they do the engine/runtime fields.
+    resources: Resources | None = None

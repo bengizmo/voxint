@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Model-service hardware telemetry on `/healthz`.** Each GPU model service
+  (whisper, pyannote, titanet) now samples its hardware in a background thread
+  and reports an additive, optional nested `resources` block on `/healthz`:
+  GPU utilization, VRAM, temperature, throttle state and decoded reasons,
+  cumulative peak-temperature and throttle-event counters, plus an `admission`
+  block (pending, max-pending, rejects-since-start) and a host-visible CPU
+  advisory. The GPU is resolved by UUID rather than device index, so a shared
+  card is reported honestly and three services aggregate into one device. It is
+  fail-soft by construction: telemetry is served from the cache, never probed on
+  the request path, and any NVML or driver failure degrades the affected fields
+  to null with a tri-state `availability`, never changing a service's readiness.
+  Off or a bad interval falls back safely (`VOXINT_TELEMETRY_ENABLED`,
+  `VOXINT_TELEMETRY_INTERVAL_SECONDS`; see `docs/gpu-contracts.md`). This is the
+  telemetry foundation for the operator resource view and safe hardware-aware
+  defaults.
 - **Speaker-matching decision evidence (#113).** Every pipeline run now records,
   for each diarized voice, what the matcher decided and the numbers behind it:
   the top roster candidate, cosine similarity, top-1 vs top-2 margin,

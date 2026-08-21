@@ -66,6 +66,10 @@ ENV TORCH_HOME=/app/models
 ENV HF_HOME=/app/models
 ENV HUGGINGFACE_HUB_CACHE=/app/models
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
+# Explicit (the CUDA base image also sets it): "utility" mounts libnvidia-ml so
+# the /healthz telemetry sampler can read NVML. Losing it degrades telemetry to
+# "unsupported" but never affects readiness.
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # No expandable_segments: under co-tenant VRAM pressure it trips torch's
 # "!block->expandable_segment_" allocator assert (upstream PyTorch bug) and
 # hard-fails inference requests. See docs/operations.md, GPU memory tuning.

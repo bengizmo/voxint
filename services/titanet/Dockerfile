@@ -64,6 +64,10 @@ COPY --chown=voxint:voxint app/ /app/app/
 RUN chown -R voxint:voxint /app
 
 ENV CUDA_DEVICE_ORDER=PCI_BUS_ID
+# Explicit (the CUDA base image also sets it): "utility" mounts libnvidia-ml so
+# the /healthz telemetry sampler can read NVML. Losing it degrades telemetry to
+# "unsupported" but never affects readiness.
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 # No expandable_segments: under co-tenant VRAM pressure it trips torch's
 # "!block->expandable_segment_" allocator assert (upstream PyTorch bug) and
 # hard-fails embedding requests. See docs/operations.md, GPU memory tuning.
