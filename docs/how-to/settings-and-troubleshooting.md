@@ -278,6 +278,40 @@ down.](../images/setup-wizard.png)
   enhancement, if you point it at a remote model). Leave those off and Voxint
   stays entirely on your machine.
 
+### Checking your hardware
+
+If runs feel slow or keep failing, the **Resources** tab in the top navigation
+shows what your graphics card is doing. The dashboard also carries a compact
+version of the same strip. Both are quiet on purpose: a card running flat out
+during a transcription is healthy, not a warning, so most of the time the strip
+just tells you each service is working.
+
+It speaks up in only two cases, each with one plain fix:
+
+- **The card is too hot and has slowed itself down** (thermal throttling). The
+  graphics driver does this on its own to protect the hardware, so nothing is
+  damaged, but transcription runs slower until it cools. Improve airflow around
+  the machine, or give it a break between long recordings.
+- **A service is full** and turning new work away. This is normal under a burst;
+  the run is not lost, it waits and retries. If it happens constantly, you are
+  asking one modest card to do too much at once. Submit fewer recordings at a
+  time, or see the single-GPU tuning notes in
+  [operations.md](../operations.md#gpu-memory-on-a-single-modest-gpu-issue-96).
+
+> A high memory (VRAM) number on its own is not a problem. The services hold
+> their models in memory for the whole session by design; that is expected, not
+> a leak. The Resources page shows it as context, never as an alarm.
+
+> **A run keeps failing with an out-of-memory error.** Open **Resources** and
+> check the card's memory while a run is going. If it is genuinely running out,
+> the fix is to lower how much runs at once. The
+> [single-GPU section of operations.md](../operations.md#gpu-memory-on-a-single-modest-gpu-issue-96)
+> walks through the levers, and is a setting your maintainer usually adjusts.
+
+Voxint never pauses your work on its own. These signals are advisory: they tell
+you what is happening so you can decide, and the graphics driver already handles
+the actual hardware protection.
+
 ---
 
 ## Related guides

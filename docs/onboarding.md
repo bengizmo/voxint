@@ -53,6 +53,13 @@ bash, not `sh`; it needs nothing at runtime beyond Docker). It:
   is asked about once and updated in place, with a backup);
 - detects host-port collisions (`API_PORT`, `POSTGRES_PORT`, `REDIS_PORT`) and
   offers a free alternate;
+- on the GPU tier, reads your card and writes a small installer-managed
+  `compose.hardware.yaml` with conservative single-GPU caps (it works one
+  recording at a time so a modest GPU does not thrash), folds it into the stack
+  it starts, and never overwrites a compose file you edited yourself. Preview
+  the detection without changing anything with
+  `./scripts/install.sh --hardware-dry-run`; details in
+  [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96);
 - pulls the pinned release images, starts the stack (core control plane plus
   the chosen tier's model services), polls the API container's healthcheck,
   then prints the console URL.

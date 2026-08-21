@@ -164,10 +164,20 @@ plus one stage's decode spike*, not all peaks at once.
 > covers transcript **enhancement** and run-asset **summary/entities** only;
 > web research and speaker-name attribution still need a BYO endpoint.
 
-> **Measured numbers pending.** These are estimates. End-to-end
-> speed benchmarks on an **RTX 3060 12 GB** and an **AMD Radeon 9060 XT 16 GB**
-> are planned ([#96](https://github.com/bengizmo/voxint/issues/96)), alongside a
-> quality assessment against an expertly annotated reference dataset
+> **Installed with the guided installer?** On the GPU tier it reads your card
+> and writes a conservative, scheduling-only baseline (it works one recording at
+> a time so a modest single GPU does not thrash), then folds it into the stack it
+> starts. You can preview what it would detect and write, without changing
+> anything, by running `./scripts/install.sh --hardware-dry-run`. Details and how
+> to tune the levers back up are in
+> [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96).
+
+> **Safe defaults have landed; measured per-GPU profiles have not.** The VRAM
+> figures above are estimates, and the conservative caps the installer writes are
+> deliberately generic. A per-GPU speed profile with a tuned `BATCH_SIZE` (a
+> numerics setting, so it only ships once it clears the parity gate) is still to
+> come ([#96](https://github.com/bengizmo/voxint/issues/96)), alongside a quality
+> assessment against an expertly annotated reference dataset
 > ([#97](https://github.com/bengizmo/voxint/issues/97)).
 
 Wire contracts: [docs/gpu-contracts.md](gpu-contracts.md).
