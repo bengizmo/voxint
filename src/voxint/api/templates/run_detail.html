@@ -119,7 +119,8 @@ up, then requeue.</p>
     all its data; reversible.</span>
 </form>
 {% endif %}
-<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete action-row">
+<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete action-row"
+      onsubmit="return confirm('Delete the derived audio files for this run? This frees disk and cannot be undone. The original source recording is kept.')">
   <input type="hidden" name="csrf_token" value="{{ csrf_run_media_delete }}">
   <button type="submit" class="danger">Delete derived audio files</button>
   <span class="muted">Frees disk by removing this run's preprocessed and chunked
