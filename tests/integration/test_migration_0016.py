@@ -114,5 +114,6 @@ def test_single_alembic_head() -> None:
     # correction trace + version, issue #82; 0029 = app_settings.corrections
     # operator-authored rules, issue #84; 0030 = pipeline_runs.sidecar frozen
     # YAML sidecar snapshot, issue #104; 0031 = operator annotation layer
-    # (annotation_tags + transcript_annotations + annotation_tag_links), #86).
-    assert list(heads) == ["0031"]
+    # (annotation_tags + transcript_annotations + annotation_tag_links), #86;
+    # 0032 = match_candidates observational match-decision evidence, issue #113).
+    assert list(heads) == ["0032"]

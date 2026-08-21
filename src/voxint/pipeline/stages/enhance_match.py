@@ -49,7 +49,8 @@ from voxint.pipeline.stages.context import LLMPolicy, StageContext
 from voxint.speakers.matching import (
     MAX_PROPOSED_NAME_LENGTH,
     NameHintProposal,
-    match_speakers,
+    evaluate_run,
+    replace_run_match_candidates,
     replace_run_proposals,
 )
 
@@ -203,8 +204,13 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
         # even if the upstream seam ever regresses.
         hints = []
 
-    proposals = match_speakers(session, run_id, ctx.matching_gates)
+    # One matcher pass yields both the accepted proposals AND the full per-label
+    # decision evidence (issue #113): proposals drive attribution exactly as
+    # before, while the near-miss/ineligible rows are captured observationally.
+    decisions = evaluate_run(session, run_id, ctx.matching_gates)
+    proposals = tuple(d.proposal for d in decisions if d.proposal is not None)
     replace_run_proposals(session, run_id, proposals, _select_hints(hints))
+    replace_run_match_candidates(session, run_id, decisions)
 
 
 def _enhance(

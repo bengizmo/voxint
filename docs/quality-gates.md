@@ -81,9 +81,17 @@ Vote agreement is the fraction of eligible-turn weight whose individually
 nearest roster speaker is the proposed one, a per-turn consistency check that
 catches labels whose centroid only *averages* into a speaker.
 
-An unmatched or ineligible label produces **no row**: absence of evidence is
-not a low-confidence proposal. P4 never creates `speakers` rows for unknown
-voices; that is the adjudication UI's job (P5).
+An unmatched or ineligible label produces **no proposal row**: absence of
+evidence is not a low-confidence proposal. P4 never creates `speakers` rows for
+unknown voices; that is the adjudication UI's job (P5).
+
+> Separately, every run records an observational `match_candidates` row per
+> label (issue #113): what the matcher decided (accepted / rejected /
+> ineligible), the top candidate, and the cosine / margin / vote-agreement
+> behind it, kept even for the near-misses that yield no proposal. This is the
+> opposite bookkeeping from the proposal surface above: it exists precisely to
+> make false *rejects* visible, so the gates can eventually be measured and
+> calibrated (epic #112). It is diagnostic only and feeds no attribution.
 
 > The enrichment draft layer (issue #37) records the complementary fact at a
 > *different* layer: a completed producer invocation that substantiated

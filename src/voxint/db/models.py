@@ -715,6 +715,98 @@ class SpeakerAssignment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class MatchCandidate(Base):
+    """Observational per-label match evidence (issue #113).
+
+    One row per diarization label per run recording what
+    ``speakers.matching.match_speakers`` decided — accepted, rejected, or
+    ineligible — and the numbers behind it (top candidate, cosine, margin,
+    vote-agreement, eligibility). Unlike ``speaker_assignments`` (accepted
+    proposals only), this keeps the near-misses that otherwise died in debug
+    logs, so false *rejects* become visible and a baseline attribution-accuracy
+    number can be measured. Purely diagnostic: nothing here feeds the resolver,
+    centroids, or thresholds; writing it does not change matching.
+
+    Written delete-then-insert by ``replace_run_match_candidates`` beside the
+    proposals, idempotent under stage retry. Cascades on run deletion /
+    re-transcription (disposable evidence, never a source of truth).
+    """
+
+    __tablename__ = "match_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id", "diarization_label", name="match_candidates_label_key"
+        ),
+        CheckConstraint(
+            "decision IN ('accepted', 'rejected', 'ineligible')",
+            name="match_candidates_decision_check",
+        ),
+        # An ineligible label never reached a roster comparison, so it has no
+        # candidate and no numbers; accepted/rejected always do.
+        CheckConstraint(
+            "(decision = 'ineligible') = (top_speaker_id IS NULL)",
+            name="match_candidates_ineligible_speaker_check",
+        ),
+        CheckConstraint(
+            "(decision = 'ineligible') = (similarity IS NULL)",
+            name="match_candidates_ineligible_similarity_check",
+        ),
+        CheckConstraint(
+            "(decision = 'ineligible') = (vote_agreement IS NULL)",
+            name="match_candidates_ineligible_vote_check",
+        ),
+        # Grounding is decided only for an accepted proposal.
+        CheckConstraint(
+            "(grounded IS NOT NULL) = (decision = 'accepted')",
+            name="match_candidates_grounded_check",
+        ),
+        # Ranges mirror the matcher's own guarantees (clamped cosine, ratio
+        # vote-agreement); margin can be NULL (single-speaker roster) and is left
+        # unbounded because a clamped top-1 can sit a float-epsilon below top-2.
+        CheckConstraint(
+            "similarity IS NULL OR (similarity >= -1 AND similarity <= 1)",
+            name="match_candidates_similarity_range_check",
+        ),
+        CheckConstraint(
+            "vote_agreement IS NULL OR (vote_agreement >= 0 AND vote_agreement <= 1)",
+            name="match_candidates_vote_range_check",
+        ),
+        CheckConstraint(
+            "eligible_turns >= 0 AND eligible_seconds >= 0",
+            name="match_candidates_eligibility_nonneg_check",
+        ),
+        CheckConstraint(
+            "roster_size IS NULL OR roster_size >= 0",
+            name="match_candidates_roster_size_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    diarization_label: Mapped[str] = mapped_column(Text)
+    decision: Mapped[str] = mapped_column(Text)
+    reason: Mapped[str] = mapped_column(Text)
+    embedding_space: Mapped[str | None] = mapped_column(Text)
+    # The top roster candidate at match time. NULL only for an ineligible label
+    # (no candidate). Speakers are soft-archived/merged (the row persists), never
+    # hard-deleted, so this plain FK never blocks in practice; it refuses a stray
+    # hard delete rather than silently nulling recorded evidence (which would also
+    # break the ineligible-speaker coherence CHECK).
+    top_speaker_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("speakers.id"))
+    similarity: Mapped[float | None] = mapped_column(Float)  # raw cosine, [-1, 1]
+    margin: Mapped[float | None] = mapped_column(Float)  # top-1 vs top-2; NULL if 1 speaker
+    vote_agreement: Mapped[float | None] = mapped_column(Float)
+    grounded: Mapped[bool | None] = mapped_column(Boolean)
+    eligible_turns: Mapped[int] = mapped_column(Integer, default=0)
+    eligible_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    roster_size: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class AdjudicationDecision(Base):
     """Immutable human ledger — rows are only ever inserted, never updated or deleted."""
 

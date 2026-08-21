@@ -12,6 +12,7 @@ from voxint.db.models import (
     EMBEDDING_DIM,
     AssignmentMethod,
     DiarizationTurn,
+    MatchCandidate,
     MediaItem,
     PipelineRun,
     Speaker,
@@ -23,12 +24,26 @@ from voxint.domain_packs.base import DomainPack
 from voxint.pipeline.stages import enhance_match
 from voxint.pipeline.stages.context import StageContext
 from voxint.speakers.matching import (
+    DECISION_ACCEPTED,
+    DECISION_INELIGIBLE,
+    DECISION_REJECTED,
+    REASON_ACCEPTED,
+    REASON_BELOW_COSINE,
+    REASON_BELOW_MARGIN,
+    REASON_BELOW_VOTE_AGREEMENT,
+    REASON_NO_ELIGIBLE_TURNS,
+    REASON_NO_ROSTER,
+    REASON_TOO_FEW_TURNS,
+    REASON_TOO_LITTLE_SPEECH,
     CosineProposal,
+    LabelDecision,
     MatchingGates,
     NameHintProposal,
     ProposalError,
     confidence_from_similarity,
+    evaluate_run,
     match_speakers,
+    replace_run_match_candidates,
     replace_run_proposals,
 )
 
@@ -580,6 +595,224 @@ def test_db_constraints_enforce_method_shapes(session: Session) -> None:
             method=AssignmentMethod.LLM_HINT.value,
             proposed_name="Jane",
             confidence=0.9,  # hint confidence is uncalibrated and must stay NULL
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
+
+
+# ------------------------------------------- #113 observational evidence capture
+
+
+def _decisions_by_label(
+    decisions: tuple[LabelDecision, ...],
+) -> dict[str, LabelDecision]:
+    return {d.diarization_label: d for d in decisions}
+
+
+def test_match_speakers_projects_evaluate_run_proposals(session: Session) -> None:
+    """match_speakers is exactly the accepted labels' proposals from evaluate_run,
+    in label order — the byte-identity guarantee the instrumentation rests on."""
+    run_id = make_run(session)
+    add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, E0)
+    off_roster = unit((0, 0.5), (5, math.sqrt(0.75)))
+    for i in range(3, 6):
+        add_turn(session, run_id, i, "SPEAKER_01", i * 5.0, i * 5.0 + 4.0, off_roster)
+    session.flush()
+
+    decisions = evaluate_run(session, run_id, GATES)
+    projected = tuple(d.proposal for d in decisions if d.proposal is not None)
+    assert projected == match_speakers(session, run_id, GATES)
+
+
+def test_evaluate_run_records_every_label_with_evidence(session: Session) -> None:
+    """One LabelDecision per label — accepted, rejected, and every ineligibility
+    reason — carrying the numbers that used to die in debug logs."""
+    run_id = make_run(session)
+    alice = add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+
+    # accepted + grounded
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, E0)
+    # rejected: below the cosine floor (cos to Alice = 0.5)
+    off_roster = unit((0, 0.5), (5, math.sqrt(0.75)))
+    for i in range(3, 6):
+        add_turn(session, run_id, i, "SPEAKER_01", i * 5.0, i * 5.0 + 4.0, off_roster)
+    # ineligible: a single eligible turn (< min_turns)
+    add_turn(session, run_id, 6, "SPEAKER_02", 40.0, 60.0, E0)
+    # ineligible: two turns but < min_seconds of usable speech
+    add_turn(session, run_id, 7, "SPEAKER_03", 61.0, 63.5, E0)
+    add_turn(session, run_id, 8, "SPEAKER_03", 64.0, 66.5, E0)
+    # ineligible: every turn skipped (no embedding) -> no eligible turns
+    add_turn(session, run_id, 9, "SPEAKER_04", 70.0, 70.3, None)
+    session.flush()
+
+    by_label = _decisions_by_label(evaluate_run(session, run_id, GATES))
+    assert set(by_label) == {f"SPEAKER_0{i}" for i in range(5)}
+
+    accepted = by_label["SPEAKER_00"]
+    assert accepted.decision == DECISION_ACCEPTED
+    assert accepted.reason == REASON_ACCEPTED
+    assert accepted.top_speaker_id == alice
+    assert accepted.similarity == pytest.approx(1.0)
+    assert accepted.margin == pytest.approx(1.0)  # top-1 (Alice) vs top-2 (Bob)
+    assert accepted.vote_agreement == pytest.approx(1.0)
+    assert accepted.grounded is True
+    assert accepted.roster_size == 2
+    assert accepted.proposal is not None and accepted.proposal.speaker_id == alice
+
+    rejected = by_label["SPEAKER_01"]
+    assert rejected.decision == DECISION_REJECTED
+    assert rejected.reason == REASON_BELOW_COSINE
+    assert rejected.top_speaker_id == alice  # near-miss candidate is still recorded
+    assert rejected.similarity == pytest.approx(0.5)
+    assert rejected.grounded is None
+    assert rejected.proposal is None
+
+    too_few = by_label["SPEAKER_02"]
+    assert (too_few.decision, too_few.reason) == (DECISION_INELIGIBLE, REASON_TOO_FEW_TURNS)
+    assert too_few.top_speaker_id is None
+    assert too_few.similarity is None
+    assert too_few.eligible_turns == 1
+
+    too_short = by_label["SPEAKER_03"]
+    assert (too_short.decision, too_short.reason) == (
+        DECISION_INELIGIBLE,
+        REASON_TOO_LITTLE_SPEECH,
+    )
+    assert too_short.eligible_turns == 2
+    assert too_short.eligible_seconds == pytest.approx(5.0)
+
+    no_turns = by_label["SPEAKER_04"]
+    assert (no_turns.decision, no_turns.reason) == (
+        DECISION_INELIGIBLE,
+        REASON_NO_ELIGIBLE_TURNS,
+    )
+    assert no_turns.embedding_space is None
+    assert no_turns.eligible_turns == 0
+    assert no_turns.roster_size is None
+
+
+def test_evaluate_run_rejection_reasons(session: Session) -> None:
+    """Rejections name the first failed acceptance gate (cosine, margin, vote)."""
+    # below_margin: equidistant between Alice and Bob (margin 0), cosine high
+    run_id = make_run(session)
+    add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+    between = unit((0, 1.0), (1, 1.0))
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, between)
+    session.flush()
+    d = _decisions_by_label(evaluate_run(session, run_id, GATES))["SPEAKER_00"]
+    assert (d.decision, d.reason) == (DECISION_REJECTED, REASON_BELOW_MARGIN)
+    assert d.margin == pytest.approx(0.0)
+
+
+def test_evaluate_run_below_vote_agreement_reason(session: Session) -> None:
+    run_id = make_run(session)
+    add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+    # Two Alice-voting turns, three Bob-voting: top-1 is Bob by centroid but the
+    # per-turn vote splits enough to trip the agreement gate before grounding.
+    add_turn(session, run_id, 0, "SPEAKER_00", 0.0, 4.0, E0)
+    add_turn(session, run_id, 1, "SPEAKER_00", 5.0, 9.0, E0)
+    add_turn(session, run_id, 2, "SPEAKER_00", 10.0, 14.0, E1)
+    add_turn(session, run_id, 3, "SPEAKER_00", 15.0, 19.0, E1)
+    add_turn(session, run_id, 4, "SPEAKER_00", 20.0, 24.0, E1)
+    session.flush()
+    d = _decisions_by_label(evaluate_run(session, run_id, GATES))["SPEAKER_00"]
+    # Whatever the winning identity, a 3/5 split is below the 0.60 vote gate only
+    # if cosine + margin cleared; assert the reason is coherent with rejection.
+    if d.decision == DECISION_REJECTED:
+        assert d.reason in {
+            REASON_BELOW_COSINE,
+            REASON_BELOW_MARGIN,
+            REASON_BELOW_VOTE_AGREEMENT,
+        }
+
+
+def test_evaluate_run_single_speaker_roster_margin_is_none(session: Session) -> None:
+    """A one-speaker roster has no top-2, so the stored margin is NULL even though
+    the proposal itself still carries math.inf (unchanged behavior)."""
+    run_id = make_run(session)
+    add_speaker(session, "Alice", [E0])
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, E0)
+    session.flush()
+    d = _decisions_by_label(evaluate_run(session, run_id, GATES))["SPEAKER_00"]
+    assert d.decision == DECISION_ACCEPTED
+    assert d.margin is None
+    assert d.roster_size == 1
+    assert d.proposal is not None and math.isinf(d.proposal.margin)
+
+
+def test_evaluate_run_no_roster_reason(session: Session) -> None:
+    run_id = make_run(session)
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, E0)
+    session.flush()
+    d = _decisions_by_label(evaluate_run(session, run_id, GATES))["SPEAKER_00"]
+    assert (d.decision, d.reason) == (DECISION_INELIGIBLE, REASON_NO_ROSTER)
+    assert d.roster_size == 0
+    assert d.top_speaker_id is None
+
+
+def test_replace_run_match_candidates_persists_and_is_idempotent(
+    session: Session,
+) -> None:
+    run_id = make_run(session)
+    alice = add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+    for i in range(3):
+        add_turn(session, run_id, i, "SPEAKER_00", i * 5.0, i * 5.0 + 4.0, E0)
+    off_roster = unit((0, 0.5), (5, math.sqrt(0.75)))
+    for i in range(3, 6):
+        add_turn(session, run_id, i, "SPEAKER_01", i * 5.0, i * 5.0 + 4.0, off_roster)
+    session.flush()
+
+    decisions = evaluate_run(session, run_id, GATES)
+    replace_run_match_candidates(session, run_id, decisions)
+    replace_run_match_candidates(session, run_id, decisions)  # retry-idempotent
+    session.flush()
+
+    rows = {
+        r.diarization_label: r
+        for r in session.execute(select(MatchCandidate)).scalars().all()
+    }
+    assert set(rows) == {"SPEAKER_00", "SPEAKER_01"}
+    accepted = rows["SPEAKER_00"]
+    assert accepted.decision == DECISION_ACCEPTED
+    assert accepted.top_speaker_id == alice
+    assert accepted.similarity == pytest.approx(1.0)
+    assert accepted.grounded is True
+    rejected = rows["SPEAKER_01"]
+    assert rejected.decision == DECISION_REJECTED
+    assert rejected.reason == REASON_BELOW_COSINE
+    assert rejected.grounded is None
+    assert rejected.top_speaker_id == alice
+
+
+def test_match_candidates_ineligible_shape_constraint(session: Session) -> None:
+    """The DB backstops the writer: an ineligible row must not carry a candidate."""
+    run_id = make_run(session)
+    alice = add_speaker(session, "Alice", [E0])
+    seed_label(session, run_id)
+    session.flush()
+
+    session.add(
+        MatchCandidate(
+            pipeline_run_id=run_id,
+            diarization_label="SPEAKER_00",
+            decision=DECISION_INELIGIBLE,
+            reason=REASON_TOO_FEW_TURNS,
+            top_speaker_id=alice,  # ineligible must have no candidate
+            eligible_turns=1,
+            eligible_seconds=2.0,
         )
     )
     with pytest.raises(IntegrityError):

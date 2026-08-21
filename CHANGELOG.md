@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Speaker-matching decision evidence (#113).** Every pipeline run now records,
+  for each diarized voice, what the matcher decided and the numbers behind it:
+  the top roster candidate, cosine similarity, top-1 vs top-2 margin,
+  vote-agreement, and why a voice was accepted, rejected, or set aside (too few
+  turns, too little clear speech, no enrolled speaker to compare against). Until
+  now only accepted matches were kept, so a voice the matcher narrowly declined
+  left no trace. This is observational only: it changes nothing an operator sees
+  and does not alter a single match. It is the measurement groundwork for making
+  speaker attribution trustworthy enough to widen (epic #112).
+
 ## [0.21.0] - 2026-08-20
 
 ### Added

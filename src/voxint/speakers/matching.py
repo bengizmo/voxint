@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from voxint.db.models import (
     AssignmentMethod,
     DiarizationTurn,
+    MatchCandidate,
     Speaker,
     SpeakerAssignment,
     SpeakerEmbedding,
@@ -46,6 +47,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 MAX_PROPOSED_NAME_LENGTH = 120
+
+# Match-candidate decision taxonomy (issue #113 observational capture). One
+# ``decision`` per label; ``reason`` refines it. Mirrored by the DB CHECK on
+# ``match_candidates.decision`` and by the 0032 migration literals.
+DECISION_ACCEPTED = "accepted"
+DECISION_REJECTED = "rejected"
+DECISION_INELIGIBLE = "ineligible"
+MATCH_CANDIDATE_DECISIONS = frozenset(
+    {DECISION_ACCEPTED, DECISION_REJECTED, DECISION_INELIGIBLE}
+)
+
+# Reasons. ``accepted`` proposals carry REASON_ACCEPTED; ineligible labels name
+# the eligibility gate that stopped them before a roster comparison; rejected
+# labels name the FIRST acceptance gate they failed (cosine, then margin, then
+# vote-agreement — the order of the accept conjunction).
+REASON_ACCEPTED = "accepted"
+REASON_NO_ELIGIBLE_TURNS = "no_eligible_turns"  # every turn skipped/over-overlapped
+REASON_TOO_FEW_TURNS = "too_few_turns"
+REASON_TOO_LITTLE_SPEECH = "too_little_speech"
+REASON_NO_ROSTER = "no_roster"  # no enrolled speaker in this embedding space
+REASON_DEGENERATE_CENTROID = "degenerate_centroid"  # zero-vector label centroid
+REASON_BELOW_COSINE = "below_cosine"
+REASON_BELOW_MARGIN = "below_margin"
+REASON_BELOW_VOTE_AGREEMENT = "below_vote_agreement"
 
 
 @dataclass(frozen=True)
@@ -92,6 +117,39 @@ class CosineProposal:
     margin: float  # top-1 minus top-2 similarity (inf with a 1-speaker roster)
     vote_agreement: float  # duration-weighted fraction of turns voting top-1
     grounded: bool
+
+
+@dataclass(frozen=True)
+class LabelDecision:
+    """Observational per-label match evidence (issue #113).
+
+    Records what the matcher decided for one diarization label — accepted,
+    rejected, or ineligible — and the numbers behind it, for EVERY label,
+    including the near-misses that produce no ``speaker_assignments`` row. Purely
+    diagnostic: for an accepted label ``proposal`` is the *identical*
+    :class:`CosineProposal` (so :func:`match_speakers` derives its output from
+    these records), and None otherwise. Nothing here feeds the resolver,
+    centroids, or thresholds — capturing it does not change matching.
+
+    ``margin`` is None with a single-speaker roster (top-1 vs top-2 is undefined;
+    the proposal itself still carries ``math.inf`` there, unchanged). ``grounded``
+    is meaningful only for accepted labels; ``roster_size`` is None for labels
+    that stop before the roster is consulted.
+    """
+
+    diarization_label: str
+    decision: str  # one of MATCH_CANDIDATE_DECISIONS
+    reason: str
+    embedding_space: str | None
+    top_speaker_id: uuid.UUID | None
+    similarity: float | None  # raw cosine top-1, clamped [-1, 1]
+    margin: float | None
+    vote_agreement: float | None
+    grounded: bool | None
+    eligible_turns: int
+    eligible_seconds: float
+    roster_size: int | None
+    proposal: CosineProposal | None
 
 
 @dataclass(frozen=True)
@@ -169,21 +227,103 @@ def label_centroid(
 def match_speakers(
     session: Session, run_id: uuid.UUID, gates: MatchingGates
 ) -> tuple[CosineProposal, ...]:
-    """Propose roster speakers for this run's diarization labels."""
+    """Propose roster speakers for this run's diarization labels.
+
+    A thin projection over :func:`evaluate_run`: the accepted labels' proposals,
+    in label order. Deriving the tuple from the shared evaluator keeps proposal
+    values and ordering byte-identical to the pre-instrumentation matcher (issue
+    #113); callers that also want the near-miss evidence use ``evaluate_run``.
+    """
+    return tuple(
+        decision.proposal
+        for decision in evaluate_run(session, run_id, gates)
+        if decision.proposal is not None
+    )
+
+
+def _run_labels(session: Session, run_id: uuid.UUID) -> set[str]:
+    """Every diarization label in this run's turn ledger (proposed or not)."""
+    return set(
+        session.execute(
+            select(DiarizationTurn.label).where(
+                DiarizationTurn.pipeline_run_id == run_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def evaluate_run(
+    session: Session, run_id: uuid.UUID, gates: MatchingGates
+) -> tuple[LabelDecision, ...]:
+    """The single matcher core: one :class:`LabelDecision` per diarization label.
+
+    Reproduces the exact acceptance logic and, for every label — accepted,
+    rejected, or ineligible — records the decision evidence (top candidate,
+    cosine, margin, vote-agreement, eligibility). Accepted labels carry the
+    identical :class:`CosineProposal` in ``decision.proposal``; everything else
+    carries None. This is pure computation — no writes, no behavior change; the
+    observational rows are persisted separately by
+    :func:`replace_run_match_candidates`.
+    """
     by_label = eligible_label_vectors(session, run_id, gates)
+    all_labels = _run_labels(session, run_id)
 
     rosters: dict[str, dict[uuid.UUID, np.ndarray]] = {}
-    proposals: list[CosineProposal] = []
-    for label in sorted(by_label):
-        space, entries = by_label[label]
-        if len(entries) < gates.min_turns:
+    decisions: list[LabelDecision] = []
+    for label in sorted(all_labels):
+        if label not in by_label:
+            # No eligible turns (all skipped or over the overlap ratio), or the
+            # label was dropped for spanning embedding spaces (a pipeline bug,
+            # already error-logged in eligible_label_vectors). Observational.
+            decisions.append(
+                _ineligible(label, REASON_NO_ELIGIBLE_TURNS, space=None, roster_size=None)
+            )
             continue
-        if sum(usable for _, usable in entries) < gates.min_seconds:
+
+        space, entries = by_label[label]
+        eligible_turns = len(entries)
+        eligible_seconds = sum(usable for _, usable in entries)
+        if eligible_turns < gates.min_turns:
+            decisions.append(
+                _ineligible(
+                    label,
+                    REASON_TOO_FEW_TURNS,
+                    space=space,
+                    roster_size=None,
+                    eligible_turns=eligible_turns,
+                    eligible_seconds=eligible_seconds,
+                )
+            )
+            continue
+        if eligible_seconds < gates.min_seconds:
+            decisions.append(
+                _ineligible(
+                    label,
+                    REASON_TOO_LITTLE_SPEECH,
+                    space=space,
+                    roster_size=None,
+                    eligible_turns=eligible_turns,
+                    eligible_seconds=eligible_seconds,
+                )
+            )
             continue
         if space not in rosters:
             rosters[space] = _roster_centroids(session, space)
         roster = rosters[space]
+        roster_size = len(roster)
         if not roster:
+            decisions.append(
+                _ineligible(
+                    label,
+                    REASON_NO_ROSTER,
+                    space=space,
+                    roster_size=0,
+                    eligible_turns=eligible_turns,
+                    eligible_seconds=eligible_seconds,
+                )
+            )
             continue
 
         weighted = [
@@ -191,6 +331,16 @@ def match_speakers(
         ]
         centroid = label_centroid(entries, gates.turn_weight_cap_seconds)
         if centroid is None:
+            decisions.append(
+                _ineligible(
+                    label,
+                    REASON_DEGENERATE_CENTROID,
+                    space=space,
+                    roster_size=roster_size,
+                    eligible_turns=eligible_turns,
+                    eligible_seconds=eligible_seconds,
+                )
+            )
             continue
 
         # Deterministic ordering: similarity desc, then speaker id.
@@ -201,6 +351,9 @@ def match_speakers(
         top_sim, top_speaker = ranked[0]
         top_sim = max(-1.0, min(1.0, top_sim))  # unit-vector dot, modulo float error
         margin = top_sim - ranked[1][0] if len(ranked) > 1 else math.inf
+        # Stored margin is None with a single-speaker roster (top-1 vs top-2 is
+        # undefined); the proposal keeps math.inf, unchanged.
+        evidence_margin = None if len(ranked) < 2 else margin
 
         agree_weight = sum(w for v, w in weighted if _nearest(v, roster) == top_speaker)
         vote_agreement = agree_weight / sum(w for _, w in weighted)
@@ -221,25 +374,96 @@ def match_speakers(
             "proposed" if accepted else "rejected",
         )
         if not accepted:
+            decisions.append(
+                LabelDecision(
+                    diarization_label=label,
+                    decision=DECISION_REJECTED,
+                    reason=_rejection_reason(top_sim, margin, gates),
+                    embedding_space=space,
+                    top_speaker_id=top_speaker,
+                    similarity=top_sim,
+                    margin=evidence_margin,
+                    vote_agreement=vote_agreement,
+                    grounded=None,
+                    eligible_turns=eligible_turns,
+                    eligible_seconds=eligible_seconds,
+                    roster_size=roster_size,
+                    proposal=None,
+                )
+            )
             continue
         grounded = (
-            len(entries) >= gates.grounded_min_turns
-            and sum(usable for _, usable in entries) >= gates.grounded_min_seconds
+            eligible_turns >= gates.grounded_min_turns
+            and eligible_seconds >= gates.grounded_min_seconds
             and top_sim >= gates.grounded_min_cosine
             and margin >= gates.grounded_min_margin
             and vote_agreement >= gates.grounded_min_vote_agreement
         )
-        proposals.append(
-            CosineProposal(
+        proposal = CosineProposal(
+            diarization_label=label,
+            speaker_id=top_speaker,
+            similarity=top_sim,
+            margin=margin,
+            vote_agreement=vote_agreement,
+            grounded=grounded,
+        )
+        decisions.append(
+            LabelDecision(
                 diarization_label=label,
-                speaker_id=top_speaker,
+                decision=DECISION_ACCEPTED,
+                reason=REASON_ACCEPTED,
+                embedding_space=space,
+                top_speaker_id=top_speaker,
                 similarity=top_sim,
-                margin=margin,
+                margin=evidence_margin,
                 vote_agreement=vote_agreement,
                 grounded=grounded,
+                eligible_turns=eligible_turns,
+                eligible_seconds=eligible_seconds,
+                roster_size=roster_size,
+                proposal=proposal,
             )
         )
-    return tuple(proposals)
+    return tuple(decisions)
+
+
+def _ineligible(
+    label: str,
+    reason: str,
+    *,
+    space: str | None,
+    roster_size: int | None,
+    eligible_turns: int = 0,
+    eligible_seconds: float = 0.0,
+) -> LabelDecision:
+    """A LabelDecision for a label that never reached a roster comparison."""
+    return LabelDecision(
+        diarization_label=label,
+        decision=DECISION_INELIGIBLE,
+        reason=reason,
+        embedding_space=space,
+        top_speaker_id=None,
+        similarity=None,
+        margin=None,
+        vote_agreement=None,
+        grounded=None,
+        eligible_turns=eligible_turns,
+        eligible_seconds=eligible_seconds,
+        roster_size=roster_size,
+        proposal=None,
+    )
+
+
+def _rejection_reason(top_sim: float, margin: float, gates: MatchingGates) -> str:
+    """The first acceptance gate the label failed, in accept-conjunction order.
+
+    Called only for a rejected label, so if cosine and margin both cleared, the
+    vote-agreement gate is the one that failed (no need to read it again)."""
+    if top_sim < gates.min_cosine:
+        return REASON_BELOW_COSINE
+    if margin < gates.min_margin:
+        return REASON_BELOW_MARGIN
+    return REASON_BELOW_VOTE_AGREEMENT
 
 
 def replace_run_proposals(
@@ -336,6 +560,40 @@ def replace_run_proposals(
                 confidence=None,  # LLM self-reported confidence is not calibrated
                 proposed_name=hint.proposed_name.strip(),
                 grounded=False,
+            )
+        )
+
+
+def replace_run_match_candidates(
+    session: Session, run_id: uuid.UUID, decisions: tuple[LabelDecision, ...]
+) -> None:
+    """Persist this run's observational match-candidate evidence (issue #113).
+
+    Delete-then-insert, idempotent under stage retry, mirroring
+    :func:`replace_run_proposals`. Diagnostics only — these rows never feed
+    attribution, so nothing here re-validates the matcher's decisions. The DB
+    CHECK constraints mirror the matcher's own numeric guarantees (clamped
+    cosine, bounded vote-agreement), so a violation would be a bug, not data.
+    """
+    session.execute(
+        delete(MatchCandidate).where(MatchCandidate.pipeline_run_id == run_id)
+    )
+    for decision in decisions:
+        session.add(
+            MatchCandidate(
+                pipeline_run_id=run_id,
+                diarization_label=decision.diarization_label,
+                decision=decision.decision,
+                reason=decision.reason,
+                embedding_space=decision.embedding_space,
+                top_speaker_id=decision.top_speaker_id,
+                similarity=decision.similarity,
+                margin=decision.margin,
+                vote_agreement=decision.vote_agreement,
+                grounded=decision.grounded,
+                eligible_turns=decision.eligible_turns,
+                eligible_seconds=decision.eligible_seconds,
+                roster_size=decision.roster_size,
             )
         )
 
