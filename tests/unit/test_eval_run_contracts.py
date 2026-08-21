@@ -190,6 +190,12 @@ class TestSubset:
         with pytest.raises(er.RunError):
             er.select_only(items, ["NOPE"])
 
+    def test_select_only_rejects_duplicate_ids(self) -> None:
+        # ``--only A,A`` must fail, not expand to two submits of one recording.
+        items = er.load_subset([_item(), _item(id="IS1009a")], "ami")
+        with pytest.raises(er.RunError, match="duplicate"):
+            er.select_only(items, ["EN2002c", "EN2002c"])
+
 
 # --------------------------------------------------------------------------- #
 # 3. Path resolution
@@ -346,6 +352,31 @@ class TestPipelineEnvironment:
         moved["model_weights"]["whisper_ct2_dir_sha256"] = "different"
         assert er.pipeline_environment_hash(moved) != base
 
+    def test_rejects_wrongly_typed_scalars(self) -> None:
+        # A string where a bool belongs, a bool where an int belongs, a dict
+        # where a scalar digest belongs, an int < 1, and an empty string are all
+        # rejected — the hash must bind a real identity, not a mistyped one.
+        cases = [
+            ("decode", "word_timestamps", "true"),  # str for bool
+            ("flags", "tf32", 1),  # int for bool
+            ("decode", "beam_size", True),  # bool for int
+            ("decode", "batch_size", 0),  # int < 1
+            ("code", "image_digest", {"nested": "x"}),  # dict for scalar
+            ("code", "git_sha", ""),  # empty string
+            ("gpu", "name", 123),  # int for str
+        ]
+        for group, key, bad in cases:
+            env = _env()
+            env[group][key] = bad
+            with pytest.raises(er.RunError):
+                er.validate_pipeline_environment(env)
+
+    def test_accepts_the_declared_types(self) -> None:
+        # Sanity: the valid _env() passes with its real bool/int/str fields.
+        env = er.validate_pipeline_environment(_env())
+        assert env["decode"]["beam_size"] == 5
+        assert env["flags"]["deterministic"] is True
+
 
 # --------------------------------------------------------------------------- #
 # 6. Cohort descriptor + hash
@@ -415,12 +446,33 @@ class TestJournalResume:
         assert d.action == er.ACTION_SUBMIT
 
     def test_completed_with_artifacts_skips_without_them_stops(self) -> None:
+        # AMI requires BOTH the hypothesis RTTM sha and the WER text sha before a
+        # completed item is safe to skip.
         j = er.new_journal("ami", self._cohort_hash(), _env())
-        j["items"]["done"] = {"status": "completed", "artifacts": {"hypothesis_rttm_sha256": "h"}}
+        j["items"]["done"] = {
+            "status": "completed",
+            "artifacts": {"hypothesis_rttm_sha256": "h", "wer_text_sha256": "w"},
+        }
         j["items"]["empty"] = {"status": "completed", "artifacts": {}}
         decisions = er.plan_resume(j, ["done", "empty"], resume=True, retry_failed=False)
         by_id = {d.recording_id: d.action for d in decisions}
         assert by_id == {"done": er.ACTION_SKIP_DONE, "empty": er.ACTION_STOP}
+
+    def test_ami_completed_missing_wer_sha_stops(self) -> None:
+        # RTTM present but WER text sha absent: an AMI run is NOT done, so a
+        # resume must STOP rather than skip it into a fake zero-change pass.
+        j = er.new_journal("ami", self._cohort_hash(), _env())
+        j["items"]["rttm_only"] = {
+            "status": "completed",
+            "artifacts": {"hypothesis_rttm_sha256": "h"},
+        }
+        assert _action1(j, "rttm_only", resume=True, retry_failed=False) == er.ACTION_STOP
+
+    def test_voxconverse_completed_needs_only_rttm(self) -> None:
+        # VoxConverse has no WER reference, so the RTTM sha alone is complete.
+        j = er.new_journal("voxconverse", self._cohort_hash(), _env())
+        j["items"]["v"] = {"status": "completed", "artifacts": {"hypothesis_rttm_sha256": "h"}}
+        assert _action1(j, "v", resume=True, retry_failed=False) == er.ACTION_SKIP_DONE
 
     def test_failure_retried_only_with_flag(self) -> None:
         j = er.new_journal("ami", self._cohort_hash(), _env())
@@ -445,3 +497,72 @@ class TestJournalResume:
         j = er.new_journal("ami", self._cohort_hash(), _env())
         j["items"]["u"] = {"status": er.UNKNOWN_SUBMISSION}
         assert _action1(j, "u", resume=True, retry_failed=False) == er.ACTION_SUBMIT
+
+    def test_queued_status_is_resumable(self) -> None:
+        # ``queued`` is the real first DB status (there is no ``pending``); a
+        # queued run with a uuid must POLL under --resume, not fall through.
+        j = er.new_journal("ami", self._cohort_hash(), _env())
+        j["items"]["q"] = {"status": "queued", "run_uuid": "u"}
+        assert _action1(j, "q", resume=True, retry_failed=False) == er.ACTION_POLL
+
+    def test_unknown_corpus_journal_is_rejected(self) -> None:
+        j = er.new_journal("ami", self._cohort_hash(), _env())
+        j["corpus"] = "mystery"
+        with pytest.raises(er.RunError, match="required-artifact"):
+            er.plan_resume(j, ["x"], resume=True, retry_failed=False)
+
+
+# --------------------------------------------------------------------------- #
+# 8. DB status mapping (fail-closed)
+# --------------------------------------------------------------------------- #
+class TestMapDbStatus:
+    def test_maps_every_real_run_status_to_itself(self) -> None:
+        for status in ("queued", "running", "awaiting_adjudication", "completed",
+                       "failed", "cancelled"):
+            assert er.map_db_status(status) == status
+
+    def test_rejects_journal_only_and_unknown_states(self) -> None:
+        # The write-ahead journal-only states are never emitted by the DB, and a
+        # misspelled/None status must fail closed rather than be copied verbatim.
+        for bad in ("submitting", "submission_unknown", "pending", "submitted", "", None):
+            with pytest.raises(er.RunError):
+                er.map_db_status(bad)
+
+
+# --------------------------------------------------------------------------- #
+# 9. Journal durability (atomic write + exclusive out-dir lock)
+# --------------------------------------------------------------------------- #
+class TestJournalDurability:
+    def test_write_json_atomic_round_trips_and_leaves_no_temp(self, tmp_path: Path) -> None:
+        import json as _json
+
+        target = tmp_path / "sub" / "journal.json"
+        payload = {"b": 2, "a": 1, "items": {"x": {"status": "completed"}}}
+        er.write_json_atomic(target, payload)
+        assert _json.loads(target.read_text(encoding="utf-8")) == payload
+        # canonical bytes: sorted keys, compact
+        assert target.read_text(encoding="utf-8").startswith('{"a":1')
+        leftovers = [p.name for p in target.parent.iterdir() if p.name != "journal.json"]
+        assert leftovers == []
+
+    def test_write_json_atomic_overwrites_in_place(self, tmp_path: Path) -> None:
+        target = tmp_path / "j.json"
+        er.write_json_atomic(target, {"v": 1})
+        er.write_json_atomic(target, {"v": 2})
+        import json as _json
+
+        assert _json.loads(target.read_text(encoding="utf-8")) == {"v": 2}
+
+    def test_out_dir_lock_is_exclusive(self, tmp_path: Path) -> None:
+        # Deliberately nested: hold the first lock, THEN prove a second
+        # acquisition of the same out-dir fails closed.
+        with er.out_dir_lock(tmp_path), pytest.raises(er.RunError, match="lock"):  # noqa: SIM117
+            with er.out_dir_lock(tmp_path):
+                pass  # pragma: no cover
+
+    def test_out_dir_lock_releases_on_exit(self, tmp_path: Path) -> None:
+        with er.out_dir_lock(tmp_path):
+            pass
+        # A second acquisition after the first releases must succeed.
+        with er.out_dir_lock(tmp_path):
+            pass

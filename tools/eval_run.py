@@ -30,10 +30,14 @@ header nframes).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import re
+import tempfile
 import wave
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -67,15 +71,54 @@ _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # NAS that holds the corpora; it must never be mistaken for an audio candidate.
 _SYNOLOGY_META = "@eaDir"
 
-# Terminal vs resumable run states (Voxint stores status lowercase). A run in
-# ``awaiting_adjudication`` is NOT terminal: Voxint can resume it to ``running``,
-# so the journal must be able to re-poll it rather than treat it as a stop.
-COMPLETED = "completed"
-RESUMABLE_STATES = frozenset(
-    {"pending", "submitting", "submitted", "running", "awaiting_adjudication"}
+# The live DB status vocabulary is ``voxint.db.models.RunStatus`` (stored
+# lowercase): queued, running, awaiting_adjudication, completed, failed,
+# cancelled. There is NO ``pending``/``submitted`` state — an earlier draft
+# invented those, which would have made the driver blind-copy a status the DB
+# never emits. The driver must map a polled DB status through ``map_db_status``
+# (fail-closed on anything unknown) rather than trust an arbitrary string.
+RUN_STATUSES = frozenset(
+    {"queued", "running", "awaiting_adjudication", "completed", "failed", "cancelled"}
 )
-FAILURE_STATES = frozenset({"failed", "cancelled"})
+
+# Journal-only write-ahead states the DB never emits: recorded BEFORE the run
+# uuid is known (``submitting``) or when a submit's outcome is unknown
+# (``submission_unknown``). Kept disjoint from the DB vocabulary so a mapping
+# bug can't disguise one as the other.
+JOURNAL_ONLY_STATES = frozenset({"submitting", "submission_unknown"})
 UNKNOWN_SUBMISSION = "submission_unknown"
+
+COMPLETED = "completed"
+# A run in ``awaiting_adjudication`` is NOT terminal: Voxint can resume it to
+# ``running``, so the journal must be able to re-poll it rather than treat it as
+# a stop. ``submitting`` is the write-ahead state whose recorded run is polled
+# once its uuid lands (else re-submitted idempotently on resume).
+RESUMABLE_STATES = frozenset({"queued", "running", "awaiting_adjudication", "submitting"})
+FAILURE_STATES = frozenset({"failed", "cancelled"})
+
+# Which artifact shas a completed run MUST carry before ``skip_done`` is safe,
+# per corpus (AMI also produces a WER hypothesis text; VoxConverse does not).
+# A completed journal item missing any of these is treated as incomplete
+# (STOP), never silently skipped into a fake zero-change pass.
+REQUIRED_ARTIFACTS: dict[str, tuple[str, ...]] = {
+    "ami": ("hypothesis_rttm_sha256", "wer_text_sha256"),
+    "voxconverse": ("hypothesis_rttm_sha256",),
+}
+
+
+def map_db_status(db_status: Any) -> str:
+    """Map a polled DB ``RunStatus`` to a journal status, failing closed.
+
+    The DB and journal share the live status vocabulary, so this is an identity
+    map WITH validation: an unknown/misspelled/None status raises rather than
+    being copied verbatim into the journal, where it would later fall through
+    ``plan_resume`` to an opaque STOP. The write-ahead journal-only states
+    (``submitting``/``submission_unknown``) are never produced by the DB and are
+    rejected here on purpose.
+    """
+    if db_status not in RUN_STATUSES:
+        raise RunError(f"unrecognized DB run status {db_status!r} (not a RunStatus value)")
+    return str(db_status)
 
 
 class RunError(Exception):
@@ -236,9 +279,17 @@ def load_subset(entries: list[dict[str, Any]], corpus: str) -> list[SubsetItem]:
 
 
 def select_only(items: list[SubsetItem], only: list[str] | None) -> list[SubsetItem]:
-    """Restrict to an explicit ``--only ID,ID`` list; unknown ids are an error."""
+    """Restrict to an explicit ``--only ID,ID`` list; unknown/duplicate ids error.
+
+    A repeated id (``--only A,A``) is rejected rather than deduplicated: it would
+    otherwise expand to two SUBMIT decisions for one recording and stage/submit
+    it twice, which the whole idempotency design exists to prevent.
+    """
     if not only:
         return items
+    dupes = sorted({rec for rec in only if only.count(rec) > 1})
+    if dupes:
+        raise RunError(f"--only names duplicate ids: {dupes}")
     by_id = {it.recording_id: it for it in items}
     unknown = [rec for rec in only if rec not in by_id]
     if unknown:
@@ -431,25 +482,62 @@ def check_duration(
 # The identity of what produced a hypothesis, so two snapshots taken before and
 # after a batch can be compared for EQUALITY (a mid-batch model/driver change
 # invalidates the run). Timestamps live in the journal, never here, so equality
-# is over identity only. Every field is required and typed; ellipsis-style
-# open dicts are rejected (codex: an under-specified env silently weakens the
-# cohort identity).
-_PIPELINE_ENV_FIELDS: dict[str, tuple[str, ...]] = {
-    "code": ("git_sha", "image_digest"),
-    "model_weights": ("whisper_ct2_dir_sha256", "pyannote_pipeline_sha256", "titanet_sha256"),
-    "gpu": ("name", "driver", "cuda"),
-    "runtime": ("ctranslate2", "torch", "pyannote_audio"),
-    "decode": ("beam_size", "batch_size", "word_timestamps"),
-    "flags": ("tf32", "deterministic"),
+# is over identity only. Every field is required, typed, AND type-checked; an
+# ellipsis-style open dict, a string where a bool belongs, or a dict where a
+# scalar digest belongs are all rejected (codex: an under-specified OR
+# mistyped env silently weakens the cohort identity a hash is supposed to bind).
+_STR = "str"
+_BOOL = "bool"
+_INT_GE1 = "int_ge1"
+
+_PIPELINE_ENV_SPEC: dict[str, dict[str, str]] = {
+    "code": {"git_sha": _STR, "image_digest": _STR},
+    "model_weights": {
+        "whisper_ct2_dir_sha256": _STR,
+        "pyannote_pipeline_sha256": _STR,
+        "titanet_sha256": _STR,
+    },
+    "gpu": {"name": _STR, "driver": _STR, "cuda": _STR},
+    "runtime": {"ctranslate2": _STR, "torch": _STR, "pyannote_audio": _STR},
+    "decode": {"beam_size": _INT_GE1, "batch_size": _INT_GE1, "word_timestamps": _BOOL},
+    "flags": {"tf32": _BOOL, "deterministic": _BOOL},
 }
+# Retained (derived) so callers/tests that referenced the group->keys shape keep
+# working; the spec above is the single source of truth.
+_PIPELINE_ENV_FIELDS: dict[str, tuple[str, ...]] = {
+    group: tuple(spec) for group, spec in _PIPELINE_ENV_SPEC.items()
+}
+
+
+def _check_env_scalar(where: str, kind: str, value: Any) -> None:
+    """Type/range-check one pipeline_environment scalar (raises on mismatch).
+
+    ``bool`` is a subclass of ``int`` in Python, so an int field explicitly
+    rejects a bool (``True`` is not a beam size) and a bool field explicitly
+    requires ``bool`` (a ``0``/``1`` int is not accepted as a flag).
+    """
+    if value is None:
+        raise RunError(f"{where} must not be null")
+    if kind == _STR:
+        if not isinstance(value, str) or not value.strip():
+            raise RunError(f"{where} must be a non-empty string, got {value!r}")
+    elif kind == _BOOL:
+        if not isinstance(value, bool):
+            raise RunError(f"{where} must be a bool, got {value!r}")
+    elif kind == _INT_GE1:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise RunError(f"{where} must be an int >= 1, got {value!r}")
+    else:  # pragma: no cover - guards a spec typo
+        raise RunError(f"{where}: unknown field kind {kind!r}")
 
 
 def validate_pipeline_environment(env: dict[str, Any]) -> dict[str, Any]:
     """Validate the strict pipeline-environment identity dict (raises on any gap).
 
     Returns the same dict on success so it can be used inline. Requires the exact
-    top-level groups and their required keys; a missing group/key, a null value,
-    or an unexpected key is an error (an identity with holes is worse than none).
+    top-level groups and their required keys, each of the DECLARED type; a
+    missing group/key, a null value, an unexpected key, or a wrongly-typed value
+    is an error (an identity with holes OR wrong types is worse than none).
     """
     if not isinstance(env, dict):
         raise RunError("pipeline_environment must be an object")
@@ -457,23 +545,22 @@ def validate_pipeline_environment(env: dict[str, Any]) -> dict[str, Any]:
         raise RunError(
             f"pipeline_environment schema_version must be {PIPELINE_ENVIRONMENT_SCHEMA_VERSION}"
         )
-    allowed_top = {"schema_version", *_PIPELINE_ENV_FIELDS}
+    allowed_top = {"schema_version", *_PIPELINE_ENV_SPEC}
     extra_top = set(env) - allowed_top
     if extra_top:
         raise RunError(f"pipeline_environment has unexpected keys: {sorted(extra_top)}")
-    for group, keys in _PIPELINE_ENV_FIELDS.items():
+    for group, spec in _PIPELINE_ENV_SPEC.items():
         block = env.get(group)
         if not isinstance(block, dict):
             raise RunError(f"pipeline_environment.{group} must be an object")
-        missing = [k for k in keys if k not in block]
+        missing = [k for k in spec if k not in block]
         if missing:
             raise RunError(f"pipeline_environment.{group} missing keys: {missing}")
-        for k in keys:
-            if block[k] is None:
-                raise RunError(f"pipeline_environment.{group}.{k} must not be null")
-        extra = set(block) - set(keys)
+        extra = set(block) - set(spec)
         if extra:
             raise RunError(f"pipeline_environment.{group} has unexpected keys: {sorted(extra)}")
+        for key, kind in spec.items():
+            _check_env_scalar(f"pipeline_environment.{group}.{key}", kind, block[key])
     return env
 
 
@@ -565,6 +652,88 @@ class ResumeDecision:
     reason: str
 
 
+def _fsync_dir(directory: Path) -> None:
+    """fsync a directory so a rename within it is durable (best-effort).
+
+    Directory fsync is not portable to every filesystem; a platform that cannot
+    open a directory for fsync (some networked/foreign mounts) is tolerated
+    rather than failing the write, since the temp-file fsync + atomic replace
+    already give crash-consistency on the common case.
+    """
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def write_json_atomic(path: Path, payload: Any) -> None:
+    """Durably, atomically write ``payload`` as canonical JSON to ``path``.
+
+    Writes a temp file in the SAME directory (so ``os.replace`` is a same-device
+    atomic rename), flushes + ``fsync``s the temp file's data to disk BEFORE the
+    rename, replaces, then ``fsync``s the parent directory so the rename itself
+    survives a crash. Without the fsyncs ``os.replace`` is atomic but not durable
+    (the rename can be lost on power loss even though the bytes look written).
+    """
+    path = Path(path)
+    directory = path.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    data = _canonical_bytes(payload)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(directory))
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink()
+        raise
+    _fsync_dir(directory)
+
+
+@contextlib.contextmanager
+def out_dir_lock(out_dir: Path) -> Iterator[Path]:
+    """Hold an EXCLUSIVE, non-blocking lock on an out-dir for a run.
+
+    Two drivers sharing one ``--out-dir`` would interleave journal writes and
+    corrupt the write-ahead invariant, so a run takes an ``flock`` on a
+    ``.eval_run.lock`` file in the out-dir and refuses to start (rather than
+    block indefinitely) if another process already holds it. The lock file is
+    left in place (its presence is harmless; the lock is advisory and released
+    with the fd), and the fd is always closed on exit.
+    """
+    import fcntl
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = out_dir / ".eval_run.lock"
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            raise RunError(
+                f"another eval run holds the out-dir lock {lock_path} "
+                f"(is a second driver using the same --out-dir?): {exc}"
+            ) from exc
+        try:
+            yield lock_path
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def new_journal(corpus: str, cohort_hash: str, pipeline_env: dict[str, Any]) -> dict[str, Any]:
     """An empty journal bound to one corpus + cohort + pipeline identity."""
     return {
@@ -613,6 +782,10 @@ def plan_resume(
     write-ahead ``submitting`` / ``submission_unknown`` states resolve to a
     submit that the driver must make idempotent by its recorded submission key.
     """
+    corpus = journal.get("corpus")
+    required = REQUIRED_ARTIFACTS.get(corpus)
+    if required is None:
+        raise RunError(f"journal corpus {corpus!r} has no required-artifact contract")
     items = journal.get("items", {})
     decisions: list[ResumeDecision] = []
     for rec in selected_ids:
@@ -627,10 +800,11 @@ def plan_resume(
         status = item.get("status")
         if status == COMPLETED:
             artifacts = item.get("artifacts") or {}
-            if artifacts.get("hypothesis_rttm_sha256"):
-                add(ACTION_SKIP_DONE, "completed with artifacts")
+            missing = [k for k in required if not artifacts.get(k)]
+            if not missing:
+                add(ACTION_SKIP_DONE, "completed with all required artifacts")
             else:
-                add(ACTION_STOP, "completed but artifacts missing")
+                add(ACTION_STOP, f"completed but missing artifacts: {missing}")
             continue
         if status == UNKNOWN_SUBMISSION:
             add(ACTION_SUBMIT, "submission outcome unknown; reconcile by submission key")
