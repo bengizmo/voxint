@@ -186,6 +186,13 @@ class Settings(BaseSettings):
     # a run.
     health_probe_timeout_seconds: PositiveSeconds = 3.0
 
+    # App-side cache TTL for the aggregated model-service resource telemetry
+    # (voxint.api.resource_status). A short single-flight cache so a 15-second
+    # browser poll across several tabs never fans out concurrent live probes of
+    # the services. NOT tier-scaled (a UI freshness knob, not a compute budget);
+    # 0 disables caching (always probe live).
+    resource_status_ttl_seconds: float = Field(default=10.0, ge=0.0)
+
     # First-run wizard "scan for existing media" (step 2). Bounds the optional
     # walk over the registered media folders: at most setup_scan_max_files net-new
     # candidates are surfaced, and the walk stops after inspecting

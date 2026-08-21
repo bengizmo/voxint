@@ -21,6 +21,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `VOXINT_TELEMETRY_INTERVAL_SECONDS`; see `docs/gpu-contracts.md`). This is the
   telemetry foundation for the operator resource view and safe hardware-aware
   defaults.
+- **App-side resource-telemetry aggregation.** The app now collects the three
+  services' `/healthz` telemetry into one operator view: it parses each block
+  defensively (an older service or a malformed value degrades to "unavailable",
+  never an error), deduplicates a shared GPU by UUID into a single device
+  (freshest reading wins; cumulative counters take the max), and reads the
+  degraded 503 body too so a struggling service still reports its numbers.
+  Probes run concurrently behind a short single-flight cache
+  (`RESOURCE_STATUS_TTL_SECONDS`, default 10) so a browser poll across tabs
+  never fans out live probes. `voxint doctor` now prints the aggregated GPU and
+  per-service admission state.
 - **Speaker-matching decision evidence (#113).** Every pipeline run now records,
   for each diarized voice, what the matcher decided and the numbers behind it:
   the top roster candidate, cosine similarity, top-1 vs top-2 margin,

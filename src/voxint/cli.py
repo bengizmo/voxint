@@ -893,6 +893,25 @@ def _doctor(args: argparse.Namespace) -> int:
     for result in results:
         tag = "ok  " if result.ok else ("FAIL" if result.hard else "warn")
         print(f"[{tag}] {result.name}: {result.detail}")
+
+    # Advisory hardware telemetry from the services' /healthz. Never gates the
+    # verdict and never raises into the command: a probe failure just omits it.
+    try:
+        from voxint.api.resource_status import (
+            collect_resource_status,
+            format_resource_status_text,
+        )
+
+        with httpx.Client(
+            timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
+        ) as client:
+            snapshot = collect_resource_status(settings, client=client, force=True)
+        print()
+        print(format_resource_status_text(snapshot))
+    except Exception:
+        # Telemetry is advisory; a probe failure must never fail doctor.
+        pass
+
     code = diagnostics.exit_code(results)
     verdict = "all hard dependencies OK" if code == 0 else "a hard dependency is down"
     print(f"\ndoctor: {verdict}")
