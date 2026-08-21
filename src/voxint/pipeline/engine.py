@@ -38,6 +38,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.config import Settings, get_settings
 from voxint.db.models import PipelineRun, RunStatus, Stage, StageRun, StageStatus
 from voxint.media.redaction import cap_length
+from voxint.pipeline.model_identity import (
+    METRICS_KEY,
+    observe_stage_model_identity,
+)
 from voxint.pipeline.transitions import (
     RunSnapshot,
     StaleRevisionError,
@@ -176,6 +180,8 @@ def _finish_claim(
     claim_id: uuid.UUID,
     status: StageStatus,
     error: str | None = None,
+    *,
+    model_identity: dict[str, Any] | None = None,
 ) -> None:
     claim = session.get(StageRun, claim_id)
     assert claim is not None
@@ -185,6 +191,28 @@ def _finish_claim(
     # keeps a pathological diagnostic from bloating the ledger. Redaction of the
     # ACQUIRE stderr tail happens upstream at the raise site (born clean).
     claim.error = cap_length(error) if error is not None else None
+    # Best-effort model-identity provenance for this attempt (see
+    # voxint.pipeline.model_identity). Only the successful completion path passes
+    # it, so a failed/superseded attempt never records identity; it is stored in
+    # the SAME transaction that completes the claim, keeping the stamp attempt-safe.
+    if model_identity is not None:
+        claim.metrics = {METRICS_KEY: model_identity}
+
+
+def _observe_stage_identity(
+    settings: "Settings | None", stage: Stage
+) -> dict[str, Any] | None:
+    """Best-effort model-identity observation for a stage. Never raises.
+
+    Returns None when there is no settings context (identity is advisory, never
+    worth failing a run over) or the stage calls no model service.
+    """
+    if settings is None:
+        return None
+    try:
+        return observe_stage_model_identity(settings, stage)
+    except Exception:
+        return None
 
 
 def default_stage_leases() -> dict[Stage, int]:
@@ -317,6 +345,11 @@ def execute_run(
                 current = session.get(PipelineRun, run_id)
                 return snapshot(current) if current is not None else held
 
+        # Observe which model answers this stage, BEFORE opening the stage session
+        # so no DB connection is held during the network probe. Best-effort and
+        # bounded; stamped onto this attempt only if the stage completes.
+        identity = _observe_stage_identity(settings, stage)
+
         with session_factory() as session:
             try:
                 stage_fns[stage](session, run_id)
@@ -347,7 +380,7 @@ def execute_run(
                         return cancelled
                     raise
                 raise StageFailedError(stage, exc, failed) from exc
-            _finish_claim(session, claim_id, StageStatus.COMPLETED)
+            _finish_claim(session, claim_id, StageStatus.COMPLETED, model_identity=identity)
             upcoming = next_stage(stage)
             try:
                 if upcoming is None:
