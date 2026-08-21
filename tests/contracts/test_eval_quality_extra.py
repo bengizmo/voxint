@@ -21,6 +21,13 @@ EXTRA = "eval-quality"
 PACKAGE = "pyannote.metrics"
 PACKAGE_NORMALIZED = "pyannote-metrics"
 
+# cpWER scorer (issue #97 commit 3). meeteval brings the Hungarian speaker
+# assignment; its runtime deps must stay CPU-only (no torch/TF/CUDA), so the
+# isolated eval-quality env resolves on both maintainer x86 and mbp arm64.
+CPWER_PACKAGE = "meeteval"
+CPWER_ALLOWED_DEPS = {"cython", "kaldialign", "numpy", "packaging", "scipy"}
+CPWER_FORBIDDEN_DEP_SUBSTRINGS = ("torch", "tensorflow", "nvidia", "cuda", "cudnn", "triton")
+
 
 def _optional_dependencies() -> dict[str, list[str]]:
     data = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
@@ -53,6 +60,66 @@ def test_uv_lock_resolves_the_pinned_scorer() -> None:
     assert match is not None, f"uv.lock does not resolve {PACKAGE_NORMALIZED}"
     assert match.group(1) == pin, (
         f"uv.lock resolves {PACKAGE_NORMALIZED} {match.group(1)}, extra pins {pin}"
+    )
+
+
+def test_eval_quality_extra_pins_meeteval_exactly() -> None:
+    extras = _optional_dependencies()
+    pin = _extra_pin(extras[EXTRA], CPWER_PACKAGE)
+    assert pin is not None, f"{EXTRA} extra must pin {CPWER_PACKAGE} with == (cpWER scorer)"
+
+
+def test_uv_lock_resolves_the_pinned_cpwer_scorer() -> None:
+    pin = _extra_pin(_optional_dependencies()[EXTRA], CPWER_PACKAGE)
+    assert pin is not None
+    lock = (REPO_ROOT / "uv.lock").read_text()
+    match = re.search(rf'name = "{re.escape(CPWER_PACKAGE)}"\nversion = "([0-9][0-9.]*)"', lock)
+    assert match is not None, f"uv.lock does not resolve {CPWER_PACKAGE}"
+    assert match.group(1) == pin, (
+        f"uv.lock resolves {CPWER_PACKAGE} {match.group(1)}, extra pins {pin}"
+    )
+
+
+def _locked_dependencies(package: str) -> set[str]:
+    """The resolved dependency NAMES of ``package`` from its uv.lock block."""
+    lock = (REPO_ROOT / "uv.lock").read_text()
+    block = re.search(
+        rf'\[\[package\]\]\nname = "{re.escape(package)}"\n.*?(?=\n\[\[package\]\]|\Z)',
+        lock,
+        re.DOTALL,
+    )
+    assert block is not None, f"uv.lock has no [[package]] block for {package}"
+    deps = re.search(r"\ndependencies = \[(.*?)\n\]", block.group(0), re.DOTALL)
+    if deps is None:
+        return set()
+    return set(re.findall(r'\{ name = "([^"]+)"', deps.group(1)))
+
+
+def test_cpwer_scorer_dependency_closure_is_cpu_only() -> None:
+    # meeteval's runtime deps must stay the small CPU-only closure; a bump that
+    # dragged in torch/CUDA would break the isolated extra on arm64 (mbp) and
+    # bloat the maintainer env. Assert the resolved closure exactly.
+    deps = _locked_dependencies(CPWER_PACKAGE)
+    assert deps == CPWER_ALLOWED_DEPS, (
+        f"{CPWER_PACKAGE} resolved deps {sorted(deps)} != expected {sorted(CPWER_ALLOWED_DEPS)}"
+    )
+    for dep in deps:
+        assert not any(bad in dep for bad in CPWER_FORBIDDEN_DEP_SUBSTRINGS), (
+            f"{CPWER_PACKAGE} dependency {dep!r} looks GPU/torch-flavored; keep cpWER CPU-only"
+        )
+
+
+def test_cpwer_scorer_stays_out_of_dev_extra() -> None:
+    dev = _optional_dependencies().get("dev", [])
+    assert _extra_pin(dev, CPWER_PACKAGE) is None, (
+        f"{CPWER_PACKAGE} leaked into the dev extra — keep it isolated in {EXTRA}"
+    )
+
+
+def test_cpwer_scorer_never_enters_the_diarizer_service_image() -> None:
+    reqs = (REPO_ROOT / "services" / "pyannote" / "requirements.txt").read_text().lower()
+    assert CPWER_PACKAGE not in reqs, (
+        f"{CPWER_PACKAGE} must never be installed into the diarizer service image"
     )
 
 

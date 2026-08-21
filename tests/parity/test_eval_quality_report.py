@@ -66,6 +66,7 @@ def _report(
     diag_der: float,
     per_recording: dict[str, dict[str, Any]],
     wer: dict[str, Any] | None = None,
+    cpwer: dict[str, Any] | None = None,
     git_sha: str = "abc123",
     manifest_sha: str = "d" * 64,
     corpus: str = "ami",
@@ -87,12 +88,20 @@ def _report(
         "global_jer": diag_der,
         "per_recording": per_recording,
     }
+    # cpWER pairs with WER (AMI transcript metrics); auto-derive a matching block
+    # from the WER cohort when not explicitly provided so fixtures stay terse.
+    if cpwer is None and wer is not None:
+        cpwer = {
+            "pooled_cpwer": wer["pooled_wer"],
+            "per_recording": {r: {"cpwer": v["wer"]} for r, v in wer["per_recording"].items()},
+        }
     environment: dict[str, Any] = {
         "git_sha": git_sha,
         "manifest_sha256": manifest_sha,
         "corpus": corpus,
         "diarization_cohort": sorted(per_recording),
         "wer_cohort": sorted(wer["per_recording"]) if wer else [],
+        "cpwer_cohort": sorted(cpwer["per_recording"]) if cpwer else [],
         "scorer_versions": scorer_versions
         or {"pyannote.metrics": "4.1", "pyannote.core": "5.0.0", "jiwer": "3.0"},
         "normalizer_version": normalizer_version,
@@ -103,7 +112,7 @@ def _report(
     if cohort_sha256 is not None:
         environment["cohort_sha256"] = cohort_sha256
     report: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "eval_quality_report",
         "diarization": {
             "jer_mapping": ev.JER_MAPPING,
@@ -114,6 +123,8 @@ def _report(
     }
     if wer is not None:
         report["wer"] = wer
+    if cpwer is not None:
+        report["cpwer"] = cpwer
     return report
 
 

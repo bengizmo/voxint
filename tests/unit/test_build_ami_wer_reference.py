@@ -134,7 +134,7 @@ class TestBuildReference:
 
     def test_merges_crops_and_hashes(self, tmp_path: Path) -> None:
         ami = self._layout(tmp_path)
-        text, record = tool.build_reference(ami, "EN2002c", "test")
+        text, record, cpwer_streams = tool.build_reference(ami, "EN2002c", "test")
         assert text == "hello world"  # 'late' at 3.0s cropped by the UEM
         assert record["word_count"] == 2
         assert record["words_dropped_outside_uem"] == 1
@@ -142,13 +142,18 @@ class TestBuildReference:
         assert record["evaluated_duration_s"] == pytest.approx(2.0)
         assert len(record["text_sha256"]) == 64
         assert len(record["canonical_words_sha256"]) == 64
+        # cpWER streams: per-speaker, occurrence-partition of the merged words.
+        assert cpwer_streams == {"speaker:A": ["hello"], "speaker:B": ["world"]}
+        assert record["cpwer_speaker_word_counts"] == {"speaker:A": 1, "speaker:B": 1}
+        assert sum(record["cpwer_speaker_word_counts"].values()) == record["word_count"]
 
     def test_deterministic_shas(self, tmp_path: Path) -> None:
         ami = self._layout(tmp_path)
-        _, a = tool.build_reference(ami, "EN2002c", "test")
-        _, b = tool.build_reference(ami, "EN2002c", "test")
+        _, a, sa = tool.build_reference(ami, "EN2002c", "test")
+        _, b, sb = tool.build_reference(ami, "EN2002c", "test")
         assert a["text_sha256"] == b["text_sha256"]
         assert a["canonical_words_sha256"] == b["canonical_words_sha256"]
+        assert sa == sb
 
     def test_missing_uem_raises(self, tmp_path: Path) -> None:
         ami = self._layout(tmp_path)

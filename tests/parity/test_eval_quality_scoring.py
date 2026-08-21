@@ -332,7 +332,7 @@ class TestCohortBinding:
     scored, stamps it, and fails closed on any drift (the plan's phase 4)."""
 
     def _ami_manifest(self, tmp_path: Path) -> tuple[dict, dict]:
-        """An AMI-style manifest (diar + wer + cohort) and its cohort block."""
+        """An AMI-style manifest (diar + wer + cpwer + cohort) and its cohort block."""
         ref = tmp_path / "ref.rttm"
         ref.write_text(_rttm("r", [(0.0, 10.0, "A")]))
         hyp = tmp_path / "hyp.rttm"
@@ -343,13 +343,20 @@ class TestCohortBinding:
         rtxt.write_text("hello world")
         htxt = tmp_path / "hyp.txt"
         htxt.write_text("hello world")
+        cp_obj = {"recording_id": "r", "streams": {"speaker:A": ["hello", "world"]}}
+        cpref = tmp_path / "ref.cpwer.json"
+        cpref.write_text(json.dumps(cp_obj))
+        cphyp = tmp_path / "hyp.cpwer.json"
+        cphyp.write_text(json.dumps(cp_obj))
         cohort = {
+            "schema_version": ev.eval_run.COHORT_SCHEMA_VERSION,
             "corpus": "ami",
             "inputs": [
                 _input("r", "audio", (1000, "0" * 64)),
                 _input("r", "reference_rttm", _sha(ref)),
                 _input("r", "uem", _sha(uem)),
                 _input("r", "wer_reference", _sha(rtxt)),
+                _input("r", "cpwer_reference", _sha(cpref)),
             ],
             "pipeline_environment": _pipeline_env(),
         }
@@ -364,6 +371,9 @@ class TestCohortBinding:
             ],
             "wer": [
                 {"recording_id": "r", "reference_text": str(rtxt), "hypothesis_text": str(htxt)}
+            ],
+            "cpwer": [
+                {"recording_id": "r", "reference_json": str(cpref), "hypothesis_json": str(cphyp)}
             ],
             "cohort": cohort,
         }
@@ -439,12 +449,14 @@ class TestCohortBinding:
         hyp = tmp_path / "hyp.rttm"
         hyp.write_text(_rttm("v", [(0.0, 9.9, "s")]))
         cohort = {
+            "schema_version": ev.eval_run.COHORT_SCHEMA_VERSION,
             "corpus": "voxconverse",
             "inputs": [
                 _input("v", "audio", (2000, "1" * 64), split="dev"),
                 _input("v", "reference_rttm", _sha(ref), split="dev"),
                 _input("v", "uem", None, split="dev"),
                 _input("v", "wer_reference", None, split="dev"),
+                _input("v", "cpwer_reference", None, split="dev"),
             ],
             "pipeline_environment": _pipeline_env(),
         }

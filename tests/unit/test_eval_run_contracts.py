@@ -224,13 +224,23 @@ class TestPathResolution:
         _touch(setup / "only_words" / "rttms" / split / f"{rid}.rttm")
         _touch(setup / "uems" / split / f"{rid}.uem")
         _touch(root / "ami" / "wer_reference" / f"{rid}.words.txt")
+        _touch(root / "ami" / "wer_reference" / f"{rid}.cpwer_reference.json")
 
-    def test_ami_resolves_all_four_roles(self, tmp_path: Path) -> None:
+    def test_ami_resolves_all_roles(self, tmp_path: Path) -> None:
         self._ami_layout(tmp_path)
         item = er.load_subset([_item()], "ami")[0]
         r = er.resolve_item(tmp_path, item)
         assert r.audio.name == "EN2002c.Mix-Headset.wav"
         assert r.uem is not None and r.wer_reference is not None
+        assert r.cpwer_reference is not None and r.cpwer_reference.name.endswith(
+            ".cpwer_reference.json"
+        )
+
+    def test_ami_missing_cpwer_reference_errors(self, tmp_path: Path) -> None:
+        self._ami_layout(tmp_path)
+        (tmp_path / "ami" / "wer_reference" / "EN2002c.cpwer_reference.json").unlink()
+        with pytest.raises(er.RunError, match="cpWER reference"):
+            er.resolve_item(tmp_path, er.load_subset([_item()], "ami")[0])
 
     def test_ami_missing_file_errors(self, tmp_path: Path) -> None:
         self._ami_layout(tmp_path)
@@ -476,12 +486,14 @@ class TestJournalResume:
         assert d.action == er.ACTION_SUBMIT
 
     def test_completed_with_artifacts_skips_without_them_stops(self) -> None:
-        # AMI requires BOTH the hypothesis RTTM sha and the WER text sha before a
-        # completed item is safe to skip.
+        # AMI requires the hypothesis RTTM, the WER text, AND the cpWER streams
+        # shas before a completed item is safe to skip.
         j = er.new_journal("ami", self._cohort_hash(), _env())
         j["items"]["done"] = {
             "status": "completed",
-            "artifacts": {"hypothesis_rttm_sha256": "h", "wer_text_sha256": "w"},
+            "artifacts": {
+                "hypothesis_rttm_sha256": "h", "wer_text_sha256": "w", "cpwer_streams_sha256": "c",
+            },
         }
         j["items"]["empty"] = {"status": "completed", "artifacts": {}}
         decisions = er.plan_resume(j, ["done", "empty"], resume=True, retry_failed=False)

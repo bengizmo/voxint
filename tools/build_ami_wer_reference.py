@@ -54,7 +54,33 @@ import prepare_bakeoff_corpus as bake  # noqa: E402
 # The frozen artifact is intended for this normalizer; the harness applies it.
 # Recorded as provenance metadata only — importing the constant is cheap and
 # does not pull the normalizer runtime (that stays a scoring-time concern).
-SCHEMA_VERSION = 1
+#
+# Schema 2 (issue #97 commit 3) adds the per-speaker cpWER reference:
+# ``{id}.cpwer_reference.json`` holds the SAME cropped ``scored`` words the
+# merged ``.words.txt`` is built from, bucketed by speaker in chronological order,
+# so the harness can score concatenated minimum-permutation WER (cpWER) against
+# the same ground truth. Both artifacts derive from ONE cropped word list (no
+# second parse), and the per-speaker grouping is checked to conserve exactly the
+# merged words (``canonical_words_sha256`` identity), so the two can never drift.
+SCHEMA_VERSION = 2
+
+# Reserved cpWER stream-label prefixes (mirrors eval_quality's collision-free
+# encoding): a real speaker becomes ``speaker:<agent>`` so a model-emitted
+# hypothesis label can never collide with the anonymous ``unassigned:`` bucket.
+# The reference has no anonymous stream, but it uses the same ``speaker:`` prefix
+# so reference and hypothesis stream keys share one namespace.
+SPEAKER_LABEL_PREFIX = "speaker:"
+
+
+def _canonical_json_bytes(payload: Any) -> bytes:
+    """Deterministic JSON bytes: sorted keys, compact, UTF-8, no NaN/Inf.
+
+    The single canonical encoder shared by every artifact this tool writes, so a
+    hash taken here is reproducible by the harness that reads it back.
+    """
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
 
 
 @dataclass(frozen=True)
@@ -163,10 +189,35 @@ def merge_chronologically(words: list[TimedWord]) -> list[TimedWord]:
     return sorted(words, key=lambda w: (w.start_us, w.end_us, w.speaker, w.text))
 
 
+def group_cpwer_streams(merged: list[TimedWord]) -> dict[str, list[str]]:
+    """Bucket the merged words by speaker into cpWER reference streams.
+
+    Iterating the globally-sorted ``merged`` list and appending per speaker keeps
+    each speaker's words in chronological order (a stable subsequence) WITHOUT a
+    second sort, and derives the per-speaker streams from the exact same word
+    objects the merged ``.words.txt`` is built from, so the two artifacts cannot
+    drift. Keys use the collision-free ``speaker:<agent>`` encoding the harness
+    reads back (see :data:`SPEAKER_LABEL_PREFIX`). A speaker whose words all fell
+    outside the UEM is simply absent from ``merged`` and so is omitted here (no
+    empty streams, which meeteval's cpWER would reject as a 0-length denominator).
+    """
+    streams: dict[str, list[str]] = {}
+    for w in merged:
+        streams.setdefault(f"{SPEAKER_LABEL_PREFIX}{w.speaker}", []).append(w.text)
+    return streams
+
+
 def build_reference(
     ami_root: Path, recording_id: str, split: str
-) -> tuple[str, dict[str, Any]]:
-    """Return ``(raw_merged_text, integrity_record)`` for one AMI meeting."""
+) -> tuple[str, dict[str, Any], dict[str, list[str]]]:
+    """Return ``(raw_merged_text, integrity_record, cpwer_streams)`` for a meeting.
+
+    ``cpwer_streams`` is the per-speaker cpWER reference (raw words, un-normalized;
+    the harness normalizes each stream at scoring time exactly as it does the
+    plain-WER stream). It is an occurrence-partition of the merged words: every
+    merged word enters exactly one speaker stream, checked here so the merged
+    ``.words.txt`` and the per-speaker JSON provably score the same ground truth.
+    """
     words_dir = ami_root / "annotations" / "words"
     uem_path = (
         ami_root / "AMI-diarization-setup-main" / "uems" / split / f"{recording_id}.uem"
@@ -193,6 +244,19 @@ def build_reference(
             ],
         }
     )
+
+    cpwer_streams = group_cpwer_streams(merged)
+    cpwer_counts = {key: len(words) for key, words in cpwer_streams.items()}
+    # Occurrence-partition conservation: the per-speaker streams together hold
+    # exactly the merged words, no more, no fewer. A mismatch means the grouping
+    # dropped or duplicated a word, which would silently move cpWER.
+    grouped_total = sum(cpwer_counts.values())
+    if grouped_total != len(merged):
+        raise BuildError(
+            f"{recording_id}: cpWER streams hold {grouped_total} words but the merged "
+            f"reference has {len(merged)} (grouping is not an occurrence-partition)"
+        )
+
     record = {
         "recording_id": recording_id,
         "split": split,
@@ -204,8 +268,9 @@ def build_reference(
         "text_sha256": bake.sha256_hex(text_bytes),
         "canonical_words_sha256": bake.sha256_hex(canonical),
         "text_bytes": len(text_bytes),
+        "cpwer_speaker_word_counts": cpwer_counts,
     }
-    return text, record
+    return text, record, cpwer_streams
 
 
 # --------------------------------------------------------------------------- #
@@ -261,8 +326,27 @@ def run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, Any]] = []
     for rec_id, split in targets:
-        text, record = build_reference(ami_root, rec_id, split)
+        text, record, cpwer_streams = build_reference(ami_root, rec_id, split)
         _write_atomic(out_dir / f"{rec_id}.words.txt", text + "\n")
+        cpwer_reference = {
+            "schema_version": SCHEMA_VERSION,
+            "kind": "ami-cpwer-reference",
+            "recording_id": rec_id,
+            "split": split,
+            "streams": cpwer_streams,
+            "speaker_word_counts": record["cpwer_speaker_word_counts"],
+            "word_count": record["word_count"],
+            # Cross-link to the merged reference: the harness binds the bytes of
+            # THIS file in the cohort, and this hash ties it back to the same
+            # cropped word set the .words.txt was built from.
+            "canonical_words_sha256": record["canonical_words_sha256"],
+        }
+        # Canonical bytes + a trailing newline, written atomically like the sibling
+        # .words.txt so a crash never leaves a half-written reference.
+        _write_atomic(
+            out_dir / f"{rec_id}.cpwer_reference.json",
+            _canonical_json_bytes(cpwer_reference).decode("utf-8") + "\n",
+        )
         records.append(record)
         preview = text[:160].replace("\n", " ")
         print(

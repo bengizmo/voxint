@@ -114,20 +114,30 @@ JaccardErrorRate: Any = None
 NORMALIZER_VERSION: str = ""
 runtime_fingerprint: Any = None
 score_pooled: Any = None
+normalize_text: Any = None
+cp_word_error_rate: Any = None
+combine_error_rates: Any = None
 
 
 def _load_scoring() -> None:
-    """Import the pyannote + jiwer scoring stack into module globals (once).
+    """Import the pyannote + jiwer + meeteval scoring stack into globals (once).
 
     Called at the top of ``cmd_score`` only. A missing extra raises the normal
     ``ImportError`` here rather than at module import, so ``import eval_quality``,
     ``run``, and ``report`` all work in the dev lane without the parity/
-    eval-quality extras installed.
+    eval-quality extras installed. meeteval is imported from its LOW-LEVEL modules
+    only (``meeteval.wer.wer.cp`` / ``.error_rate``); the api/CLI layer misreads a
+    flat ``{speaker: text}`` dict as ``{session: text}`` and pulls extra deps.
     """
     global Annotation, Segment, Timeline, DiarizationErrorRate, JaccardErrorRate
-    global NORMALIZER_VERSION, runtime_fingerprint, score_pooled
+    global NORMALIZER_VERSION, runtime_fingerprint, score_pooled, normalize_text
+    global cp_word_error_rate, combine_error_rates
     if Annotation is not None:
         return
+    # cpWER (eval-quality extra): meeteval's Hungarian speaker assignment + pooled
+    # integer edit counts, low-level modules only.
+    from meeteval.wer.wer.cp import cp_word_error_rate as _cp
+    from meeteval.wer.wer.error_rate import combine_error_rates as _combine
     from pyannote.core import Annotation as _Annotation
     from pyannote.core import Segment as _Segment
     from pyannote.core import Timeline as _Timeline
@@ -136,29 +146,51 @@ def _load_scoring() -> None:
 
     # Frozen WER stack (parity extra): jiwer + the sha-pinned Whisper normalizer.
     from tests.parity.bakeoff.normalize import NORMALIZER_VERSION as _NV
+    from tests.parity.bakeoff.normalize import normalize_text as _nt
     from tests.parity.bakeoff.normalize import runtime_fingerprint as _rf
     from tests.parity.whisper_bakeoff_score import score_pooled as _sp
 
     Annotation, Segment, Timeline = _Annotation, _Segment, _Timeline
     DiarizationErrorRate, JaccardErrorRate = _DER, _JER
     NORMALIZER_VERSION, runtime_fingerprint, score_pooled = _NV, _rf, _sp
+    normalize_text = _nt
+    cp_word_error_rate, combine_error_rates = _cp, _combine
 
 # The strict, gate-bearing diarization protocol vs the forgiving diagnostic one.
 STRICT = {"collar": 0.0, "skip_overlap": False}
 DIAGNOSTIC = {"collar": 0.5, "skip_overlap": True}
 
+# The cpWER scoring protocol token (issue #97 commit 3): each speaker stream is
+# whisper-normalized on its own concatenation, then split; meeteval only
+# whitespace-tokenizes (a no-op on the already-split tokens) and runs the
+# Hungarian speaker assignment. This differs from plain WER's whole-stream
+# normalization, so it is recorded as a distinct protocol token that enters the
+# cohort identity (a change here is a protocol change and must fail the floor).
+CPWER_PROTOCOL = "per-stream whisper-normalize then meeteval-cp, no meeteval preprocess"
+
 # The scoring protocol is a property of THIS harness, never the caller's to set:
 # two runs are a legitimate zero-change pair only if scored under the same
-# strict+diagnostic protocol, so the constant is baked into the cohort descriptor
-# (and thus the hash), not read from the manifest.
-HARNESS_PROTOCOL = {"strict": STRICT, "diagnostic": DIAGNOSTIC}
+# strict+diagnostic+cpWER protocol, so the constant is baked into the cohort
+# descriptor (and thus the hash), not read from the manifest.
+HARNESS_PROTOCOL = {"strict": STRICT, "diagnostic": DIAGNOSTIC, "cpwer": CPWER_PROTOCOL}
 
-# The four cohort input roles. `audio` drives the hypothesis; reference_rttm/uem/
-# wer_reference are the ground truth the score is taken against. Hypothesis files
-# are OUTPUTS, never cohort inputs (two zero-change runs differ there by design,
-# which is exactly what the noise floor measures). A corpus that lacks a role
-# (VoxConverse has no UEM or WER) carries an EXPLICIT null record for it.
-COHORT_ROLES = ("audio", "reference_rttm", "uem", "wer_reference")
+# The cohort input roles. `audio` drives the hypothesis; reference_rttm/uem/
+# wer_reference/cpwer_reference are the ground truth the score is taken against.
+# Hypothesis files are OUTPUTS, never cohort inputs (two zero-change runs differ
+# there by design, which is exactly what the noise floor measures). A corpus that
+# lacks a role (VoxConverse has no UEM/WER/cpWER) carries an EXPLICIT null record
+# for it. `cpwer_reference` is the per-speaker AMI cpWER JSON (issue #97 commit 3);
+# it is always paired with `wer_reference` (both present for AMI, both null for
+# VoxConverse — the corpus matrix enforced in `_cohort_records`).
+COHORT_ROLES = ("audio", "reference_rttm", "uem", "wer_reference", "cpwer_reference")
+
+# Roles that must NEVER be null (every corpus has audio + a diarization reference).
+COHORT_REQUIRED_ROLES = ("audio", "reference_rttm")
+
+# Import the collision-free cpWER stream-label keys from the frozen run contracts
+# so reference builder, hypothesis export, and scorer share ONE namespace.
+CPWER_SPEAKER_PREFIX = eval_run.CPWER_SPEAKER_PREFIX
+CPWER_UNASSIGNED_KEY = eval_run.CPWER_UNASSIGNED_KEY
 
 # pyannote 4.1's JaccardErrorRate maps hypothesis to reference speakers by
 # MAXIMIZING raw co-occurrence duration, whereas the official DIHARD/dscore JER
@@ -170,7 +202,16 @@ COHORT_ROLES = ("audio", "reference_rttm", "uem", "wer_reference")
 # DIHARD JER is a deferred follow-up if an absolute claim is ever needed.
 JER_MAPPING = "pyannote-4.1-cooccurrence (delta-only; not DIHARD Jaccard-optimal)"
 
-SCHEMA_VERSION = 1
+# Schema 2 (issue #97 commit 3): the metrics JSON gains a `cpwer` block. `report`
+# requires SCHEMA_VERSION, so a stale schema-1 metrics file fails closed rather
+# than being rendered without its cpWER numbers.
+SCHEMA_VERSION = 2
+
+# meeteval refuses inputs with more than this many speakers per side (a sanity
+# backstop against a mislabelled input). AMI has ~4-5; we pre-check the raw
+# stream-key count so an all-empty/punctuation-only 21-stream regression still
+# fails as an actionable EvalError rather than meeteval's opaque RuntimeError.
+CPWER_MAX_SPEAKERS = 20
 
 
 def _git_sha() -> str:
@@ -372,6 +413,156 @@ def score_wer(items: list[tuple[str, str, str]]) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# cpWER scoring (concatenated minimum-permutation WER; AMI-only, meeteval)
+# --------------------------------------------------------------------------- #
+CpwerStreams = dict[str, list[str]]
+
+
+def _validate_cpwer_streams(
+    rid: str, streams: Any, *, side: str, allow_unassigned: bool, allow_empty: bool = False
+) -> None:
+    """Validate a stored cpWER stream dict at score time (reject, never repair).
+
+    Every value must be a ``list[str]`` of non-empty, non-whitespace-only tokens
+    (internal whitespace is allowed — meeteval re-tokenizes it, and the frozen
+    normalizer would too). Keys must be exactly the collision-free encoding: a
+    reference has only ``speaker:<label>`` streams; a hypothesis may also carry the
+    anonymous ``unassigned:`` bucket. A blank ``speaker:`` label is rejected so it
+    can never masquerade as a real speaker or evade the unassigned gate.
+    """
+    if not isinstance(streams, dict):
+        raise EvalError(f"{rid}: cpWER {side} streams must be an object")
+    if not streams and not allow_empty:
+        raise EvalError(f"{rid}: cpWER {side} streams must be a non-empty object")
+    for key, words in streams.items():
+        if key == CPWER_UNASSIGNED_KEY:
+            if not allow_unassigned:
+                raise EvalError(
+                    f"{rid}: cpWER {side} must not carry an {CPWER_UNASSIGNED_KEY!r} key"
+                )
+        elif key.startswith(CPWER_SPEAKER_PREFIX):
+            if not key[len(CPWER_SPEAKER_PREFIX):].strip():
+                raise EvalError(f"{rid}: cpWER {side} has a blank speaker label {key!r}")
+        else:
+            raise EvalError(
+                f"{rid}: cpWER {side} stream key {key!r} is not "
+                f"{CPWER_UNASSIGNED_KEY!r} or a {CPWER_SPEAKER_PREFIX!r}<label> key"
+            )
+        if not isinstance(words, list):
+            raise EvalError(f"{rid}: cpWER {side} stream {key!r} must be a list of words")
+        for w in words:
+            if not isinstance(w, str) or not w.strip():
+                raise EvalError(f"{rid}: cpWER {side} stream {key!r} has an empty/non-string word")
+
+
+def _normalize_cpwer_stream(words: list[str]) -> list[str]:
+    """One frozen-normalizer pass over a whole speaker stream, then whitespace split.
+
+    Normalizing the concatenated stream (not each token) matches the plain-WER
+    protocol for a single speaker and lets contraction/number expansion see word
+    context; meeteval then whitespace-tokenizes the result, a no-op on these
+    already-split tokens. Returns ``[]`` for a stream that normalizes to nothing.
+    """
+    return normalize_text(" ".join(words)).split()
+
+
+def _cpwer_one(rid: str, ref_streams: CpwerStreams, hyp_streams: CpwerStreams) -> Any:
+    """Score ONE recording's cpWER, returning meeteval's ``CPErrorRate``.
+
+    Guards, in order: raw stream-key counts (pre-normalization) must not exceed
+    :data:`CPWER_MAX_SPEAKERS` on either side; stored streams must be well-formed;
+    every REFERENCE stream must be non-empty after normalization (a 0-length
+    denominator makes meeteval return ``error_rate=None``); empty hypothesis
+    streams are dropped (meeteval ignores them and they would pollute the
+    false-alarm-speaker diagnostic). Speaker keys are fed in sorted order so any
+    S/D/I tie resolves deterministically.
+    """
+    if len(ref_streams) > CPWER_MAX_SPEAKERS or len(hyp_streams) > CPWER_MAX_SPEAKERS:
+        raise EvalError(
+            f"{rid}: cpWER speaker count exceeds {CPWER_MAX_SPEAKERS} "
+            f"(ref {len(ref_streams)}, hyp {len(hyp_streams)}); mislabelled input?"
+        )
+    # An all-silent hypothesis (no ASR output) is a legitimate empty stream dict
+    # that meeteval scores as all-deletions; the reference must never be empty.
+    _validate_cpwer_streams(rid, ref_streams, side="reference", allow_unassigned=False)
+    _validate_cpwer_streams(
+        rid, hyp_streams, side="hypothesis", allow_unassigned=True, allow_empty=True
+    )
+
+    ref_norm = {k: _normalize_cpwer_stream(ref_streams[k]) for k in sorted(ref_streams)}
+    empty_ref = sorted(k for k, v in ref_norm.items() if not v)
+    if empty_ref:
+        raise EvalError(f"{rid}: cpWER reference streams normalize to empty: {empty_ref}")
+    hyp_norm = {k: v for k in sorted(hyp_streams) if (v := _normalize_cpwer_stream(hyp_streams[k]))}
+
+    rate = cp_word_error_rate(
+        ref_norm, hyp_norm, reference_sort=False, hypothesis_sort=False
+    )
+    if rate.errors != rate.substitutions + rate.deletions + rate.insertions:
+        raise EvalError(f"{rid}: cpWER errors {rate.errors} != S+D+I (meeteval invariant broke)")
+    return rate
+
+
+def score_cpwer(
+    items: list[tuple[str, CpwerStreams, CpwerStreams]],
+) -> dict[str, Any]:
+    """Pooled micro-average cpWER over ``(recording_id, ref_streams, hyp_streams)``.
+
+    Each stream is a ``dict`` of collision-free encoded label -> RAW (un-normalized)
+    word list. Per recording the frozen normalizer is applied per stream, then
+    meeteval assigns hypothesis speakers to reference speakers (Hungarian) and
+    pools integer edit counts; ``combine_error_rates`` then micro-averages across
+    recordings exactly like ``score_wer``. The gate-bearing numbers are pooled
+    cpWER + aggregate S/D/I + ``unassigned_words``; the per-recording assignment
+    and speaker counts are tie-order-sensitive diagnostics.
+
+    ``unassigned_words`` counts RAW words in the anonymous hypothesis bucket
+    (before normalization, which could erase a punctuation-only token and hide a
+    regression). Today every AMI segment carries a diarization label, so ANY
+    unassigned word is a regression and the caller gates ``unassigned_words == 0``.
+    """
+    _load_scoring()
+    if not items:
+        raise EvalError("score_cpwer: no recordings to score (empty cpWER cohort)")
+    rates: list[Any] = []
+    per_recording: dict[str, dict[str, Any]] = {}
+    total_unassigned = 0
+    for rid, ref_streams, hyp_streams in items:
+        unassigned_words = len(hyp_streams.get(CPWER_UNASSIGNED_KEY, []))
+        total_unassigned += unassigned_words
+        rate = _cpwer_one(rid, ref_streams, hyp_streams)
+        rates.append(rate)
+        per_recording[rid] = {
+            "cpwer": rate.error_rate,
+            "substitutions": rate.substitutions,
+            "deletions": rate.deletions,
+            "insertions": rate.insertions,
+            "length": rate.length,
+            "missed_speaker": rate.missed_speaker,
+            "falarm_speaker": rate.falarm_speaker,
+            "scored_speaker": rate.scored_speaker,
+            "unassigned_words": unassigned_words,
+            # (ref_label, hyp_label) pairs, None on the unmatched side; a diagnostic.
+            "assignment": [list(pair) for pair in rate.assignment],
+        }
+    pooled = combine_error_rates(*rates)
+    if pooled.errors != pooled.substitutions + pooled.deletions + pooled.insertions:
+        raise EvalError("pooled cpWER errors != S+D+I (meeteval pooling invariant broke)")
+    return {
+        "pooled_cpwer": pooled.error_rate,
+        "substitutions": pooled.substitutions,
+        "deletions": pooled.deletions,
+        "insertions": pooled.insertions,
+        "length": pooled.length,
+        "missed_speaker": pooled.missed_speaker,
+        "falarm_speaker": pooled.falarm_speaker,
+        "scored_speaker": pooled.scored_speaker,
+        "unassigned_words": total_unassigned,
+        "per_recording": per_recording,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Manifest-driven `score` command
 # --------------------------------------------------------------------------- #
 def _read(path: Path) -> str:
@@ -458,7 +649,7 @@ def _load_diar_items(
 
 
 def _environment_manifest(
-    manifest_bytes: bytes, diar_ids: list[str], wer_ids: list[str]
+    manifest_bytes: bytes, diar_ids: list[str], wer_ids: list[str], cpwer_ids: list[str]
 ) -> dict[str, Any]:
     """Bind a report to exactly what produced it (the plan's env manifest).
 
@@ -472,10 +663,18 @@ def _environment_manifest(
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
         "diarization_cohort": sorted(diar_ids),
         "wer_cohort": sorted(wer_ids),
+        "cpwer_cohort": sorted(cpwer_ids),
         "scorer_versions": {
             "pyannote.metrics": _pkg_version("pyannote.metrics"),
             "pyannote.core": _pkg_version("pyannote.core"),
             "jiwer": _pkg_version("jiwer"),
+            # cpWER scorer stack: meeteval orchestrates, scipy runs the Hungarian
+            # speaker assignment, kaldialign computes the S/D/I edit counts, numpy
+            # underpins both — a bump in any can move the cpWER number.
+            "meeteval": _pkg_version("meeteval"),
+            "scipy": _pkg_version("scipy"),
+            "numpy": _pkg_version("numpy"),
+            "kaldialign": _pkg_version("kaldialign"),
         },
         "normalizer_version": NORMALIZER_VERSION,
         "normalizer_runtime": runtime_fingerprint(),
@@ -503,9 +702,11 @@ def _cohort_records(
     """Validate the cohort ``inputs`` array; return (split_by_id, records).
 
     ``records`` maps ``(id, role)`` to ``(byte_len, sha256)`` or ``None`` for an
-    explicit null role. Enforces exactly the four :data:`COHORT_ROLES` per id,
-    unique ``(id, role)`` pairs, one consistent split per id, coherent
-    null/hash/length pairs, and non-null ``audio``/``reference_rttm`` records.
+    explicit null role. Enforces exactly the :data:`COHORT_ROLES` per id, unique
+    ``(id, role)`` pairs, one consistent split per id, coherent null/hash/length
+    pairs, non-null :data:`COHORT_REQUIRED_ROLES`, and null-coherence between
+    ``wer_reference`` and ``cpwer_reference`` (both present, or both absent — the
+    two AMI ground-truth transcripts are produced and dropped together).
     """
     if not isinstance(inputs, list) or not inputs:
         raise EvalError("cohort.inputs must be a non-empty array")
@@ -538,7 +739,7 @@ def _cohort_records(
             raise EvalError(f"{where}: byte_len and sha256 must both be set or both null")
         value: tuple[int, str] | None
         if byte_len is None:
-            if role in ("audio", "reference_rttm"):
+            if role in COHORT_REQUIRED_ROLES:
                 raise EvalError(f"{where} must not be null")
             value = None
         else:
@@ -554,13 +755,39 @@ def _cohort_records(
     for rid, roles in roles_by_id.items():
         if roles != set(COHORT_ROLES):
             missing = sorted(set(COHORT_ROLES) - roles)
-            raise EvalError(f"cohort id {rid!r} must carry all four roles; missing {missing}")
+            extra_roles = sorted(roles - set(COHORT_ROLES))
+            raise EvalError(
+                f"cohort id {rid!r} must carry exactly roles {list(COHORT_ROLES)}; "
+                f"missing {missing}, unexpected {extra_roles}"
+            )
+    # Null-coherence: an AMI recording has both transcript references, VoxConverse
+    # neither; a mixed pair (one null, one not) is a malformed cohort.
+    for rid in split_by_id:
+        wer_null = records[(rid, "wer_reference")] is None
+        cpwer_null = records[(rid, "cpwer_reference")] is None
+        if wer_null != cpwer_null:
+            raise EvalError(
+                f"cohort id {rid!r}: wer_reference and cpwer_reference must both be "
+                f"null or both present (wer null={wer_null}, cpwer null={cpwer_null})"
+            )
     return split_by_id, records
 
 
 def _role_input(rid: str, role: str, obs: tuple[int, str] | None) -> eval_run.CohortInput:
     """A ``CohortInput`` from an observed ``(byte_len, sha256)`` pair or a null role."""
     return eval_run.CohortInput(rid, role, obs[0] if obs else None, obs[1] if obs else None)
+
+
+def expected_ids_for_role(
+    records: dict[tuple[str, str], tuple[int, str] | None], role: str
+) -> set[str]:
+    """The recording ids whose ``role`` record is non-null (the role's scored set).
+
+    Used to prove the scored WER/cpWER set is EXACTLY the recordings that declare
+    that reference (all AMI, no VoxConverse), never an implicit subset.
+    """
+    ids = {rid for (rid, r) in records if r == role}
+    return {rid for rid in ids if records[(rid, role)] is not None}
 
 
 def _verify_observed(
@@ -578,24 +805,46 @@ def _verify_observed(
         )
 
 
+# The AMI/VoxConverse corpus matrix: which roles a corpus's cohort MUST declare
+# non-null vs null. Null-coherence alone (wer <-> cpwer) permits the wrong pair
+# for a claimed corpus (e.g. an AMI cohort with all-null transcript refs), so the
+# corpus label pins the exact shape once it is known in `_bind_cohort`.
+_CORPUS_NONNULL_ROLES: dict[str, tuple[str, ...]] = {
+    "ami": ("uem", "wer_reference", "cpwer_reference"),
+    "voxconverse": (),
+}
+
+
 def _bind_cohort(
     cohort: dict[str, Any],
     diar_observed: Observed,
     wer_observed: dict[str, tuple[int, str]],
+    cpwer_observed: dict[str, tuple[int, str]],
     diar_ids: list[str],
     wer_ids: list[str],
+    cpwer_ids: list[str],
 ) -> dict[str, Any]:
     """Recompute the cohort identity from the scored bytes and return the stamp.
 
     Returns ``{"cohort_sha256", "corpus", "pipeline_environment"}`` to merge into
     the metrics ``environment``. Raises :class:`EvalError` on any disagreement
-    between the manifest attestation and what was actually scored.
+    between the manifest attestation and what was actually scored. The cohort's
+    ``schema_version`` is checked FIRST so a stale (pre-cpWER) manifest fails with
+    an actionable "re-run" message rather than an opaque hash mismatch.
     """
     if not isinstance(cohort, dict):
         raise EvalError("manifest 'cohort' must be an object")
+    schema_version = cohort.get("schema_version")
+    if schema_version != eval_run.COHORT_SCHEMA_VERSION:
+        raise EvalError(
+            f"cohort.schema_version is {schema_version!r}, expected "
+            f"{eval_run.COHORT_SCHEMA_VERSION} — re-run the bundle with the current harness"
+        )
     corpus = cohort.get("corpus")
     if not isinstance(corpus, str) or not corpus:
         raise EvalError("cohort.corpus must be a non-empty string")
+    if corpus not in _CORPUS_NONNULL_ROLES:
+        raise EvalError(f"cohort.corpus {corpus!r} is not a known corpus")
     pipeline_env = cohort.get("pipeline_environment")
     if not isinstance(pipeline_env, dict):
         raise EvalError("cohort.pipeline_environment must be an object")
@@ -612,33 +861,54 @@ def _bind_cohort(
             f"scored diarization set {sorted(diar_ids)} does not equal the cohort "
             f"recording set {sorted(cohort_ids)}"
         )
-    # WER is scored for exactly the recordings whose wer_reference role is non-null
-    # (all AMI, no VoxConverse); an implicit subset is forbidden.
-    expected_wer = {rid for rid in cohort_ids if records[(rid, "wer_reference")] is not None}
-    if set(wer_ids) != expected_wer:
-        raise EvalError(
-            f"scored WER set {sorted(wer_ids)} does not equal the recordings with a "
-            f"non-null wer_reference {sorted(expected_wer)}"
-        )
+
+    # Corpus-matrix: pin exactly which roles this corpus declares non-null vs null.
+    nonnull_roles = set(_CORPUS_NONNULL_ROLES[corpus])
+    optional_roles = set(COHORT_ROLES) - set(COHORT_REQUIRED_ROLES)
+    for rid in cohort_ids:
+        for role in optional_roles:
+            is_null = records[(rid, role)] is None
+            must_be_present = role in nonnull_roles
+            if must_be_present and is_null:
+                raise EvalError(f"cohort id {rid!r}: corpus {corpus!r} requires a non-null {role}")
+            if not must_be_present and not is_null:
+                raise EvalError(f"cohort id {rid!r}: corpus {corpus!r} requires a null {role}")
+
+    # WER and cpWER are scored for exactly the recordings whose reference role is
+    # non-null (all AMI, no VoxConverse); an implicit subset is forbidden.
+    for label, ids, role in (
+        ("WER", wer_ids, "wer_reference"),
+        ("cpWER", cpwer_ids, "cpwer_reference"),
+    ):
+        expected = expected_ids_for_role(records, role)
+        if set(ids) != expected:
+            raise EvalError(
+                f"scored {label} set {sorted(ids)} does not equal the recordings with a "
+                f"non-null {role} {sorted(expected)}"
+            )
 
     # Verify every locally observable role against the bytes scored, then build
-    # the descriptor from those observed values (audio stays a pure attestation).
+    # the descriptor from those observed values (audio stays a pure attestation:
+    # its bytes are not read at score time). Iterate COHORT_ROLES so adding a role
+    # can never desync the descriptor shape from `_cohort_records`'s validation.
+    observed_by_role: dict[str, dict[str, tuple[int, str] | None]] = {
+        rid: {
+            "reference_rttm": diar_observed[rid]["reference_rttm"],
+            "uem": diar_observed[rid]["uem"],
+            "wer_reference": wer_observed.get(rid),
+            "cpwer_reference": cpwer_observed.get(rid),
+        }
+        for rid in cohort_ids
+    }
     inputs: list[eval_run.CohortInput] = []
     for rid in sorted(cohort_ids):
-        ref_obs = diar_observed[rid]["reference_rttm"]
-        _verify_observed(rid, "reference_rttm", ref_obs, records)
-        uem_obs = diar_observed[rid]["uem"]
-        _verify_observed(rid, "uem", uem_obs, records)
-        wer_obs = wer_observed.get(rid)
-        _verify_observed(rid, "wer_reference", wer_obs, records)
-        audio = records[(rid, "audio")]
-        assert audio is not None and ref_obs is not None  # enforced above
-        inputs += [
-            _role_input(rid, "audio", audio),
-            _role_input(rid, "reference_rttm", ref_obs),
-            _role_input(rid, "uem", uem_obs),
-            _role_input(rid, "wer_reference", wer_obs),
-        ]
+        for role in COHORT_ROLES:
+            if role == "audio":
+                inputs.append(_role_input(rid, "audio", records[(rid, "audio")]))
+                continue
+            obs = observed_by_role[rid][role]
+            _verify_observed(rid, role, obs, records)
+            inputs.append(_role_input(rid, role, obs))
 
     try:
         descriptor = eval_run.cohort_descriptor(
@@ -656,6 +926,27 @@ def _bind_cohort(
     return {"cohort_sha256": cohort_hash, "corpus": corpus, "pipeline_environment": pipeline_env}
 
 
+def _load_cpwer_streams(base_dir: Path, path_str: str, rid: str) -> tuple[bytes, CpwerStreams]:
+    """Read a cpWER stream JSON; return (raw bytes, the ``streams`` dict).
+
+    Reads the buffer ONCE so the cohort observation covers exactly what was
+    scored. Validates the wrapper shape and that its ``recording_id`` matches the
+    manifest entry, then returns the raw (un-normalized) per-label word lists.
+    """
+    data = _read_bytes(_resolve(base_dir, path_str))
+    obj = json.loads(_decode(data, path_str))
+    if not isinstance(obj, dict):
+        raise EvalError(f"{path_str}: cpWER stream file must be a JSON object")
+    if obj.get("recording_id") != rid:
+        raise EvalError(
+            f"{path_str}: cpWER recording_id {obj.get('recording_id')!r} != manifest {rid!r}"
+        )
+    streams = obj.get("streams")
+    if not isinstance(streams, dict):
+        raise EvalError(f"{path_str}: cpWER file must carry a 'streams' object")
+    return data, streams
+
+
 def cmd_score(args: argparse.Namespace) -> int:
     _load_scoring()
     manifest_path = Path(args.manifest)
@@ -669,6 +960,7 @@ def cmd_score(args: argparse.Namespace) -> int:
     manifest_dir = manifest_path.resolve().parent
     diar_entries = manifest.get("diarization", [])
     wer_entries = manifest.get("wer", [])
+    cpwer_entries = manifest.get("cpwer", [])
     if not diar_entries and not wer_entries:
         raise EvalError(f"{args.manifest}: manifest has no 'diarization' or 'wer' entries")
 
@@ -676,8 +968,10 @@ def cmd_score(args: argparse.Namespace) -> int:
 
     diar_ids = [e["recording_id"] for e in diar_entries]
     wer_ids = [e["recording_id"] for e in wer_entries]
+    cpwer_ids = [e["recording_id"] for e in cpwer_entries]
     diar_observed: Observed = {}
     wer_observed: dict[str, tuple[int, str]] = {}
+    cpwer_observed: dict[str, tuple[int, str]] = {}
 
     if diar_entries:
         items, diar_observed = _load_diar_items(diar_entries, manifest_dir)
@@ -702,14 +996,38 @@ def cmd_score(args: argparse.Namespace) -> int:
             wer_observed[rid] = _observe(ref_bytes)
         report["wer"] = score_wer(triples)
 
-    environment = _environment_manifest(manifest_bytes, diar_ids, wer_ids)
+    if cpwer_entries:
+        if len(set(cpwer_ids)) != len(cpwer_ids):
+            raise EvalError("duplicate recording_id in 'cpwer' entries")
+        cpwer_items: list[tuple[str, CpwerStreams, CpwerStreams]] = []
+        for e in cpwer_entries:
+            rid = e["recording_id"]
+            # Reference bytes are cohort-observed; the hypothesis is an output.
+            ref_bytes, ref_streams = _load_cpwer_streams(manifest_dir, e["reference_json"], rid)
+            _hyp_bytes, hyp_streams = _load_cpwer_streams(manifest_dir, e["hypothesis_json"], rid)
+            cpwer_items.append((rid, ref_streams, hyp_streams))
+            cpwer_observed[rid] = _observe(ref_bytes)
+        cpwer_report = score_cpwer(cpwer_items)
+        # Structural tripwire: today every AMI segment carries a diarization
+        # label, so any unassigned hypothesis word is a regression, not a metric.
+        if cpwer_report["unassigned_words"] != 0:
+            raise EvalError(
+                f"cpWER hypothesis has {cpwer_report['unassigned_words']} unassigned words "
+                "(a diarization label was lost); refusing to score a fabricated improvement"
+            )
+        report["cpwer"] = cpwer_report
+
+    environment = _environment_manifest(manifest_bytes, diar_ids, wer_ids, cpwer_ids)
     # A `run`-produced manifest carries a cohort block; recompute its identity
     # from the scored bytes and stamp it so `report` can prove the run is a
     # zero-change peer of another. A cohort-less manifest keeps today's shape
     # (no cohort_sha256), and `report` will refuse to render it (fail closed).
     if "cohort" in manifest:
         environment.update(
-            _bind_cohort(manifest["cohort"], diar_observed, wer_observed, diar_ids, wer_ids)
+            _bind_cohort(
+                manifest["cohort"], diar_observed, wer_observed, cpwer_observed,
+                diar_ids, wer_ids, cpwer_ids,
+            )
         )
     report["environment"] = environment
 
@@ -785,10 +1103,13 @@ def _scorer_identity(env: dict[str, Any]) -> tuple[str, str, str]:
     fatal error. What actually determines the metric is the scorer package
     versions and the frozen normalizer, so THOSE must match across a noise floor.
     """
+    # ``normalizer_runtime`` is a dict (runtime_fingerprint()); canonical-JSON
+    # encode it so this identity tuple stays hashable — a multi-run noise floor
+    # builds a set of these, which a raw dict would break with a TypeError.
     return (
         json.dumps(env.get("scorer_versions", {}), sort_keys=True),
         env.get("normalizer_version", ""),
-        env.get("normalizer_runtime", ""),
+        json.dumps(env.get("normalizer_runtime", ""), sort_keys=True),
     )
 
 
@@ -796,14 +1117,17 @@ def _validate_corpus_runs(corpus: str, runs: list[dict[str, Any]]) -> None:
     """Fail closed unless the runs are genuinely comparable (the plan's guard).
 
     Every run of a corpus must be cohort-bound, carry the same cohort identity,
-    be labelled for this corpus, and expose identical DER and WER recording sets;
-    a multi-run noise floor must additionally share one scorer identity. Only
-    then is calling the max spread a zero-change band an honest claim.
+    be labelled for this corpus, and expose identical DER, WER, and cpWER
+    recording sets; a multi-run noise floor must additionally share one scorer
+    identity. Only then is calling the max spread a zero-change band an honest
+    claim.
     """
     hashes: set[str] = set()
     diar_sets: set[frozenset[str]] = set()
     wer_flags: set[bool] = set()
     wer_sets: set[frozenset[str]] = set()
+    cpwer_flags: set[bool] = set()
+    cpwer_sets: set[frozenset[str]] = set()
     for run in runs:
         env = run.get("environment", {})
         cohort_hash = env.get("cohort_sha256")
@@ -831,6 +1155,16 @@ def _validate_corpus_runs(corpus: str, runs: list[dict[str, Any]]) -> None:
         if has_wer and wset != set(env.get("wer_cohort", [])):
             raise EvalError(f"{corpus}: a run's WER set disagrees with environment.wer_cohort")
         wer_sets.add(frozenset(wset))
+        has_cpwer = "cpwer" in run
+        cpwer_flags.add(has_cpwer)
+        cpset = set(run["cpwer"]["per_recording"]) if has_cpwer else set()
+        if has_cpwer and cpset != set(env.get("cpwer_cohort", [])):
+            raise EvalError(f"{corpus}: a run's cpWER set disagrees with environment.cpwer_cohort")
+        # cpWER rides with WER (both AMI transcript metrics); a run that scores one
+        # but not the other is a malformed bundle, not a comparable peer.
+        if has_cpwer != has_wer:
+            raise EvalError(f"{corpus}: a run carries only one of WER/cpWER (they must pair)")
+        cpwer_sets.add(frozenset(cpset))
     if len(hashes) != 1:
         raise EvalError(f"{corpus}: runs do not share one cohort_sha256 (not a zero-change set)")
     if len(diar_sets) != 1:
@@ -839,6 +1173,10 @@ def _validate_corpus_runs(corpus: str, runs: list[dict[str, Any]]) -> None:
         raise EvalError(f"{corpus}: some runs carry WER and some do not")
     if len(wer_sets) != 1:
         raise EvalError(f"{corpus}: runs have different WER recording sets")
+    if len(cpwer_flags) != 1:
+        raise EvalError(f"{corpus}: some runs carry cpWER and some do not")
+    if len(cpwer_sets) != 1:
+        raise EvalError(f"{corpus}: runs have different cpWER recording sets")
     if len(runs) > 1 and len({_scorer_identity(r.get("environment", {})) for r in runs}) != 1:
         raise EvalError(
             f"{corpus}: a multi-run noise floor mixes scorer versions or normalizer identity; "
@@ -872,12 +1210,14 @@ def _report_header(date: str, runs: list[dict[str, Any]]) -> list[str]:
 
 def _corpus_section(corpus: str, runs: list[dict[str, Any]]) -> list[str]:
     has_wer = all("wer" in r for r in runs)
+    has_cpwer = all("cpwer" in r for r in runs)
     n = len(runs)
     strict_der = [_strict(r)["pooled_der"] for r in runs]
     diag_der = [_diagnostic(r)["pooled_der"] for r in runs]
     strict_jer = [_strict(r)["global_jer"] for r in runs]
     diag_jer = [_diagnostic(r)["global_jer"] for r in runs]
     wer = [r["wer"]["pooled_wer"] for r in runs] if has_wer else []
+    cpwer = [r["cpwer"]["pooled_cpwer"] for r in runs] if has_cpwer else []
 
     lines = [f"## {corpus}", ""]
     lines.append(
@@ -894,7 +1234,17 @@ def _corpus_section(corpus: str, runs: list[dict[str, Any]]) -> list[str]:
     ]
     if has_wer:
         lines.append(f"| Pooled WER | {_pct(_mean(wer))} | n/a |")
+    if has_cpwer:
+        lines.append(f"| Pooled cpWER | {_pct(_mean(cpwer))} | n/a |")
     lines.append("")
+    if has_cpwer:
+        lines += [
+            "cpWER is speaker-attributed ASR error: single-stream ASR cannot cover "
+            "overlapped speech, so an overlap-deletion floor is expected and documented, "
+            "not fixed. The anonymous `unassigned:` hypothesis stream is an opaque stream "
+            "meeteval assigns like any other; a scored run gates `unassigned_words == 0`.",
+            "",
+        ]
 
     if n > 1:
         band = [
@@ -903,21 +1253,25 @@ def _corpus_section(corpus: str, runs: list[dict[str, Any]]) -> list[str]:
         ]
         if has_wer:
             band.append(f"pooled WER {_pp(_spread(wer))}")
+        if has_cpwer:
+            band.append(f"pooled cpWER {_pp(_spread(cpwer))}")
         lines += [
             f"### Noise floor ({n} zero-change runs)",
             "",
             "Pooled max spread (strict protocol): " + ", ".join(band) + ".",
             "",
         ]
-        worst = _worst_file_spread(corpus, runs, has_wer)
+        worst = _worst_file_spread(corpus, runs, has_wer, has_cpwer)
         if worst:
             lines += [worst, ""]
 
-    lines += _per_recording_table(runs, has_wer)
+    lines += _per_recording_table(runs, has_wer, has_cpwer)
     return lines
 
 
-def _worst_file_spread(corpus: str, runs: list[dict[str, Any]], has_wer: bool) -> str:
+def _worst_file_spread(
+    corpus: str, runs: list[dict[str, Any]], has_wer: bool, has_cpwer: bool
+) -> str:
     recs = _corpus_recordings(runs)
     der_worst = ("", 0.0)
     for rec in recs:
@@ -925,26 +1279,36 @@ def _worst_file_spread(corpus: str, runs: list[dict[str, Any]], has_wer: bool) -
         if spread > der_worst[1]:
             der_worst = (rec, spread)
     parts = [f"DER {der_worst[0]} {_pp(der_worst[1])}"] if der_worst[0] else []
-    if has_wer:
-        wer_worst = ("", 0.0)
+    for present, block, key, label in (
+        (has_wer, "wer", "wer", "WER"),
+        (has_cpwer, "cpwer", "cpwer", "cpWER"),
+    ):
+        if not present:
+            continue
+        worst = ("", 0.0)
         for rec in recs:
-            vals = [r["wer"]["per_recording"].get(rec, {}).get("wer") for r in runs]
+            vals = [r[block]["per_recording"].get(rec, {}).get(key) for r in runs]
             vals = [v for v in vals if v is not None]
             if len(vals) == len(runs):
                 spread = _spread(vals)
-                if spread > wer_worst[1]:
-                    wer_worst = (rec, spread)
-        if wer_worst[0]:
-            parts.append(f"WER {wer_worst[0]} {_pp(wer_worst[1])}")
+                if spread > worst[1]:
+                    worst = (rec, spread)
+        if worst[0]:
+            parts.append(f"{label} {worst[0]} {_pp(worst[1])}")
     return ("Worst single-file spread: " + "; ".join(parts) + ".") if parts else ""
 
 
-def _per_recording_table(runs: list[dict[str, Any]], has_wer: bool) -> list[str]:
+def _per_recording_table(
+    runs: list[dict[str, Any]], has_wer: bool, has_cpwer: bool
+) -> list[str]:
     recs = _corpus_recordings(runs)
     header = "| recording | evaluated | speakers | ref overlap | strict DER | strict JER |"
     rule = "| --- | --- | --- | --- | --- | --- |"
     if has_wer:
         header += " WER |"
+        rule += " --- |"
+    if has_cpwer:
+        header += " cpWER |"
         rule += " --- |"
     lines = ["Per recording:", "", header, rule]
     for rec in recs:
@@ -962,6 +1326,10 @@ def _per_recording_table(runs: list[dict[str, Any]], has_wer: bool) -> list[str]
             wvals = [r["wer"]["per_recording"].get(rec, {}).get("wer") for r in runs]
             wvals = [v for v in wvals if v is not None]
             row += f" {_pct(_mean(wvals))} |" if wvals else " n/a |"
+        if has_cpwer:
+            cvals = [r["cpwer"]["per_recording"].get(rec, {}).get("cpwer") for r in runs]
+            cvals = [v for v in cvals if v is not None]
+            row += f" {_pct(_mean(cvals))} |" if cvals else " n/a |"
         lines.append(row)
     lines.append("")
     return lines
@@ -1100,36 +1468,51 @@ def assert_monotonic_unique(indices: list[int], what: str) -> None:
         prev = idx
 
 
-def segments_to_word_lists(segments: list[Any]) -> list[list[dict[str, Any]]]:
-    """Ordered per-segment word lists for the AMI WER hypothesis (strict nulls).
+def segments_to_labeled_words(segments: list[Any]) -> list[eval_run.LabeledSegment]:
+    """Ordered ``(segment_index, diarization_label, words)`` for the AMI hypothesis.
 
     ``segments`` are ``TranscriptSegment`` rows ALREADY ordered by
-    ``segment_index`` (the caller supplies the DB order). A segment whose
-    ``words`` is NULL but whose ``raw_text`` is non-empty is a hard error: the
-    run lost its word timing, and silently treating it as ``[]`` would fabricate
-    a perfect-empty hypothesis and move WER. A genuinely empty segment (no
-    ``raw_text``) contributes an empty list.
+    ``segment_index`` (the caller supplies the DB order). Carries the REAL DB
+    ``segment_index`` and the segment's ``diarization_label`` (None -> the
+    anonymous cpWER stream) so plain WER and cpWER partition the same words. A
+    segment whose ``words`` is NULL but whose ``raw_text`` is non-empty is a hard
+    error: the run lost its word timing, and silently treating it as ``[]`` would
+    fabricate a perfect-empty hypothesis and move WER. A genuinely empty segment
+    (no ``raw_text``) contributes an empty list. A blank/whitespace-only
+    diarization label is rejected so it can never masquerade as a real speaker or
+    evade the ``unassigned_words`` gate.
     """
     assert_monotonic_unique([s.segment_index for s in segments], "transcript segment_index")
-    out: list[list[dict[str, Any]]] = []
+    out: list[eval_run.LabeledSegment] = []
     for s in segments:
+        label = s.diarization_label
+        if label is not None and not str(label).strip():
+            raise EvalError(
+                f"transcript segment {s.segment_index} has a blank diarization label "
+                f"{label!r}; refusing to score an unlabellable hypothesis word"
+            )
         if s.words is None:
             if (s.raw_text or "").strip():
                 raise EvalError(
                     f"transcript segment {s.segment_index} has non-empty text but NULL word "
                     "timing; cannot build a WER hypothesis (word timestamps missing)"
                 )
-            out.append([])
+            out.append((s.segment_index, label, []))
         else:
-            out.append(list(s.words))
+            out.append((s.segment_index, label, list(s.words)))
     return out
+
+
+def segments_to_word_lists(segments: list[Any]) -> list[list[dict[str, Any]]]:
+    """Back-compat: the per-segment word lists only, dropping labels/indices."""
+    return [words for _index, _label, words in segments_to_labeled_words(segments)]
 
 
 # --------------------------------------------------------------------------- #
 # Cohort observation + self-contained bundle (pure file IO; round-trippable)
 # --------------------------------------------------------------------------- #
 def observe_role_files(resolved: list[Any]) -> dict[str, dict[str, tuple[int, str] | None]]:
-    """Hash the four cohort role files per recording (explicit null for absent)."""
+    """Hash the cohort role files per recording (explicit null for an absent role)."""
     observed: dict[str, dict[str, tuple[int, str] | None]] = {}
     for r in resolved:
         observed[r.recording_id] = {
@@ -1138,6 +1521,11 @@ def observe_role_files(resolved: list[Any]) -> dict[str, dict[str, tuple[int, st
             "uem": _observe(_read_bytes(r.uem)) if r.uem is not None else None,
             "wer_reference": (
                 _observe(_read_bytes(r.wer_reference)) if r.wer_reference is not None else None
+            ),
+            "cpwer_reference": (
+                _observe(_read_bytes(r.cpwer_reference))
+                if r.cpwer_reference is not None
+                else None
             ),
         }
     return observed
@@ -1161,25 +1549,36 @@ def _copy_bytes(src: Path, dst: Path) -> None:
     dst.write_bytes(_read_bytes(src))
 
 
+def _canonical_streams_bytes(streams: CpwerStreams) -> bytes:
+    """Deterministic JSON bytes for a cpWER stream dict (stable sha + storage)."""
+    return json.dumps(
+        streams, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
 def write_bundle(
     out_dir: Path,
     resolved: list[Any],
     hyp_rttm_by_id: dict[str, str],
     wer_hyp_by_id: dict[str, str],
+    cpwer_hyp_by_id: dict[str, CpwerStreams],
     cohort_block: dict[str, Any],
 ) -> Path:
     """Write a self-contained score bundle; return the manifest path.
 
-    Copies each recording's reference RTTM/UEM (and WER reference for AMI) into
-    ``<out_dir>/inputs`` and writes the exported hypothesis RTTM (and AMI WER
-    text) into ``<out_dir>/hypotheses``, then emits ``manifest.json`` with paths
-    RELATIVE to the manifest directory. ``score`` (which now resolves relative
-    paths against the manifest's directory) can therefore score the bundle
-    wherever it is moved.
+    Copies each recording's reference RTTM/UEM (and, for AMI, the WER + cpWER
+    references) into ``<out_dir>/inputs`` and writes the exported hypotheses
+    (RTTM, AMI WER text, AMI cpWER streams JSON) into ``<out_dir>/hypotheses``,
+    then emits ``manifest.json`` with paths RELATIVE to the manifest directory.
+    ``score`` resolves relative paths against the manifest's directory, so the
+    bundle scores identically wherever it is moved. The cpWER reference is copied
+    byte-for-byte from the maintainer-built file so its score-time sha matches the
+    cohort attestation.
     """
     out_dir = Path(out_dir)
     diar_entries: list[dict[str, Any]] = []
     wer_entries: list[dict[str, Any]] = []
+    cpwer_entries: list[dict[str, Any]] = []
     for r in resolved:
         rid = r.recording_id
         ref_rel = f"{BUNDLE_INPUTS}/{rid}.reference.rttm"
@@ -1208,9 +1607,21 @@ def write_bundle(
             wer_entries.append(
                 {"recording_id": rid, "reference_text": wref_rel, "hypothesis_text": whyp_rel}
             )
+        if r.cpwer_reference is not None:
+            cpref_rel = f"{BUNDLE_INPUTS}/{rid}.cpwer_reference.json"
+            cphyp_rel = f"{BUNDLE_HYPS}/{rid}.cpwer_hypothesis.json"
+            _copy_bytes(r.cpwer_reference, out_dir / cpref_rel)
+            hyp_obj = {"recording_id": rid, "streams": cpwer_hyp_by_id[rid]}
+            (out_dir / cphyp_rel).parent.mkdir(parents=True, exist_ok=True)
+            (out_dir / cphyp_rel).write_bytes(_canonical_streams_bytes(hyp_obj) + b"\n")
+            cpwer_entries.append(
+                {"recording_id": rid, "reference_json": cpref_rel, "hypothesis_json": cphyp_rel}
+            )
     manifest: dict[str, Any] = {"diarization": diar_entries, "cohort": cohort_block}
     if wer_entries:
         manifest["wer"] = wer_entries
+    if cpwer_entries:
+        manifest["cpwer"] = cpwer_entries
     manifest_path = out_dir / "manifest.json"
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest_text = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
@@ -1347,8 +1758,14 @@ def _reconcile_run(driver: Any, session: Any, staged_rel: str) -> Any:
 
 def _export_completed(
     driver: Any, session: Any, run_id: Any, resolved: Any
-) -> tuple[str, str | None]:
-    """Read a completed run's DB rows and return (hypothesis_rttm, wer_text|None)."""
+) -> tuple[str, str | None, CpwerStreams | None]:
+    """Read a completed run's DB rows -> (hypothesis_rttm, wer_text?, cpwer_streams?).
+
+    For AMI, the plain-WER text and the per-label cpWER streams are built in ONE
+    pass over the labelled transcript (:func:`eval_run.ami_hypothesis_renders`) so
+    they can never disagree about the hypothesis. VoxConverse has no transcript
+    reference, so both are None.
+    """
     turns = (
         session.execute(
             driver.select(driver.DiarizationTurn)
@@ -1362,6 +1779,7 @@ def _export_completed(
     hyp_rttm = driver.to_rttm(turns, resolved.recording_id)
 
     wer_text: str | None = None
+    cpwer_streams: CpwerStreams | None = None
     if resolved.wer_reference is not None:
         segments = (
             session.execute(
@@ -1372,11 +1790,11 @@ def _export_completed(
             .scalars()
             .all()
         )
-        word_lists = segments_to_word_lists(segments)
+        labeled = segments_to_labeled_words(segments)
         uem_text = _read(resolved.uem)
         uem_regions = _uem_regions_us(uem_text, resolved.recording_id)
-        wer_text = eval_run.ami_hypothesis_text(word_lists, uem_regions)
-    return hyp_rttm, wer_text
+        wer_text, cpwer_streams = eval_run.ami_hypothesis_renders(labeled, uem_regions)
+    return hyp_rttm, wer_text, cpwer_streams
 
 
 def _uem_regions_us(text: str, recording_id: str) -> list[tuple[int, int]]:
@@ -1482,6 +1900,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             for rid in by_id
             if by_id[rid].wer_reference is not None
         }
+        cpwer_hyp_by_id = {
+            rid: journal["items"][rid]["cpwer_streams"]
+            for rid in by_id
+            if by_id[rid].cpwer_reference is not None
+        }
         cohort_block = {
             "schema_version": eval_run.COHORT_SCHEMA_VERSION,
             "corpus": corpus,
@@ -1490,7 +1913,9 @@ def cmd_run(args: argparse.Namespace) -> int:
             "cohort_sha256": cohort_hash,
             "batch_id": batch_id,
         }
-        manifest_path = write_bundle(out_dir, resolved, hyp_rttm_by_id, wer_hyp_by_id, cohort_block)
+        manifest_path = write_bundle(
+            out_dir, resolved, hyp_rttm_by_id, wer_hyp_by_id, cpwer_hyp_by_id, cohort_block
+        )
     print(manifest_path)
     return 0
 
@@ -1583,7 +2008,9 @@ def _drive_one(
                     raise EvalError(f"{rid}: run {run_uuid} vanished from the DB")
                 status = eval_run.map_db_status(str(run.status))
                 if status == "completed":
-                    hyp_rttm, wer_text = _export_completed(driver, session, run.id, resolved)
+                    hyp_rttm, wer_text, cpwer_streams = _export_completed(
+                        driver, session, run.id, resolved
+                    )
                     break
                 if status in eval_run.FAILURE_STATES:
                     _record(out_dir, journal, rid, {"status": status})
@@ -1598,6 +2025,11 @@ def _drive_one(
         if wer_text is not None:
             artifacts["wer_text_sha256"] = _observe(wer_text.encode())[1]
             patch["wer_text"] = wer_text
+        if cpwer_streams is not None:
+            # A stable hash over the canonical cpWER streams marks the artifact
+            # complete for the skip_done contract (REQUIRED_ARTIFACTS["ami"]).
+            artifacts["cpwer_streams_sha256"] = _observe(_canonical_streams_bytes(cpwer_streams))[1]
+            patch["cpwer_streams"] = cpwer_streams
         patch["artifacts"] = artifacts
         _record(out_dir, journal, rid, patch)
     finally:

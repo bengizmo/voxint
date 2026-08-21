@@ -92,6 +92,15 @@ parity = [
 # tools/eval_quality.py …` (parity carries the frozen jiwer WER stack).
 eval-quality = [
     "pyannote.metrics==4.1",
+    # cpWER (concatenated minimum-permutation WER) for AMI, issue #97 commit 3.
+    # meeteval brings the vetted Hungarian speaker-assignment + pooled edit
+    # counts; we import only its low-level `meeteval.wer.wer.{cp,siso,error_rate}`
+    # helpers (the api/CLI layer misreads a flat {speaker: text} dict as
+    # {session: text} and pulls extra optional deps). Its runtime deps are
+    # kaldialign/numpy/scipy/Cython/packaging — NO torch/TF/CUDA (dep-closure
+    # asserted in tests/contracts/test_eval_quality_extra.py); kaldialign + Cython
+    # are compiled extensions with wheels for linux-x86_64 and macos-arm64.
+    "meeteval==0.4.3",
 ]
 
 [project.scripts]

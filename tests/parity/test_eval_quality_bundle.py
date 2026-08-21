@@ -79,10 +79,22 @@ def _ami_resolved(root: Path, rid: str) -> types.SimpleNamespace:
     uem.write_text(f"{rid} 1 0.00 10.00\n", encoding="utf-8")
     wer = root / f"{rid}.words.txt"
     wer.write_text("the quick brown fox\n", encoding="utf-8")
+    cpwer = root / f"{rid}.cpwer_reference.json"
+    cpwer.write_text(
+        json.dumps(
+            {"recording_id": rid, "streams": {"speaker:A": ["the", "quick", "brown", "fox"]}}
+        ),
+        encoding="utf-8",
+    )
     return types.SimpleNamespace(
         recording_id=rid, corpus="ami", split="test",
-        audio=root / f"{rid}.wav", reference_rttm=ref, uem=uem, wer_reference=wer,
+        audio=root / f"{rid}.wav", reference_rttm=ref, uem=uem,
+        wer_reference=wer, cpwer_reference=cpwer,
     )
+
+
+# A cpWER hypothesis matching _ami_resolved's single-speaker reference (cpWER 0).
+_CPWER_HYP = {"speaker:SPEAKER_00": ["the", "quick", "brown", "fox"]}
 
 
 def _build_cohort_block(resolved: list, corpus: str) -> tuple[dict, str]:
@@ -115,7 +127,8 @@ def test_written_bundle_scores_from_an_unrelated_cwd(tmp_path: Path, monkeypatch
         "SPEAKER run-uuid 1 5.000 4.000 <NA> <NA> SPEAKER_01 <NA> <NA>\n"
     )
     manifest_path = eq.write_bundle(
-        out_dir, [r], {"EN2002c": hyp_rttm}, {"EN2002c": "the quick brown fox"}, block
+        out_dir, [r], {"EN2002c": hyp_rttm}, {"EN2002c": "the quick brown fox"},
+        {"EN2002c": _CPWER_HYP}, block,
     )
 
     # Score from an unrelated cwd: relative manifest paths MUST resolve against
@@ -137,9 +150,11 @@ def test_written_bundle_scores_from_an_unrelated_cwd(tmp_path: Path, monkeypatch
     # matches what the driver stamped (the round-trip is byte-faithful).
     assert metrics["environment"]["cohort_sha256"] == cohort_hash
     assert metrics["environment"]["corpus"] == "ami"
-    # A perfect hypothesis over this reference scores DER 0 and WER 0.
+    # A perfect hypothesis over this reference scores DER 0, WER 0, and cpWER 0.
     assert metrics["diarization"]["strict"]["pooled_der"] == 0.0
     assert metrics["wer"]["pooled_wer"] == 0.0
+    assert metrics["cpwer"]["pooled_cpwer"] == 0.0
+    assert metrics["cpwer"]["unassigned_words"] == 0
 
 
 def test_bundle_with_tampered_reference_fails_cohort_binding(tmp_path: Path) -> None:
@@ -155,6 +170,7 @@ def test_bundle_with_tampered_reference_fails_cohort_binding(tmp_path: Path) -> 
         [r],
         {"EN2002c": "SPEAKER u 1 0.000 4.000 <NA> <NA> SPEAKER_00 <NA> <NA>\n"},
         {"EN2002c": "the quick brown fox"},
+        {"EN2002c": _CPWER_HYP},
         block,
     )
     # Tamper with the copied reference inside the bundle.

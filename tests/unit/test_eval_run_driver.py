@@ -71,12 +71,18 @@ def _resolved(root: Path, rid: str, *, ami: bool) -> types.SimpleNamespace:
         uem.write_text(f"{rid} 1 0.00 1.00\n", encoding="utf-8")
         wer = root / f"{rid}.words.txt"
         wer.write_text("hello world\n", encoding="utf-8")
+        cpwer = root / f"{rid}.cpwer_reference.json"
+        cpwer.write_text(
+            json.dumps({"recording_id": rid, "streams": {"speaker:A": ["hello", "world"]}}),
+            encoding="utf-8",
+        )
     else:
         uem = None
         wer = None
+        cpwer = None
     return types.SimpleNamespace(
         recording_id=rid, corpus="ami" if ami else "voxconverse", split="test",
-        audio=audio, reference_rttm=ref, uem=uem, wer_reference=wer,
+        audio=audio, reference_rttm=ref, uem=uem, wer_reference=wer, cpwer_reference=cpwer,
     )
 
 
@@ -128,27 +134,47 @@ class TestExportShaping:
 
     def test_words_flattened_in_segment_order(self) -> None:
         segs = [
-            _row(segment_index=0, raw_text="a", words=[{"start": 0.0, "end": 0.1, "word": "a"}]),
-            _row(segment_index=1, raw_text="b", words=[{"start": 0.2, "end": 0.3, "word": "b"}]),
+            _row(segment_index=0, raw_text="a", diarization_label="SPEAKER_00",
+                 words=[{"start": 0.0, "end": 0.1, "word": "a"}]),
+            _row(segment_index=1, raw_text="b", diarization_label="SPEAKER_01",
+                 words=[{"start": 0.2, "end": 0.3, "word": "b"}]),
         ]
         assert eq.segments_to_word_lists(segs) == [
             [{"start": 0.0, "end": 0.1, "word": "a"}],
             [{"start": 0.2, "end": 0.3, "word": "b"}],
         ]
 
+    def test_labeled_words_carry_index_and_label(self) -> None:
+        segs = [
+            _row(segment_index=5, raw_text="a", diarization_label="SPEAKER_00",
+                 words=[{"start": 0.0, "end": 0.1, "word": "a"}]),
+            _row(segment_index=6, raw_text="b", diarization_label=None,
+                 words=[{"start": 0.2, "end": 0.3, "word": "b"}]),
+        ]
+        assert eq.segments_to_labeled_words(segs) == [
+            (5, "SPEAKER_00", [{"start": 0.0, "end": 0.1, "word": "a"}]),
+            (6, None, [{"start": 0.2, "end": 0.3, "word": "b"}]),
+        ]
+
+    def test_blank_diarization_label_rejected(self) -> None:
+        segs = [_row(segment_index=0, raw_text="a", diarization_label="  ",
+                     words=[{"start": 0.0, "end": 0.1, "word": "a"}])]
+        with pytest.raises(eq.EvalError, match="blank diarization label"):
+            eq.segments_to_labeled_words(segs)
+
     def test_null_words_with_text_is_rejected(self) -> None:
-        segs = [_row(segment_index=0, raw_text="lost timing", words=None)]
+        segs = [_row(segment_index=0, raw_text="lost timing", diarization_label=None, words=None)]
         with pytest.raises(eq.EvalError, match="NULL word timing"):
             eq.segments_to_word_lists(segs)
 
     def test_null_words_empty_segment_is_ok(self) -> None:
-        segs = [_row(segment_index=0, raw_text="   ", words=None)]
+        segs = [_row(segment_index=0, raw_text="   ", diarization_label=None, words=None)]
         assert eq.segments_to_word_lists(segs) == [[]]
 
     def test_out_of_order_segments_rejected(self) -> None:
         segs = [
-            _row(segment_index=1, raw_text="", words=[]),
-            _row(segment_index=0, raw_text="", words=[]),
+            _row(segment_index=1, raw_text="", diarization_label=None, words=[]),
+            _row(segment_index=0, raw_text="", diarization_label=None, words=[]),
         ]
         with pytest.raises(eq.EvalError):
             eq.segments_to_word_lists(segs)
@@ -186,14 +212,17 @@ class TestSubsetLoader:
 # Cohort inputs + bundle
 # --------------------------------------------------------------------------- #
 class TestCohortInputs:
-    def test_ami_builds_four_roles_and_reuses_one_path(self, tmp_path: Path) -> None:
+    def test_ami_builds_all_roles_and_reuses_one_path(self, tmp_path: Path) -> None:
         r = _resolved(tmp_path, "EN2002c", ami=True)
         observed = eq.observe_role_files([r])
         split_by_id, inputs = eq.build_cohort_inputs([r], observed)
         assert split_by_id == {"EN2002c": "test"}
         by_role = {ci.role: ci for ci in inputs}
-        assert set(by_role) == {"audio", "reference_rttm", "uem", "wer_reference"}
+        assert set(by_role) == {
+            "audio", "reference_rttm", "uem", "wer_reference", "cpwer_reference"
+        }
         assert by_role["uem"].sha256 is not None and by_role["wer_reference"].byte_len is not None
+        assert by_role["cpwer_reference"].sha256 is not None
 
     def test_voxconverse_null_roles_are_explicit(self, tmp_path: Path) -> None:
         r = _resolved(tmp_path, "vc1", ami=False)
@@ -202,6 +231,7 @@ class TestCohortInputs:
         by_role = {ci.role: ci for ci in inputs}
         assert by_role["uem"].sha256 is None and by_role["uem"].byte_len is None
         assert by_role["wer_reference"].sha256 is None
+        assert by_role["cpwer_reference"].sha256 is None
         assert by_role["audio"].sha256 is not None
 
 
@@ -209,10 +239,11 @@ class TestBundleWriter:
     def test_bundle_copies_inputs_and_writes_relative_manifest(self, tmp_path: Path) -> None:
         r = _resolved(tmp_path / "corpus", "EN2002c", ami=True)
         out = tmp_path / "bundle"
-        cohort = {"schema_version": 1, "corpus": "ami", "cohort_sha256": "deadbeef", "inputs": []}
+        cohort = {"schema_version": 2, "corpus": "ami", "cohort_sha256": "deadbeef", "inputs": []}
         manifest_path = eq.write_bundle(
             out, [r], {"EN2002c": "SPEAKER u 1 0.0 1.0 <NA> <NA> S0 <NA> <NA>\n"},
-            {"EN2002c": "hello world"}, cohort,
+            {"EN2002c": "hello world"},
+            {"EN2002c": {"speaker:A": ["hello", "world"]}}, cohort,
         )
         manifest = json.loads(manifest_path.read_text())
         diar = manifest["diarization"][0]
@@ -223,17 +254,24 @@ class TestBundleWriter:
         assert manifest["wer"][0]["reference_text"].startswith("inputs/")
         assert (out / manifest["wer"][0]["hypothesis_text"]).read_text() == "hello world"
         assert manifest["cohort"]["cohort_sha256"] == "deadbeef"
+        # cpWER: reference copied byte-for-byte, hypothesis written as {rid, streams}.
+        cp = manifest["cpwer"][0]
+        assert cp["reference_json"].startswith("inputs/")
+        assert (out / cp["reference_json"]).is_file()
+        hyp = json.loads((out / cp["hypothesis_json"]).read_text())
+        assert hyp == {"recording_id": "EN2002c", "streams": {"speaker:A": ["hello", "world"]}}
 
     def test_voxconverse_bundle_has_null_uem_and_no_wer(self, tmp_path: Path) -> None:
         r = _resolved(tmp_path / "corpus", "vc1", ami=False)
         out = tmp_path / "bundle"
         manifest_path = eq.write_bundle(
-            out, [r], {"vc1": "SPEAKER u 1 0.0 1.0 <NA> <NA> S0 <NA> <NA>\n"}, {},
-            {"schema_version": 1, "corpus": "voxconverse", "cohort_sha256": "x", "inputs": []},
+            out, [r], {"vc1": "SPEAKER u 1 0.0 1.0 <NA> <NA> S0 <NA> <NA>\n"}, {}, {},
+            {"schema_version": 2, "corpus": "voxconverse", "cohort_sha256": "x", "inputs": []},
         )
         manifest = json.loads(manifest_path.read_text())
         assert manifest["diarization"][0]["uem"] is None
         assert "wer" not in manifest
+        assert "cpwer" not in manifest
 
 
 # --------------------------------------------------------------------------- #
@@ -372,7 +410,9 @@ class TestJournalCrashSafety:
         j = self._journal(tmp_path)
         eq._record(tmp_path, j, "EN2002c", {
             "status": "completed",
-            "artifacts": {"hypothesis_rttm_sha256": "h", "wer_text_sha256": "w"},
+            "artifacts": {
+                "hypothesis_rttm_sha256": "h", "wer_text_sha256": "w", "cpwer_streams_sha256": "c",
+            },
         })
         reloaded = json.loads(eq._journal_path(tmp_path).read_text())
         [d] = er.plan_resume(reloaded, ["EN2002c"], resume=True, retry_failed=False)

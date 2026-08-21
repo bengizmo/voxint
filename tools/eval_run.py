@@ -37,6 +37,7 @@ import os
 import re
 import tempfile
 import wave
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,12 +55,26 @@ if str(_TOOLS) not in __import__("sys").path:
 # in the hypothesis and desync the two streams.
 import prepare_bakeoff_corpus as bake  # noqa: E402
 
-JOURNAL_SCHEMA_VERSION = 1
+# Schema 2 (issue #97 commit 3) adds cpWER: the AMI cohort gains a fifth
+# ``cpwer_reference`` role and a completed AMI journal item gains a cpWER
+# hypothesis-streams artifact. A hard cutover (no backward migration): a stale
+# schema-1 journal/cohort fails closed rather than silently omitting cpWER.
+JOURNAL_SCHEMA_VERSION = 2
 PIPELINE_ENVIRONMENT_SCHEMA_VERSION = 1
-COHORT_SCHEMA_VERSION = 1
+COHORT_SCHEMA_VERSION = 2
 
 CORPORA = ("ami", "voxconverse")
 SPLITS = ("dev", "test")
+
+# Collision-free cpWER stream-label keys (issue #97 commit 3), shared by the
+# reference builder, the hypothesis export, and the scorer so reference and
+# hypothesis stream keys live in ONE namespace. A real diarization label becomes
+# ``speaker:<label>`` and the anonymous (null-label) hypothesis bucket is the
+# reserved ``unassigned:`` key, so a model-emitted label can never collide with
+# the sentinel and the ``unassigned_words == 0`` gate cannot be evaded by a label
+# that merely spells like the sentinel.
+CPWER_SPEAKER_PREFIX = "speaker:"
+CPWER_UNASSIGNED_KEY = "unassigned:"
 
 # A recording id becomes a path component and a run label, so it must be a plain
 # filename token: no separators, no traversal, no dotfiles. This is the
@@ -101,7 +116,7 @@ FAILURE_STATES = frozenset({"failed", "cancelled"})
 # A completed journal item missing any of these is treated as incomplete
 # (STOP), never silently skipped into a fake zero-change pass.
 REQUIRED_ARTIFACTS: dict[str, tuple[str, ...]] = {
-    "ami": ("hypothesis_rttm_sha256", "wer_text_sha256"),
+    "ami": ("hypothesis_rttm_sha256", "wer_text_sha256", "cpwer_streams_sha256"),
     "voxconverse": ("hypothesis_rttm_sha256",),
 }
 
@@ -187,36 +202,112 @@ def _coerce_word(raw: dict[str, Any]) -> HypWord:
     return HypWord(start_us=start_us, end_us=end_us, text=token)
 
 
-def ami_hypothesis_text(
-    segments_words: list[list[dict[str, Any]]], uem_regions_us: list[tuple[int, int]]
-) -> str:
-    """Build the UEM-cropped AMI WER hypothesis from stored per-word timings.
+# A labelled transcript segment for the shared hypothesis render: the DB
+# ``segment_index``, the segment's diarization label (None -> anonymous stream),
+# and its stored word-timing list. cpWER groups words by this label; plain WER
+# ignores it. Both come from ONE crop pass so they can never disagree.
+LabeledSegment = tuple[int, str | None, list[dict[str, Any]]]
 
-    ``segments_words`` is the run's transcript, one inner list of word objects
-    per ``TranscriptSegment`` ORDERED by ``segment_index`` (the caller in commit
-    2 supplies that order from the DB). Words are flattened in provider order and
-    NOT re-sorted: this is a single ASR stream whose order is the decoder's, and
-    timestamp-sorting could reorder tied or jittered tokens and move WER. (The
-    reference sorts only because it merges independent per-speaker streams.)
+
+@dataclass(frozen=True)
+class KeptWord:
+    """One UEM-kept hypothesis word tagged with its occurrence provenance.
+
+    ``(segment_index, word_index)`` is a stable occurrence id used to prove the
+    plain-WER render and the per-label cpWER streams partition the same words.
+    """
+
+    segment_index: int
+    word_index: int
+    label: str | None
+    text: str
+
+
+def encode_cpwer_label(label: str | None) -> str:
+    """Encode a diarization label into a collision-free cpWER stream key.
+
+    A null label is the anonymous :data:`CPWER_UNASSIGNED_KEY`; a real label
+    becomes ``speaker:<label>``. A blank/whitespace-only label is rejected at
+    export (:func:`~eval_quality.segments_to_labeled_words`), never silently
+    mapped, so it can never masquerade as the unassigned sentinel or a speaker.
+    """
+    if label is None:
+        return CPWER_UNASSIGNED_KEY
+    return f"{CPWER_SPEAKER_PREFIX}{label}"
+
+
+def _iter_kept_hyp_words(
+    labeled_segments: list[LabeledSegment], uem_regions_us: list[tuple[int, int]]
+) -> Iterator[KeptWord]:
+    """Yield UEM-kept hypothesis words in ASR order — the ONE shared crop pass.
 
     A word is kept when its MIDPOINT lies in some UEM region, half-open
     ``start_us <= mid_us < end_us`` — identical to the reference's
-    ``in_any_region``. The kept tokens are stripped of their stored leading space
-    and joined with single spaces, matching the reference's ``" ".join``. An
-    empty result is legitimate (a recording whose speech is all outside the UEM),
-    not an error.
+    ``in_any_region`` — then stripped of stored spacing and dropped if empty.
+    Words are NOT re-sorted: this is a single ASR stream whose order is the
+    decoder's, and timestamp-sorting could reorder tied tokens and move WER.
+    ``word_index`` is the position within the segment's stored word list.
     """
     if not uem_regions_us:
-        raise RunError("ami_hypothesis_text: no UEM regions (AMI WER is always UEM-cropped)")
-    kept: list[str] = []
-    for segment in segments_words:
-        for raw in segment:
+        raise RunError("ami hypothesis render: no UEM regions (AMI WER is always UEM-cropped)")
+    for segment_index, label, words in labeled_segments:
+        for word_index, raw in enumerate(words):
             word = _coerce_word(raw)
             if any(start <= word.mid_us < end for start, end in uem_regions_us):
                 stripped = word.text.strip()
                 if stripped:
-                    kept.append(stripped)
-    return " ".join(kept)
+                    yield KeptWord(segment_index, word_index, label, stripped)
+
+
+def ami_hypothesis_renders(
+    labeled_segments: list[LabeledSegment], uem_regions_us: list[tuple[int, int]]
+) -> tuple[str, dict[str, list[str]]]:
+    """Build the plain-WER text AND the per-label cpWER streams in one crop pass.
+
+    Returns ``(plain_wer_text, cpwer_streams)`` from ONE materialized kept-word
+    list, so the two renders can never disagree about the hypothesis. The plain
+    text is every kept word in ASR order (``" ".join``); the cpWER streams bucket
+    the SAME words by their collision-free encoded label, segment order preserved
+    within a label. Occurrence-partition conservation is asserted before
+    returning: each kept ``(segment_index, word_index)`` is unique AND lands in
+    exactly one stream, so no word is dropped or double-counted between renders.
+    An empty result (all speech outside the UEM) is legitimate.
+    """
+    kept = list(_iter_kept_hyp_words(labeled_segments, uem_regions_us))
+    occurrences = Counter((k.segment_index, k.word_index) for k in kept)
+    dupes = sorted(occ for occ, count in occurrences.items() if count != 1)
+    if dupes:
+        raise RunError(
+            f"ami hypothesis render: duplicate (segment_index, word_index) occurrences {dupes}"
+        )
+    text = " ".join(k.text for k in kept)
+    streams: dict[str, list[str]] = {}
+    for k in kept:
+        streams.setdefault(encode_cpwer_label(k.label), []).append(k.text)
+    grouped_total = sum(len(words) for words in streams.values())
+    if grouped_total != len(kept):
+        raise RunError(
+            f"ami hypothesis render: cpWER streams hold {grouped_total} words but {len(kept)} "
+            "were kept (grouping is not an occurrence-partition)"
+        )
+    return text, streams
+
+
+def ami_hypothesis_text(
+    segments_words: list[list[dict[str, Any]]], uem_regions_us: list[tuple[int, int]]
+) -> str:
+    """Plain-WER AMI hypothesis text (delegates to the shared render pass).
+
+    ``segments_words`` is the run's transcript, one inner list of word objects per
+    ``TranscriptSegment`` ORDERED by ``segment_index``. Kept for the callers and
+    tests that only need the plain-WER stream; it wraps
+    :func:`ami_hypothesis_renders` with anonymous labels so the crop logic has a
+    SINGLE implementation. The export path passes real diarization labels to
+    ``ami_hypothesis_renders`` to also get the cpWER streams.
+    """
+    labeled: list[LabeledSegment] = [(i, None, words) for i, words in enumerate(segments_words)]
+    text, _streams = ami_hypothesis_renders(labeled, uem_regions_us)
+    return text
 
 
 # --------------------------------------------------------------------------- #
@@ -302,8 +393,11 @@ def select_only(items: list[SubsetItem], only: list[str] | None) -> list[SubsetI
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
 class ResolvedItem:
-    """One recording's resolved input paths. ``uem``/``wer_reference`` are None
-    when the corpus has none (VoxConverse has no UEM and no reference transcript)."""
+    """One recording's resolved input paths. ``uem``/``wer_reference``/
+    ``cpwer_reference`` are None when the corpus has none (VoxConverse has no UEM
+    and no reference transcript). ``cpwer_reference`` is the per-speaker AMI cpWER
+    JSON produced beside ``wer_reference`` by ``build_ami_wer_reference.py``; the
+    two are always both present or both absent (the corpus matrix)."""
 
     recording_id: str
     corpus: str
@@ -312,6 +406,7 @@ class ResolvedItem:
     reference_rttm: Path
     uem: Path | None
     wer_reference: Path | None
+    cpwer_reference: Path | None
 
 
 def _require_within(root: Path, candidate: Path, what: str) -> Path:
@@ -363,6 +458,7 @@ def resolve_ami(root: Path, item: SubsetItem) -> ResolvedItem:
         / f"{item.recording_id}.uem"
     )
     wer_ref = root / "ami" / "wer_reference" / f"{item.recording_id}.words.txt"
+    cpwer_ref = root / "ami" / "wer_reference" / f"{item.recording_id}.cpwer_reference.json"
     return ResolvedItem(
         recording_id=item.recording_id,
         corpus=item.corpus,
@@ -374,6 +470,9 @@ def resolve_ami(root: Path, item: SubsetItem) -> ResolvedItem:
         uem=_require_file(_require_within(root, uem, "AMI UEM"), "AMI UEM"),
         wer_reference=_require_file(
             _require_within(root, wer_ref, "AMI WER reference"), "AMI WER reference"
+        ),
+        cpwer_reference=_require_file(
+            _require_within(root, cpwer_ref, "AMI cpWER reference"), "AMI cpWER reference"
         ),
     )
 
@@ -401,6 +500,7 @@ def resolve_voxconverse(root: Path, item: SubsetItem) -> ResolvedItem:
         ),
         uem=None,
         wer_reference=None,
+        cpwer_reference=None,
     )
 
 
