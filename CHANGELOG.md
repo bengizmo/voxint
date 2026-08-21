@@ -16,6 +16,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and does not alter a single match. It is the measurement groundwork for making
   speaker attribution trustworthy enough to widen (epic #112).
 
+### Fixed
+- **The titanet and pyannote CUDA images no longer enable the PyTorch
+  `expandable_segments` allocator mode (#111).** Under heavy VRAM pressure
+  (observed with titanet on a GPU shared with another CUDA workload), that mode
+  can trip an upstream PyTorch allocator bug
+  (`!block->expandable_segment_ INTERNAL ASSERT FAILED`), hard-failing the
+  request and the run's current stage; retries and service restarts do not
+  clear it while the mode is enabled. Each image keeps the rest of its allocator tuning.
+  For older already-pulled images, the same fix works as a compose environment
+  override; see the GPU memory section of
+  [docs/operations.md](docs/operations.md).
+
 ## [0.21.0] - 2026-08-20
 
 ### Added
@@ -101,16 +113,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `enhance_match` while recovery republishes them to an unconsumed `post` queue.
 
 ### Fixed
-- **The titanet and pyannote CUDA images no longer enable the PyTorch
-  `expandable_segments` allocator mode (#111).** Under heavy VRAM pressure
-  (observed with titanet on a GPU shared with another CUDA workload), that mode
-  can trip an upstream PyTorch allocator bug
-  (`!block->expandable_segment_ INTERNAL ASSERT FAILED`), hard-failing the
-  request and the run's current stage; retries and service restarts do not
-  clear it while the mode is enabled. Each image keeps the rest of its allocator tuning.
-  For older already-pulled images, the same fix works as a compose environment
-  override; see the GPU memory section of
-  [docs/operations.md](docs/operations.md).
 - **The Markdown transcript export can no longer let transcript text forge
   document structure (#65 follow-up).** The `.md` escaper now defuses a `=`
   setext underline and a bare carriage return (each could forge a heading, and

@@ -285,7 +285,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.20.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.21.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -327,13 +327,13 @@ RuntimeError: !block->expandable_segment_ INTERNAL ASSERT FAILED at "../c10/cuda
 
 The service returns `500` for that request and the run fails at its current
 stage. This is an upstream PyTorch bug in the `expandable_segments` allocator
-mode, which both CUDA images enabled through 0.20.0. The reproduced case was
+mode, which both CUDA images enabled through 0.21.0. The reproduced case was
 titanet on a card shared with another CUDA workload, where long recordings hit
 the assert on every retry; pyannote shipped the same allocator mode and
 carries the same exposure. Retrying the run or restarting the service does not
 help while the mode is enabled.
 
-Releases after 0.20.0 drop `expandable_segments` from both images and keep
+Releases after 0.21.0 drop `expandable_segments` from both images and keep
 the rest of each image's allocator tuning. On an affected image, apply the
 same change without rebuilding by overriding the allocator mode in your
 compose override:
