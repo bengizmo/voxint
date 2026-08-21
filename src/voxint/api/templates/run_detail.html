@@ -187,6 +187,39 @@ up, then requeue.</p>
 {% include "fragments/run_assets.html" %}
 
 <section class="card">
+<h2>Pipeline models</h2>
+<p class="muted">The model each stage saw just before it ran. This is observed
+immediately before the attempt, not read back from the output, so it records
+which model answered rather than proving the exact build.</p>
+{% for stage in model_provenance %}
+<div class="model-stage">
+  <h3>{{ stage.label }}{% if stage.recorded and stage.attempt and stage.attempt > 1 %}
+    <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
+  {% if not stage.recorded %}
+  <p class="muted">Not recorded. This run finished before model provenance was
+  added, or no attempt of this stage completed.</p>
+  {% else %}
+  <dl>
+    {% for role in stage.roles %}
+    <dt>{{ role.label }}</dt>
+    {% if role.reachable %}
+    <dd>
+      {% if role.model %}<code>{{ role.model }}</code>{% else %}<span class="muted">no model name reported</span>{% endif %}
+      {% if role.engine %} <span class="muted">engine <code>{{ role.engine }}</code></span>{% endif %}
+      {% if role.revision %}<br><span class="muted">revision <code>{{ role.revision }}</code></span>{% endif %}
+      {% if role.decode_config_hash %}<br><span class="muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
+    </dd>
+    {% else %}
+    <dd><span class="muted">Not observed ({{ role.detail }} when the stage ran).</span></dd>
+    {% endif %}
+    {% endfor %}
+  </dl>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+
+<section class="card">
 <h2>Stage ledger</h2>
 {% if not stage_runs %}
 <p class="muted">No stage attempts recorded yet.</p>

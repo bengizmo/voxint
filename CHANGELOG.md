@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Run detail shows which models ran ("Pipeline models").** The run-detail page
+  now renders the per-attempt model identity recorded for the transcription and
+  diarization stages, taken from each stage's latest completed attempt, so a
+  retried stage shows the model that produced the result rather than a failed
+  attempt's stamp. Each service shows its model, engine, revision, and decode
+  configuration where the service reports them. A run that finished before this
+  provenance existed, or a stage whose service could not be reached, reads "Not
+  recorded" or "Not observed" rather than implying the model is unknown for a
+  subtle reason. The copy states plainly that this is observed immediately before
+  the attempt, not read back from the output.
 - **Per-attempt model-identity provenance on each stage run.** Every stage that
   calls a model service now records, on its own `StageRun`, which model answered
   it: the identity (`model`, `revision`, `engine`, `decode_config_hash` where the
