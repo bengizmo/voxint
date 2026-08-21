@@ -29,7 +29,14 @@ same contract.
   - *contract version*: the `/v1/` path prefix. Additive response fields are
     allowed within `v1`; renames/removals/semantic changes require `/v2`.
   - *service version*: the image's own semver (`version` in `/healthz`).
-  - *model identity*: the model actually loaded (`model` in `/healthz`).
+  - *model identity*: the model actually loaded (`model` in `/healthz`). The
+    validated defaults are whisper **large-v2** and pyannote
+    **speaker-diarization-3.1**; those two are the tier the numerics contracts
+    below are measured against. An operator may override the ASR or diarizer
+    model (deployment-owned, via `.env`; see
+    [Changing pipeline models](how-to/changing-pipeline-models.md)), but an
+    override is unvalidated and each stage stamps the served identity onto its
+    `StageRun.metrics.model_identity` so a run records what actually ran.
   - *embedding space* (titanet only): versions the vector semantics; any
     model **or preprocessing** change requires a new space id even if
     `/v1/embed` stays wire-compatible.

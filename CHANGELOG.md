@@ -73,6 +73,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   with `token=`) and surfaces in the service `/healthz` as `model_revision`. It
   is not applicable to the vendored default (whose config is itself the pin) and
   is ignored there with a warning. The validated default load path is unchanged.
+- **Installer can record an alternate pipeline model.** The guided installer
+  (`scripts/install.sh`) now offers one skippable advanced prompt for pointing
+  transcription or diarization at a non-default model. It defaults to skip and
+  writes nothing, so a normal install is unchanged. Opting in collects the
+  whisper model plus its required 40-character revision (and records
+  `WHISPER_ALLOW_DOWNLOAD=1` automatically), the diarizer model plus an optional
+  revision pin, and a Hugging Face token for a gated pipeline that is read
+  hidden, never echoed, and single-quoted when written. The prompt states
+  honestly that only the shipped models are validated. A new how-to,
+  [Changing pipeline models](docs/how-to/changing-pipeline-models.md), documents
+  the full procedure, the validated-versus-unvalidated tradeoff, and the
+  timeout note for slower models; the new keys are documented in `.env.example`.
 
 ## [0.22.1] - 2026-08-21
 
