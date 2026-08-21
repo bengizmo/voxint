@@ -5,6 +5,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Per-attempt model-identity provenance on each stage run.** Every stage that
+  calls a model service now records, on its own `StageRun`, which model answered
+  it: the identity (`model`, `revision`, `engine`, `decode_config_hash` where the
+  service reports them) is read from the service `/healthz` immediately before the
+  attempt runs and stored under `StageRun.metrics.model_identity`. The read is
+  best-effort and never blocks a run: an unreachable or not-yet-loaded service
+  records a `reachable: false` marker and the stage proceeds. Because it lives on
+  the per-attempt claim row and is written in the same transaction that completes
+  the claim, a failed or lease-expired attempt can never overwrite a later
+  successful attempt's recorded identity. This is provenance observed just before
+  the call, not response-carried proof of the exact build; the groundwork for the
+  operator-facing pipeline-models surfaces that follow.
+
 ## [0.22.1] - 2026-08-21
 
 ### Fixed

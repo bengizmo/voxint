@@ -59,3 +59,28 @@ def test_visibility_floor_matches_engine_lease_topology(
     # One second below the engine's sum is rejected by the config validator.
     with pytest.raises(ValidationError, match="stage leases"):
         Settings(_env_file=None, celery_visibility_timeout_seconds=engine_sum - 1, **leases)
+
+
+def test_observe_stage_identity_none_without_settings() -> None:
+    # Identity is advisory: with no settings context there is nothing to probe and
+    # nothing worth failing a run over.
+    assert engine._observe_stage_identity(None, Stage.TRANSCRIBE) is None
+
+
+def test_observe_stage_identity_non_model_stage() -> None:
+    settings = Settings(voxint_user="u", voxint_password="p")
+    # A stage that calls no model service is never probed (returns None even with
+    # a live settings context).
+    assert engine._observe_stage_identity(settings, Stage.PREPARE) is None
+
+
+def test_observe_stage_identity_swallows_probe_errors(
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
+        raise RuntimeError("probe machinery blew up")
+
+    monkeypatch.setattr(engine, "observe_stage_model_identity", _boom)
+    settings = Settings(voxint_user="u", voxint_password="p")
+    # The probe never propagates into the stage loop.
+    assert engine._observe_stage_identity(settings, Stage.TRANSCRIBE) is None
