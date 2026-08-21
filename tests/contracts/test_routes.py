@@ -216,6 +216,7 @@ class TestPyannoteRoutes:
                 engine_version="test-engine-ver",
                 runtime="torch",
                 runtime_version="test-runtime-ver",
+                model_revision=None,
                 diarize=lambda *a, **k: result,
             ),
         )

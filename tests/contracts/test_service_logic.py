@@ -15,6 +15,7 @@ from tests.contracts.conftest import load_service_module
 
 detector = load_service_module("whisper", "transcription")
 whisper_backends = load_service_module("whisper", "backends")
+whisper_startup = load_service_module("whisper", "whisper_startup")
 whisper_ct2_legacy = load_service_module("whisper", "backends.ct2_legacy")
 whisper_ct2 = load_service_module("whisper", "backends.ct2")
 postprocess = load_service_module("pyannote", "postprocess")
@@ -385,6 +386,44 @@ class TestDiarizerModelResolution:
         assert d.model_source == "someorg/custom-pipeline"
         assert d.model_is_local is False
 
+    def test_revision_pins_an_overridden_hf_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # DIARIZER_REVISION on an HF repo-id override is carried as reproducible
+        # provenance and surfaces in /healthz as model_revision (configurable
+        # models A3).
+        monkeypatch.setenv("DIARIZER_MODEL_NAME", "someorg/custom-pipeline")
+        monkeypatch.setenv("DIARIZER_REVISION", "a" * 40)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        d = diarizer.Diarizer()
+        assert d.model_is_local is False
+        assert d.model_revision == "a" * 40
+
+    def test_revision_ignored_for_vendored_local_source(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        # The vendored config is itself the pin; a stray DIARIZER_REVISION must
+        # not pretend to pin it, so model_revision stays null (healthz reports
+        # null, matching the per-attempt provenance probe).
+        vendored = tmp_path / "config.yaml"  # type: ignore[operator]
+        vendored.write_text("version: 3.1.0\n")
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", str(vendored))
+        monkeypatch.setenv("DIARIZER_REVISION", "b" * 40)
+        d = diarizer.Diarizer()
+        assert d.model_is_local is True
+        assert d.model_revision is None
+
+    def test_no_revision_leaves_model_revision_null(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DIARIZER_MODEL_NAME", "someorg/custom-pipeline")
+        monkeypatch.delenv("DIARIZER_REVISION", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        d = diarizer.Diarizer()
+        assert d.model_revision is None
+
+
     def test_vendored_config_is_default_and_keeps_canonical_identity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
     ) -> None:
@@ -418,6 +457,72 @@ class TestDiarizerModelResolution:
         monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
         with pytest.raises(RuntimeError, match="does not exist"):
             diarizer.Diarizer()
+
+
+class TestDiarizerFromPretrainedAdaptive:
+    """The version-adaptive pipeline load (configurable models A3). pyannote 4.x
+    takes revision=/token=; 3.1.1 (our pin) has neither and pins via the
+    "repo@revision" string with use_auth_token=. The default (no revision) load
+    must stay exactly the pre-existing no-revision path."""
+
+    class _FakePipeline:
+        """Records from_pretrained calls; ``reject`` simulates an older pyannote
+        that raises TypeError on unexpected kwargs (token=/revision=)."""
+
+        def __init__(self, reject: tuple[str, ...] = ()) -> None:
+            self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+            self._reject = reject
+
+        def from_pretrained(self, *args: object, **kwargs: object) -> object:
+            if any(k in self._reject for k in kwargs):
+                raise TypeError(
+                    f"from_pretrained() got an unexpected keyword argument "
+                    f"{next(k for k in kwargs if k in self._reject)!r}"
+                )
+            self.calls.append((args, kwargs))
+            return object()
+
+    def test_v4_uses_revision_and_token(self) -> None:
+        fake = self._FakePipeline()
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", "c" * 40, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"revision": "c" * 40, "token": "tok"}
+
+    def test_v31_falls_back_to_repo_at_revision_and_use_auth_token(self) -> None:
+        # 3.1.1 rejects both revision= and token=; the pin must move into the
+        # "repo@revision" string and auth into use_auth_token=.
+        fake = self._FakePipeline(reject=("revision", "token"))
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", "c" * 40, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe@" + "c" * 40,)
+        assert kwargs == {"use_auth_token": "tok"}
+
+    def test_default_no_revision_v4(self) -> None:
+        fake = self._FakePipeline()
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", None, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"token": "tok"}
+
+    def test_default_no_revision_v31_unchanged(self) -> None:
+        # The validated/vendored default path: no revision, 3.1.1 fallback lands
+        # on the plain source + use_auth_token, byte-identical to before A3.
+        fake = self._FakePipeline(reject=("token",))
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", None, None)
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"use_auth_token": None}
+
+    def test_unrelated_typeerror_propagates(self) -> None:
+        # A TypeError that is not about the auth/revision kwargs is a real bug,
+        # not a version skew, and must not be swallowed by the fallback.
+        class Boom:
+            def from_pretrained(self, *a: object, **k: object) -> object:
+                raise TypeError("something else entirely")
+
+        with pytest.raises(TypeError, match="something else"):
+            diarizer._from_pretrained_adaptive(Boom(), "org/pipe", "d" * 40, "tok")
 
 
 class TestDeviceCascade:
@@ -717,6 +822,110 @@ class TestWhisperEngineRegistry:
         assert transcriber.model_name == "large-v2"  # type: ignore[attr-defined]
         assert callable(transcriber._backend.decode_windows)  # type: ignore[attr-defined]
         assert callable(transcriber._backend.transcribe_raw)  # type: ignore[attr-defined]
+
+
+class TestWhisperStartupResolution:
+    """The fail-closed whisper model-selection truth table (configurable models
+    A2). The validated large-v2 default keeps the baked, offline path untouched;
+    an alternate model must be explicitly and fully gated or the service refuses
+    to start. The resolver is pure over an env mapping — no model, no container."""
+
+    BAKED = "f0fe81560cb8b68660e564f55dd99207059c092e"
+    ALT = "0123456789abcdef0123456789abcdef01234567"
+
+    def _resolve(self, **env: str) -> object:
+        return whisper_startup.resolve_whisper_startup(env)
+
+    def test_unset_model_is_the_baked_default(self) -> None:
+        d = self._resolve()
+        assert d.model_name == "large-v2"
+        assert d.is_override is False
+        assert d.env_overrides == {}
+        assert d.warning is None
+
+    @pytest.mark.parametrize("model", ["large-v2", "Systran/faster-whisper-large-v2"])
+    def test_default_model_forms_change_nothing(self, model: str) -> None:
+        # Both accepted spellings of the validated default resolve to the baked,
+        # offline path with no env overrides — even if a stray ALLOW_DOWNLOAD is
+        # present, the default is never an override.
+        d = self._resolve(WHISPER_MODEL=model, WHISPER_ALLOW_DOWNLOAD="1")
+        assert d.is_override is False
+        assert d.env_overrides == {}
+
+    def test_blank_model_fails_closed(self) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match="empty"):
+            self._resolve(WHISPER_MODEL="   ")
+
+    @pytest.mark.parametrize("model", ["/models/local", "./rel", "~/m", "a/b/c"])
+    def test_path_like_model_rejected(self, model: str) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"repo id|path"):
+            self._resolve(WHISPER_MODEL=model, WHISPER_ALLOW_DOWNLOAD="1",
+                          WHISPER_REVISION=self.ALT)
+
+    def test_alternate_without_allow_download_fails_closed(self) -> None:
+        with pytest.raises(
+            whisper_startup.WhisperStartupError, match="WHISPER_ALLOW_DOWNLOAD=1"
+        ):
+            self._resolve(WHISPER_MODEL="openai/whisper-large-v3", WHISPER_REVISION=self.ALT)
+
+    @pytest.mark.parametrize(
+        "revision",
+        ["", "main", "v3", "abc123", "F0FE81560CB8B68660E564F55DD99207059C092E"],
+    )
+    def test_alternate_requires_full_lowercase_sha(self, revision: str) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match="40-character"):
+            self._resolve(
+                WHISPER_MODEL="openai/whisper-large-v3",
+                WHISPER_ALLOW_DOWNLOAD="1",
+                WHISPER_REVISION=revision,
+            )
+
+    def test_alternate_still_carrying_baked_revision_fails_closed(self) -> None:
+        # The image bakes WHISPER_REVISION to the large-v2 SHA (a valid 40-char
+        # value); an operator who sets an alternate model but forgets to change
+        # the revision must fail closed, not silently fetch the wrong snapshot.
+        with pytest.raises(whisper_startup.WhisperStartupError, match="baked"):
+            self._resolve(
+                WHISPER_MODEL="openai/whisper-large-v3",
+                WHISPER_ALLOW_DOWNLOAD="1",
+                WHISPER_REVISION=self.BAKED,
+                WHISPER_BAKED_REVISION=self.BAKED,
+            )
+
+    def test_fully_gated_alternate_enables_fetch_to_separate_cache(self) -> None:
+        d = self._resolve(
+            WHISPER_MODEL="openai/whisper-large-v3",
+            WHISPER_ALLOW_DOWNLOAD="1",
+            WHISPER_REVISION=self.ALT,
+            WHISPER_BAKED_REVISION=self.BAKED,
+        )
+        assert d.is_override is True
+        assert d.model_name == "openai/whisper-large-v3"
+        # Downloads land in the SEPARATE cache, never over the baked root.
+        assert d.env_overrides["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+        assert whisper_startup.ALT_CACHE_ROOT != "/app/.cache/whisper"
+        # ALLOW_DOWNLOAD=1 is the explicit authority that turns offline off.
+        assert d.env_overrides["HF_HUB_OFFLINE"] == "0"
+        assert d.warning is not None and "unvalidated" in d.warning
+
+    def test_apply_mutates_environ_and_returns_decision(self) -> None:
+        env: dict[str, str] = {
+            "WHISPER_MODEL": "openai/whisper-large-v3",
+            "WHISPER_ALLOW_DOWNLOAD": "1",
+            "WHISPER_REVISION": self.ALT,
+            "WHISPER_BAKED_REVISION": self.BAKED,
+        }
+        d = whisper_startup.apply_whisper_startup(env)
+        assert d.is_override is True
+        assert env["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+        assert env["HF_HUB_OFFLINE"] == "0"
+
+    def test_apply_default_leaves_offline_untouched(self) -> None:
+        # The baked default must never have its offline flag flipped by the applier.
+        env = {"HF_HUB_OFFLINE": "1"}
+        whisper_startup.apply_whisper_startup(env)
+        assert env["HF_HUB_OFFLINE"] == "1"
+        assert "WHISPER_DOWNLOAD_ROOT" not in env
 
 
 class TestCt2DeviceVerify:
@@ -1498,4 +1707,10 @@ class TestWhisperOfflineStartup:
         assert "ENV HF_HUB_OFFLINE=1" in text, f"{dockerfile_name} lost HF_HUB_OFFLINE=1"
         assert "ENV WHISPER_REVISION=${WHISPER_HF_REVISION}" in text, (
             f"{dockerfile_name} runtime stage lost the WHISPER_REVISION pin"
+        )
+        # The startup resolver rejects an alternate model that still carries the
+        # baked SHA; that guard needs the baked reference in the image, sourced
+        # from the same ARG so it can never drift from WHISPER_REVISION.
+        assert "ENV WHISPER_BAKED_REVISION=${WHISPER_HF_REVISION}" in text, (
+            f"{dockerfile_name} lost the WHISPER_BAKED_REVISION resolver reference"
         )

@@ -64,6 +64,10 @@ ENV WHISPER_DOWNLOAD_ROOT=/app/.cache/whisper
 # the load to the baked snapshot so offline resolution needs no ref lookup.
 ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
 ENV WHISPER_REVISION=${WHISPER_HF_REVISION}
+# Baked-snapshot reference for the startup resolver: an alternate model whose
+# WHISPER_REVISION still equals this baked large-v2 SHA is a forgotten-revision
+# mistake and fails closed (app/whisper_startup.py). Never operator-facing.
+ENV WHISPER_BAKED_REVISION=${WHISPER_HF_REVISION}
 ENV HF_HUB_OFFLINE=1
 ENV DEVICE=cpu
 ENV COMPUTE_TYPE=int8

@@ -113,6 +113,7 @@ async def healthz() -> HealthResponse | JSONResponse:
         engine_version=diarizer.engine_version,
         runtime=diarizer.runtime,
         runtime_version=diarizer.runtime_version,
+        model_revision=diarizer.model_revision,
         model_loaded=loaded,
         resources=build_resources(sampler, admission),
     )

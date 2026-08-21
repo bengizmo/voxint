@@ -18,6 +18,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   successful attempt's recorded identity. This is provenance observed just before
   the call, not response-carried proof of the exact build; the groundwork for the
   operator-facing pipeline-models surfaces that follow.
+- **Opt-in alternate transcription model (whisper), fully gated.** The shipped
+  `large-v2` stays the only validated model and its baked, offline path is
+  unchanged. An operator can now select an alternate model, but only by opting in
+  explicitly: a non-default `WHISPER_MODEL` requires both `WHISPER_ALLOW_DOWNLOAD=1`
+  and `WHISPER_REVISION` set to that model's full 40-character commit SHA, or the
+  whisper service refuses to start with a message naming exactly what to set.
+  Alternate weights download into a separate cache volume that never shadows the
+  baked default. Alternate models are an unvalidated mechanism (v3 and turbo
+  hallucinate); the startup warns, and the numerics guarantees cover `large-v2`
+  only.
+- **Reproducible pin for an overridden diarization model (`DIARIZER_REVISION`).**
+  Setting `DIARIZER_MODEL_NAME` to an alternate Hugging Face pipeline can now be
+  paired with `DIARIZER_REVISION` to pin that pipeline to an exact commit, so the
+  recorded provenance is reproducible instead of floating with the repo's default
+  branch. The pin is applied across pyannote's incompatible loader forms (3.1.x
+  pins via the `repo@revision` form with `use_auth_token`; 4.x via `revision=`
+  with `token=`) and surfaces in the service `/healthz` as `model_revision`. It
+  is not applicable to the vendored default (whose config is itself the pin) and
+  is ignored there with a warning. The validated default load path is unchanged.
 
 ## [0.22.1] - 2026-08-21
 
