@@ -307,8 +307,21 @@ class TestWavPreflight:
             uem_max_end_s=106.0,
             tol_s=1.0,
         )
-        assert len(problems) == 3  # extent mismatch + reference past end + uem past end
+        assert len(problems) == 3  # truncated (shorter than extent) + reference + uem past end
         assert er.check_duration(100.0, 100.0, 99.0, None, tol_s=1.0) == []
+
+    def test_check_duration_allows_audio_longer_than_extent(self) -> None:
+        # AMI Mix-Headset audio runs past the last annotated word: the decoded
+        # duration exceeds the subset extent, but the reference/UEM stay inside
+        # the audio, so this is a clean file, not a problem. (Regression: a
+        # symmetric extent check false-failed every AMI recording in Step 7.)
+        assert er.check_duration(
+            measured_s=943.833,
+            extent_s=869.200,
+            reference_max_end_s=869.000,
+            uem_max_end_s=500.000,
+            tol_s=2.0,
+        ) == []
 
     def test_rttm_and_uem_max_end_are_pure_text_scans(self) -> None:
         rttm = (

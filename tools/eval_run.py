@@ -509,12 +509,21 @@ def check_duration(
     of the audio, whereas ``uem_max_end_s > measured_s`` does. Each check is a
     warning string so the caller can log them all rather than stopping at the
     first.
+
+    ``extent_s`` is the subset's reference ANNOTATION extent (the last annotated
+    speech end from ``rttm_stats.json``), NOT the audio duration. VoxConverse
+    clips are trimmed to roughly their annotated region so the two coincide, but
+    AMI Mix-Headset audio legitimately runs past the last annotated word. So the
+    length guard is one-directional: only a decoded file SHORTER than its own
+    extent (a truncated or wrong download) is flagged; audio longer than the
+    extent is expected and fine. A truncated file is also caught by the
+    reference/UEM out-of-bounds checks below.
     """
     problems: list[str] = []
-    if abs(measured_s - extent_s) > tol_s:
+    if extent_s - measured_s > tol_s:
         problems.append(
-            f"decoded duration {measured_s:.3f}s differs from subset extent {extent_s:.3f}s "
-            f"by more than {tol_s:.3f}s"
+            f"decoded duration {measured_s:.3f}s is shorter than subset extent "
+            f"{extent_s:.3f}s by more than {tol_s:.3f}s (truncated or wrong file?)"
         )
     if reference_max_end_s > measured_s + tol_s:
         problems.append(
