@@ -162,6 +162,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
     verify_csrf_token,
 )
+from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import (
     MediaResolutionError,
     PlaybackCapability,
@@ -3807,6 +3808,10 @@ def _register_routes(app: FastAPI) -> None:
                 "request": request,
                 "run": run,
                 "stage_runs": stage_runs,
+                # Which model actually answered each stage, from that stage's
+                # latest completed attempt (A1 provenance). "Not recorded" for
+                # legacy runs stamped before this existed.
+                "model_provenance": select_run_model_identity(stage_runs),
                 # The frozen sidecar title (issue #104), shown as the run's
                 # display name above the raw path. Tolerant read: None when the
                 # run has no sidecar (or a tampered one).
