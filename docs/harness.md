@@ -210,6 +210,50 @@ pin it.
 These have no CLI yet; if one grows a public workflow, it gets a `score`
 subcommand and a contract section here.
 
+## Feeding the harness from live runs (`voxint.harness_export`)
+
+The harness scores files; it never reads a database. `voxint.harness_export` is
+the one package allowed to read the database and render live pipeline runs into
+these input shapes, so it lives OUTSIDE `voxint.harness` to keep that package
+DB-free. It exports STORED evidence only: it re-uses the matcher's own
+eligibility and centroid helpers over the stored per-turn vectors, and never
+re-runs TitaNet or the matcher decision, so an exported baseline reflects
+production numerics exactly.
+
+- `name_accuracy_items(session, run_ids, *, truth_anchoring)` renders one
+  name-accuracy item per run, one slot per diarization label. `assigned_name` is
+  the matcher's automatic attribution, a grounded cosine proposal, read from the
+  machine evidence INDEPENDENTLY of the read-time resolution: a label a human
+  later adjudicated still reports what the machine would have shown, so a human
+  ruling never masks the prediction being measured. `truth` is the human ruling
+  (assign, `__ABSTAIN__` for exclude, `__NEITHER_DETERMINABLE__` for unknown, and
+  absent for a label no human confirmed). Each slot also carries a `match`
+  provenance block (the full accept/reject/ineligible decision, with `margin`
+  null for a single-speaker roster, never `Infinity`) that the scorer ignores but
+  a later confidence-policy pass can re-derive any band from. `truth_anchoring`
+  records whether the truth was fixed independently of the proposal (a corpus) or
+  after the operator saw it (their own material); the database cannot prove this,
+  so the caller declares it.
+- `agreement_enrollment(session, embedding_space, ...)` and
+  `agreement_slots(session, run_ids, ...)` render the enroll-and-re-identify
+  contract. Voiceprints are the active roster's production centroids; per-voice
+  slot vectors are the production label centroids. `held_out` is asserted only
+  when every contributing enrollment row records its source run, and
+  `source_item_ids` lists those runs, so the harness leakage gate abstains on any
+  item a voiceprint was built from.
+- `evidence_snapshot(session, settings, run_ids, *, exported_at, git_sha=None)`
+  records the code version, embedding-space identity, matching gates, and roster
+  digest beside a baseline. It is an EXPORT-TIME snapshot, not a historical
+  replay: the database does not retain the gates or roster centroids used when
+  each run was matched, so the gates are labelled `gates_at_export` and the
+  roster digest is an export-time fingerprint. A baseline whose snapshot no
+  longer matches the live gates or roster is stale and must be regenerated.
+
+The exporter is a library today (a thin `voxint score`-adjacent driver that
+selects runs and writes the files is the next slice); its DB to JSONL mapping is
+unit-tested and round-tripped through the real `score name-accuracy` and
+`score agreement` commands.
+
 ## Relation to the private ancestors
 
 The cores are fresh implementations of scorers developed in the private

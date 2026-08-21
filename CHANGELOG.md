@@ -15,6 +15,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   left no trace. This is observational only: it changes nothing an operator sees
   and does not alter a single match. It is the measurement groundwork for making
   speaker attribution trustworthy enough to widen (epic #112).
+- **Scoring-harness exporter (#113).** A maintainer-facing library
+  (`voxint.harness_export`) renders live pipeline runs into the file shapes the
+  offline `voxint score` harness consumes: name-accuracy items (the matcher's
+  automatic attribution scored against the human ruling) and acoustic-agreement
+  enrollment plus per-voice slots (the exact voiceprints and centroids
+  production compares), alongside an evidence snapshot recording the code
+  version, matching gates, and roster identity at export time. This closes the
+  measurement loop so a first speaker-attribution baseline can be produced; it
+  reads the database and never re-runs the models or the matcher.
 
 ## [0.21.0] - 2026-08-20
 
