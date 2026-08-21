@@ -286,6 +286,11 @@ version of the same strip. Both are quiet on purpose: a card running flat out
 during a transcription is healthy, not a warning, so most of the time the strip
 just tells you each service is working.
 
+![The Voxint Resources page, listing each model service (transcription,
+diarization, speaker embedding), whether it is reachable, and the device it runs
+on, above a note that GPU readings appear here when a graphics card is in
+use.](../images/resources.png)
+
 It speaks up in only two cases, each with one plain fix:
 
 - **The card is too hot and has slowed itself down** (thermal throttling). The
