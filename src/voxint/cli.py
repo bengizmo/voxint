@@ -948,10 +948,37 @@ def _stats(args: argparse.Namespace) -> int:
     finally:
         engine.dispose()
 
+    # Advisory hardware telemetry from the services' /healthz, rendered from the
+    # same snapshot the dashboard and /metrics use. A one-shot CLI, so force a
+    # fresh probe; a probe failure omits the section rather than failing stats.
+    snapshot = None
+    try:
+        import httpx
+
+        from voxint.api.resource_status import collect_resource_status
+        from voxint.config import get_settings
+
+        with httpx.Client(
+            timeout=httpx.Timeout(get_settings().health_probe_timeout_seconds)
+        ) as client:
+            snapshot = collect_resource_status(get_settings(), client=client, force=True)
+    except Exception:
+        snapshot = None
+
     if args.json:
-        print(json.dumps(stats_to_json(stats), indent=2, ensure_ascii=False))
+        data = stats_to_json(stats)
+        if snapshot is not None:
+            from voxint.api.resource_status import resource_snapshot_to_json
+
+            data["resources"] = resource_snapshot_to_json(snapshot)
+        print(json.dumps(data, indent=2, ensure_ascii=False))
     else:
         sys.stdout.write(format_stats_text(stats))
+        if snapshot is not None:
+            from voxint.api.resource_status import format_resource_status_text
+
+            print()
+            print(format_resource_status_text(snapshot))
     return 0
 
 

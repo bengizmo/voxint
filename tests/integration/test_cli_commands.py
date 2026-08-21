@@ -559,6 +559,73 @@ def test_stats_text_and_json(
     assert durations["transcribe"]["avg_seconds"] == 10.0
 
 
+def test_stats_includes_resource_section(
+    session_factory: sessionmaker[Session],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`voxint stats` renders the hardware snapshot in both text and --json,
+    from the same aggregation the dashboard uses. The probe is patched so the
+    test does not depend on live model services."""
+    from voxint.api.resource_status import (
+        AdmissionInfo,
+        AggregatedGpu,
+        ResourceSnapshot,
+        ServiceResourceView,
+    )
+
+    snap = ResourceSnapshot(
+        gpus=(
+            AggregatedGpu(
+                gpu_uuid="GPU-aaaaaaaa-1111-2222-3333-444444444444",
+                utilization_percent=71,
+                vram_used_bytes=4_000_000_000,
+                vram_total_bytes=12_000_000_000,
+                temperature_celsius=60,
+                throttle_active=False,
+                throttle_reasons=(),
+                max_temperature_celsius=70,
+                throttle_events_since_start=0,
+                sample_age_seconds=1.0,
+                services=("transcription",),
+            ),
+        ),
+        services=(
+            ServiceResourceView(
+                name="transcription",
+                up=True,
+                device="cuda",
+                telemetry_available=True,
+                gpu_uuid="GPU-aaaaaaaa-1111-2222-3333-444444444444",
+                admission=AdmissionInfo(
+                    pending=2,
+                    max_pending=8,
+                    rejected_since_start=0,
+                    process_started_at="2026-01-01T00:00:00+00:00",
+                ),
+                cpu=None,
+            ),
+        ),
+        collected_age_seconds=0.0,
+    )
+    monkeypatch.setattr(
+        "voxint.api.resource_status.collect_resource_status",
+        lambda settings, **kw: snap,
+    )
+
+    assert main(["stats"]) == 0
+    text = capsys.readouterr().out
+    assert "Resource telemetry:" in text
+    assert "util 71%" in text
+
+    import json
+
+    assert main(["stats", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["resources"]["gpus"][0]["utilization_percent"] == 71
+    assert payload["resources"]["services"][0]["admission"]["pending"] == 2
+
+
 def test_watch_sees_committed_status_flip(
     session_factory: sessionmaker[Session], capsys: pytest.CaptureFixture[str]
 ) -> None:

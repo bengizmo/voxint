@@ -31,6 +31,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (`RESOURCE_STATUS_TTL_SECONDS`, default 10) so a browser poll across tabs
   never fans out live probes. `voxint doctor` now prints the aggregated GPU and
   per-service admission state.
+- **Operator resource visibility.** The aggregated hardware snapshot now renders
+  everywhere from one cached source: a curated **Dashboard** strip, a dedicated
+  **Resources** page (`GET /resources`), `voxint stats` (text and, under a
+  `resources` key, `--json`), and `voxint_gpu_*` / `voxint_service_admission_*`
+  gauges on `GET /metrics`. The strip is deliberately quiet to avoid alarm
+  fatigue: it shows each GPU's activity (idle / working / busy, never an alarm,
+  since full utilization during a transcription is healthy) and warns, with one
+  plain remedy each, only when the driver reports thermal throttling or a service
+  queue is currently full. High VRAM and cumulative-since-restart counts are not
+  warnings; the resource page shows them as instantaneous or cumulative context.
+  When no service reports telemetry the surfaces say so rather than claiming
+  all-clear. Warnings are advisory in v1: the driver already protects the
+  hardware, so Voxint never pauses work on its own.
 - **Speaker-matching decision evidence (#113).** Every pipeline run now records,
   for each diarized voice, what the matcher decided and the numbers behind it:
   the top roster candidate, cosine similarity, top-1 vs top-2 margin,

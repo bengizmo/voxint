@@ -349,3 +349,222 @@ class TestTextRenderer:
     def test_empty_snapshot_says_unavailable(self) -> None:
         empty = rs.ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0)
         assert "unavailable" in rs.format_resource_status_text(empty)
+
+
+# --------------------------------------------------------------------------- #
+# Visibility layer (W3): strip curation, JSON, prometheus, trio agreement.
+# Fixtures build the frozen snapshot directly so the pure renderers unit-test
+# without any HTTP.
+# --------------------------------------------------------------------------- #
+def _gpu(
+    uuid: str = UUID_A,
+    *,
+    util: int | None = 50,
+    used: int | None = 4_000_000_000,
+    total: int | None = 12_000_000_000,
+    temp: int | None = 60,
+    throttle_active: bool | None = False,
+    throttle_reasons: tuple[str, ...] = (),
+    max_temp: int | None = 70,
+    throttle_events: int | None = 0,
+    sample_age: float | None = 1.0,
+    services: tuple[str, ...] = ("transcription",),
+) -> rs.AggregatedGpu:
+    return rs.AggregatedGpu(
+        gpu_uuid=uuid,
+        utilization_percent=util,
+        vram_used_bytes=used,
+        vram_total_bytes=total,
+        temperature_celsius=temp,
+        throttle_active=throttle_active,
+        throttle_reasons=throttle_reasons,
+        max_temperature_celsius=max_temp,
+        throttle_events_since_start=throttle_events,
+        sample_age_seconds=sample_age,
+        services=services,
+    )
+
+
+def _admission(pending: int = 0, max_pending: int = 8, rejected: int = 0) -> rs.AdmissionInfo:
+    return rs.AdmissionInfo(
+        pending=pending,
+        max_pending=max_pending,
+        rejected_since_start=rejected,
+        process_started_at="2026-01-01T00:00:00+00:00",
+    )
+
+
+def _view(
+    name: str = "transcription",
+    *,
+    up: bool = True,
+    device: str | None = "cuda",
+    admission: rs.AdmissionInfo | None = None,
+) -> rs.ServiceResourceView:
+    return rs.ServiceResourceView(
+        name=name,
+        up=up,
+        device=device,
+        telemetry_available=admission is not None,
+        gpu_uuid=UUID_A if admission is not None else None,
+        admission=admission,
+        cpu=None,
+    )
+
+
+def _snapshot(
+    gpus: tuple[rs.AggregatedGpu, ...] = (),
+    services: tuple[rs.ServiceResourceView, ...] = (),
+    age: float = 0.0,
+) -> rs.ResourceSnapshot:
+    return rs.ResourceSnapshot(gpus=gpus, services=services, collected_age_seconds=age)
+
+
+class TestDeviceState:
+    @pytest.mark.parametrize(
+        "util,expected",
+        [(None, "unknown"), (0, "idle"), (15, "idle"), (16, "working"),
+         (89, "working"), (90, "busy"), (100, "busy")],
+    )
+    def test_boundaries(self, util: int | None, expected: str) -> None:
+        assert rs.device_state(util) == expected
+
+
+class TestStrip:
+    def test_gpu_activity_and_no_warnings_is_calm_not_unavailable(self) -> None:
+        strip = rs.build_resource_strip(_snapshot(gpus=(_gpu(util=40),)))
+        assert strip.telemetry_present is True
+        assert strip.warnings == ()
+        assert [g.state for g in strip.gpus] == ["working"]
+
+    def test_no_telemetry_at_all_is_unavailable(self) -> None:
+        # No GPU and every service lacks admission -> "status unavailable", the
+        # honest state that must never be rendered as all-clear.
+        strip = rs.build_resource_strip(_snapshot(services=(_view(admission=None),)))
+        assert strip.telemetry_present is False
+        assert strip.gpus == ()
+        assert strip.warnings == ()
+
+    def test_thermal_throttle_warns_with_remedy(self) -> None:
+        gpu = _gpu(throttle_active=True, throttle_reasons=("thermal_sw",))
+        strip = rs.build_resource_strip(_snapshot(gpus=(gpu,)))
+        assert [w.kind for w in strip.warnings] == ["thermal"]
+        w = strip.warnings[0]
+        assert "cool" in w.message.lower()
+        assert w.remedy  # a non-technical one-step remedy is always present
+
+    def test_non_thermal_throttle_does_not_warn(self) -> None:
+        # Power/clock/idle throttling is normal governor behaviour, not a problem.
+        gpu = _gpu(throttle_active=True, throttle_reasons=("power", "clock", "idle"))
+        assert rs.build_resource_strip(_snapshot(gpus=(gpu,))).warnings == ()
+
+    def test_not_throttling_does_not_warn_even_when_hot(self) -> None:
+        gpu = _gpu(throttle_active=False, temp=95, throttle_reasons=("thermal_sw",))
+        assert rs.build_resource_strip(_snapshot(gpus=(gpu,))).warnings == ()
+
+    def test_high_vram_and_full_util_are_not_warnings(self) -> None:
+        # Resident model footprint + 100% util during a run are healthy, never amber.
+        gpu = _gpu(util=100, used=11_900_000_000, total=12_000_000_000)
+        strip = rs.build_resource_strip(_snapshot(gpus=(gpu,)))
+        assert strip.warnings == ()
+        assert strip.gpus[0].state == "busy"
+
+    def test_queue_full_warns_with_remedy(self) -> None:
+        svc = _view("transcription", admission=_admission(pending=8, max_pending=8))
+        strip = rs.build_resource_strip(_snapshot(services=(svc,)))
+        assert [w.kind for w in strip.warnings] == ["queue_full"]
+        assert "transcription" in strip.warnings[0].message
+        assert strip.warnings[0].remedy
+
+    def test_queue_below_max_does_not_warn(self) -> None:
+        svc = _view("transcription", admission=_admission(pending=7, max_pending=8))
+        assert rs.build_resource_strip(_snapshot(services=(svc,))).warnings == ()
+
+    def test_cumulative_rejects_are_not_a_live_warning(self) -> None:
+        # rejected_since_start is monotonic-since-boot: the wrong tense for a live
+        # strip. A past rejection with a currently non-full queue raises nothing.
+        svc = _view("transcription", admission=_admission(pending=1, max_pending=8, rejected=42))
+        assert rs.build_resource_strip(_snapshot(services=(svc,))).warnings == ()
+
+    def test_zero_max_pending_never_warns(self) -> None:
+        svc = _view("transcription", admission=_admission(pending=0, max_pending=0))
+        assert rs.build_resource_strip(_snapshot(services=(svc,))).warnings == ()
+
+
+class TestJsonRenderer:
+    def test_shape_and_values(self) -> None:
+        snap = _snapshot(
+            gpus=(_gpu(util=77),),
+            services=(_view("transcription", admission=_admission(pending=2, rejected=1)),),
+            age=3.5,
+        )
+        data = rs.resource_snapshot_to_json(snap)
+        assert data["collected_age_seconds"] == 3.5
+        assert data["gpus"][0]["utilization_percent"] == 77
+        assert data["gpus"][0]["services"] == ["transcription"]
+        svc = data["services"][0]
+        assert svc["admission"]["pending"] == 2
+        assert svc["admission"]["rejected_since_start"] == 1
+        assert svc["cpu"] is None
+
+    def test_service_without_admission_serialises_null(self) -> None:
+        data = rs.resource_snapshot_to_json(_snapshot(services=(_view(admission=None),)))
+        assert data["services"][0]["admission"] is None
+
+
+class TestPrometheusRenderer:
+    def test_gpu_and_admission_gauges_present(self) -> None:
+        snap = _snapshot(
+            gpus=(_gpu(util=77, temp=61),),
+            services=(_view("transcription", admission=_admission(pending=2, max_pending=8)),),
+        )
+        text = rs.render_resource_prometheus(snap)
+        assert f'voxint_gpu_utilization_percent{{gpu="{UUID_A}"}} 77' in text
+        assert f'voxint_gpu_temperature_celsius{{gpu="{UUID_A}"}} 61' in text
+        assert 'voxint_service_admission_pending{service="transcription"} 2' in text
+        assert 'voxint_service_admission_max_pending{service="transcription"} 8' in text
+        assert "# TYPE voxint_gpu_utilization_percent gauge" in text
+        assert text.endswith("\n")
+
+    def test_throttle_active_bool_becomes_one_zero(self) -> None:
+        on = rs.render_resource_prometheus(_snapshot(gpus=(_gpu(throttle_active=True),)))
+        off = rs.render_resource_prometheus(_snapshot(gpus=(_gpu(throttle_active=False),)))
+        assert f'voxint_gpu_throttle_active{{gpu="{UUID_A}"}} 1' in on
+        assert f'voxint_gpu_throttle_active{{gpu="{UUID_A}"}} 0' in off
+
+    def test_null_values_omit_their_sample(self) -> None:
+        text = rs.render_resource_prometheus(_snapshot(gpus=(_gpu(util=None, temp=None),)))
+        assert "voxint_gpu_utilization_percent{" not in text  # no sample for null util
+        assert f'voxint_gpu_vram_used_bytes{{gpu="{UUID_A}"}} 4000000000' in text
+
+    def test_empty_snapshot_renders_nothing(self) -> None:
+        assert rs.render_resource_prometheus(_snapshot()) == ""
+
+    def test_no_total_suffix_on_gauges(self) -> None:
+        # The guardrail is the monotonic-counter `_total` *suffix* (which promtool
+        # flags on a gauge), not the substring — `vram_total_bytes` is fine.
+        text = rs.render_resource_prometheus(_snapshot(gpus=(_gpu(),)))
+        assert "_total{" not in text and "_total " not in text
+
+
+class TestTrioAgreement:
+    def test_all_renderers_agree_on_the_same_numbers(self) -> None:
+        # One snapshot -> json / prometheus / strip / text must reflect the same
+        # utilization and queue figures (the plan's core W3 invariant).
+        snap = _snapshot(
+            gpus=(_gpu(util=83),),
+            services=(_view("transcription", admission=_admission(pending=8, max_pending=8)),),
+        )
+        data = rs.resource_snapshot_to_json(snap)
+        prom = rs.render_resource_prometheus(snap)
+        strip = rs.build_resource_strip(snap)
+        text = rs.format_resource_status_text(snap)
+
+        assert data["gpus"][0]["utilization_percent"] == 83
+        assert f'voxint_gpu_utilization_percent{{gpu="{UUID_A}"}} 83' in prom
+        assert "util 83%" in text
+        assert strip.gpus[0].state == "working"  # 83 -> working, consistently
+        # The full queue is the one warning, and prometheus carries the same 8/8.
+        assert [w.kind for w in strip.warnings] == ["queue_full"]
+        assert 'voxint_service_admission_pending{service="transcription"} 8' in prom
+        assert data["services"][0]["admission"]["pending"] == 8

@@ -321,3 +321,299 @@ def format_resource_status_text(snapshot: ResourceSnapshot) -> str:
                 f"rejected {adm.rejected_since_start}"
             )
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# Curated visibility layer (W3): one snapshot -> strip / page / json / metrics.
+# --------------------------------------------------------------------------- #
+
+# Device-activity thresholds. Fixed internal constants, NOT operator knobs: the
+# strip shows *activity*, never an alarm, so these only pick the wording of a
+# neutral pill and a few percent either way changes nothing an operator acts on.
+_IDLE_UTIL_MAX = 15  # <= this is "idle"
+_BUSY_UTIL_MIN = 90  # >= this is "busy"
+
+# The only throttle reasons that raise a thermal warning. Power/clock/idle
+# throttling is normal governor behaviour and is never surfaced as a problem
+# (guardrail from the plan consult: thermal is warn-only in v1, driven solely by
+# the driver's own thermal verdict, never by an invented temperature threshold).
+_THERMAL_REASONS = frozenset({"thermal_sw", "thermal_hw"})
+
+
+@dataclass(frozen=True)
+class GpuActivity:
+    """One GPU's neutral, informational activity state for the strip."""
+
+    gpu_uuid: str
+    short_uuid: str
+    state: str  # "idle" | "working" | "busy" | "unknown"
+    utilization_percent: int | None
+    services: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ResourceWarning:
+    """A single curated, actionable warning. Amber, never red: the NVIDIA driver
+    already protects the hardware, so v1 warns and advises rather than acting."""
+
+    kind: str  # "thermal" | "queue_full"
+    scope: str  # which GPU (short uuid) or service the warning is about
+    message: str  # plain-language statement of what is happening
+    remedy: str  # one concrete next step a non-technical operator can take
+
+
+@dataclass(frozen=True)
+class ResourceStripView:
+    """The compact dashboard strip: neutral GPU activity plus active warnings.
+
+    ``telemetry_present`` separates "no warnings" (calm, telemetry was seen) from
+    "status unavailable" (no service reported anything) so the strip never claims
+    all-clear on missing data.
+    """
+
+    telemetry_present: bool
+    gpus: tuple[GpuActivity, ...]
+    warnings: tuple[ResourceWarning, ...]
+    collected_age_seconds: float
+
+
+def device_state(util: int | None) -> str:
+    """Neutral activity label for a utilization reading (idle/working/busy), or
+    "unknown" when there is no reading. Informational, never an alarm."""
+    if util is None:
+        return "unknown"
+    if util <= _IDLE_UTIL_MAX:
+        return "idle"
+    if util >= _BUSY_UTIL_MIN:
+        return "busy"
+    return "working"
+
+
+# Back-compat private alias (kept so existing call sites / tests need no churn).
+_device_state = device_state
+
+
+def _is_thermal_throttling(gpu: AggregatedGpu) -> bool:
+    """True only when the driver reports it is throttling *for heat* — a
+    non-thermal throttle (power/clock/idle) is normal and never warns."""
+    return bool(gpu.throttle_active) and not _THERMAL_REASONS.isdisjoint(gpu.throttle_reasons)
+
+
+def build_resource_strip(snapshot: ResourceSnapshot) -> ResourceStripView:
+    """Curate the snapshot into the compact dashboard strip (pure).
+
+    Only two conditions raise an (amber) warning: the driver reports thermal
+    throttling, or a service's admission queue is currently full. High VRAM,
+    100% utilization, and cumulative-since-restart counters are deliberately NOT
+    warnings (they are normal during a run, and cumulative counts are the wrong
+    tense for a live strip); those live on the resource page as instantaneous /
+    cumulative context instead.
+    """
+    gpus = tuple(
+        GpuActivity(
+            gpu_uuid=g.gpu_uuid,
+            short_uuid=_short_uuid(g.gpu_uuid),
+            state=device_state(g.utilization_percent),
+            utilization_percent=g.utilization_percent,
+            services=g.services,
+        )
+        for g in snapshot.gpus
+    )
+    warnings: list[ResourceWarning] = []
+    for g in snapshot.gpus:
+        if _is_thermal_throttling(g):
+            warnings.append(
+                ResourceWarning(
+                    kind="thermal",
+                    scope=_short_uuid(g.gpu_uuid),
+                    message="The GPU is slowing itself down to stay cool.",
+                    remedy=(
+                        "Check that the computer's fans and air vents are clear, "
+                        "then let it cool down."
+                    ),
+                )
+            )
+    for view in snapshot.services:
+        adm = view.admission
+        if adm is not None and adm.max_pending > 0 and adm.pending >= adm.max_pending:
+            warnings.append(
+                ResourceWarning(
+                    kind="queue_full",
+                    scope=view.name,
+                    message=f"The {view.name} queue is full ({adm.pending}/{adm.max_pending}).",
+                    remedy="Wait for the current work to finish before adding more audio.",
+                )
+            )
+    telemetry_present = bool(snapshot.gpus) or any(
+        v.admission is not None for v in snapshot.services
+    )
+    return ResourceStripView(
+        telemetry_present=telemetry_present,
+        gpus=gpus,
+        warnings=tuple(warnings),
+        collected_age_seconds=snapshot.collected_age_seconds,
+    )
+
+
+def short_uuid(uuid: str) -> str:
+    """Public alias of :func:`_short_uuid` for template display."""
+    return _short_uuid(uuid)
+
+
+def gib(nbytes: int | None) -> str:
+    """Bytes as a GiB number string (no unit suffix), for template display."""
+    return f"{nbytes / (1024**3):.1f}" if nbytes is not None else "?"
+
+
+def vram_percent(used: int | None, total: int | None) -> int | None:
+    """Used-VRAM percentage, or None when either figure is missing."""
+    if used is None or total is None or total <= 0:
+        return None
+    return round(100 * used / total)
+
+
+def resource_snapshot_to_json(snapshot: ResourceSnapshot) -> dict[str, object]:
+    """The snapshot as JSON-serialisable primitives (stable key set)."""
+    return {
+        "collected_age_seconds": snapshot.collected_age_seconds,
+        "gpus": [
+            {
+                "gpu_uuid": g.gpu_uuid,
+                "utilization_percent": g.utilization_percent,
+                "vram_used_bytes": g.vram_used_bytes,
+                "vram_total_bytes": g.vram_total_bytes,
+                "temperature_celsius": g.temperature_celsius,
+                "throttle_active": g.throttle_active,
+                "throttle_reasons": list(g.throttle_reasons),
+                "max_temperature_celsius": g.max_temperature_celsius,
+                "throttle_events_since_start": g.throttle_events_since_start,
+                "sample_age_seconds": g.sample_age_seconds,
+                "services": list(g.services),
+            }
+            for g in snapshot.gpus
+        ],
+        "services": [
+            {
+                "name": v.name,
+                "up": v.up,
+                "device": v.device,
+                "telemetry_available": v.telemetry_available,
+                "gpu_uuid": v.gpu_uuid,
+                "admission": (
+                    {
+                        "pending": v.admission.pending,
+                        "max_pending": v.admission.max_pending,
+                        "rejected_since_start": v.admission.rejected_since_start,
+                        "process_started_at": v.admission.process_started_at,
+                    }
+                    if v.admission is not None
+                    else None
+                ),
+                "cpu": (
+                    {
+                        "availability": v.cpu.availability,
+                        "logical_cores": v.cpu.logical_cores,
+                        "load_average_1m": v.cpu.load_average_1m,
+                    }
+                    if v.cpu is not None
+                    else None
+                ),
+            }
+            for v in snapshot.services
+        ],
+    }
+
+
+def _escape_prom_label(value: str) -> str:
+    """Escape a Prometheus label value (backslash, double-quote, newline)."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+def render_resource_prometheus(snapshot: ResourceSnapshot) -> str:
+    """Prometheus text exposition (format 0.0.4) for the hardware telemetry.
+
+    Series are keyed by GPU uuid / service name, discovered at runtime, so unlike
+    the DB metrics there is no fixed label set to zero-fill; a metric line is
+    emitted only when its value is present (a null reading omits the sample rather
+    than inventing a zero). All gauges: every value is a current reading or a
+    counter that resets on service restart, so none carries a monotonic-counter
+    ``_total`` suffix (``promtool check metrics`` would flag that on these).
+    Returns an empty string when no telemetry is present so ``/metrics`` appends
+    nothing rather than empty metric families.
+    """
+    out: list[str] = []
+
+    def _gpu_gauge(name: str, help_text: str, pick: object) -> None:
+        assert callable(pick)
+        out.append(f"# HELP {name} {help_text}")
+        out.append(f"# TYPE {name} gauge")
+        for g in snapshot.gpus:
+            value = pick(g)
+            if value is None:
+                continue
+            out.append(f'{name}{{gpu="{_escape_prom_label(g.gpu_uuid)}"}} {value}')
+
+    if snapshot.gpus:
+        _gpu_gauge(
+            "voxint_gpu_utilization_percent",
+            "Instantaneous GPU utilization (0-100).",
+            lambda g: g.utilization_percent,
+        )
+        _gpu_gauge(
+            "voxint_gpu_vram_used_bytes",
+            "GPU memory in use, device-global (bytes).",
+            lambda g: g.vram_used_bytes,
+        )
+        _gpu_gauge(
+            "voxint_gpu_vram_total_bytes",
+            "Total GPU memory (bytes).",
+            lambda g: g.vram_total_bytes,
+        )
+        _gpu_gauge(
+            "voxint_gpu_temperature_celsius",
+            "Instantaneous GPU temperature (Celsius).",
+            lambda g: g.temperature_celsius,
+        )
+        _gpu_gauge(
+            "voxint_gpu_max_temperature_celsius",
+            "Peak GPU temperature since service start (Celsius).",
+            lambda g: g.max_temperature_celsius,
+        )
+        _gpu_gauge(
+            "voxint_gpu_throttle_active",
+            "1 if the GPU is currently throttling, else 0.",
+            lambda g: None if g.throttle_active is None else int(g.throttle_active),
+        )
+        _gpu_gauge(
+            "voxint_gpu_throttle_events_since_start",
+            "Throttle events counted since service start.",
+            lambda g: g.throttle_events_since_start,
+        )
+
+    admission_services = [v for v in snapshot.services if v.admission is not None]
+    if admission_services:
+        for metric, help_text, field in (
+            (
+                "voxint_service_admission_pending",
+                "In-flight and queued requests at the service.",
+                "pending",
+            ),
+            (
+                "voxint_service_admission_max_pending",
+                "Admission ceiling before the service rejects.",
+                "max_pending",
+            ),
+            (
+                "voxint_service_admission_rejected_since_start",
+                "Requests rejected since service start.",
+                "rejected_since_start",
+            ),
+        ):
+            out.append(f"# HELP {metric} {help_text}")
+            out.append(f"# TYPE {metric} gauge")
+            for v in admission_services:
+                assert v.admission is not None  # narrowed by the filter above
+                value = getattr(v.admission, field)
+                out.append(f'{metric}{{service="{_escape_prom_label(v.name)}"}} {value}')
+
+    return "\n".join(out) + "\n" if out else ""

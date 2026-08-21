@@ -487,7 +487,9 @@ than stalling). See `docs/domain-packs.md` for the rule schema and semantics.
 failed stage *attempts* per stage, average per-stage duration over finished
 attempts, roster size, and runs created within a window. `--since` accepts a
 relative span (`24h`, `7d`) or an ISO-8601 datetime (default 24h); `--json`
-emits a stable object for scripting.
+emits a stable object for scripting. It also appends the aggregated hardware
+snapshot (see "Hardware resource telemetry" below), under a `resources` key in
+`--json`.
 
 ```bash
 docker compose exec api voxint stats --since 7d          # human table
@@ -559,9 +561,36 @@ the cache:
 |---|---|---|
 | `RESOURCE_STATUS_TTL_SECONDS` | `10` | How long the aggregated resource view is cached before the app re-probes the services. `0` probes live on every read. |
 
-`voxint doctor` prints this aggregated view today (the per-GPU readout plus each
-service's admission depth). A compact dashboard resource strip and a dedicated
-resource page are planned but not yet shipped.
+This one aggregated snapshot renders on every surface: `voxint doctor` and
+`voxint stats` print it (the per-GPU readout plus each service's admission
+depth), `voxint stats --json` carries it under a `resources` key, `GET /metrics`
+appends `voxint_gpu_*` and `voxint_service_admission_*` gauges, and the console
+renders it in two places.
+
+The **Dashboard** carries a compact hardware strip, refreshed on the same 15s
+poll as the run figures. It is deliberately quiet: it shows each GPU's activity
+(idle / working / busy, never an alarm, since 100% during a transcription is
+healthy) and raises an amber warning only for the two conditions an operator can
+act on, each with one plain-language remedy:
+
+- The driver reports the GPU is thermally throttling (improve airflow, let it
+  cool). A high temperature that is not throttling is shown on the resource page
+  but does not warn.
+- A service's admission queue is currently full (wait for current work to
+  finish). A past rejection with a now-idle queue does not warn.
+
+High VRAM is not a warning: the models hold a resident footprint, so a
+percentage is not an honest predictor of an out-of-memory failure. When no
+service reports telemetry the strip says "hardware status unavailable" rather
+than claiming all-clear.
+
+The **Resources** page (`GET /resources`, authenticated, 15s htmx refresh) is the
+fuller live view behind the strip: the aggregated per-GPU card with utilization,
+VRAM, and temperature labeled as instantaneous (now) readings, peak temperature
+and throttle-event counts labeled as cumulative-since-restart, and each service's
+admission depth and rejected-since-restart count. Warnings are warn-only in v1;
+the NVIDIA driver already protects the hardware, so Voxint advises rather than
+pausing work.
 
 ### Exporting transcripts
 
@@ -1201,8 +1230,9 @@ mutations are gated by their per-run claim token.
 | Route | Purpose |
 |---|---|
 | `GET /healthz` | Liveness (no DB access; schema readiness is the migrate gate's job) |
-| `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated, scrape with `basic_auth`) |
-| `GET /dashboard` | Operator dashboard: read-only HTML render of the `/metrics` aggregates; optional `?since=` window, 15s htmx auto-refresh |
+| `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth`) |
+| `GET /dashboard` | Operator dashboard: read-only HTML render of the `/metrics` aggregates plus the curated hardware strip; optional `?since=` window, 15s htmx auto-refresh |
+| `GET /resources` | Hardware resource page: the fuller live GPU + admission view behind the dashboard strip; 15s htmx auto-refresh |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |

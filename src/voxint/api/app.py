@@ -176,6 +176,16 @@ from voxint.api.presentation import (
     humanize_status,
     title_from_snapshot,
 )
+from voxint.api.resource_status import (
+    ResourceSnapshot,
+    build_resource_strip,
+    collect_resource_status,
+    device_state,
+    gib,
+    render_resource_prometheus,
+    short_uuid,
+    vram_percent,
+)
 from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
@@ -990,6 +1000,11 @@ templates.env.globals["format_duration"] = format_duration
 templates.env.globals["format_age"] = format_age
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
+# Hardware-telemetry display helpers (W3): bytes -> GiB number, used-VRAM %.
+templates.env.globals["gib"] = gib
+templates.env.globals["vram_percent"] = vram_percent
+templates.env.globals["short_uuid"] = short_uuid
+templates.env.globals["device_state"] = device_state
 
 
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
@@ -5448,12 +5463,30 @@ def _register_routes(app: FastAPI) -> None:
     # holds without a new flag or token path. The one windowed series
     # (voxint_runs_created_24h) bakes its window into the metric name.
 
+    def _resource_snapshot(request: Request) -> ResourceSnapshot:
+        """The cached hardware snapshot for a render, guarded to never raise.
+
+        ``/metrics`` and the dashboard/resource pages read this cached value
+        (never ``force``): a 15s poll across tabs shares one probe, and a probe
+        failure degrades to an empty snapshot rather than breaking the page.
+        """
+        try:
+            return collect_resource_status(request.app.state.settings)
+        except Exception:
+            # Telemetry is advisory; a probe failure must never break a render.
+            return ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0)
+
     @protected.get("/metrics")
-    def metrics(operator: OperatorDep, session: SessionDep) -> Response:
+    def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
         now = datetime.now(UTC)
         stats = collect_stats(session, since=now - DEFAULT_WINDOW, now=now)
+        # Append the hardware gauges from the same cached snapshot the dashboard
+        # and resource page render, so a scrape and the UI cannot disagree.
+        body = render_prometheus(stats) + render_resource_prometheus(
+            _resource_snapshot(request)
+        )
         return Response(
-            content=render_prometheus(stats),
+            content=body,
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
@@ -5483,6 +5516,9 @@ def _register_routes(app: FastAPI) -> None:
         context = {
             "request": request,
             "stats": stats,
+            # Curated hardware strip (W3): rendered inside the htmx-swapped
+            # fragment so it refreshes on the same 15s poll as the run figures.
+            "resource_strip": build_resource_strip(_resource_snapshot(request)),
             "active_nav": "dashboard",
             # Iterate the enum (not the sparse status_counts map) so the status
             # table renders in a stable order and zero-fills empty statuses, the
@@ -5502,6 +5538,30 @@ def _register_routes(app: FastAPI) -> None:
             "fragments/dashboard_metrics.html"
             if request.headers.get("HX-Request")
             else "dashboard.html"
+        )
+        return templates.TemplateResponse(request, template, context)
+
+    # ---- Hardware resource page (hardware-aware W3) -----------------------------
+    # The fuller live view behind the dashboard strip: the aggregated GPU card
+    # (utilization/VRAM/temperature labeled INSTANTANEOUS, peak temp + throttle
+    # events labeled cumulative-since-restart), per-service admission, and the
+    # curated warnings. Reads the same cached snapshot as /metrics and the strip,
+    # so the three cannot disagree. An htmx poll swaps just the fragment, like
+    # /dashboard. Protected like every non-/healthz page.
+
+    @protected.get("/resources")
+    def resources(request: Request, operator: OperatorDep) -> Response:
+        snapshot = _resource_snapshot(request)
+        context = {
+            "request": request,
+            "snapshot": snapshot,
+            "resource_strip": build_resource_strip(snapshot),
+            "active_nav": "resources",
+        }
+        template = (
+            "fragments/resource_status.html"
+            if request.headers.get("HX-Request")
+            else "resources.html"
         )
         return templates.TemplateResponse(request, template, context)
 
