@@ -155,6 +155,34 @@ class TestExportShaping:
 
 
 # --------------------------------------------------------------------------- #
+# Subset entry loading (the wrapper key the corpus tooling actually emits)
+# --------------------------------------------------------------------------- #
+class TestSubsetLoader:
+    def _write(self, tmp_path: Path, payload: object) -> Path:
+        p = tmp_path / "subset.json"
+        p.write_text(json.dumps(payload))
+        return p
+
+    def test_files_wrapper_is_accepted(self, tmp_path: Path) -> None:
+        # The frozen scoring_subset.json wraps entries under "files"; the driver
+        # must read it, not only the "items" spelling (this was a live-only bug).
+        entries = [{"corpus": "ami", "split": "test", "id": "EN2002c", "extent_s": 1.0}]
+        assert eq._load_subset_entries(self._write(tmp_path, {"files": entries})) == entries
+
+    def test_items_wrapper_still_accepted(self, tmp_path: Path) -> None:
+        entries = [{"corpus": "ami", "split": "test", "id": "EN2002c", "extent_s": 1.0}]
+        assert eq._load_subset_entries(self._write(tmp_path, {"items": entries})) == entries
+
+    def test_bare_array_accepted(self, tmp_path: Path) -> None:
+        entries = [{"corpus": "ami", "split": "test", "id": "EN2002c", "extent_s": 1.0}]
+        assert eq._load_subset_entries(self._write(tmp_path, entries)) == entries
+
+    def test_object_without_a_list_key_is_rejected(self, tmp_path: Path) -> None:
+        with pytest.raises(eq.EvalError):
+            eq._load_subset_entries(self._write(tmp_path, {"description": "no entries here"}))
+
+
+# --------------------------------------------------------------------------- #
 # Cohort inputs + bundle
 # --------------------------------------------------------------------------- #
 class TestCohortInputs:

@@ -1307,10 +1307,17 @@ def require_verified_fingerprints(
 # --------------------------------------------------------------------------- #
 def _load_subset_entries(path: Path) -> list[dict[str, Any]]:
     data = json.loads(_read(path))
-    if isinstance(data, dict) and "items" in data:
-        data = data["items"]
+    if isinstance(data, dict):
+        # The corpus-tooling subset wraps the entries under "files"; accept the
+        # legacy "items" spelling too. A bare array is also fine.
+        for key in ("items", "files"):
+            if key in data:
+                data = data[key]
+                break
     if not isinstance(data, list):
-        raise EvalError(f"{path}: subset must be a JSON array or an object with an 'items' array")
+        raise EvalError(
+            f"{path}: subset must be a JSON array or an object with an 'items' or 'files' array"
+        )
     return data
 
 
