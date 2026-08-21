@@ -16,13 +16,15 @@
 <div class="review-journey">
   <h1 title="{{ run.media_item.source_path }}">{{ run_source_title(run) }}</h1>
   <p class="muted">Added {{ run.created_at.strftime("%Y-%m-%d") }} · <code>{{ run.id.hex[:8] }}</code></p>
-  <ol class="review-steps" aria-label="Review steps">
-    <li class="review-step{% if current_step == 1 %} is-current{% endif %}"
+  {# role="list"/"listitem" restore list semantics under `.review-steps`'
+     `list-style: none`, which Safari/VoiceOver otherwise strip (review finding). #}
+  <ol class="review-steps" role="list" aria-label="Review steps">
+    <li role="listitem" class="review-step{% if current_step == 1 %} is-current{% endif %}"
         {% if current_step == 1 %}aria-current="step"{% endif %}>
       <span class="review-step-n">Step 1 of 2</span>
       <span class="review-step-name">Who is speaking</span>
     </li>
-    <li class="review-step{% if current_step == 2 %} is-current{% endif %}"
+    <li role="listitem" class="review-step{% if current_step == 2 %} is-current{% endif %}"
         {% if current_step == 2 %}aria-current="step"{% endif %}>
       <span class="review-step-n">Step 2 of 2</span>
       <span class="review-step-name">Check the words</span>

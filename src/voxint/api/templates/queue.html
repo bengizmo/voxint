@@ -4,7 +4,7 @@
 <h1>Review</h1>
 <p class="muted">Recordings that finished and still need you to confirm who is speaking. Signed in as {{ operator }}.</p>
 {% if not entries %}
-<p>Nothing to review — every completed run is fully resolved. 🎉</p>
+<p>Nothing to review right now. Every finished recording either had its speakers confirmed by you or matched confidently by Voxint.</p>
 {% else %}
 {# Sort control — mirrors the runs.html filter idiom, but the queue has no other
    query state to preserve, so these are plain links. Default stays "oldest"

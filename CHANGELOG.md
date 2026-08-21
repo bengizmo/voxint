@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **A task-first "first 30 minutes" flow for the review console (#117).** The
+  console now guides a first-run operator instead of only presenting controls.
+  The dashboard leads with three task cards (add audio, continue review with the
+  count of recordings still needing a ruling, and the last finished run) and
+  tucks the throughput and stage metrics behind a "Show run details" disclosure,
+  with the window control and any error kept in view. Review reads as an explicit
+  two-step sequence, "who is speaking" then "check the words", with one dominant
+  Continue on each step and an honest end state that never claims a completion
+  the system does not track. Happy-path wording drops maintainer jargon: the nav
+  says "Review", a voice match reads "Strong voice match" or "Possible voice
+  match" with the raw similarity tucked into a "Why this match?" reveal, and the
+  setup step is "Text clean-up and name hints (optional)". The guided tutorial
+  now walks both review steps (five steps: run, review, attribute the voices,
+  check the words, export). No numerics change and no new configuration.
 - **Speaker-matching decision evidence (#113).** Every pipeline run now records,
   for each diarized voice, what the matcher decided and the numbers behind it:
   the top roster candidate, cosine similarity, top-1 vs top-2 margin,

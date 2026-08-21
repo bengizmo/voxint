@@ -334,10 +334,12 @@ A few deliberate rules:
 
 ## Finishing a run
 
-A run is done when **every voice has a ruling** (the workbench cards all show a
-decision, not "needs ruling") and the **transcript reads right** (the lines you
-care about are verified and corrected). At that point the run drops off the
-**Review** page.
+A run leaves the **Review** list once **every voice has a ruling** (the workbench
+cards all show a decision, not "needs ruling"). Checking the words in Step 2 is
+recommended, and it is how you get a transcript you can fully trust, but it is
+not what removes the run from Review. A run can drop off the list with some lines
+still unchecked. To keep checking or to export it afterwards, reopen it from
+**Runs**.
 
 Now read or export it. The **Download transcript** menu on either the workbench
 or the transcript page offers plain text, Markdown, subtitles (SubRip / WebVTT),

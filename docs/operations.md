@@ -510,16 +510,25 @@ distinguishable from a genuinely 0-second average), `voxint_roster_speakers`, an
 `voxint_runs_created_24h`.
 
 For a human at the console, the **Dashboard** page (`GET /dashboard`, first in the
-top nav) renders the *same* aggregates as a read-only page: runs by status, the
+top nav) leads with a task-first spine: three cards for **Add audio** (to the Runs
+add-media section), **Continue review** (the canonical review-backlog count, to
+`/review`), and **Last finished run** (to its detail page, with an honest empty
+state). The task cards render on page load and refresh only on a full reload, so
+the count is a plain figure, never styled as live.
+
+The *same* aggregates `/metrics` and `voxint stats` report (runs by status, the
 review backlog, per-stage timing and failures, roster size, and runs created in
-the window. It is authenticated like every non-`/healthz` page and shares the
-`stats_query` data layer with `/metrics` and `voxint stats`, so the three surfaces
-always agree. Stage names render in plain language ("Diarize & embed") while the
-machine `/metrics`, JSON, and `voxint stats` outputs keep their raw identifiers.
-The page auto-refreshes every 15 seconds (an htmx fragment poll, no external
-assets). The throughput window is a **24h / 7d / 30d picker on the page**; the
-same `?since=` query param still overrides it directly (any span/ISO-8601 syntax
-`voxint stats --since` accepts), degrading to 24h if malformed.
+the window) sit below the task cards behind a **Show run details** disclosure.
+The invalid-`?since=` notice and the time-window control stay outside that
+disclosure so an error and an input are never hidden. The page is authenticated
+like every non-`/healthz` page and shares the `stats_query` data layer with
+`/metrics` and `voxint stats`, so the three surfaces always agree. Stage names
+render in plain language ("Diarize & embed") while the machine `/metrics`, JSON,
+and `voxint stats` outputs keep their raw identifiers. The metrics fragment
+auto-refreshes every 15 seconds (an htmx fragment poll, no external assets). The
+throughput window is a **24h / 7d / 30d picker on the page**; the same `?since=`
+query param still overrides it directly (any span/ISO-8601 syntax `voxint stats
+--since` accepts), degrading to 24h if malformed.
 
 ### Exporting transcripts
 
@@ -1160,7 +1169,7 @@ mutations are gated by their per-run claim token.
 |---|---|
 | `GET /healthz` | Liveness (no DB access; schema readiness is the migrate gate's job) |
 | `GET /metrics` | Prometheus text exposition (aggregate gauges; authenticated, scrape with `basic_auth`) |
-| `GET /dashboard` | Operator dashboard: read-only HTML render of the `/metrics` aggregates; optional `?since=` window, 15s htmx auto-refresh |
+| `GET /dashboard` | Operator dashboard: task cards (add audio, continue review, last finished run) over the `/metrics` aggregates behind a "Show run details" disclosure; optional `?since=` window, 15s htmx auto-refresh of the metrics fragment |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
