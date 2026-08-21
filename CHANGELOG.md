@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Fixed
+- **The whisper decode identity now includes the compute device.** The
+  `decode_config_hash` reported on the whisper service `/healthz` folds the
+  effective decode config into one digest so a numerics-relevant change is
+  visible deployment to deployment. It omitted the device, so a CUDA
+  deployment and a ROCm deployment produced the same hash even though they run
+  different backends. The hash now distinguishes them. This is a provenance
+  fix, not a transcription change: model output is untouched. One-time effect:
+  after this update every deployment reports a new `decode_config_hash` on the
+  next restart, on every tier (CUDA, ROCm, CPU, Metal).
+
 ## [0.22.0] - 2026-08-21
 
 ### Added

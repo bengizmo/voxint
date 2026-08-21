@@ -196,6 +196,13 @@ Some AMD consumer GPUs still hit a known convolution issue
 ([#4](https://github.com/bengizmo/voxint/issues/4)). Details:
 [operations.md](operations.md#running-on-an-amd-gpu-rocm-tier).
 
+Because only transcription runs on the GPU here, a single card is not competing
+with two other models for memory the way a small NVIDIA card can. The ROCm tier
+keeps the image default `BATCH_SIZE=16` and ships no automatic per-GPU batch
+profile. The tuned profiles noted above are NVIDIA-specific; on ROCm you can
+still lower `BATCH_SIZE` by hand if a smaller card runs short of memory
+(see [operations.md](operations.md#gpu-memory-on-a-single-modest-gpu-issue-96)).
+
 ### Apple Silicon Mac: metal tier
 
 Docker Desktop can't pass the Apple GPU into a container, so on a Mac the metal

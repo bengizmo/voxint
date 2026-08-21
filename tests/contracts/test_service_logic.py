@@ -262,6 +262,54 @@ class TestWhisperHipRuntimeProbe:
         assert detector.resolve_device_name("cuda") == "cuda"
 
 
+def _fake_backend(*, device: str) -> object:
+    """A loaded backend stub exposing exactly what ``decode_identity`` reads.
+
+    The device is the canonical post-load label (the real backends settle it
+    via ``resolve_device_name`` inside ``load_model``), so a CUDA and a ROCm
+    deployment reach ``decode_identity`` with everything else identical.
+    """
+    return SimpleNamespace(
+        kind="shared_windows",
+        engine="faster-whisper",
+        engine_version="1.2.1",
+        runtime="ctranslate2",
+        runtime_version="4.8.1",
+        device=device,
+        model_name="large-v2",
+        compute_type="int8",
+        batch_size=16,
+    )
+
+
+class TestDecodeIdentityDevice:
+    """The decode identity must hash the canonical device: a CUDA box and a
+    ROCm box are otherwise byte-identical (same faster-whisper/ctranslate2
+    versions, same model/compute/batch/VAD), so without device they collide."""
+
+    def test_cuda_and_rocm_hash_differently(self) -> None:
+        from tests.contracts.conftest import service_package
+
+        cuda = detector.WhisperTranscriber(backend=_fake_backend(device="cuda"))
+        rocm = detector.WhisperTranscriber(backend=_fake_backend(device="rocm"))
+        # decode_identity lazily imports app.backends.vad_plan at call time.
+        with service_package("whisper"):
+            cuda_hash = cuda.decode_identity()["decode_config_hash"]
+            rocm_hash = rocm.decode_identity()["decode_config_hash"]
+        assert cuda_hash != rocm_hash
+
+    def test_identity_is_stable_and_cached(self) -> None:
+        from tests.contracts.conftest import service_package
+
+        transcriber = detector.WhisperTranscriber(backend=_fake_backend(device="rocm"))
+        with service_package("whisper"):
+            first = transcriber.decode_identity()
+            second = transcriber.decode_identity()
+        # Same object returned (cached), and the digest is deterministic.
+        assert first is second
+        assert first["decode_config_hash"] == second["decode_config_hash"]
+
+
 class TestWhisperFlavorPinParity:
     def test_rocm_requirements_mirror_shared_pins(self) -> None:
         # Same philosophy as the titanet cpu/cuda pin mirror: a one-sided

@@ -96,9 +96,9 @@ same contract.
     absence (older services) and any future additive values.
   - **whisper only** additionally carries a cached *decode identity* (#33
     Slice 2b), populated once the model is loaded (`null` while `degraded`):
-    `decode_config_hash` (digest of the effective decode config: engine,
-    model, compute_type, batch_size, engine/runtime versions, VAD params +
-    plan version), `vad_plan_version`, `vad_params`, and `model_revision`
+    `decode_config_hash` (digest of the effective decode config: engine, the
+    canonical compute device, model, compute_type, batch_size, engine/runtime
+    versions, VAD params + plan version), `vad_plan_version`, `vad_params`, and `model_revision`
     (the pinned HF snapshot). It never hashes weights per request; it exists so
     two deployments are distinguishable and a numerics change is visible.
   - **All services** additionally carry an optional nested `resources` block
@@ -990,8 +990,8 @@ windows + source-time offsets), window→file timestamp remapping, the
 `exp(avg_logprob)` confidence transform, and repetition soft-tagging; engines
 only decode identical pre-cut windows. `/healthz` identity gains a cached decode
 identity: `decode_config_hash` (digest of the effective decode config: engine,
-model, compute_type, batch_size, engine/runtime versions, VAD params + plan
-version), `vad_plan_version`, `vad_params`, and `model_revision` (the pinned HF
+the canonical compute device, model, compute_type, batch_size, engine/runtime
+versions, VAD params + plan version), `vad_plan_version`, `vad_params`, and `model_revision` (the pinned HF
 snapshot; weights are never hashed per request). Device selection is
 verified fail-closed so a requested Metal engine cannot silently execute on CPU.
 

@@ -381,11 +381,13 @@ class WhisperTranscriber:
         """The effective decode identity for /healthz, computed once and cached.
 
         Digests everything that moves numerics deployment-to-deployment: the
-        engine kind + package versions, the model/compute/batch config, and the
-        shared VAD plan version + parameters. Never hashes weights (the pinned
-        HF revision is the weight provenance). Call after ``load_model`` so the
-        engine/runtime versions are resolved; the result is cached so healthz
-        never recomputes it per request.
+        engine kind + package versions, the canonical compute device, the
+        model/compute/batch config, and the shared VAD plan version +
+        parameters. Never hashes weights (the pinned HF revision is the weight
+        provenance). Call after ``load_model`` so the engine/runtime versions
+        are resolved and the backend has settled ``device`` to its canonical
+        reporting label (e.g. ``rocm`` behind a "cuda" HIP runtime); the result
+        is cached so healthz never recomputes it per request.
         """
         if self._decode_identity is None:
             import hashlib
@@ -400,6 +402,7 @@ class WhisperTranscriber:
                 "engine_version": self._backend.engine_version,
                 "runtime": self._backend.runtime,
                 "runtime_version": self._backend.runtime_version,
+                "device": self._backend.device,
                 "model_name": self._backend.model_name,
                 "compute_type": getattr(self._backend, "compute_type", None),
                 "batch_size": getattr(self._backend, "batch_size", None),
