@@ -249,10 +249,58 @@ production numerics exactly.
   roster digest is an export-time fingerprint. A baseline whose snapshot no
   longer matches the live gates or roster is stale and must be regenerated.
 
-The exporter is a library today (a thin `voxint score`-adjacent driver that
-selects runs and writes the files is the next slice); its DB to JSONL mapping is
-unit-tested and round-tripped through the real `score name-accuracy` and
-`score agreement` commands.
+The DB to JSONL mapping is unit-tested and round-tripped through the real
+`score name-accuracy` and `score agreement` commands.
+
+### Driving an export (`tools/export_match_evidence.py`)
+
+The maintainer tool `tools/export_match_evidence.py` selects runs and writes the
+files. It reads a small run-selection manifest, calls the exporters above, and
+writes the artifacts atomically with the same deterministic, no-NaN
+serialization the harness uses, so a repeated export from an unchanged database
+is byte-for-byte identical. It is a maintainer tool, deliberately NOT a `voxint`
+subcommand: the `score` command stays DB-free by contract, so the one piece that
+reads the database sits outside it (alongside `tools/qualify_local_llm.py`).
+
+The manifest (`schema_version` 1) declares one required `embedding_space` shared
+by every artifact and at least one lane:
+
+```json
+{
+  "schema_version": 1,
+  "embedding_space": "titanet-large-v1",
+  "name_accuracy": {
+    "truth_anchoring": "independent",
+    "run_ids": ["<run-uuid>", "..."]
+  },
+  "agreement": {
+    "runs": [
+      {"run_id": "<run-uuid>", "kind": "curated", "host_id": "<speaker-uuid>"},
+      {"run_id": "<run-uuid>", "kind": "negative_control"}
+    ],
+    "roster_speaker_ids": ["<speaker-uuid>", "..."]
+  }
+}
+```
+
+`truth_anchoring` is `independent` (a corpus annotated without seeing Voxint's
+proposal) or `post_proposal` (the operator ruled after seeing it). A `curated`
+agreement run must name its `host_id`; a `negative_control` run must not.
+`roster_speaker_ids` is optional and defaults to the whole active roster. Run it
+with:
+
+```
+uv run python -m tools.export_match_evidence \
+  --manifest baseline-selection.json --out-dir docs/reports/baseline-export
+```
+
+It writes `snapshot.json` always, `name_accuracy_items.jsonl` for the
+name-accuracy lane, and `enrollment.json` plus `agreement_slots.jsonl` for the
+agreement lane. It records the current git HEAD in the snapshot and refuses to
+run on a working tree with uncommitted tracked changes (pass `--allow-dirty` to
+override), so the snapshot's code sha means what it says. The agreement
+thresholds file that `score agreement` also needs is a calibration artifact, not
+DB-derived, so the driver does not produce it.
 
 ## Relation to the private ancestors
 

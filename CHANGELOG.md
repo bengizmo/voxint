@@ -24,6 +24,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   version, matching gates, and roster identity at export time. This closes the
   measurement loop so a first speaker-attribution baseline can be produced; it
   reads the database and never re-runs the models or the matcher.
+- **Match-evidence export driver (#113).** A maintainer tool
+  (`tools/export_match_evidence.py`) reads a small run-selection manifest, calls
+  the exporter, and writes the score-harness input files plus the evidence
+  snapshot into a directory. Writes are atomic and deterministic, so a repeated
+  export from an unchanged database is byte-for-byte identical, and it refuses to
+  run on a working tree with uncommitted tracked changes so the recorded code
+  version means what it says.
 
 ### Fixed
 - **The titanet and pyannote CUDA images no longer enable the PyTorch
