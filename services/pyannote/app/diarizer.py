@@ -133,6 +133,36 @@ def select_device() -> str:
     return "cpu"
 
 
+def _from_pretrained_adaptive(
+    pipeline_cls: Any, source: str, revision: str | None, token: str | None
+) -> Any:
+    """Load a pipeline across pyannote's incompatible ``from_pretrained`` forms.
+
+    The auth kwarg and revision-pinning mechanism differ across releases
+    (verified against the 3.1.1 and 4.0.x sources):
+
+    * 4.x   -> ``from_pretrained(source, revision=<rev>, token=<tok>)``
+    * 3.1.x -> no ``revision=`` kwarg and ``use_auth_token=``; a revision is
+      pinned via the ``"repo@revision"`` checkpoint-string form, parsed
+      internally and forwarded to ``hf_hub_download``.
+
+    The 4.x form is tried first, falling back to 3.1.x on the ``TypeError`` its
+    unexpected kwargs raise. ``revision=None`` (the validated/vendored default)
+    takes exactly the pre-existing no-revision path, so that load is unchanged.
+    """
+    try:
+        if revision is not None:
+            return pipeline_cls.from_pretrained(source, revision=revision, token=token)
+        return pipeline_cls.from_pretrained(source, token=token)
+    except TypeError as exc:
+        # 3.1.x rejects token= and/or revision= as unexpected kwargs.
+        if "token" not in str(exc) and "revision" not in str(exc):
+            raise
+        if revision is not None:
+            return pipeline_cls.from_pretrained(f"{source}@{revision}", use_auth_token=token)
+        return pipeline_cls.from_pretrained(source, use_auth_token=token)
+
+
 class Diarizer:
     """Pipeline load + single-flight inference + post-processing."""
 
@@ -169,6 +199,22 @@ class Diarizer:
         self.model_is_local = os.path.isfile(self.model_source)
         self.hf_token = os.getenv("HF_TOKEN") or None
         self.device_name = "cpu"
+
+        # DIARIZER_REVISION pins an overridden (HF repo-id) pipeline to an exact
+        # commit so the stamped provenance is reproducible; today
+        # DIARIZER_MODEL_NAME alone floats with the repo's default branch. It is
+        # N/A for the vendored/local source (the vendored config IS the pin), and
+        # ignored there with a warning rather than silently pretending to pin.
+        requested_revision = os.getenv("DIARIZER_REVISION") or None
+        if requested_revision and self.model_is_local:
+            logger.warning(
+                "DIARIZER_REVISION=%s is ignored for the vendored/local pipeline "
+                "%s — the vendored config is itself the pin",
+                requested_revision,
+                self.model_source,
+            )
+            requested_revision = None
+        self.model_revision = requested_revision
 
         # /healthz identity fields (see docs/gpu-contracts.md); versions
         # resolved at load time so healthz never imports engine packages.
@@ -217,18 +263,11 @@ class Diarizer:
 
         self.engine_version = pyannote.audio.__version__
         self.runtime_version = torch.__version__
-        # The auth kwarg name differs between pyannote releases:
-        # 3.1.x wants use_auth_token=, 4.x wants token=. Try 4.x first.
         local_hint = "corrupt or incomplete vendored files — rebuild/re-pull the image"
         try:
-            try:
-                self.model = Pipeline.from_pretrained(self.model_source, token=self.hf_token)
-            except TypeError as exc:
-                if "token" not in str(exc):
-                    raise
-                self.model = Pipeline.from_pretrained(
-                    self.model_source, use_auth_token=self.hf_token
-                )
+            self.model = _from_pretrained_adaptive(
+                Pipeline, self.model_source, self.model_revision, self.hf_token
+            )
         except Exception as exc:
             # A missing/truncated checkpoint behind an existing vendored config
             # surfaces as a raw torch/FileNotFound error; keep the actionable

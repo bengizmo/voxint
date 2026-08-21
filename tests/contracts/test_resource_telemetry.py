@@ -490,3 +490,43 @@ class TestComposeEnvPropagation:
             env = config["services"][svc]["environment"]
             assert "VOXINT_TELEMETRY_ENABLED" in env, f"{overlay}:{svc}"
             assert "VOXINT_TELEMETRY_INTERVAL_SECONDS" in env, f"{overlay}:{svc}"
+
+
+class TestWhisperOverridePassthrough:
+    """Every whisper-bearing overlay forwards the model-override knobs and mounts
+    the separate alternate-model cache (configurable models A2). HF_HUB_OFFLINE is
+    deliberately NOT a pass-through: an empty compose default would flip the baked
+    offline behavior, so the resolver owns that flag instead."""
+
+    # Empty-defaulted so an unset .env leaves the baked default untouched.
+    _OVERRIDE_KEYS = ("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD", "HF_TOKEN")
+    _ALT_CACHE = "/app/model-cache/whisper"
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_override_env_forwarded_to_whisper(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        env = config["services"]["whisper"]["environment"]
+        for key in self._OVERRIDE_KEYS:
+            assert key in env, f"{overlay}:whisper missing {key} pass-through"
+            # Empty default: KEY: ${KEY:-} — never a hardcoded value.
+            assert env[key] == f"${{{key}:-}}", f"{overlay}:whisper {key} not empty-defaulted"
+        # HF_HUB_OFFLINE must not leak in as a pass-through (would flip the baked
+        # default when unset in .env).
+        assert "HF_HUB_OFFLINE" not in env, f"{overlay}:whisper must not pass HF_HUB_OFFLINE"
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_whisper_models_cache_volume_declared_and_mounted(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        assert "whisper-models" in (config.get("volumes") or {}), (
+            f"{overlay} missing top-level whisper-models volume"
+        )
+        mounts = config["services"]["whisper"]["volumes"]
+        assert any(m == f"whisper-models:{self._ALT_CACHE}" for m in mounts), (
+            f"{overlay}:whisper does not mount whisper-models at {self._ALT_CACHE}"
+        )
+        # The alternate cache must never shadow the baked large-v2 download root.
+        assert self._ALT_CACHE != "/app/.cache/whisper"

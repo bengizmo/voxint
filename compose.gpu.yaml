@@ -30,8 +30,19 @@ services:
       # telemetry, never readiness.
       VOXINT_TELEMETRY_ENABLED: ${VOXINT_TELEMETRY_ENABLED:-1}
       VOXINT_TELEMETRY_INTERVAL_SECONDS: ${VOXINT_TELEMETRY_INTERVAL_SECONDS:-5}
+      # Optional ASR override: the default large-v2 is baked and offline. An
+      # alternate model is an unvalidated opt-in and must be fully gated
+      # (WHISPER_ALLOW_DOWNLOAD=1 + a 40-char WHISPER_REVISION) or the service
+      # refuses to start. HF_HUB_OFFLINE is NOT passed through: an empty value
+      # would flip the baked default. HF_TOKEN is only used for a gated model.
+      WHISPER_MODEL: ${WHISPER_MODEL:-}
+      WHISPER_REVISION: ${WHISPER_REVISION:-}
+      WHISPER_ALLOW_DOWNLOAD: ${WHISPER_ALLOW_DOWNLOAD:-}
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       - ${MEDIA_ROOT:-./media}:/data/media:ro
+      # Separate cache for an alternate model; never shadows the baked large-v2.
+      - whisper-models:/app/model-cache/whisper
     ports:
       - "127.0.0.1:8022:8022"
     deploy:
@@ -97,3 +108,4 @@ services:
 
 volumes:
   pyannote-models:
+  whisper-models:
