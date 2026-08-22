@@ -14,12 +14,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   completed the stage and says "Not recorded" when that attempt has none.
   Display only; the worker stamps every completed attempt on the normal path,
   so this surfaces only with hand-edited or partially migrated data.
-- **An alternate transcription model can no longer silently load a local
-  directory.** A `WHISPER_MODEL` value shaped like a Hub id (`org/name`) could
-  also name a real directory next to the service, which faster-whisper loads
-  verbatim, skipping the pinned download. The service now refuses to start when
-  the alternate model value names an existing local directory. Reachable only
-  after opting in to an alternate model; the stock deployment was unaffected.
+- **The transcription service can no longer silently load a local directory in
+  place of its model.** Any accepted `WHISPER_MODEL` value, a Hub id such as
+  `org/name` or the validated default's own spellings, can also name a real
+  directory next to the service, which faster-whisper loads verbatim, skipping
+  the pinned weights. The service now refuses to start when the resolved model
+  value names an existing local directory. Requires a colliding directory in
+  the service working directory; the stock container deployment was
+  unaffected.
 - **The transcription service no longer loads different weights under the
   validated model name.** Setting `WHISPER_MODEL=large-v2` (the validated name)
   together with a different valid `WHISPER_REVISION` previously took the default

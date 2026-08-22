@@ -11,9 +11,11 @@ of its own, so it unit-tests without a database like
 Selection rule: **the latest completed attempt per stage.** A stage can be
 retried, and a failed or lease-expired attempt may have stamped a different (or
 no) identity; only a completed attempt reflects the model that produced the
-result the operator is looking at. A stage with no completed, stamped attempt
-renders "Not recorded" (legacy runs from before this provenance existed, or a
-probe that could not reach the service).
+result the operator is looking at. The identity is read only from that latest
+completed attempt; when it carries none the stage renders "Not recorded" (a
+legacy run from before this provenance existed, a stage with no completed
+attempt, or a latest completed attempt that did not record it) rather than
+borrowing an older attempt's stamp.
 """
 
 from collections.abc import Iterable
@@ -26,7 +28,7 @@ from voxint.pipeline.model_identity import METRICS_KEY
 # The stages that call a model service, in run order, each with the roles it
 # exercises as ``(identity key, operator-facing label)``. This mirrors
 # ``model_identity._STAGE_MODEL_SERVICES`` (the probe side) as the display side;
-# a role the probe stops recording simply renders "not observed" here.
+# a role the probe stops recording simply renders "Not observed" here.
 _MODEL_STAGES: tuple[tuple[str, str, tuple[tuple[str, str], ...]], ...] = (
     (Stage.TRANSCRIBE.value, "Transcription", (("asr", "Transcription model"),)),
     (
@@ -74,9 +76,9 @@ class ModelRole:
 class StageModels:
     """The model identity to show for one stage, from its latest completed attempt.
 
-    ``recorded`` False means no completed attempt carried an identity (a
-    pre-provenance run, or the probe machinery itself failed): the template shows
-    "Not recorded" and ``roles`` is empty.
+    ``recorded`` False means the latest completed attempt carried no identity,
+    or no attempt completed at all (a pre-provenance run, or the probe machinery
+    itself failed): the template shows "Not recorded" and ``roles`` is empty.
     """
 
     stage: str
@@ -94,8 +96,10 @@ def _role_from_payload(role: str, label: str, payload: object) -> ModelRole:
     """Normalize one role's identity payload into a display record.
 
     A missing or malformed payload, or one the probe marked unreachable, becomes
-    a ``reachable=False`` record with a plain-language detail; the model fields
-    are only trusted on an explicitly reachable payload.
+    a ``reachable=False`` record; ``detail`` carries the probe's plain-language
+    reason when it recorded one and stays ``None`` otherwise (the template then
+    renders a bare "Not observed" instead of parroting a placeholder). The model
+    fields are only trusted on an explicitly reachable payload.
     """
     if not isinstance(payload, dict):
         return ModelRole(
@@ -106,10 +110,10 @@ def _role_from_payload(role: str, label: str, payload: object) -> ModelRole:
             revision=None,
             engine=None,
             decode_config_hash=None,
-            detail="not observed",
+            detail=None,
         )
     if payload.get("reachable") is not True:
-        detail = _str_or_none(payload.get("detail")) or "not observed"
+        detail = _str_or_none(payload.get("detail"))
         return ModelRole(
             role=role,
             label=label,

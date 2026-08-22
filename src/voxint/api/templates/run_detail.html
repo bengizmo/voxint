@@ -198,8 +198,8 @@ which model answered rather than proving the exact build.</p>
     <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
   {% if not stage.recorded %}
   <p class="muted">Not recorded. This run finished before model provenance was
-  added, no attempt of this stage completed, or the attempt that completed did
-  not record it.</p>
+  added, no attempt of this stage completed, or the latest completed attempt
+  did not record it.</p>
   {% else %}
   <dl>
     {% for role in stage.roles %}
@@ -212,7 +212,7 @@ which model answered rather than proving the exact build.</p>
       {% if role.decode_config_hash %}<br><span class="muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
     </dd>
     {% else %}
-    <dd><span class="muted">Not observed ({{ role.detail }} when the stage ran).</span></dd>
+    <dd><span class="muted">Not observed{% if role.detail %} ({{ role.detail }} when the stage ran){% endif %}.</span></dd>
     {% endif %}
     {% endfor %}
   </dl>

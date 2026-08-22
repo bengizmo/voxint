@@ -128,10 +128,10 @@ def resolve_whisper_startup(env: Mapping[str, str]) -> WhisperStartup:
 
     # A local path or a deep repo id would bypass the download-and-pin policy
     # (faster-whisper will load a directory verbatim). Only Hub ids are supported
-    # for alternates: a bare alias or a single ``org/name``. A value with that
-    # shape can still name a real relative directory; the resolver stays pure
-    # (no filesystem access), so ``apply_whisper_startup`` closes that residual
-    # with an existence check at boot.
+    # for alternates: a bare alias or a single ``org/name``. Any accepted value
+    # can still name a real relative directory; the resolver stays pure (no
+    # filesystem access), so ``apply_whisper_startup`` closes that residual with
+    # an existence check at boot.
     if model.startswith(("/", ".", "~")) or model.count("/") > 1:
         raise WhisperStartupError(
             f"WHISPER_MODEL={model!r} looks like a filesystem path. Alternate "
@@ -197,21 +197,26 @@ def apply_whisper_startup(
     the decision so the caller can pass ``model_name`` to ``create_transcriber``.
     Propagates ``WhisperStartupError`` so a misconfigured service fails to start.
 
-    Also the impure half of the alternate-model path guard: the pure resolver
-    rejects path-shaped values by syntax alone, but a single-slash ``org/name``
-    can also name a real relative directory, which faster-whisper would load
-    verbatim, bypassing the pinned download. The existence check lives here so
-    the resolver stays filesystem-free; it raises before any env write, so a
-    refused boot leaves ``environ`` untouched.
+    Also the impure half of the model path guard: the pure resolver rejects
+    path-shaped values by syntax alone, but any accepted model string (a bare
+    alias, a single-slash ``org/name``, the validated default itself) can also
+    name a real relative directory, which faster-whisper loads verbatim before
+    it ever consults the pinned download. The existence check lives here so the
+    resolver stays filesystem-free; it applies to every resolved model, not just
+    alternates, and raises before any env write, so a refused boot leaves
+    ``environ`` untouched. ``isdir`` (which follows symlinks to directories) is
+    the right predicate: faster-whisper only special-cases directories, so a
+    plain file of the same name falls through to the pinned Hub path.
     """
     target = os.environ if environ is None else environ
     decision = resolve_whisper_startup(target)
-    if decision.is_override and os.path.isdir(decision.model_name):
+    if os.path.isdir(decision.model_name):
         raise WhisperStartupError(
             f"WHISPER_MODEL={decision.model_name!r} names an existing local "
-            "directory; faster-whisper would load it verbatim, bypassing the "
-            "pinned download. Local paths are not supported: remove or rename "
-            "the directory, or use a Hugging Face repo id."
+            f"directory (at {os.path.abspath(decision.model_name)}); "
+            "faster-whisper would load it verbatim, bypassing the pinned "
+            "weights. Local paths are not supported: remove or rename the "
+            "directory, or use a Hugging Face repo id."
         )
     for key, value in decision.env_overrides.items():
         target[key] = value

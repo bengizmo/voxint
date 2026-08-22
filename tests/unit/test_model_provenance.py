@@ -258,7 +258,7 @@ def test_unreachable_role_passes_the_detail_through() -> None:
 def test_missing_role_in_a_recorded_identity_reads_not_observed() -> None:
     # The defensive-empty identity object (probe machinery itself failed) carries
     # v/observed_before_attempt but no role keys. The stage is recorded, but each
-    # role honestly reads "not observed".
+    # role honestly reads "Not observed" with no fabricated detail.
     runs = [
         _Attempt(
             Stage.DIARIZE_EMBED.value,
@@ -271,7 +271,7 @@ def test_missing_role_in_a_recorded_identity_reads_not_observed() -> None:
     assert stage.recorded is True
     for role in stage.roles:
         assert role.reachable is False
-        assert role.detail == "not observed"
+        assert role.detail is None
 
 
 def test_malformed_role_payload_reads_not_observed() -> None:
@@ -285,7 +285,7 @@ def test_malformed_role_payload_reads_not_observed() -> None:
     ]
     asr = _role(_stage(select_run_model_identity(runs), Stage.TRANSCRIBE), "asr")
     assert asr.reachable is False
-    assert asr.detail == "not observed"
+    assert asr.detail is None
 
 
 def test_non_string_identity_fields_coerce_to_none() -> None:

@@ -1001,6 +1001,44 @@ class TestWhisperStartupResolution:
         assert d.is_override is True
         assert env["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
 
+    @pytest.mark.parametrize("model", ["large-v2", "Systran/faster-whisper-large-v2"])
+    def test_apply_rejects_the_default_spellings_colliding_with_a_local_dir(
+        self, model: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The bypass is not alternate-only: faster-whisper checks isdir() on any
+        # model string before consulting the pinned snapshot, so a directory
+        # shadowing the validated default's name would load verbatim while the
+        # service still reports the validated identity. The applier checks every
+        # resolved model, not just overrides.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / model).mkdir(parents=True)
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup({"WHISPER_MODEL": model})
+
+    def test_apply_rejects_a_symlink_to_a_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # isdir() follows symlinks; a symlinked directory is the same verbatim-load
+        # bypass and must stay rejected if the predicate is ever "improved".
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "real-model-dir").mkdir()
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "faster-whisper-name").symlink_to(tmp_path / "real-model-dir")
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup(self._alt_env())
+
+    def test_apply_accepts_a_plain_file_of_the_same_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # faster-whisper only special-cases directories; a plain file falls
+        # through to the pinned Hub download, so it is not a bypass and must not
+        # trip the guard.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "faster-whisper-name").write_text("not a model dir")
+        d = whisper_startup.apply_whisper_startup(self._alt_env())
+        assert d.is_override is True
+
 
 class TestPyannoteCheckpointFingerprint:
     """The pyannote weight-checkpoint fingerprint (#125): a digest over the two
