@@ -968,6 +968,39 @@ class TestWhisperStartupResolution:
         assert env["HF_HUB_OFFLINE"] == "1"
         assert "WHISPER_DOWNLOAD_ROOT" not in env
 
+    def _alt_env(self, model: str = "org/faster-whisper-name") -> dict[str, str]:
+        return {
+            "WHISPER_MODEL": model,
+            "WHISPER_ALLOW_DOWNLOAD": "1",
+            "WHISPER_REVISION": self.ALT,
+            "WHISPER_BAKED_REVISION": self.BAKED,
+        }
+
+    def test_apply_rejects_an_alternate_that_names_an_existing_local_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #127: a single-slash "org/name" is a valid Hub id but can also name a
+        # real relative directory, which faster-whisper would load verbatim —
+        # bypassing the download-and-pin gates. The pure resolver cannot see the
+        # filesystem, so the applier closes the gap at boot.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "org" / "faster-whisper-name").mkdir(parents=True)
+        env = self._alt_env()
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup(env)
+        # A refused boot must not have half-applied the decision.
+        assert "WHISPER_DOWNLOAD_ROOT" not in env
+        assert "HF_HUB_OFFLINE" not in env
+
+    def test_apply_accepts_the_same_alternate_when_no_local_dir_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        env = self._alt_env()
+        d = whisper_startup.apply_whisper_startup(env)
+        assert d.is_override is True
+        assert env["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+
 
 class TestPyannoteCheckpointFingerprint:
     """The pyannote weight-checkpoint fingerprint (#125): a digest over the two

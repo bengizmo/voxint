@@ -128,7 +128,10 @@ def resolve_whisper_startup(env: Mapping[str, str]) -> WhisperStartup:
 
     # A local path or a deep repo id would bypass the download-and-pin policy
     # (faster-whisper will load a directory verbatim). Only Hub ids are supported
-    # for alternates: a bare alias or a single ``org/name``.
+    # for alternates: a bare alias or a single ``org/name``. A value with that
+    # shape can still name a real relative directory; the resolver stays pure
+    # (no filesystem access), so ``apply_whisper_startup`` closes that residual
+    # with an existence check at boot.
     if model.startswith(("/", ".", "~")) or model.count("/") > 1:
         raise WhisperStartupError(
             f"WHISPER_MODEL={model!r} looks like a filesystem path. Alternate "
@@ -193,9 +196,23 @@ def apply_whisper_startup(
     before the model libraries import, so ``HF_HUB_OFFLINE`` takes effect. Returns
     the decision so the caller can pass ``model_name`` to ``create_transcriber``.
     Propagates ``WhisperStartupError`` so a misconfigured service fails to start.
+
+    Also the impure half of the alternate-model path guard: the pure resolver
+    rejects path-shaped values by syntax alone, but a single-slash ``org/name``
+    can also name a real relative directory, which faster-whisper would load
+    verbatim, bypassing the pinned download. The existence check lives here so
+    the resolver stays filesystem-free; it raises before any env write, so a
+    refused boot leaves ``environ`` untouched.
     """
     target = os.environ if environ is None else environ
     decision = resolve_whisper_startup(target)
+    if decision.is_override and os.path.isdir(decision.model_name):
+        raise WhisperStartupError(
+            f"WHISPER_MODEL={decision.model_name!r} names an existing local "
+            "directory; faster-whisper would load it verbatim, bypassing the "
+            "pinned download. Local paths are not supported: remove or rename "
+            "the directory, or use a Hugging Face repo id."
+        )
     for key, value in decision.env_overrides.items():
         target[key] = value
     if decision.warning:
