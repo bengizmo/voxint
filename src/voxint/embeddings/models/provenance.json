@@ -1,0 +1,31 @@
+{
+  "asset_release": "minilm-onnx-v1",
+  "vendored": "2026-08-22",
+  "purpose": "transcript semantic-search embedding spine (issue #121)",
+  "model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "embedding_space": "minilm-multi-l12-onnx-fp32-mean-v1",
+  "embedding_dim": 384,
+  "max_sequence_tokens": 128,
+  "pooling": "attention-mask mean over tokens, then L2 normalize (done in numpy; the ONNX graph is the BERT backbone only, output last_hidden_state)",
+  "runtime": "onnxruntime CPU EP, FP32",
+  "upstream_repo": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "upstream_revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+  "files": {
+    "model.onnx": {
+      "upstream_file": "onnx/model.onnx",
+      "sha256": "10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a",
+      "size_bytes": 470301610,
+      "note": "FP32 BERT backbone exported by HF optimum; inputs input_ids/attention_mask/token_type_ids, single output last_hidden_state (n, seq, 384). Pooling + normalization are NOT baked in and are reproduced in the embedder."
+    },
+    "tokenizer.json": {
+      "upstream_file": "tokenizer.json",
+      "sha256": "2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8",
+      "size_bytes": 9081518,
+      "note": "fast (Rust tokenizers) tokenizer; loaded with truncation max_length=128 and dynamic right padding. The tokenizer config advertises 512, but the sentence-transformer contract (sentence_bert_config.json) is 128."
+    }
+  },
+  "license": "apache-2.0",
+  "license_note": "paraphrase-multilingual-MiniLM-L12-v2 is released by the sentence-transformers project under Apache-2.0. Redistribution with attribution is permitted; the ~470 MB FP32 model.onnx + tokenizer.json are kept out of git (weights doctrine) and published as an immutable GitHub asset release, then sha256-verified before being baked into the app image. No Hugging Face account, token, or network access is needed at install or runtime.",
+  "equivalence": "Correctness is a measured 3-model-independent contract, not reasoning: tests/parity/test_text_embedding.py asserts per-vector cosine >= 0.9999 for the ONNX path vs reference vectors generated once in a dev-only sentence-transformers environment (torch never enters the app closure). Regenerate the references with tools/generate_text_embedding_references.py.",
+  "regeneration": "download onnx/model.onnx + tokenizer.json at the pinned upstream_revision, verify the sha256s above, and publish a NEW asset release (minilm-onnx-v2, ...) together with an updated provenance file, Dockerfile sha ARGs, and the *_RELEASE env in release.yml — assets under a given tag are immutable."
+}

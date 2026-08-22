@@ -55,6 +55,15 @@ services/pyannote/models/*.bin
 # asset release; sha256 in services/llama-cpp/provenance.json — the Dockerfile,
 # provenance, and NOTICE ARE tracked, only the 2.89 GB weight stays out of git)
 services/llama-cpp/models/*.gguf
+# Vendored MiniLM text-embedding weights for the semantic-search spine (#121;
+# fetched from the minilm-onnx-v1 asset release; sha256s in
+# src/voxint/embeddings/models/provenance.json — provenance IS tracked, the
+# ~470 MB FP32 model.onnx + tokenizer.json stay out of git). vendor/minilm is
+# the maintainer dev/test location the embedder + equivalence gate point at.
+vendor/minilm/
+src/voxint/embeddings/models/*.onnx
+src/voxint/embeddings/models/*.json
+!src/voxint/embeddings/models/provenance.json
 
 # Maintainer-internal notes: a SEPARATE private repo nested here (never part
 # of this public repo; see CLAUDE.md "Internal notes").
