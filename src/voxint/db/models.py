@@ -47,6 +47,13 @@ from voxint.db import search
 
 EMBEDDING_DIM = 192
 
+# Text-embedding dimension for the transcript semantic-search spine (issue
+# #121). Deliberately separate from ``EMBEDDING_DIM`` (192, the TitaNet
+# speaker space): the MiniLM text space is 384-dim, and the two vector spaces
+# must never be conflated. Cosine is only meaningful within one
+# ``embedding_space`` discriminator.
+TEXT_EMBEDDING_DIM = 384
+
 
 class Base(DeclarativeBase):
     type_annotation_map: ClassVar = {dict[str, Any]: JSON().with_variant(JSONB(), "postgresql")}
@@ -1754,6 +1761,158 @@ class RunAssetJob(Base):
     # Bounded, redacted failure summary (closed vocabulary + safe detail only).
     error: Mapped[str | None] = mapped_column(Text)
     asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("run_enrichment_assets.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class EmbeddingJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SegmentEmbedding(Base):
+    """One embedded transcript chunk — the semantic-search spine (issue #121).
+
+    An additive artifact: the embedding producer reads finished transcript text
+    (resolved via ``attributed_transcript`` → ``paragraphize_transcript``) and
+    writes these rows. It never touches ASR / diarization / TitaNet, so it does
+    not trip the numerics parity gate. Cosine is only valid within one
+    ``embedding_space`` (the MiniLM text space, e.g.
+    ``"minilm-multi-l12-onnx-fp32-mean-v1"``) — never compared against the
+    192-dim TitaNet speaker space.
+
+    Chunks are paragraph-derived and ephemeral (paragraph boundaries shift when
+    a correction, split, or speaker ruling changes), so the span and text live
+    ON the row rather than behind a segment FK. ``generation`` is monotonic per
+    (pipeline_run_id, embedding_space): a re-embed publishes a whole new
+    generation of the run's chunks atomically and the old generation is
+    replaced, never half-seen. ``content_hash`` is the sha256 of the exact
+    embedded string, for cheap per-chunk change detection within a rebuild.
+    """
+
+    __tablename__ = "segment_embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "embedding_space",
+            "generation",
+            "chunk_index",
+            name="segment_embeddings_chunk_key",
+        ),
+        CheckConstraint(
+            "length(trim(embedding_space)) > 0",
+            name="segment_embeddings_space_nonempty_check",
+        ),
+        CheckConstraint("generation >= 1", name="segment_embeddings_generation_check"),
+        CheckConstraint("chunk_index >= 0", name="segment_embeddings_chunk_index_check"),
+        CheckConstraint(
+            "start_seconds >= 0 AND end_seconds >= start_seconds",
+            name="segment_embeddings_interval_check",
+        ),
+        CheckConstraint(
+            "content_hash ~ '^[0-9a-f]{64}$'",
+            name="segment_embeddings_content_hash_check",
+        ),
+        # The current-generation lookup path: filter by run+space, order/scan by
+        # generation. No ANN index in v1 — exact cosine scan is sub-second at
+        # single-operator scale; add HNSW only on measured latency evidence.
+        Index(
+            "ix_segment_embeddings_run_space_generation",
+            "pipeline_run_id",
+            "embedding_space",
+            "generation",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    embedding_space: Mapped[str] = mapped_column(Text)
+    generation: Mapped[int] = mapped_column(Integer)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    start_seconds: Mapped[float] = mapped_column(Float)
+    end_seconds: Mapped[float] = mapped_column(Float)
+    # The local diarization/display speaker for the chunk's dominant span, for a
+    # future speaker facet; nullable because a chunk may span an unlabeled gap.
+    speaker_label: Mapped[str | None] = mapped_column(Text)
+    # Which rendering the chunk text came from (corrected/enhanced/raw); a
+    # paragraph assembled from mixed renderings records its dominant one.
+    text_rendering: Mapped[str] = mapped_column(Text)
+    # The exact text that was embedded — kept on the row so a semantic hit can
+    # show a passage snippet and a jump target without re-resolving the run.
+    chunk_text: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[Any] = mapped_column(Vector(TEXT_EMBEDDING_DIM))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EmbeddingJob(Base):
+    """One embedding-index build attempt for one (run, embedding_space) — #121.
+
+    A dedicated lane, deliberately NOT the LLM-coupled run-asset job family:
+    embedding needs no LLM client and no ``llm_enabled`` gate. It reuses the
+    proven lifecycle *patterns* only — ``status`` moves queued → running
+    (guarded claim UPDATE, duplicate Celery delivery no-ops) → succeeded |
+    failed | cancelled; a partial unique index allows one active job per
+    (run, space); ``source_content_hash`` is the staleness detector (a run is
+    stale when its recomputed resolved-transcript hash differs from the current
+    generation's). A succeeded job is the generation manifest: it records the
+    ``generation`` it published and links nothing else — the vectors live in
+    ``segment_embeddings``. A failed/cancelled job publishes no generation.
+    """
+
+    __tablename__ = "embedding_jobs"
+    __table_args__ = (
+        Index(
+            "embedding_jobs_one_active_per_run_space",
+            "pipeline_run_id",
+            "embedding_space",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(EmbeddingJobStatus)})",
+            name="embedding_jobs_status_check",
+        ),
+        CheckConstraint(
+            "length(trim(embedding_space)) > 0",
+            name="embedding_jobs_space_nonempty_check",
+        ),
+        CheckConstraint(
+            "generation IS NULL OR generation >= 1",
+            name="embedding_jobs_generation_check",
+        ),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'",
+            name="embedding_jobs_source_hash_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="embedding_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="embedding_jobs_finished_requires_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    embedding_space: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=EmbeddingJobStatus.QUEUED.value)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    # The generation this job published, stamped on success; NULL until then.
+    generation: Mapped[int | None] = mapped_column(Integer)
+    # Bounded, redacted failure summary (closed vocabulary + safe detail only).
+    error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
