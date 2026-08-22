@@ -33,22 +33,34 @@
   <p class="muted">This is the validated model. Voxint's accuracy is measured
      against it.</p>
   {% elif svc.verdict == 'mismatch' %}
+  {% if svc.role == 'asr' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but it is
+     running a different version of the weights, so the results cannot be trusted.
+     This happens when <code>WHISPER_REVISION</code> is set to a version other than
+     the one that ships with Voxint. Remove <code>WHISPER_REVISION</code> from your
+     <code>.env</code> (or set it back to the built-in value) and restart the
+     transcription service to return to the validated model.</p>
+  {% else %}
   <p class="notice" role="alert">⚠ This reports the validated model name, but the
      loaded model files do not match the validated ones. The results cannot be
      trusted. This usually means the image or its model files were changed or are
      incomplete: re-pull or rebuild the service to restore the validated model.</p>
+  {% endif %}
   {% elif svc.verdict == 'unverified' %}
   <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
      cannot verify the loaded model files on this deployment, so it is not treated
      as validated. This happens when the model is loaded from an online source
      instead of the files that ship with Voxint. Use the built-in default for a
      verified install.</p>
-  {% else %}
+  {% elif svc.verdict == 'unvalidated' %}
   <p class="notice" role="alert">⚠ This is not the validated model. It runs, but its
      accuracy has not been measured and the results may be unreliable. Only
      <code>large-v2</code> for transcription and
      <code>pyannote/speaker-diarization-3.1</code> for diarization are validated.
      If you did not mean to change this, set it back using the keys below.</p>
+  {% else %}
+  <p class="notice" role="status">Voxint could not classify this model's identity.
+     Check that the service is running the validated default, described below.</p>
   {% endif %}
   {% endif %}
 </div>

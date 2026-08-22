@@ -116,8 +116,12 @@ same contract.
     `seg = sha256(segmentation_bin)`, `emb = sha256(embedding_bin)`, both
     lowercase hex; `checkpoint_fingerprint = sha256("segmentation:" + seg +
     "\nembedding:" + emb + "\n")`. The two `.bin` paths are read from the loaded
-    pipeline config's `pipeline.params.segmentation` / `embedding`. The config
-    file itself is deliberately excluded: its checkpoint paths are repointed per
+    pipeline config's `pipeline.params.segmentation` / `embedding`; a relative
+    path there is resolved against the config file's own directory (the way
+    pyannote's local loader resolves it), never against the process working
+    directory, so the digest always covers the files the pipeline actually
+    loaded. The config file itself is deliberately excluded: its checkpoint
+    paths are repointed per
     install flavor (the metal launcher rewrites the path prefix), so its bytes
     are not deployment-invariant, while the `.bin` bytes are identical across
     flavors. The vendored default's value is

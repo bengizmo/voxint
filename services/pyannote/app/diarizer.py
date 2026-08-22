@@ -54,7 +54,7 @@ def compute_checkpoint_fingerprint(config_path: str) -> str:
     """
     import yaml
 
-    with open(config_path) as handle:
+    with open(config_path, encoding="utf-8") as handle:
         cfg = yaml.safe_load(handle) or {}
     params = (cfg.get("pipeline") or {}).get("params") or {}
     segmentation = params.get("segmentation")
@@ -64,8 +64,17 @@ def compute_checkpoint_fingerprint(config_path: str) -> str:
             f"pipeline config {config_path} does not reference segmentation and "
             "embedding checkpoint files"
         )
-    seg_sha = _sha256_file(segmentation)
-    emb_sha = _sha256_file(embedding)
+    # Resolve relative checkpoint paths against the config file's directory, the
+    # way pyannote's local loader does, so the fingerprint hashes the exact files
+    # pyannote loaded rather than a path resolved against the process CWD. The
+    # vendored configs use absolute paths today (the metal launcher rewrites the
+    # prefix but keeps them absolute), so this is defensive: it keeps a relative
+    # custom config honest instead of hashing the wrong file or failing on CWD.
+    base = os.path.dirname(os.path.realpath(config_path))
+    seg_path = segmentation if os.path.isabs(segmentation) else os.path.join(base, segmentation)
+    emb_path = embedding if os.path.isabs(embedding) else os.path.join(base, embedding)
+    seg_sha = _sha256_file(seg_path)
+    emb_sha = _sha256_file(emb_path)
     return hashlib.sha256(
         f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
     ).hexdigest()

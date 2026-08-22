@@ -159,6 +159,33 @@ def test_pipeline_models_panel_renders_weights_mismatch(
     assert "re-pull or rebuild" in body
 
 
+def test_pipeline_models_panel_renders_asr_mismatch_with_revision_guidance(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #125 review: an ASR weights mismatch is caused by an overridden
+    # WHISPER_REVISION, which a rebuild does not clear, so the copy must tell the
+    # operator to remove WHISPER_REVISION rather than re-pull/rebuild.
+    views = _views()
+    views[0] = ServiceIdentityView(
+        role="asr",
+        label="Transcription",
+        url="http://localhost:8022",
+        reachable=True,
+        model="large-v2",
+        revision="0" * 40,
+        engine="faster-whisper",
+        configurable=True,
+        verdict=ModelVerdict.MISMATCH,
+        detail=None,
+        env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
+    )
+    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    body = client.get("/settings").text
+    assert "different version of the weights" in body
+    assert "Remove <code>WHISPER_REVISION</code>" in body
+    assert "re-pull or rebuild" not in body  # the diarizer-only guidance
+
+
 def test_pipeline_models_panel_renders_unverified(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

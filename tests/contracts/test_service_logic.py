@@ -1025,6 +1025,37 @@ class TestPyannoteCheckpointFingerprint:
         with pytest.raises(RuntimeError, match="does not reference"):
             diarizer.compute_checkpoint_fingerprint(str(config))
 
+    def test_relative_checkpoint_paths_resolve_against_config_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A config that names its .bin files relative to itself must hash the same
+        # files pyannote loads, independent of the process CWD (the vendored
+        # configs use absolute paths, but this keeps a relative config honest).
+        import hashlib
+
+        (tmp_path / "segmentation-3.0.bin").write_bytes(b"segmentation-weights")
+        (tmp_path / "pyannote-wespeaker.bin").write_bytes(b"embedding-weights")
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            "    segmentation: segmentation-3.0.bin\n"
+            "    embedding: pyannote-wespeaker.bin\n"
+        )
+        seg_sha = hashlib.sha256(b"segmentation-weights").hexdigest()
+        emb_sha = hashlib.sha256(b"embedding-weights").hexdigest()
+        expected = hashlib.sha256(
+            f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+        ).hexdigest()
+
+        # Run from an unrelated CWD: a CWD-relative resolution would fail to find
+        # the files (RuntimeError) rather than return the config-relative digest.
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        monkeypatch.chdir(other)
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) == expected
+
 
 class TestCt2DeviceVerify:
     """ct2-legacy fails closed on a device CTranslate2 cannot run — the whisper
@@ -1372,6 +1403,32 @@ class TestCpuImageProvenance:
         assert expected == _VALIDATED_DIARIZER_CHECKPOINT, (
             "service_identity._VALIDATED_DIARIZER_CHECKPOINT drifted from the "
             "provenance .bin shas — recompute it from provenance.json"
+        )
+
+    def test_smoke_checkpoint_constant_matches_provenance(self) -> None:
+        # #125: the release smoke asserts the live pyannote reports this exact
+        # fingerprint, so it is a third copy of the same digest (alongside the
+        # console constant and docs/gpu-contracts.md). Bind it to provenance too, or
+        # a pyannote-models-v2 refresh could leave the smoke green on the old digest
+        # while the console moves.
+        import hashlib
+        import json
+
+        from tools.smoke_cpu_services import VENDORED_CHECKPOINT_FINGERPRINT
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        provenance = json.loads(
+            (REPO_ROOT / "services" / "pyannote" / "models" / "provenance.json").read_text()
+        )
+        seg = provenance["files"]["segmentation-3.0.bin"]["sha256"]
+        emb = provenance["files"]["wespeaker-voxceleb-resnet34-LM.bin"]["sha256"]
+        expected = hashlib.sha256(
+            f"segmentation:{seg}\nembedding:{emb}\n".encode()
+        ).hexdigest()
+        assert expected == VENDORED_CHECKPOINT_FINGERPRINT, (
+            "tools/smoke_cpu_services.VENDORED_CHECKPOINT_FINGERPRINT drifted from "
+            "the provenance .bin shas — recompute it from provenance.json"
         )
 
     def test_console_asr_revision_constant_matches_dockerfiles(self) -> None:

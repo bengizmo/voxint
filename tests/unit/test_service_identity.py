@@ -242,6 +242,38 @@ def test_diarizer_validated_name_with_null_fingerprint_is_unverified() -> None:
     assert diarizer.verdict == ModelVerdict.UNVERIFIED
 
 
+@pytest.mark.parametrize(
+    "bad_fingerprint",
+    [
+        "",  # empty
+        "not-a-hash",  # non-hex
+        "AA94A2D96A8F1EB5EB8FB80B863C6616417FF1E5C9A8DAB91CE42914F836A0D2",  # uppercase
+        "aa94a2d9",  # truncated
+        "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2 ",  # trailing space
+    ],
+)
+def test_diarizer_malformed_fingerprint_is_unverified(bad_fingerprint: str) -> None:
+    # #125 review: a present-but-malformed fingerprint (empty, non-hex, uppercase,
+    # truncated, padded) does not prove the weights differ — only that identity
+    # could not be verified. Fail closed to unverified (amber), not mismatch (red),
+    # so the panel never asserts a mismatch the operator cannot act on.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _ready(
+                "pyannote",
+                "pyannote/speaker-diarization-3.1",
+                "pyannote.audio",
+                checkpoint_fingerprint=bad_fingerprint,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.reachable is True
+    assert diarizer.verdict == ModelVerdict.UNVERIFIED
+
+
 def test_diarizer_validated_name_without_fingerprint_field_is_validated() -> None:
     # Rollout compatibility: an older pyannote that predates the fingerprint field
     # omits the key entirely. Absent (not null) means no signal to fail on, so the

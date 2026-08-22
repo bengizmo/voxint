@@ -25,6 +25,7 @@ with unvalidated numerics (v3/turbo hallucinate). titanet is a database invarian
 operator-configurable and never carries an "unvalidated" warning.
 """
 
+import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import StrEnum
@@ -66,6 +67,14 @@ _VALIDATED_ASR_REVISION = "f0fe81560cb8b68660e564f55dd99207059c092e"
 _VALIDATED_DIARIZER_CHECKPOINT = (
     "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2"
 )
+
+# A well-formed checkpoint fingerprint is a sha256 hexdigest (64 lowercase hex).
+# A reported value that is not (empty string, truncated, uppercase, garbage) does
+# not prove the weights differ — only that the identity could not be verified — so
+# it fails closed as UNVERIFIED rather than asserting a MISMATCH the operator
+# cannot act on. The service composes this digest itself, so the default install
+# always reports a well-formed value.
+_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ModelVerdict(StrEnum):
@@ -193,7 +202,10 @@ def _exact_identity_verdict(
             # so trust the validated name exactly as before.
             return ModelVerdict.VALIDATED
         reported = _str_or_none(payload.get(CHECKPOINT_FINGERPRINT_FIELD))
-        if reported is None:
+        if reported is None or not _FINGERPRINT_RE.match(reported):
+            # Null (unverifiable source) or a malformed digest: verification could
+            # not be completed, which is not proof the weights differ. Fail closed
+            # as UNVERIFIED, not MISMATCH.
             return ModelVerdict.UNVERIFIED
         return (
             ModelVerdict.VALIDATED
@@ -201,6 +213,12 @@ def _exact_identity_verdict(
             else ModelVerdict.MISMATCH
         )
     if spec.validated_revision is not None:
+        # Asymmetry with the pyannote branch above, deliberate: whisper carries no
+        # "absent key" rollout case. ``revision`` is an always-present field on the
+        # whisper /healthz contract and every image bakes ``WHISPER_BAKED_REVISION``,
+        # so a missing revision means an unverifiable identity (UNVERIFIED), never
+        # "an older service, trust the name". Do not copy the pyannote absent-key
+        # rule here without re-checking that contract.
         if revision is None:
             return ModelVerdict.UNVERIFIED
         return (
