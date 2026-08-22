@@ -72,12 +72,22 @@ def test_no_torch_stack_anywhere_in_the_lock() -> None:
     assert not leaked_prefixed, f"GPU/CUDA packages leaked into uv.lock: {leaked_prefixed}"
 
 
+def _provenance() -> dict:
+    return json.loads(
+        (REPO_ROOT / "src" / "voxint" / "embeddings" / "models" / "provenance.json").read_text()
+    )
+
+
 def test_embedding_space_and_dim_constants() -> None:
     # The stored vector width and the equivalence contract both depend on these;
     # a change is a new embedding space (a visible re-index), never silent drift.
-    assert TEXT_EMBEDDING_DIM == 384
+    # Bound to provenance, not bare literals, so the module constants and the
+    # committed provenance can never diverge unnoticed.
+    provenance = _provenance()
+    assert TEXT_EMBEDDING_DIM == 384 == provenance["embedding_dim"]
+    assert MAX_SEQUENCE_TOKENS == 128 == provenance["max_sequence_tokens"]
     assert EMBEDDING_SPACE, "embedding space id must be non-empty"
-    assert MAX_SEQUENCE_TOKENS == 128
+    assert provenance["embedding_space"] == EMBEDDING_SPACE
 
 
 def test_app_dockerfile_minilm_shas_match_provenance() -> None:
@@ -88,15 +98,30 @@ def test_app_dockerfile_minilm_shas_match_provenance() -> None:
     # was pinned against. Mirrors the titanet/pyannote/gguf provenance gates in
     # tests/contracts/test_service_logic.py.
     dockerfile = (REPO_ROOT / "Dockerfile").read_text()
-    provenance = json.loads(
-        (REPO_ROOT / "src" / "voxint" / "embeddings" / "models" / "provenance.json").read_text()
-    )
+    provenance = _provenance()
     for arg, filename in (
         ("MINILM_ONNX_SHA256", "model.onnx"),
         ("MINILM_TOKENIZER_SHA256", "tokenizer.json"),
     ):
-        match = re.search(rf"ARG {arg}=([0-9a-f]{{64}})", dockerfile)
-        assert match is not None, f"Dockerfile lost its {arg} default"
-        assert match.group(1) == provenance["files"][filename]["sha256"], (
+        # Anchored + exactly-one: a commented-out or stale duplicate ARG must not
+        # satisfy the gate in place of the effective default.
+        matches = re.findall(rf"^ARG {arg}=([0-9a-f]{{64}})$", dockerfile, flags=re.MULTILINE)
+        assert len(matches) == 1, (
+            f"Dockerfile must declare {arg} exactly once (found {len(matches)})"
+        )
+        assert matches[0] == provenance["files"][filename]["sha256"], (
             f"Dockerfile {arg} drifted from src/voxint/embeddings/models/provenance.json"
         )
+
+
+def test_release_workflow_minilm_asset_matches_provenance() -> None:
+    # The release workflow's MINILM_ONNX_RELEASE and provenance's asset_release
+    # name the same immutable GitHub release; a refresh that bumps one but not
+    # the other would fail late at `gh release download` in CI. Pin them here so
+    # the drift is caught at test time instead.
+    release_yml = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text()
+    match = re.search(r"^\s*MINILM_ONNX_RELEASE:\s*(\S+)\s*$", release_yml, flags=re.MULTILINE)
+    assert match is not None, "release.yml lost its MINILM_ONNX_RELEASE env"
+    assert match.group(1) == _provenance()["asset_release"], (
+        "release.yml MINILM_ONNX_RELEASE drifted from provenance.json asset_release"
+    )

@@ -254,6 +254,26 @@ jobs:
         run: |
           expected=$(python3 -c "import json; print(json.load(open('tests/parity/fixtures/onnx/provenance.json'))['onnx_sha256'])")
           echo "${expected}  services/titanet/models/titanet-large.onnx" | sha256sum -c -
+      - name: Fetch the MiniLM embedding weights (text-embedding parity prereq)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # tests/parity/test_text_embedding.py runs under VOXINT_PARITY_REQUIRED=1
+          # and hard-fails without these; it resolves them from vendor/minilm by
+          # default (gitignored, so absent in a fresh checkout).
+          mkdir -p vendor/minilm
+          gh release download "$MINILM_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern model.onnx \
+            --output vendor/minilm/model.onnx
+          gh release download "$MINILM_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern tokenizer.json \
+            --output vendor/minilm/tokenizer.json
+          for name in model.onnx tokenizer.json; do
+            expected=$(python3 -c "import json,sys; print(json.load(open('src/voxint/embeddings/models/provenance.json'))['files'][sys.argv[1]]['sha256'])" "$name")
+            echo "${expected}  vendor/minilm/${name}" | sha256sum -c -
+          done
       - name: Parity harness (strict — missing prerequisites hard-fail)
         env:
           VOXINT_PARITY_REQUIRED: "1"
@@ -448,12 +468,24 @@ jobs:
         with:
           name: digests-titanet-cpu-${{ matrix.platform.arch }}
           path: /tmp/digests/titanet
-      - name: App image boots and imports
+      - name: App image boots, imports, and embeds
         run: |
           owner="ghcr.io/${{ github.repository_owner }}"
           digest=$(ls /tmp/digests/app)
-          docker run --rm "${owner}/voxint@sha256:${digest}" \
-            python -c "import voxint; print('voxint', voxint.__version__)"
+          # Also exercise the baked MiniLM weights per arch: the build sha-gate
+          # proves the bytes, but only a real load proves onnxruntime can read
+          # the graph on this arch (arm64 is never otherwise exercised) and that
+          # the baked path still matches the embedder's default (a silent rename
+          # would pass the gate, then degrade semantic search to "skip honestly").
+          docker run --rm "${owner}/voxint@sha256:${digest}" python -c "
+          import voxint
+          print('voxint', voxint.__version__)
+          from voxint.embeddings.onnx_embedder import get_text_embedder, minilm_artifacts_available
+          assert minilm_artifacts_available(), 'baked MiniLM weights missing at the default path'
+          v = get_text_embedder().embed_texts(['smoke'])
+          assert v.shape == (1, 384), v.shape
+          print('embedder ok', v.shape)
+          "
       - name: Boot model services from digests
         run: |
           owner="ghcr.io/${{ github.repository_owner }}"
