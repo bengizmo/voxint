@@ -51,6 +51,9 @@ MAX_SPEAKERS = 64
 MAX_SPEAKER_CHARS = 120
 MAX_NOTES_CHARS = 10_000
 MAX_PACK_NAME_CHARS = 120
+# Upper bound for the diarization speaker-count keys (issue #128), matching the
+# pyannote service bounds and the DIARIZATION_MAX_SPEAKERS config field.
+MAX_SIDECAR_SPEAKER_CEILING = 20
 
 # Budgets for normalizing the WHOLE mapping into a JSON-safe snapshot. YAML
 # aliases/anchors can expand far beyond the input byte cap (a shared list
@@ -61,7 +64,9 @@ _MAX_DEPTH = 32
 _MAX_NODES = 10_000
 _MAX_SNAPSHOT_BYTES = 4 * MAX_SIDECAR_BYTES
 
-_APPLIED_KEYS = frozenset({"title", "speakers", "domain_pack", "notes"})
+_APPLIED_KEYS = frozenset(
+    {"title", "speakers", "domain_pack", "notes", "max_speakers", "num_speakers"}
+)
 
 # Same rejected categories as domain-pack corrections: Cc control, Cf format
 # (zero-width/bidi), Cs surrogate — invisible or unserializable characters have
@@ -92,6 +97,11 @@ class Sidecar:
     speakers: tuple[str, ...]
     domain_pack: str | None
     notes: str | None
+    # Diarization speaker-count hint (issue #128), distinct from ``speakers``
+    # (a name-seed roster). ``max_speakers`` bounds diarization; ``num_speakers``
+    # forces an exact count and wins over the bound. Both None ⇒ not supplied.
+    max_speakers: int | None
+    num_speakers: int | None
     raw: dict[str, Any]
     ignored_keys: tuple[str, ...]
 
@@ -185,12 +195,16 @@ def parse_sidecar(text: str, *, source_name: str) -> Sidecar:
     domain_pack = _single_line_field(data, "domain_pack", MAX_PACK_NAME_CHARS, source_name)
     notes = _notes_field(data, source_name)
     speakers = _speakers_field(data, source_name)
+    max_speakers = _speaker_count_field(data, "max_speakers", source_name)
+    num_speakers = _speaker_count_field(data, "num_speakers", source_name)
     ignored = tuple(sorted(str(key) for key in data if key not in _APPLIED_KEYS))
     return Sidecar(
         title=title,
         speakers=speakers,
         domain_pack=domain_pack,
         notes=notes,
+        max_speakers=max_speakers,
+        num_speakers=num_speakers,
         raw=raw,
         ignored_keys=ignored,
     )
@@ -282,6 +296,30 @@ def _notes_field(data: dict[Any, Any], source_name: str) -> str | None:
                 f"(U+{ord(ch):04X})"
             )
     return cleaned
+
+
+def _speaker_count_field(
+    data: dict[Any, Any], key: str, source_name: str
+) -> int | None:
+    """Parse an optional diarization speaker-count key (issue #128).
+
+    A whole number in 1..MAX_SIDECAR_SPEAKER_CEILING, or absent. ``bool`` is a
+    subclass of ``int`` in Python, so a YAML ``yes``/``no`` must be rejected
+    explicitly rather than read as 1/0. Out-of-range is a visible SidecarError,
+    never clamped (the module posture)."""
+    if key not in data:
+        return None
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SidecarError(
+            f"{source_name}: '{key}' must be a whole number, not {_type_word(value)}"
+        )
+    if value < 1 or value > MAX_SIDECAR_SPEAKER_CEILING:
+        raise SidecarError(
+            f"{source_name}: '{key}' must be between 1 and "
+            f"{MAX_SIDECAR_SPEAKER_CEILING}"
+        )
+    return value
 
 
 def _speakers_field(data: dict[Any, Any], source_name: str) -> tuple[str, ...]:

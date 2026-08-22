@@ -24,6 +24,7 @@ Orchestration philosophy (two execution lanes over the P1 stage engine):
 import logging
 import random
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -180,6 +181,23 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
     ctx = apply_run_preferences(
         base_ctx, settings, prefs, pack, llm_api_key=llm_api_key, bundled=bundled
     )
+    # Per-run diarization speaker-count hint (issue #128), frozen on the run at
+    # submit. A stored max overrides the install-wide ceiling already on ctx; a
+    # stored exact count pins pyannote to that many speakers. NULL columns leave
+    # the settings default in place (a legacy run, or one with no hint).
+    if run_row is not None and (
+        run_row.diarization_max_speakers is not None
+        or run_row.diarization_num_speakers is not None
+    ):
+        ctx = replace(
+            ctx,
+            diarization_max_speakers=(
+                run_row.diarization_max_speakers
+                if run_row.diarization_max_speakers is not None
+                else ctx.diarization_max_speakers
+            ),
+            diarization_num_speakers=run_row.diarization_num_speakers,
+        )
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)

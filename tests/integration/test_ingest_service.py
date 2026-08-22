@@ -930,3 +930,104 @@ def test_caller_pack_name_beats_sidecar_pack_name(
         run_id = run.id
     with session_factory() as session:
         assert session.get(PipelineRun, run_id).domain_pack["name"] == "lecture"
+
+
+# --- diarization speaker-count hint (issue #128) ------------------------------
+
+
+def test_submit_persists_explicit_speaker_hint(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A CLI-style explicit exact count is frozen on the run; the bound is dropped
+    # because an exact count subsumes it (num wins at diarize time).
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/a.wav", diarization_num_speakers=2
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_num_speakers == 2
+        assert stored.diarization_max_speakers is None
+
+
+def test_submit_persists_explicit_bound(
+    session_factory: sessionmaker[Session],
+) -> None:
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/b.wav", diarization_max_speakers=4
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_max_speakers == 4
+        assert stored.diarization_num_speakers is None
+
+
+def test_submit_without_hint_leaves_columns_null(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # No hint ⇒ NULL columns ⇒ the worker falls back to the install-wide default.
+    with session_factory() as session:
+        run = submit_media_item(session, "incoming/c.wav")
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_max_speakers is None
+        assert stored.diarization_num_speakers is None
+
+
+def test_submit_reads_speaker_hint_from_sidecar(
+    session_factory: sessionmaker[Session],
+) -> None:
+    from voxint.ingest.sidecar import parse_sidecar
+
+    sidecar = parse_sidecar("num_speakers: 3\n", source_name="a.wav.yaml")
+    with session_factory() as session:
+        run = submit_media_item(session, "incoming/d.wav", sidecar=sidecar)
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_num_speakers == 3
+        assert stored.diarization_max_speakers is None
+
+
+def test_explicit_speaker_hint_beats_sidecar(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Per-field precedence: an explicit caller bound wins over the sidecar's.
+    from voxint.ingest.sidecar import parse_sidecar
+
+    sidecar = parse_sidecar("max_speakers: 8\n", source_name="a.wav.yaml")
+    with session_factory() as session:
+        run = submit_media_item(
+            session, "incoming/e.wav", sidecar=sidecar, diarization_max_speakers=2
+        )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_max_speakers == 2
+
+
+def test_if_new_persists_sidecar_speaker_hint(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The watch-folder primitive threads the sidecar hint the same way.
+    from voxint.ingest.sidecar import parse_sidecar
+
+    sidecar = parse_sidecar("max_speakers: 5\n", source_name="a.wav.yaml")
+    with session_factory() as session:
+        run = submit_media_item_if_new(session, "incoming/f.wav", sidecar=sidecar)
+        session.commit()
+        assert run is not None
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored.diarization_max_speakers == 5
+        assert stored.diarization_num_speakers is None

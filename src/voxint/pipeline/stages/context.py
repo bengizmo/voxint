@@ -98,6 +98,12 @@ class StageContext:
     # Surfaced to the whisper initial_prompt and rendered into enhancement_context.
     vocabulary: tuple[str, ...] = ()
     matching_gates: MatchingGates = field(default_factory=MatchingGates)
+    # Speaker-count hint handed to the diarizer for this run. The max is the
+    # install-wide ceiling (settings.diarization_max_speakers) unless the run
+    # carries a per-recording override; the exact count, when set, pins pyannote
+    # to that many speakers and wins over the max. See issue #128.
+    diarization_max_speakers: int = 10
+    diarization_num_speakers: int | None = None
 
 
 def build_stage_context(settings: Settings) -> StageContext:
@@ -149,6 +155,7 @@ def build_stage_context(settings: Settings) -> StageContext:
         enhancement_context=pack.prompt_fragments.get("enhancement_context", ""),
         vocabulary=pack.vocabulary,
         matching_gates=gates_from_settings(settings),
+        diarization_max_speakers=settings.diarization_max_speakers,
     )
 
 

@@ -40,11 +40,48 @@ What to do about it:
 
 - **Adjudicate it away.** The review workbench is the place to rule that two
 proposed voices are the same person. Assign both to one speaker.
-- **Known-speaker-count constraints**: the pyannote service's `/v1/diarize`
-endpoint accepts `min_speakers` / `max_speakers` bounds (defaults 1–10).
-The pipeline does not set them per run today; every run uses the defaults.
-So the knob is available to direct service callers only, and wiring a per-run
-speaker-count hint through the pipeline is future work.
+- **Tell the pipeline how many speakers to expect** (see the next section). When
+you already know a recording has two people, cap or pin the count and
+diarization stops splitting one voice into many.
+
+## Telling the pipeline the speaker count
+
+pyannote estimates the speaker count on its own. On hard audio (distance, wind,
+crosstalk) it can split one voice into several clusters, and it stops at a
+ceiling of 10 speakers by default. When you know the real answer, supply it and
+diarization is constrained to it.
+
+There are two constraints:
+
+- A **bound** (`max_speakers`): the most speakers diarization may return. This is
+the safe choice, because the diarizer can still return fewer. Reach for it when
+you know a recording has at most a handful of voices.
+- An **exact count** (`num_speakers`): pins diarization to that many speakers.
+Use it only when you are certain, because a wrong exact count merges two real
+people or splits one. The exact count wins when both are supplied.
+
+Both are best-effort at the final output. pyannote can still land on fewer
+speakers when the audio is too short or sparse to support the count you asked
+for, and Voxint drops sub-second turns before reporting, which can remove a
+cluster. The constraint steers clustering; it does not force a minimum.
+
+Supply the count three ways, from most to least specific:
+
+| Where | How | Scope |
+|---|---|---|
+| Per recording, CLI | `voxint submit clip.wav --max-speakers 3` or `--num-speakers 2` | That one submission. |
+| Per recording, sidecar | `max_speakers: 3` or `num_speakers: 2` in the media file's YAML sidecar | Every submission of that file, frozen at submit. |
+| Install-wide default | `DIARIZATION_MAX_SPEAKERS=3` in `.env` | Every run with no per-recording override. |
+
+A per-recording value overrides the install-wide default. The sidecar keys are
+separate from the sidecar's `speakers:` list, which seeds speaker *names* and
+never implies a count. All values are bounded 1 to 20 (the pyannote service
+limit). The hint is frozen onto the run at submit, so a requeue or recovery
+reuses it.
+
+Under the hood the exact count is sent to the service as equal
+`min_speakers`/`max_speakers` bounds, so no separate service field is involved
+(`services/pyannote/app/schemas.py`).
 
 ## Quick diagnostic checklist
 

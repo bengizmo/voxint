@@ -313,6 +313,18 @@ class PipelineRun(Base):
             "sidecar IS NULL OR jsonb_typeof(sidecar) = 'object'",
             name="pipeline_runs_sidecar_object_check",
         ),
+        # Mirror the pyannote service bounds (1..20) and the config field so a bad
+        # hint can never reach the diarizer through this column.
+        CheckConstraint(
+            "diarization_max_speakers IS NULL"
+            " OR (diarization_max_speakers >= 1 AND diarization_max_speakers <= 20)",
+            name="pipeline_runs_diarization_max_speakers_check",
+        ),
+        CheckConstraint(
+            "diarization_num_speakers IS NULL"
+            " OR (diarization_num_speakers >= 1 AND diarization_num_speakers <= 20)",
+            name="pipeline_runs_diarization_num_speakers_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -359,6 +371,16 @@ class PipelineRun(Base):
     # tolerantly (api.presentation.title_from_snapshot); nothing downstream
     # re-parses it.
     sidecar: Mapped[dict[str, Any] | None] = mapped_column()
+    # Per-recording diarization speaker-count hint (issue #128), frozen at submit
+    # from a CLI flag or the YAML sidecar. NULL max ⇒ the worker falls back to the
+    # install-wide default (settings.diarization_max_speakers) at execution;
+    # a non-NULL value is an explicit per-run override. num is an EXACT count that
+    # pins pyannote to that many speakers and takes precedence over max. Both are
+    # bounded 1..20 (a CHECK mirrors the pyannote service and the config field).
+    # Read in the worker alongside domain_pack; deliberately typed scalar columns,
+    # not folded into the domain_pack manifest.
+    diarization_max_speakers: Mapped[int | None] = mapped_column(Integer)
+    diarization_num_speakers: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

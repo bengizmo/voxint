@@ -85,6 +85,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   [Changing pipeline models](docs/how-to/changing-pipeline-models.md), documents
   the full procedure, the validated-versus-unvalidated tradeoff, and the
   timeout note for slower models; the new keys are documented in `.env.example`.
+- **Operator-supplied speaker count for diarization (issue #128).** You can now
+  tell the pipeline how many speakers a recording has, so pyannote stops
+  over-segmenting one voice into many clusters on hard audio. Supply either a
+  bound (the most speakers to expect) or an exact count three ways: the
+  `voxint submit --max-speakers N` / `--num-speakers N` flags, the matching
+  `max_speakers:` / `num_speakers:` keys in a media file's YAML sidecar, or the
+  install-wide `DIARIZATION_MAX_SPEAKERS` default (default 10, unchanged
+  behavior). A per-recording hint is frozen onto the run at submit and reused on
+  requeue. The exact count is sent to the service as equal `min`/`max` bounds, so
+  it needs no change to the pyannote request contract. See
+  [docs/interpreting-diarization.md](docs/interpreting-diarization.md).
 
 ## [0.22.1] - 2026-08-21
 

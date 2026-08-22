@@ -18,6 +18,7 @@ import yaml
 from voxint.ingest.sidecar import (
     MAX_NOTES_CHARS,
     MAX_SIDECAR_BYTES,
+    MAX_SIDECAR_SPEAKER_CEILING,
     MAX_SPEAKER_CHARS,
     MAX_SPEAKERS,
     MAX_TITLE_CHARS,
@@ -70,7 +71,14 @@ def test_parse_each_field_alone(text: str, field: str, expected: object) -> None
 def test_empty_mapping_is_valid() -> None:
     sc = parse_sidecar("{}", source_name="x.yaml")
     assert sc == Sidecar(
-        title=None, speakers=(), domain_pack=None, notes=None, raw={}, ignored_keys=()
+        title=None,
+        speakers=(),
+        domain_pack=None,
+        notes=None,
+        max_speakers=None,
+        num_speakers=None,
+        raw={},
+        ignored_keys=(),
     )
 
 
@@ -582,3 +590,56 @@ def test_read_sidecar_holds_when_path_removed_after_read(
     monkeypatch.setattr("voxint.ingest.sidecar.os.lstat", _raise)
     with pytest.raises(SidecarError, match="removed"):
         read_sidecar(p)
+
+
+# --- diarization speaker-count keys (issue #128) ------------------------------
+
+
+def test_parse_max_speakers() -> None:
+    sc = parse_sidecar("max_speakers: 3", source_name="x.yaml")
+    assert sc.max_speakers == 3
+    assert sc.num_speakers is None
+
+
+def test_parse_num_speakers() -> None:
+    sc = parse_sidecar("num_speakers: 2", source_name="x.yaml")
+    assert sc.num_speakers == 2
+    assert sc.max_speakers is None
+
+
+def test_speaker_count_keys_absent_are_none() -> None:
+    sc = parse_sidecar("title: just a title", source_name="x.yaml")
+    assert sc.max_speakers is None
+    assert sc.num_speakers is None
+    # The count keys are machine-read, not reference-only: never in ignored_keys.
+    assert "max_speakers" not in sc.ignored_keys
+    assert "num_speakers" not in sc.ignored_keys
+
+
+def test_speaker_count_is_distinct_from_speakers_roster() -> None:
+    # A partial name roster does not imply a count; the two coexist.
+    sc = parse_sidecar(
+        "speakers: [Jane]\nnum_speakers: 2", source_name="x.yaml"
+    )
+    assert sc.speakers == ("Jane",)
+    assert sc.num_speakers == 2
+
+
+@pytest.mark.parametrize("key", ["max_speakers", "num_speakers"])
+def test_speaker_count_rejects_bool(key: str) -> None:
+    # bool is an int subclass in Python: a YAML yes/no must not read as 1/0.
+    with pytest.raises(SidecarError, match="whole number"):
+        parse_sidecar(f"{key}: yes", source_name="x.yaml")
+
+
+@pytest.mark.parametrize("key", ["max_speakers", "num_speakers"])
+def test_speaker_count_rejects_non_integer(key: str) -> None:
+    with pytest.raises(SidecarError, match="whole number"):
+        parse_sidecar(f"{key}: two", source_name="x.yaml")
+
+
+@pytest.mark.parametrize("key", ["max_speakers", "num_speakers"])
+@pytest.mark.parametrize("value", [0, MAX_SIDECAR_SPEAKER_CEILING + 1])
+def test_speaker_count_rejects_out_of_range(key: str, value: int) -> None:
+    with pytest.raises(SidecarError, match=str(MAX_SIDECAR_SPEAKER_CEILING)):
+        parse_sidecar(f"{key}: {value}", source_name="x.yaml")

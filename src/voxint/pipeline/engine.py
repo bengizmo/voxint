@@ -82,6 +82,8 @@ def submit(
     domain_pack: dict[str, Any],
     sidecar: dict[str, Any] | None = None,
     operator_notes: str | None = None,
+    diarization_max_speakers: int | None = None,
+    diarization_num_speakers: int | None = None,
 ) -> PipelineRun:
     """Queue a fresh run, freezing its resolved domain-pack snapshot (issue #11).
 
@@ -95,11 +97,18 @@ def submit(
     stamped write-once alongside the pack snapshot; ``operator_notes`` seeds the
     run's notes at creation (the sidecar's ``notes`` field). Both stay optional so
     submit paths without a sidecar are unchanged.
+
+    ``diarization_max_speakers`` / ``diarization_num_speakers`` (issue #128) freeze
+    the run's optional speaker-count hint: a bound and/or an exact count. Left NULL
+    ⇒ the worker uses the install-wide default at execution. Plain integer columns,
+    so an explicit None is a genuine SQL NULL (unlike the JSON columns above).
     """
     run = PipelineRun(
         media_item_id=media_item_id,
         status=RunStatus.QUEUED.value,
         domain_pack=domain_pack,
+        diarization_max_speakers=diarization_max_speakers,
+        diarization_num_speakers=diarization_num_speakers,
     )
     # Set only when present: an explicit None on a JSON column serializes as a
     # JSON null (jsonb_typeof 'null'), not SQL NULL, and would trip the

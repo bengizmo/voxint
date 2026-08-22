@@ -115,5 +115,6 @@ def test_single_alembic_head() -> None:
     # operator-authored rules, issue #84; 0030 = pipeline_runs.sidecar frozen
     # YAML sidecar snapshot, issue #104; 0031 = operator annotation layer
     # (annotation_tags + transcript_annotations + annotation_tag_links), #86;
-    # 0032 = match_candidates observational match-decision evidence, issue #113).
-    assert list(heads) == ["0032"]
+    # 0032 = match_candidates observational match-decision evidence, issue #113;
+    # 0033 = pipeline_runs diarization speaker-count hint, issue #128).
+    assert list(heads) == ["0033"]

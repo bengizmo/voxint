@@ -18,7 +18,11 @@ from voxint.pipeline.stages.context import StageContext, StageDataError, normali
 
 def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     audio = normalized_audio_path(session, run_id, ctx.media_root)
-    turns = ctx.diarizer.diarize(audio).turns
+    turns = ctx.diarizer.diarize(
+        audio,
+        max_speakers=ctx.diarization_max_speakers,
+        num_speakers=ctx.diarization_num_speakers,
+    ).turns
 
     session.execute(
         delete(DiarizationTurn).where(DiarizationTurn.pipeline_run_id == run_id)

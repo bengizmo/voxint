@@ -376,6 +376,61 @@ def test_diarize_maps_turns() -> None:
     result = client.diarize(AUDIO)
     assert [t.label for t in result.turns] == ["SPEAKER_00", "SPEAKER_01"]
     assert result.turns[1].end_seconds == 9.0
+    # The service's speaker count is surfaced back (was previously discarded).
+    assert result.num_speakers == 2
+
+
+def _diarize_body() -> dict[str, Any]:
+    return {"duration_seconds": 1.0, "num_speakers": 1, "turns": [], "speakers": []}
+
+
+def _capture_diarize_request(seen: dict[str, Any]) -> Any:
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_diarize_body())
+
+    return handler
+
+
+def test_diarize_sends_no_bounds_by_default() -> None:
+    seen: dict[str, Any] = {}
+    client = make_client(HttpDiarizerClient, _capture_diarize_request(seen))
+    client.diarize(AUDIO)
+    # Backward-compatible wire shape: with no hint, only the path is sent and the
+    # service applies its own default ceiling.
+    assert set(seen) == {"path"}
+
+
+def test_diarize_sends_max_speakers_bound() -> None:
+    seen: dict[str, Any] = {}
+    client = make_client(HttpDiarizerClient, _capture_diarize_request(seen))
+    client.diarize(AUDIO, max_speakers=4)
+    assert seen["max_speakers"] == 4
+    assert "min_speakers" not in seen  # a bound leaves min at the service default
+
+
+def test_diarize_pins_bounds_for_exact_count() -> None:
+    seen: dict[str, Any] = {}
+    client = make_client(HttpDiarizerClient, _capture_diarize_request(seen))
+    client.diarize(AUDIO, num_speakers=2)
+    # An exact count is expressed as min == max == N (no service-side field).
+    assert seen["min_speakers"] == 2
+    assert seen["max_speakers"] == 2
+
+
+def test_diarize_exact_count_wins_over_bound() -> None:
+    seen: dict[str, Any] = {}
+    client = make_client(HttpDiarizerClient, _capture_diarize_request(seen))
+    client.diarize(AUDIO, max_speakers=8, num_speakers=3)
+    assert seen["min_speakers"] == 3
+    assert seen["max_speakers"] == 3
+
+
+def test_diarize_rejects_non_integer_num_speakers() -> None:
+    body = {**_diarize_body(), "num_speakers": "two"}
+    client = make_client(HttpDiarizerClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.diarize(AUDIO)
 
 
 # ---------------------------------------------------------------- embedder
