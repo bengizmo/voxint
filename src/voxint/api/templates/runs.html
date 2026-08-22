@@ -48,6 +48,14 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 {% endif %}
 </section>
 
+{# Search-mode toggle (issue #121): the exact keyword browse (this page) versus the
+   ranked semantic "Meaning" search. The current query term carries across both tabs
+   so switching modes never loses the operator's words. #}
+<nav class="top tab-strip" aria-label="Search mode">
+  <a href="/runs{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}" aria-current="page">Exact</a>
+  <a href="/search{% if filters.q %}?q={{ filters.q|urlencode }}{% endif %}">Meaning</a>
+</nav>
+
 <form method="get" action="/runs" class="filters">
   {# Preserve the archived view across a filter submit (issue #5). #}
   {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}

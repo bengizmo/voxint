@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Voxint — meaning search{% endblock %}
+{% block body %}
+<h1>Meaning search</h1>
+<p class="muted">Find a passage by what it means, across every transcript. Results are
+ranked together by semantic closeness and word-for-word overlap; a
+<code>&quot;quoted phrase&quot;</code> is matched exactly and floated to the top.</p>
+
+{# Search-mode toggle (issue #121): mirrors the strip on /runs. "Exact" is the
+   chronological keyword browse; "Meaning" (this page) is the ranked passage search.
+   The query term carries across so switching modes keeps the operator's words. #}
+<nav class="top tab-strip" aria-label="Search mode">
+  <a href="/runs{% if query %}?q={{ query|urlencode }}{% endif %}">Exact</a>
+  <a href="/search{% if query %}?q={{ query|urlencode }}{% endif %}" aria-current="page">Meaning</a>
+</nav>
+
+<form method="get" action="/search" class="filters" role="search">
+  <label>Search transcripts
+    <input type="search" name="q" value="{{ query }}"
+           placeholder='what a passage means, or &quot;an exact phrase&quot;'
+           {% if not query %}autofocus{% endif %}>
+  </label>
+  <button type="submit" class="primary">Search</button>
+</form>
+
+{% if page.state == "empty_query" %}
+<p>Type what you are looking for above. Meaning search reads the whole transcript
+corpus, so a phrase from memory finds the passage even when the words are not exact.</p>
+
+{% elif page.state == "off" %}
+<p class="notice">Semantic search is turned off. Turn it on under
+<a href="/settings">Settings</a>, then let new runs index or run
+<code>voxint embed backfill</code> for the existing ones.</p>
+
+{% elif page.state == "unavailable" %}
+<p class="notice">Semantic search is unavailable on this instance: the embedding
+model weights are not installed, so queries cannot be embedded. Reinstall with the
+weights bundled to enable it.</p>
+
+{% elif page.state == "indexing" %}
+<p class="notice">Semantic search is on, but no transcripts are indexed yet. New runs
+are indexed as they finish; index the existing runs with
+<code>voxint embed backfill</code>.</p>
+
+{% elif not page.items %}
+<p>No passages match &ldquo;{{ query }}&rdquo;.</p>
+
+{% else %}
+<ol class="search-results">
+  {% for it in page.items %}
+  <li class="search-result">
+    <div class="result-head">
+      {# jump_url deep-links the transcript at the passage start; the island
+         scrolls and flashes the line (issue #121). #}
+      <a href="{{ it.jump_url }}" class="result-title"
+         title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</a>
+      {% if it.speaker_label %}<span class="spk-badge">{{ it.speaker_label }}</span>{% endif %}
+      <span class="muted result-time">{{ format_duration(it.start_seconds) }}&ndash;{{ format_duration(it.end_seconds) }}</span>
+      {% if it.exact_quote %}<span class="pill grounded">exact quote</span>{% endif %}
+    </div>
+    {# snippet is server-escaped in meaning_query._preview with only our <mark>
+       injected; transcript text itself is never trusted markup. #}
+    <p class="result-snippet">{{ it.snippet }}</p>
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,49 @@
+{# Settings → Semantic search (issue #121): runtime tri-state toggles for the
+   transcript meaning-search spine. Like the Features section, each control is On /
+   Off / use the installation (env) setting, writing NULL for the last so an
+   override never permanently pins. The two flags depend on nothing else and
+   validate through their own self-contained invariant (autogenerate needs the
+   feature on), so this is a section of its own, not folded into Features.
+   Self-contained: renders from _settings_context. #}
+<section id="semantic-search" aria-labelledby="semantic-search-heading">
+<h2 id="semantic-search-heading">Semantic search</h2>
+<p class="muted">Meaning search finds a passage by what it means, across every
+   transcript, from the <a href="/search">Meaning</a> tab beside the runs search box.
+   It builds a private on-device index as runs finish; nothing leaves this machine.
+   Changes here apply to your next run or job, no restart needed.</p>
+{% for error in semantic_index_errors %}
+  <p class="notice" role="alert">{{ error }}</p>
+{% endfor %}
+{% if semantic_index_enabled_state != "off" and not semantic_index_weights_available %}
+  <p class="notice">The embedding model weights are not installed on this instance,
+     so meaning search cannot answer a query even while it is on. Reinstall with the
+     weights bundled to use it.</p>
+{% endif %}
+<form method="post" action="/settings/semantic">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <fieldset class="field feature-flag">
+    <legend>Semantic search</legend>
+    <p class="muted">Index finished transcripts so you can search them by meaning.
+       Runs fully on-device with the bundled embedding model — no LLM, no network.</p>
+    <label><input type="radio" name="semantic_index_enabled" value="on"{% if semantic_index_enabled_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="semantic_index_enabled" value="off"{% if semantic_index_enabled_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="semantic_index_enabled" value="inherit"{% if semantic_index_enabled_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if semantic_index_enabled_env_default else "Off" }})</span></label>
+  </fieldset>
+  <fieldset class="field feature-flag">
+    <legend>Index new runs automatically</legend>
+    <p class="muted">Build the index for each run as it finishes. With this off,
+       index existing or new runs on demand with <code>voxint embed backfill</code>.
+       Requires semantic search to be on.</p>
+    <label><input type="radio" name="semantic_index_autogenerate" value="on"{% if semantic_index_autogenerate_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="semantic_index_autogenerate" value="off"{% if semantic_index_autogenerate_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="semantic_index_autogenerate" value="inherit"{% if semantic_index_autogenerate_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if semantic_index_autogenerate_env_default else "Off" }})</span></label>
+  </fieldset>
+  <button type="submit">Save semantic search settings</button>
+</form>
+</section>

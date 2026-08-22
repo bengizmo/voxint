@@ -507,6 +507,18 @@
     /* Line hover as a reading aid. :where() keeps this at (0,0,0) so the active
        line's island tint (bg-seg/20, a class at 0,1,0) always wins over it. */
     :where(.tp-line:hover) { background: var(--surface-2); }
+    /* Deep-link jump flash (issue #121): a Meaning search result scrolls its
+       target transcript line into view and briefly flashes it so the eye lands on
+       the passage. A background fade (not a border) reads over any speaker accent;
+       reduced-motion falls back to a static tint the island's timeout then clears. */
+    @keyframes tp-jump-flash {
+      from { background: var(--accent-soft); }
+      to { background: transparent; }
+    }
+    .tp-jump-flash { animation: tp-jump-flash 2s ease-out; border-radius: var(--r-sm); }
+    @media (prefers-reduced-motion: reduce) {
+      .tp-jump-flash { animation: none; background: var(--accent-soft); }
+    }
     .card-actions { display: flex; flex-wrap: wrap; gap: .5rem .9rem; align-items: center;
                     margin-top: .7rem; padding-top: .7rem; border-top: 1px solid var(--line); }
     .card-actions form.inline { margin-right: 0; }
@@ -566,6 +578,18 @@
        item. */
     .add-media { margin: 0 0 1rem; }
     .add-media > h2 { margin: .6rem 0 .8rem; font-size: var(--t-md); }
+    /* Meaning-search results (issue #121): a ranked passage list. Each row is a
+       transcript deep-link title, an optional speaker badge + time range, and the
+       marked passage snippet. Tokens only, consistent with the run listing; the
+       snippet's <mark> keeps the browser default so it reads the same as an exact
+       /runs search hit. */
+    .search-results { list-style: none; padding: 0; margin: 1rem 0; }
+    .search-result { padding: .7rem 0; border-top: 1px solid var(--line); }
+    .search-result:first-child { border-top: 0; }
+    .result-head { display: flex; flex-wrap: wrap; gap: .4rem .6rem; align-items: baseline; }
+    .result-title { font-weight: 600; }
+    .result-time { font-size: var(--t-sm); }
+    .result-snippet { margin: .3rem 0 0; color: var(--ink-2); }
     .minibar { display: inline-block; vertical-align: middle; width: 6rem; height: .5rem;
                border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
                margin-left: .5rem; }

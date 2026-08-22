@@ -162,6 +162,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
     verify_csrf_token,
 )
+from voxint.api.meaning_query import search_passages
 from voxint.api.playback import (
     MediaResolutionError,
     PlaybackCapability,
@@ -251,6 +252,7 @@ from voxint.app_settings import (
     resolve_effective_web_search_api_key,
     resolve_effective_web_search_base_url,
     resolve_effective_ytdlp_enabled,
+    semantic_index_flags_ok,
     str_flag_form_field,
     validate_effective_flags,
     validate_web_search_base_url,
@@ -300,6 +302,7 @@ from voxint.domain_packs.corrections import (
     operator_correction_message,
 )
 from voxint.domain_packs.registry import available_domain_packs, default_domain_pack
+from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.asset_jobs import (
     RunAssetJobError,
     active_or_last_jobs,
@@ -2697,6 +2700,71 @@ def _persist_feature_flags(
     return []
 
 
+# The two live-read flags the Settings "Semantic search" section exposes as
+# tri-state toggles (issue #121). Kept out of _FEATURE_FLAG_META on purpose: the
+# semantic pair depends on nothing else and validates through its OWN self-contained
+# invariant (semantic_index_flags_ok), never the EffectiveFlags web, matching the
+# app_settings design note that these flags stay out of EffectiveFlags.
+_SEMANTIC_FLAG_NAMES: tuple[str, ...] = (
+    "semantic_index_enabled",
+    "semantic_index_autogenerate",
+)
+
+
+def _persist_semantic_index(
+    session: Session,
+    settings: Settings,
+    *,
+    submitted: dict[str, str],
+) -> list[str]:
+    """Apply the Semantic search section's two tri-state toggles atomically (#121).
+
+    Mirrors :func:`_persist_feature_flags`' candidate → validate → one-mutation
+    shape, but validates the semantic pair's OWN self-contained invariant
+    (:func:`semantic_index_flags_ok`: autogenerate rides on the feature, so it
+    requires the feature enabled) rather than the EffectiveFlags web. The effective
+    combination (candidate over env default) is checked BEFORE any get_or_create, so
+    a rejected save writes NOTHING (the API session commits on the 200 error
+    re-render). An unexpected choice is rejected, never coerced, for the same reason
+    the Features section rejects one: silently mapping it would drop an override or
+    disable a feature. Returns operator-plain error messages (empty ⇒ success); the
+    caller commits on success.
+    """
+    candidates: dict[str, bool | None] = {}
+    for name in _SEMANTIC_FLAG_NAMES:
+        choice = submitted.get(name, "inherit")
+        if choice not in _FEATURE_FLAG_CHOICES:
+            return [
+                "Unrecognized semantic-search setting — choose On, Off, or Use"
+                " installation setting."
+            ]
+        candidates[name] = None if choice == "inherit" else (choice == "on")
+    row = get_app_settings(session)
+
+    def _effective(name: str) -> bool:
+        candidate = candidates[name]
+        return bool(getattr(settings, name)) if candidate is None else candidate
+
+    # semantic_index_flags_ok is the single source of WHICH combination is invalid;
+    # its message names the flag identifiers (for a .env editor), so the operator
+    # boundary translates the one reachable violation to plain language.
+    if (
+        semantic_index_flags_ok(
+            enabled=_effective("semantic_index_enabled"),
+            autogenerate=_effective("semantic_index_autogenerate"),
+        )
+        is not None
+    ):
+        return [
+            "Turn semantic search on before auto-indexing new runs — the automatic"
+            " step only runs the feature it rides on."
+        ]
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    for name, value in candidates.items():
+        setattr(row, name, value)
+    return []
+
+
 def _persist_web_research(
     session: Session,
     settings: Settings,
@@ -3670,6 +3738,41 @@ def _register_routes(app: FastAPI) -> None:
                 ),
                 # Injected clock for the relative-age render (format_age(now=…)).
                 "now": datetime.now(UTC),
+                "active_nav": "runs",
+            },
+        )
+
+    @protected.get("/search")
+    def search(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        q: str | None = None,
+    ) -> Response:
+        # The ranked semantic "Meaning" mode (issue #121): a distinct surface from
+        # the chronological /runs browse, reading the embedding index the spine
+        # builds. search_passages needs the session FACTORY, not this request's
+        # session: it opens its own two short sessions (a settings gate, then one
+        # read-only REPEATABLE READ snapshot that wraps all ranking arms so a
+        # concurrent publish cannot straddle them). SessionDep still runs first,
+        # so the factory is initialized and the basic-auth + onboarding gates on
+        # the `protected` router have already passed. The feature/weights/indexing
+        # state comes back on the page object, which the template renders honestly.
+        settings: Settings = request.app.state.settings
+        page = search_passages(
+            request.app.state.session_factory,
+            settings=settings,
+            query=q or "",
+        )
+        return templates.TemplateResponse(
+            request,
+            "search.html",
+            {
+                "request": request,
+                "page": page,
+                "query": page.query,
+                # Meaning search pairs with Runs (reached from its toggle), so the
+                # Runs nav item stays lit rather than leaving the nav orphaned.
                 "active_nav": "runs",
             },
         )
@@ -5667,6 +5770,13 @@ def _register_routes(app: FastAPI) -> None:
             }
             for name, label, help_text in _FEATURE_FLAG_META
         ]
+        # Semantic search section (issue #121): two tri-state rows (the feature +
+        # its autogenerate rider). On an invariant-rejected save, render the
+        # operator's submitted choices back (``semantic_index_submitted``); otherwise
+        # the stored raw tri-state.
+        semantic_submitted: dict[str, str] | None = overrides.pop(
+            "semantic_index_submitted", None
+        )
         # Sources & research section (issue #76). On an invariant/format-rejected
         # save, render the operator's submitted choices back (``web_research_submitted``
         # — the four non-secret fields only, never the key); otherwise the stored raw
@@ -5709,6 +5819,27 @@ def _register_routes(app: FastAPI) -> None:
             "tutorial_error": None,
             "feature_flags": feature_flags,
             "features_errors": [],
+            # Semantic search (issue #121): the two tri-state toggles (raw stored
+            # tri-state, or submitted choice on re-render), their env defaults for the
+            # "inherit" label, and whether the embedding weights are actually
+            # installed — an honest note when the feature is on but weights are absent,
+            # since enabling it then cannot answer a query.
+            "semantic_index_enabled_state": (
+                semantic_submitted.get("semantic_index_enabled", "inherit")
+                if semantic_submitted is not None
+                else feature_flag_state(row, "semantic_index_enabled")
+            ),
+            "semantic_index_enabled_env_default": bool(settings.semantic_index_enabled),
+            "semantic_index_autogenerate_state": (
+                semantic_submitted.get("semantic_index_autogenerate", "inherit")
+                if semantic_submitted is not None
+                else feature_flag_state(row, "semantic_index_autogenerate")
+            ),
+            "semantic_index_autogenerate_env_default": bool(
+                settings.semantic_index_autogenerate
+            ),
+            "semantic_index_weights_available": minilm_artifacts_available(),
+            "semantic_index_errors": [],
             # Sources & research (issue #76): the two web-research toggles (raw
             # tri-state, or submitted choice on re-render), the endpoint override +
             # env placeholder, the credential status (present + source, never the
@@ -5881,6 +6012,45 @@ def _register_routes(app: FastAPI) -> None:
                 "settings.html",
                 _settings_context(
                     request, session, features_errors=errors, features_submitted=submitted
+                ),
+            )
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/semantic")
+    def settings_semantic(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        semantic_index_enabled: Annotated[str, Form()] = "inherit",
+        semantic_index_autogenerate: Annotated[str, Form()] = "inherit",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Save the Semantic search section's two tri-state toggles (issue #121).
+
+        Scoped and CSRF-gated like every settings section. Both rendered radios have
+        a matching Form param here (a rendered radio whose name is undeclared is
+        dropped by Starlette and then read as "inherit", silently clearing an
+        override — test_semantic_route_declares_every_flag guards the pairing). On the
+        one reachable invariant violation (autogenerate on with the feature off)
+        nothing is written and the operator's choices re-render with a plain message.
+        """
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        submitted = {
+            "semantic_index_enabled": semantic_index_enabled,
+            "semantic_index_autogenerate": semantic_index_autogenerate,
+        }
+        errors = _persist_semantic_index(session, settings, submitted=submitted)
+        if errors:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request,
+                    session,
+                    semantic_index_errors=errors,
+                    semantic_index_submitted=submitted,
                 ),
             )
         session.commit()

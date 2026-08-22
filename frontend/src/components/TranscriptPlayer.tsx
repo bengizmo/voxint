@@ -17,6 +17,7 @@ import {
 } from "../lib/playback";
 import { fetchPeaks, type PeaksPayload, type Turn } from "../lib/peaks";
 import { type AnnotationLineSpan } from "../lib/annotations";
+import { resolveJumpIndex } from "../lib/jump";
 import { CapabilityBanner, SpeedControl } from "./PlaybackControls";
 import { WaveformStrip } from "./WaveformStrip";
 
@@ -225,6 +226,14 @@ export interface TranscriptPlayerProps {
   annotationSpans?: Map<number, AnnotationLineSpan[]>;
   staleLocators?: Set<number>;
   onTextSelect?: () => void;
+  // Deep-link jump target (issue #121): a media-time in seconds a Meaning search
+  // result carries in ?t=. On mount the matching line is scrolled into view and
+  // briefly flashed, so the eye lands on the passage. No audio seek (a jump is a
+  // reading act). null/undefined ⇒ no jump — the review surface and a plain
+  // transcript open pass nothing, so both stay byte-identical. The read-only
+  // island entry resolves it from location.search; the resolution + parse are
+  // pure (lib/jump.ts) and unit-tested there.
+  jumpToSeconds?: number | null;
 }
 
 // Imperative handle (issue #53): the ONLY review affordance the pure player
@@ -290,6 +299,7 @@ export const TranscriptPlayer = forwardRef<
     annotationSpans,
     staleLocators,
     onTextSelect,
+    jumpToSeconds,
   },
   ref,
 ) {
@@ -312,6 +322,10 @@ export const TranscriptPlayer = forwardRef<
   const activeLineRef = useRef<HTMLParagraphElement | null>(null);
   // Timestamp until which self-emitted scroll events are ignored (see guard).
   const scrollGuardUntil = useRef<number>(0);
+  // Deep-link jump flash (issue #121): the line a ?t= jump landed on, briefly, so
+  // it fades a highlight after the scroll. -1 = no flash (the default, and after
+  // the flash clears).
+  const [jumpIndex, setJumpIndex] = useState<number>(-1);
 
   // Scroll the active line into view WITHOUT moving DOM focus (accessibility)
   // and WITHOUT smooth scrolling. If the line is already fully visible we do
@@ -422,6 +436,32 @@ export const TranscriptPlayer = forwardRef<
       controller.abort();
     };
   }, [peaksUrl]);
+
+  // Deep-link jump (issue #121). Mount-only: read the resolved ?t= target once,
+  // scroll the matching line into view, and flash it for ~2s. The scroll guard is
+  // armed so this self-emitted scroll does not read as the operator taking over
+  // (following stays on). No audio seek. A null target, no matching line (t past
+  // the end), or a missing node is a silent no-op. segments is stable on the
+  // read-only surface (no verify/correct patching there), so reading it once on
+  // mount is correct; the review surface passes no jumpToSeconds.
+  useEffect(() => {
+    if (jumpToSeconds == null || !Number.isFinite(jumpToSeconds)) return;
+    const idx = resolveJumpIndex(segments, jumpToSeconds);
+    if (idx < 0) return;
+    const el = listRef.current?.querySelector<HTMLElement>(
+      `[data-seg-index="${idx}"]`,
+    );
+    if (!el) return;
+    scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
+    el.scrollIntoView({ block: "center" });
+    setJumpIndex(idx);
+    const timer = window.setTimeout(() => setJumpIndex(-1), 2000);
+    return () => {
+      window.clearTimeout(timer);
+    };
+    // Mount-only: the deep link is consumed once on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Operator annotation selection (issue #86): a driver that passes onTextSelect is
   // notified on every mouseup so it can read the current window selection and open
@@ -560,6 +600,9 @@ export const TranscriptPlayer = forwardRef<
           // into child chips/timecodes and pushed small text below AA (review
           // finding) — the active line's tint + aria-current carry emphasis.
           if (active) classes.push("bg-seg/20");
+          // Deep-link jump flash (issue #121): a brief fading highlight on the
+          // line a ?t= jump landed on. Cleared by the mount effect's timeout.
+          if (i === jumpIndex) classes.push("tp-jump-flash");
           return (
             <p
               // Keyed by parent + word-range (falling back to start time) so a
