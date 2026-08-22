@@ -108,6 +108,38 @@ same contract.
     versions, VAD params + plan version), `vad_plan_version`, `vad_params`, and `model_revision`
     (the pinned HF snapshot). It never hashes weights per request; it exists so
     two deployments are distinguishable and a numerics change is visible.
+  - **pyannote only** additionally carries a `checkpoint_fingerprint` (#125),
+    populated once the model is loaded (`null` while `degraded`). It is a weight
+    identity, not a pipeline identity: a digest over the two actually-loaded
+    checkpoint `.bin` files, so a deployment reporting the validated pipeline
+    *name* can be checked against the validated *weights*. Algorithm (normative):
+    `seg = sha256(segmentation_bin)`, `emb = sha256(embedding_bin)`, both
+    lowercase hex; `checkpoint_fingerprint = sha256("segmentation:" + seg +
+    "\nembedding:" + emb + "\n")`. The two `.bin` paths are read from the loaded
+    pipeline config's `pipeline.params.segmentation` / `embedding`. The config
+    file itself is deliberately excluded: its checkpoint paths are repointed per
+    install flavor (the metal launcher rewrites the path prefix), so its bytes
+    are not deployment-invariant, while the `.bin` bytes are identical across
+    flavors. The vendored default's value is
+    `aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2`, derived
+    from `services/pyannote/models/provenance.json` (contract-tested). For a
+    non-local (Hugging Face) source the field is `null`: those files are not
+    hashed here. A local source that loaded but cannot be hashed fails the boot
+    rather than reporting `null`, so `null` always means "unverifiable source",
+    never "broken bake". The field is additive within `v1`; a consumer must
+    treat the key being **absent** (an older service) differently from
+    present-and-`null`: absence means classify by name as before, `null` means
+    fail closed as unverifiable. This is operational provenance, not attestation
+    against a hostile operator (a service operator can serve any `/healthz`);
+    it exists to catch an accidental weights swap under the validated name in a
+    single-operator deployment.
+  - The console's Settings "Pipeline models" panel consumes these to classify
+    each configurable service by exact identity, not name (#125): the validated
+    name plus the matching `checkpoint_fingerprint` (pyannote) or `model_revision`
+    (whisper's baked large-v2 snapshot) reads as validated; the validated name
+    with a different fingerprint/revision reads as a weights mismatch and fails
+    closed; the validated name with an unverifiable (`null`) fingerprint reads as
+    unverified and fails closed.
   - **All services** additionally carry an optional nested `resources` block
     (additive within `v1`; absent on older services, always present on an
     upgraded one). It reports the hardware this service sees so the operator has

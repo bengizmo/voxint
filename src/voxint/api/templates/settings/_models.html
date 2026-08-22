@@ -29,9 +29,20 @@
   {% if not svc.configurable %}
   <p class="muted">This model is fixed. Voxint depends on it for speaker identity,
      so it is not something you change.</p>
-  {% elif svc.validated %}
+  {% elif svc.verdict == 'validated' %}
   <p class="muted">This is the validated model. Voxint's accuracy is measured
      against it.</p>
+  {% elif svc.verdict == 'mismatch' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but the
+     loaded model files do not match the validated ones. The results cannot be
+     trusted. This usually means the image or its model files were changed or are
+     incomplete: re-pull or rebuild the service to restore the validated model.</p>
+  {% elif svc.verdict == 'unverified' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
+     cannot verify the loaded model files on this deployment, so it is not treated
+     as validated. This happens when the model is loaded from an online source
+     instead of the files that ship with Voxint. Use the built-in default for a
+     verified install.</p>
   {% else %}
   <p class="notice" role="alert">⚠ This is not the validated model. It runs, but its
      accuracy has not been measured and the results may be unreliable. Only

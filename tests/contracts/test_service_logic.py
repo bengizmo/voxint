@@ -868,12 +868,33 @@ class TestWhisperStartupResolution:
         assert d.is_override is False
         assert d.env_overrides == {"WHISPER_REVISION": self.BAKED}
 
-    def test_default_path_leaves_operator_revision_untouched(self) -> None:
-        # A non-empty WHISPER_REVISION on the default path is already correct;
-        # the resolver must not clobber it with the baked reference.
+    def test_default_path_accepts_the_baked_revision(self) -> None:
+        # WHISPER_REVISION explicitly set to the baked snapshot on the default
+        # name is the validated weights — accepted, no override, no clobber.
         d = self._resolve(
-            WHISPER_MODEL="large-v2", WHISPER_REVISION=self.ALT, WHISPER_BAKED_REVISION=self.BAKED
+            WHISPER_MODEL="large-v2", WHISPER_REVISION=self.BAKED, WHISPER_BAKED_REVISION=self.BAKED
         )
+        assert d.is_override is False
+        assert d.env_overrides == {}
+
+    def test_default_name_with_non_baked_revision_fails_closed(self) -> None:
+        # #125: WHISPER_MODEL=large-v2 (a validated NAME) with a different valid
+        # revision would load different weights under the validated name with no
+        # gate. The resolver must refuse it — the validated name loads only the
+        # baked snapshot; an alternate build goes through WHISPER_ALLOW_DOWNLOAD.
+        with pytest.raises(whisper_startup.WhisperStartupError, match="baked large-v2"):
+            self._resolve(
+                WHISPER_MODEL="large-v2",
+                WHISPER_REVISION=self.ALT,
+                WHISPER_BAKED_REVISION=self.BAKED,
+            )
+
+    def test_default_name_non_baked_revision_without_baked_ref_is_allowed(self) -> None:
+        # Dev/bare-venv path: no WHISPER_BAKED_REVISION means we cannot prove the
+        # revision is wrong, so the guard does not fire (it requires the baked
+        # reference to be present). The operator revision is kept untouched.
+        d = self._resolve(WHISPER_MODEL="large-v2", WHISPER_REVISION=self.ALT)
+        assert d.is_override is False
         assert d.env_overrides == {}
 
     @pytest.mark.parametrize("model", ["/models/local", "./rel", "~/m", "a/b/c"])
@@ -946,6 +967,63 @@ class TestWhisperStartupResolution:
         whisper_startup.apply_whisper_startup(env)
         assert env["HF_HUB_OFFLINE"] == "1"
         assert "WHISPER_DOWNLOAD_ROOT" not in env
+
+
+class TestPyannoteCheckpointFingerprint:
+    """The pyannote weight-checkpoint fingerprint (#125): a digest over the two
+    loaded .bin files referenced by the pipeline config, composed as documented
+    in docs/gpu-contracts.md. Config bytes are excluded (repointed per flavor)."""
+
+    def _write_config(self, tmp_path: Path, seg: Path, emb: Path) -> Path:
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            f"    segmentation: {seg}\n"
+            f"    embedding: {emb}\n"
+        )
+        return config
+
+    def test_fingerprint_composes_the_two_bin_shas(self, tmp_path: Path) -> None:
+        import hashlib
+
+        seg = tmp_path / "segmentation-3.0.bin"
+        emb = tmp_path / "pyannote-wespeaker.bin"
+        seg.write_bytes(b"segmentation-weights")
+        emb.write_bytes(b"embedding-weights")
+        config = self._write_config(tmp_path, seg, emb)
+
+        seg_sha = hashlib.sha256(seg.read_bytes()).hexdigest()
+        emb_sha = hashlib.sha256(emb.read_bytes()).hexdigest()
+        expected = hashlib.sha256(
+            f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+        ).hexdigest()
+
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) == expected
+
+    def test_fingerprint_changes_when_a_bin_changes(self, tmp_path: Path) -> None:
+        seg = tmp_path / "segmentation-3.0.bin"
+        emb = tmp_path / "pyannote-wespeaker.bin"
+        seg.write_bytes(b"segmentation-weights")
+        emb.write_bytes(b"embedding-weights")
+        config = self._write_config(tmp_path, seg, emb)
+        before = diarizer.compute_checkpoint_fingerprint(str(config))
+        emb.write_bytes(b"DIFFERENT-embedding-weights")
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) != before
+
+    def test_missing_checkpoint_file_raises(self, tmp_path: Path) -> None:
+        seg = tmp_path / "segmentation-3.0.bin"
+        seg.write_bytes(b"x")
+        config = self._write_config(tmp_path, seg, tmp_path / "absent.bin")
+        with pytest.raises(RuntimeError, match="missing or not a regular file"):
+            diarizer.compute_checkpoint_fingerprint(str(config))
+
+    def test_config_without_checkpoint_paths_raises(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("pipeline:\n  name: x\n  params: {}\n")
+        with pytest.raises(RuntimeError, match="does not reference"):
+            diarizer.compute_checkpoint_fingerprint(str(config))
 
 
 class TestCt2DeviceVerify:
@@ -1271,6 +1349,47 @@ class TestCpuImageProvenance:
             assert match.group(1) == provenance["files"][filename]["sha256"], (
                 f"{dockerfile_name} {arg} drifted from models/provenance.json"
             )
+
+    def test_console_diarizer_checkpoint_constant_matches_provenance(self) -> None:
+        # #125: the console's known-good pyannote fingerprint must be the digest of
+        # the two provenance .bin shas, composed by the documented algorithm. A
+        # weights refresh (pyannote-models-v2) changes provenance and fails this
+        # until the console constant moves with it.
+        import hashlib
+        import json
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CHECKPOINT
+
+        provenance = json.loads(
+            (REPO_ROOT / "services" / "pyannote" / "models" / "provenance.json").read_text()
+        )
+        seg = provenance["files"]["segmentation-3.0.bin"]["sha256"]
+        emb = provenance["files"]["wespeaker-voxceleb-resnet34-LM.bin"]["sha256"]
+        expected = hashlib.sha256(
+            f"segmentation:{seg}\nembedding:{emb}\n".encode()
+        ).hexdigest()
+        assert expected == _VALIDATED_DIARIZER_CHECKPOINT, (
+            "service_identity._VALIDATED_DIARIZER_CHECKPOINT drifted from the "
+            "provenance .bin shas — recompute it from provenance.json"
+        )
+
+    def test_console_asr_revision_constant_matches_dockerfiles(self) -> None:
+        # #125: the console's known-good whisper revision must be the baked
+        # large-v2 snapshot the images pin, so a stale/re-fetched revision under
+        # the validated name reads as a mismatch.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_ASR_REVISION
+
+        dockerfile = (REPO_ROOT / "services" / "whisper" / "Dockerfile").read_text()
+        match = re.search(r"ARG WHISPER_HF_REVISION=([0-9a-f]{40})", dockerfile)
+        assert match is not None, "whisper Dockerfile lost its WHISPER_HF_REVISION default"
+        assert match.group(1) == _VALIDATED_ASR_REVISION, (
+            "service_identity._VALIDATED_ASR_REVISION drifted from the whisper "
+            "Dockerfile WHISPER_HF_REVISION ARG"
+        )
 
     def test_pyannote_vendored_config_references_baked_paths(self) -> None:
         # The vendored pipeline config must reference exactly the paths the

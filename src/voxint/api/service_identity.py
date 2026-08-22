@@ -27,12 +27,16 @@ operator-configurable and never carries an "unvalidated" warning.
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import httpx
 
 from voxint.config import Settings
-from voxint.pipeline.model_identity import probe_identity_one
+from voxint.pipeline.model_identity import (
+    CHECKPOINT_FINGERPRINT_FIELD,
+    probe_identity_one,
+)
 
 # Validated transcription model ids. Mirrors
 # ``services/whisper/app/whisper_startup.py::DEFAULT_MODELS`` (kept in sync by
@@ -44,6 +48,40 @@ _VALIDATED_ASR_MODELS = frozenset({"large-v2", "Systran/faster-whisper-large-v2"
 # The validated diarization pipeline id. The vendored default reports this
 # canonical id on ``/healthz``; pyannote 4.x and other pipelines are unvalidated.
 _VALIDATED_DIARIZER_MODELS = frozenset({"pyannote/speaker-diarization-3.1"})
+
+# Exact-identity anchors (#125): a validated NAME is not proof of validated
+# WEIGHTS. These pin the exact identity each configurable service must also
+# report to read as validated, so a re-fetched or swapped build under the
+# validated name fails closed instead of showing green.
+#
+# The baked large-v2 snapshot: mirrors the whisper Dockerfiles'
+# ``WHISPER_HF_REVISION`` ARG (contract-tested to match). An overridden whisper
+# revision under the validated name reads as a weights mismatch.
+_VALIDATED_ASR_REVISION = "f0fe81560cb8b68660e564f55dd99207059c092e"
+
+# The vendored pyannote checkpoint fingerprint: sha256 over the two loaded
+# ``.bin`` files, composed as documented in ``docs/gpu-contracts.md``. Derived
+# from ``services/pyannote/models/provenance.json`` and contract-tested to match,
+# so a weights refresh to ``pyannote-models-v2`` moves both together.
+_VALIDATED_DIARIZER_CHECKPOINT = (
+    "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2"
+)
+
+
+class ModelVerdict(StrEnum):
+    """How a reachable configurable service's live identity compares to the
+    validated one. ``VALIDATED`` is the reported name matching a validated id
+    *and* the exact identity (weights) matching; ``MISMATCH`` is a validated
+    name whose weights demonstrably differ (fail closed, the tampered/wrong-build
+    case); ``UNVERIFIED`` is a validated name whose weights cannot be verified on
+    this deployment (fail closed, e.g. an online/HF source); ``UNVALIDATED`` is a
+    different model id (opted out). A non-configurable service is always
+    ``VALIDATED`` — the template shows its fixed-model copy instead."""
+
+    VALIDATED = "validated"
+    MISMATCH = "mismatch"
+    UNVERIFIED = "unverified"
+    UNVALIDATED = "unvalidated"
 
 
 @dataclass(frozen=True)
@@ -57,6 +95,13 @@ class _ServiceSpec:
     configurable: bool  # False => a fixed model (titanet DB invariant)
     validated_models: frozenset[str]  # ids that read as the validated default
     env_keys: tuple[str, ...]  # the .env keys that change this service's model
+    # Exact-identity anchor for a validated NAME (#125). At most one is set.
+    # ``validated_checkpoint``: the pyannote weight fingerprint, compared against
+    # the ``checkpoint_fingerprint`` the service reports (absent => an older
+    # service, classify by name only). ``validated_revision``: the whisper baked
+    # snapshot, compared against the reported ``revision``.
+    validated_checkpoint: str | None
+    validated_revision: str | None
 
 
 # The three services, in stage order. Only ASR and diarization are operator-
@@ -70,6 +115,8 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         configurable=True,
         validated_models=_VALIDATED_ASR_MODELS,
         env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
+        validated_checkpoint=None,
+        validated_revision=_VALIDATED_ASR_REVISION,
     ),
     _ServiceSpec(
         role="diarizer",
@@ -78,6 +125,8 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         configurable=True,
         validated_models=_VALIDATED_DIARIZER_MODELS,
         env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
+        validated_checkpoint=_VALIDATED_DIARIZER_CHECKPOINT,
+        validated_revision=None,
     ),
     _ServiceSpec(
         role="embedder",
@@ -86,6 +135,8 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         configurable=False,
         validated_models=frozenset(),
         env_keys=(),
+        validated_checkpoint=None,
+        validated_revision=None,
     ),
 )
 
@@ -96,11 +147,12 @@ class ServiceIdentityView:
 
     ``reachable`` False means the probe could not read a trustworthy identity
     (down, still loading, or a bad URL); ``detail`` carries the plain-language
-    reason and the model fields are ``None``. ``validated`` is only meaningful
-    for a ``configurable`` service: it is the reachable-and-matches-a-validated-
-    default verdict that drives the unvalidated-override warning. A
+    reason and the model fields are ``None``. ``verdict`` is only meaningful for
+    a reachable ``configurable`` service: it drives the panel's validated /
+    weights-mismatch / unverified / unvalidated states (see ``ModelVerdict``). A
     non-configurable service (the embedder) is a fixed model and shows its raw
-    identity without a validated/unvalidated badge.
+    identity without a badge; its ``verdict`` is ``VALIDATED`` but the template
+    renders the fixed-model copy instead.
     """
 
     role: str
@@ -111,7 +163,7 @@ class ServiceIdentityView:
     revision: str | None
     engine: str | None
     configurable: bool
-    validated: bool
+    verdict: ModelVerdict
     detail: str | None
     env_keys: tuple[str, ...]
 
@@ -120,13 +172,54 @@ def _str_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _exact_identity_verdict(
+    spec: _ServiceSpec, payload: dict[str, Any], revision: str | None
+) -> ModelVerdict:
+    """Classify a service whose reported NAME is a validated one by its exact
+    identity (#125). A validated name is necessary but not sufficient: the
+    weights must also match, or the panel fails closed.
+
+    Uses whichever exactness anchor the spec carries. Pyannote reports a weight
+    ``checkpoint_fingerprint`` whose key is absent on an older service (classify
+    by name only, ``VALIDATED``), null when the source is unverifiable
+    (``UNVERIFIED``), or a hex string to compare (``VALIDATED`` / ``MISMATCH``).
+    Whisper compares the reported ``revision`` against the baked snapshot: a
+    different revision under the validated name is a weights ``MISMATCH``; a
+    missing one is ``UNVERIFIED``.
+    """
+    if spec.validated_checkpoint is not None:
+        if CHECKPOINT_FINGERPRINT_FIELD not in payload:
+            # Older service that predates the fingerprint: no signal to fail on,
+            # so trust the validated name exactly as before.
+            return ModelVerdict.VALIDATED
+        reported = _str_or_none(payload.get(CHECKPOINT_FINGERPRINT_FIELD))
+        if reported is None:
+            return ModelVerdict.UNVERIFIED
+        return (
+            ModelVerdict.VALIDATED
+            if reported == spec.validated_checkpoint
+            else ModelVerdict.MISMATCH
+        )
+    if spec.validated_revision is not None:
+        if revision is None:
+            return ModelVerdict.UNVERIFIED
+        return (
+            ModelVerdict.VALIDATED
+            if revision == spec.validated_revision
+            else ModelVerdict.MISMATCH
+        )
+    # No exactness anchor for this service: the validated name is the verdict.
+    return ModelVerdict.VALIDATED
+
+
 def _classify(spec: _ServiceSpec, url: str, payload: dict[str, Any]) -> ServiceIdentityView:
     """Turn one probe payload into a classified display record.
 
     An unreachable payload becomes an "unavailable" record (never a false
-    unvalidated warning); a reachable one is validated when the service is
-    non-configurable (fixed model) or its reported model id is in the validated
-    set.
+    unvalidated warning). A reachable non-configurable service is always
+    ``VALIDATED`` (fixed model). A reachable configurable service is
+    ``UNVALIDATED`` when its reported id is not a validated one, otherwise its
+    exact identity decides validated / mismatch / unverified.
     """
     if payload.get("reachable") is not True:
         detail = _str_or_none(payload.get("detail")) or "unavailable"
@@ -139,24 +232,28 @@ def _classify(spec: _ServiceSpec, url: str, payload: dict[str, Any]) -> ServiceI
             revision=None,
             engine=None,
             configurable=spec.configurable,
-            validated=False,
+            verdict=ModelVerdict.UNVALIDATED,
             detail=detail,
             env_keys=spec.env_keys,
         )
     model = _str_or_none(payload.get("model"))
-    validated = (not spec.configurable) or (
-        model is not None and model in spec.validated_models
-    )
+    revision = _str_or_none(payload.get("revision"))
+    if not spec.configurable:
+        verdict = ModelVerdict.VALIDATED
+    elif model is None or model not in spec.validated_models:
+        verdict = ModelVerdict.UNVALIDATED
+    else:
+        verdict = _exact_identity_verdict(spec, payload, revision)
     return ServiceIdentityView(
         role=spec.role,
         label=spec.label,
         url=url,
         reachable=True,
         model=model,
-        revision=_str_or_none(payload.get("revision")),
+        revision=revision,
         engine=_str_or_none(payload.get("engine")),
         configurable=spec.configurable,
-        validated=validated,
+        verdict=verdict,
         detail=None,
         env_keys=spec.env_keys,
     )

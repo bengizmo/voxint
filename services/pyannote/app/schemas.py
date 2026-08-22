@@ -72,6 +72,12 @@ class HealthResponse(BaseModel):
     # (DIARIZER_REVISION). Null for the vendored/local default, whose config is
     # itself the pin — the per-attempt provenance probe records null there.
     model_revision: str | None = None
+    # Additive v1 field (#125): a digest over the actually-loaded checkpoint
+    # ``.bin`` files (segmentation + embedding), so a consumer can tell the
+    # vendored/validated weights from a same-named re-fetch. Composed as
+    # documented in docs/gpu-contracts.md. Null for a non-local (HF) source whose
+    # files are not hashed here; absent on services older than this field.
+    checkpoint_fingerprint: str | None = None
     model_loaded: bool
     # Additive v1 field (hardware-aware processing, W1): optional nested
     # hardware telemetry. Absent on older services; an upgraded service always

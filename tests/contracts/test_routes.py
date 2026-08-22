@@ -217,6 +217,7 @@ class TestPyannoteRoutes:
                 runtime="torch",
                 runtime_version="test-runtime-ver",
                 model_revision=None,
+                checkpoint_fingerprint="a" * 64,
                 diarize=lambda *a, **k: result,
             ),
         )
@@ -245,11 +246,25 @@ class TestPyannoteRoutes:
         assert response.status_code == 400
         assert response.json()["detail"]["code"] == "invalid_media"
 
+    def test_healthz_ok(self, mod: ModuleType) -> None:
+        response = _client(mod).get("/healthz")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["model"] == "pyannote/speaker-diarization-3.1"
+        assert body["engine"] == "pyannote.audio"
+        assert body["model_revision"] is None
+        assert body["model_loaded"] is True
+        # #125: the loaded-checkpoint fingerprint is on the identity contract.
+        assert body["checkpoint_fingerprint"] == "a" * 64
+
     def test_healthz_degraded(self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(mod.diarizer, "model_loaded", False)
         response = _client(mod).get("/healthz")
         assert response.status_code == 503
         assert response.json()["model"] is None
+        # Degraded: the fingerprint is not read from the (possibly unset) diarizer.
+        assert response.json()["checkpoint_fingerprint"] is None
 
 
 class TestTitanetRoutes:

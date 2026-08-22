@@ -5,8 +5,9 @@ The live-identity collection and its classification are unit-tested in
 the real ``GET /settings`` route and template against seeded database rows, with
 the probe stubbed to fixed views so the render is hermetic (no live services).
 Pins that each classified state renders its honest copy: a validated default, an
-unvalidated override warning, a fixed non-configurable model, and an unavailable
-service, plus the "How to change" keys.
+unvalidated override warning, the two fail-closed states (weights mismatch and
+unverified), a fixed non-configurable model, and an unavailable service, plus the
+"How to change" keys.
 """
 
 import pytest
@@ -16,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 import voxint.api.app as app_module
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.service_identity import ServiceIdentityView
+from voxint.api.service_identity import ModelVerdict, ServiceIdentityView
 from voxint.config import Settings
 
 CREDS = ("reviewer", "s3cret")
@@ -42,7 +43,7 @@ def _views() -> list[ServiceIdentityView]:
             revision="f" * 40,
             engine="faster-whisper",
             configurable=True,
-            validated=True,
+            verdict=ModelVerdict.VALIDATED,
             detail=None,
             env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
         ),
@@ -55,7 +56,7 @@ def _views() -> list[ServiceIdentityView]:
             revision=None,
             engine="pyannote.audio",
             configurable=True,
-            validated=False,
+            verdict=ModelVerdict.UNVALIDATED,
             detail=None,
             env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
         ),
@@ -68,11 +69,27 @@ def _views() -> list[ServiceIdentityView]:
             revision=None,
             engine=None,
             configurable=False,
-            validated=False,
+            verdict=ModelVerdict.UNVALIDATED,
             detail="timeout",
             env_keys=(),
         ),
     ]
+
+
+def _diarizer_view(verdict: ModelVerdict) -> ServiceIdentityView:
+    return ServiceIdentityView(
+        role="diarizer",
+        label="Speaker diarization",
+        url="http://localhost:8024",
+        reachable=True,
+        model="pyannote/speaker-diarization-3.1",
+        revision=None,
+        engine="pyannote.audio",
+        configurable=True,
+        verdict=verdict,
+        detail=None,
+        env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
+    )
 
 
 def test_pipeline_models_panel_renders_each_state(
@@ -117,7 +134,7 @@ def test_pipeline_models_panel_marks_fixed_embedder(
         revision=None,
         engine="nemo",
         configurable=False,
-        validated=True,
+        verdict=ModelVerdict.VALIDATED,
         detail=None,
         env_keys=(),
     )
@@ -126,3 +143,29 @@ def test_pipeline_models_panel_marks_fixed_embedder(
     body = client.get("/settings").text
     assert "nvidia/speakerverification_en_titanet_large" in body
     assert "This model is fixed" in body
+
+
+def test_pipeline_models_panel_renders_weights_mismatch(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #125: a validated name whose loaded weights differ renders the fail-closed
+    # mismatch copy, not the validated confirmation.
+    views = _views()
+    views[1] = _diarizer_view(ModelVerdict.MISMATCH)
+    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    body = client.get("/settings").text
+    assert "do not match the validated" in body
+    assert "This is the validated model" in body  # asr is still validated
+    assert "re-pull or rebuild" in body
+
+
+def test_pipeline_models_panel_renders_unverified(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #125: a validated name whose weights cannot be verified (online source)
+    # renders the amber unverified copy.
+    views = _views()
+    views[1] = _diarizer_view(ModelVerdict.UNVERIFIED)
+    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    body = client.get("/settings").text
+    assert "cannot verify the loaded model files" in body

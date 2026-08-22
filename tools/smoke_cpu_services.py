@@ -35,6 +35,13 @@ import urllib.request
 COSINE_FLOOR = 0.999  # vector-level parity gate is 0.9995; smoke keeps margin
 SNR_TOLERANCE_DB = 0.5
 EMBED_WINDOW_ID = "clean_utt_00"  # clean-category window; clears all gates
+# The vendored pyannote weight-checkpoint fingerprint (#125): sha256 over the two
+# baked .bin files, composed per docs/gpu-contracts.md. Derived from
+# services/pyannote/models/provenance.json and contract-tested to match the
+# console constant; asserting it here proves the exact validated weights loaded.
+VENDORED_CHECKPOINT_FINGERPRINT = (
+    "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2"
+)
 
 
 def _request(url: str, payload: dict | None = None, timeout: float = 600.0) -> dict:
@@ -133,7 +140,13 @@ def main() -> None:
 
     if args.pyannote:
         check_healthz(
-            args.pyannote, "pyannote", {"device": "cpu", "model_loaded": True}
+            args.pyannote,
+            "pyannote",
+            {
+                "device": "cpu",
+                "model_loaded": True,
+                "checkpoint_fingerprint": VENDORED_CHECKPOINT_FINGERPRINT,
+            },
         )
         result = _request(
             f"{args.pyannote}/v1/diarize",

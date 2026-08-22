@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **The transcription service no longer loads different weights under the
+  validated model name.** Setting `WHISPER_MODEL=large-v2` (the validated name)
+  together with a different valid `WHISPER_REVISION` previously took the default
+  path and loaded that other snapshot with no download gate and no warning. The
+  startup resolver now refuses to start in that case: the validated name loads
+  only the built-in snapshot, and an alternate build must go through the explicit
+  `WHISPER_ALLOW_DOWNLOAD=1` path with its own model id and commit SHA. Reachable
+  only in non-default setups (a custom image or a cleared offline flag); the
+  stock offline deployment was already safe.
 - **Whisper model services no longer fail to start under the configurable-model
   compose pass-throughs.** The whisper overlays forward
   `WHISPER_MODEL: ${WHISPER_MODEL:-}` and `WHISPER_REVISION: ${WHISPER_REVISION:-}`,
@@ -21,6 +30,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   accident of an older compose; this closes the gap for all three overlays.
 
 ### Added
+- **The models panel now checks the actual model files, not just the model
+  name.** A deployment could report a validated model name while running
+  different weights: the diarization service does not distinguish the built-in
+  checkpoint from a re-fetched one by name alone, and the transcription service
+  would accept the validated `large-v2` name paired with a different revision.
+  The diarization service now reports a fingerprint of its loaded checkpoint
+  files on `/healthz`, and the "Pipeline models" panel classifies each service
+  by exact identity: the validated name with matching files reads as validated;
+  the validated name with different files reads as a weights mismatch and is not
+  trusted; the validated name whose files cannot be verified (a model loaded from
+  an online source) reads as unverified and is not trusted. The default install
+  is unaffected: it ships the validated files and reads as validated. See
+  `docs/gpu-contracts.md` for the fingerprint definition.
 - **Settings shows which models are running ("Pipeline models").** The settings
   page now has a read-only panel that reads each model service live as the page
   loads and shows the transcription, diarization, and speaker-embedding model

@@ -13,6 +13,7 @@ and loads it by default — no Hugging Face account or token involved. Setting
 ``HF_TOKEN`` is required for gated repos.
 """
 
+import hashlib
 import logging
 import os
 import re
@@ -27,6 +28,47 @@ logger = logging.getLogger(__name__)
 
 class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
+
+
+def _sha256_file(path: str) -> str:
+    """Streaming sha256 of a regular file, following symlinks. Raises if the
+    resolved target is not a regular file (a broken bake must fail loudly)."""
+    resolved = os.path.realpath(path)
+    if not os.path.isfile(resolved):
+        raise RuntimeError(f"checkpoint file is missing or not a regular file: {path}")
+    digest = hashlib.sha256()
+    with open(resolved, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def compute_checkpoint_fingerprint(config_path: str) -> str:
+    """The vendored-checkpoint weight fingerprint (#125), from a *local* pipeline
+    config. A digest over the two actually-loaded ``.bin`` files — segmentation
+    and embedding — referenced by the config's ``pipeline.params``. The config
+    itself is deliberately excluded: its checkpoint paths are repointed per
+    install flavor (the metal launcher rewrites the path prefix), so hashing it
+    would not be deployment-invariant, while the ``.bin`` bytes are identical
+    across flavors. See ``docs/gpu-contracts.md`` for the canonical algorithm.
+    """
+    import yaml
+
+    with open(config_path) as handle:
+        cfg = yaml.safe_load(handle) or {}
+    params = (cfg.get("pipeline") or {}).get("params") or {}
+    segmentation = params.get("segmentation")
+    embedding = params.get("embedding")
+    if not isinstance(segmentation, str) or not isinstance(embedding, str):
+        raise RuntimeError(
+            f"pipeline config {config_path} does not reference segmentation and "
+            "embedding checkpoint files"
+        )
+    seg_sha = _sha256_file(segmentation)
+    emb_sha = _sha256_file(embedding)
+    return hashlib.sha256(
+        f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+    ).hexdigest()
 
 
 def resolve_device_name(device_type: str) -> str:
@@ -234,6 +276,9 @@ class Diarizer:
         self.engine_version: str | None = None
         self.runtime: str | None = "torch"
         self.runtime_version: str | None = None
+        # Weight-checkpoint fingerprint (#125), computed at load for a local
+        # source; None for an HF source whose files are not hashed here.
+        self.checkpoint_fingerprint: str | None = None
 
         # Env-tunable hyperparameters. Threshold below the pyannote default
         # (~0.70) is deliberate: the default under-clusters quiet recordings
@@ -333,6 +378,22 @@ class Diarizer:
             logger.warning(
                 "Pipeline rejected clustering overrides; running with model defaults"
             )
+
+        # Fingerprint the loaded weights (#125). For a local/vendored source the
+        # two .bin files must be hashable — a broken or incomplete bake fails the
+        # boot loudly rather than reporting an unverifiable (null) identity under
+        # the validated name. A non-local (HF) source is left null: its files are
+        # not hashed here and the console fails closed on a null fingerprint.
+        if self.model_is_local:
+            try:
+                self.checkpoint_fingerprint = compute_checkpoint_fingerprint(
+                    self.model_source
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to fingerprint the vendored checkpoints for "
+                    f"{self.model_source} — {local_hint}"
+                ) from exc
 
         self.model_loaded = True
         logger.info("Diarization pipeline loaded in %.2fs", time.time() - start)

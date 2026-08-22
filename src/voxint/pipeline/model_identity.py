@@ -27,7 +27,10 @@ The shape written under ``StageRun.metrics["model_identity"]`` is::
      ...}
 
 with one entry per role the stage exercises. An unreachable role is
-``{"reachable": false, "detail": "timeout"}``.
+``{"reachable": false, "detail": "timeout"}``. A role whose service reports a
+weight-checkpoint fingerprint (pyannote, #125) additionally carries
+``"checkpoint_fingerprint": "<hex|null>"``; the key is omitted entirely for a
+service that does not report it.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -40,6 +43,15 @@ from voxint.db.models import Stage
 
 METRICS_KEY = "model_identity"
 IDENTITY_SCHEMA_VERSION = 1
+
+# The pyannote weight-checkpoint fingerprint (#125): a digest over the actually-
+# loaded ``.bin`` checkpoint files, so a service reporting the validated NAME can
+# be checked against the validated WEIGHTS. Handled outside ``_IDENTITY_FIELDS``
+# because, unlike the always-present string fields, the console must distinguish
+# the key being ABSENT (an older service that predates the field — classify by
+# name as before) from PRESENT-but-null (a new service on an unverifiable source
+# — fail closed). The other fields collapse both to null; this one must not.
+CHECKPOINT_FINGERPRINT_FIELD = "checkpoint_fingerprint"
 
 # Which model services each stage exercises, as (role, Settings URL attribute)
 # pairs in call order. A stage absent from this map calls no model service and is
@@ -101,6 +113,12 @@ def probe_identity_one(client: httpx.Client, base_url: str) -> dict[str, Any]:
     for out_key, health_key in _IDENTITY_FIELDS:
         value = body.get(health_key)
         payload[out_key] = value if isinstance(value, str) else None
+    # Only carry the checkpoint fingerprint when the service actually reports the
+    # key, so a consumer can tell "old service, field absent" from "new service,
+    # value null". Present-but-non-string is normalised to null (unverifiable).
+    if CHECKPOINT_FINGERPRINT_FIELD in body:
+        raw = body[CHECKPOINT_FINGERPRINT_FIELD]
+        payload[CHECKPOINT_FINGERPRINT_FIELD] = raw if isinstance(raw, str) else None
     return payload
 
 

@@ -92,6 +92,25 @@ def resolve_whisper_startup(env: Mapping[str, str]) -> WhisperStartup:
             )
 
     if model in DEFAULT_MODELS:
+        # The validated large-v2 name must load the baked large-v2 weights, not a
+        # different snapshot under the same name (#125). An operator revision that
+        # is present AND differs from the baked snapshot would otherwise load
+        # different weights while still reporting the validated name — no download
+        # gate, no warning. Fail closed: only the baked revision is valid on the
+        # default name; an alternate build must go through the explicit
+        # WHISPER_ALLOW_DOWNLOAD path with its own model id. The guard requires the
+        # baked reference to be present, so a bare dev venv without
+        # WHISPER_BAKED_REVISION is not broken.
+        operator_revision = _clean(env, "WHISPER_REVISION")
+        baked = _clean(env, "WHISPER_BAKED_REVISION")
+        if operator_revision and baked and operator_revision != baked:
+            raise WhisperStartupError(
+                f"WHISPER_MODEL={model!r} is the validated default, but "
+                f"WHISPER_REVISION={operator_revision} is not the baked large-v2 "
+                f"snapshot ({baked}). Unset WHISPER_REVISION to load the validated "
+                "weights, or select an alternate model with WHISPER_MODEL plus "
+                "WHISPER_ALLOW_DOWNLOAD=1 and that model's own commit SHA."
+            )
         # The whisper compose overlays forward ``WHISPER_REVISION: ${WHISPER_REVISION:-}``,
         # which sets the container's WHISPER_REVISION to an EMPTY string whenever the
         # operator does not override it. An empty (revision-less) load resolves the
@@ -101,10 +120,8 @@ def resolve_whisper_startup(env: Mapping[str, str]) -> WhisperStartup:
         # (baked from the same ARG and never compose-forwarded) so the shipped default
         # stays byte-identical and network-free even under the empty pass-through.
         overrides: dict[str, str] = {}
-        if not _clean(env, "WHISPER_REVISION"):
-            baked = _clean(env, "WHISPER_BAKED_REVISION")
-            if baked:
-                overrides["WHISPER_REVISION"] = baked
+        if not operator_revision and baked:
+            overrides["WHISPER_REVISION"] = baked
         return WhisperStartup(
             model_name=model, is_override=False, env_overrides=overrides, warning=None
         )

@@ -114,6 +114,7 @@ async def healthz() -> HealthResponse | JSONResponse:
         runtime=diarizer.runtime,
         runtime_version=diarizer.runtime_version,
         model_revision=diarizer.model_revision,
+        checkpoint_fingerprint=diarizer.checkpoint_fingerprint if loaded else None,
         model_loaded=loaded,
         resources=build_resources(sampler, admission),
     )
