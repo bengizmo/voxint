@@ -584,6 +584,101 @@ def _enrich_assets(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def _embed_backfill(args: argparse.Namespace) -> int:
+    """Build or refresh the transcript semantic-search index (issue #121).
+
+    Runs the same job lane the worker uses — create → claim → resolve → embed →
+    atomic publish — synchronously, so an operator can index the whole corpus
+    with no broker (and a native install can catch up after fetching the
+    weights). Stale-only by default (a run with no current index, or whose
+    transcript changed since it was last indexed); ``--force`` reindexes every
+    completed run; a single ``run_id`` (re)indexes just that run. Refuses up
+    front when the feature is off or the weights are absent, so an operator sees
+    the one fix rather than a failed job per run. Exit 1 if any run fails."""
+    from sqlalchemy import select
+
+    from voxint.app_settings import get_app_settings
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.models import EmbeddingJob, PipelineRun, RunStatus
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.embeddings.onnx_embedder import minilm_artifacts_available
+    from voxint.enrichment.embedding_jobs import (
+        EmbeddingJobError,
+        create_jobs,
+        embedding_gates_open,
+        execute_job,
+        runs_needing_embeddings,
+    )
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    if not minilm_artifacts_available():
+        print(
+            "error: MiniLM ONNX weights not found — fetch the minilm-onnx-v1"
+            " asset and set VOXINT_MINILM_ONNX_PATH / VOXINT_MINILM_TOKENIZER_PATH"
+        )
+        return 2
+
+    factory = build_session_factory(build_engine(settings.database_url))
+    with factory() as session:
+        if not embedding_gates_open(settings, get_app_settings(session)):
+            print(
+                "error: semantic search is disabled (SEMANTIC_INDEX_ENABLED is off,"
+                " or the in-UI toggle)"
+            )
+            return 2
+        if args.run_id is not None:
+            run_ids = [args.run_id]
+        elif args.force:
+            run_ids = list(
+                session.execute(
+                    select(PipelineRun.id)
+                    .where(PipelineRun.status == RunStatus.COMPLETED.value)
+                    .order_by(PipelineRun.created_at)
+                ).scalars()
+            )
+        else:
+            run_ids = runs_needing_embeddings(session)
+
+    if not run_ids:
+        print("nothing to index — every completed run is up to date")
+        return 0
+
+    failures = 0
+    for run_id in run_ids:
+        with factory() as session:
+            try:
+                job, already_active = create_jobs(
+                    session, pipeline_run_id=run_id, settings=settings
+                )
+                session.commit()
+            except EmbeddingJobError as exc:
+                # A run with no resolvable transcript is a skip, not a hard
+                # failure — a corpus sweep should not exit 1 for it.
+                print(f"{run_id}: skipped — {exc}")
+                continue
+        if already_active:
+            print(f"{run_id}: skipped — a job is already active for this run")
+            continue
+        assert job is not None
+        job_id = job.id
+        print(f"job {job_id}: indexing run {run_id} ...")
+        execute_job(factory, job_id, settings=settings)
+        with factory() as session:
+            finished = session.get(EmbeddingJob, job_id)
+            assert finished is not None
+            print(f"{run_id}: {finished.status}")
+            if finished.error:
+                print(f"error: {finished.error}")
+            if finished.status != "succeeded":
+                failures += 1
+    return 1 if failures else 0
+
+
 def _research_search(args: argparse.Namespace) -> int:
     """One provider query via the controlled retrieval capability (issue #39).
 
@@ -1248,6 +1343,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="asset kind to generate (repeatable; default: all three)",
     )
     assets_p.set_defaults(fn=_enrich_assets)
+
+    embed_p = sub.add_parser(
+        "embed",
+        help="transcript semantic-search index — build/refresh (issue #121)",
+    )
+    embed_sub = embed_p.add_subparsers(dest="embed_command", required=True)
+    backfill_p = embed_sub.add_parser(
+        "backfill",
+        help="index completed runs for semantic search (stale-only by default;"
+        " --force reindexes all)",
+    )
+    backfill_p.add_argument(
+        "run_id",
+        nargs="?",
+        type=uuid.UUID,
+        help="a single run to (re)index (omit to sweep every stale run)",
+    )
+    backfill_p.add_argument(
+        "--force",
+        action="store_true",
+        help="reindex every completed run, not just the stale ones",
+    )
+    backfill_p.set_defaults(fn=_embed_backfill)
 
     research_p = sub.add_parser(
         "research",

@@ -14,6 +14,7 @@ from voxint.db.models import (
     MediaItem,
     PipelineRun,
     RunStatus,
+    SegmentEmbedding,
     Stage,
     StageRun,
     StageStatus,
@@ -915,3 +916,57 @@ def test_enrich_assets_reports_failed_kind(
     out = capsys.readouterr().out
     assert "topics: failed" in out
     assert "no usable topics" in out
+
+
+def test_embed_backfill_refuses_without_weights(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Refuse up front (exit 2) with the one actionable fix, not a failed job per
+    # run, when the vendored MiniLM weights are absent (a native install that
+    # never fetched the minilm-onnx-v1 asset).
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: False
+    )
+    assert main(["embed", "backfill"]) == 2
+    assert "weights not found" in capsys.readouterr().out
+
+
+def test_embed_backfill_indexes_stale_runs(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The same job lane the worker runs, driven synchronously: a stale-only
+    # sweep indexes the completed run; a second sweep finds nothing to do. A
+    # weightless fake embedder keeps this CI-safe.
+    from .test_embedding_jobs import FakeEmbedder
+
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "voxint.enrichment.embedding_jobs.get_text_embedder", lambda: FakeEmbedder()
+    )
+
+    assert main(["embed", "backfill"]) == 0
+    out = capsys.readouterr().out
+    assert f"{run_id}: succeeded" in out
+    with session_factory() as session:
+        rows = (
+            session.execute(
+                select(SegmentEmbedding).where(
+                    SegmentEmbedding.pipeline_run_id == run_id
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) >= 1
+
+    # Nothing is stale now.
+    assert main(["embed", "backfill"]) == 0
+    assert "up to date" in capsys.readouterr().out
