@@ -21,13 +21,15 @@ background, ready for that query.
 
 ## On by default
 
-Two independent flags govern it. Both default to on, and both resolve
-row-over-env (a stored in-UI value overrides the environment default).
+Two independent flags govern it, both default on. In this release they are set
+through the environment; the resolver already reads them row-over-env (a stored
+value overrides the environment default) for the settings toggle that arrives
+with the query UI.
 
 | Flag | Default | Effect |
 |---|---|---|
 | `SEMANTIC_INDEX_ENABLED` | `true` | Turns the feature on. Off means no index is built or served. |
-| `SEMANTIC_INDEX_AUTOGENERATE` | `true` | Embeds each run as it completes, so search covers new recordings with no manual step. Best-effort: a broker outage defers the build, it never fails the run. Requires `SEMANTIC_INDEX_ENABLED=true`. |
+| `SEMANTIC_INDEX_AUTOGENERATE` | `true` | Embeds each run as it completes, so search covers new recordings with no manual step. Best-effort: the completed run is never affected, but if the enqueue does not go through the run is left unindexed until you run `voxint embed backfill`. Requires `SEMANTIC_INDEX_ENABLED=true`. |
 
 The defaults are set for the recommended Docker install, which always bakes the
 weights. See the "Transcript semantic search" block in `.env.example` for the
@@ -56,8 +58,9 @@ Behavior worth knowing:
   weights are absent, so you see the one fix instead of a failed job per run.
 - A run with no resolvable transcript is a **per-run skip**, not a hard failure:
   a corpus sweep does not abort on one unindexable run.
-- Exit code 1 means at least one job actually failed. Exit 0 means every run is
-  indexed and up to date.
+- Exit code 1 means at least one job actually failed. Exit 0 means no attempted
+  job failed; runs that were skipped (no resolvable transcript, or a job already
+  active for the run) may still be unindexed.
 
 ## The weights requirement on native installs
 
@@ -91,4 +94,5 @@ generated once in a throwaway sentence-transformers environment to within cosine
 0.9999. The embedding space id (`minilm-multi-l12-onnx-fp32-mean-v1`) changes
 only when the weights or the pooling change, and a change is a visible reindex,
 never silent drift. A weights refresh publishes a new immutable asset release and
-updates the provenance file, the Dockerfile sha ARGs, and `release.yml` together.
+updates the provenance file, the Dockerfile sha ARGs, `release.yml`, and (when
+the tokenizer hash changes) the `.gitleaks.toml` allowlist together.

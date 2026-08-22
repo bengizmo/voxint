@@ -257,8 +257,9 @@ its publish cannot resurrect a superseded generation.
 
 **Producing an index.** When `SEMANTIC_INDEX_AUTOGENERATE` is on, the worker's
 finalize hook (`worker/tasks.py`) enqueues a build as a run completes, so search
-covers new recordings with no manual step (best-effort: a broker outage defers,
-never fails the run). The finalize hook and the backfill CLI both check
+covers new recordings with no manual step. It is best-effort: the completed run
+is never affected by an enqueue failure, and a run left unindexed is picked up by
+a later `voxint embed backfill`. The finalize hook and the backfill CLI both check
 `minilm_artifacts_available()` first and skip honestly when the weights are
 absent (a native install that never fetched the asset), rather than enqueuing a
 doomed job per run. `voxint embed backfill` drives the same lane synchronously
