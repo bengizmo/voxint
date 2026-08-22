@@ -402,6 +402,14 @@ def execute_job(
         except EmbeddingError as exc:
             session.rollback()
             _finish(session, job_id, status=EmbeddingJobStatus.FAILED, error=str(exc))
+        except FileNotFoundError as exc:
+            # The embedder raises this with an actionable message when the
+            # vendored MiniLM weights are absent (e.g. a native install run
+            # via `voxint embed backfill` before the minilm-onnx-v1 asset was
+            # fetched). Preserve it verbatim so the operator sees "weights not
+            # found", not a generic "unexpected error".
+            session.rollback()
+            _finish(session, job_id, status=EmbeddingJobStatus.FAILED, error=str(exc))
         except Exception as exc:
             logger.exception("embedding job %s failed unexpectedly", job_id)
             session.rollback()

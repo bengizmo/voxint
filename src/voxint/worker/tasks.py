@@ -46,6 +46,7 @@ from voxint.db.models import (
 )
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
+from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment import asset_jobs, embedding_jobs
 from voxint.enrichment.research_jobs import execute_job
 from voxint.ingest.watch import sweep_watch_folders
@@ -490,6 +491,20 @@ def _autogenerate_segment_embeddings(
             if not app_settings.resolve_effective_semantic_index_autogenerate(row, settings):
                 return
             if not embedding_jobs.embedding_gates_open(settings, row):
+                return
+            if not minilm_artifacts_available():
+                # Semantic search is enabled but the vendored MiniLM weights are
+                # absent (a native install that never fetched the minilm-onnx-v1
+                # asset; the Docker image always bakes them). Skip rather than
+                # enqueue a job that could only fail — the native `doctor` check
+                # surfaces the missing weights, and `voxint embed backfill`
+                # re-indexes once they are present.
+                logger.warning(
+                    "semantic index skipped for run %s: MiniLM ONNX weights not "
+                    "found (fetch the minilm-onnx-v1 asset, then run "
+                    "`voxint embed backfill`)",
+                    run_id,
+                )
                 return
             job, _ = embedding_jobs.create_jobs(
                 session, pipeline_run_id=run_id, settings=settings

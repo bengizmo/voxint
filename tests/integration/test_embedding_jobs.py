@@ -237,3 +237,82 @@ def test_force_cancel_fences_queued_job(
     assert finished is not None
     assert finished.status == EmbeddingJobStatus.CANCELLED.value
     assert _rows(session, run_id) == []
+
+
+class _MissingWeightsEmbedder(FakeEmbedder):
+    """Stands in for a load against absent MiniLM weights — the real embedder
+    raises ``FileNotFoundError`` with an actionable message in that case."""
+
+    def embed_texts(self, texts: list[str]) -> np.ndarray:
+        raise FileNotFoundError(
+            "MiniLM ONNX weights not found: /app/models/minilm/model.onnx "
+            "(set VOXINT_MINILM_ONNX_PATH, or fetch the minilm-onnx-v1 asset)"
+        )
+
+
+def test_execute_job_reports_missing_weights_honestly(
+    session_factory: sessionmaker[Session], session: Session
+) -> None:
+    # A job that runs (e.g. via `voxint embed backfill`) on an install where the
+    # weights were never fetched must fail with the honest "weights not found"
+    # message, not a generic "unexpected error" that hides the fix.
+    settings = make_settings()
+    run_id = _seed_run(session, [("S0", "text to embed")])
+    job, _ = create_jobs(session, pipeline_run_id=run_id, settings=settings)
+    session.commit()
+    assert job is not None
+
+    execute_job(
+        session_factory, job.id, settings=settings, embedder=_MissingWeightsEmbedder()
+    )
+    session.expire_all()
+    finished = session.get(EmbeddingJob, job.id)
+    assert finished is not None
+    assert finished.status == EmbeddingJobStatus.FAILED.value
+    assert finished.error is not None
+    assert "weights not found" in finished.error
+    assert "unexpected error" not in finished.error
+    assert _rows(session, run_id) == []
+
+
+def test_autogenerate_skips_enqueue_when_weights_absent(
+    session_factory: sessionmaker[Session],
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The finalize hook must not enqueue a doomed job when the weights are
+    # absent (a native install that never fetched the asset); with weights
+    # present it enqueues exactly one.
+    from voxint.worker import tasks
+
+    settings = make_settings()
+    run_id = _seed_run(session, [("S0", "a completed run awaiting its index")])
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        tasks.generate_segment_embeddings, "delay", lambda job_id: dispatched.append(job_id)
+    )
+
+    # Weights absent → no job row, nothing dispatched.
+    monkeypatch.setattr(tasks, "minilm_artifacts_available", lambda: False)
+    tasks._autogenerate_segment_embeddings(session_factory, run_id, settings)
+    session.expire_all()
+    assert (
+        session.execute(
+            select(EmbeddingJob).where(EmbeddingJob.pipeline_run_id == run_id)
+        ).first()
+        is None
+    )
+    assert dispatched == []
+
+    # Weights present → exactly one job enqueued and dispatched.
+    monkeypatch.setattr(tasks, "minilm_artifacts_available", lambda: True)
+    tasks._autogenerate_segment_embeddings(session_factory, run_id, settings)
+    session.expire_all()
+    jobs = list(
+        session.execute(
+            select(EmbeddingJob).where(EmbeddingJob.pipeline_run_id == run_id)
+        ).scalars()
+    )
+    assert len(jobs) == 1
+    assert dispatched == [str(jobs[0].id)]

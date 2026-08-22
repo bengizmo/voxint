@@ -69,6 +69,20 @@ def _tokenizer_path() -> str:
     return os.getenv("VOXINT_MINILM_TOKENIZER_PATH", _DEFAULT_TOKENIZER_PATH)
 
 
+def minilm_artifacts_available() -> bool:
+    """True when both vendored MiniLM files are present at the resolved paths.
+
+    A cheap file-existence probe (no onnxruntime/tokenizer load) so callers can
+    decide whether embedding is possible before committing to it. The finalize
+    hook uses it to skip enqueueing a doomed job on an install where the
+    ``minilm-onnx-v1`` asset was never fetched (native, no-Docker), and the
+    native ``doctor`` uses it as a preflight check. This is advisory: a file
+    can vanish or be corrupt between the probe and the load, so the embedder
+    still validates at construction and the job lane still fails honestly.
+    """
+    return Path(_onnx_path()).exists() and Path(_tokenizer_path()).exists()
+
+
 class TextEmbedder:
     """A loaded ONNX session + tokenizer that turns text into unit vectors.
 

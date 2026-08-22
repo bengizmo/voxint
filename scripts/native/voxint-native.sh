@@ -2118,6 +2118,25 @@ cmd_doctor() {
     doctor_report FAIL "console islands not staged -- run: $0 setup (the console will not hydrate)"
   fi
 
+  step "Semantic search weights"
+  # Transcript semantic search (issue #121) is on by default, but it needs the
+  # vendored MiniLM ONNX weights. The Docker image bakes them; a native install
+  # must fetch the minilm-onnx-v1 asset and point VOXINT_MINILM_ONNX_PATH /
+  # VOXINT_MINILM_TOKENIZER_PATH at the files. Use the app's own probe so this
+  # check resolves paths exactly as the worker and CLI do.
+  venv=$(core_venv)
+  if [ -x "$venv/bin/python" ]; then
+    if "$venv/bin/python" -c \
+        "import sys; from voxint.embeddings.onnx_embedder import minilm_artifacts_available; sys.exit(0 if minilm_artifacts_available() else 1)" \
+        >/dev/null 2>&1; then
+      doctor_report PASS "MiniLM ONNX weights present -- transcript semantic search will index"
+    else
+      doctor_report FAIL "MiniLM ONNX weights not found -- transcript semantic search is on by default but cannot index; fetch the minilm-onnx-v1 asset and set VOXINT_MINILM_ONNX_PATH / VOXINT_MINILM_TOKENIZER_PATH, then run: voxint embed backfill"
+    fi
+  else
+    doctor_report SKIP "core venv missing -- cannot check semantic-search weights ($0 setup)"
+  fi
+
   step "Model services"
   if models_delegated; then
     if [ -f "$(metal_script)" ]; then
