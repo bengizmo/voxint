@@ -1234,25 +1234,31 @@ class TestDiarizerClusteringFailClosed:
 
     class _FakePipeline:
         """Minimal stand-in for a loaded pyannote pipeline. ``reject_min_size``
-        simulates a pipeline version that refuses the ``min_cluster_size`` param."""
+        simulates a pipeline version that refuses the ``min_cluster_size`` param;
+        ``reject_all`` simulates one that refuses every clustering override."""
 
-        def __init__(self, reject_min_size: bool) -> None:
+        def __init__(self, reject_min_size: bool, reject_all: bool = False) -> None:
             self._reject_min_size = reject_min_size
+            self._reject_all = reject_all
             self.instantiated: dict[str, object] | None = None
 
         def instantiate(
             self, params: dict[str, object]
         ) -> "TestDiarizerClusteringFailClosed._FakePipeline":
+            if self._reject_all:
+                raise ValueError("this pipeline version rejects all clustering overrides")
             clustering: dict[str, object] = params.get("clustering", {})  # type: ignore[assignment]
             if self._reject_min_size and "min_cluster_size" in clustering:
                 raise ValueError("this pipeline version rejects min_cluster_size")
             self.instantiated = params
             return self
 
-    def _diarizer(self, *, local: bool, reject_min_size: bool) -> "diarizer.Diarizer":
+    def _diarizer(
+        self, *, local: bool, reject_min_size: bool, reject_all: bool = False
+    ) -> "diarizer.Diarizer":
         d = diarizer.Diarizer()
         d.model_is_local = local
-        d.model = self._FakePipeline(reject_min_size)
+        d.model = self._FakePipeline(reject_min_size, reject_all)
         return d
 
     def test_local_pipeline_that_rejects_min_size_fails_closed(self) -> None:
@@ -1277,6 +1283,41 @@ class TestDiarizerClusteringFailClosed:
         d = self._diarizer(local=False, reject_min_size=True)
         d._apply_clustering_overrides()
         assert d.model.instantiated == {"clustering": {"threshold": d.clustering_threshold}}
+
+    def test_non_local_override_that_rejects_everything_runs_on_defaults(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The terminal branch of the tolerant (non-local) fallback: when *both* the
+        # strict and threshold-only instantiate attempts are rejected, an explicit
+        # operator pipeline must warn and run on its own clustering defaults rather
+        # than crash. (The local/validated path fails closed instead — covered
+        # above.)
+        import logging
+
+        d = self._diarizer(local=False, reject_min_size=True, reject_all=True)
+        with caplog.at_level(logging.WARNING):
+            d._apply_clustering_overrides()
+        assert d.model.instantiated is None  # neither attempt was accepted
+        assert any("running with model defaults" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        "env_name",
+        [
+            "PYANNOTE_CLUSTERING_THRESHOLD",
+            "PYANNOTE_MIN_DURATION_OFF",
+            "PYANNOTE_SEGMENTATION_STEP",
+        ],
+    )
+    @pytest.mark.parametrize("bad_value", ["nan", "inf", "-inf"])
+    def test_non_finite_hyperparameter_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, env_name: str, bad_value: str
+    ) -> None:
+        # #129 review (Grok/Kimi): a non-finite float env value parses cleanly and
+        # hashes to a stable digest of nonsense, then runs broken clustering under
+        # the validated identity. Reject it at construction instead of hashing it.
+        monkeypatch.setenv(env_name, bad_value)
+        with pytest.raises(RuntimeError, match=f"{env_name} must be a finite number"):
+            diarizer.Diarizer()
 
 
 class TestCt2DeviceVerify:
@@ -1710,6 +1751,36 @@ class TestCpuImageProvenance:
             "service_identity._VALIDATED_DIARIZER_CONFIG_HASH drifted from the "
             "effective-config recipe (env defaults + vendored config + pyannote "
             "version) — recompute it"
+        )
+
+    def test_config_hash_float_canonicalization_is_legible(self) -> None:
+        # #129 review (Grok): the config hash's cross-platform stability rests on
+        # CPython's shortest-round-trip float repr feeding json.dumps. The recipe
+        # test above would catch a serializer drift, but only as an opaque digest
+        # mismatch. Lock the exact serialization of the validated float tunables so
+        # such a drift fails HERE with a readable diff instead.
+        import json
+
+        canonical = json.dumps(
+            {"clustering_threshold": 0.55, "segmentation_step": 0.5, "min_duration_off": 0.6},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        assert canonical == (
+            '{"clustering_threshold":0.55,"min_duration_off":0.6,"segmentation_step":0.5}'
+        ), "json.dumps float serialization drifted — the config hash recipe is no longer stable"
+
+    def test_docs_config_hash_literal_matches_console(self) -> None:
+        # #129 review (Kimi): docs/gpu-contracts.md quotes the validated config hash
+        # in prose — a fourth copy of the digest. Bind it so a deliberate re-pin
+        # cannot leave the doc showing a stale value.
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        doc = (REPO_ROOT / "docs" / "gpu-contracts.md").read_text()
+        assert _VALIDATED_DIARIZER_CONFIG_HASH in doc, (
+            "docs/gpu-contracts.md no longer contains the validated diarization "
+            "config hash — update the doc prose when re-pinning the constant"
         )
 
     def test_console_asr_revision_constant_matches_dockerfiles(self) -> None:

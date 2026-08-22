@@ -41,9 +41,9 @@
      <code>.env</code> (or set it back to the built-in value) and restart the
      transcription service to return to the validated model.</p>
   {% elif svc.identity_axis == 'config' %}
-  <p class="notice" role="alert">⚠ This reports the validated model name and weights,
-     but its clustering configuration does not match the validated one, so the
-     results cannot be trusted. This happens when a
+  <p class="notice" role="alert">⚠ This reports the validated model name, but its
+     clustering configuration does not match the validated one, so the results
+     cannot be trusted. This happens when a
      <code>PYANNOTE_CLUSTERING_THRESHOLD</code>,
      <code>PYANNOTE_CLUSTERING_MIN_SIZE</code>,
      <code>PYANNOTE_SEGMENTATION_STEP</code>, or

@@ -92,13 +92,16 @@ _FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 
 class ModelVerdict(StrEnum):
     """How a reachable configurable service's live identity compares to the
-    validated one. ``VALIDATED`` is the reported name matching a validated id
-    *and* the exact identity (weights) matching; ``MISMATCH`` is a validated
-    name whose weights demonstrably differ (fail closed, the tampered/wrong-build
-    case); ``UNVERIFIED`` is a validated name whose weights cannot be verified on
-    this deployment (fail closed, e.g. an online/HF source); ``UNVALIDATED`` is a
-    different model id (opted out). A non-configurable service is always
-    ``VALIDATED`` — the template shows its fixed-model copy instead."""
+    validated one, across every exact-identity axis the service carries (weights
+    #125, effective clustering config #129, whisper baked revision), combined
+    worst-case (see ``_exact_identity_verdict``). ``VALIDATED`` is the reported
+    name matching a validated id *and* every axis matching; ``MISMATCH`` is a
+    validated name whose identity demonstrably differs on some axis (fail closed,
+    the tampered/wrong-build or drifted-config case); ``UNVERIFIED`` is a validated
+    name whose identity cannot be verified on some axis (fail closed, e.g. an
+    online/HF source); ``UNVALIDATED`` is a different model id (opted out). A
+    non-configurable service is always ``VALIDATED`` — the template shows its
+    fixed-model copy instead."""
 
     VALIDATED = "validated"
     MISMATCH = "mismatch"

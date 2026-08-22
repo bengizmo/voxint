@@ -266,7 +266,9 @@ class TestPyannoteRoutes:
         response = _client(mod).get("/healthz")
         assert response.status_code == 503
         assert response.json()["model"] is None
-        # Degraded: neither identity hash is read from the (possibly unset) diarizer.
+        # Degraded: no identity field is read from the (possibly unset) diarizer —
+        # the revision, like both hashes, is null until the model is loaded.
+        assert response.json()["model_revision"] is None
         assert response.json()["checkpoint_fingerprint"] is None
         assert response.json()["diarization_config_hash"] is None
 

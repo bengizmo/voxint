@@ -88,6 +88,21 @@ def compute_checkpoint_fingerprint(config_path: str) -> str:
 DIARIZATION_CONFIG_HASH_VERSION = 1
 
 
+def _require_finite(value: float, env_name: str) -> float:
+    """Reject a non-finite hyperparameter at boot (#129 fail-closed).
+
+    ``float("nan")`` / ``float("inf")`` parse cleanly and ``json.dumps`` reprs them
+    to a *stable* digest, so a malformed value would hash to a deterministic hash
+    of nonsense and run broken clustering while the panel shows only an amber
+    config mismatch. Fail the boot loudly instead, matching the fail-closed intent
+    of the clustering-override guard."""
+    import math
+
+    if not math.isfinite(value):
+        raise RuntimeError(f"{env_name} must be a finite number; got {value!r}")
+    return value
+
+
 def compute_diarization_config_hash(
     *,
     pipeline_class: str,
@@ -380,16 +395,25 @@ class Diarizer:
         # Env-tunable hyperparameters. Threshold below the pyannote default
         # (~0.70) is deliberate: the default under-clusters quiet recordings
         # into 0-speaker results.
-        self.clustering_threshold = float(os.getenv("PYANNOTE_CLUSTERING_THRESHOLD", "0.55"))
+        self.clustering_threshold = _require_finite(
+            float(os.getenv("PYANNOTE_CLUSTERING_THRESHOLD", "0.55")),
+            "PYANNOTE_CLUSTERING_THRESHOLD",
+        )
         self.clustering_min_size = int(os.getenv("PYANNOTE_CLUSTERING_MIN_SIZE", "10"))
         # Gap merged through in post-processing; prevents natural pauses from
         # fragmenting speakers.
-        self.min_duration_off = float(os.getenv("PYANNOTE_MIN_DURATION_OFF", "0.6"))
+        self.min_duration_off = _require_finite(
+            float(os.getenv("PYANNOTE_MIN_DURATION_OFF", "0.6")),
+            "PYANNOTE_MIN_DURATION_OFF",
+        )
         self.segmentation_batch_size = int(os.getenv("PYANNOTE_SEGMENTATION_BATCH_SIZE", "8"))
         self.embedding_batch_size = int(os.getenv("PYANNOTE_EMBEDDING_BATCH_SIZE", "12"))
         # Larger than the 0.1 default: fewer, larger chunks sustain GPU load
         # instead of brief bursts.
-        self.segmentation_step = float(os.getenv("PYANNOTE_SEGMENTATION_STEP", "0.5"))
+        self.segmentation_step = _require_finite(
+            float(os.getenv("PYANNOTE_SEGMENTATION_STEP", "0.5")),
+            "PYANNOTE_SEGMENTATION_STEP",
+        )
 
         # The pipeline object is not concurrency-safe. A threading.Lock (not
         # asyncio.Lock) because diarize() runs synchronously in a worker
@@ -478,7 +502,13 @@ class Diarizer:
             # hash reflects the config that actually runs. Local-only, like the
             # fingerprint: a non-local source has no local config to read and its
             # identity is unvalidated by name anyway.
-            assert self.engine_version is not None  # set above at load start
+            # A guard, not an ``assert`` (which ``python -O`` strips): engine_version
+            # is folded into the hash below, so a None here must fail the boot loudly
+            # rather than hash ``null`` under an optimized runtime.
+            if self.engine_version is None:  # set above at load start
+                raise RuntimeError(
+                    "engine_version was not resolved before computing the config hash"
+                )
             try:
                 static = read_pipeline_static_config(self.model_source)
                 self.diarization_config_hash = compute_diarization_config_hash(
