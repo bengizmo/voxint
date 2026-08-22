@@ -46,7 +46,7 @@ from voxint.db.models import (
 )
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
-from voxint.enrichment import asset_jobs
+from voxint.enrichment import asset_jobs, embedding_jobs
 from voxint.enrichment.research_jobs import execute_job
 from voxint.ingest.watch import sweep_watch_folders
 from voxint.media.reclaim import (
@@ -206,6 +206,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             # late/redelivered GPU task may observe an already-COMPLETED row;
             # treating that observation as completion would enqueue assets twice.
             _autogenerate_run_assets(factory, run_id, settings)
+            _autogenerate_segment_embeddings(factory, run_id, settings)
         elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
             # This covers both the first GPU→post handoff and a duplicate GPU
             # delivery observing an already-parked run. Re-publishing is safe:
@@ -462,6 +463,43 @@ def _autogenerate_run_assets(
             generate_run_asset.delay(job_id)
     except Exception:
         logger.exception("post-finalize run-asset enqueue failed for run %s", run_id)
+
+
+@app.task(name="voxint.generate_segment_embeddings", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def generate_segment_embeddings(job_id_str: str) -> None:
+    """Run one queued embedding-index job (issue #121).
+
+    No Celery retries (the run-asset/research precedent): failures land as
+    honest, bounded error text on the job row. A duplicate delivery no-ops on the
+    guarded queued→running claim. The embedder is a process-wide singleton, so a
+    long-lived worker loads the ONNX graph once."""
+    factory, _ = _runtime()
+    embedding_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+
+
+def _autogenerate_segment_embeddings(
+    factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings
+) -> None:
+    """Opt-in post-finalize step: enqueue an embedding job for a completed run so
+    semantic search covers it automatically. Best-effort by contract — a
+    completed run is COMPLETED whatever happens here, so every failure is logged
+    and swallowed. Independent of the LLM run-asset autogenerate."""
+    try:
+        with factory() as session:
+            row = app_settings.get_app_settings(session)
+            if not app_settings.resolve_effective_semantic_index_autogenerate(row, settings):
+                return
+            if not embedding_jobs.embedding_gates_open(settings, row):
+                return
+            job, _ = embedding_jobs.create_jobs(
+                session, pipeline_run_id=run_id, settings=settings
+            )
+            session.commit()
+            job_id = str(job.id) if job is not None else None
+        if job_id is not None:
+            generate_segment_embeddings.delay(job_id)
+    except Exception:
+        logger.exception("post-finalize embedding enqueue failed for run %s", run_id)
 
 
 @app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
