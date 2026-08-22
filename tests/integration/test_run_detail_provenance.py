@@ -206,3 +206,46 @@ def test_render_surfaces_diarizer_and_embedder_identity(
     body = client.get(f"/runs/{run_id}").text
     assert "pyannote/speaker-diarization-3.1" in body
     assert "titanet-large-v1" in body
+
+
+def _seed_run_with_prompt(
+    session_factory: sessionmaker[Session], *, initial_prompt: str | None
+) -> uuid.UUID:
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4().hex}/source")
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.COMPLETED.value,
+            created_at=BASE,
+            updated_at=BASE,
+            initial_prompt=initial_prompt,
+        )
+        session.add(run)
+        session.flush()
+        run_id = run.id
+        session.commit()
+        return run_id
+
+
+def test_render_shows_applied_glossary_prompt(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The "Glossary applied" card shows the exact recorded initial_prompt (issue #123).
+    run_id = _seed_run_with_prompt(session_factory, initial_prompt="Zoning Board, NUCA")
+    body = client.get(f"/runs/{run_id}").text
+    assert "Glossary applied" in body
+    assert "Zoning Board, NUCA" in body
+
+
+def test_render_glossary_empty_state_when_prompt_null(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A run with no recorded prompt shows the honest empty state, not a blank card.
+    run_id = _seed_run_with_prompt(session_factory, initial_prompt=None)
+    body = client.get(f"/runs/{run_id}").text
+    assert "Glossary applied" in body
+    # A phrase unique to the glossary empty state (the models card also says
+    # "Not recorded"), so this pins the glossary branch specifically.
+    assert "began recording the applied glossary" in body

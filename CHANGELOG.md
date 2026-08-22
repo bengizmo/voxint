@@ -43,6 +43,27 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   an online source) reads as unverified and is not trusted. The default install
   is unaffected: it ships the validated files and reads as validated. See
   `docs/gpu-contracts.md` for the fingerprint definition.
+- **Settings has a Glossary editor for expected proper nouns.** The settings page
+  now has a Glossary section that edits the operator's list of expected names,
+  places, organizations, and acronyms without re-running the setup wizard. Voxint
+  already feeds these terms to transcription as a decoding hint on every run; this
+  makes the list manageable after onboarding. The section reuses the wizard's
+  validation exactly (one term per line, deduplicated, at most 500 terms of up to
+  120 characters), replaces the whole list on save, and applies to runs that start
+  after you save, including any already queued. Terms are a hint, not a guarantee,
+  and a rejected save keeps your text and explains what to fix. The copy points a
+  recurring, identical mistranscription at the Corrections section instead, and
+  notes that a name split across a pause is handled here because the glossary
+  steers transcription before the words are grouped into lines. Decoding behaviour
+  is unchanged; only where the same list is edited moves.
+- **Run detail records the glossary a run decoded with.** The run-detail page now
+  shows the exact bounded vocabulary hint whisper saw for that run, the operator's
+  glossary unioned with the run's domain-pack words. The frozen domain-pack
+  snapshot only recorded the pack's words, so the operator's live-applied glossary
+  was previously unrecoverable per run; a new nullable `initial_prompt` column on
+  `pipeline_runs`, stamped by the transcribe stage once the decode succeeds, closes
+  that gap. A run not yet transcribed, one with no vocabulary, or one that finished
+  before this existed shows an honest empty state.
 - **Settings shows which models are running ("Pipeline models").** The settings
   page now has a read-only panel that reads each model service live as the page
   loads and shows the transcription, diarization, and speaker-embedding model

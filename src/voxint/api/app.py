@@ -5799,6 +5799,17 @@ def _register_routes(app: FastAPI) -> None:
         # Initialized like every sibling error (llm_error, watch_folder_error) so the
         # template never leans on Jinja's lenient Undefined; overridden on a rejected save.
         context["corrections_error"] = None
+        # Glossary (issue #123): the operator's expected proper nouns, edited from the
+        # console over the same app_settings.vocabulary the setup wizard writes. The
+        # list drives the term count; the text is the textarea's replace-all body. Fed
+        # to whisper as an initial_prompt hint, applied LIVE (not frozen), so a saved
+        # change reaches the next run that starts.
+        stored_vocabulary = list(row.vocabulary) if row is not None and row.vocabulary else []
+        context["vocabulary"] = stored_vocabulary
+        context["vocabulary_text"] = "\n".join(stored_vocabulary)
+        # Initialized like corrections_error; overridden with the submitted text on a
+        # rejected save so the operator does not lose their edit.
+        context["glossary_error"] = None
         # Pipeline models panel (issue: configurable pipeline models). Live,
         # read-only identity of the three model services, probed concurrently on
         # each render (no cache: an operator who just changed .env reloads to
@@ -5983,6 +5994,50 @@ def _register_routes(app: FastAPI) -> None:
         if wants_json:
             return JSONResponse({"ok": True, "corrections": normalized})
         return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/glossary")
+    def settings_glossary(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        vocabulary: Annotated[str, Form()] = "",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Replace the operator's glossary (issue #123) from the console.
+
+        Edits the same ``app_settings.vocabulary`` the setup wizard writes, through
+        the SAME ``normalize_vocabulary`` gate (one term per line, deduped, 500-term
+        / 120-char bounds), replace-all. On a bounds violation NOTHING is written and
+        the page re-renders with the plain-language message AND the operator's
+        submitted text (so a rejected save never eats their edit); get_or_create runs
+        only after validation, so the rejected render's commit persists no change.
+        """
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        try:
+            terms = normalize_vocabulary(vocabulary)
+        except SetupValidationError as exc:
+            # Keep the term count honest with the textarea on a rejected save: show
+            # the operator's own submitted lines, not the last stored list (the
+            # partial reads only ``vocabulary|length`` for the count). So "501
+            # terms." sits beside an "at most 500" message, not a stale "1 term.".
+            submitted = [line for line in vocabulary.splitlines() if line.strip()]
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request,
+                    session,
+                    glossary_error=str(exc),
+                    vocabulary_text=vocabulary,
+                    vocabulary=submitted,
+                ),
+                status_code=422,
+            )
+        row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+        row.vocabulary = terms
+        session.commit()
+        return RedirectResponse("/settings#glossary", status_code=303)
 
     @protected.post("/settings/watch-folder")
     def settings_watch_folder(

@@ -220,6 +220,22 @@ which model answered rather than proving the exact build.</p>
 {% endfor %}
 </section>
 
+{# Glossary provenance (issue #123): the exact vocabulary hint whisper decoded this
+   run with, the operator's glossary unioned with the pack's words. Read-only; NULL
+   means the run had no vocabulary or predates this record. #}
+<section class="card">
+<h2>Glossary applied</h2>
+<p class="muted">The vocabulary hint transcription saw for this run, the terms from
+your glossary and the run's domain pack. It records what the model was told to expect,
+not that every term was spelled this way.</p>
+{% if run.initial_prompt %}
+<p><code>{{ run.initial_prompt }}</code></p>
+{% else %}
+<p class="muted">Not recorded. This run has not been transcribed yet, had no
+vocabulary, or it finished before Voxint began recording the applied glossary.</p>
+{% endif %}
+</section>
+
 <section class="card">
 <h2>Stage ledger</h2>
 {% if not stage_runs %}

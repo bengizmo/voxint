@@ -381,6 +381,15 @@ class PipelineRun(Base):
     # not folded into the domain_pack manifest.
     diarization_max_speakers: Mapped[int | None] = mapped_column(Integer)
     diarization_num_speakers: Mapped[int | None] = mapped_column(Integer)
+    # The bounded whisper ``initial_prompt`` this run actually decoded with (issue
+    # #123): the rendered join of the effective vocabulary (pack + operator glossary,
+    # deduped/capped), stamped by the transcribe stage. The frozen domain_pack
+    # snapshot above records only the PACK's words; the operator's glossary is
+    # unioned LIVE at run start (app_settings.vocabulary), so without this column the
+    # names this run was actually told about are unrecoverable. NULL = a run not yet
+    # transcribed, a run with no vocabulary (empty prompt), or a legacy run
+    # transcribed before this column existed.
+    initial_prompt: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
