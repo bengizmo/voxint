@@ -158,6 +158,37 @@ def test_render_prefers_a_later_completed_retry(
     assert "from attempt 2" in body
 
 
+def test_render_never_shows_an_older_stamp_over_a_newer_unstamped_completion(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Issue #126: attempt 2 completed but stamped nothing; attempt 1 completed
+    # earlier with a stamp. The page must say "Not recorded" for the stage, not
+    # attribute attempt 2's result to attempt 1's identity.
+    run_id = _seed_run(
+        session_factory,
+        stage_runs=[
+            _stage_run(
+                uuid.uuid4(),
+                Stage.TRANSCRIBE,
+                attempt=1,
+                status=StageStatus.COMPLETED,
+                metrics={METRICS_KEY: _identity(asr={"reachable": True, "model": "large-v2"})},
+            ),
+            _stage_run(
+                uuid.uuid4(),
+                Stage.TRANSCRIBE,
+                attempt=2,
+                status=StageStatus.COMPLETED,
+                metrics=None,
+            ),
+        ],
+    )
+    body = client.get(f"/runs/{run_id}").text
+    assert "Not recorded" in body
+    assert "large-v2" not in body
+    assert "from attempt" not in body
+
+
 def test_render_marks_unrecorded_stage_not_recorded(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

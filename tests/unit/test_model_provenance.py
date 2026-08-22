@@ -110,6 +110,44 @@ def test_later_failed_attempt_never_masks_a_completed_one() -> None:
     assert _role(transcribe, "asr").model == "large-v2"
 
 
+def test_newer_unstamped_completion_is_not_masked_by_an_older_stamp() -> None:
+    # Issue #126: the displayed identity must belong to the attempt that produced
+    # the result. When the latest completed attempt carries no identity, the page
+    # says "Not recorded" instead of borrowing an older attempt's stale stamp.
+    runs = [
+        _Attempt(
+            Stage.TRANSCRIBE.value,
+            StageStatus.COMPLETED.value,
+            1,
+            {METRICS_KEY: _identity(asr=_asr(model="large-v2"))},
+        ),
+        _Attempt(Stage.TRANSCRIBE.value, StageStatus.COMPLETED.value, 2, None),
+    ]
+    transcribe = _stage(select_run_model_identity(runs), Stage.TRANSCRIBE)
+    assert transcribe.recorded is False
+    assert transcribe.attempt is None
+    assert transcribe.roles == ()
+
+
+def test_newer_completion_missing_the_identity_key_is_not_masked_either() -> None:
+    runs = [
+        _Attempt(
+            Stage.TRANSCRIBE.value,
+            StageStatus.COMPLETED.value,
+            1,
+            {METRICS_KEY: _identity(asr=_asr(model="large-v2"))},
+        ),
+        _Attempt(
+            Stage.TRANSCRIBE.value,
+            StageStatus.COMPLETED.value,
+            2,
+            {"some_other_metric": 1},
+        ),
+    ]
+    transcribe = _stage(select_run_model_identity(runs), Stage.TRANSCRIBE)
+    assert transcribe.recorded is False
+
+
 def test_running_and_failed_attempts_are_ignored_when_no_completed_exists() -> None:
     runs = [
         _Attempt(

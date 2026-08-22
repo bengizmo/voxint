@@ -198,7 +198,8 @@ which model answered rather than proving the exact build.</p>
     <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
   {% if not stage.recorded %}
   <p class="muted">Not recorded. This run finished before model provenance was
-  added, or no attempt of this stage completed.</p>
+  added, no attempt of this stage completed, or the attempt that completed did
+  not record it.</p>
   {% else %}
   <dl>
     {% for role in stage.roles %}

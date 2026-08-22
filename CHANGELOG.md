@@ -6,6 +6,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Fixed
+- **The run page no longer attributes a result to an older attempt's model
+  stamp.** When a stage was retried and the newest completed attempt carried no
+  recorded model identity, the "Pipeline models" panel fell back to an older
+  attempt's stamp, which could name a model that did not produce the shown
+  result. The panel now reads the identity only from the attempt that actually
+  completed the stage and says "Not recorded" when that attempt has none.
+  Display only; the worker stamps every completed attempt on the normal path,
+  so this surfaces only with hand-edited or partially migrated data.
 - **The transcription service no longer loads different weights under the
   validated model name.** Setting `WHISPER_MODEL=large-v2` (the validated name)
   together with a different valid `WHISPER_REVISION` previously took the default

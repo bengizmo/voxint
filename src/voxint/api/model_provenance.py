@@ -135,26 +135,31 @@ def _role_from_payload(role: str, label: str, payload: object) -> ModelRole:
 def _latest_completed_identity(
     stage_runs: Iterable[_StageAttempt], stage: str
 ) -> tuple[int, dict[str, Any]] | None:
-    """The identity object from the latest completed, stamped attempt of ``stage``.
+    """The identity object from the latest completed attempt of ``stage``.
 
-    Returns ``(attempt, identity)`` for the highest-numbered completed attempt
-    that carries a ``model_identity`` object, or ``None`` when none does. Attempt
-    number breaks the tie (it is unique per stage and monotonic with retries), so
-    a failed or lease-expired attempt can never mask a later completed one.
+    Selects the highest-numbered completed attempt first, stamped or not, then
+    reads its ``model_identity``: ``(attempt, identity)`` when that attempt is
+    stamped, ``None`` otherwise. Attempt number breaks the tie (it is unique per
+    stage and monotonic with retries), so neither a failed/lease-expired attempt
+    nor an older *stamped* attempt can mask the completion that actually
+    produced the result — an unstamped latest completion renders "Not recorded"
+    rather than borrowing a stale identity.
     """
-    best: tuple[int, dict[str, Any]] | None = None
+    best: _StageAttempt | None = None
     for run in stage_runs:
         if run.stage != stage or run.status != StageStatus.COMPLETED.value:
             continue
-        metrics = run.metrics
-        if not isinstance(metrics, dict):
-            continue
-        identity = metrics.get(METRICS_KEY)
-        if not isinstance(identity, dict):
-            continue
-        if best is None or run.attempt > best[0]:
-            best = (run.attempt, identity)
-    return best
+        if best is None or run.attempt > best.attempt:
+            best = run
+    if best is None:
+        return None
+    metrics = best.metrics
+    if not isinstance(metrics, dict):
+        return None
+    identity = metrics.get(METRICS_KEY)
+    if not isinstance(identity, dict):
+        return None
+    return (best.attempt, identity)
 
 
 def select_run_model_identity(
