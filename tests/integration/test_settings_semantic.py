@@ -212,3 +212,40 @@ def test_weights_absent_note_shows_when_feature_on(
     client, _ = make_client(session_factory, tmp_path)
     body = client.get("/settings").text
     assert "The embedding model weights are not installed" in body
+
+
+def test_weights_absent_note_hidden_when_effectively_off_via_inherit(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # "Use installation setting" with an installation default of OFF is
+    # effectively off, so the weights-missing note must NOT claim that an enabled
+    # search cannot answer — the note gates on effective enablement, not the raw
+    # tri-state.
+    # Both env flags go off together: the Settings invariant refuses autogenerate
+    # riding on a disabled feature at construction (the same rule the route checks).
+    client, _ = make_client(
+        session_factory,
+        tmp_path,
+        semantic_index_enabled=False,
+        semantic_index_autogenerate=False,
+    )
+    body = client.get("/settings").text
+    assert 'name="semantic_index_enabled" value="inherit" checked' in body
+    assert "The embedding model weights are not installed" not in body
+
+
+def test_weights_absent_note_shows_when_explicitly_on_over_off_default(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # An explicit On override beats the OFF installation default, so the feature
+    # is effectively on and the honest weights-missing note renders again.
+    client, _ = make_client(
+        session_factory,
+        tmp_path,
+        semantic_index_enabled=False,
+        semantic_index_autogenerate=False,
+    )
+    _seed_flags(session_factory, semantic_index_enabled=True)
+    body = client.get("/settings").text
+    assert 'name="semantic_index_enabled" value="on" checked' in body
+    assert "The embedding model weights are not installed" in body

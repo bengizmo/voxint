@@ -30,6 +30,12 @@ describe("parseJumpParam", () => {
   it("ignores other params around t", () => {
     expect(parseJumpParam("?q=hi&t=7&x=1")).toBe(7);
   });
+
+  it("returns null for a non-finite time", () => {
+    expect(parseJumpParam("?t=Infinity")).toBeNull();
+    expect(parseJumpParam("?t=1e309")).toBeNull();
+    expect(parseJumpParam("?t=NaN")).toBeNull();
+  });
 });
 
 describe("resolveJumpIndex", () => {
@@ -57,5 +63,23 @@ describe("resolveJumpIndex", () => {
 
   it("returns -1 for an empty transcript", () => {
     expect(resolveJumpIndex([], 3)).toBe(-1);
+  });
+
+  it("snaps t at a line's exclusive end forward (half-open [start, end))", () => {
+    // 10 is the end of line 1 [5, 10) and not contained by it; it snaps to the
+    // next line starting at or after 10 (here the gap-forward line 2).
+    expect(resolveJumpIndex(segs, 10)).toBe(2);
+  });
+
+  it("lands the fractional start on its own line, not the previous one", () => {
+    // The bug the fractional ?t= fix guards: with contiguous lines, a target
+    // start of 10.9 truncated to 10 would resolve into the previous [9.2, 10.9)
+    // line. Passing the true fractional start resolves to the target line.
+    const contiguous = [
+      { start: 9.2, end: 10.9 },
+      { start: 10.9, end: 12.0 },
+    ];
+    expect(resolveJumpIndex(contiguous, 10.9)).toBe(1);
+    expect(resolveJumpIndex(contiguous, 10)).toBe(0); // documents the truncation trap
   });
 });

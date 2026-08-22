@@ -14,7 +14,7 @@
 {% for error in semantic_index_errors %}
   <p class="notice" role="alert">{{ error }}</p>
 {% endfor %}
-{% if semantic_index_enabled_state != "off" and not semantic_index_weights_available %}
+{% if semantic_index_effective_enabled and not semantic_index_weights_available %}
   <p class="notice">The embedding model weights are not installed on this instance,
      so meaning search cannot answer a query even while it is on. Reinstall with the
      weights bundled to use it.</p>

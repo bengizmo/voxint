@@ -219,8 +219,17 @@ def rank_candidates(
 
 
 def _jump_url(run_id: uuid.UUID, start_seconds: float) -> str:
-    """The transcript deep link at the passage start (the island seeks on ?t=)."""
-    return f"/runs/{run_id}/transcript?t={int(start_seconds)}"
+    """The transcript deep link at the passage start (the island scrolls to ?t=).
+
+    Preserves sub-second precision: truncating to whole seconds can push the
+    target into the PREVIOUS contiguous segment, because the island resolves the
+    line by half-open ``[start, end)`` containment. A passage starting at 10.9s
+    truncated to ``t=10`` lands inside a prior ``[9.2, 10.9)`` line and scrolls
+    the operator to the wrong place. Format with a stable decimal and trim
+    trailing zeros so an integer start still reads ``t=10``.
+    """
+    t = f"{start_seconds:.3f}".rstrip("0").rstrip(".")
+    return f"/runs/{run_id}/transcript?t={t}"
 
 
 def _preview(chunk_text: str, phrases: list[str]) -> Markup:
@@ -348,9 +357,17 @@ def search_passages(
                 "postgresql_readonly": True,
             }
         )
+        # Probe for SEARCHABLE rows with the same visibility the arms use
+        # (non-archived runs in this space); an index of only archived runs is
+        # not something a query can surface, so it reports INDEXING honestly
+        # rather than a misleading "no passages match".
         indexed = session.execute(
             select(SegmentEmbedding.id)
-            .where(SegmentEmbedding.embedding_space == EMBEDDING_SPACE)
+            .join(PipelineRun, PipelineRun.id == SegmentEmbedding.pipeline_run_id)
+            .where(
+                SegmentEmbedding.embedding_space == EMBEDDING_SPACE,
+                PipelineRun.archived_at.is_(None),
+            )
             .limit(1)
         ).first()
         if indexed is None:

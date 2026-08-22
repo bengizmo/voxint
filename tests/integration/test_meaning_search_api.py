@@ -159,6 +159,32 @@ class TestRankedPassages:
         assert "<script>alert" not in str(page.items[0].snippet)
 
 
+class TestJumpUrl:
+    def test_jump_url_preserves_fractional_start(self) -> None:
+        from voxint.api.meaning_query import _jump_url
+
+        rid = uuid.uuid4()
+        # Integer starts stay clean; a fractional start is NOT truncated, because
+        # a truncated ?t= can resolve to the PREVIOUS contiguous transcript line
+        # (the island matches half-open [start, end)).
+        assert _jump_url(rid, 0.0) == f"/runs/{rid}/transcript?t=0"
+        assert _jump_url(rid, 10.0) == f"/runs/{rid}/transcript?t=10"
+        assert _jump_url(rid, 10.9) == f"/runs/{rid}/transcript?t=10.9"
+        assert _jump_url(rid, 12.5) == f"/runs/{rid}/transcript?t=12.5"
+
+
+class TestPreview:
+    def test_preview_escapes_then_promotes_only_our_marks(self) -> None:
+        from voxint.api.meaning_query import _preview
+
+        out = str(_preview("<script>alert(1)</script> the phrase here", ["phrase"]))
+        # Hostile markup is escaped to text; only our own <mark> pair is live, so
+        # a transcript cannot inject anything but the highlight we asked for.
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+        assert "<mark>phrase</mark>" in out
+
+
 class TestHonestStates:
     def test_empty_query_via_route(self, client: TestClient) -> None:
         resp = client.get("/search")
@@ -180,10 +206,17 @@ class TestHonestStates:
         assert "Semantic search is turned off" in resp.text
 
     def test_unavailable_state_when_weights_absent_via_route(
-        self, client: TestClient
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # The route uses the real in-process embedder; this env has no weights, so
-        # a query it cannot embed reports UNAVAILABLE honestly rather than 500ing.
+        # The route uses the real in-process embedder. Point the weight paths at a
+        # location that cannot exist so minilm_artifacts_available() is False
+        # regardless of ambient env — otherwise this assertion flips wherever the
+        # vendored weights are configured (e.g. a golden run in the same session).
+        # A query it cannot embed must report UNAVAILABLE, not 500.
+        monkeypatch.setenv("VOXINT_MINILM_ONNX_PATH", "/nonexistent/voxint-test/model.onnx")
+        monkeypatch.setenv(
+            "VOXINT_MINILM_TOKENIZER_PATH", "/nonexistent/voxint-test/tokenizer.json"
+        )
         resp = client.get("/search", params={"q": "anything"})
         assert resp.status_code == 200
         assert "Semantic search is unavailable" in resp.text
@@ -234,6 +267,25 @@ class TestCorpusScoping:
         run_ids = {it.run_id for it in page.items}
         assert live in run_ids
         assert archived not in run_ids
+
+    def test_only_archived_indexed_runs_report_indexing(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Embeddings persist when a run is archived, but the arms hide archived
+        # runs. The INDEXING probe uses the SAME visibility, so an index of only
+        # archived runs reports INDEXING honestly rather than a misleading empty
+        # OK ("no passages match") for a query that could never surface them.
+        run_id = _seed_indexed_run(
+            session_factory, [("S0", "archived subcooling reading", None)]
+        )
+        with session_factory() as session:
+            run = session.get(PipelineRun, run_id)
+            assert run is not None
+            run.archived_at = datetime.now(tz=UTC)
+            session.commit()
+        page = _run_search(session_factory, "archived subcooling reading")
+        assert page.state is MeaningSearchState.INDEXING
+        assert page.items == []
 
     def test_punctuation_query_has_no_lexical_hits_but_vector_still_returns(
         self, session_factory: sessionmaker[Session]

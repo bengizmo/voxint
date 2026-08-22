@@ -2739,7 +2739,6 @@ def _persist_semantic_index(
                 " installation setting."
             ]
         candidates[name] = None if choice == "inherit" else (choice == "on")
-    row = get_app_settings(session)
 
     def _effective(name: str) -> bool:
         candidate = candidates[name]
@@ -5777,6 +5776,17 @@ def _register_routes(app: FastAPI) -> None:
         semantic_submitted: dict[str, str] | None = overrides.pop(
             "semantic_index_submitted", None
         )
+        # The tri-state the toggle renders (submitted choice on an invariant-
+        # rejected re-render, else the stored raw state). The weights-missing
+        # notice gates on the EFFECTIVE enablement derived from it, not the raw
+        # state: "inherit" with an installation default of Off is effectively
+        # off, so warning that an on-but-weightless search cannot answer would be
+        # untrue.
+        semantic_enabled_state = (
+            semantic_submitted.get("semantic_index_enabled", "inherit")
+            if semantic_submitted is not None
+            else feature_flag_state(row, "semantic_index_enabled")
+        )
         # Sources & research section (issue #76). On an invariant/format-rejected
         # save, render the operator's submitted choices back (``web_research_submitted``
         # — the four non-secret fields only, never the key); otherwise the stored raw
@@ -5824,12 +5834,17 @@ def _register_routes(app: FastAPI) -> None:
             # "inherit" label, and whether the embedding weights are actually
             # installed — an honest note when the feature is on but weights are absent,
             # since enabling it then cannot answer a query.
-            "semantic_index_enabled_state": (
-                semantic_submitted.get("semantic_index_enabled", "inherit")
-                if semantic_submitted is not None
-                else feature_flag_state(row, "semantic_index_enabled")
-            ),
+            "semantic_index_enabled_state": semantic_enabled_state,
             "semantic_index_enabled_env_default": bool(settings.semantic_index_enabled),
+            # Effective enablement (candidate/stored state resolved over the env
+            # default) — the honest gate for the weights-missing notice below.
+            "semantic_index_effective_enabled": (
+                semantic_enabled_state == "on"
+                or (
+                    semantic_enabled_state == "inherit"
+                    and bool(settings.semantic_index_enabled)
+                )
+            ),
             "semantic_index_autogenerate_state": (
                 semantic_submitted.get("semantic_index_autogenerate", "inherit")
                 if semantic_submitted is not None
