@@ -5,6 +5,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Transcript semantic search index (#121).** Voxint now builds a
+  meaning-based index of finished transcripts, so a later search can find a
+  passage by what it discusses and not only by its exact words. This release
+  lands the indexing half of the feature. An in-process embedder (the
+  multilingual MiniLM model, run as a vendored ONNX graph with no torch and no
+  network at runtime) reads each completed run's resolved transcript, splits it
+  into passages, and stores their vectors. Indexing runs automatically when a
+  run finishes, and `voxint embed backfill` indexes the existing back catalogue
+  (stale-only by default; `--force` reindexes everything). Correcting a
+  transcript reindexes that run on the next pass, so the index tracks the
+  transcript as you fix it. Two new settings, `SEMANTIC_INDEX_ENABLED` and
+  `SEMANTIC_INDEX_AUTOGENERATE`, are on by default and can be turned off. The
+  ranked "Meaning" search view that reads this index is a following slice. The
+  Docker images bake the model files; a native install fetches them from the
+  pinned `minilm-onnx-v1` release asset, and `voxint-native.sh doctor` reports
+  when they are missing.
+
 ## [0.22.1] - 2026-08-21
 
 ### Fixed
