@@ -36,6 +36,7 @@ import httpx
 from voxint.config import Settings
 from voxint.pipeline.model_identity import (
     CHECKPOINT_FINGERPRINT_FIELD,
+    DIARIZATION_CONFIG_HASH_FIELD,
     probe_identity_one,
 )
 
@@ -66,6 +67,18 @@ _VALIDATED_ASR_REVISION = "f0fe81560cb8b68660e564f55dd99207059c092e"
 # so a weights refresh to ``pyannote-models-v2`` moves both together.
 _VALIDATED_DIARIZER_CHECKPOINT = (
     "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2"
+)
+
+# The validated diarization *config* hash (#129): the effective-clustering-config
+# identity, orthogonal to the weight checkpoint above. Derived from the runtime
+# env defaults (PYANNOTE_CLUSTERING_THRESHOLD=0.55 / MIN_SIZE=10 / SEGMENTATION_STEP
+# =0.5 / MIN_DURATION_OFF=0.6) plus the vendored config's static bits and the
+# pinned pyannote.audio version, composed by the service's
+# ``compute_diarization_config_hash``. Contract-tested against those sources, so a
+# validated clustering change re-pins here deliberately. A validated name + weights
+# but a different config hash reads as a config mismatch.
+_VALIDATED_DIARIZER_CONFIG_HASH = (
+    "9a31a4a4f1aaf4720b790bba8add7bd18f40968d428601e0ec80e3820556fca0"
 )
 
 # A well-formed checkpoint fingerprint is a sha256 hexdigest (64 lowercase hex).
@@ -104,12 +117,17 @@ class _ServiceSpec:
     configurable: bool  # False => a fixed model (titanet DB invariant)
     validated_models: frozenset[str]  # ids that read as the validated default
     env_keys: tuple[str, ...]  # the .env keys that change this service's model
-    # Exact-identity anchor for a validated NAME (#125). At most one is set.
-    # ``validated_checkpoint``: the pyannote weight fingerprint, compared against
-    # the ``checkpoint_fingerprint`` the service reports (absent => an older
-    # service, classify by name only). ``validated_revision``: the whisper baked
-    # snapshot, compared against the reported ``revision``.
+    # Exact-identity anchors for a validated NAME. A service may carry more than
+    # one, evaluated together (worst verdict wins). ``validated_checkpoint`` (#125):
+    # the pyannote weight fingerprint, compared against the reported
+    # ``checkpoint_fingerprint`` (absent => an older service, classify by name
+    # only). ``validated_config_hash`` (#129): the pyannote effective-clustering-
+    # config hash, compared against the reported ``diarization_config_hash``
+    # (orthogonal to the weight axis — a weights swap fails one, a config drift the
+    # other). ``validated_revision``: the whisper baked snapshot, compared against
+    # the reported ``revision``.
     validated_checkpoint: str | None
+    validated_config_hash: str | None
     validated_revision: str | None
 
 
@@ -125,6 +143,7 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         validated_models=_VALIDATED_ASR_MODELS,
         env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
         validated_checkpoint=None,
+        validated_config_hash=None,
         validated_revision=_VALIDATED_ASR_REVISION,
     ),
     _ServiceSpec(
@@ -135,6 +154,7 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         validated_models=_VALIDATED_DIARIZER_MODELS,
         env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
         validated_checkpoint=_VALIDATED_DIARIZER_CHECKPOINT,
+        validated_config_hash=_VALIDATED_DIARIZER_CONFIG_HASH,
         validated_revision=None,
     ),
     _ServiceSpec(
@@ -145,6 +165,7 @@ _SERVICE_SPECS: tuple[_ServiceSpec, ...] = (
         validated_models=frozenset(),
         env_keys=(),
         validated_checkpoint=None,
+        validated_config_hash=None,
         validated_revision=None,
     ),
 )
@@ -173,6 +194,11 @@ class ServiceIdentityView:
     engine: str | None
     configurable: bool
     verdict: ModelVerdict
+    # Which exact-identity axis a non-validated ``verdict`` is being surfaced for,
+    # so the panel can give the right remedy: ``"weights"`` (re-pull/rebuild),
+    # ``"config"`` (reset the clustering env vars), ``"revision"`` (whisper baked
+    # snapshot), or None when validated / unvalidated-by-name / not applicable.
+    identity_axis: str | None
     detail: str | None
     env_keys: tuple[str, ...]
 
@@ -181,53 +207,81 @@ def _str_or_none(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+# Severity order for combining several exact-identity axes: a demonstrable
+# MISMATCH outranks an UNVERIFIED (verification could not complete), which
+# outranks VALIDATED. The worst axis is what the panel surfaces.
+_VERDICT_SEVERITY = {
+    ModelVerdict.VALIDATED: 0,
+    ModelVerdict.UNVERIFIED: 1,
+    ModelVerdict.MISMATCH: 2,
+}
+
+
+def _hash_axis_verdict(
+    payload: dict[str, Any], field: str, validated_value: str
+) -> ModelVerdict:
+    """Verdict for one sha256-hash identity axis (checkpoint #125, config #129).
+
+    The key being **absent** means an older service that predates the field: no
+    signal to fail on, so trust the validated name (``VALIDATED``). **Null or
+    malformed** (unverifiable source, or a garbage digest) is not proof the
+    identity differs, so it fails closed as ``UNVERIFIED``, not ``MISMATCH``. A
+    well-formed digest is compared: equal is ``VALIDATED``, otherwise ``MISMATCH``.
+    """
+    if field not in payload:
+        return ModelVerdict.VALIDATED
+    reported = _str_or_none(payload.get(field))
+    if reported is None or not _FINGERPRINT_RE.match(reported):
+        return ModelVerdict.UNVERIFIED
+    return ModelVerdict.VALIDATED if reported == validated_value else ModelVerdict.MISMATCH
+
+
+def _revision_axis_verdict(validated_revision: str, revision: str | None) -> ModelVerdict:
+    """Verdict for whisper's baked-snapshot ``revision`` axis. Deliberately unlike
+    the hash axes: whisper carries no "absent key" rollout case. ``revision`` is an
+    always-present field on the whisper /healthz contract and every image bakes
+    ``WHISPER_BAKED_REVISION``, so a missing revision means an unverifiable identity
+    (``UNVERIFIED``), never "an older service, trust the name"."""
+    if revision is None:
+        return ModelVerdict.UNVERIFIED
+    return ModelVerdict.VALIDATED if revision == validated_revision else ModelVerdict.MISMATCH
+
+
 def _exact_identity_verdict(
     spec: _ServiceSpec, payload: dict[str, Any], revision: str | None
-) -> ModelVerdict:
-    """Classify a service whose reported NAME is a validated one by its exact
-    identity (#125). A validated name is necessary but not sufficient: the
-    weights must also match, or the panel fails closed.
+) -> tuple[ModelVerdict, str | None]:
+    """Classify a service whose reported NAME is validated by its exact identity.
+    A validated name is necessary but not sufficient: every anchor the spec
+    carries must also match, or the panel fails closed.
 
-    Uses whichever exactness anchor the spec carries. Pyannote reports a weight
-    ``checkpoint_fingerprint`` whose key is absent on an older service (classify
-    by name only, ``VALIDATED``), null when the source is unverifiable
-    (``UNVERIFIED``), or a hex string to compare (``VALIDATED`` / ``MISMATCH``).
-    Whisper compares the reported ``revision`` against the baked snapshot: a
-    different revision under the validated name is a weights ``MISMATCH``; a
-    missing one is ``UNVERIFIED``.
+    A service may carry several axes (the diarizer carries both weights #125 and
+    config #129); they are evaluated together and the **worst** verdict wins. On a
+    severity tie the earlier axis wins — weights before config, since a wrong-
+    weights service can't be fixed by resetting the clustering env. Returns
+    ``(verdict, axis)`` where ``axis`` names which anchor is being surfaced
+    (``"weights"`` / ``"config"`` / ``"revision"``) or None when validated.
     """
+    axes: list[tuple[str, ModelVerdict]] = []
     if spec.validated_checkpoint is not None:
-        if CHECKPOINT_FINGERPRINT_FIELD not in payload:
-            # Older service that predates the fingerprint: no signal to fail on,
-            # so trust the validated name exactly as before.
-            return ModelVerdict.VALIDATED
-        reported = _str_or_none(payload.get(CHECKPOINT_FINGERPRINT_FIELD))
-        if reported is None or not _FINGERPRINT_RE.match(reported):
-            # Null (unverifiable source) or a malformed digest: verification could
-            # not be completed, which is not proof the weights differ. Fail closed
-            # as UNVERIFIED, not MISMATCH.
-            return ModelVerdict.UNVERIFIED
-        return (
-            ModelVerdict.VALIDATED
-            if reported == spec.validated_checkpoint
-            else ModelVerdict.MISMATCH
+        axes.append(
+            ("weights", _hash_axis_verdict(
+                payload, CHECKPOINT_FINGERPRINT_FIELD, spec.validated_checkpoint
+            ))
+        )
+    if spec.validated_config_hash is not None:
+        axes.append(
+            ("config", _hash_axis_verdict(
+                payload, DIARIZATION_CONFIG_HASH_FIELD, spec.validated_config_hash
+            ))
         )
     if spec.validated_revision is not None:
-        # Asymmetry with the pyannote branch above, deliberate: whisper carries no
-        # "absent key" rollout case. ``revision`` is an always-present field on the
-        # whisper /healthz contract and every image bakes ``WHISPER_BAKED_REVISION``,
-        # so a missing revision means an unverifiable identity (UNVERIFIED), never
-        # "an older service, trust the name". Do not copy the pyannote absent-key
-        # rule here without re-checking that contract.
-        if revision is None:
-            return ModelVerdict.UNVERIFIED
-        return (
-            ModelVerdict.VALIDATED
-            if revision == spec.validated_revision
-            else ModelVerdict.MISMATCH
-        )
-    # No exactness anchor for this service: the validated name is the verdict.
-    return ModelVerdict.VALIDATED
+        axes.append(("revision", _revision_axis_verdict(spec.validated_revision, revision)))
+    if not axes:
+        # No exactness anchor for this service: the validated name is the verdict.
+        return ModelVerdict.VALIDATED, None
+    # max() keeps the first element on a tie, so weights (appended first) wins.
+    axis, verdict = max(axes, key=lambda item: _VERDICT_SEVERITY[item[1]])
+    return verdict, (axis if verdict is not ModelVerdict.VALIDATED else None)
 
 
 def _classify(spec: _ServiceSpec, url: str, payload: dict[str, Any]) -> ServiceIdentityView:
@@ -251,17 +305,19 @@ def _classify(spec: _ServiceSpec, url: str, payload: dict[str, Any]) -> ServiceI
             engine=None,
             configurable=spec.configurable,
             verdict=ModelVerdict.UNVALIDATED,
+            identity_axis=None,
             detail=detail,
             env_keys=spec.env_keys,
         )
     model = _str_or_none(payload.get("model"))
     revision = _str_or_none(payload.get("revision"))
+    identity_axis: str | None = None
     if not spec.configurable:
         verdict = ModelVerdict.VALIDATED
     elif model is None or model not in spec.validated_models:
         verdict = ModelVerdict.UNVALIDATED
     else:
-        verdict = _exact_identity_verdict(spec, payload, revision)
+        verdict, identity_axis = _exact_identity_verdict(spec, payload, revision)
     return ServiceIdentityView(
         role=spec.role,
         label=spec.label,
@@ -272,6 +328,7 @@ def _classify(spec: _ServiceSpec, url: str, payload: dict[str, Any]) -> ServiceI
         engine=_str_or_none(payload.get("engine")),
         configurable=spec.configurable,
         verdict=verdict,
+        identity_axis=identity_axis,
         detail=None,
         env_keys=spec.env_keys,
     )

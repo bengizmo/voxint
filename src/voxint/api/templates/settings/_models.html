@@ -40,6 +40,16 @@
      the one that ships with Voxint. Remove <code>WHISPER_REVISION</code> from your
      <code>.env</code> (or set it back to the built-in value) and restart the
      transcription service to return to the validated model.</p>
+  {% elif svc.identity_axis == 'config' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name and weights,
+     but its clustering configuration does not match the validated one, so the
+     results cannot be trusted. This happens when a
+     <code>PYANNOTE_CLUSTERING_THRESHOLD</code>,
+     <code>PYANNOTE_CLUSTERING_MIN_SIZE</code>,
+     <code>PYANNOTE_SEGMENTATION_STEP</code>, or
+     <code>PYANNOTE_MIN_DURATION_OFF</code> value differs from the validated
+     default. Set those back to their built-in values (or remove them from your
+     <code>.env</code>) and restart the speaker diarization service.</p>
   {% else %}
   <p class="notice" role="alert">⚠ This reports the validated model name, but the
      loaded model files do not match the validated ones. The results cannot be
@@ -47,11 +57,19 @@
      incomplete: re-pull or rebuild the service to restore the validated model.</p>
   {% endif %}
   {% elif svc.verdict == 'unverified' %}
+  {% if svc.identity_axis == 'config' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
+     cannot verify its clustering configuration on this deployment, so it is not
+     treated as validated. This happens when the pipeline is loaded from an online
+     source instead of the files that ship with Voxint. Use the built-in default for
+     a verified install.</p>
+  {% else %}
   <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
      cannot verify the loaded model files on this deployment, so it is not treated
      as validated. This happens when the model is loaded from an online source
      instead of the files that ship with Voxint. Use the built-in default for a
      verified install.</p>
+  {% endif %}
   {% elif svc.verdict == 'unvalidated' %}
   <p class="notice" role="alert">⚠ This is not the validated model. It runs, but its
      accuracy has not been measured and the results may be unreliable. Only

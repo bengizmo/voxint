@@ -11,8 +11,11 @@ import httpx
 from voxint.config import Settings
 from voxint.db.models import Stage
 from voxint.pipeline.model_identity import (
+    CHECKPOINT_FINGERPRINT_FIELD,
+    DIARIZATION_CONFIG_HASH_FIELD,
     IDENTITY_SCHEMA_VERSION,
     observe_stage_model_identity,
+    probe_identity_one,
     stage_has_model_identity,
 )
 
@@ -165,6 +168,51 @@ def test_malformed_body_records_marker() -> None:
     result = observe_stage_model_identity(_settings(), Stage.TRANSCRIBE, client=client)
     assert result is not None
     assert result["asr"] == {"reachable": False, "detail": "invalid response"}
+
+
+def _probe(body: dict[str, object]) -> dict[str, object]:
+    client = _client({_DIARIZER_PORT: httpx.Response(200, json=body)})
+    return probe_identity_one(client, f"http://localhost:{_DIARIZER_PORT}")
+
+
+_READY_BASE: dict[str, object] = {
+    "status": "ok",
+    "service": "pyannote",
+    "model": "pyannote/speaker-diarization-3.1",
+    "engine": "pyannote.audio",
+    "model_loaded": True,
+}
+
+
+def test_identity_hash_fields_carry_present_hex() -> None:
+    # #125/#129: both special-cased hash fields carry their reported value.
+    payload = _probe(
+        {
+            **_READY_BASE,
+            CHECKPOINT_FINGERPRINT_FIELD: "a" * 64,
+            DIARIZATION_CONFIG_HASH_FIELD: "b" * 64,
+        }
+    )
+    assert payload[CHECKPOINT_FINGERPRINT_FIELD] == "a" * 64
+    assert payload[DIARIZATION_CONFIG_HASH_FIELD] == "b" * 64
+
+
+def test_identity_hash_fields_present_but_null_carry_none() -> None:
+    # PRESENT-but-null must be preserved as None (fail-closed signal), distinct
+    # from the key being absent below — a non-string is normalised to null too.
+    payload = _probe(
+        {**_READY_BASE, CHECKPOINT_FINGERPRINT_FIELD: None, DIARIZATION_CONFIG_HASH_FIELD: 123}
+    )
+    assert payload[CHECKPOINT_FINGERPRINT_FIELD] is None
+    assert payload[DIARIZATION_CONFIG_HASH_FIELD] is None
+
+
+def test_identity_hash_fields_absent_are_omitted() -> None:
+    # An older service omits the keys entirely; the probe must not invent them, so
+    # the console can tell "old service, classify by name" from "new service, null".
+    payload = _probe(dict(_READY_BASE))
+    assert CHECKPOINT_FINGERPRINT_FIELD not in payload
+    assert DIARIZATION_CONFIG_HASH_FIELD not in payload
 
 
 def test_partial_role_failure_isolated() -> None:

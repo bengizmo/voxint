@@ -46,6 +46,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   accident of an older compose; this closes the gap for all three overlays.
 
 ### Added
+- **The models panel now also checks the diarizer's clustering configuration,
+  not just its weights.** A deployment could report the validated diarization
+  name and the validated weights while running a different clustering
+  configuration (the tuned threshold, minimum cluster size, segmentation step,
+  or merge gap), which changes the result. The diarization service now reports a
+  hash of its effective clustering configuration on `/healthz`, and the
+  "Pipeline models" panel classifies it as a second identity axis alongside the
+  weights: a drifted configuration reads as a mismatch with its own remedy (reset
+  the `PYANNOTE_CLUSTERING_*` values), separate from a weights mismatch (re-pull
+  or rebuild). The two axes are independent, so each points at the right fix.
+  Relatedly, on the built-in (validated) pipeline the service now refuses to
+  start if it rejects the tuned clustering settings, where before it logged a
+  warning and quietly ran with default values under the validated name; an
+  explicitly overridden pipeline keeps the previous tolerant behavior. The
+  default install is unaffected: it ships the validated configuration, starts
+  normally, and reads as validated. Batch sizes are excluded from the hash: they
+  are throughput-only and expected to vary per GPU. See `docs/gpu-contracts.md`
+  for the hash definition.
 - **The models panel now checks the actual model files, not just the model
   name.** A deployment could report a validated model name while running
   different weights: the diarization service does not distinguish the built-in

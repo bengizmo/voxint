@@ -42,6 +42,14 @@ EMBED_WINDOW_ID = "clean_utt_00"  # clean-category window; clears all gates
 VENDORED_CHECKPOINT_FINGERPRINT = (
     "aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2"
 )
+# The vendored pyannote effective-config hash (#129): the pipeline identity over
+# the numerics-affecting clustering config, orthogonal to the weight fingerprint.
+# Derived from the runtime env defaults + vendored config + pinned pyannote
+# version and contract-tested to match the console constant; asserting it here
+# proves the live service runs the exact validated clustering config.
+VENDORED_DIARIZATION_CONFIG_HASH = (
+    "9a31a4a4f1aaf4720b790bba8add7bd18f40968d428601e0ec80e3820556fca0"
+)
 
 
 def _request(url: str, payload: dict | None = None, timeout: float = 600.0) -> dict:
@@ -146,6 +154,7 @@ def main() -> None:
                 "device": "cpu",
                 "model_loaded": True,
                 "checkpoint_fingerprint": VENDORED_CHECKPOINT_FINGERPRINT,
+                "diarization_config_hash": VENDORED_DIARIZATION_CONFIG_HASH,
             },
         )
         result = _request(

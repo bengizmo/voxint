@@ -29,8 +29,10 @@ The shape written under ``StageRun.metrics["model_identity"]`` is::
 with one entry per role the stage exercises. An unreachable role is
 ``{"reachable": false, "detail": "timeout"}``. A role whose service reports a
 weight-checkpoint fingerprint (pyannote, #125) additionally carries
-``"checkpoint_fingerprint": "<hex|null>"``; the key is omitted entirely for a
-service that does not report it.
+``"checkpoint_fingerprint": "<hex|null>"``, and one reporting an effective-config
+hash (pyannote, #129) additionally carries ``"diarization_config_hash":
+"<hex|null>"``; each key is omitted entirely for a service that does not report
+it.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -52,6 +54,14 @@ IDENTITY_SCHEMA_VERSION = 1
 # name as before) from PRESENT-but-null (a new service on an unverifiable source
 # — fail closed). The other fields collapse both to null; this one must not.
 CHECKPOINT_FINGERPRINT_FIELD = "checkpoint_fingerprint"
+
+# The pyannote effective-config hash (#129): the pipeline identity (clustering
+# config the pipeline actually runs with), orthogonal to the weight fingerprint
+# above. Same absent-vs-null contract as the fingerprint: the key being ABSENT
+# means an older service (classify by name), PRESENT-but-null means a new service
+# on a source with no local config to hash (fail closed). Carried outside
+# ``_IDENTITY_FIELDS`` for the same reason.
+DIARIZATION_CONFIG_HASH_FIELD = "diarization_config_hash"
 
 # Which model services each stage exercises, as (role, Settings URL attribute)
 # pairs in call order. A stage absent from this map calls no model service and is
@@ -119,6 +129,10 @@ def probe_identity_one(client: httpx.Client, base_url: str) -> dict[str, Any]:
     if CHECKPOINT_FINGERPRINT_FIELD in body:
         raw = body[CHECKPOINT_FINGERPRINT_FIELD]
         payload[CHECKPOINT_FINGERPRINT_FIELD] = raw if isinstance(raw, str) else None
+    # Same absent-vs-null carry for the effective-config hash (#129).
+    if DIARIZATION_CONFIG_HASH_FIELD in body:
+        raw_cfg = body[DIARIZATION_CONFIG_HASH_FIELD]
+        payload[DIARIZATION_CONFIG_HASH_FIELD] = raw_cfg if isinstance(raw_cfg, str) else None
     return payload
 
 

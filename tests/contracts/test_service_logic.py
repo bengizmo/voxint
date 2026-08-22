@@ -1128,6 +1128,157 @@ class TestPyannoteCheckpointFingerprint:
         assert diarizer.compute_checkpoint_fingerprint(str(config)) == expected
 
 
+_CONFIG_HASH_FIELDS: dict[str, object] = dict(
+    pipeline_class="pyannote.audio.pipelines.SpeakerDiarization",
+    clustering="AgglomerativeClustering",
+    clustering_method="centroid",
+    clustering_threshold=0.55,
+    clustering_min_cluster_size=10,
+    segmentation_step=0.5,
+    min_duration_off=0.6,
+    embedding_exclude_overlap=True,
+    engine_version="3.1.1",
+)
+
+
+class TestPyannoteDiarizationConfigHash:
+    """The pyannote effective-config hash (#129): the pipeline identity over the
+    numerics-affecting clustering config, orthogonal to the weight fingerprint.
+    Batch sizes are excluded on purpose (throughput-only, tuned per GPU)."""
+
+    def test_hash_is_a_sha256_hexdigest(self) -> None:
+        import re
+
+        value = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        assert re.fullmatch(r"[0-9a-f]{64}", value)
+
+    def test_hash_is_stable_and_order_independent(self) -> None:
+        # Same inputs (given in a different kwarg order) must yield the same
+        # digest — the canonicalisation sorts keys, so call order never leaks in.
+        a = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        shuffled = {k: _CONFIG_HASH_FIELDS[k] for k in reversed(list(_CONFIG_HASH_FIELDS))}
+        b = diarizer.compute_diarization_config_hash(**shuffled)
+        assert a == b
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("clustering_threshold", 0.7046),
+            ("clustering_min_cluster_size", 12),
+            ("segmentation_step", 0.1),
+            ("min_duration_off", 0.0),
+            ("clustering_method", "average"),
+            ("pipeline_class", "pyannote.audio.pipelines.Other"),
+            ("engine_version", "4.0.0"),
+            ("embedding_exclude_overlap", False),
+        ],
+    )
+    def test_hash_changes_when_a_numerics_field_changes(
+        self, field: str, value: object
+    ) -> None:
+        base = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        changed = {**_CONFIG_HASH_FIELDS, field: value}
+        assert diarizer.compute_diarization_config_hash(**changed) != base
+
+    def test_hash_excludes_batch_sizes(self) -> None:
+        # The recipe takes no batch-size argument at all: a deployment that tunes
+        # PYANNOTE_*_BATCH_SIZE for its GPU (the hardware-aware profiles do) must
+        # keep the same config identity. Asserting the signature is batch-free is
+        # the durable guard against a well-meaning future re-add.
+        import inspect
+
+        params = set(inspect.signature(diarizer.compute_diarization_config_hash).parameters)
+        assert not any("batch" in name for name in params)
+
+    def test_hash_version_is_in_the_payload(self) -> None:
+        # Bumping the recipe version must flip the digest, so an old and a new
+        # recipe never silently compare equal.
+        import unittest.mock
+
+        base = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        with unittest.mock.patch.object(diarizer, "DIARIZATION_CONFIG_HASH_VERSION", 999):
+            assert diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS) != base
+
+    def test_read_static_config_extracts_the_structural_bits(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            "    clustering: AgglomerativeClustering\n"
+            "    embedding_exclude_overlap: true\n"
+            "params:\n"
+            "  clustering:\n"
+            "    method: centroid\n"
+        )
+        assert diarizer.read_pipeline_static_config(str(config)) == {
+            "pipeline_class": "pyannote.audio.pipelines.SpeakerDiarization",
+            "clustering": "AgglomerativeClustering",
+            "clustering_method": "centroid",
+            "embedding_exclude_overlap": True,
+        }
+
+    def test_read_static_config_raises_on_missing_fields(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("pipeline:\n  name: x\n  params: {}\n")
+        with pytest.raises(RuntimeError, match="missing required identity fields"):
+            diarizer.read_pipeline_static_config(str(config))
+
+
+class TestDiarizerClusteringFailClosed:
+    """#129 part 2: a validated/local pipeline that rejects its clustering
+    overrides must fail the boot, not silently degrade; an explicit non-local
+    override keeps the tolerant most-to-least-specific fallback. Exercises the
+    extracted ``_apply_clustering_overrides`` directly so the torch-free contract
+    suite never touches the real load path."""
+
+    class _FakePipeline:
+        """Minimal stand-in for a loaded pyannote pipeline. ``reject_min_size``
+        simulates a pipeline version that refuses the ``min_cluster_size`` param."""
+
+        def __init__(self, reject_min_size: bool) -> None:
+            self._reject_min_size = reject_min_size
+            self.instantiated: dict[str, object] | None = None
+
+        def instantiate(
+            self, params: dict[str, object]
+        ) -> "TestDiarizerClusteringFailClosed._FakePipeline":
+            clustering: dict[str, object] = params.get("clustering", {})  # type: ignore[assignment]
+            if self._reject_min_size and "min_cluster_size" in clustering:
+                raise ValueError("this pipeline version rejects min_cluster_size")
+            self.instantiated = params
+            return self
+
+    def _diarizer(self, *, local: bool, reject_min_size: bool) -> "diarizer.Diarizer":
+        d = diarizer.Diarizer()
+        d.model_is_local = local
+        d.model = self._FakePipeline(reject_min_size)
+        return d
+
+    def test_local_pipeline_that_rejects_min_size_fails_closed(self) -> None:
+        d = self._diarizer(local=True, reject_min_size=True)
+        with pytest.raises(RuntimeError, match="rejected its clustering overrides"):
+            d._apply_clustering_overrides()
+
+    def test_local_pipeline_applies_the_most_specific_params(self) -> None:
+        d = self._diarizer(local=True, reject_min_size=False)
+        d._apply_clustering_overrides()
+        assert d.model.instantiated == {
+            "clustering": {
+                "threshold": d.clustering_threshold,
+                "min_cluster_size": d.clustering_min_size,
+            }
+        }
+
+    def test_non_local_override_degrades_to_threshold_only(self) -> None:
+        # An explicit HF override whose pipeline version rejects min_cluster_size
+        # must degrade to threshold-only (not crash) rather than fail an operator's
+        # chosen pipeline.
+        d = self._diarizer(local=False, reject_min_size=True)
+        d._apply_clustering_overrides()
+        assert d.model.instantiated == {"clustering": {"threshold": d.clustering_threshold}}
+
+
 class TestCt2DeviceVerify:
     """ct2-legacy fails closed on a device CTranslate2 cannot run — the whisper
     analogue of pyannote's probe_device (#33 Slice 2a)."""
@@ -1500,6 +1651,65 @@ class TestCpuImageProvenance:
         assert expected == VENDORED_CHECKPOINT_FINGERPRINT, (
             "tools/smoke_cpu_services.VENDORED_CHECKPOINT_FINGERPRINT drifted from "
             "the provenance .bin shas — recompute it from provenance.json"
+        )
+
+    def test_smoke_config_hash_constant_matches_console(self) -> None:
+        # #129: the release smoke asserts the live pyannote reports this exact
+        # config hash, a third copy alongside the console constant and
+        # docs/gpu-contracts.md. Bind it to the console constant so the two never
+        # drift apart (the console constant is itself recipe-bound in the test
+        # below).
+        from tools.smoke_cpu_services import VENDORED_DIARIZATION_CONFIG_HASH
+
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        assert VENDORED_DIARIZATION_CONFIG_HASH == _VALIDATED_DIARIZER_CONFIG_HASH, (
+            "tools/smoke_cpu_services.VENDORED_DIARIZATION_CONFIG_HASH drifted from "
+            "service_identity._VALIDATED_DIARIZER_CONFIG_HASH — keep them identical"
+        )
+
+    def test_console_diarizer_config_hash_constant_matches_recipe(self) -> None:
+        # #129: the console's known-good effective-config hash must be the digest
+        # the service composes from (a) the vendored config's static bits, (b) the
+        # runtime env DEFAULTS — parsed from diarizer.py's getenv fallbacks, not the
+        # config's overridden 0.7046/12 — and (c) the pinned pyannote.audio version.
+        # A validated clustering-config change (an env default or the vendored
+        # config) fails this until the constant is re-pinned deliberately.
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        models_dir = REPO_ROOT / "services" / "pyannote" / "models"
+        static = diarizer.read_pipeline_static_config(str(models_dir / "config.vendored.yaml"))
+        provenance = json.loads((models_dir / "provenance.json").read_text())
+
+        # Env defaults are the source of truth for the effective tunables. Read
+        # them from the source's getenv fallbacks so the recipe stays bound to the
+        # code and independent of any ambient PYANNOTE_* in the test environment.
+        src = (REPO_ROOT / "services" / "pyannote" / "app" / "diarizer.py").read_text()
+
+        def _default(name: str) -> str:
+            match = re.search(rf'os\.getenv\("{name}",\s*"([^"]+)"\)', src)
+            assert match is not None, f"diarizer.py lost its {name} getenv default"
+            return match.group(1)
+
+        expected = diarizer.compute_diarization_config_hash(
+            pipeline_class=static["pipeline_class"],
+            clustering=static["clustering"],
+            clustering_method=static["clustering_method"],
+            clustering_threshold=float(_default("PYANNOTE_CLUSTERING_THRESHOLD")),
+            clustering_min_cluster_size=int(_default("PYANNOTE_CLUSTERING_MIN_SIZE")),
+            segmentation_step=float(_default("PYANNOTE_SEGMENTATION_STEP")),
+            min_duration_off=float(_default("PYANNOTE_MIN_DURATION_OFF")),
+            embedding_exclude_overlap=bool(static["embedding_exclude_overlap"]),
+            engine_version=provenance["pyannote_audio_version"],
+        )
+        assert expected == _VALIDATED_DIARIZER_CONFIG_HASH, (
+            "service_identity._VALIDATED_DIARIZER_CONFIG_HASH drifted from the "
+            "effective-config recipe (env defaults + vendored config + pyannote "
+            "version) — recompute it"
         )
 
     def test_console_asr_revision_constant_matches_dockerfiles(self) -> None:

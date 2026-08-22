@@ -44,6 +44,7 @@ def _views() -> list[ServiceIdentityView]:
             engine="faster-whisper",
             configurable=True,
             verdict=ModelVerdict.VALIDATED,
+            identity_axis=None,
             detail=None,
             env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
         ),
@@ -57,6 +58,7 @@ def _views() -> list[ServiceIdentityView]:
             engine="pyannote.audio",
             configurable=True,
             verdict=ModelVerdict.UNVALIDATED,
+            identity_axis=None,
             detail=None,
             env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
         ),
@@ -70,13 +72,16 @@ def _views() -> list[ServiceIdentityView]:
             engine=None,
             configurable=False,
             verdict=ModelVerdict.UNVALIDATED,
+            identity_axis=None,
             detail="timeout",
             env_keys=(),
         ),
     ]
 
 
-def _diarizer_view(verdict: ModelVerdict) -> ServiceIdentityView:
+def _diarizer_view(
+    verdict: ModelVerdict, identity_axis: str | None = "weights"
+) -> ServiceIdentityView:
     return ServiceIdentityView(
         role="diarizer",
         label="Speaker diarization",
@@ -87,6 +92,7 @@ def _diarizer_view(verdict: ModelVerdict) -> ServiceIdentityView:
         engine="pyannote.audio",
         configurable=True,
         verdict=verdict,
+        identity_axis=identity_axis,
         detail=None,
         env_keys=("DIARIZER_MODEL_NAME", "DIARIZER_REVISION"),
     )
@@ -135,6 +141,7 @@ def test_pipeline_models_panel_marks_fixed_embedder(
         engine="nemo",
         configurable=False,
         verdict=ModelVerdict.VALIDATED,
+        identity_axis=None,
         detail=None,
         env_keys=(),
     )
@@ -176,6 +183,7 @@ def test_pipeline_models_panel_renders_asr_mismatch_with_revision_guidance(
         engine="faster-whisper",
         configurable=True,
         verdict=ModelVerdict.MISMATCH,
+        identity_axis="weights",
         detail=None,
         env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
     )
@@ -196,3 +204,30 @@ def test_pipeline_models_panel_renders_unverified(
     monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "cannot verify the loaded model files" in body
+
+
+def test_pipeline_models_panel_renders_config_mismatch(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #129: a validated name + weights but a drifted clustering config renders the
+    # config-axis remedy (reset the PYANNOTE_CLUSTERING_* env vars), NOT the
+    # weights re-pull/rebuild copy.
+    views = _views()
+    views[1] = _diarizer_view(ModelVerdict.MISMATCH, identity_axis="config")
+    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    body = client.get("/settings").text
+    assert "clustering configuration does not match" in body
+    assert "PYANNOTE_CLUSTERING_THRESHOLD" in body
+    assert "re-pull or rebuild" not in body  # the weights-only remedy
+
+
+def test_pipeline_models_panel_renders_config_unverified(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # #129: a validated name whose clustering config cannot be verified renders the
+    # config-axis unverified copy, distinct from the weights-files copy.
+    views = _views()
+    views[1] = _diarizer_view(ModelVerdict.UNVERIFIED, identity_axis="config")
+    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    body = client.get("/settings").text
+    assert "cannot verify its clustering configuration" in body

@@ -14,6 +14,7 @@ and loads it by default — no Hugging Face account or token involved. Setting
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -78,6 +79,88 @@ def compute_checkpoint_fingerprint(config_path: str) -> str:
     return hashlib.sha256(
         f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
     ).hexdigest()
+
+
+# Bump when the config-hash *recipe* changes (a field added/removed or the
+# canonicalisation altered), so an old and a new hash never silently compare
+# equal and the pinned reference is re-derived deliberately. It is part of the
+# hashed payload, so any change flips the digest.
+DIARIZATION_CONFIG_HASH_VERSION = 1
+
+
+def compute_diarization_config_hash(
+    *,
+    pipeline_class: str,
+    clustering: str,
+    clustering_method: str,
+    clustering_threshold: float,
+    clustering_min_cluster_size: int,
+    segmentation_step: float,
+    min_duration_off: float,
+    embedding_exclude_overlap: bool,
+    engine_version: str,
+) -> str:
+    """The effective-clustering-config identity (#129): a digest over the
+    *numerics-affecting* configuration the pipeline actually runs with, so a
+    deployment reporting the validated pipeline *name* + *weights* can also be
+    checked against the validated *config*. This is the pipeline identity that
+    ``compute_checkpoint_fingerprint`` (the weight identity) deliberately is not.
+
+    Orthogonal to the checkpoint fingerprint by design: a weights swap flips that
+    axis, a clustering-config drift flips this one, and each gets a distinct
+    operator remedy. The checkpoint fingerprint is therefore *not* folded in here.
+
+    Deliberately excluded: batch sizes (throughput-only, not numerics; the
+    hardware-aware profiles legitimately vary them per GPU, so hashing them would
+    false-flag a tuned deployment) and the device (its own /healthz field). See
+    ``docs/gpu-contracts.md`` for the canonical recipe.
+    """
+    payload = {
+        "hash_version": DIARIZATION_CONFIG_HASH_VERSION,
+        "pipeline_class": pipeline_class,
+        "clustering": clustering,
+        "clustering_method": clustering_method,
+        "clustering_threshold": clustering_threshold,
+        "clustering_min_cluster_size": clustering_min_cluster_size,
+        "segmentation_step": segmentation_step,
+        "min_duration_off": min_duration_off,
+        "embedding_exclude_overlap": embedding_exclude_overlap,
+        "engine_version": engine_version,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def read_pipeline_static_config(config_path: str) -> dict[str, Any]:
+    """Read the static (structural) pipeline bits a local config declares, for the
+    #129 config-hash: pipeline class, clustering algorithm + method, and the
+    embedding-overlap discriminator. The runtime *tunables* (threshold, min-size,
+    step, merge gap) are not read here — they come from the env-driven ``self.*``
+    effective values, since the runtime overrides the config's baked defaults.
+
+    Raises if a required key is absent so a malformed config fails the boot loudly
+    rather than hashing a half-defined identity.
+    """
+    import yaml
+
+    with open(config_path, encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+    pipeline = cfg.get("pipeline") or {}
+    pipeline_params = pipeline.get("params") or {}
+    method = ((cfg.get("params") or {}).get("clustering") or {}).get("method")
+    fields = {
+        "pipeline_class": pipeline.get("name"),
+        "clustering": pipeline_params.get("clustering"),
+        "clustering_method": method,
+        "embedding_exclude_overlap": pipeline_params.get("embedding_exclude_overlap"),
+    }
+    missing = [key for key, value in fields.items() if value is None]
+    if missing:
+        raise RuntimeError(
+            f"pipeline config {config_path} is missing required identity fields: "
+            f"{', '.join(sorted(missing))}"
+        )
+    return fields
 
 
 def resolve_device_name(device_type: str) -> str:
@@ -288,6 +371,11 @@ class Diarizer:
         # Weight-checkpoint fingerprint (#125), computed at load for a local
         # source; None for an HF source whose files are not hashed here.
         self.checkpoint_fingerprint: str | None = None
+        # Effective-clustering-config hash (#129): the pipeline identity, computed
+        # at load for a local source once the clustering overrides are accepted.
+        # None for an HF source (no local config to read); orthogonal to the
+        # weight fingerprint above.
+        self.diarization_config_hash: str | None = None
 
         # Env-tunable hyperparameters. Threshold below the pyannote default
         # (~0.70) is deliberate: the default under-clusters quiet recordings
@@ -365,28 +453,7 @@ class Diarizer:
         self.model.embedding_batch_size = self.embedding_batch_size
         self.model.segmentation_step = self.segmentation_step
 
-        # Clustering hyperparameters go through instantiate(); parameter names
-        # vary across pipeline versions, so fall back from most to least
-        # specific rather than failing the boot.
-        for params in (
-            {
-                "clustering": {
-                    "threshold": self.clustering_threshold,
-                    "min_cluster_size": self.clustering_min_size,
-                }
-            },
-            {"clustering": {"threshold": self.clustering_threshold}},
-        ):
-            try:
-                self.model = self.model.instantiate(params)
-                logger.info("Applied clustering hyperparameters: %s", params)
-                break
-            except Exception as exc:
-                logger.debug("instantiate(%s) rejected: %s", params, exc)
-        else:
-            logger.warning(
-                "Pipeline rejected clustering overrides; running with model defaults"
-            )
+        self._apply_clustering_overrides()
 
         # Fingerprint the loaded weights (#125). For a local/vendored source the
         # two .bin files must be hashable — a broken or incomplete bake fails the
@@ -404,8 +471,78 @@ class Diarizer:
                     f"{self.model_source} — {local_hint}"
                 ) from exc
 
+            # The effective-config identity (#129), orthogonal to the weight
+            # fingerprint above. Static bits come from the loaded config; the
+            # tunables from the accepted runtime values — the fail-closed
+            # instantiate above guarantees these overrides were applied, so the
+            # hash reflects the config that actually runs. Local-only, like the
+            # fingerprint: a non-local source has no local config to read and its
+            # identity is unvalidated by name anyway.
+            assert self.engine_version is not None  # set above at load start
+            try:
+                static = read_pipeline_static_config(self.model_source)
+                self.diarization_config_hash = compute_diarization_config_hash(
+                    pipeline_class=static["pipeline_class"],
+                    clustering=static["clustering"],
+                    clustering_method=static["clustering_method"],
+                    clustering_threshold=self.clustering_threshold,
+                    clustering_min_cluster_size=self.clustering_min_size,
+                    segmentation_step=self.segmentation_step,
+                    min_duration_off=self.min_duration_off,
+                    embedding_exclude_overlap=bool(static["embedding_exclude_overlap"]),
+                    engine_version=self.engine_version,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to compute the diarization config hash for "
+                    f"{self.model_source} — {local_hint}"
+                ) from exc
+
         self.model_loaded = True
         logger.info("Diarization pipeline loaded in %.2fs", time.time() - start)
+
+    def _apply_clustering_overrides(self) -> None:
+        """Apply the tuned clustering hyperparameters through ``instantiate()``.
+
+        For the vendored/local (validated) pipeline this is **fail-closed** (#129):
+        the most-specific override MUST be accepted or the boot fails. A silent
+        degrade to threshold-only or to model defaults would let the service run a
+        different clustering config while still reporting the validated identity,
+        defeating the config-hash gate. For a non-local (explicit HF override)
+        source the param names may legitimately differ across pipeline versions, so
+        the historical most-to-least-specific fallback is kept there rather than
+        failing an operator's chosen pipeline.
+        """
+        strict_params = {
+            "clustering": {
+                "threshold": self.clustering_threshold,
+                "min_cluster_size": self.clustering_min_size,
+            }
+        }
+        if self.model_is_local:
+            try:
+                self.model = self.model.instantiate(strict_params)
+            except Exception as exc:
+                raise RuntimeError(
+                    "The vendored pipeline rejected its clustering overrides "
+                    f"{strict_params} — refusing to start with an unvalidated "
+                    "clustering config under the validated identity"
+                ) from exc
+            logger.info("Applied clustering hyperparameters: %s", strict_params)
+            return
+        for params in (
+            strict_params,
+            {"clustering": {"threshold": self.clustering_threshold}},
+        ):
+            try:
+                self.model = self.model.instantiate(params)
+                logger.info("Applied clustering hyperparameters: %s", params)
+                return
+            except Exception as exc:
+                logger.debug("instantiate(%s) rejected: %s", params, exc)
+        logger.warning(
+            "Pipeline rejected clustering overrides; running with model defaults"
+        )
 
     def diarize(
         self,

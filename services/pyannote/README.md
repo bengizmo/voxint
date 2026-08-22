@@ -40,6 +40,18 @@ persist them.
 | `MAX_PENDING_REQUESTS` | `8` | Admission bound; beyond it → retryable 503 |
 | `PORT` | `8024` | Listen port |
 
+The clustering, step, and merge knobs (`PYANNOTE_CLUSTERING_THRESHOLD`,
+`PYANNOTE_CLUSTERING_MIN_SIZE`, `PYANNOTE_SEGMENTATION_STEP`,
+`PYANNOTE_MIN_DURATION_OFF`) feed the `diarization_config_hash` on `/healthz`
+(#129), the effective-config identity the console checks against the validated
+default. Changing one on the vendored/validated pipeline makes the console read
+the diarizer as a config mismatch. Batch sizes are excluded from that hash: they
+are throughput-only and expected to vary per GPU. For the vendored pipeline the
+clustering overrides are applied fail-closed: if the loaded pipeline rejects the
+tuned `{threshold, min_cluster_size}`, the service refuses to start rather than
+silently running a different clustering config under the validated identity. See
+[docs/gpu-contracts.md](../../docs/gpu-contracts.md) for the normative recipe.
+
 ## Image matrix
 
 Python 3.10 · CUDA 11.8 runtime (cuDNN 8) · torch/torchaudio 2.5.0+cu118 ·

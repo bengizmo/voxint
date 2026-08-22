@@ -137,13 +137,47 @@ same contract.
     against a hostile operator (a service operator can serve any `/healthz`);
     it exists to catch an accidental weights swap under the validated name in a
     single-operator deployment.
+  - **pyannote only** additionally carries a `diarization_config_hash` (#129),
+    populated once the model is loaded (`null` while `degraded`). Where
+    `checkpoint_fingerprint` is the *weight* identity, this is the *pipeline*
+    identity: a digest over the effective clustering configuration the pipeline
+    actually runs with, so a deployment reporting the validated name and weights
+    can also be checked against the validated *config*. The two axes are
+    orthogonal by design: a weights swap flips the fingerprint, a clustering
+    drift flips this hash, and each carries a distinct operator remedy, so the
+    fingerprint is not folded in here. Algorithm (normative):
+    `diarization_config_hash = sha256(canonical)` where `canonical =
+    json.dumps(payload, sort_keys=True, separators=(",",":"))` and `payload` is
+    `{hash_version, pipeline_class, clustering, clustering_method,
+    clustering_threshold, clustering_min_cluster_size, segmentation_step,
+    min_duration_off, embedding_exclude_overlap, engine_version}`. The static
+    bits (`pipeline_class`, `clustering`, `clustering_method`,
+    `embedding_exclude_overlap`) are read from the loaded pipeline config; the
+    tunables (`clustering_threshold`, `clustering_min_cluster_size`,
+    `segmentation_step`, `min_duration_off`) are the effective env-driven values;
+    `engine_version` is `pyannote.audio.__version__`. Batch sizes are
+    deliberately excluded: they are throughput-only, not numerics, and the
+    hardware-aware profiles legitimately vary them per GPU, so hashing them would
+    false-flag a tuned deployment. The vendored default's value is
+    `9a31a4a4f1aaf4720b790bba8add7bd18f40968d428601e0ec80e3820556fca0`, derived
+    from the runtime env defaults plus the vendored config and the pinned
+    pyannote version (contract-tested). For the validated (local) pipeline the
+    clustering overrides are applied **fail-closed**: if `instantiate()` rejects
+    the tuned `{threshold, min_cluster_size}` the service refuses to start rather
+    than silently degrading to threshold-only or model defaults, so a service on
+    the validated identity cannot quietly run the wrong clustering config. An
+    explicit non-local (Hugging Face) override keeps the tolerant fallback and
+    reports `null` here (no local config to hash). The field is additive within
+    `v1` with the same absent-vs-`null` contract as `checkpoint_fingerprint`.
   - The console's Settings "Pipeline models" panel consumes these to classify
-    each configurable service by exact identity, not name (#125): the validated
-    name plus the matching `checkpoint_fingerprint` (pyannote) or `model_revision`
-    (whisper's baked large-v2 snapshot) reads as validated; the validated name
-    with a different fingerprint/revision reads as a weights mismatch and fails
-    closed; the validated name with an unverifiable (`null`) fingerprint reads as
-    unverified and fails closed.
+    each configurable service by exact identity, not name (#125, #129): the
+    validated name plus the matching `checkpoint_fingerprint` and
+    `diarization_config_hash` (pyannote) or `model_revision` (whisper's baked
+    large-v2 snapshot) reads as validated; the validated name with a different
+    fingerprint/hash/revision reads as a mismatch and fails closed (weights and
+    config are surfaced as separate axes so the remedy is specific); the
+    validated name with an unverifiable (`null`) value reads as unverified and
+    fails closed.
   - **All services** additionally carry an optional nested `resources` block
     (additive within `v1`; absent on older services, always present on an
     upgraded one). It reports the hardware this service sees so the operator has

@@ -78,6 +78,14 @@ class HealthResponse(BaseModel):
     # documented in docs/gpu-contracts.md. Null for a non-local (HF) source whose
     # files are not hashed here; absent on services older than this field.
     checkpoint_fingerprint: str | None = None
+    # Additive v1 field (#129): a digest over the *effective clustering config*
+    # the pipeline actually runs with (threshold, min-cluster-size, segmentation
+    # step, merge gap, pipeline class/method, engine version) — the pipeline
+    # identity, orthogonal to the weight ``checkpoint_fingerprint`` above. Batch
+    # sizes are deliberately excluded (throughput-only). Composed as documented in
+    # docs/gpu-contracts.md. Null for a non-local (HF) source with no local config
+    # to read; absent on services older than this field.
+    diarization_config_hash: str | None = None
     model_loaded: bool
     # Additive v1 field (hardware-aware processing, W1): optional nested
     # hardware telemetry. Absent on older services; an upgraded service always

@@ -13,6 +13,7 @@ import pytest
 from voxint.api.service_identity import (
     _VALIDATED_ASR_REVISION,
     _VALIDATED_DIARIZER_CHECKPOINT,
+    _VALIDATED_DIARIZER_CONFIG_HASH,
     ModelVerdict,
     ServiceIdentityView,
     collect_service_identity,
@@ -64,12 +65,14 @@ def _whisper_default() -> httpx.Response:
 
 def _pyannote_default() -> httpx.Response:
     # The vendored pyannote reports the weight-checkpoint fingerprint of the two
-    # baked .bin files; that exact digest is what reads as validated (#125).
+    # baked .bin files (#125) and the effective-config hash (#129); both matching
+    # the validated anchors is what reads as validated.
     return _ready(
         "pyannote",
         "pyannote/speaker-diarization-3.1",
         "pyannote.audio",
         checkpoint_fingerprint=_VALIDATED_DIARIZER_CHECKPOINT,
+        diarization_config_hash=_VALIDATED_DIARIZER_CONFIG_HASH,
     )
 
 
@@ -220,6 +223,7 @@ def test_diarizer_validated_name_with_wrong_fingerprint_is_mismatch() -> None:
     diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
     assert diarizer.reachable is True
     assert diarizer.verdict == ModelVerdict.MISMATCH
+    assert diarizer.identity_axis == "weights"  # #129: which axis failed
 
 
 def test_diarizer_validated_name_with_null_fingerprint_is_unverified() -> None:
@@ -291,6 +295,122 @@ def test_diarizer_validated_name_without_fingerprint_field_is_validated() -> Non
     diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
     assert diarizer.reachable is True
     assert diarizer.verdict == ModelVerdict.VALIDATED
+
+
+def _pyannote_with(**extra: object) -> httpx.Response:
+    # A pyannote payload with the validated NAME plus caller-chosen identity
+    # fields, for exercising the two orthogonal exact-identity axes (#129).
+    return _ready(
+        "pyannote", "pyannote/speaker-diarization-3.1", "pyannote.audio", **extra
+    )
+
+
+def test_diarizer_both_axes_valid_is_validated() -> None:
+    # #129: validated name + matching weights + matching config hash. identity_axis
+    # is None because nothing failed.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_default(),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.VALIDATED
+    assert diarizer.identity_axis is None
+
+
+def test_diarizer_wrong_config_hash_is_config_mismatch() -> None:
+    # #129: validated name and weights, but a different effective-config hash means
+    # a drifted clustering config. Fail closed as MISMATCH on the config axis, so
+    # the panel shows the clustering-env remedy, not the re-pull/rebuild one.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_with(
+                checkpoint_fingerprint=_VALIDATED_DIARIZER_CHECKPOINT,
+                diarization_config_hash="0" * 64,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.MISMATCH
+    assert diarizer.identity_axis == "config"
+
+
+def test_diarizer_null_config_hash_is_config_unverified() -> None:
+    # A validated name + weights but a null config hash (a source with no local
+    # config to hash) cannot be verified on the config axis — fail closed to
+    # UNVERIFIED, surfaced as the config axis.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_with(
+                checkpoint_fingerprint=_VALIDATED_DIARIZER_CHECKPOINT,
+                diarization_config_hash=None,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.UNVERIFIED
+    assert diarizer.identity_axis == "config"
+
+
+def test_diarizer_config_hash_absent_field_is_validated() -> None:
+    # Rollout compatibility: a service that reports the weight fingerprint but
+    # predates the config hash omits the key entirely. Absent (not null) means no
+    # signal to fail on, so the config axis stays validated.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_with(
+                checkpoint_fingerprint=_VALIDATED_DIARIZER_CHECKPOINT,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.VALIDATED
+    assert diarizer.identity_axis is None
+
+
+def test_diarizer_both_axes_wrong_surfaces_weights_first() -> None:
+    # When weights AND config both mismatch, the panel surfaces weights: a
+    # wrong-weights service cannot be fixed by resetting the clustering env, so
+    # that remedy comes first.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_with(
+                checkpoint_fingerprint="0" * 64,
+                diarization_config_hash="0" * 64,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.MISMATCH
+    assert diarizer.identity_axis == "weights"
+
+
+def test_diarizer_config_mismatch_outranks_weights_unverified() -> None:
+    # Severity, not axis order, wins first: a demonstrable config MISMATCH outranks
+    # an unverifiable (null) weights fingerprint, so the config axis is surfaced.
+    client = _client(
+        {
+            _ASR_PORT: _whisper_default(),
+            _DIARIZER_PORT: _pyannote_with(
+                checkpoint_fingerprint=None,
+                diarization_config_hash="0" * 64,
+            ),
+            _EMBEDDER_PORT: _titanet_default(),
+        }
+    )
+    diarizer = _by_role(collect_service_identity(_settings(), client=client))["diarizer"]
+    assert diarizer.verdict == ModelVerdict.MISMATCH
+    assert diarizer.identity_axis == "config"
 
 
 def test_embedder_never_unvalidated_even_with_unexpected_model() -> None:
