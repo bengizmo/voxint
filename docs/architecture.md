@@ -217,10 +217,10 @@ ever writes the decision ledger:
 Exact full-text search over `transcript_segments` finds a passage only when the
 operator already knows a word in it. The embedding spine adds meaning-based
 retrieval: finished transcripts are embedded and stored as vectors, so a later
-query can rank passages by similarity. PR1 (this data spine) builds and
-maintains the index; the ranked "Meaning" query and its UI arrive in a
-follow-up. The producer reads finished transcript text only. It never touches
-ASR, diarization, or TitaNet, so it does not trip the numerics parity gate.
+query can rank passages by similarity. The data spine builds and maintains the
+index; the ranked "Meaning" query (below) reads it. The producer reads finished
+transcript text only. It never touches ASR, diarization, or TitaNet, so it does
+not trip the numerics parity gate.
 
 **The embedder.** `voxint.embeddings.onnx_embedder` runs
 `paraphrase-multilingual-MiniLM-L12-v2` as a vendored ONNX graph on the
@@ -267,6 +267,36 @@ for a whole-corpus catch-up with no broker. See
 [semantic-search.md](semantic-search.md) for the operator commands and the
 weights requirement, and [gpu-contracts.md](gpu-contracts.md) for the model
 services this spine sits alongside.
+
+**The query path.** `api/meaning_query.py` serves the ranked `/search` "Meaning"
+mode, a distinct surface from the chronological `/runs` keyset browse (a
+`GET /runs` render is byte-stable except for the added Exact/Meaning tab strip).
+The query is embedded first, with the same in-process singleton, never a Celery
+round-trip. Three arms then run over `segment_embeddings` inside one short
+read-only REPEATABLE READ transaction: a **vector** arm (pgvector
+`cosine_distance` nearest neighbours, bounded by a candidate limit, the first
+pgvector SQL in the repo), a **lexical** arm (a `simple`-config full-text match
+with a mandatory `@@` predicate so the tail is not padded with zero-rank
+non-matches), and an **exact-quote** arm (its own `strpos` query, not `ILIKE`, so
+a `%` or `_` in the phrase is literal; all hits, since a literal can rank outside
+both bounded arms). The one snapshot is the correctness guard: two independent
+READ COMMITTED statements could straddle a concurrent publish and mix an old
+generation's rows from one arm with a new generation's from another. Because a
+publish deletes every prior generation in the transaction it commits the new one,
+the table holds exactly one generation per (run, space) at any committed read
+point, so search reads `segment_embeddings` directly and never resolves the
+current generation through `embedding_jobs`. The vector and lexical arms are
+fused with reciprocal rank fusion (k=60); exact-quote hits float above the fused
+order; a per-run cap is applied while walking the final order before the top-k
+truncation. Each result carries a `jump_url` (`/runs/{id}/transcript?t=SECONDS`);
+the read-only transcript island reads `?t=` on load and scrolls the matching line
+into view with a brief highlight, with no audio seek. There is no ANN index in
+v1: the bounded exact scans are sub-second at single-operator scale, and an HNSW
+index is added only on measured latency evidence. Two tri-state runtime toggles
+(`semantic_index_enabled`, `semantic_index_autogenerate`) live under
+**Settings > Semantic search**; they depend on nothing else and validate through
+their own self-contained invariant (`semantic_index_flags_ok`: autogenerate rides
+on the feature), deliberately outside the `EffectiveFlags` web.
 
 ## URL ingestion & SSRF (the ACQUIRE stage)
 

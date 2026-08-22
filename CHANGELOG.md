@@ -6,20 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **Transcript semantic search index (#121).** Voxint now builds a
-  meaning-based index of finished transcripts, so a later search can find a
-  passage by what it discusses and not only by its exact words. This release
-  lands the indexing half of the feature. An in-process embedder (the
+- **Transcript semantic search (#121).** Voxint now finds a passage by what it
+  means, across every transcript, not only by its exact words. A new **Meaning**
+  tab beside the runs search box opens a ranked `/search` page: type what you are
+  looking for and get the closest passages from the whole corpus, each with the
+  run, speaker, and time range, and a link that opens the transcript scrolled to
+  that passage. A `"quoted phrase"` is matched exactly and floated to the top. The
+  search runs fully on-device with no LLM and no network, combining semantic
+  closeness with word-for-word overlap.
+- **The semantic index that powers it (#121).** An in-process embedder (the
   multilingual MiniLM model, run as a vendored ONNX graph with no torch and no
   network at runtime) reads each completed run's resolved transcript, splits it
   into passages, and stores their vectors. Indexing runs automatically when a
   run finishes, and `voxint embed backfill` indexes the existing back catalogue
   (stale-only by default; `--force` reindexes everything). Correcting a
   transcript reindexes that run on the next pass, so the index tracks the
-  transcript as you fix it. Two new settings, `SEMANTIC_INDEX_ENABLED` and
-  `SEMANTIC_INDEX_AUTOGENERATE`, are on by default and can be turned off. The
-  ranked "Meaning" search view that reads this index is a following slice. The
-  Docker images bake the model files; a native install fetches them from the
+  transcript as you fix it. Semantic search and automatic indexing are two
+  toggles under **Settings > Semantic search** (and the `SEMANTIC_INDEX_ENABLED`
+  and `SEMANTIC_INDEX_AUTOGENERATE` installation defaults), both on by default.
+  The Docker images bake the model files; a native install fetches them from the
   pinned `minilm-onnx-v1` release asset, and `voxint-native.sh doctor` reports
   when they are missing.
 

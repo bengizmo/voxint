@@ -15,16 +15,37 @@ that never uses those words. The embedding runs in-process on sha-pinned MiniLM
 ONNX weights baked into the app image: no LLM, no network egress, no external
 cost, and nothing leaves the machine.
 
-This release ships the index (the "spine"). The ranked query and its console UI
-land in a follow-up; until then the index builds and stays fresh in the
-background, ready for that query.
+## Searching by meaning
+
+The console has two search modes, switched by the **Exact** / **Meaning** tab
+strip beside the runs search box. **Exact** is the chronological `/runs` browse
+that finds a run by the words it contains. **Meaning** is the ranked `/search`
+page: it reads the embedding index and returns a finite top list of passages from
+across every transcript, each with the run, the speaker, the time range, and a
+link that opens the transcript scrolled to that passage.
+
+A Meaning query fuses three signals over the index in one snapshot:
+
+- a **vector** arm, the cosine nearest passages to the query's own embedding, so
+  a paraphrase finds the passage even when the words differ;
+- a **lexical** arm, a language-neutral full-text match, so a passage in any
+  language stays findable by its own words; and
+- an **exact-quote** arm: any `"quoted phrase"` in the query is matched
+  literally and floated to the top, so a phrase you remember verbatim wins over a
+  near paraphrase. A phrase written `-"like this"` is an exclusion and is not
+  promoted.
+
+The vector and lexical arms are combined with reciprocal rank fusion, and one
+recording cannot flood the results because passages are capped per run. Meaning
+search has no "older" pager: it is a ranked answer, not a chronological feed.
 
 ## On by default
 
-Two independent flags govern it, both default on. In this release they are set
-through the environment; the resolver already reads them row-over-env (a stored
-value overrides the environment default) for the settings toggle that arrives
-with the query UI.
+Two independent flags govern it, both default on. Set them per instance from
+**Settings > Semantic search** (On / Off / use the installation setting for
+each), or as the installation default through the environment. A stored setting
+overrides the environment default and applies to the next run or query with no
+restart.
 
 | Flag | Default | Effect |
 |---|---|---|
