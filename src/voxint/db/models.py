@@ -1455,6 +1455,13 @@ class AppSettings(Base):
     voxint_web_research: Mapped[bool | None] = mapped_column(Boolean)
     enrichment_web_research_enabled: Mapped[bool | None] = mapped_column(Boolean)
     ytdlp_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    # Transcript semantic-search embedding spine (#121). Same tri-state: NULL
+    # inherits the env default, non-NULL overrides. These two depend only on each
+    # other (autogenerate ⇒ enabled), never on llm_enabled — the embedder is a
+    # local ONNX graph with no LLM and no egress. Resolve only via
+    # resolve_effective_semantic_index_{enabled,autogenerate}.
+    semantic_index_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    semantic_index_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
     # Optional bundled local LLM (issue #67). Same tri-state as the flags above:
     # NULL inherits env LLM_BUNDLED_ENABLED, non-NULL overrides. When effective
     # AND a bundled base URL is configured, enhancement + run-asset

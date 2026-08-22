@@ -487,6 +487,19 @@ class Settings(BaseSettings):
     # config snapshot); the staleness hash always covers the full source.
     run_assets_max_input_chars: int = Field(default=48_000, ge=1_000)
 
+    # Transcript semantic-search embedding spine (#121). The additive embedding
+    # producer reads finished transcript text and writes local vectors — no LLM,
+    # no egress, no external cost — so unlike the LLM-coupled capabilities above
+    # these two flags depend on nothing but each other (autogenerate ⇒ enabled).
+    # ON by default: semantic search is the corpus tool's headline capability and
+    # is meant to work with zero configuration. The vectors are computed in-
+    # process from the sha-pinned MiniLM ONNX weights baked into the app image.
+    semantic_index_enabled: bool = True
+    # Opt-in post-finalize step: enqueue an embedding job when a pipeline run
+    # completes, so semantic search covers new recordings automatically. Best-
+    # effort — a broker outage defers, never fails the run.
+    semantic_index_autogenerate: bool = True
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -557,7 +570,11 @@ class Settings(BaseSettings):
         # the same message. Imported locally because app_settings imports Settings,
         # so a module-level import would cycle. Raising the first message preserves
         # the prior boot-strict behavior and the exact operator-facing copy.
-        from voxint.app_settings import EffectiveFlags, validate_effective_flags
+        from voxint.app_settings import (
+            EffectiveFlags,
+            semantic_index_flags_ok,
+            validate_effective_flags,
+        )
 
         errors = validate_effective_flags(
             EffectiveFlags(
@@ -573,6 +590,15 @@ class Settings(BaseSettings):
         )
         if errors:
             raise ValueError(errors[0])
+        # The embedding flags (#121) depend only on each other, so their one
+        # invariant lives in its own standalone validator rather than the
+        # LLM/web-research-coupled EffectiveFlags web.
+        semantic_error = semantic_index_flags_ok(
+            enabled=self.semantic_index_enabled,
+            autogenerate=self.semantic_index_autogenerate,
+        )
+        if semantic_error is not None:
+            raise ValueError(semantic_error)
         return self
 
     @model_validator(mode="after")

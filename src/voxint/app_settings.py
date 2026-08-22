@@ -210,6 +210,49 @@ def resolve_effective_enrichment_run_assets_autogenerate(
     return _resolve_bool_flag(row, settings, "enrichment_run_assets_autogenerate")
 
 
+def resolve_effective_semantic_index_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    """Effective enablement of the transcript semantic-search spine (#121).
+
+    Independent of ``llm_enabled`` and every other capability — the embedding
+    producer runs the vendored MiniLM ONNX graph in-process, with no LLM and no
+    egress. The single chokepoint (:func:`voxint.enrichment.embedding_jobs.create_jobs`)
+    resolves through here, so a UI toggle applies with no restart.
+    """
+    return _resolve_bool_flag(row, settings, "semantic_index_enabled")
+
+
+def resolve_effective_semantic_index_autogenerate(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    """Effective enablement of the post-finalize auto-embed step (#121).
+
+    Only meaningful when :func:`resolve_effective_semantic_index_enabled` is also
+    true; :func:`semantic_index_flags_ok` enforces that self-contained invariant.
+    """
+    return _resolve_bool_flag(row, settings, "semantic_index_autogenerate")
+
+
+def semantic_index_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
+    """The one self-contained embedding-flag invariant, in one place (#121).
+
+    Returns an operator-facing error message when the effective combination is
+    invalid, else ``None``. Autogenerate rides on the feature it enqueues, so it
+    requires the feature to be enabled. Shared by the ``config.py`` env-time
+    validator and (later, PR2) the runtime settings form, so the two can never
+    drift — the standalone-validator precedent of :func:`validate_web_search_base_url`.
+    These flags depend on nothing else, so unlike the LLM/web-research web they
+    stay out of :class:`EffectiveFlags`.
+    """
+    if autogenerate and not enabled:
+        return (
+            "semantic_index_autogenerate requires semantic_index_enabled=true —"
+            " the post-finalize step only enqueues the feature it rides on"
+        )
+    return None
+
+
 def resolve_effective_voxint_web_research(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "voxint_web_research")
 
