@@ -2,9 +2,9 @@
 
 Mirrors ``test_resource_config.py``: the ``diarization_max_speakers`` knob
 (issue #128) is documented in ``.env.example`` under its env-var name, defaults
-to the pyannote service default of 10, holds its 1..20 bounds, and is not
-rescaled by the compute-tier profile (it is a diarization ceiling, not a compute
-timing budget).
+to unset (so a default install sends no bound and the service applies its own
+default), holds its 1..20 bounds when set, and is not rescaled by the
+compute-tier profile (it is a diarization ceiling, not a compute timing budget).
 """
 
 import re
@@ -23,8 +23,10 @@ def test_documented_in_env_example() -> None:
     ), ".env.example lacks a DIARIZATION_MAX_SPEAKERS line"
 
 
-def test_default() -> None:
-    assert Settings(_env_file=None).diarization_max_speakers == 10
+def test_default_is_unset() -> None:
+    # Unset means "no bound" so a default install is byte-identical to pre-#128:
+    # the client sends no max_speakers and the service applies its own default.
+    assert Settings(_env_file=None).diarization_max_speakers is None
 
 
 def test_bounds_reject_out_of_range() -> None:

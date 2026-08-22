@@ -91,9 +91,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   bound (the most speakers to expect) or an exact count three ways: the
   `voxint submit --max-speakers N` / `--num-speakers N` flags, the matching
   `max_speakers:` / `num_speakers:` keys in a media file's YAML sidecar, or the
-  install-wide `DIARIZATION_MAX_SPEAKERS` default (default 10, unchanged
-  behavior). A per-recording hint is frozen onto the run at submit and reused on
-  requeue. The exact count is sent to the service as equal `min`/`max` bounds, so
+  install-wide `DIARIZATION_MAX_SPEAKERS` ceiling (unset by default, so a stock
+  install sends no bound and the service's own default of 10 still applies). A
+  per-recording hint is frozen onto the run at submit and reused on requeue. The exact count is sent to the service as equal `min`/`max` bounds, so
   it needs no change to the pyannote request contract. See
   [docs/interpreting-diarization.md](docs/interpreting-diarization.md).
 

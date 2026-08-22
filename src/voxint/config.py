@@ -175,15 +175,15 @@ class Settings(BaseSettings):
     asr_url: str = "http://localhost:8022"
     diarizer_url: str = "http://localhost:8024"
     embedder_url: str = "http://localhost:8021"
-    # Install-wide default ceiling on the number of distinct speakers the
-    # diarizer may return. Sent to the pyannote service as max_speakers (the
-    # service enforces 1..20; see services/pyannote/app/schemas.py). The default
-    # of 10 matches the service default, so an install that never touches this
-    # sees unchanged behavior; lower it for a site that only ever handles small
-    # panels. A per-recording CLI flag or sidecar key overrides it per run. A
-    # pipeline knob, not a timing budget, so it stays out of
-    # TIER_SCALED_TIMING_FIELDS.
-    diarization_max_speakers: int = Field(default=10, ge=1, le=20)
+    # Install-wide ceiling on the number of distinct speakers the diarizer may
+    # return. Unset (None) means Voxint sends no bound and the pyannote service
+    # applies its own default (currently 10), so a default install is
+    # byte-identical to pre-#128. Set a value (1..20, the service limit; see
+    # services/pyannote/app/schemas.py) to cap it install-wide, e.g. for a site
+    # that only ever handles small panels. A per-recording CLI flag or sidecar
+    # key overrides it per run. A pipeline knob, not a timing budget, so it stays
+    # out of TIER_SCALED_TIMING_FIELDS.
+    diarization_max_speakers: int | None = Field(default=None, ge=1, le=20)
     # One request = one synchronous inference run over media that can be hours
     # long. Must stay comfortably BELOW stage_lease_seconds: the lease covers a
     # whole stage (possibly several sequential calls) plus persistence margin.
