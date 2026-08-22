@@ -89,7 +89,10 @@ COPY --from=builder /opt/whisper_models /app/.cache/whisper
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
-RUN mkdir -p /app/.cache/huggingface && chown -R voxint:voxint /app
+# Pre-create the alternate-model cache mountpoint so a fresh named volume mounted
+# there inherits voxint ownership; otherwise Docker creates it root-owned and the
+# non-root service cannot write an alternate model's download (WHISPER_DOWNLOAD_ROOT).
+RUN mkdir -p /app/.cache/huggingface /app/model-cache/whisper && chown -R voxint:voxint /app
 COPY --chown=voxint:voxint app/ /app/app/
 
 USER voxint

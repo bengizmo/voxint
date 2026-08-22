@@ -380,6 +380,35 @@ def test_prompt_advanced_models_collects_values_and_hides_token(repo: Path) -> N
     assert proc.stdout.count("hf_topsecret") == 1
 
 
+def test_prompt_advanced_models_drops_whisper_override_without_full_sha(repo: Path) -> None:
+    # A non-technical operator who gives a model but a short/typo'd revision would
+    # otherwise get WHISPER_MODEL + WHISPER_ALLOW_DOWNLOAD=1 with no valid SHA, and
+    # the whisper service refuses to start (crash-loop after a "successful" install).
+    # The installer now drops the override and keeps the validated large-v2 instead.
+    for bad_rev in ("", "abc123", "A" * 40):  # blank, too-short, uppercase
+        proc = run_lib(
+            repo,
+            "prompt_advanced_models\n"
+            'echo "M=${WHISPER_MODEL_VALUE}"\n'
+            'echo "R=${WHISPER_REVISION_VALUE}"\n'
+            'echo "A=${WHISPER_ALLOW_DOWNLOAD_VALUE}"\n',
+            stdin=f"y\nlarge-v3\n{bad_rev}\n\n",
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "M=\n" in proc.stdout, f"model should be dropped for revision {bad_rev!r}"
+        assert "R=\n" in proc.stdout
+        assert "A=\n" in proc.stdout  # never records the download opt-in without a SHA
+        assert "Keeping the" in proc.stderr
+
+
+def test_prompt_advanced_models_rejects_unsafe_token(repo: Path) -> None:
+    # A token with an embedded single-quote would break dotenv_squote; reject it at
+    # input rather than emit a malformed .env that fails opaquely at Compose time.
+    proc = run_lib(repo, "prompt_advanced_models\n", stdin="y\n\npyannote/x\n\nbad'tok\n")
+    assert proc.returncode != 0
+    assert "must not contain a single-quote" in proc.stderr
+
+
 def test_prompt_advanced_models_rejects_unsafe_value(repo: Path) -> None:
     # A model id with a space cannot be written into dotenv safely: reject it here
     # with a clear message rather than fail opaquely at Compose validation.

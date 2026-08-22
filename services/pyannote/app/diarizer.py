@@ -15,6 +15,7 @@ and loads it by default — no Hugging Face account or token involved. Setting
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -214,6 +215,17 @@ class Diarizer:
                 self.model_source,
             )
             requested_revision = None
+        elif requested_revision is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", requested_revision
+        ):
+            # Docs and .env.example call this a reproducible commit pin. A mutable
+            # ref (a branch or tag) is still loaded, but it can resolve to different
+            # weights across restarts, so say so rather than imply reproducibility.
+            logger.warning(
+                "DIARIZER_REVISION=%s is not a full 40-character commit SHA; the "
+                "pin will float with the ref rather than being reproducible",
+                requested_revision,
+            )
         self.model_revision = requested_revision
 
         # /healthz identity fields (see docs/gpu-contracts.md); versions

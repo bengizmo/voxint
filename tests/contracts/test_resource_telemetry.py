@@ -571,3 +571,52 @@ class TestWhisperOverridePassthrough:
         )
         # The alternate cache must never shadow the baked large-v2 download root.
         assert self._ALT_CACHE != "/app/.cache/whisper"
+
+    _WHISPER_DOCKERFILES = (
+        "services/whisper/Dockerfile",
+        "services/whisper/Dockerfile.cpu",
+        "services/whisper/Dockerfile.rocm",
+    )
+
+    @pytest.mark.parametrize("dockerfile", _WHISPER_DOCKERFILES)
+    def test_alt_cache_mountpoint_is_owned_by_runtime_user(self, dockerfile: str) -> None:
+        # A fresh named volume mounted at the alt-cache path inherits that path's
+        # ownership FROM THE IMAGE. If the image never creates it, Docker makes the
+        # mountpoint (and the empty volume) root-owned and the non-root ``voxint``
+        # service cannot write an alternate model's download. The image must create
+        # the path and chown it to voxint before dropping privileges.
+        text = (REPO_ROOT / dockerfile).read_text()
+        assert self._ALT_CACHE in text, (
+            f"{dockerfile} never creates the alt-cache mountpoint {self._ALT_CACHE}; "
+            "a fresh named volume there will be root-owned and unwritable by voxint"
+        )
+        chown_at = text.find("chown -R voxint:voxint /app")
+        user_at = text.find("USER voxint")
+        mkdir_at = text.find(self._ALT_CACHE)
+        assert chown_at != -1, f"{dockerfile} missing chown -R voxint:voxint /app"
+        assert user_at != -1, f"{dockerfile} missing USER voxint"
+        # The mountpoint must be created, then chowned, all before USER voxint.
+        assert mkdir_at < user_at and chown_at < user_at, (
+            f"{dockerfile} must create+chown {self._ALT_CACHE} before USER voxint"
+        )
+
+
+class TestDiarizerOverridePassthrough:
+    """Every pyannote-bearing overlay forwards the diarization model-override knobs
+    so a deployment-set DIARIZER_REVISION (configurable models A3) actually reaches
+    the container. Omitting the revision silently floats the pin at the repo
+    default while the operator believes it is pinned."""
+
+    _DIARIZER_KEYS = ("DIARIZER_MODEL_NAME", "DIARIZER_REVISION", "HF_TOKEN")
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_override_env_forwarded_to_pyannote(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        env = config["services"]["pyannote"]["environment"]
+        for key in self._DIARIZER_KEYS:
+            assert key in env, f"{overlay}:pyannote missing {key} pass-through"
+            assert env[key] == f"${{{key}:-}}", (
+                f"{overlay}:pyannote {key} not empty-defaulted"
+            )

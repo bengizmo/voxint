@@ -196,7 +196,12 @@ def _finish_claim(
     # it, so a failed/superseded attempt never records identity; it is stored in
     # the SAME transaction that completes the claim, keeping the stamp attempt-safe.
     if model_identity is not None:
-        claim.metrics = {METRICS_KEY: model_identity}
+        # Merge rather than replace: model_identity is the only writer today, but a
+        # future stage that records its own metrics on the claim row must not be
+        # silently clobbered by the stamp.
+        merged = dict(claim.metrics or {})
+        merged[METRICS_KEY] = model_identity
+        claim.metrics = merged
 
 
 def _observe_stage_identity(

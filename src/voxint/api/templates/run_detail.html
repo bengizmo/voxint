@@ -61,9 +61,10 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 <p class="muted">This stage needs the model services (ASR / diarizer / embedder).
 If they aren't running, start a compute tier —
 <code>docker compose -f compose.yaml -f compose.gpu.yaml up -d</code> (NVIDIA GPU) or
-<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU;
-needs <code>HF_TOKEN</code> in <code>.env</code> either way) — wait for them to come
-up, then requeue.</p>
+<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU) —
+wait for them to come up, then requeue. The shipped models run offline; an
+<code>HF_TOKEN</code> is only needed if you overrode diarization to a gated
+pipeline.</p>
 {% endif %}
 {% endif %}
 

@@ -51,7 +51,8 @@
   <li><strong>Transcription:</strong> <code>WHISPER_MODEL</code>,
       <code>WHISPER_REVISION</code>, <code>WHISPER_ALLOW_DOWNLOAD</code></li>
   <li><strong>Speaker diarization:</strong> <code>DIARIZER_MODEL_NAME</code>,
-      <code>DIARIZER_REVISION</code></li>
+      <code>DIARIZER_REVISION</code> (and <code>HF_TOKEN</code> for a gated
+      pipeline)</li>
 </ul>
 <p class="muted">After editing <code>.env</code>, restart just that service, for
    example <code>docker compose ... up -d whisper</code>, and only its container is

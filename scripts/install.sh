@@ -66,7 +66,8 @@ fi
 # Managed keys we own in .env. Unset any inherited shell exports of these so
 # they cannot silently shadow the .env values during Compose interpolation
 # (shell environment outranks the .env file). We do not touch DATABASE_URL etc.
-unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER VOXINT_RENDER_GID 2>/dev/null || true
+unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER VOXINT_RENDER_GID \
+  WHISPER_MODEL WHISPER_REVISION WHISPER_ALLOW_DOWNLOAD DIARIZER_MODEL_NAME DIARIZER_REVISION 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Compute-tier state. COMPUTE_TIER_VALUE is what the user chose
@@ -438,6 +439,15 @@ _reject_unsafe_env_value() {
   case $2 in *\\) fail "$1 must not end with a backslash (\\)." ;; esac
 }
 
+_is_full_sha() {
+  # $1 = candidate; success iff exactly 40 lowercase hex chars (the whisper
+  # service's revision gate). Empty or any non-hex character fails. Bash 3.2.
+  case $1 in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq 40 ]
+}
+
 # ---------------------------------------------------------------------------
 # Optional, advanced: point transcription or diarization at an alternate model.
 # Skipped by default -- the shipped whisper large-v2 and pyannote
@@ -450,7 +460,7 @@ _reject_unsafe_env_value() {
 # never echoed. Every field defaults to blank, meaning leave that key unset.
 # ---------------------------------------------------------------------------
 prompt_advanced_models() {
-  local ans
+  local ans model_ans
   step "Alternate pipeline models (advanced, optional)"
   say "  The shipped models -- whisper large-v2 and pyannote speaker-diarization-3.1"
   say "  -- are the only validated ones and need no setup. Most installs skip this."
@@ -468,19 +478,24 @@ prompt_advanced_models() {
   IFS= read -r ans || ans=""
   if [ -n "$ans" ]; then
     _reject_unsafe_env_value "Transcription model" "$ans"
-    WHISPER_MODEL_VALUE=$ans
+    model_ans=$ans
     say "  A non-default model must be downloaded once and pinned to an exact commit."
-    printf 'Transcription model revision (full 40-character commit SHA): ' >&2
+    printf 'Transcription model revision (full 40-character lowercase commit SHA): ' >&2
     IFS= read -r ans || ans=""
-    if [ -n "$ans" ]; then
-      _reject_unsafe_env_value "Transcription revision" "$ans"
+    _reject_unsafe_env_value "Transcription revision" "$ans"
+    if _is_full_sha "$ans"; then
+      WHISPER_MODEL_VALUE=$model_ans
       WHISPER_REVISION_VALUE=$ans
+      # The service refuses to start without BOTH a full-SHA revision (validated
+      # above) and this download opt-in, so record it only once the SHA is valid.
+      # This never writes a config the whisper container would reject at startup.
+      WHISPER_ALLOW_DOWNLOAD_VALUE=1
+      say "  Recorded WHISPER_ALLOW_DOWNLOAD=1 to permit the one-time download."
+    else
+      say "  That is not a full 40-character lowercase commit SHA. Keeping the"
+      say "  validated large-v2 instead; re-run the installer to set an alternate"
+      say "  model with its exact revision."
     fi
-    # Opting into a non-default model implies allowing its one-time download. The
-    # service still refuses to start unless BOTH this and a full-SHA revision are
-    # set, so record it now rather than fail closed on the first run.
-    WHISPER_ALLOW_DOWNLOAD_VALUE=1
-    say "  Recorded WHISPER_ALLOW_DOWNLOAD=1 to permit the one-time download."
   fi
 
   # Diarization (pyannote).
@@ -501,6 +516,9 @@ prompt_advanced_models() {
     IFS= read -r -s ans || ans=""
     printf '\n' >&2
     if [ -n "$ans" ]; then
+      # dotenv_squote (used to write it) requires no embedded single-quote or
+      # trailing backslash; enforce that here rather than emit a malformed .env.
+      _reject_unsafe_env_value "Hugging Face token" "$ans"
       HF_TOKEN_VALUE=$ans
     fi
   fi
