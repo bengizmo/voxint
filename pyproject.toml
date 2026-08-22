@@ -32,6 +32,14 @@ dependencies = [
     "scipy>=1.13",
     "pyyaml>=6.0",
     "yt-dlp>=2024.8",
+    # In-process text-embedding runtime for the semantic-search spine (#121):
+    # MiniLM as a vendored ONNX graph via onnxruntime + the Rust tokenizers
+    # lib. Deliberately NOT torch/transformers/sentence-transformers — the
+    # "NO torch/TF/CUDA" dep-closure boundary holds. onnxruntime is exact-pinned
+    # to the version the titanet -cpu parity harness measures (single repo-wide
+    # pin; a contract test binds it to services/titanet/requirements.cpu.txt).
+    "onnxruntime==1.28.0",
+    "tokenizers>=0.20",
 ]
 
 [project.optional-dependencies]
@@ -58,7 +66,8 @@ parity = [
     # gate floor of 0.9995, and the release smoke closes the gap end-to-end
     # by checking a shipped-image embedding against the committed CUDA
     # reference (tools/smoke_cpu_services.py).
-    "onnxruntime==1.28.0",
+    # onnxruntime itself now lives in the MAIN deps (the #121 embedder ships it
+    # to every install) at the same exact pin; the parity harness reuses it.
     # Exact pins mirroring services/titanet/requirements.txt — the in-process
     # ONNX chain must run the same preprocessing stack as the shipped image,
     # or preprocess version skew masquerades as engine drift.
@@ -165,6 +174,11 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 module = "celery.*"
+ignore_missing_imports = true
+
+# The in-process text embedder (#121) runtime deps ship no type stubs.
+[[tool.mypy.overrides]]
+module = ["onnxruntime", "onnxruntime.*", "tokenizers", "tokenizers.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
