@@ -30,8 +30,10 @@
 # Model weights are NOT in git: jobs fetch the ~100 MB titanet .onnx from
 # TITANET_ONNX_RELEASE (sha256 in tests/parity/fixtures/onnx/provenance.json)
 # and the pyannote checkpoints from PYANNOTE_MODELS_RELEASE (sha256s in
-# services/pyannote/models/provenance.json) before building/verifying. A
-# weights refresh bumps the asset release AND its provenance file together.
+# services/pyannote/models/provenance.json) before building/verifying. The app
+# image bakes the ~470 MB MiniLM transcript-search embedder from
+# MINILM_ONNX_RELEASE (sha256s in src/voxint/embeddings/models/provenance.json).
+# A weights refresh bumps the asset release AND its provenance file together.
 name: release
 
 on:
@@ -41,6 +43,7 @@ on:
 env:
   TITANET_ONNX_RELEASE: titanet-onnx-v1
   PYANNOTE_MODELS_RELEASE: pyannote-models-v1
+  MINILM_ONNX_RELEASE: minilm-onnx-v1
 
 jobs:
   # CUDA images — byte-identical build steps to previous releases; amd64-only.
@@ -342,6 +345,31 @@ jobs:
               if digest != prov[name]["sha256"]:
                   raise SystemExit(f"{name}: {digest} does not match provenance")
           print("vendored checkpoints match provenance")
+          PYEOF
+      - name: Fetch the MiniLM embedding weights (app only)
+        if: matrix.target.image == 'voxint'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p vendor/minilm
+          gh release download "$MINILM_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern model.onnx \
+            --output vendor/minilm/model.onnx
+          gh release download "$MINILM_ONNX_RELEASE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern tokenizer.json \
+            --output vendor/minilm/tokenizer.json
+          # The Dockerfile re-verifies against its baked provenance shas; this
+          # early check just fails faster with a clearer message.
+          python3 - <<'PYEOF'
+          import hashlib, json
+          prov = json.load(open("src/voxint/embeddings/models/provenance.json"))["files"]
+          for name in ("model.onnx", "tokenizer.json"):
+              digest = hashlib.sha256(open(f"vendor/minilm/{name}", "rb").read()).hexdigest()
+              if digest != prov[name]["sha256"]:
+                  raise SystemExit(f"{name}: {digest} does not match provenance")
+          print("vendored MiniLM weights match provenance")
           PYEOF
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c  # v4.2.0
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0

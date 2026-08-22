@@ -28,6 +28,26 @@ COPY alembic ./alembic
 # app_asset resolves it. No Node in the runtime image.
 COPY --from=frontend /app/frontend/dist ./src/voxint/api/static/app
 
+# Vendored transcript-search embedding weights (issue #121): the ~470 MB FP32
+# MiniLM ONNX backbone + its tokenizer, baked at the embedder's default path
+# (src/voxint/embeddings/onnx_embedder.py). Not in git (weights doctrine).
+# Before building, place model.onnx + tokenizer.json under vendor/minilm/. CI
+# fetches them from the minilm-onnx-v1 asset release; the maintainer supplies
+# them from the pinned upstream revision (see src/voxint/embeddings/models/
+# provenance.json). The build FAILS unless their sha256s match the ARGs below.
+# Overriding the ARGs produces a NON-PROVENANCE build (dev-only escape hatch);
+# release CI never overrides them.
+ARG MINILM_ONNX_SHA256=10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a
+ARG MINILM_TOKENIZER_SHA256=2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8
+COPY vendor/minilm/model.onnx /app/models/minilm/model.onnx
+COPY vendor/minilm/tokenizer.json /app/models/minilm/tokenizer.json
+RUN printf '%s\n' \
+      "${MINILM_ONNX_SHA256}  /app/models/minilm/model.onnx" \
+      "${MINILM_TOKENIZER_SHA256}  /app/models/minilm/tokenizer.json" \
+    | sha256sum -c - \
+    || { echo "vendored MiniLM embedding weights do not match the committed provenance sha256s — \
+fetch the matching minilm-onnx-v1 release assets (see src/voxint/embeddings/models/provenance.json)" >&2; exit 1; }
+
 # Honor the committed lockfile exactly; no dev deps, no editable install.
 RUN uv sync --frozen --no-dev --no-editable --no-cache
 ENV PATH="/app/.venv/bin:$PATH"

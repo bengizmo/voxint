@@ -81,10 +81,17 @@ paths = [
 # (docs/reports/console-ux-modernization-design-2026-08-19.md) describing an
 # audio-transport a11y surface; the generic-api-key rule mis-flags the two words
 # joined by a slash. Named individually — never allowlist a broad prose pattern.
+#
+# The MiniLM tokenizer sha256 (#121) is the committed provenance hash of a public
+# model file, baked as the app Dockerfile's MINILM_TOKENIZER_SHA256 ARG default;
+# its shape trips generic-api-key. It matches src/voxint/embeddings/models/
+# provenance.json (contract-tested). Named by its exact value — never allowlist a
+# broad 64-hex or MINILM_* pattern.
 regexes = [
     '''hf_(TESTSECRETTOKEN123|NEWSECRET456|PREFLIGHTSECRET789)''',
     '''WHISPER_AHEADS_LARGE_V2''',
     '''elapsed/duration''',
+    '''2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8''',
 ]
 # 29ce5b5a: parity doc/test comments named the measurement host (a bare machine
 # nickname — no address or credential). Scrubbed from the worktree in the v0.4.0

@@ -13,6 +13,7 @@ These are pure file/constant checks (no DB); the measured ONNX-vs-reference
 equivalence lives in ``tests/parity/test_text_embedding.py``.
 """
 
+import json
 import re
 import tomllib
 
@@ -77,3 +78,25 @@ def test_embedding_space_and_dim_constants() -> None:
     assert TEXT_EMBEDDING_DIM == 384
     assert EMBEDDING_SPACE, "embedding space id must be non-empty"
     assert MAX_SEQUENCE_TOKENS == 128
+
+
+def test_app_dockerfile_minilm_shas_match_provenance() -> None:
+    # The app image bakes the vendored MiniLM weights behind a build-time
+    # sha256 gate (issue #121). Drift between the Dockerfile's ARG defaults and
+    # the committed provenance would let a differently-exported graph ship
+    # silently and invalidate the measured equivalence gate the embedding space
+    # was pinned against. Mirrors the titanet/pyannote/gguf provenance gates in
+    # tests/contracts/test_service_logic.py.
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text()
+    provenance = json.loads(
+        (REPO_ROOT / "src" / "voxint" / "embeddings" / "models" / "provenance.json").read_text()
+    )
+    for arg, filename in (
+        ("MINILM_ONNX_SHA256", "model.onnx"),
+        ("MINILM_TOKENIZER_SHA256", "tokenizer.json"),
+    ):
+        match = re.search(rf"ARG {arg}=([0-9a-f]{{64}})", dockerfile)
+        assert match is not None, f"Dockerfile lost its {arg} default"
+        assert match.group(1) == provenance["files"][filename]["sha256"], (
+            f"Dockerfile {arg} drifted from src/voxint/embeddings/models/provenance.json"
+        )
