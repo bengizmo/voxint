@@ -1,0 +1,21 @@
+{
+  "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "upstream_revision": "e8f8c211226b894fcb81acc59f3b34ba3efd5f42",
+  "embedding_space": "minilm-multi-l12-onnx-fp32-mean-v1",
+  "note": "The equivalence corpus for tests/parity/test_text_embedding.py. Each item is embedded by BOTH the app's ONNX path and (once, offline) the reference sentence-transformers path; the test asserts per-vector cosine >= 0.9999. Chosen to exercise every drift site: multiple scripts/languages (tokenizer), a near-synonym retrieval pair (pooling), an exact repeated phrase, a 300-word monologue (128-token truncation), leading/trailing whitespace and punctuation, and a single unbroken long token.",
+  "items": [
+    {"id": "en-merger", "text": "where do they discuss the merger"},
+    {"id": "en-acquisition", "text": "the acquisition was finalized last quarter"},
+    {"id": "en-lunch", "text": "let's talk about lunch tomorrow"},
+    {"id": "es-fusion", "text": "¿dónde hablan de la fusión de empresas?"},
+    {"id": "fr-fusion", "text": "où discutent-ils de la fusion des sociétés"},
+    {"id": "de-uebernahme", "text": "die Firmenübernahme wurde letztes Quartal abgeschlossen"},
+    {"id": "zh-merger", "text": "会议讨论了公司合并的问题"},
+    {"id": "ru-merger", "text": "они обсуждают слияние компаний"},
+    {"id": "ar-merger", "text": "يناقشون اندماج الشركتين"},
+    {"id": "quote-exact", "text": "\"We will not be releasing the numbers before Friday,\" she said."},
+    {"id": "ws-padding", "text": "   spacing   and\tpunctuation!!!   "},
+    {"id": "long-monologue", "text": "So the way I see the whole situation is that we have been building toward this quarter for a very long time and every single team has put in an enormous amount of work to make sure that the product is ready for a wide launch and I want to be clear that none of this would have been possible without the engineers who stayed late and the support staff who fielded every question and the researchers who kept us honest about what the data actually said and so when we talk about the merger and the acquisition strategy and the way the two organizations will come together over the next several months I think it is important to remember that behind every line on the roadmap there is a person and a story and a set of tradeoffs that we argued about in a room until we finally reached something like agreement and that is the thing I am most proud of because it is easy to ship features and it is hard to build the kind of trust that lets a team disagree openly and still move forward together and that trust is exactly what we are going to need when the integration work begins in earnest and the two very different engineering cultures have to find a shared way of working and a shared definition of what good looks like and a shared willingness to throw away the parts of our own process that were never really working in the first place."},
+    {"id": "long-token", "text": "supercalifragilisticexpialidociousantidisestablishmentarianismpneumonoultramicroscopicsilicovolcanoconiosis"}
+  ]
+}
