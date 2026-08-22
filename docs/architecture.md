@@ -140,6 +140,8 @@ longer idles while a previous run's LLM enhancement is in flight. See
 | `profile_review_decisions` | **append-only human trail for enrichment claims** (revision 0010), deliberately separate from `adjudication_decisions`: accepting a bio is a different act from ruling on who spoke. UNIQUE per candidate (terminal accept/reject); corrections arrive as fresh candidates from a producer re-run |
 | `run_enrichment_assets` | **immutable run-level assets** (revision 0012, issue #41): one successful summary/topics/entity-mentions generation per row, keyed (run, kind, generation) with a monotonic per-kind generation under an advisory lock. Whole documents, not per-field claims: no review lifecycle, and regenerate supersedes (write-once stamp, trigger-enforced like `enrichment_candidates`). Carries producer + version, model, schema-versioned payload and config snapshot, and a `source_content_hash` over the canonical generation inputs (transcript text + #36 metadata + operator notes + each segment's **attributed** speaker, resolved through the shared `display_name`), so re-adjudicating, renaming, or merging a speaker marks the run's assets stale, staleness is recomputable, and a prompt/model upgrade never masquerades as a source change |
 | `run_asset_jobs` | mutable orchestration for one asset-generation attempt (revision 0012): queued → running (guarded claim) → succeeded \| failed \| cancelled, one active job per (run, kind) via a partial unique index, deadline-aware cancel. Failed/cancelled jobs record NO asset and consume no generation; the three kinds fail independently by construction |
+| `segment_embeddings` | **immutable transcript-search chunks** (revision 0033, issue #121): one row per embedded paragraph, keyed (run, `embedding_space`, `generation`, `chunk_index`). Carries the chunk's span, dominant `speaker_label`, `text_rendering`, the exact embedded `chunk_text`, a `content_hash` over that string, and the 384-dim `embedding` vector. Chunks are paragraph-derived and ephemeral (boundaries shift when a correction, split, or speaker ruling changes), so the span and text live ON the row, not behind a segment FK. `generation` is monotonic per (run, space): a re-embed publishes a whole new generation atomically and the old one is replaced, never half-seen. No ANN index in v1: exact cosine scan is sub-second at single-operator scale (add HNSW only on measured latency evidence) |
+| `embedding_jobs` | mutable orchestration for one index build per (run, `embedding_space`) (revision 0033): a dedicated lane, deliberately **not** the LLM-coupled `run_asset_jobs` family (embedding needs no LLM client and no `llm_enabled` gate). It reuses the proven lifecycle patterns only: queued → running (guarded claim UPDATE, duplicate delivery no-ops) → succeeded \| failed \| cancelled, one active job per (run, space) via a partial unique index. `source_content_hash` is the staleness detector (a run is stale when its recomputed resolved-transcript hash differs from the current generation's). A succeeded job is the generation manifest (it records the `generation` it published; the vectors live in `segment_embeddings`); a failed/cancelled job publishes no generation |
 
 Three invariants worth naming:
 
@@ -209,6 +211,61 @@ ever writes the decision ledger:
   archived name is refused with restore guidance; enrollment replay validates
   against durable provenance (run, label, operator), never the mutable
   `display_name`, so a rename can never break a replayed enrollment POST.
+
+## Transcript semantic search (the embedding spine, issue #121)
+
+Exact full-text search over `transcript_segments` finds a passage only when the
+operator already knows a word in it. The embedding spine adds meaning-based
+retrieval: finished transcripts are embedded and stored as vectors, so a later
+query can rank passages by similarity. PR1 (this data spine) builds and
+maintains the index; the ranked "Meaning" query and its UI arrive in a
+follow-up. The producer reads finished transcript text only. It never touches
+ASR, diarization, or TitaNet, so it does not trip the numerics parity gate.
+
+**The embedder.** `voxint.embeddings.onnx_embedder` runs
+`paraphrase-multilingual-MiniLM-L12-v2` as a vendored ONNX graph on the
+onnxruntime CPU provider, mean-pooling the token states and L2-normalizing in
+numpy. The BERT backbone is the whole ONNX graph; pooling and normalization are
+reproduced in Python, not baked in. It ships **without** torch, transformers, or
+sentence-transformers (a contract test, `tests/contracts/test_text_embedding_deps.py`,
+keeps that closure clean), so the "no torch/TF/CUDA in the app image" boundary
+holds. The output space is `minilm-multi-l12-onnx-fp32-mean-v1`, 384-dim; it is
+never compared against the 192-dim TitaNet speaker space. The tokenizer bakes
+`truncation.max_length=128`, so chunking counts tokens with a separate
+non-truncating `count_tokens` and keeps each chunk within `MAX_SEQUENCE_TOKENS`.
+Correctness is a measured equivalence gate (`tests/parity/test_text_embedding.py`,
+per-vector cosine >= 0.9999 against references generated once in a throwaway
+sentence-transformers env), not reasoning.
+
+**The producer.** `enrichment/producers/segment_embeddings.py` resolves the
+run's finished transcript (`attributed_transcript` → `paragraphize_transcript`),
+splits it into token-bounded paragraph chunks, embeds each, and writes
+`segment_embeddings` rows. Chunks carry their own span and text because
+paragraph boundaries move when a correction, split, or speaker ruling changes.
+
+**The job lane.** `enrichment/embedding_jobs.py` owns the lifecycle
+(`create_jobs` → `claim` → `execute_job` → atomic publish → `cancel`),
+mirroring the `run_asset_jobs` patterns without the LLM coupling. A build reads
+the transcript under a REPEATABLE READ snapshot before the CPU-bound embed, then
+publishes the whole run's new `generation` and deletes the prior one in one
+transaction under an advisory lock, so a concurrent reader sees the old
+generation whole or the new one whole, never a mix. Staleness is a
+whole-transcript content hash: a run is stale when its recomputed
+resolved-transcript hash differs from the current generation's, which is what
+`runs_needing_embeddings` scans for. A force-cancel fences an in-flight build so
+its publish cannot resurrect a superseded generation.
+
+**Producing an index.** When `SEMANTIC_INDEX_AUTOGENERATE` is on, the worker's
+finalize hook (`worker/tasks.py`) enqueues a build as a run completes, so search
+covers new recordings with no manual step (best-effort: a broker outage defers,
+never fails the run). The finalize hook and the backfill CLI both check
+`minilm_artifacts_available()` first and skip honestly when the weights are
+absent (a native install that never fetched the asset), rather than enqueuing a
+doomed job per run. `voxint embed backfill` drives the same lane synchronously
+for a whole-corpus catch-up with no broker. See
+[semantic-search.md](semantic-search.md) for the operator commands and the
+weights requirement, and [gpu-contracts.md](gpu-contracts.md) for the model
+services this spine sits alongside.
 
 ## URL ingestion & SSRF (the ACQUIRE stage)
 

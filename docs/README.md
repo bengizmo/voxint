@@ -13,6 +13,7 @@ Reference & internals:
 | Doc | Contents |
 |---|---|
 | `architecture.md` | Pipeline stages, state machine, data model |
+| `semantic-search.md` | Transcript semantic search: what the embedding index is, building/refreshing it with `voxint embed backfill`, and the weights requirement on native installs |
 | `annotations.md` | Operator annotations: the anchor contract (kinds, coordinate mapping, hashing, staleness, refresh, API taxonomy) |
 | `domain-packs.md` | Domain packs: manifest, resolution, the per-run frozen snapshot, and which fields shape which stages |
 | `gpu-contracts.md` | Versioned HTTP contracts for the ASR / diarizer / embedder services |
