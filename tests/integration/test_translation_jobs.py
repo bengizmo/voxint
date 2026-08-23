@@ -201,6 +201,28 @@ class TestWriter:
                         completed_at=now,
                     )
 
+    def test_display_case_target_language_is_normalized(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import UTC, datetime
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            source = load_translation_source(session, run_id)
+            now = datetime.now(tz=UTC)
+            row = record_translation(
+                session,
+                source=source,
+                target_language=" ES ",
+                translated={ln.line_index: f"ES:{ln.text}" for ln in source.lines},
+                model="m",
+                producer="p",
+                producer_version="1",
+                started_at=now,
+                completed_at=now,
+            )
+            assert row.target_language == "es"
+
     def test_correction_flips_freshness(self, session_factory: sessionmaker[Session]) -> None:
         with session_factory() as session:
             run_id = seed_run(session)
@@ -288,12 +310,14 @@ class TestJobs:
                 settings=make_settings(),
             )
             assert job is None and already
-            # A different language is its own slot.
+            # A different language is ALSO refused while any job is active:
+            # the console card is a single-job surface, and a second
+            # concurrent language would run with no visible cancel control.
             other, other_active = create_job(
                 session, pipeline_run_id=run_id, target_language="fr",
                 settings=make_settings(),
             )
-            assert other is not None and not other_active
+            assert other is None and other_active
 
     def test_claim_is_exactly_once_and_cancel_queued_wins(
         self, session_factory: sessionmaker[Session]
@@ -305,7 +329,11 @@ class TestJobs:
             assert claim_job(session, job_id) is not None
         with session_factory() as session:
             assert claim_job(session, job_id) is None  # duplicate delivery no-ops
-        queued = self._one_job(session_factory, run_id, target="fr")
+        # A separate run for the queued-cancel arm: the first run's RUNNING
+        # job blocks any new enqueue on it (one active job per run).
+        with session_factory() as session:
+            other_run_id = seed_run(session)
+        queued = self._one_job(session_factory, other_run_id, target="fr")
         with session_factory() as session:
             assert request_cancel(session, queued)
             session.commit()

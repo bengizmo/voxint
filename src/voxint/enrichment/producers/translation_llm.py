@@ -43,7 +43,7 @@ class TranslationProducerError(Exception):
 
 
 class TranslationCancelled(Exception):
-    """The cooperative cancel flag was observed between batches."""
+    """The cooperative cancel flag was observed between LLM calls."""
 
 
 class ChatJsonLLM(Protocol):
@@ -149,9 +149,16 @@ def _translate_batch(
     source_label: str | None,
     target_label: str,
     attempts: int,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[int, str]:
     last: Exception | None = None
     for _ in range(max(1, attempts)):
+        # Checked before EVERY call, not just between top-level batches: the
+        # retry ladder and recursive bisection can multiply one failing
+        # batch into many calls, and a cancel must stop that spend at the
+        # next call boundary, not after the whole ladder runs dry.
+        if should_cancel is not None and should_cancel():
+            raise TranslationCancelled()
         try:
             body = client.chat_json(
                 _batch_prompt(batch, source_label=source_label, target_label=target_label)
@@ -178,11 +185,11 @@ def _translate_batch(
     mid = len(batch) // 2
     left = _translate_batch(
         client, batch[:mid], source_label=source_label, target_label=target_label,
-        attempts=attempts,
+        attempts=attempts, should_cancel=should_cancel,
     )
     right = _translate_batch(
         client, batch[mid:], source_label=source_label, target_label=target_label,
-        attempts=attempts,
+        attempts=attempts, should_cancel=should_cancel,
     )
     return {**left, **right}
 
@@ -200,10 +207,10 @@ def translate_lines(
 
     Raises :class:`TranslationProducerError` when any line cannot be validly
     translated — partial output never leaves this function, so the writer only
-    ever sees complete generations. ``should_cancel`` is checked between
-    batches (the multi-call analogue of the asset executor's single post-call
-    check); an observed flag raises :class:`TranslationCancelled` so a long
-    generation stops after the in-flight batch, not at the very end.
+    ever sees complete generations. ``should_cancel`` is checked before every
+    LLM call — including retries and bisected sub-batches — so a cancel stops
+    a long generation after the in-flight call, never after a whole retry
+    ladder; an observed flag raises :class:`TranslationCancelled`.
     """
     out: dict[int, str] = {}
     to_translate: list[TranslationLineSource] = []
@@ -218,8 +225,6 @@ def translate_lines(
         max_segments=settings.llm_batch_max_segments,
         max_chars=settings.llm_batch_max_chars,
     ):
-        if should_cancel is not None and should_cancel():
-            raise TranslationCancelled()
         out.update(
             _translate_batch(
                 client,
@@ -227,6 +232,7 @@ def translate_lines(
                 source_label=source_label,
                 target_label=target_label,
                 attempts=settings.llm_attempts_per_batch,
+                should_cancel=should_cancel,
             )
         )
     return out

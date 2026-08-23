@@ -28,7 +28,7 @@ cleared and the one-active-per-(run, language) slot recovered.
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, Protocol, cast
 
 from sqlalchemy import CursorResult, case, func, select, update
@@ -152,7 +152,13 @@ def create_job(
 
     Returns ``(job, already_active)`` — an active job for the same (run,
     language) is a skip, not an error, mapped from the partial unique index
-    itself (check-then-insert would race).
+    itself (check-then-insert would race). An active job for ANY language on
+    the run is also a skip: the console card is a single-job surface (one
+    poll target, one cancel form), so a second concurrent language would run
+    invisibly with no cancel control. That cross-language guard is a plain
+    check (two simultaneous different-language enqueues can both slip in;
+    the strays just run to completion — benign for a single operator), while
+    the same-language index stays the atomic backstop.
     """
     row = get_app_settings(session)
     if not translation_gates_open(settings, row):
@@ -175,6 +181,18 @@ def create_job(
             f"the transcript is already in {language_label(target)} —"
             " nothing to translate"
         )
+    active = session.execute(
+        select(TranslationJob.id)
+        .where(
+            TranslationJob.pipeline_run_id == pipeline_run_id,
+            TranslationJob.status.in_(
+                (TranslationJobStatus.QUEUED.value, TranslationJobStatus.RUNNING.value)
+            ),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if active is not None:
+        return None, True
     # Snapshot the ROW-resolved endpoint (the asset-job contract): an env change
     # between enqueue and execution can't silently redirect the call. The API
     # KEY is never snapshotted — it is resolved live at execution from the row.
@@ -199,6 +217,13 @@ def create_job(
             raise
         return None, True
     return job, False
+
+
+def _db_now(session: Session) -> datetime:
+    """The database's clock. Both run_translations stamps must come from one
+    clock (the claim writes started_at with the DB's now()) or the table's
+    completed_at >= started_at CHECK can fail under DB/app clock skew."""
+    return session.execute(select(func.now())).scalar_one()
 
 
 def claim_job(session: Session, job_id: uuid.UUID) -> TranslationJob | None:
@@ -230,10 +255,12 @@ def claim_job(session: Session, job_id: uuid.UUID) -> TranslationJob | None:
 
 def request_cancel(session: Session, job_id: uuid.UUID) -> bool:
     """Cancel cooperatively — atomically, never clobbering a terminal state
-    (the asset-job contract verbatim). A RUNNING job that provably outlived
-    one batch's worst case (attempts x timeout + grace) has no live executor
-    refreshing it toward success within that bound — force-cancel clears the
-    slot; a still-live executor's own terminal stamp is CAS-guarded either way."""
+    (the asset-job contract verbatim). A RUNNING job older than one batch's
+    worst case (attempts x timeout + grace) is force-cancelled outright: a
+    dead executor never clears the slot itself, and a still-live one on a
+    long multi-batch run was told to stop anyway (it observes the flag
+    before its next LLM call, and its terminal stamp is CAS-guarded either
+    way — cancel wins, never corrupts)."""
     flagged = cast(
         CursorResult[Any],
         session.execute(
@@ -369,7 +396,7 @@ def execute_job(
             if source.source_language is not None
             else None
         )
-        started_at = job.started_at or datetime.now(tz=UTC)
+        started_at = job.started_at or _db_now(session)
         owned_client: HttpLLMClient | None = None
         client: ChatJsonLLM
         if llm is None:
@@ -470,6 +497,13 @@ def execute_job(
             # provenance, not this guard's baseline). A mismatch means this
             # generation describes a transcript that no longer exists, so it
             # must NOT persist or supersede the (still-valid) previous one.
+            # Best-effort narrowing, not a lock: an edit committing between
+            # this compare and our commit can still slip through, but the
+            # slipped-in generation still describes the same pre-edit source
+            # the previous head did, and the card's per-render hash compare
+            # (the actual freshness authority) marks it out of date
+            # immediately — so the residual window never shows wrong text,
+            # and source rows stay unlocked across LLM-adjacent commits.
             current_source = load_translation_source(session, job.pipeline_run_id)
             if translation_source_hash(current_source) != translation_source_hash(source):
                 _finish(
@@ -488,7 +522,12 @@ def execute_job(
                 producer=PRODUCER_NAME,
                 producer_version=PRODUCER_VERSION,
                 started_at=started_at,
-                completed_at=datetime.now(tz=UTC),
+                # DB clock, like the claim's started_at: run_translations
+                # enforces completed_at >= started_at, and mixing an
+                # app-clock stamp with the DB-clock claim stamp could trip
+                # that CHECK under clock skew — failing the job AFTER a
+                # fully paid-for generation.
+                completed_at=_db_now(session),
             )
             session.flush()
             stamped = cast(

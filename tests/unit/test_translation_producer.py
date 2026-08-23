@@ -227,6 +227,34 @@ class TestFailureLadder:
             )
         assert llm.calls == 1  # first batch ran, second was cancelled
 
+    def test_cancel_observed_between_retry_attempts(self) -> None:
+        # First attempt fails, then the flag flips: the remaining retries of
+        # the same batch must not run.
+        cancels = iter([False, True])
+        llm = FakeLLM([LLMError("transient")])
+        with pytest.raises(TranslationCancelled):
+            translate_lines(
+                llm, [line(0, "One.")], source_label=None,
+                target_label="Spanish (es)",
+                settings=make_settings(llm_attempts_per_batch=3),
+                should_cancel=lambda: next(cancels),
+            )
+        assert llm.calls == 1
+
+    def test_cancel_observed_during_bisection(self) -> None:
+        # The pair batch fails its only attempt, then the flag flips: neither
+        # bisected single-line batch may reach the model.
+        cancels = iter([False, True])
+        llm = FakeLLM([LLMError("lost track of the list")])
+        with pytest.raises(TranslationCancelled):
+            translate_lines(
+                llm, [line(0, "One."), line(1, "Two.")], source_label=None,
+                target_label="Spanish (es)",
+                settings=make_settings(llm_attempts_per_batch=1, llm_batch_max_segments=2),
+                should_cancel=lambda: next(cancels),
+            )
+        assert llm.calls == 1
+
 
 class TestBatching:
     def test_batches_respect_segment_and_char_caps(self) -> None:

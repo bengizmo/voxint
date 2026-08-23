@@ -108,6 +108,12 @@ class TestConsole:
         assert again.status_code == 200
         assert "already in progress" in again.text
         assert len(published) == 1
+        # A DIFFERENT language while one is active is refused the same way —
+        # the card is a single-job surface with one cancel control.
+        other = _generate(client, run_id, target="fr")
+        assert other.status_code == 200
+        assert "already in progress" in other.text
+        assert len(published) == 1
 
     def test_generate_defaults_to_preferred_language(
         self, session_factory: sessionmaker[Session], published: list[uuid.UUID]
@@ -121,6 +127,20 @@ class TestConsole:
             job = session.execute(select(TranslationJob)).scalar_one()
             assert job.target_language == "fr"
         assert len(published) == 1
+
+    def test_preferred_matching_detected_falls_back_to_explicit_choice(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # The detected language is dropped from the select's options, so a
+        # preferred language equal to it cannot be the default: the browser
+        # would silently pick the first remaining option. The card must show
+        # the explicit-choice placeholder instead.
+        with session_factory() as session:
+            run_id = seed_run(session, detected_language="es")
+        client = _build_client(session_factory, translation_target_language="es")
+        body = client.get(f"/runs/{run_id}/translation").text
+        assert "Choose a language" in body
+        assert body.count(" selected") == 1  # only the placeholder
 
     def test_generate_without_any_target_reports_inline(
         self, session_factory: sessionmaker[Session], published: list[uuid.UUID]

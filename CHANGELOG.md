@@ -26,8 +26,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   the job while keeping the previous translation current. Console rendering of
   translated lines and translated exports land in slice B. Migration 0038.
 
-## [0.23.1] - 2026-08-23
-
 ### Fixed
 - A transcript could be left permanently out of semantic search if its
   embedding job was recorded but never handed to the worker (a crash or broker
@@ -36,6 +34,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   would retry it. The background recovery pass now re-dispatches such a job once
   it has sat unclaimed past the staleness grace, and `voxint embed backfill`
   adopts and runs it instead of reporting the run as already active (#130).
+
+## [0.23.1] - 2026-08-23
 
 ### Fixed
 - The Docker app image baked the transcript-search MiniLM weights (#121) into

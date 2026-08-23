@@ -3323,8 +3323,12 @@ def _run_translation_state(
         resolve_effective_translation_target_language(row, settings)
     )
     # The generate select defaults to the preferred language; with none set,
-    # the operator picks one per run (blank forces an explicit choice).
-    default_target = preferred or ""
+    # the operator picks one per run (blank forces an explicit choice). A
+    # preferred language MATCHING the detected one also defaults to blank:
+    # the template drops the detected language from the options, so keeping
+    # it as the default would leave no option selected and the browser would
+    # silently submit the first arbitrary language instead.
+    default_target = preferred if preferred and preferred != detected else ""
     return {
         "run_id": run_id,
         "translations": [
@@ -7038,7 +7042,7 @@ def _register_routes(app: FastAPI) -> None:
         request: Request,
         operator: OperatorDep,
         session: SessionDep,
-        target_language: Annotated[str | None, Form()] = None,
+        target_language: Annotated[str | None, Form(max_length=64)] = None,
         csrf_token: Annotated[str | None, Form()] = None,
     ) -> Response:
         """Start one translation job for the run (#133).

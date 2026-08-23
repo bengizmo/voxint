@@ -210,6 +210,10 @@ def record_translation(
     line exactly (the executor's batch validation should already guarantee
     this; the writer re-checks so no caller can smuggle a partial generation).
     """
+    # Defensive normalization: the job path already stores canonical codes,
+    # but a future caller passing display case must not fail here — AFTER
+    # the LLM work is already paid for.
+    target_language = target_language.strip().lower()
     if target_language not in LANGUAGE_NAMES:
         raise TranslationError(f"unknown target language code: {target_language!r}")
     for label, value, cap in (

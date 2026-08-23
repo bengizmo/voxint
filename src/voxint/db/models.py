@@ -2004,6 +2004,10 @@ class TranslationJob(Base):
             "finished_at IS NULL OR started_at IS NOT NULL",
             name="translation_jobs_finished_requires_started_check",
         ),
+        CheckConstraint(
+            "finished_at IS NULL OR finished_at >= started_at",
+            name="translation_jobs_finished_after_started_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
