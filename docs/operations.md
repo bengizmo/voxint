@@ -701,14 +701,22 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
 `VOXINT_PASSWORD`) for operators who prefer not to shell into a container:
 
 - **`GET /runs`**: an execution-history browser, newest-first, keyset-paged
-  (`RUNS_PAGE_SIZE`, default 50), with **orthogonal** filters `status=` and
-  `review=needed|resolved|claimed`. **`GET /runs/{id}`** shows the run detail and
+  (`RUNS_PAGE_SIZE`, default 50), with **orthogonal** filters `status=`,
+  `review=needed|resolved|claimed`, and `language=` (an exact match on the
+  language whisper detected, its options limited to codes some run actually
+  carries; #124). Each row carries a **Language** column showing the detected
+  language, or a dash for a run not yet transcribed or one that predates the
+  feature. **`GET /runs/{id}`** shows the run detail and
   the per-stage attempt ledger (the same data as `voxint status`), with
   transcript and audio links when present. A **Pipeline models** block renders
   the per-attempt model identity recorded for the transcription and diarization
   stages (from each stage's latest completed attempt, so a retried stage shows
   the model that produced the result); runs that predate this provenance read
-  "Not recorded". See [Changing pipeline models](how-to/changing-pipeline-models.md).
+  "Not recorded". A **Detected language** block names the language and, when one
+  was recorded, whisper's own **language-detection score**, labelled as the
+  model's confidence in its own guess rather than a measure of transcript
+  accuracy; runs from before the feature read as unrecorded. See
+  [Changing pipeline models](how-to/changing-pipeline-models.md).
 - **`GET /review`**: the adjudication queue of completed runs with at least one
   voice still needing a human ruling. Each row shows a **friendly title**, the
   recording **duration** and **age**, and a **resolved-of-total** progress bar,

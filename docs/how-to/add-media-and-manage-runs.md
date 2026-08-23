@@ -242,6 +242,18 @@ the **transcribe** or **diarize & embed** stage, the most common cause is that
 the model services were not running; the run page says so and tells you how to
 start them.
 
+### The recording's language
+
+Voxint listens to each recording and works out what language it is in, then
+shows that on the run page as **Detected language**, for example "Spanish (es)".
+It picks one language for the whole recording. Next to the language it may show a
+**detection score**: this is how sure the model is about the language it chose,
+not how accurate the transcript is. The **Runs** list has a **Language** column
+so you can see every recording's language at a glance, and a **Detected
+language** filter to show only recordings in one language. Recordings you
+processed with an older version of Voxint have no language recorded and show a
+dash.
+
 ---
 
 ## Manage runs
