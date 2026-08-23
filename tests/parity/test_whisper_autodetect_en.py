@@ -145,12 +145,19 @@ def _params() -> list[tuple[str, str, str]]:
 
 
 class _TranscriberCache:
-    """One resident engine at a time; switching evicts the other model."""
+    """One resident engine at a time; switching evicts the other model.
+
+    The ``service_package("whisper")`` context stays OPEN for the resident
+    engine's whole lifetime, not just during construction: the ct2 front layer
+    lazy-imports ``app.backends.vad_plan`` at *transcribe* time, so ``app`` must
+    remain importable across the transcribe calls (matching the ct2-legacy
+    replay gate, whose fixture yields from inside the same context).
+    """
 
     def __init__(self) -> None:
         self._engine: str | None = None
         self._transcriber: Any = None
-        self._env_saved: dict[str, str | None] = {}
+        self._ctx: Any = None
 
     def get(self, engine: str) -> Any:
         if self._engine == engine:
@@ -160,7 +167,9 @@ class _TranscriberCache:
         os.environ["WHISPER_REVISION"] = WHISPER_HF_REVISION
         from tests.contracts.conftest import service_package
 
-        with service_package("whisper"):
+        ctx = service_package("whisper")
+        ctx.__enter__()
+        try:
             from app.backends.ct2 import Ct2Backend
             from app.transcription import WhisperTranscriber
 
@@ -181,13 +190,18 @@ class _TranscriberCache:
                     )
                 )
             t.load_model()
-        self._engine, self._transcriber = engine, t
+        except BaseException:
+            ctx.__exit__(*sys.exc_info())
+            raise
+        self._engine, self._transcriber, self._ctx = engine, t, ctx
         return t
 
     def close(self) -> None:
         if self._transcriber is not None:
             self._transcriber.cleanup_memory()
-        self._engine, self._transcriber = None, None
+        if self._ctx is not None:
+            self._ctx.__exit__(None, None, None)
+        self._engine, self._transcriber, self._ctx = None, None, None
         gc.collect()
 
 
