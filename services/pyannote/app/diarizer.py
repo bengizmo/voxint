@@ -558,6 +558,16 @@ class Diarizer:
                     f"{strict_params} — refusing to start with an unvalidated "
                     "clustering config under the validated identity"
                 ) from exc
+            # #131: a non-throwing instantiate() is not proof the overrides took.
+            # Pinned pyannote 3.1.1 can carry a FROZEN clustering hyperparameter
+            # and still return successfully, leaving the effective value at the
+            # frozen default while the config hash computed at load would encode
+            # the *requested* value — attributing a config the service never ran
+            # to the validated identity. Read the instantiated params back and
+            # fail closed unless the effective clustering matches what we asked
+            # for. Stock config.vendored.yaml has no freeze section, so the
+            # default deploy passes this unchanged.
+            self._verify_effective_clustering(strict_params["clustering"])
             logger.info("Applied clustering hyperparameters: %s", strict_params)
             return
         for params in (
@@ -573,6 +583,43 @@ class Diarizer:
         logger.warning(
             "Pipeline rejected clustering overrides; running with model defaults"
         )
+
+    def _verify_effective_clustering(self, requested: dict[str, Any]) -> None:
+        """Fail closed unless the pipeline's *effective* clustering params match
+        ``requested`` (#131).
+
+        Called only on the local/validated path after a successful
+        ``instantiate``. Reads back ``parameters(instantiated=True)["clustering"]``
+        and raises ``RuntimeError`` if the effective ``threshold`` or
+        ``min_cluster_size`` differs from what was requested — the frozen-
+        hyperparameter case where ``instantiate`` returns without applying an
+        override. Refusing to boot keeps the validated config hash (computed from
+        the requested values) from covering a config the service never ran.
+        """
+        try:
+            effective = self.model.parameters(instantiated=True)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not read the instantiated clustering parameters back from "
+                "the vendored pipeline to confirm the overrides took effect — "
+                "refusing to start rather than report an unverified clustering "
+                "config under the validated identity"
+            ) from exc
+        effective_clustering: dict[str, Any] = {}
+        if isinstance(effective, dict) and isinstance(effective.get("clustering"), dict):
+            effective_clustering = effective["clustering"]
+        mismatched = {
+            key: {"requested": requested[key], "effective": effective_clustering.get(key)}
+            for key in ("threshold", "min_cluster_size")
+            if effective_clustering.get(key) != requested[key]
+        }
+        if mismatched:
+            raise RuntimeError(
+                "The vendored pipeline accepted the clustering overrides but its "
+                f"effective clustering config differs from requested: {mismatched} "
+                "(a frozen hyperparameter) — refusing to start so the validated "
+                "identity cannot cover a clustering config that did not run"
+            )
 
     def diarize(
         self,

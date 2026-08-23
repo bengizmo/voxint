@@ -1235,11 +1235,23 @@ class TestDiarizerClusteringFailClosed:
     class _FakePipeline:
         """Minimal stand-in for a loaded pyannote pipeline. ``reject_min_size``
         simulates a pipeline version that refuses the ``min_cluster_size`` param;
-        ``reject_all`` simulates one that refuses every clustering override."""
+        ``reject_all`` simulates one that refuses every clustering override.
+        ``frozen_clustering`` (#131) simulates a pipeline that *accepts*
+        ``instantiate`` but reads back a frozen clustering value that differs from
+        the requested one; ``no_parameters`` simulates one whose
+        ``parameters(instantiated=True)`` readback raises."""
 
-        def __init__(self, reject_min_size: bool, reject_all: bool = False) -> None:
+        def __init__(
+            self,
+            reject_min_size: bool,
+            reject_all: bool = False,
+            frozen_clustering: dict[str, object] | None = None,
+            no_parameters: bool = False,
+        ) -> None:
             self._reject_min_size = reject_min_size
             self._reject_all = reject_all
+            self._frozen_clustering = frozen_clustering
+            self._no_parameters = no_parameters
             self.instantiated: dict[str, object] | None = None
 
         def instantiate(
@@ -1253,12 +1265,33 @@ class TestDiarizerClusteringFailClosed:
             self.instantiated = params
             return self
 
+        def parameters(self, instantiated: bool = False) -> dict[str, object]:
+            if self._no_parameters:
+                raise RuntimeError("this pipeline version has no instantiated params view")
+            applied: dict[str, object] = {}
+            if isinstance(self.instantiated, dict):
+                clustering = self.instantiated.get("clustering", {})
+                if isinstance(clustering, dict):
+                    applied = dict(clustering)
+            # A frozen hyperparameter overrides whatever was requested.
+            if self._frozen_clustering:
+                applied.update(self._frozen_clustering)
+            return {"clustering": applied}
+
     def _diarizer(
-        self, *, local: bool, reject_min_size: bool, reject_all: bool = False
+        self,
+        *,
+        local: bool,
+        reject_min_size: bool,
+        reject_all: bool = False,
+        frozen_clustering: dict[str, object] | None = None,
+        no_parameters: bool = False,
     ) -> "diarizer.Diarizer":
         d = diarizer.Diarizer()
         d.model_is_local = local
-        d.model = self._FakePipeline(reject_min_size, reject_all)
+        d.model = self._FakePipeline(
+            reject_min_size, reject_all, frozen_clustering, no_parameters
+        )
         return d
 
     def test_local_pipeline_that_rejects_min_size_fails_closed(self) -> None:
@@ -1274,6 +1307,43 @@ class TestDiarizerClusteringFailClosed:
                 "threshold": d.clustering_threshold,
                 "min_cluster_size": d.clustering_min_size,
             }
+        }
+
+    def test_local_pipeline_that_freezes_threshold_fails_closed(self) -> None:
+        # #131: instantiate() succeeds but a frozen threshold leaves the effective
+        # value different from the requested one. The config hash computed at load
+        # would encode the requested value, so the boot must fail closed rather
+        # than attribute a config the service never ran to the validated identity.
+        d = self._diarizer(
+            local=True, reject_min_size=False, frozen_clustering={"threshold": 0.7045654963945799}
+        )
+        with pytest.raises(RuntimeError, match="effective clustering config differs"):
+            d._apply_clustering_overrides()
+
+    def test_local_pipeline_that_freezes_min_cluster_size_fails_closed(self) -> None:
+        # #131: the same guard on the other tunable folded into the config hash.
+        d = self._diarizer(
+            local=True, reject_min_size=False, frozen_clustering={"min_cluster_size": 12}
+        )
+        with pytest.raises(RuntimeError, match="effective clustering config differs"):
+            d._apply_clustering_overrides()
+
+    def test_local_pipeline_without_a_params_readback_fails_closed(self) -> None:
+        # #131: if the effective params cannot be read back at all, the overrides
+        # are unverified — fail closed rather than report an unconfirmed config.
+        d = self._diarizer(local=True, reject_min_size=False, no_parameters=True)
+        with pytest.raises(RuntimeError, match="Could not read the instantiated"):
+            d._apply_clustering_overrides()
+
+    def test_local_pipeline_with_matching_effective_params_boots(self) -> None:
+        # The #131 readback must NOT reject the happy path: when the effective
+        # clustering equals what was requested, the boot proceeds. (Stock
+        # config.vendored.yaml has no freeze section, so this is the default.)
+        d = self._diarizer(local=True, reject_min_size=False)
+        d._apply_clustering_overrides()  # must not raise
+        assert d.model.parameters(instantiated=True)["clustering"] == {
+            "threshold": d.clustering_threshold,
+            "min_cluster_size": d.clustering_min_size,
         }
 
     def test_non_local_override_degrades_to_threshold_only(self) -> None:

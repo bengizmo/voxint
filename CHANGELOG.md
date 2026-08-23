@@ -156,6 +156,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   [docs/interpreting-diarization.md](docs/interpreting-diarization.md).
 
 ### Fixed
+- **The built-in diarizer now confirms its clustering settings actually took
+  effect before reporting them as validated.** On the built-in pipeline the
+  service applied the tuned clustering settings and, if that call did not raise,
+  treated them as applied and folded the requested values into the configuration
+  hash. A pinned pyannote build can hold a clustering setting fixed and still
+  accept the call, which would leave the service running one configuration while
+  reporting the hash of another under the validated identity. The service now
+  reads the effective clustering settings back after applying them and refuses to
+  start unless the threshold and minimum cluster size match what was requested.
+  The stock configuration pins no setting, so the default install applies its
+  settings, starts normally, and reads as validated.
 - **The run page no longer attributes a result to an older attempt's model
   stamp.** When a stage was retried and the newest completed attempt carried no
   recorded model identity, the "Pipeline models" panel fell back to an older
