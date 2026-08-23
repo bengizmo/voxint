@@ -179,7 +179,8 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   recorded with Dutch-first speakers, that auto-detection legitimately resolves
   to the speaker's first language, e.g. `TS3011a` resolves to Dutch; like the
   silence and hallucination-bait clips these sit outside the en-conditional
-  Tier-1 claim and belong to the Tier-2 follow-up, not asserted here); on arm64;
+  Tier-1 claim and belong to the Tier-2 follow-up (#132), not asserted here); on
+  arm64;
   see
   docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
   report. `VOXINT_PARITY_REQUIRED`

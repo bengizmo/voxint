@@ -9,7 +9,8 @@ normally matches forced-en* — not an unconditional byte-identity claim.
 
 For every SPEECH entry of the frozen ct2-cpu oracle that auto-detects en (the
 silence and hallucination-bait clips are excluded — with nothing to detect
-from, auto-detection legitimately returns arbitrary languages, Tier-2 scope —
+from, auto-detection legitimately returns arbitrary languages, Tier-2 scope
+(#132) —
 and so is ``TS3011a``, a TNO scenario AMI clip of Dutch-accented English that
 auto-detection resolves to Dutch on both engines, measured; see
 ``_NON_EN_KEYS``), both engines (``ct2-legacy`` and ``ct2``), both vad modes,
@@ -23,7 +24,7 @@ transcribed with ``language=None``:
   by ``test_whisper_ct2_legacy_replay.py``.
 
 Tier 2 (non-English / ambiguous / silence fixtures with fresh CUDA references)
-is a separate follow-up issue, deliberately not built here.
+is issue #132, deliberately not built here.
 
 Maintainer-run (Gate M pattern): Apple-Silicon-only, needs the metal whisper
 venv and the pinned large-v2 snapshot (``voxint-metal.sh setup``); the AMI
@@ -129,8 +130,8 @@ _MANIFEST: dict[str, dict[str, Any]] = _manifest_by_key() if MANIFEST.exists() e
 # Non-speech oracle entries (silence + hallucination bait) are OUT of Tier-1
 # scope: with nothing to detect from, auto-detection legitimately returns
 # arbitrary languages, so the en-conditional equivalence claim does not apply.
-# Their auto-detect behavior belongs to the Tier-2 follow-up (fresh references
-# for silence/ambiguous input), deliberately not built here.
+# Their auto-detect behavior belongs to the Tier-2 follow-up (#132: fresh
+# references for silence/ambiguous input), deliberately not built here.
 _NON_SPEECH_PREFIXES = ("synthetic/bait_", "synthetic/silence_")
 
 # Speech entries whose audio auto-detects a language other than en, for the same
@@ -140,7 +141,7 @@ _NON_SPEECH_PREFIXES = ("synthetic/bait_", "synthetic/silence_")
 # Dutch-first speakers; auto-detection resolves the accented English to Dutch
 # (nl, prob ~0.71-0.76) and transcribes coherent Dutch, while the forced-en
 # oracle decodes the same audio as coherent English. Every other AMI clip
-# detects en with zero drift. Accented / ambiguous language is Tier-2 scope.
+# detects en with zero drift. Accented / ambiguous language is Tier-2 scope (#132).
 _NON_EN_KEYS = frozenset({"ami_ihm/TS3011a.Headset-0"})
 
 
