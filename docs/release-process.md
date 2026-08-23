@@ -277,7 +277,15 @@ model assets) voids it for the gate it feeds.
    (`ruff` / `mypy` / `pytest` with the pgvector test DB) and both gitleaks scans
    (`gitleaks dir .` and `gitleaks git .` with `.gitleaks.toml`; the `git` history
    scan is the authoritative clean-room check; a `dir` scan also flags gitignored
-   local `.env` / `internal/` files, which is expected, not a leak). As a
+   local `.env` / `internal/` files, which is expected, not a leak).
+   Note the CI `secrets-scan` job checks out with `fetch-depth: 0`, so its
+   `gitleaks git .` scans every fetched ref, not just `main`. A secret-shaped
+   literal on an unmerged feature branch, for example a sha256 weight pin baked
+   as a Dockerfile ARG, therefore turns `main`'s CI red even though nothing on
+   `main` leaks, and a shallow local scan will not reproduce it. The remedy is to
+   exempt that exact value in `main`'s `.gitleaks.toml`, byte-identical to the
+   entry the source branch already carries so the two configs converge on merge;
+   never widen it to a broad pattern. As a
    security-posture checkpoint, glance at
    [`security/audit-2026-08-18.md`](security/audit-2026-08-18.md) for the standing
    findings still open (web console, research, supply chain, media) before cutting.
