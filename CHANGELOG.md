@@ -28,7 +28,7 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   pinned `minilm-onnx-v1` release asset, and `voxint-native.sh doctor` reports
   when they are missing.
 - **The models panel now also checks the diarizer's clustering configuration,
-  not just its weights.** A deployment could report the validated diarization
+  not just its weights (#129).** A deployment could report the validated diarization
   name and the validated weights while running a different clustering
   configuration (the tuned threshold, minimum cluster size, segmentation step,
   or merge gap), which changes the result. The diarization service now reports a
@@ -39,14 +39,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   or rebuild). The two axes are independent, so each points at the right fix.
   Relatedly, on the built-in (validated) pipeline the service now refuses to
   start if it rejects the tuned clustering settings, where before it logged a
-  warning and quietly ran with default values under the validated name; an
+  warning and quietly ran with default values under the validated name; it also
+  refuses to start in the subtler case where the pipeline accepts the settings
+  but silently keeps a frozen default, by reading the effective clustering
+  parameters back and confirming they match what was requested (#131). An
   explicitly overridden pipeline keeps the previous tolerant behavior. The
   default install is unaffected: it ships the validated configuration, starts
   normally, and reads as validated. Batch sizes are excluded from the hash: they
   are throughput-only and expected to vary per GPU. See `docs/gpu-contracts.md`
   for the hash definition.
 - **The models panel now checks the actual model files, not just the model
-  name.** A deployment could report a validated model name while running
+  name (#125).** A deployment could report a validated model name while running
   different weights: the diarization service does not distinguish the built-in
   checkpoint from a re-fetched one by name alone, and the transcription service
   would accept the validated `large-v2` name paired with a different revision.

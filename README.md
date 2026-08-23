@@ -45,6 +45,11 @@ Voxint takes a recording and walks it through four steps:
 4. **Read or export**: read a finished transcript on screen, or download a clean,
    speaker-labelled copy (plain text, Markdown, subtitles, or structured data).
 
+Once you have a few transcripts, you can also **search across all of them by
+meaning**, not only by the exact words. Type what you are looking for and Voxint
+finds the closest passages from every recording, each with a link straight to
+that spot. This search runs on your own hardware too, with no outside AI.
+
 The models all run **locally**: transcription (Whisper), speaker separation
 (pyannote), and voice identity (TitaNet). Everything they need is bundled into
 Voxint, so there is **no Hugging Face account or token** to set up.

@@ -165,7 +165,16 @@ same contract.
     clustering overrides are applied **fail-closed**: if `instantiate()` rejects
     the tuned `{threshold, min_cluster_size}` the service refuses to start rather
     than silently degrading to threshold-only or model defaults, so a service on
-    the validated identity cannot quietly run the wrong clustering config. An
+    the validated identity cannot quietly run the wrong clustering config. A
+    non-throwing `instantiate()` is not sufficient proof on its own (#131): pinned
+    pyannote 3.1.1 can carry a frozen clustering hyperparameter and return
+    successfully while leaving the effective value at its frozen default, so the
+    service reads `parameters(instantiated=True)["clustering"]` back and refuses
+    to start unless the effective `threshold` and `min_cluster_size` exactly match
+    what was requested, keeping the config hash (computed from the requested
+    values) from ever attributing a config the service never ran to the validated
+    identity. The stock `config.vendored.yaml` has no freeze section, so the
+    default deploy passes this check unchanged. An
     explicit non-local (Hugging Face) override keeps the tolerant fallback and
     reports `null` here (no local config to hash). The field is additive within
     `v1` with the same absent-vs-`null` contract as `checkpoint_fingerprint`.

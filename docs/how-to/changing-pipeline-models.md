@@ -129,6 +129,43 @@ never displays that token back to you, including in the Settings panel.
 
 ---
 
+## Tuning how speakers are separated
+
+Beyond which model runs, a few settings control how the diarizer decides where
+one speaker ends and the next begins. You rarely need to touch them, but they are
+here if a particular recording clusters poorly, for example everyone collapsed
+into a single speaker, or one speaker split into several.
+
+| Key | Default | What it does |
+|---|---|---|
+| `PYANNOTE_CLUSTERING_THRESHOLD` | `0.55` | How close two voices must sound to be treated as the same person. Lower splits speakers more readily; higher merges them more. |
+| `PYANNOTE_CLUSTERING_MIN_SIZE` | `10` | The smallest group of segments that can become its own speaker. |
+| `PYANNOTE_SEGMENTATION_STEP` | `0.5` | How far the analysis window moves each step. |
+| `PYANNOTE_MIN_DURATION_OFF` | `0.6` | How long a pause must be before it splits one speaker's turn in two. |
+
+These four change the numbers behind speaker separation, so they are part of the
+diarizer's recorded configuration identity. If you change any of them, the
+console's **Pipeline models** panel shows the built-in pipeline as a
+configuration mismatch until you set them back. That is expected: it is the panel
+telling you honestly that this deployment no longer matches the validated
+default. Reset the values to clear it.
+
+> ⚠️ On the built-in (validated) pipeline these are fail-closed. If you set one to
+> a value the pipeline cannot actually apply, the diarization service refuses to
+> start rather than quietly run a different value while still reporting the
+> validated name. This covers two cases: the pipeline rejecting the value
+> outright, and the subtler one where it accepts the call but silently keeps a
+> frozen default. In both the service stops with a message naming what did not
+> take. An explicitly overridden pipeline (one you pointed at your own
+> `DIARIZER_MODEL_NAME`) keeps the older tolerant behavior instead.
+
+Two more keys, `PYANNOTE_SEGMENTATION_BATCH_SIZE` (default `8`) and
+`PYANNOTE_EMBEDDING_BATCH_SIZE` (default `12`), only affect speed, not results, so
+they are left out of that identity check. Raise them to push the GPU harder, lower
+them if you run short of video memory.
+
+---
+
 ## When a model is slower
 
 A bigger or slower model changes how long a stage takes, and Voxint has time
