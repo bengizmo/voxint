@@ -1524,6 +1524,16 @@ class AppSettings(Base):
     # resolve_effective_semantic_index_{enabled,autogenerate}.
     semantic_index_enabled: Mapped[bool | None] = mapped_column(Boolean)
     semantic_index_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
+    # Transcript translation (issue #133). ``translation_target_language`` is the
+    # installation's preferred target language (whisper-style code, validated
+    # against the vendored map at the write seam): NULL/blank inherits the env
+    # default (the llm_base_url nullable-string pattern). The autogenerate flag
+    # is the usual tri-state Boolean: NULL inherits env, non-NULL overrides —
+    # when effective (and an LLM path is open) a completed run whose detected
+    # language differs from the target is translated automatically. Resolve only
+    # via resolve_effective_translation_{target_language,autogenerate}.
+    translation_target_language: Mapped[str | None] = mapped_column(Text)
+    translation_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
     # Optional bundled local LLM (issue #67). Same tri-state as the flags above:
     # NULL inherits env LLM_BUNDLED_ENABLED, non-NULL overrides. When effective
     # AND a bundled base URL is configured, enhancement + run-asset
@@ -1830,6 +1840,187 @@ class RunAssetJob(Base):
     # Bounded, redacted failure summary (closed vocabulary + safe detail only).
     error: Mapped[str | None] = mapped_column(Text)
     asset_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("run_enrichment_assets.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TranslationJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class RunTranslation(Base):
+    """One **successful** whole-transcript translation generation (issue #133).
+
+    An immutable machine-generated rendition of the finished (corrected)
+    transcript in one target language, produced by the configured LLM. Rows are
+    inserted only on success by the single sanctioned writer
+    (``enrichment/translations.py``); failed attempts live on
+    ``translation_jobs`` and never consume a generation. Content is immutable:
+    the only permitted mutation is stamping ``superseded_by_translation_id``
+    once when a newer generation for the *same target language* lands.
+
+    ``lines`` is a versioned JSONB **snapshot**, not a live join: one entry per
+    ``attributed_transcript`` line at generation time, in order —
+    ``{"i", "segment_id", "word_start", "word_end", "source_text", "text"}``.
+    ``i`` (the line index) is the identity *within* this generation only; the
+    segment/word-range coordinates are frozen provenance and diagnostics, never
+    read-time recovery keys. The run-level ``source_content_hash`` is the ONLY
+    freshness authority: it covers the ordered structural + effective-text
+    fields of the corrected transcript (speaker names deliberately excluded —
+    speakers are not sent to the model, so re-adjudicating one must not stale a
+    translation). Hash mismatch ⇒ the whole generation is stale; stale lines
+    are never partially aligned to a changed transcript (regenerate, don't
+    patch).
+    """
+
+    __tablename__ = "run_translations"
+    __table_args__ = (
+        UniqueConstraint(
+            "pipeline_run_id",
+            "target_language",
+            "generation",
+            name="run_translations_generation_key",
+        ),
+        # NO one-current partial unique index on purpose (the
+        # run_enrichment_assets precedent): the writer inserts the new head and
+        # supersedes the old one in the same transaction, so two NULL rows
+        # coexist transiently inside it and a partial unique index would refuse
+        # the handover. Post-commit uniqueness of the head holds by
+        # construction — the advisory lock serializes writers per (run,
+        # language) and the supersede UPDATE covers every older generation.
+        CheckConstraint(
+            "length(trim(target_language)) > 0",
+            name="run_translations_target_language_nonempty_check",
+        ),
+        CheckConstraint("generation >= 1", name="run_translations_generation_check"),
+        CheckConstraint(
+            "jsonb_typeof(lines) = 'array'",
+            name="run_translations_lines_array_check",
+        ),
+        CheckConstraint(
+            "payload_schema_version >= 1",
+            name="run_translations_payload_version_check",
+        ),
+        CheckConstraint(
+            "length(trim(producer)) > 0",
+            name="run_translations_producer_nonempty_check",
+        ),
+        CheckConstraint(
+            "length(trim(producer_version)) > 0",
+            name="run_translations_producer_version_nonempty_check",
+        ),
+        CheckConstraint(
+            "length(trim(model)) > 0",
+            name="run_translations_model_nonempty_check",
+        ),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'",
+            name="run_translations_source_hash_check",
+        ),
+        CheckConstraint(
+            "completed_at >= started_at",
+            name="run_translations_completed_after_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    # Whisper-style language code (validated against the vendored map at the
+    # write seam, not by the DB — the map is content, not schema).
+    target_language: Mapped[str] = mapped_column(Text)
+    generation: Mapped[int] = mapped_column(Integer)
+    # The run's detected_language at generation time (provenance; NULL when
+    # detection had nothing to report and the prompt said "the source language").
+    source_language: Mapped[str | None] = mapped_column(Text)
+    lines: Mapped[list[Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"))
+    payload_schema_version: Mapped[int] = mapped_column(Integer)
+    producer: Mapped[str] = mapped_column(Text)
+    producer_version: Mapped[str] = mapped_column(Text)
+    # The exact model identifier the generation ran with (provenance).
+    model: Mapped[str] = mapped_column(Text)
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    superseded_by_translation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("run_translations.id")
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TranslationJob(Base):
+    """One translation attempt for one (run, target language) — issue #133.
+
+    Mutable orchestration state only, exactly like ``run_asset_jobs``: the
+    *result* is an immutable ``run_translations`` row linked via
+    ``translation_id`` when the attempt succeeded. ``status`` moves queued →
+    running (guarded claim UPDATE, duplicate Celery delivery no-ops) →
+    succeeded | failed | cancelled. A failed or cancelled job records NO
+    translation and consumes NO generation. The partial unique index allows one
+    active job per (run, target language); cancel is deadline-aware so a
+    crashed RUNNING row cannot hold that slot forever.
+
+    ``source_content_hash`` records the transcript hash at enqueue
+    (provenance). The executor's source-changed race guard compares against
+    the snapshot it actually translated (frozen at job start), finishing as
+    failed (``source changed``) on a mismatch — so an edit made while the
+    model was translating can never retire a still-valid generation.
+    """
+
+    __tablename__ = "translation_jobs"
+    __table_args__ = (
+        Index(
+            "translation_jobs_one_active_per_run_language",
+            "pipeline_run_id",
+            "target_language",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        CheckConstraint(
+            "length(trim(target_language)) > 0",
+            name="translation_jobs_target_language_nonempty_check",
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(TranslationJobStatus)})",
+            name="translation_jobs_status_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(config) = 'object'",
+            name="translation_jobs_config_object_check",
+        ),
+        CheckConstraint(
+            "source_content_hash ~ '^[0-9a-f]{64}$'",
+            name="translation_jobs_source_hash_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="translation_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="translation_jobs_finished_requires_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("pipeline_runs.id"), index=True)
+    target_language: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=TranslationJobStatus.QUEUED.value)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Snapshot of the execution settings this job was started under — the
+    # worker reconstructs from this, so a settings change between enqueue and
+    # execution never silently applies (the #40 snapshot-executes doctrine).
+    config: Mapped[dict[str, Any]] = mapped_column()
+    # The transcript hash at enqueue (provenance; the race guard baselines on
+    # the snapshot frozen at job start, not this).
+    source_content_hash: Mapped[str] = mapped_column(Text)
+    # Bounded, redacted failure summary (closed vocabulary + safe detail only).
+    error: Mapped[str | None] = mapped_column(Text)
+    translation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("run_translations.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -5,6 +5,29 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Transcript translation, slice A: settings, jobs, and the run-page card**
+  (#133). Voxint can now translate a finished transcript into a preferred
+  language with the configured LLM (bring-your-own or bundled). A new
+  Settings → Translation section holds the installation's preferred target
+  language (picked from the vendored language list) and an opt-in
+  auto-translate toggle that translates each run as its pipeline completes,
+  skipping runs whose detected language (#124) already matches. The run detail
+  page gains a Translation card: translate or re-translate into any language
+  (defaulting to the preferred one), watch progress, cancel, and see honest
+  freshness — a translation is an immutable generation of the corrected
+  transcript, line-aligned and hash-stamped, so a later edit or split marks the
+  whole rendition "out of date" for one-click re-translation rather than ever
+  showing old lines against a changed transcript (speaker renames deliberately
+  do not invalidate it). Generation is fail-closed: the model must echo every
+  line index exactly (merged, dropped, or reordered lines fail the batch, which
+  retries and then bisects down to single lines), runaway output is bounded,
+  partial generations never persist, and an edit landing mid-generation fails
+  the job while keeping the previous translation current. Console rendering of
+  translated lines and translated exports land in slice B. Migration 0038.
+
+## [0.23.1] - 2026-08-23
+
 ### Fixed
 - A transcript could be left permanently out of semantic search if its
   embedding job was recorded but never handed to the worker (a crash or broker

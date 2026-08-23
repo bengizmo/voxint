@@ -95,6 +95,10 @@ CSRF_PROFILE_DECISION = "profile-decision"
 # cancelling one are independent mutations with different blast radii.
 CSRF_ASSETS_GENERATE = "assets-generate"
 CSRF_ASSETS_CANCEL = "assets-cancel"
+# Transcript translation (issue #133): starting a job (LLM spend) and
+# cancelling one are independent mutations with different blast radii.
+CSRF_TRANSLATION_GENERATE = "translation-generate"
+CSRF_TRANSLATION_CANCEL = "translation-cancel"
 # Run soft-archive + derived-media deletion (issue #5, slice 2). Per-action
 # tokens — hiding a run (reversible), un-hiding it, and irreversibly deleting its
 # derived audio files have very different blast radii and must never share a token.

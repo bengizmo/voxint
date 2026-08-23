@@ -513,6 +513,19 @@ class Settings(BaseSettings):
     # effort — a broker outage defers, never fails the run.
     semantic_index_autogenerate: bool = True
 
+    # Transcript translation (#133). The installation's preferred target
+    # language as a whisper-style code from the vendored map (e.g. "es");
+    # unset means translation is not configured. The autogenerate flag is the
+    # opt-in post-finalize step: translate each completed run whose detected
+    # language differs from the target. Both have tri-state row overrides on
+    # app_settings; runtime gates resolve through
+    # resolve_effective_translation_{target_language,autogenerate}. Translation
+    # rides on the configured LLM (BYO or bundled) — that dependency is checked
+    # at enqueue/execution (translation_gates_open), not here, because LLM
+    # enablement itself is runtime-togglable.
+    translation_target_language: str | None = None
+    translation_autogenerate: bool = False
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant
@@ -586,6 +599,7 @@ class Settings(BaseSettings):
         from voxint.app_settings import (
             EffectiveFlags,
             semantic_index_flags_ok,
+            translation_flags_ok,
             validate_effective_flags,
         )
 
@@ -612,6 +626,15 @@ class Settings(BaseSettings):
         )
         if semantic_error is not None:
             raise ValueError(semantic_error)
+        # The translation flags (#133) depend only on each other (autogenerate
+        # needs a target; the target must be a known code) — same standalone
+        # shape as the semantic pair. The LLM dependency is a runtime gate.
+        translation_error = translation_flags_ok(
+            autogenerate=self.translation_autogenerate,
+            target_language=self.translation_target_language,
+        )
+        if translation_error is not None:
+            raise ValueError(translation_error)
         return self
 
     @model_validator(mode="after")

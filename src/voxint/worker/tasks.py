@@ -48,7 +48,7 @@ from voxint.db.models import (
 from voxint.db.session import build_engine, build_session_factory
 from voxint.domain_packs.registry import domain_pack_from_snapshot
 from voxint.embeddings.onnx_embedder import minilm_artifacts_available
-from voxint.enrichment import asset_jobs, embedding_jobs
+from voxint.enrichment import asset_jobs, embedding_jobs, translation_jobs
 from voxint.enrichment.research_jobs import execute_job
 from voxint.ingest.watch import sweep_watch_folders
 from voxint.media.reclaim import (
@@ -239,6 +239,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             # treating that observation as completion would enqueue assets twice.
             _autogenerate_run_assets(factory, run_id, settings)
             _autogenerate_segment_embeddings(factory, run_id, settings)
+            _autogenerate_translation(factory, run_id, settings)
         elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
             # This covers both the first GPU→post handoff and a duplicate GPU
             # delivery observing an already-parked run. Re-publishing is safe:
@@ -531,6 +532,57 @@ def _autogenerate_run_assets(
             generate_run_asset.delay(job_id)
     except Exception:
         logger.exception("post-finalize run-asset enqueue failed for run %s", run_id)
+
+
+@app.task(name="voxint.translate_run", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
+def translate_run(job_id_str: str) -> None:
+    """Run one queued transcript-translation job (issue #133).
+
+    No Celery retries on purpose (the run-asset precedent): failures land as
+    honest, bounded error text on the job row for the operator to see. A
+    duplicate delivery no-ops on the guarded queued→running claim.
+    """
+    factory, _ = _runtime()
+    translation_jobs.execute_job(factory, uuid.UUID(job_id_str), settings=get_settings())
+
+
+def _autogenerate_translation(
+    factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings
+) -> None:
+    """Opt-in post-finalize step: enqueue a translation job for a completed run
+    when auto-translate is on, a target language is set, the LLM path is open,
+    and the run's detected language differs from the target. Best-effort by
+    contract — a completed run is COMPLETED whatever happens here, so every
+    failure is logged and swallowed."""
+    try:
+        with factory() as session:
+            row = app_settings.get_app_settings(session)
+            if not app_settings.resolve_effective_translation_autogenerate(row, settings):
+                return
+            target = translation_jobs.normalized_language(
+                app_settings.resolve_effective_translation_target_language(row, settings)
+            )
+            if target is None:
+                return
+            if not translation_jobs.translation_gates_open(settings, row):
+                return
+            run = session.get(PipelineRun, run_id)
+            if run is None:
+                return
+            if translation_jobs.normalized_language(run.detected_language) == target:
+                # Already in the preferred language — nothing to translate.
+                return
+            if not translation_jobs.translation_needed(session, run_id, target):
+                return
+            job, _already = translation_jobs.create_job(
+                session, pipeline_run_id=run_id, target_language=target, settings=settings
+            )
+            session.commit()
+            job_id = str(job.id) if job is not None else None
+        if job_id is not None:
+            translate_run.delay(job_id)
+    except Exception:
+        logger.exception("post-finalize translation enqueue failed for run %s", run_id)
 
 
 @app.task(name="voxint.generate_segment_embeddings", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]

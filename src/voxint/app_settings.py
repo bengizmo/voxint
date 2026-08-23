@@ -253,6 +253,68 @@ def semantic_index_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
     return None
 
 
+def resolve_effective_translation_target_language(
+    row: AppSettings | None, settings: Settings
+) -> str | None:
+    """Effective preferred target language for transcript translation (#133).
+
+    A non-blank ROW value wins, else the env default (which may itself be
+    unset). Returns ``None`` when neither configures a target — translation is
+    then unconfigured and every gate stays closed. Whitespace is stripped like
+    every string override; validity against the vendored language map is the
+    write seam's job (settings form / env-time validator), not this reader's.
+    """
+    if row is not None:
+        value = row.translation_target_language
+        if value is not None and value.strip():
+            return value.strip()
+    env_value = settings.translation_target_language
+    if env_value is not None and env_value.strip():
+        return env_value.strip()
+    return None
+
+
+def resolve_effective_translation_autogenerate(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    """Effective enablement of the post-finalize auto-translate step (#133).
+
+    Only meaningful when a target language resolves and an LLM path is open;
+    :func:`translation_flags_ok` holds the self-contained target invariant and
+    the enqueue/execution gates hold the LLM one.
+    """
+    return _resolve_bool_flag(row, settings, "translation_autogenerate")
+
+
+def translation_flags_ok(*, autogenerate: bool, target_language: str | None) -> str | None:
+    """The self-contained translation-flag invariants, in one place (#133).
+
+    Returns an operator-facing error message when the combination is invalid,
+    else ``None``. Shared by the ``config.py`` env-time validator and the
+    runtime settings form so the two can never drift (the
+    ``semantic_index_flags_ok`` precedent). The LLM dependency is deliberately
+    NOT here — LLM enablement is runtime-togglable, so it is a gate
+    (``translation_gates_open``), not a static invariant.
+    """
+    # Local import: languages.py is dependency-free, but app_settings is
+    # imported by config.py's validator, so keep the api package off this
+    # module's import time.
+    from voxint.api.languages import LANGUAGE_NAMES
+
+    normalized = target_language.strip() if target_language is not None else ""
+    if normalized and normalized not in LANGUAGE_NAMES:
+        return (
+            f"translation_target_language {normalized!r} is not a language code"
+            " whisper can emit — pick one from the language list (e.g. 'es')"
+        )
+    if autogenerate and not normalized:
+        return (
+            "translation_autogenerate requires translation_target_language —"
+            " the automatic step needs to know which language to translate into"
+        )
+    return None
+
+
 def resolve_effective_voxint_web_research(row: AppSettings | None, settings: Settings) -> bool:
     return _resolve_bool_flag(row, settings, "voxint_web_research")
 

@@ -159,10 +159,12 @@ from voxint.api.csrf import (
     CSRF_SETTINGS,
     CSRF_SETUP,
     CSRF_SUBMIT,
+    CSRF_TRANSLATION_CANCEL,
+    CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
     verify_csrf_token,
 )
-from voxint.api.languages import language_label
+from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.meaning_query import search_passages
 from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import (
@@ -251,6 +253,7 @@ from voxint.app_settings import (
     resolve_effective_llm_api_key,
     resolve_effective_llm_enabled,
     resolve_effective_source_authority_domains,
+    resolve_effective_translation_target_language,
     resolve_effective_voxint_web_research,
     resolve_effective_watch_folder_enabled,
     resolve_effective_web_search_api_key,
@@ -258,6 +261,7 @@ from voxint.app_settings import (
     resolve_effective_ytdlp_enabled,
     semantic_index_flags_ok,
     str_flag_form_field,
+    translation_flags_ok,
     validate_effective_flags,
     validate_web_search_base_url,
 )
@@ -293,6 +297,8 @@ from voxint.db.models import (
     StageRun,
     TranscriptAnnotation,
     TranscriptSegment,
+    TranslationJob,
+    TranslationJobStatus,
 )
 from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.diagnostics import check_state, run_diagnostics
@@ -345,6 +351,26 @@ from voxint.enrichment.run_assets import (
     latest_assets,
     load_source,
     source_content_hash,
+)
+from voxint.enrichment.translation_jobs import (
+    TranslationJobError,
+    normalized_language,
+    translation_gates_open,
+)
+from voxint.enrichment.translation_jobs import (
+    active_or_last_job as active_or_last_translation_job,
+)
+from voxint.enrichment.translation_jobs import (
+    create_job as create_translation_job,
+)
+from voxint.enrichment.translation_jobs import (
+    request_cancel as request_translation_cancel,
+)
+from voxint.enrichment.translations import (
+    TranslationError,
+    current_translations,
+    load_translation_source,
+    translation_source_hash,
 )
 from voxint.enrichment.triage import (
     EvidenceRef,
@@ -892,6 +918,28 @@ def _publish_research_job(job_id: uuid.UUID) -> bool:
     except OperationalError:
         logger.warning(
             "research enqueue deferred (broker unavailable); job %s stays QUEUED",
+            job_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+def _publish_translation_job(job_id: uuid.UUID) -> bool:
+    """Enqueue a committed translation job, returning False on a broker outage.
+
+    Mirrors ``_publish_run_asset_job``: no recovery sweep (v1), so the console
+    shows a deferred job as queued with its age and the operator cancels and
+    retries."""
+    from celery.exceptions import OperationalError
+
+    from voxint.worker.tasks import translate_run
+
+    try:
+        translate_run.apply_async((str(job_id),), ignore_result=True)
+    except OperationalError:
+        logger.warning(
+            "broker unavailable — translation job %s stays QUEUED",
             job_id,
             exc_info=True,
         )
@@ -2769,6 +2817,63 @@ def _persist_semantic_index(
     return []
 
 
+def _persist_translation(
+    session: Session,
+    settings: Settings,
+    *,
+    submitted: dict[str, str],
+) -> list[str]:
+    """Apply the Translation section atomically (#133).
+
+    Two controls save together: the preferred-target-language select (a string
+    override — "inherit" writes NULL, a code writes the override) and the
+    autogenerate tri-state. The effective combination (candidates over env
+    defaults) is validated through the shared :func:`translation_flags_ok`
+    BEFORE any get_or_create, so a rejected save writes NOTHING. Returns
+    operator-plain error messages (empty ⇒ success); the caller commits.
+    """
+    target_choice = submitted.get("translation_target_language", "inherit").strip()
+    if target_choice != "inherit" and target_choice.lower() not in LANGUAGE_NAMES:
+        return [
+            "Unrecognized language choice — pick a language from the list or"
+            " Use installation setting."
+        ]
+    auto_choice = submitted.get("translation_autogenerate", "inherit")
+    if auto_choice not in _FEATURE_FLAG_CHOICES:
+        return [
+            "Unrecognized auto-translate setting — choose On, Off, or Use"
+            " installation setting."
+        ]
+    target_candidate = None if target_choice == "inherit" else target_choice.lower()
+    auto_candidate = None if auto_choice == "inherit" else (auto_choice == "on")
+
+    effective_target = (
+        target_candidate
+        if target_candidate is not None
+        else (
+            settings.translation_target_language.strip()
+            if settings.translation_target_language is not None
+            and settings.translation_target_language.strip()
+            else None
+        )
+    )
+    effective_auto = (
+        bool(settings.translation_autogenerate) if auto_candidate is None else auto_candidate
+    )
+    if (
+        translation_flags_ok(autogenerate=effective_auto, target_language=effective_target)
+        is not None
+    ):
+        return [
+            "Pick a preferred language before turning auto-translate on — the"
+            " automatic step needs to know which language to translate into."
+        ]
+    row = get_or_create(session, llm_enabled_default=settings.llm_enabled)
+    row.translation_target_language = target_candidate
+    row.translation_autogenerate = auto_candidate
+    return []
+
+
 def _persist_web_research(
     session: Session,
     settings: Settings,
@@ -3187,6 +3292,77 @@ def _run_assets_response(
             ),
             "csrf_assets_generate": mint_csrf_token(secret, CSRF_ASSETS_GENERATE),
             "csrf_assets_cancel": mint_csrf_token(secret, CSRF_ASSETS_CANCEL),
+        },
+    )
+
+
+_TRANSLATION_ACTIVE_STATUSES = (
+    TranslationJobStatus.QUEUED.value,
+    TranslationJobStatus.RUNNING.value,
+)
+
+
+def _run_translation_state(
+    session: Session, settings: Settings, run_id: uuid.UUID, error: str | None = None
+) -> dict[str, Any]:
+    """The run's translation block: every current generation (with staleness
+    against the freshly recomputed source hash) and the active/last job."""
+    row = get_app_settings(session)
+    heads = current_translations(session, run_id)
+    job = active_or_last_translation_job(session, run_id)
+    job_active = job is not None and job.status in _TRANSLATION_ACTIVE_STATUSES
+    current_hash: str | None = None
+    source_problem: str | None = None
+    try:
+        current_hash = translation_source_hash(load_translation_source(session, run_id))
+    except TranslationError as exc:
+        source_problem = str(exc)
+    run = session.get(PipelineRun, run_id)
+    detected = normalized_language(run.detected_language) if run is not None else None
+    preferred = normalized_language(
+        resolve_effective_translation_target_language(row, settings)
+    )
+    # The generate select defaults to the preferred language; with none set,
+    # the operator picks one per run (blank forces an explicit choice).
+    default_target = preferred or ""
+    return {
+        "run_id": run_id,
+        "translations": [
+            {
+                "translation": head,
+                "stale": current_hash is not None
+                and head.source_content_hash != current_hash,
+            }
+            for head in heads
+        ],
+        "job": job,
+        "job_active": job_active,
+        "any_active": job_active,
+        "gates_open": translation_gates_open(settings, row),
+        "source_problem": source_problem,
+        "error": error,
+        "default_target": default_target,
+        "detected_language": detected,
+        "language_options": sorted(LANGUAGE_NAMES.items(), key=lambda item: item[1]),
+    }
+
+
+def _run_translation_response(
+    request: Request, session: Session, run_id: uuid.UUID, error: str | None = None
+) -> Response:
+    """The per-run translation fragment — the polling target and every
+    translation mutation's response."""
+    secret = request.app.state.csrf_secret
+    return templates.TemplateResponse(
+        request,
+        "fragments/run_translation.html",
+        {
+            "request": request,
+            "translation_state": _run_translation_state(
+                session, request.app.state.settings, run_id, error
+            ),
+            "csrf_translation_generate": mint_csrf_token(secret, CSRF_TRANSLATION_GENERATE),
+            "csrf_translation_cancel": mint_csrf_token(secret, CSRF_TRANSLATION_CANCEL),
         },
     )
 
@@ -3980,6 +4156,15 @@ def _register_routes(app: FastAPI) -> None:
                 ),
                 "csrf_assets_cancel": mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_ASSETS_CANCEL
+                ),
+                # Transcript translation (issue #133): current generation(s)
+                # with staleness, plus generation controls.
+                "translation_state": _run_translation_state(session, settings, run_id),
+                "csrf_translation_generate": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
+                ),
+                "csrf_translation_cancel": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
                 ),
                 "tutorial": _tutorial_banner(
                     request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
@@ -5803,6 +5988,20 @@ def _register_routes(app: FastAPI) -> None:
             if semantic_submitted is not None
             else feature_flag_state(row, "semantic_index_enabled")
         )
+        # Translation section (issue #133): the preferred-language select (a
+        # string override — "inherit" or a language code) + the autogenerate
+        # tri-state. On an invariant-rejected save, render the operator's
+        # submitted choices back.
+        translation_submitted: dict[str, str] | None = overrides.pop(
+            "translation_submitted", None
+        )
+        stored_translation_target = (
+            row.translation_target_language.strip()
+            if row is not None
+            and row.translation_target_language is not None
+            and row.translation_target_language.strip()
+            else "inherit"
+        )
         # Sources & research section (issue #76). On an invariant/format-rejected
         # save, render the operator's submitted choices back (``web_research_submitted``
         # — the four non-secret fields only, never the key); otherwise the stored raw
@@ -5871,6 +6070,33 @@ def _register_routes(app: FastAPI) -> None:
             ),
             "semantic_index_weights_available": minilm_artifacts_available(),
             "semantic_index_errors": [],
+            # Transcript translation (issue #133): the preferred-language select
+            # state ("inherit" or a code), the env default (a code or None) for
+            # the inherit label, the autogenerate tri-state, whether the LLM
+            # path is effectively open (an honest note when auto-translate is on
+            # but the LLM is off), and the sorted code/name options.
+            "translation_target_state": (
+                translation_submitted.get("translation_target_language", "inherit")
+                if translation_submitted is not None
+                else stored_translation_target
+            ),
+            "translation_target_env_default": (
+                settings.translation_target_language.strip()
+                if settings.translation_target_language is not None
+                and settings.translation_target_language.strip()
+                else None
+            ),
+            "translation_autogenerate_state": (
+                translation_submitted.get("translation_autogenerate", "inherit")
+                if translation_submitted is not None
+                else feature_flag_state(row, "translation_autogenerate")
+            ),
+            "translation_autogenerate_env_default": bool(settings.translation_autogenerate),
+            "translation_llm_open": translation_gates_open(settings, row),
+            "translation_language_options": sorted(
+                LANGUAGE_NAMES.items(), key=lambda item: item[1]
+            ),
+            "translation_errors": [],
             # Sources & research (issue #76): the two web-research toggles (raw
             # tri-state, or submitted choice on re-render), the endpoint override +
             # env placeholder, the credential status (present + source, never the
@@ -6099,6 +6325,45 @@ def _register_routes(app: FastAPI) -> None:
                     session,
                     semantic_index_errors=errors,
                     semantic_index_submitted=submitted,
+                ),
+            )
+        session.commit()
+        return RedirectResponse("/settings", status_code=303)
+
+    @protected.post("/settings/translation")
+    def settings_translation(
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        translation_target_language: Annotated[str, Form()] = "inherit",
+        translation_autogenerate: Annotated[str, Form()] = "inherit",
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Save the Translation section (#133): the preferred-language select
+        (string override) + the auto-translate tri-state.
+
+        Scoped and CSRF-gated like every settings section. Both rendered
+        controls have a matching Form param here (an undeclared name would be
+        dropped by Starlette and read as "inherit", silently clearing an
+        override). On an invariant violation nothing is written and the
+        operator's choices re-render with a plain message.
+        """
+        _require_csrf(request, CSRF_SETTINGS, csrf_token)
+        settings: Settings = request.app.state.settings
+        submitted = {
+            "translation_target_language": translation_target_language,
+            "translation_autogenerate": translation_autogenerate,
+        }
+        errors = _persist_translation(session, settings, submitted=submitted)
+        if errors:
+            return templates.TemplateResponse(
+                request,
+                "settings.html",
+                _settings_context(
+                    request,
+                    session,
+                    translation_errors=errors,
+                    translation_submitted=submitted,
                 ),
             )
         session.commit()
@@ -6759,6 +7024,92 @@ def _register_routes(app: FastAPI) -> None:
         # Commit now so the executor's post-call check sees it immediately.
         session.commit()
         return _run_assets_response(request, session, run_id)
+
+    @protected.get("/runs/{run_id}/translation")
+    def run_translation_fragment(
+        run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+    ) -> Response:
+        _run_or_404(session, run_id)
+        return _run_translation_response(request, session, run_id)
+
+    @protected.post("/runs/{run_id}/translation/generate")
+    def run_translation_generate(
+        run_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        target_language: Annotated[str | None, Form()] = None,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Start one translation job for the run (#133).
+
+        The form's language select defaults to the installation's preferred
+        language; a per-run choice overrides it for this generation only.
+        Same-language, no-transcript, and gates-off requests come back as
+        plain-language card errors, not HTTP failures — the card is the
+        operator's surface. Commit-before-publish like every enqueue."""
+        _require_csrf(request, CSRF_TRANSLATION_GENERATE, csrf_token)
+        _run_or_404(session, run_id)
+        settings: Settings = request.app.state.settings
+        target = normalized_language(target_language)
+        if target is None:
+            target = normalized_language(
+                resolve_effective_translation_target_language(
+                    get_app_settings(session), settings
+                )
+            )
+        if target is None:
+            return _run_translation_response(
+                request,
+                session,
+                run_id,
+                error="Pick a language to translate into (or set a preferred"
+                " language in Settings → Translation).",
+            )
+        try:
+            job, already_active = create_translation_job(
+                session, pipeline_run_id=run_id, target_language=target, settings=settings
+            )
+        except TranslationJobError as exc:
+            session.rollback()
+            return _run_translation_response(request, session, run_id, error=str(exc))
+        if already_active or job is None:
+            session.rollback()
+            return _run_translation_response(
+                request, session, run_id, error="A translation is already in progress."
+            )
+        job_id = job.id
+        session.commit()
+        # Honest UX: a broker outage leaves a real QUEUED row with no recovery
+        # sweep — say so instead of rendering a silently-stuck spinner.
+        notice = (
+            None
+            if _publish_translation_job(job_id)
+            else "worker broker unavailable — the queued job will not start;"
+            " cancel and retry once the worker is back"
+        )
+        return _run_translation_response(request, session, run_id, error=notice)
+
+    @protected.post("/runs/{run_id}/translation/{job_id}/cancel")
+    def run_translation_cancel(
+        run_id: uuid.UUID,
+        job_id: uuid.UUID,
+        request: Request,
+        operator: OperatorDep,
+        session: SessionDep,
+        csrf_token: Annotated[str | None, Form()] = None,
+    ) -> Response:
+        """Cancel: resolves a QUEUED job outright; a RUNNING one is re-checked
+        between LLM batches, and a provably-dead one is force-cancelled."""
+        _require_csrf(request, CSRF_TRANSLATION_CANCEL, csrf_token)
+        _run_or_404(session, run_id)
+        job = session.get(TranslationJob, job_id)
+        if job is None or job.pipeline_run_id != run_id:
+            raise HTTPException(status_code=404, detail="no such translation job")
+        request_translation_cancel(session, job_id)
+        # Commit now so the executor's post-call check sees it immediately.
+        session.commit()
+        return _run_translation_response(request, session, run_id)
 
     @protected.get("/media/{run_id}")
     @protected.head("/media/{run_id}")

@@ -1,0 +1,52 @@
+{# Settings → Translation (issue #133): the installation's preferred target
+   language (a string override: "Use installation setting" writes NULL, a
+   language writes the override) and the auto-translate tri-state. Validated
+   through the shared translation_flags_ok invariant (auto-translate needs a
+   target language); the LLM dependency is a runtime gate surfaced as an honest
+   note, not a save-blocker. Self-contained: renders from _settings_context. #}
+<section id="translation" aria-labelledby="translation-heading">
+<h2 id="translation-heading">Translation</h2>
+<p class="muted">Translate finished transcripts into your preferred language with
+   the configured LLM. Each translation is generated from the transcript as it is
+   at that moment; if you edit the transcript afterwards, the translation is marked
+   out of date and you can re-translate from the run page. Changes here apply to
+   your next run or job, no restart needed.</p>
+{% for error in translation_errors %}
+  <p class="notice" role="alert">{{ error }}</p>
+{% endfor %}
+{% if not translation_llm_open %}
+  <p class="notice">Translation needs the LLM: turn on
+     <strong>LLM transcript enhancement</strong> in
+     <a href="/settings#llm">Settings → LLM</a> to use it.</p>
+{% endif %}
+<form method="post" action="/settings/translation">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <div class="field">
+    <label for="translation-target">Preferred language</label>
+    <p class="muted">The language transcripts are translated into — the default for
+       every Translate button and for automatic translation.</p>
+    <select id="translation-target" name="translation_target_language">
+      <option value="inherit"{% if translation_target_state == "inherit" %} selected{% endif %}>
+        Use installation setting
+        (currently {{ language_label(translation_target_env_default) if translation_target_env_default else "not set" }})
+      </option>
+      {% for code, name in translation_language_options %}
+      <option value="{{ code }}"{% if translation_target_state == code %} selected{% endif %}>{{ name }} ({{ code }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <fieldset class="field feature-flag">
+    <legend>Translate new runs automatically</legend>
+    <p class="muted">Translates the transcript as it is when the pipeline finishes —
+       re-translate after you finish corrections. Runs whose detected language already
+       matches the preferred language are skipped. Requires a preferred language.</p>
+    <label><input type="radio" name="translation_autogenerate" value="on"{% if translation_autogenerate_state == "on" %} checked{% endif %}>
+      On</label>
+    <label><input type="radio" name="translation_autogenerate" value="off"{% if translation_autogenerate_state == "off" %} checked{% endif %}>
+      Off</label>
+    <label><input type="radio" name="translation_autogenerate" value="inherit"{% if translation_autogenerate_state == "inherit" %} checked{% endif %}>
+      Use installation setting <span class="muted">(currently {{ "On" if translation_autogenerate_env_default else "Off" }})</span></label>
+  </fieldset>
+  <button type="submit">Save translation settings</button>
+</form>
+</section>
