@@ -1052,6 +1052,19 @@ Gates A/R/E green fresh at `b0937f2`; Gate M autodetect Tier-1 carried green fro
 the #124 branch on patch-identical content, with the remaining metal lanes
 carried. Clear to tag v0.23.0.
 
+#### Verdict: v0.23.1, all GPU gates carry from v0.23.0 (app-Dockerfile-only patch) (2026-08-23)
+
+0.23.1 is a patch over `6936ecc` (v0.23.0). `git diff v0.23.0..HEAD` touches only
+the app `Dockerfile` (the #121 MiniLM bake now restores directory traversal so the
+non-root runtime user can read the baked weights), the version pins, and the
+CHANGELOG. No `services/`, pipeline, api, clients, db, enrichment, frontend,
+`tests/parity/`, `tests/e2e/`, or metal-lane path changed, so Gates A, R, E, and M
+all carry their v0.23.0 verdicts above. The app-image permission fix is proven by
+a local build repro (the non-root user reads both baked weight files) and is
+re-proven at release time by `release.yml`'s own CPU smoke gate, which exercises
+the baked MiniLM weights per arch and which the v0.23.0 build failed on. Clear to
+tag v0.23.1.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
