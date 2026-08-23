@@ -5,6 +5,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-08-23
+
 ### Added
 - **Voxint now detects each recording's language and records it on the run**
   (#124). The pipeline previously told the transcription service to use English
