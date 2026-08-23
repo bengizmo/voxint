@@ -318,6 +318,18 @@ def test_build_stage_context_wires_the_real_downloader() -> None:
     assert callable(ctx.downloader)
 
 
+def test_build_stage_context_diarization_ceiling_defaults_unset() -> None:
+    """No-hint runs stay byte-identical to pre-#128 (issue #128 review): with the
+    ceiling unset the context carries None, so diarize_embed passes no bound and
+    the client posts only the path (see test_diarize_sends_no_bounds_by_default).
+    An install-wide ceiling flows through as an explicit int."""
+    from voxint.config import Settings
+    from voxint.pipeline.stages.context import build_stage_context
+
+    assert build_stage_context(Settings(_env_file=None)).diarization_max_speakers is None
+    assert build_stage_context(Settings(diarization_max_speakers=4)).diarization_max_speakers == 4
+
+
 def test_acquisition_error_is_not_auto_retried() -> None:
     """The worker only auto-retries ServiceError; an AcquisitionError (or a
     StageDataError) is deterministic, so the run stays FAILED for manual Requeue."""

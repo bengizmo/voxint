@@ -9,8 +9,24 @@ from voxint.clients.errors import ProtocolError
 
 
 class HttpDiarizerClient(ServiceHttpClient):
-    def diarize(self, audio_path: Path) -> DiarizationResult:
-        body = self.post_json("/v1/diarize", {"path": self.relative_path(audio_path)})
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        max_speakers: int | None = None,
+        num_speakers: int | None = None,
+    ) -> DiarizationResult:
+        payload: dict[str, object] = {"path": self.relative_path(audio_path)}
+        # The pyannote request model has no exact-count field: an exact count is
+        # expressed by pinning both bounds (min == max forces that many
+        # clusters). A bound sets only max_speakers and leaves min at the
+        # service default. num_speakers wins when both are supplied.
+        if num_speakers is not None:
+            payload["min_speakers"] = num_speakers
+            payload["max_speakers"] = num_speakers
+        elif max_speakers is not None:
+            payload["max_speakers"] = max_speakers
+        body = self.post_json("/v1/diarize", payload)
         try:
             turns = []
             for turn in body["turns"]:
@@ -38,6 +54,11 @@ class HttpDiarizerClient(ServiceHttpClient):
                         overlap_seconds=float(overlap_seconds),
                     )
                 )
+            reported = body.get("num_speakers")
+            if reported is not None and (
+                isinstance(reported, bool) or not isinstance(reported, int)
+            ):
+                raise ProtocolError("num_speakers must be an integer")
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError(f"malformed diarize response: {exc!r}") from exc
-        return DiarizationResult(turns=tuple(turns))
+        return DiarizationResult(turns=tuple(turns), num_speakers=reported)

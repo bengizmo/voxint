@@ -24,6 +24,7 @@ Orchestration philosophy (two execution lanes over the P1 stage engine):
 import logging
 import random
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any
@@ -175,12 +176,36 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
         # endpoint and its name_hints are dropped.
         bundled = app_settings.llm_bundled_active(row, settings)
         # The run's frozen domain-pack snapshot (issue #11); NULL for a legacy run.
+        # Copy the run's per-run scalars out INSIDE the session, the same way as the
+        # pack snapshot: reading them off run_row after the session closes would hit
+        # a detached instance (and, if anything in this block ever commits, an
+        # expired attribute) rather than the loaded value.
         run_row = session.get(PipelineRun, run_id)
         pack_snapshot = run_row.domain_pack if run_row is not None else None
+        max_speakers_hint = (
+            run_row.diarization_max_speakers if run_row is not None else None
+        )
+        num_speakers_hint = (
+            run_row.diarization_num_speakers if run_row is not None else None
+        )
     pack = domain_pack_from_snapshot(pack_snapshot, settings)
     ctx = apply_run_preferences(
         base_ctx, settings, prefs, pack, llm_api_key=llm_api_key, bundled=bundled
     )
+    # Per-run diarization speaker-count hint (issue #128), frozen on the run at
+    # submit. A stored max overrides the install-wide ceiling already on ctx; a
+    # stored exact count pins pyannote to that many speakers. NULL columns leave
+    # the settings default in place (a legacy run, or one with no hint).
+    if max_speakers_hint is not None or num_speakers_hint is not None:
+        ctx = replace(
+            ctx,
+            diarization_max_speakers=(
+                max_speakers_hint
+                if max_speakers_hint is not None
+                else ctx.diarization_max_speakers
+            ),
+            diarization_num_speakers=num_speakers_hint,
+        )
     stage_fns = build_stage_fns(ctx)
     try:
         final = execute_run(factory, run_id, stage_fns, settings=settings, stages=segment)

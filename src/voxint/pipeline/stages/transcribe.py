@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from voxint.clients.base import TranscriptionSegment, TranscriptionWord
-from voxint.db.models import TranscriptSegment
+from voxint.db.models import PipelineRun, TranscriptSegment
 from voxint.pipeline.stages.context import StageContext, normalized_audio_path
 
 # Whisper biases toward — and can hallucinate from — an over-long initial_prompt,
@@ -95,7 +95,17 @@ def _word_payload(words: list[TranscriptionWord]) -> list[dict[str, Any]]:
 
 def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     audio = normalized_audio_path(session, run_id, ctx.media_root)
-    result = ctx.asr.transcribe(audio, initial_prompt=_initial_prompt(ctx.vocabulary))
+    # Render the prompt once, decode, then stamp what whisper actually saw: the
+    # operator's live-unioned glossary is captured nowhere else (issue #123).
+    # Stamping AFTER the decode keeps provenance structurally honest — a run that
+    # never transcribed records no prompt, independent of the engine's rollback.
+    # Idempotent under at-least-once stage re-runs: the same effective vocabulary
+    # renders the same prompt, and a re-run reflects the final decode.
+    prompt = _initial_prompt(ctx.vocabulary)
+    result = ctx.asr.transcribe(audio, initial_prompt=prompt)
+    pipeline_run = session.get(PipelineRun, run_id)
+    if pipeline_run is not None:
+        pipeline_run.initial_prompt = prompt
     session.execute(
         delete(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
     )

@@ -33,6 +33,7 @@ from app.schemas import (
     Word,
 )
 from app.transcription import DecodeError
+from app.whisper_startup import apply_whisper_startup
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -44,10 +45,17 @@ SERVICE_VERSION = "1.0.0"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", "/data/media"))
 MAX_PENDING_REQUESTS = int(os.getenv("MAX_PENDING_REQUESTS", "8"))
 
+# Fail-closed model selection: the default (large-v2) keeps the baked, offline
+# path untouched; an alternate model must be explicitly gated
+# (WHISPER_ALLOW_DOWNLOAD=1 + a full-SHA WHISPER_REVISION) or the service refuses
+# to start. Applied before create_transcriber so the download-root and offline
+# overrides are in os.environ before the model libraries load.
+_startup = apply_whisper_startup()
+
 # Fail-closed engine selection via WHISPER_ENGINE (default ct2-legacy); an
 # unknown engine raises here at import rather than degrading silently.
 transcriber = create_transcriber(
-    model_name=os.getenv("WHISPER_MODEL", "large-v2"),
+    model_name=_startup.model_name,
     device=os.getenv("DEVICE", "cuda"),
     compute_type=os.getenv("COMPUTE_TYPE", "int8"),
     batch_size=int(os.getenv("BATCH_SIZE", "16")),

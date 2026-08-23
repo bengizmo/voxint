@@ -10,6 +10,7 @@ Short, task-focused guides for using Voxint day to day. New here? Start with
 | [Review & adjudicate](reviewing-and-adjudicating.md) | Confirm who each speaker is and correct the transcript: the review queue, the workbench, keyboard shortcuts, the waveform, and splitting or reassigning segments. |
 | [Manage speakers & export](managing-speakers-and-exporting.md) | Tend the speaker roster (rename, merge, archive), read a finished transcript on screen, and download it (txt / md / srt / vtt / json / rttm). |
 | [Settings & troubleshooting](settings-and-troubleshooting.md) | Configure everything from the browser, check what your hardware is doing, and fix common problems. |
+| [Changing pipeline models](changing-pipeline-models.md) | Advanced: point transcription or diarization at a model other than the validated default, what it costs, and how to apply the change. |
 
 Reference material (architecture, the model-service contracts, operations, and
 the release process) lives one level up in [docs/](../README.md).

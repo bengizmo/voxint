@@ -6,6 +6,7 @@ with the label of the turn it overlaps most. No Speaker rows are created here:
 identity is P4's matching problem, fed by these observations.
 """
 
+import logging
 import uuid
 
 from sqlalchemy import delete, select, update
@@ -15,10 +16,28 @@ from voxint.clients.base import DiarizationTurn as TurnResult
 from voxint.db.models import DiarizationTurn, TranscriptSegment
 from voxint.pipeline.stages.context import StageContext, StageDataError, normalized_audio_path
 
+logger = logging.getLogger(__name__)
+
 
 def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     audio = normalized_audio_path(session, run_id, ctx.media_root)
-    turns = ctx.diarizer.diarize(audio).turns
+    result = ctx.diarizer.diarize(
+        audio,
+        max_speakers=ctx.diarization_max_speakers,
+        num_speakers=ctx.diarization_num_speakers,
+    )
+    turns = result.turns
+    # Diagnostic for the #128 speaker-count hint: whether the constraint took
+    # effect. On hard audio pyannote may still land below an exact count (it is
+    # best-effort), so surfacing requested-vs-returned helps an operator see it.
+    if ctx.diarization_max_speakers is not None or ctx.diarization_num_speakers is not None:
+        logger.info(
+            "run %s diarization speaker hint (max=%s num=%s); service reported %s",
+            run_id,
+            ctx.diarization_max_speakers,
+            ctx.diarization_num_speakers,
+            result.num_speakers,
+        )
 
     session.execute(
         delete(DiarizationTurn).where(DiarizationTurn.pipeline_run_id == run_id)

@@ -13,8 +13,11 @@ and loads it by default — no Hugging Face account or token involved. Setting
 ``HF_TOKEN`` is required for gated repos.
 """
 
+import hashlib
+import json
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -26,6 +29,153 @@ logger = logging.getLogger(__name__)
 
 class DecodeError(ValueError):
     """Input audio could not be decoded (HTTP 400 invalid_media)."""
+
+
+def _sha256_file(path: str) -> str:
+    """Streaming sha256 of a regular file, following symlinks. Raises if the
+    resolved target is not a regular file (a broken bake must fail loudly)."""
+    resolved = os.path.realpath(path)
+    if not os.path.isfile(resolved):
+        raise RuntimeError(f"checkpoint file is missing or not a regular file: {path}")
+    digest = hashlib.sha256()
+    with open(resolved, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def compute_checkpoint_fingerprint(config_path: str) -> str:
+    """The vendored-checkpoint weight fingerprint (#125), from a *local* pipeline
+    config. A digest over the two actually-loaded ``.bin`` files — segmentation
+    and embedding — referenced by the config's ``pipeline.params``. The config
+    itself is deliberately excluded: its checkpoint paths are repointed per
+    install flavor (the metal launcher rewrites the path prefix), so hashing it
+    would not be deployment-invariant, while the ``.bin`` bytes are identical
+    across flavors. See ``docs/gpu-contracts.md`` for the canonical algorithm.
+    """
+    import yaml
+
+    with open(config_path, encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+    params = (cfg.get("pipeline") or {}).get("params") or {}
+    segmentation = params.get("segmentation")
+    embedding = params.get("embedding")
+    if not isinstance(segmentation, str) or not isinstance(embedding, str):
+        raise RuntimeError(
+            f"pipeline config {config_path} does not reference segmentation and "
+            "embedding checkpoint files"
+        )
+    # Resolve relative checkpoint paths against the config file's directory, the
+    # way pyannote's local loader does, so the fingerprint hashes the exact files
+    # pyannote loaded rather than a path resolved against the process CWD. The
+    # vendored configs use absolute paths today (the metal launcher rewrites the
+    # prefix but keeps them absolute), so this is defensive: it keeps a relative
+    # custom config honest instead of hashing the wrong file or failing on CWD.
+    base = os.path.dirname(os.path.realpath(config_path))
+    seg_path = segmentation if os.path.isabs(segmentation) else os.path.join(base, segmentation)
+    emb_path = embedding if os.path.isabs(embedding) else os.path.join(base, embedding)
+    seg_sha = _sha256_file(seg_path)
+    emb_sha = _sha256_file(emb_path)
+    return hashlib.sha256(
+        f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+    ).hexdigest()
+
+
+# Bump when the config-hash *recipe* changes (a field added/removed or the
+# canonicalisation altered), so an old and a new hash never silently compare
+# equal and the pinned reference is re-derived deliberately. It is part of the
+# hashed payload, so any change flips the digest.
+DIARIZATION_CONFIG_HASH_VERSION = 1
+
+
+def _require_finite(value: float, env_name: str) -> float:
+    """Reject a non-finite hyperparameter at boot (#129 fail-closed).
+
+    ``float("nan")`` / ``float("inf")`` parse cleanly and ``json.dumps`` reprs them
+    to a *stable* digest, so a malformed value would hash to a deterministic hash
+    of nonsense and run broken clustering while the panel shows only an amber
+    config mismatch. Fail the boot loudly instead, matching the fail-closed intent
+    of the clustering-override guard."""
+    import math
+
+    if not math.isfinite(value):
+        raise RuntimeError(f"{env_name} must be a finite number; got {value!r}")
+    return value
+
+
+def compute_diarization_config_hash(
+    *,
+    pipeline_class: str,
+    clustering: str,
+    clustering_method: str,
+    clustering_threshold: float,
+    clustering_min_cluster_size: int,
+    segmentation_step: float,
+    min_duration_off: float,
+    embedding_exclude_overlap: bool,
+    engine_version: str,
+) -> str:
+    """The effective-clustering-config identity (#129): a digest over the
+    *numerics-affecting* configuration the pipeline actually runs with, so a
+    deployment reporting the validated pipeline *name* + *weights* can also be
+    checked against the validated *config*. This is the pipeline identity that
+    ``compute_checkpoint_fingerprint`` (the weight identity) deliberately is not.
+
+    Orthogonal to the checkpoint fingerprint by design: a weights swap flips that
+    axis, a clustering-config drift flips this one, and each gets a distinct
+    operator remedy. The checkpoint fingerprint is therefore *not* folded in here.
+
+    Deliberately excluded: batch sizes (throughput-only, not numerics; the
+    hardware-aware profiles legitimately vary them per GPU, so hashing them would
+    false-flag a tuned deployment) and the device (its own /healthz field). See
+    ``docs/gpu-contracts.md`` for the canonical recipe.
+    """
+    payload = {
+        "hash_version": DIARIZATION_CONFIG_HASH_VERSION,
+        "pipeline_class": pipeline_class,
+        "clustering": clustering,
+        "clustering_method": clustering_method,
+        "clustering_threshold": clustering_threshold,
+        "clustering_min_cluster_size": clustering_min_cluster_size,
+        "segmentation_step": segmentation_step,
+        "min_duration_off": min_duration_off,
+        "embedding_exclude_overlap": embedding_exclude_overlap,
+        "engine_version": engine_version,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def read_pipeline_static_config(config_path: str) -> dict[str, Any]:
+    """Read the static (structural) pipeline bits a local config declares, for the
+    #129 config-hash: pipeline class, clustering algorithm + method, and the
+    embedding-overlap discriminator. The runtime *tunables* (threshold, min-size,
+    step, merge gap) are not read here — they come from the env-driven ``self.*``
+    effective values, since the runtime overrides the config's baked defaults.
+
+    Raises if a required key is absent so a malformed config fails the boot loudly
+    rather than hashing a half-defined identity.
+    """
+    import yaml
+
+    with open(config_path, encoding="utf-8") as handle:
+        cfg = yaml.safe_load(handle) or {}
+    pipeline = cfg.get("pipeline") or {}
+    pipeline_params = pipeline.get("params") or {}
+    method = ((cfg.get("params") or {}).get("clustering") or {}).get("method")
+    fields = {
+        "pipeline_class": pipeline.get("name"),
+        "clustering": pipeline_params.get("clustering"),
+        "clustering_method": method,
+        "embedding_exclude_overlap": pipeline_params.get("embedding_exclude_overlap"),
+    }
+    missing = [key for key, value in fields.items() if value is None]
+    if missing:
+        raise RuntimeError(
+            f"pipeline config {config_path} is missing required identity fields: "
+            f"{', '.join(sorted(missing))}"
+        )
+    return fields
 
 
 def resolve_device_name(device_type: str) -> str:
@@ -133,6 +283,36 @@ def select_device() -> str:
     return "cpu"
 
 
+def _from_pretrained_adaptive(
+    pipeline_cls: Any, source: str, revision: str | None, token: str | None
+) -> Any:
+    """Load a pipeline across pyannote's incompatible ``from_pretrained`` forms.
+
+    The auth kwarg and revision-pinning mechanism differ across releases
+    (verified against the 3.1.1 and 4.0.x sources):
+
+    * 4.x   -> ``from_pretrained(source, revision=<rev>, token=<tok>)``
+    * 3.1.x -> no ``revision=`` kwarg and ``use_auth_token=``; a revision is
+      pinned via the ``"repo@revision"`` checkpoint-string form, parsed
+      internally and forwarded to ``hf_hub_download``.
+
+    The 4.x form is tried first, falling back to 3.1.x on the ``TypeError`` its
+    unexpected kwargs raise. ``revision=None`` (the validated/vendored default)
+    takes exactly the pre-existing no-revision path, so that load is unchanged.
+    """
+    try:
+        if revision is not None:
+            return pipeline_cls.from_pretrained(source, revision=revision, token=token)
+        return pipeline_cls.from_pretrained(source, token=token)
+    except TypeError as exc:
+        # 3.1.x rejects token= and/or revision= as unexpected kwargs.
+        if "token" not in str(exc) and "revision" not in str(exc):
+            raise
+        if revision is not None:
+            return pipeline_cls.from_pretrained(f"{source}@{revision}", use_auth_token=token)
+        return pipeline_cls.from_pretrained(source, use_auth_token=token)
+
+
 class Diarizer:
     """Pipeline load + single-flight inference + post-processing."""
 
@@ -170,26 +350,70 @@ class Diarizer:
         self.hf_token = os.getenv("HF_TOKEN") or None
         self.device_name = "cpu"
 
+        # DIARIZER_REVISION pins an overridden (HF repo-id) pipeline to an exact
+        # commit so the stamped provenance is reproducible; today
+        # DIARIZER_MODEL_NAME alone floats with the repo's default branch. It is
+        # N/A for the vendored/local source (the vendored config IS the pin), and
+        # ignored there with a warning rather than silently pretending to pin.
+        requested_revision = os.getenv("DIARIZER_REVISION") or None
+        if requested_revision and self.model_is_local:
+            logger.warning(
+                "DIARIZER_REVISION=%s is ignored for the vendored/local pipeline "
+                "%s — the vendored config is itself the pin",
+                requested_revision,
+                self.model_source,
+            )
+            requested_revision = None
+        elif requested_revision is not None and not re.fullmatch(
+            r"[0-9a-f]{40}", requested_revision
+        ):
+            # Docs and .env.example call this a reproducible commit pin. A mutable
+            # ref (a branch or tag) is still loaded, but it can resolve to different
+            # weights across restarts, so say so rather than imply reproducibility.
+            logger.warning(
+                "DIARIZER_REVISION=%s is not a full 40-character commit SHA; the "
+                "pin will float with the ref rather than being reproducible",
+                requested_revision,
+            )
+        self.model_revision = requested_revision
+
         # /healthz identity fields (see docs/gpu-contracts.md); versions
         # resolved at load time so healthz never imports engine packages.
         self.engine = "pyannote.audio"
         self.engine_version: str | None = None
         self.runtime: str | None = "torch"
         self.runtime_version: str | None = None
+        # Weight-checkpoint fingerprint (#125), computed at load for a local
+        # source; None for an HF source whose files are not hashed here.
+        self.checkpoint_fingerprint: str | None = None
+        # Effective-clustering-config hash (#129): the pipeline identity, computed
+        # at load for a local source once the clustering overrides are accepted.
+        # None for an HF source (no local config to read); orthogonal to the
+        # weight fingerprint above.
+        self.diarization_config_hash: str | None = None
 
         # Env-tunable hyperparameters. Threshold below the pyannote default
         # (~0.70) is deliberate: the default under-clusters quiet recordings
         # into 0-speaker results.
-        self.clustering_threshold = float(os.getenv("PYANNOTE_CLUSTERING_THRESHOLD", "0.55"))
+        self.clustering_threshold = _require_finite(
+            float(os.getenv("PYANNOTE_CLUSTERING_THRESHOLD", "0.55")),
+            "PYANNOTE_CLUSTERING_THRESHOLD",
+        )
         self.clustering_min_size = int(os.getenv("PYANNOTE_CLUSTERING_MIN_SIZE", "10"))
         # Gap merged through in post-processing; prevents natural pauses from
         # fragmenting speakers.
-        self.min_duration_off = float(os.getenv("PYANNOTE_MIN_DURATION_OFF", "0.6"))
+        self.min_duration_off = _require_finite(
+            float(os.getenv("PYANNOTE_MIN_DURATION_OFF", "0.6")),
+            "PYANNOTE_MIN_DURATION_OFF",
+        )
         self.segmentation_batch_size = int(os.getenv("PYANNOTE_SEGMENTATION_BATCH_SIZE", "8"))
         self.embedding_batch_size = int(os.getenv("PYANNOTE_EMBEDDING_BATCH_SIZE", "12"))
         # Larger than the 0.1 default: fewer, larger chunks sustain GPU load
         # instead of brief bursts.
-        self.segmentation_step = float(os.getenv("PYANNOTE_SEGMENTATION_STEP", "0.5"))
+        self.segmentation_step = _require_finite(
+            float(os.getenv("PYANNOTE_SEGMENTATION_STEP", "0.5")),
+            "PYANNOTE_SEGMENTATION_STEP",
+        )
 
         # The pipeline object is not concurrency-safe. A threading.Lock (not
         # asyncio.Lock) because diarize() runs synchronously in a worker
@@ -217,18 +441,11 @@ class Diarizer:
 
         self.engine_version = pyannote.audio.__version__
         self.runtime_version = torch.__version__
-        # The auth kwarg name differs between pyannote releases:
-        # 3.1.x wants use_auth_token=, 4.x wants token=. Try 4.x first.
         local_hint = "corrupt or incomplete vendored files — rebuild/re-pull the image"
         try:
-            try:
-                self.model = Pipeline.from_pretrained(self.model_source, token=self.hf_token)
-            except TypeError as exc:
-                if "token" not in str(exc):
-                    raise
-                self.model = Pipeline.from_pretrained(
-                    self.model_source, use_auth_token=self.hf_token
-                )
+            self.model = _from_pretrained_adaptive(
+                Pipeline, self.model_source, self.model_revision, self.hf_token
+            )
         except Exception as exc:
             # A missing/truncated checkpoint behind an existing vendored config
             # surfaces as a raw torch/FileNotFound error; keep the actionable
@@ -260,31 +477,102 @@ class Diarizer:
         self.model.embedding_batch_size = self.embedding_batch_size
         self.model.segmentation_step = self.segmentation_step
 
-        # Clustering hyperparameters go through instantiate(); parameter names
-        # vary across pipeline versions, so fall back from most to least
-        # specific rather than failing the boot.
+        self._apply_clustering_overrides()
+
+        # Fingerprint the loaded weights (#125). For a local/vendored source the
+        # two .bin files must be hashable — a broken or incomplete bake fails the
+        # boot loudly rather than reporting an unverifiable (null) identity under
+        # the validated name. A non-local (HF) source is left null: its files are
+        # not hashed here and the console fails closed on a null fingerprint.
+        if self.model_is_local:
+            try:
+                self.checkpoint_fingerprint = compute_checkpoint_fingerprint(
+                    self.model_source
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to fingerprint the vendored checkpoints for "
+                    f"{self.model_source} — {local_hint}"
+                ) from exc
+
+            # The effective-config identity (#129), orthogonal to the weight
+            # fingerprint above. Static bits come from the loaded config; the
+            # tunables from the accepted runtime values — the fail-closed
+            # instantiate above guarantees these overrides were applied, so the
+            # hash reflects the config that actually runs. Local-only, like the
+            # fingerprint: a non-local source has no local config to read and its
+            # identity is unvalidated by name anyway.
+            # A guard, not an ``assert`` (which ``python -O`` strips): engine_version
+            # is folded into the hash below, so a None here must fail the boot loudly
+            # rather than hash ``null`` under an optimized runtime.
+            if self.engine_version is None:  # set above at load start
+                raise RuntimeError(
+                    "engine_version was not resolved before computing the config hash"
+                )
+            try:
+                static = read_pipeline_static_config(self.model_source)
+                self.diarization_config_hash = compute_diarization_config_hash(
+                    pipeline_class=static["pipeline_class"],
+                    clustering=static["clustering"],
+                    clustering_method=static["clustering_method"],
+                    clustering_threshold=self.clustering_threshold,
+                    clustering_min_cluster_size=self.clustering_min_size,
+                    segmentation_step=self.segmentation_step,
+                    min_duration_off=self.min_duration_off,
+                    embedding_exclude_overlap=bool(static["embedding_exclude_overlap"]),
+                    engine_version=self.engine_version,
+                )
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Failed to compute the diarization config hash for "
+                    f"{self.model_source} — {local_hint}"
+                ) from exc
+
+        self.model_loaded = True
+        logger.info("Diarization pipeline loaded in %.2fs", time.time() - start)
+
+    def _apply_clustering_overrides(self) -> None:
+        """Apply the tuned clustering hyperparameters through ``instantiate()``.
+
+        For the vendored/local (validated) pipeline this is **fail-closed** (#129):
+        the most-specific override MUST be accepted or the boot fails. A silent
+        degrade to threshold-only or to model defaults would let the service run a
+        different clustering config while still reporting the validated identity,
+        defeating the config-hash gate. For a non-local (explicit HF override)
+        source the param names may legitimately differ across pipeline versions, so
+        the historical most-to-least-specific fallback is kept there rather than
+        failing an operator's chosen pipeline.
+        """
+        strict_params = {
+            "clustering": {
+                "threshold": self.clustering_threshold,
+                "min_cluster_size": self.clustering_min_size,
+            }
+        }
+        if self.model_is_local:
+            try:
+                self.model = self.model.instantiate(strict_params)
+            except Exception as exc:
+                raise RuntimeError(
+                    "The vendored pipeline rejected its clustering overrides "
+                    f"{strict_params} — refusing to start with an unvalidated "
+                    "clustering config under the validated identity"
+                ) from exc
+            logger.info("Applied clustering hyperparameters: %s", strict_params)
+            return
         for params in (
-            {
-                "clustering": {
-                    "threshold": self.clustering_threshold,
-                    "min_cluster_size": self.clustering_min_size,
-                }
-            },
+            strict_params,
             {"clustering": {"threshold": self.clustering_threshold}},
         ):
             try:
                 self.model = self.model.instantiate(params)
                 logger.info("Applied clustering hyperparameters: %s", params)
-                break
+                return
             except Exception as exc:
                 logger.debug("instantiate(%s) rejected: %s", params, exc)
-        else:
-            logger.warning(
-                "Pipeline rejected clustering overrides; running with model defaults"
-            )
-
-        self.model_loaded = True
-        logger.info("Diarization pipeline loaded in %.2fs", time.time() - start)
+        logger.warning(
+            "Pipeline rejected clustering overrides; running with model defaults"
+        )
 
     def diarize(
         self,

@@ -452,7 +452,11 @@ def test_run_detail_shows_stage_ledger(
     assert "asr exploded" in body  # the failed attempt's error surfaces
     assert "worker-a" in body and "worker-b" in body  # both attempts' workers
     # Chronological by started_at — prepare precedes the transcribe attempts.
-    assert body.index("prepare") < body.index("transcribe")
+    # Scope the ordering check to the stage-ledger region: the glossary provenance
+    # panel above it (issue #123) renders "transcribed", which a whole-body search
+    # would otherwise match before the ledger's own rows.
+    ledger = body[body.index("Stage ledger") :]
+    assert ledger.index("prepare") < ledger.index("transcribe")
     # Responsive + a11y (issue #64): the 8-column ledger — the widest table in
     # the app — scrolls inside its own keyboard-reachable, labelled region.
     assert 'class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0"' in body

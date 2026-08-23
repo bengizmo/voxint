@@ -61,17 +61,26 @@ class FakeASR:
 
 
 class FakeDiarizer:
-    def diarize(self, audio_path: Path) -> DiarizationResult:
-        return DiarizationResult(
-            turns=(
-                DiarizationTurn(0.0, 4.0, "SPEAKER_00"),
-                DiarizationTurn(4.0, 9.0, "SPEAKER_01"),
-                # Repeated label + sub-second window: exercises the skip path
-                # and proves labels may repeat across turns (real diarization
-                # always produces many turns per speaker).
-                DiarizationTurn(8.5, 9.0, "SPEAKER_00", overlap=True, overlap_seconds=0.5),
-            )
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        max_speakers: int | None = None,
+        num_speakers: int | None = None,
+    ) -> DiarizationResult:
+        # The count hints are accepted (the Protocol carries them) but do not
+        # steer this deterministic fixture: production flow-through of the hints
+        # is covered at the HTTP-client layer. num_speakers reports the distinct
+        # labels below, mirroring the service's own len(distinct) computation.
+        turns = (
+            DiarizationTurn(0.0, 4.0, "SPEAKER_00"),
+            DiarizationTurn(4.0, 9.0, "SPEAKER_01"),
+            # Repeated label + sub-second window: exercises the skip path
+            # and proves labels may repeat across turns (real diarization
+            # always produces many turns per speaker).
+            DiarizationTurn(8.5, 9.0, "SPEAKER_00", overlap=True, overlap_seconds=0.5),
         )
+        return DiarizationResult(turns=turns, num_speakers=len({t.label for t in turns}))
 
 
 class FakeEmbedder:

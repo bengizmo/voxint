@@ -128,6 +128,18 @@ def _publish_or_defer(run_id: uuid.UUID, *, stage: "Stage | None" = None) -> boo
     return True
 
 
+def _speaker_count(value: str) -> int:
+    """argparse type for --max-speakers / --num-speakers: an int in 1..20,
+    matching the pyannote service bounds and the DIARIZATION_MAX_SPEAKERS config."""
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a whole number") from None
+    if count < 1 or count > 20:
+        raise argparse.ArgumentTypeError(f"{count} is not between 1 and 20")
+    return count
+
+
 def _submit(args: argparse.Namespace) -> int:
     from voxint.config import get_settings
     from voxint.db.session import build_engine, build_session_factory, session_scope
@@ -158,7 +170,12 @@ def _submit(args: argparse.Namespace) -> int:
         factory = build_session_factory(engine)
         try:
             with session_scope(factory) as session:
-                run_id = submit_media_item(session, str(relative)).id
+                run_id = submit_media_item(
+                    session,
+                    str(relative),
+                    diarization_max_speakers=args.max_speakers,
+                    diarization_num_speakers=args.num_speakers,
+                ).id
         except DomainPackError as exc:
             # Freeze-time domain-pack collision (issue #84) / unresolvable pack
             # (issue #11): fail honestly (exit 2) with a plain-language message
@@ -1225,6 +1242,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     submit_p.add_argument(
         "--interval", type=float, default=2.0, help="--wait: poll every N seconds (default 2)"
+    )
+    submit_p.add_argument(
+        "--max-speakers",
+        type=_speaker_count,
+        default=None,
+        metavar="N",
+        help="upper bound (1-20) on distinct speakers for diarization; the "
+        "diarizer may still return fewer. Overrides DIARIZATION_MAX_SPEAKERS "
+        "for this run",
+    )
+    submit_p.add_argument(
+        "--num-speakers",
+        type=_speaker_count,
+        default=None,
+        metavar="N",
+        help="exact number of speakers (1-20) if you know it; pins diarization "
+        "to that many. Takes precedence over --max-speakers",
     )
     submit_p.set_defaults(fn=_submit)
 

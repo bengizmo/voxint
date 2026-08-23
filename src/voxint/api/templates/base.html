@@ -510,7 +510,7 @@
     /* Deep-link jump flash (issue #121): a Meaning search result scrolls its
        target transcript line into view and briefly flashes it so the eye lands on
        the passage. A background fade (not a border) reads over any speaker accent;
-       reduced-motion falls back to a static tint the island's timeout then clears. */
+       reduced-motion falls back to a static tint the island clears once its flash window ends. */
     @keyframes tp-jump-flash {
       from { background: var(--accent-soft); }
       to { background: transparent; }

@@ -120,6 +120,14 @@ def test_app_settings_edit_changes_next_run_without_rebuild(
     assert "Packword" in asr.last_initial_prompt  # pack vocab persists
     assert ctx_b.llm is None  # disabled by the edit
 
+    # The provenance stamp tracks the re-run: the persisted prompt equals what the
+    # SECOND decode saw, so a requeue with an edited glossary overwrites the first
+    # run's stamp rather than leaving stale provenance (issue #123).
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.initial_prompt == asr.last_initial_prompt
+
 
 def test_run_pipeline_reapplies_settings_each_invocation(
     session_factory: sessionmaker[Session], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -187,6 +195,105 @@ def test_run_pipeline_reapplies_settings_each_invocation(
 
     assert captured[0].vocabulary == ("Packword", "Foobar")
     assert captured[1].vocabulary == ("Packword", "Bazqux")  # re-read, no rebuild
+
+
+def test_transcribe_records_applied_initial_prompt(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The transcribe stage stamps the run with the exact bounded prompt whisper
+    decoded with (issue #123) — the operator's glossary is captured nowhere else, so
+    this closes the provenance gap the pack snapshot leaves. The persisted value must
+    equal what FakeASR was handed, term-for-term."""
+    settings = Settings(_env_file=None, llm_enabled=False)
+    pack = DomainPack(name="prov-test", vocabulary=("Packword",))
+    base_ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        domain_pack=pack,
+        vocabulary=("Packword",),
+    )
+    asr = base_ctx.asr
+    run_id = _seed_run(session_factory)
+
+    with session_factory() as session:
+        row = store.get_or_create(session, llm_enabled_default=False)
+        row.vocabulary = ["Foobar"]
+        session.commit()
+
+    with session_factory() as session:
+        row = store.get_app_settings(session)
+        prefs = resolve_run_preferences(row, settings)
+        ctx = apply_run_preferences(base_ctx, settings, prefs, pack, llm_api_key=None)
+        transcribe.run(ctx, session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        # Exactly what whisper saw, and the union order is preserved.
+        assert stored.initial_prompt == asr.last_initial_prompt == "Packword, Foobar"
+
+
+def test_transcribe_records_null_prompt_when_no_vocabulary(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A run with no effective vocabulary renders an empty prompt (None), and the
+    stage records that as SQL NULL — never an empty string masquerading as a hint."""
+    base_ctx = StageContext(
+        asr=FakeASR(),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=(),
+    )
+    asr = base_ctx.asr
+    run_id = _seed_run(session_factory)
+
+    with session_factory() as session:
+        transcribe.run(base_ctx, session, run_id)
+        session.commit()
+
+    assert asr.last_initial_prompt is None
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.initial_prompt is None
+
+
+def test_transcribe_leaves_prompt_null_when_decode_fails(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A failed decode records no provenance: the stamp lands only AFTER a successful
+    transcribe, so a run that never decoded leaves the column NULL — the card must not
+    claim whisper saw a prompt the service never received (issue #123)."""
+
+    class RaisingASR:
+        def transcribe(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("asr unreachable")
+
+    base_ctx = StageContext(
+        asr=RaisingASR(),  # type: ignore[arg-type]
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=("Packword",),
+    )
+    run_id = _seed_run(session_factory)
+
+    with session_factory() as session:
+        with pytest.raises(RuntimeError, match="asr unreachable"):
+            transcribe.run(base_ctx, session, run_id)
+        session.rollback()
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.initial_prompt is None
 
 
 def test_run_pipeline_closes_per_run_llm_client(

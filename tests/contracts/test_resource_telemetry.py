@@ -522,3 +522,101 @@ class TestComposeEnvPropagation:
             env = config["services"][svc]["environment"]
             assert "VOXINT_TELEMETRY_ENABLED" in env, f"{overlay}:{svc}"
             assert "VOXINT_TELEMETRY_INTERVAL_SECONDS" in env, f"{overlay}:{svc}"
+
+
+class TestWhisperOverridePassthrough:
+    """Every whisper-bearing overlay forwards the model-override knobs and mounts
+    the separate alternate-model cache (configurable models A2). HF_HUB_OFFLINE is
+    deliberately NOT a pass-through: an empty compose default would flip the baked
+    offline behavior, so the resolver owns that flag instead."""
+
+    # A compose ``${KEY:-}`` pass-through does NOT leave a baked image ENV
+    # untouched: it SETS the container var to the empty string, shadowing the
+    # bake. That is why WHISPER_MODEL carries a real ``large-v2`` default (the
+    # startup resolver rejects an empty model), and why the resolver restores the
+    # baked revision when WHISPER_REVISION comes through empty. WHISPER_ALLOW_DOWNLOAD
+    # and HF_TOKEN are genuine opt-ins whose correct default IS empty.
+    _EMPTY_DEFAULTED_KEYS = ("WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD", "HF_TOKEN")
+    _ALT_CACHE = "/app/model-cache/whisper"
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_override_env_forwarded_to_whisper(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        env = config["services"]["whisper"]["environment"]
+        # The model must default to the validated large-v2, never empty: an empty
+        # ${WHISPER_MODEL:-} fails the startup resolver closed (blank != baked default).
+        assert env.get("WHISPER_MODEL") == "${WHISPER_MODEL:-large-v2}", (
+            f"{overlay}:whisper WHISPER_MODEL must default to large-v2, not empty"
+        )
+        for key in self._EMPTY_DEFAULTED_KEYS:
+            assert key in env, f"{overlay}:whisper missing {key} pass-through"
+            assert env[key] == f"${{{key}:-}}", f"{overlay}:whisper {key} not empty-defaulted"
+        # HF_HUB_OFFLINE must not leak in as a pass-through (would flip the baked
+        # default when unset in .env).
+        assert "HF_HUB_OFFLINE" not in env, f"{overlay}:whisper must not pass HF_HUB_OFFLINE"
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_whisper_models_cache_volume_declared_and_mounted(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        assert "whisper-models" in (config.get("volumes") or {}), (
+            f"{overlay} missing top-level whisper-models volume"
+        )
+        mounts = config["services"]["whisper"]["volumes"]
+        assert any(m == f"whisper-models:{self._ALT_CACHE}" for m in mounts), (
+            f"{overlay}:whisper does not mount whisper-models at {self._ALT_CACHE}"
+        )
+        # The alternate cache must never shadow the baked large-v2 download root.
+        assert self._ALT_CACHE != "/app/.cache/whisper"
+
+    _WHISPER_DOCKERFILES = (
+        "services/whisper/Dockerfile",
+        "services/whisper/Dockerfile.cpu",
+        "services/whisper/Dockerfile.rocm",
+    )
+
+    @pytest.mark.parametrize("dockerfile", _WHISPER_DOCKERFILES)
+    def test_alt_cache_mountpoint_is_owned_by_runtime_user(self, dockerfile: str) -> None:
+        # A fresh named volume mounted at the alt-cache path inherits that path's
+        # ownership FROM THE IMAGE. If the image never creates it, Docker makes the
+        # mountpoint (and the empty volume) root-owned and the non-root ``voxint``
+        # service cannot write an alternate model's download. The image must create
+        # the path and chown it to voxint before dropping privileges.
+        text = (REPO_ROOT / dockerfile).read_text()
+        assert self._ALT_CACHE in text, (
+            f"{dockerfile} never creates the alt-cache mountpoint {self._ALT_CACHE}; "
+            "a fresh named volume there will be root-owned and unwritable by voxint"
+        )
+        chown_at = text.find("chown -R voxint:voxint /app")
+        user_at = text.find("USER voxint")
+        mkdir_at = text.find(self._ALT_CACHE)
+        assert chown_at != -1, f"{dockerfile} missing chown -R voxint:voxint /app"
+        assert user_at != -1, f"{dockerfile} missing USER voxint"
+        # The mountpoint must be created, then chowned, all before USER voxint.
+        assert mkdir_at < user_at and chown_at < user_at, (
+            f"{dockerfile} must create+chown {self._ALT_CACHE} before USER voxint"
+        )
+
+
+class TestDiarizerOverridePassthrough:
+    """Every pyannote-bearing overlay forwards the diarization model-override knobs
+    so a deployment-set DIARIZER_REVISION (configurable models A3) actually reaches
+    the container. Omitting the revision silently floats the pin at the repo
+    default while the operator believes it is pinned."""
+
+    _DIARIZER_KEYS = ("DIARIZER_MODEL_NAME", "DIARIZER_REVISION", "HF_TOKEN")
+
+    @pytest.mark.parametrize("overlay", _TELEMETRY_OVERLAYS)
+    def test_override_env_forwarded_to_pyannote(self, overlay: str) -> None:
+        import yaml
+
+        config = yaml.safe_load((REPO_ROOT / overlay).read_text())
+        env = config["services"]["pyannote"]["environment"]
+        for key in self._DIARIZER_KEYS:
+            assert key in env, f"{overlay}:pyannote missing {key} pass-through"
+            assert env[key] == f"${{{key}:-}}", (
+                f"{overlay}:pyannote {key} not empty-defaulted"
+            )

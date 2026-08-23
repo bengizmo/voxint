@@ -29,7 +29,14 @@ same contract.
   - *contract version*: the `/v1/` path prefix. Additive response fields are
     allowed within `v1`; renames/removals/semantic changes require `/v2`.
   - *service version*: the image's own semver (`version` in `/healthz`).
-  - *model identity*: the model actually loaded (`model` in `/healthz`).
+  - *model identity*: the model actually loaded (`model` in `/healthz`). The
+    validated defaults are whisper **large-v2** and pyannote
+    **speaker-diarization-3.1**; those two are the tier the numerics contracts
+    below are measured against. An operator may override the ASR or diarizer
+    model (deployment-owned, via `.env`; see
+    [Changing pipeline models](how-to/changing-pipeline-models.md)), but an
+    override is unvalidated and each stage stamps the served identity onto its
+    `StageRun.metrics.model_identity` so a run records what actually ran.
   - *embedding space* (titanet only): versions the vector semantics; any
     model **or preprocessing** change requires a new space id even if
     `/v1/embed` stays wire-compatible.
@@ -101,6 +108,76 @@ same contract.
     versions, VAD params + plan version), `vad_plan_version`, `vad_params`, and `model_revision`
     (the pinned HF snapshot). It never hashes weights per request; it exists so
     two deployments are distinguishable and a numerics change is visible.
+  - **pyannote only** additionally carries a `checkpoint_fingerprint` (#125),
+    populated once the model is loaded (`null` while `degraded`). It is a weight
+    identity, not a pipeline identity: a digest over the two actually-loaded
+    checkpoint `.bin` files, so a deployment reporting the validated pipeline
+    *name* can be checked against the validated *weights*. Algorithm (normative):
+    `seg = sha256(segmentation_bin)`, `emb = sha256(embedding_bin)`, both
+    lowercase hex; `checkpoint_fingerprint = sha256("segmentation:" + seg +
+    "\nembedding:" + emb + "\n")`. The two `.bin` paths are read from the loaded
+    pipeline config's `pipeline.params.segmentation` / `embedding`; a relative
+    path there is resolved against the config file's own directory (the way
+    pyannote's local loader resolves it), never against the process working
+    directory, so the digest always covers the files the pipeline actually
+    loaded. The config file itself is deliberately excluded: its checkpoint
+    paths are repointed per
+    install flavor (the metal launcher rewrites the path prefix), so its bytes
+    are not deployment-invariant, while the `.bin` bytes are identical across
+    flavors. The vendored default's value is
+    `aa94a2d96a8f1eb5eb8fb80b863c6616417ff1e5c9a8dab91ce42914f836a0d2`, derived
+    from `services/pyannote/models/provenance.json` (contract-tested). For a
+    non-local (Hugging Face) source the field is `null`: those files are not
+    hashed here. A local source that loaded but cannot be hashed fails the boot
+    rather than reporting `null`, so `null` always means "unverifiable source",
+    never "broken bake". The field is additive within `v1`; a consumer must
+    treat the key being **absent** (an older service) differently from
+    present-and-`null`: absence means classify by name as before, `null` means
+    fail closed as unverifiable. This is operational provenance, not attestation
+    against a hostile operator (a service operator can serve any `/healthz`);
+    it exists to catch an accidental weights swap under the validated name in a
+    single-operator deployment.
+  - **pyannote only** additionally carries a `diarization_config_hash` (#129),
+    populated once the model is loaded (`null` while `degraded`). Where
+    `checkpoint_fingerprint` is the *weight* identity, this is the *pipeline*
+    identity: a digest over the effective clustering configuration the pipeline
+    actually runs with, so a deployment reporting the validated name and weights
+    can also be checked against the validated *config*. The two axes are
+    orthogonal by design: a weights swap flips the fingerprint, a clustering
+    drift flips this hash, and each carries a distinct operator remedy, so the
+    fingerprint is not folded in here. Algorithm (normative):
+    `diarization_config_hash = sha256(canonical)` where `canonical =
+    json.dumps(payload, sort_keys=True, separators=(",",":"))` and `payload` is
+    `{hash_version, pipeline_class, clustering, clustering_method,
+    clustering_threshold, clustering_min_cluster_size, segmentation_step,
+    min_duration_off, embedding_exclude_overlap, engine_version}`. The static
+    bits (`pipeline_class`, `clustering`, `clustering_method`,
+    `embedding_exclude_overlap`) are read from the loaded pipeline config; the
+    tunables (`clustering_threshold`, `clustering_min_cluster_size`,
+    `segmentation_step`, `min_duration_off`) are the effective env-driven values;
+    `engine_version` is `pyannote.audio.__version__`. Batch sizes are
+    deliberately excluded: they are throughput-only, not numerics, and the
+    hardware-aware profiles legitimately vary them per GPU, so hashing them would
+    false-flag a tuned deployment. The vendored default's value is
+    `9a31a4a4f1aaf4720b790bba8add7bd18f40968d428601e0ec80e3820556fca0`, derived
+    from the runtime env defaults plus the vendored config and the pinned
+    pyannote version (contract-tested). For the validated (local) pipeline the
+    clustering overrides are applied **fail-closed**: if `instantiate()` rejects
+    the tuned `{threshold, min_cluster_size}` the service refuses to start rather
+    than silently degrading to threshold-only or model defaults, so a service on
+    the validated identity cannot quietly run the wrong clustering config. An
+    explicit non-local (Hugging Face) override keeps the tolerant fallback and
+    reports `null` here (no local config to hash). The field is additive within
+    `v1` with the same absent-vs-`null` contract as `checkpoint_fingerprint`.
+  - The console's Settings "Pipeline models" panel consumes these to classify
+    each configurable service by exact identity, not name (#125, #129): the
+    validated name plus the matching `checkpoint_fingerprint` and
+    `diarization_config_hash` (pyannote) or `model_revision` (whisper's baked
+    large-v2 snapshot) reads as validated; the validated name with a different
+    fingerprint/hash/revision reads as a mismatch and fails closed (weights and
+    config are surfaced as separate axes so the remedy is specific); the
+    validated name with an unverifiable (`null`) value reads as unverified and
+    fails closed.
   - **All services** additionally carry an optional nested `resources` block
     (additive within `v1`; absent on older services, always present on an
     upgraded one). It reports the hardware this service sees so the operator has
@@ -246,6 +323,35 @@ Response:
   how to weight flagged spans. `suspect_score` ∈ [0, 1] is a severity hint
   (the two rules score on different scales), `suspect_span` is an example
   offending substring (≤120 chars). Both are `null` when `suspect` is false.
+
+### ROCm `BATCH_SIZE=16` VRAM soak (measured, RX 9060 XT 16 GB, 2026-08-21)
+
+The shipped ROCm default is `BATCH_SIZE=16`. This records the measured VRAM cost
+of that default on the maintainer AMD hardware, so the "keep 16 on ROCm" stance
+rests on evidence rather than the ordinal argument that 16 GB beats 12 GB.
+
+- **Setup**: whisper `0.22.0-rocm` (`device: rocm`, large-v2, int8), one
+  speech-dense 761-second file (25 concatenated LibriSpeech clips producing 28
+  output segments, so more than 16 VAD windows and past the batch-16 boundary),
+  `concurrency=1`. VRAM read two ways that reconcile: the per-process amdgpu
+  `fdinfo` `drm-memory-vram` on the render node (isolates whisper from the
+  desktop compositor) and the card-total `mem_info_vram_used` sysfs counter. The
+  local LLM was stopped first so whisper had the card, matching the shipped ROCm
+  deployment where only whisper is GPU-resident.
+- **Result (`vad_filter=true`, the batched pipeline `BATCH_SIZE` governs)**:
+  whisper sat at 1.97 GiB idle-loaded and peaked at **13.06 GiB** during decode
+  (a batch-driven rise of about 11.1 GiB). Peak VRAM is bounded by the batch, not
+  the file length. No out-of-memory, no container restart (restart count 0), zero
+  admission rejects, transcript correct.
+- **`vad_filter=false`** bypasses the batched pipeline (raw
+  `WhisperModel.transcribe`), so it does not exercise the `BATCH_SIZE` path; it
+  ran as a functional smoke only and passed (229 raw segments, transcript
+  correct, no OOM).
+- **Verdict**: `BATCH_SIZE=16` fits a 16 GB AMD card with roughly 2.9 GiB of
+  headroom and is safe to ship there. It is adequate, not ample: a 12 GB AMD card
+  would exceed VRAM at batch 16 (13.06 GiB peak) and must lower `BATCH_SIZE` by
+  hand (see [setup.md](setup.md) and the tuning table below). This is
+  infrastructure evidence for the shipped default, not a numerics oracle.
 
 ## pyannote: `POST /v1/diarize` (port 8024)
 

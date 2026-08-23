@@ -56,7 +56,10 @@ COPY --from=builder /opt/whisper_models /app/.cache/whisper
 ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /app
-RUN mkdir -p /app/.cache/huggingface && chown -R voxint:voxint /app
+# Pre-create the alternate-model cache mountpoint so a fresh named volume mounted
+# there inherits voxint ownership; otherwise Docker creates it root-owned and the
+# non-root service cannot write an alternate model's download (WHISPER_DOWNLOAD_ROOT).
+RUN mkdir -p /app/.cache/huggingface /app/model-cache/whisper && chown -R voxint:voxint /app
 COPY --chown=voxint:voxint app/ /app/app/
 
 USER voxint
@@ -70,6 +73,10 @@ ENV WHISPER_DOWNLOAD_ROOT=/app/.cache/whisper
 # the load to the baked snapshot so offline resolution needs no ref lookup.
 ARG WHISPER_HF_REVISION=f0fe81560cb8b68660e564f55dd99207059c092e
 ENV WHISPER_REVISION=${WHISPER_HF_REVISION}
+# Baked-snapshot reference for the startup resolver: an alternate model whose
+# WHISPER_REVISION still equals this baked large-v2 SHA is a forgotten-revision
+# mistake and fails closed (app/whisper_startup.py). Never operator-facing.
+ENV WHISPER_BAKED_REVISION=${WHISPER_HF_REVISION}
 ENV HF_HUB_OFFLINE=1
 ENV DEVICE=cuda
 ENV COMPUTE_TYPE=int8

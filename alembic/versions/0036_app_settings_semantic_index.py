@@ -7,8 +7,8 @@ non-NULL value is a UI override. Both depend only on each other
 (``semantic_index_autogenerate`` ⇒ ``semantic_index_enabled``), never on
 ``llm_enabled`` — the embedder is a local ONNX graph with no LLM and no egress.
 
-Revision ID: 0034
-Revises: 0033
+Revision ID: 0036
+Revises: 0035
 Create Date: 2026-08-22 08:30:00.000000
 """
 
@@ -17,8 +17,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0034"
-down_revision: str | None = "0033"
+revision: str = "0036"
+down_revision: str | None = "0035"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

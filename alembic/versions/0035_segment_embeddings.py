@@ -20,8 +20,8 @@ the numerics parity gate.
 The pgvector extension already exists (created in 0001). Downgrade drops both
 tables (disposable derived data; the transcript is untouched).
 
-Revision ID: 0033
-Revises: 0032
+Revision ID: 0035
+Revises: 0034
 Create Date: 2026-08-21 23:30:00.000000
 """
 
@@ -31,8 +31,8 @@ import pgvector.sqlalchemy
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0033"
-down_revision: str | None = "0032"
+revision: str = "0035"
+down_revision: str | None = "0034"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

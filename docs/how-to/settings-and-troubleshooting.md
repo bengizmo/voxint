@@ -13,8 +13,8 @@ to your **next** run or job. That is by design: a run's settings are locked in
 the moment it starts, so nothing shifts underneath a job that is already going.
 
 ![The Voxint Settings page, showing the First-run setup, Appearance, Features,
-Media folders, Corrections, LLM enhancement, Sources and research, and Guided
-tutorial sections stacked down the page.](../images/settings.png)
+Media folders, Glossary, Corrections, LLM enhancement, Sources and research, and
+Guided tutorial sections stacked down the page.](../images/settings.png)
 
 ---
 
@@ -120,6 +120,38 @@ which also explains sidecar files.
 
 To learn what domain packs are and how to choose one, see
 [domain-packs.md](../domain-packs.md).
+
+### Glossary *(optional)*
+
+List the proper nouns your recordings use (people, places, organizations,
+acronyms), one per line. Voxint hints transcription toward these spellings, which
+is the best single fix for a mangled name. This is the same list the setup wizard
+collects; the Glossary section lets you manage it later without walking through
+the wizard again.
+
+Type or paste your terms into the box, one per line, and **Save glossary**. Voxint
+deduplicates the list and accepts up to 500 terms of at most 120 characters each;
+a term that is too long or a list that is too big is refused with the reason, and
+your text is kept so you can fix it. Saving replaces the whole list.
+
+A glossary term is a hint, not a guarantee: it improves the odds that an unusual
+name comes out right, it does not force a spelling. The terms apply to runs that
+**start** after you save, including any already waiting in the queue, and they
+never change a transcript that has already finished. A run can only carry about
+2000 characters of hint, and the domain pack's own words come first, so a very
+long list can push your last terms past that limit; keep it to the names that
+actually get mistranscribed.
+
+The Glossary and [Corrections](#corrections-optional) solve different problems. A
+glossary term is what you **expect to hear**; use it for a name that is unusual or
+that transcription keeps splitting across a pause, because the glossary steers
+transcription before the words are grouped into lines. A correction is for a word
+that comes out **wrong the same way every time**, where you already know both the
+wrong form and the right one. Reach for a correction when a glossary term alone has
+not fixed a recurring, identical mistake.
+
+On the run's detail page, the **Glossary applied** section shows the exact hint
+that run decoded with, so you can confirm which names it was told to expect.
 
 ### Corrections *(optional)*
 

@@ -64,6 +64,10 @@ class DiarizationTurn:
 @dataclass(frozen=True)
 class DiarizationResult:
     turns: tuple[DiarizationTurn, ...]
+    # The speaker count the service actually landed on (len of its distinct
+    # labels). Surfaced for observability — e.g. logging that an operator asked
+    # for 2 and pyannote returned 2. None when the response omitted it.
+    num_speakers: int | None = None
 
 
 @dataclass(frozen=True)
@@ -91,7 +95,20 @@ class ASRClient(Protocol):
 
 
 class DiarizerClient(Protocol):
-    def diarize(self, audio_path: Path) -> DiarizationResult: ...
+    def diarize(
+        self,
+        audio_path: Path,
+        *,
+        max_speakers: int | None = None,
+        num_speakers: int | None = None,
+    ) -> DiarizationResult:
+        """Diarize ``audio_path``.
+
+        ``max_speakers`` is an upper bound (the service may return fewer);
+        ``num_speakers`` forces an exact count. When both are given, the exact
+        count wins. Both None ⇒ the service applies its own default ceiling.
+        """
+        ...
 
 
 class EmbedderClient(Protocol):

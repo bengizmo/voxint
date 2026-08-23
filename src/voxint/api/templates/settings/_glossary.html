@@ -1,0 +1,40 @@
+{# Settings → Glossary (issue #123): manage the operator's expected proper nouns
+   (names, places, organizations, acronyms) from the console, not only the setup
+   wizard. This edits app_settings.vocabulary through the SAME normalize_vocabulary
+   gate the wizard uses (one term per line, deduped, 500-term / 120-char bounds),
+   posting the full list to POST /settings/glossary (replace-all). The terms are
+   unioned with the selected domain pack's words and fed to whisper as a decoding
+   hint (initial_prompt) on every run; unlike corrections, they are applied LIVE
+   (not frozen at submit), so a saved change reaches the next run that starts. Plain
+   server-rendered textarea, no island: nothing here needs JavaScript. Self-contained:
+   renders from _settings_context. #}
+<section id="glossary" aria-labelledby="glossary-heading">
+<h2 id="glossary-heading">Glossary</h2>
+<p class="muted">List the proper nouns your recordings use (people, places,
+   organizations, acronyms), one per line. Voxint hints transcription toward these
+   spellings, which is the best fix for a mangled name. A hint improves the odds; it
+   does not guarantee a spelling. Terms apply to runs that start after you save,
+   including any already waiting in the queue, and they never change a transcript
+   that has already finished.</p>
+<p class="muted">A glossary term is what you expect to hear. If a word comes out
+   wrong the same way every time, add a <a href="#corrections">Correction</a> instead,
+   which replaces a known wrong spelling with the one you want. A name split across a
+   pause is handled here, not by corrections: the glossary steers transcription before
+   the words are grouped into lines.</p>
+{% if glossary_error %}
+  <p class="notice" role="alert">{{ glossary_error }}</p>
+{% endif %}
+<form method="post" action="/settings/glossary">
+  <input type="hidden" name="csrf_token" value="{{ csrf_settings }}">
+  <div class="field">
+    <label for="glossary-terms">Terms (one per line)</label>
+    <textarea id="glossary-terms" name="vocabulary" rows="8"
+              placeholder="Zoning Board&#10;NUCA&#10;Dr. Ilana Rosen">{{ vocabulary_text }}</textarea>
+  </div>
+  <p class="muted">{{ vocabulary|length }} term{{ "" if vocabulary|length == 1 else "s" }}.
+     A run can only carry about 2000 characters of hint, and the domain pack's own
+     words come first, so a very long list can push your last terms past that limit.
+     Keep it to the names that actually get mistranscribed.</p>
+  <button type="submit">Save glossary</button>
+</form>
+</section>

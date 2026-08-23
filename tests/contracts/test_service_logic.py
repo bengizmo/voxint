@@ -15,6 +15,7 @@ from tests.contracts.conftest import load_service_module
 
 detector = load_service_module("whisper", "transcription")
 whisper_backends = load_service_module("whisper", "backends")
+whisper_startup = load_service_module("whisper", "whisper_startup")
 whisper_ct2_legacy = load_service_module("whisper", "backends.ct2_legacy")
 whisper_ct2 = load_service_module("whisper", "backends.ct2")
 postprocess = load_service_module("pyannote", "postprocess")
@@ -385,6 +386,44 @@ class TestDiarizerModelResolution:
         assert d.model_source == "someorg/custom-pipeline"
         assert d.model_is_local is False
 
+    def test_revision_pins_an_overridden_hf_pipeline(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # DIARIZER_REVISION on an HF repo-id override is carried as reproducible
+        # provenance and surfaces in /healthz as model_revision (configurable
+        # models A3).
+        monkeypatch.setenv("DIARIZER_MODEL_NAME", "someorg/custom-pipeline")
+        monkeypatch.setenv("DIARIZER_REVISION", "a" * 40)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        d = diarizer.Diarizer()
+        assert d.model_is_local is False
+        assert d.model_revision == "a" * 40
+
+    def test_revision_ignored_for_vendored_local_source(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
+    ) -> None:
+        # The vendored config is itself the pin; a stray DIARIZER_REVISION must
+        # not pretend to pin it, so model_revision stays null (healthz reports
+        # null, matching the per-attempt provenance probe).
+        vendored = tmp_path / "config.yaml"  # type: ignore[operator]
+        vendored.write_text("version: 3.1.0\n")
+        monkeypatch.delenv("DIARIZER_MODEL_NAME", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", str(vendored))
+        monkeypatch.setenv("DIARIZER_REVISION", "b" * 40)
+        d = diarizer.Diarizer()
+        assert d.model_is_local is True
+        assert d.model_revision is None
+
+    def test_no_revision_leaves_model_revision_null(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("DIARIZER_MODEL_NAME", "someorg/custom-pipeline")
+        monkeypatch.delenv("DIARIZER_REVISION", raising=False)
+        monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
+        d = diarizer.Diarizer()
+        assert d.model_revision is None
+
+
     def test_vendored_config_is_default_and_keeps_canonical_identity(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: object
     ) -> None:
@@ -418,6 +457,72 @@ class TestDiarizerModelResolution:
         monkeypatch.setenv("VOXINT_VENDORED_PIPELINE", "/nonexistent/config.yaml")
         with pytest.raises(RuntimeError, match="does not exist"):
             diarizer.Diarizer()
+
+
+class TestDiarizerFromPretrainedAdaptive:
+    """The version-adaptive pipeline load (configurable models A3). pyannote 4.x
+    takes revision=/token=; 3.1.1 (our pin) has neither and pins via the
+    "repo@revision" string with use_auth_token=. The default (no revision) load
+    must stay exactly the pre-existing no-revision path."""
+
+    class _FakePipeline:
+        """Records from_pretrained calls; ``reject`` simulates an older pyannote
+        that raises TypeError on unexpected kwargs (token=/revision=)."""
+
+        def __init__(self, reject: tuple[str, ...] = ()) -> None:
+            self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+            self._reject = reject
+
+        def from_pretrained(self, *args: object, **kwargs: object) -> object:
+            if any(k in self._reject for k in kwargs):
+                raise TypeError(
+                    f"from_pretrained() got an unexpected keyword argument "
+                    f"{next(k for k in kwargs if k in self._reject)!r}"
+                )
+            self.calls.append((args, kwargs))
+            return object()
+
+    def test_v4_uses_revision_and_token(self) -> None:
+        fake = self._FakePipeline()
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", "c" * 40, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"revision": "c" * 40, "token": "tok"}
+
+    def test_v31_falls_back_to_repo_at_revision_and_use_auth_token(self) -> None:
+        # 3.1.1 rejects both revision= and token=; the pin must move into the
+        # "repo@revision" string and auth into use_auth_token=.
+        fake = self._FakePipeline(reject=("revision", "token"))
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", "c" * 40, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe@" + "c" * 40,)
+        assert kwargs == {"use_auth_token": "tok"}
+
+    def test_default_no_revision_v4(self) -> None:
+        fake = self._FakePipeline()
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", None, "tok")
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"token": "tok"}
+
+    def test_default_no_revision_v31_unchanged(self) -> None:
+        # The validated/vendored default path: no revision, 3.1.1 fallback lands
+        # on the plain source + use_auth_token, byte-identical to before A3.
+        fake = self._FakePipeline(reject=("token",))
+        diarizer._from_pretrained_adaptive(fake, "org/pipe", None, None)
+        (args, kwargs) = fake.calls[-1]
+        assert args == ("org/pipe",)
+        assert kwargs == {"use_auth_token": None}
+
+    def test_unrelated_typeerror_propagates(self) -> None:
+        # A TypeError that is not about the auth/revision kwargs is a real bug,
+        # not a version skew, and must not be swallowed by the fallback.
+        class Boom:
+            def from_pretrained(self, *a: object, **k: object) -> object:
+                raise TypeError("something else entirely")
+
+        with pytest.raises(TypeError, match="something else"):
+            diarizer._from_pretrained_adaptive(Boom(), "org/pipe", "d" * 40, "tok")
 
 
 class TestDeviceCascade:
@@ -717,6 +822,502 @@ class TestWhisperEngineRegistry:
         assert transcriber.model_name == "large-v2"  # type: ignore[attr-defined]
         assert callable(transcriber._backend.decode_windows)  # type: ignore[attr-defined]
         assert callable(transcriber._backend.transcribe_raw)  # type: ignore[attr-defined]
+
+
+class TestWhisperStartupResolution:
+    """The fail-closed whisper model-selection truth table (configurable models
+    A2). The validated large-v2 default keeps the baked, offline path untouched;
+    an alternate model must be explicitly and fully gated or the service refuses
+    to start. The resolver is pure over an env mapping — no model, no container."""
+
+    BAKED = "f0fe81560cb8b68660e564f55dd99207059c092e"
+    ALT = "0123456789abcdef0123456789abcdef01234567"
+
+    def _resolve(self, **env: str) -> object:
+        return whisper_startup.resolve_whisper_startup(env)
+
+    def test_unset_model_is_the_baked_default(self) -> None:
+        d = self._resolve()
+        assert d.model_name == "large-v2"
+        assert d.is_override is False
+        assert d.env_overrides == {}
+        assert d.warning is None
+
+    @pytest.mark.parametrize("model", ["large-v2", "Systran/faster-whisper-large-v2"])
+    def test_default_model_forms_change_nothing(self, model: str) -> None:
+        # Both accepted spellings of the validated default resolve to the baked,
+        # offline path with no env overrides — even if a stray ALLOW_DOWNLOAD is
+        # present, the default is never an override.
+        d = self._resolve(WHISPER_MODEL=model, WHISPER_ALLOW_DOWNLOAD="1")
+        assert d.is_override is False
+        assert d.env_overrides == {}
+
+    def test_blank_model_fails_closed(self) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match="empty"):
+            self._resolve(WHISPER_MODEL="   ")
+
+    def test_default_path_restores_baked_revision_when_env_blank(self) -> None:
+        # The compose overlays forward ${WHISPER_REVISION:-}, so an operator who
+        # does not override gets WHISPER_REVISION="" — which shadows the image's
+        # baked revision and would make the offline load resolve "main" and fail.
+        # On the default path the resolver restores the baked revision so the
+        # shipped path stays offline-clean.
+        d = self._resolve(
+            WHISPER_MODEL="large-v2", WHISPER_REVISION="", WHISPER_BAKED_REVISION=self.BAKED
+        )
+        assert d.is_override is False
+        assert d.env_overrides == {"WHISPER_REVISION": self.BAKED}
+
+    def test_default_path_accepts_the_baked_revision(self) -> None:
+        # WHISPER_REVISION explicitly set to the baked snapshot on the default
+        # name is the validated weights — accepted, no override, no clobber.
+        d = self._resolve(
+            WHISPER_MODEL="large-v2", WHISPER_REVISION=self.BAKED, WHISPER_BAKED_REVISION=self.BAKED
+        )
+        assert d.is_override is False
+        assert d.env_overrides == {}
+
+    def test_default_name_with_non_baked_revision_fails_closed(self) -> None:
+        # #125: WHISPER_MODEL=large-v2 (a validated NAME) with a different valid
+        # revision would load different weights under the validated name with no
+        # gate. The resolver must refuse it — the validated name loads only the
+        # baked snapshot; an alternate build goes through WHISPER_ALLOW_DOWNLOAD.
+        with pytest.raises(whisper_startup.WhisperStartupError, match="baked large-v2"):
+            self._resolve(
+                WHISPER_MODEL="large-v2",
+                WHISPER_REVISION=self.ALT,
+                WHISPER_BAKED_REVISION=self.BAKED,
+            )
+
+    def test_default_name_non_baked_revision_without_baked_ref_is_allowed(self) -> None:
+        # Dev/bare-venv path: no WHISPER_BAKED_REVISION means we cannot prove the
+        # revision is wrong, so the guard does not fire (it requires the baked
+        # reference to be present). The operator revision is kept untouched.
+        d = self._resolve(WHISPER_MODEL="large-v2", WHISPER_REVISION=self.ALT)
+        assert d.is_override is False
+        assert d.env_overrides == {}
+
+    @pytest.mark.parametrize("model", ["/models/local", "./rel", "~/m", "a/b/c"])
+    def test_path_like_model_rejected(self, model: str) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"repo id|path"):
+            self._resolve(WHISPER_MODEL=model, WHISPER_ALLOW_DOWNLOAD="1",
+                          WHISPER_REVISION=self.ALT)
+
+    def test_alternate_without_allow_download_fails_closed(self) -> None:
+        with pytest.raises(
+            whisper_startup.WhisperStartupError, match="WHISPER_ALLOW_DOWNLOAD=1"
+        ):
+            self._resolve(WHISPER_MODEL="openai/whisper-large-v3", WHISPER_REVISION=self.ALT)
+
+    @pytest.mark.parametrize(
+        "revision",
+        ["", "main", "v3", "abc123", "F0FE81560CB8B68660E564F55DD99207059C092E"],
+    )
+    def test_alternate_requires_full_lowercase_sha(self, revision: str) -> None:
+        with pytest.raises(whisper_startup.WhisperStartupError, match="40-character"):
+            self._resolve(
+                WHISPER_MODEL="openai/whisper-large-v3",
+                WHISPER_ALLOW_DOWNLOAD="1",
+                WHISPER_REVISION=revision,
+            )
+
+    def test_alternate_still_carrying_baked_revision_fails_closed(self) -> None:
+        # The image bakes WHISPER_REVISION to the large-v2 SHA (a valid 40-char
+        # value); an operator who sets an alternate model but forgets to change
+        # the revision must fail closed, not silently fetch the wrong snapshot.
+        with pytest.raises(whisper_startup.WhisperStartupError, match="baked"):
+            self._resolve(
+                WHISPER_MODEL="openai/whisper-large-v3",
+                WHISPER_ALLOW_DOWNLOAD="1",
+                WHISPER_REVISION=self.BAKED,
+                WHISPER_BAKED_REVISION=self.BAKED,
+            )
+
+    def test_fully_gated_alternate_enables_fetch_to_separate_cache(self) -> None:
+        d = self._resolve(
+            WHISPER_MODEL="openai/whisper-large-v3",
+            WHISPER_ALLOW_DOWNLOAD="1",
+            WHISPER_REVISION=self.ALT,
+            WHISPER_BAKED_REVISION=self.BAKED,
+        )
+        assert d.is_override is True
+        assert d.model_name == "openai/whisper-large-v3"
+        # Downloads land in the SEPARATE cache, never over the baked root.
+        assert d.env_overrides["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+        assert whisper_startup.ALT_CACHE_ROOT != "/app/.cache/whisper"
+        # ALLOW_DOWNLOAD=1 is the explicit authority that turns offline off.
+        assert d.env_overrides["HF_HUB_OFFLINE"] == "0"
+        assert d.warning is not None and "unvalidated" in d.warning
+
+    def test_apply_mutates_environ_and_returns_decision(self) -> None:
+        env: dict[str, str] = {
+            "WHISPER_MODEL": "openai/whisper-large-v3",
+            "WHISPER_ALLOW_DOWNLOAD": "1",
+            "WHISPER_REVISION": self.ALT,
+            "WHISPER_BAKED_REVISION": self.BAKED,
+        }
+        d = whisper_startup.apply_whisper_startup(env)
+        assert d.is_override is True
+        assert env["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+        assert env["HF_HUB_OFFLINE"] == "0"
+
+    def test_apply_default_leaves_offline_untouched(self) -> None:
+        # The baked default must never have its offline flag flipped by the applier.
+        env = {"HF_HUB_OFFLINE": "1"}
+        whisper_startup.apply_whisper_startup(env)
+        assert env["HF_HUB_OFFLINE"] == "1"
+        assert "WHISPER_DOWNLOAD_ROOT" not in env
+
+    def _alt_env(self, model: str = "org/faster-whisper-name") -> dict[str, str]:
+        return {
+            "WHISPER_MODEL": model,
+            "WHISPER_ALLOW_DOWNLOAD": "1",
+            "WHISPER_REVISION": self.ALT,
+            "WHISPER_BAKED_REVISION": self.BAKED,
+        }
+
+    def test_apply_rejects_an_alternate_that_names_an_existing_local_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # #127: a single-slash "org/name" is a valid Hub id but can also name a
+        # real relative directory, which faster-whisper would load verbatim —
+        # bypassing the download-and-pin gates. The pure resolver cannot see the
+        # filesystem, so the applier closes the gap at boot.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "org" / "faster-whisper-name").mkdir(parents=True)
+        env = self._alt_env()
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup(env)
+        # A refused boot must not have half-applied the decision.
+        assert "WHISPER_DOWNLOAD_ROOT" not in env
+        assert "HF_HUB_OFFLINE" not in env
+
+    def test_apply_accepts_the_same_alternate_when_no_local_dir_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        env = self._alt_env()
+        d = whisper_startup.apply_whisper_startup(env)
+        assert d.is_override is True
+        assert env["WHISPER_DOWNLOAD_ROOT"] == whisper_startup.ALT_CACHE_ROOT
+
+    @pytest.mark.parametrize("model", ["large-v2", "Systran/faster-whisper-large-v2"])
+    def test_apply_rejects_the_default_spellings_colliding_with_a_local_dir(
+        self, model: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The bypass is not alternate-only: faster-whisper checks isdir() on any
+        # model string before consulting the pinned snapshot, so a directory
+        # shadowing the validated default's name would load verbatim while the
+        # service still reports the validated identity. The applier checks every
+        # resolved model, not just overrides.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / model).mkdir(parents=True)
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup({"WHISPER_MODEL": model})
+
+    def test_apply_rejects_a_symlink_to_a_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # isdir() follows symlinks; a symlinked directory is the same verbatim-load
+        # bypass and must stay rejected if the predicate is ever "improved".
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "real-model-dir").mkdir()
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "faster-whisper-name").symlink_to(tmp_path / "real-model-dir")
+        with pytest.raises(whisper_startup.WhisperStartupError, match=r"local\s+directory"):
+            whisper_startup.apply_whisper_startup(self._alt_env())
+
+    def test_apply_accepts_a_plain_file_of_the_same_name(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # faster-whisper only special-cases directories; a plain file falls
+        # through to the pinned Hub download, so it is not a bypass and must not
+        # trip the guard.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "org").mkdir()
+        (tmp_path / "org" / "faster-whisper-name").write_text("not a model dir")
+        d = whisper_startup.apply_whisper_startup(self._alt_env())
+        assert d.is_override is True
+
+
+class TestPyannoteCheckpointFingerprint:
+    """The pyannote weight-checkpoint fingerprint (#125): a digest over the two
+    loaded .bin files referenced by the pipeline config, composed as documented
+    in docs/gpu-contracts.md. Config bytes are excluded (repointed per flavor)."""
+
+    def _write_config(self, tmp_path: Path, seg: Path, emb: Path) -> Path:
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            f"    segmentation: {seg}\n"
+            f"    embedding: {emb}\n"
+        )
+        return config
+
+    def test_fingerprint_composes_the_two_bin_shas(self, tmp_path: Path) -> None:
+        import hashlib
+
+        seg = tmp_path / "segmentation-3.0.bin"
+        emb = tmp_path / "pyannote-wespeaker.bin"
+        seg.write_bytes(b"segmentation-weights")
+        emb.write_bytes(b"embedding-weights")
+        config = self._write_config(tmp_path, seg, emb)
+
+        seg_sha = hashlib.sha256(seg.read_bytes()).hexdigest()
+        emb_sha = hashlib.sha256(emb.read_bytes()).hexdigest()
+        expected = hashlib.sha256(
+            f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+        ).hexdigest()
+
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) == expected
+
+    def test_fingerprint_changes_when_a_bin_changes(self, tmp_path: Path) -> None:
+        seg = tmp_path / "segmentation-3.0.bin"
+        emb = tmp_path / "pyannote-wespeaker.bin"
+        seg.write_bytes(b"segmentation-weights")
+        emb.write_bytes(b"embedding-weights")
+        config = self._write_config(tmp_path, seg, emb)
+        before = diarizer.compute_checkpoint_fingerprint(str(config))
+        emb.write_bytes(b"DIFFERENT-embedding-weights")
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) != before
+
+    def test_missing_checkpoint_file_raises(self, tmp_path: Path) -> None:
+        seg = tmp_path / "segmentation-3.0.bin"
+        seg.write_bytes(b"x")
+        config = self._write_config(tmp_path, seg, tmp_path / "absent.bin")
+        with pytest.raises(RuntimeError, match="missing or not a regular file"):
+            diarizer.compute_checkpoint_fingerprint(str(config))
+
+    def test_config_without_checkpoint_paths_raises(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("pipeline:\n  name: x\n  params: {}\n")
+        with pytest.raises(RuntimeError, match="does not reference"):
+            diarizer.compute_checkpoint_fingerprint(str(config))
+
+    def test_relative_checkpoint_paths_resolve_against_config_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A config that names its .bin files relative to itself must hash the same
+        # files pyannote loads, independent of the process CWD (the vendored
+        # configs use absolute paths, but this keeps a relative config honest).
+        import hashlib
+
+        (tmp_path / "segmentation-3.0.bin").write_bytes(b"segmentation-weights")
+        (tmp_path / "pyannote-wespeaker.bin").write_bytes(b"embedding-weights")
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            "    segmentation: segmentation-3.0.bin\n"
+            "    embedding: pyannote-wespeaker.bin\n"
+        )
+        seg_sha = hashlib.sha256(b"segmentation-weights").hexdigest()
+        emb_sha = hashlib.sha256(b"embedding-weights").hexdigest()
+        expected = hashlib.sha256(
+            f"segmentation:{seg_sha}\nembedding:{emb_sha}\n".encode()
+        ).hexdigest()
+
+        # Run from an unrelated CWD: a CWD-relative resolution would fail to find
+        # the files (RuntimeError) rather than return the config-relative digest.
+        other = tmp_path / "elsewhere"
+        other.mkdir()
+        monkeypatch.chdir(other)
+        assert diarizer.compute_checkpoint_fingerprint(str(config)) == expected
+
+
+_CONFIG_HASH_FIELDS: dict[str, object] = dict(
+    pipeline_class="pyannote.audio.pipelines.SpeakerDiarization",
+    clustering="AgglomerativeClustering",
+    clustering_method="centroid",
+    clustering_threshold=0.55,
+    clustering_min_cluster_size=10,
+    segmentation_step=0.5,
+    min_duration_off=0.6,
+    embedding_exclude_overlap=True,
+    engine_version="3.1.1",
+)
+
+
+class TestPyannoteDiarizationConfigHash:
+    """The pyannote effective-config hash (#129): the pipeline identity over the
+    numerics-affecting clustering config, orthogonal to the weight fingerprint.
+    Batch sizes are excluded on purpose (throughput-only, tuned per GPU)."""
+
+    def test_hash_is_a_sha256_hexdigest(self) -> None:
+        import re
+
+        value = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        assert re.fullmatch(r"[0-9a-f]{64}", value)
+
+    def test_hash_is_stable_and_order_independent(self) -> None:
+        # Same inputs (given in a different kwarg order) must yield the same
+        # digest — the canonicalisation sorts keys, so call order never leaks in.
+        a = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        shuffled = {k: _CONFIG_HASH_FIELDS[k] for k in reversed(list(_CONFIG_HASH_FIELDS))}
+        b = diarizer.compute_diarization_config_hash(**shuffled)
+        assert a == b
+
+    @pytest.mark.parametrize(
+        "field, value",
+        [
+            ("clustering_threshold", 0.7046),
+            ("clustering_min_cluster_size", 12),
+            ("segmentation_step", 0.1),
+            ("min_duration_off", 0.0),
+            ("clustering_method", "average"),
+            ("pipeline_class", "pyannote.audio.pipelines.Other"),
+            ("engine_version", "4.0.0"),
+            ("embedding_exclude_overlap", False),
+        ],
+    )
+    def test_hash_changes_when_a_numerics_field_changes(
+        self, field: str, value: object
+    ) -> None:
+        base = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        changed = {**_CONFIG_HASH_FIELDS, field: value}
+        assert diarizer.compute_diarization_config_hash(**changed) != base
+
+    def test_hash_excludes_batch_sizes(self) -> None:
+        # The recipe takes no batch-size argument at all: a deployment that tunes
+        # PYANNOTE_*_BATCH_SIZE for its GPU (the hardware-aware profiles do) must
+        # keep the same config identity. Asserting the signature is batch-free is
+        # the durable guard against a well-meaning future re-add.
+        import inspect
+
+        params = set(inspect.signature(diarizer.compute_diarization_config_hash).parameters)
+        assert not any("batch" in name for name in params)
+
+    def test_hash_version_is_in_the_payload(self) -> None:
+        # Bumping the recipe version must flip the digest, so an old and a new
+        # recipe never silently compare equal.
+        import unittest.mock
+
+        base = diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS)
+        with unittest.mock.patch.object(diarizer, "DIARIZATION_CONFIG_HASH_VERSION", 999):
+            assert diarizer.compute_diarization_config_hash(**_CONFIG_HASH_FIELDS) != base
+
+    def test_read_static_config_extracts_the_structural_bits(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  name: pyannote.audio.pipelines.SpeakerDiarization\n"
+            "  params:\n"
+            "    clustering: AgglomerativeClustering\n"
+            "    embedding_exclude_overlap: true\n"
+            "params:\n"
+            "  clustering:\n"
+            "    method: centroid\n"
+        )
+        assert diarizer.read_pipeline_static_config(str(config)) == {
+            "pipeline_class": "pyannote.audio.pipelines.SpeakerDiarization",
+            "clustering": "AgglomerativeClustering",
+            "clustering_method": "centroid",
+            "embedding_exclude_overlap": True,
+        }
+
+    def test_read_static_config_raises_on_missing_fields(self, tmp_path: Path) -> None:
+        config = tmp_path / "config.yaml"
+        config.write_text("pipeline:\n  name: x\n  params: {}\n")
+        with pytest.raises(RuntimeError, match="missing required identity fields"):
+            diarizer.read_pipeline_static_config(str(config))
+
+
+class TestDiarizerClusteringFailClosed:
+    """#129 part 2: a validated/local pipeline that rejects its clustering
+    overrides must fail the boot, not silently degrade; an explicit non-local
+    override keeps the tolerant most-to-least-specific fallback. Exercises the
+    extracted ``_apply_clustering_overrides`` directly so the torch-free contract
+    suite never touches the real load path."""
+
+    class _FakePipeline:
+        """Minimal stand-in for a loaded pyannote pipeline. ``reject_min_size``
+        simulates a pipeline version that refuses the ``min_cluster_size`` param;
+        ``reject_all`` simulates one that refuses every clustering override."""
+
+        def __init__(self, reject_min_size: bool, reject_all: bool = False) -> None:
+            self._reject_min_size = reject_min_size
+            self._reject_all = reject_all
+            self.instantiated: dict[str, object] | None = None
+
+        def instantiate(
+            self, params: dict[str, object]
+        ) -> "TestDiarizerClusteringFailClosed._FakePipeline":
+            if self._reject_all:
+                raise ValueError("this pipeline version rejects all clustering overrides")
+            clustering: dict[str, object] = params.get("clustering", {})  # type: ignore[assignment]
+            if self._reject_min_size and "min_cluster_size" in clustering:
+                raise ValueError("this pipeline version rejects min_cluster_size")
+            self.instantiated = params
+            return self
+
+    def _diarizer(
+        self, *, local: bool, reject_min_size: bool, reject_all: bool = False
+    ) -> "diarizer.Diarizer":
+        d = diarizer.Diarizer()
+        d.model_is_local = local
+        d.model = self._FakePipeline(reject_min_size, reject_all)
+        return d
+
+    def test_local_pipeline_that_rejects_min_size_fails_closed(self) -> None:
+        d = self._diarizer(local=True, reject_min_size=True)
+        with pytest.raises(RuntimeError, match="rejected its clustering overrides"):
+            d._apply_clustering_overrides()
+
+    def test_local_pipeline_applies_the_most_specific_params(self) -> None:
+        d = self._diarizer(local=True, reject_min_size=False)
+        d._apply_clustering_overrides()
+        assert d.model.instantiated == {
+            "clustering": {
+                "threshold": d.clustering_threshold,
+                "min_cluster_size": d.clustering_min_size,
+            }
+        }
+
+    def test_non_local_override_degrades_to_threshold_only(self) -> None:
+        # An explicit HF override whose pipeline version rejects min_cluster_size
+        # must degrade to threshold-only (not crash) rather than fail an operator's
+        # chosen pipeline.
+        d = self._diarizer(local=False, reject_min_size=True)
+        d._apply_clustering_overrides()
+        assert d.model.instantiated == {"clustering": {"threshold": d.clustering_threshold}}
+
+    def test_non_local_override_that_rejects_everything_runs_on_defaults(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The terminal branch of the tolerant (non-local) fallback: when *both* the
+        # strict and threshold-only instantiate attempts are rejected, an explicit
+        # operator pipeline must warn and run on its own clustering defaults rather
+        # than crash. (The local/validated path fails closed instead — covered
+        # above.)
+        import logging
+
+        d = self._diarizer(local=False, reject_min_size=True, reject_all=True)
+        with caplog.at_level(logging.WARNING):
+            d._apply_clustering_overrides()
+        assert d.model.instantiated is None  # neither attempt was accepted
+        assert any("running with model defaults" in record.message for record in caplog.records)
+
+    @pytest.mark.parametrize(
+        "env_name",
+        [
+            "PYANNOTE_CLUSTERING_THRESHOLD",
+            "PYANNOTE_MIN_DURATION_OFF",
+            "PYANNOTE_SEGMENTATION_STEP",
+        ],
+    )
+    @pytest.mark.parametrize("bad_value", ["nan", "inf", "-inf"])
+    def test_non_finite_hyperparameter_fails_closed(
+        self, monkeypatch: pytest.MonkeyPatch, env_name: str, bad_value: str
+    ) -> None:
+        # #129 review (Grok/Kimi): a non-finite float env value parses cleanly and
+        # hashes to a stable digest of nonsense, then runs broken clustering under
+        # the validated identity. Reject it at construction instead of hashing it.
+        monkeypatch.setenv(env_name, bad_value)
+        with pytest.raises(RuntimeError, match=f"{env_name} must be a finite number"):
+            diarizer.Diarizer()
 
 
 class TestCt2DeviceVerify:
@@ -1042,6 +1643,162 @@ class TestCpuImageProvenance:
             assert match.group(1) == provenance["files"][filename]["sha256"], (
                 f"{dockerfile_name} {arg} drifted from models/provenance.json"
             )
+
+    def test_console_diarizer_checkpoint_constant_matches_provenance(self) -> None:
+        # #125: the console's known-good pyannote fingerprint must be the digest of
+        # the two provenance .bin shas, composed by the documented algorithm. A
+        # weights refresh (pyannote-models-v2) changes provenance and fails this
+        # until the console constant moves with it.
+        import hashlib
+        import json
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CHECKPOINT
+
+        provenance = json.loads(
+            (REPO_ROOT / "services" / "pyannote" / "models" / "provenance.json").read_text()
+        )
+        seg = provenance["files"]["segmentation-3.0.bin"]["sha256"]
+        emb = provenance["files"]["wespeaker-voxceleb-resnet34-LM.bin"]["sha256"]
+        expected = hashlib.sha256(
+            f"segmentation:{seg}\nembedding:{emb}\n".encode()
+        ).hexdigest()
+        assert expected == _VALIDATED_DIARIZER_CHECKPOINT, (
+            "service_identity._VALIDATED_DIARIZER_CHECKPOINT drifted from the "
+            "provenance .bin shas — recompute it from provenance.json"
+        )
+
+    def test_smoke_checkpoint_constant_matches_provenance(self) -> None:
+        # #125: the release smoke asserts the live pyannote reports this exact
+        # fingerprint, so it is a third copy of the same digest (alongside the
+        # console constant and docs/gpu-contracts.md). Bind it to provenance too, or
+        # a pyannote-models-v2 refresh could leave the smoke green on the old digest
+        # while the console moves.
+        import hashlib
+        import json
+
+        from tools.smoke_cpu_services import VENDORED_CHECKPOINT_FINGERPRINT
+
+        from tests.contracts.conftest import REPO_ROOT
+
+        provenance = json.loads(
+            (REPO_ROOT / "services" / "pyannote" / "models" / "provenance.json").read_text()
+        )
+        seg = provenance["files"]["segmentation-3.0.bin"]["sha256"]
+        emb = provenance["files"]["wespeaker-voxceleb-resnet34-LM.bin"]["sha256"]
+        expected = hashlib.sha256(
+            f"segmentation:{seg}\nembedding:{emb}\n".encode()
+        ).hexdigest()
+        assert expected == VENDORED_CHECKPOINT_FINGERPRINT, (
+            "tools/smoke_cpu_services.VENDORED_CHECKPOINT_FINGERPRINT drifted from "
+            "the provenance .bin shas — recompute it from provenance.json"
+        )
+
+    def test_smoke_config_hash_constant_matches_console(self) -> None:
+        # #129: the release smoke asserts the live pyannote reports this exact
+        # config hash, a third copy alongside the console constant and
+        # docs/gpu-contracts.md. Bind it to the console constant so the two never
+        # drift apart (the console constant is itself recipe-bound in the test
+        # below).
+        from tools.smoke_cpu_services import VENDORED_DIARIZATION_CONFIG_HASH
+
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        assert VENDORED_DIARIZATION_CONFIG_HASH == _VALIDATED_DIARIZER_CONFIG_HASH, (
+            "tools/smoke_cpu_services.VENDORED_DIARIZATION_CONFIG_HASH drifted from "
+            "service_identity._VALIDATED_DIARIZER_CONFIG_HASH — keep them identical"
+        )
+
+    def test_console_diarizer_config_hash_constant_matches_recipe(self) -> None:
+        # #129: the console's known-good effective-config hash must be the digest
+        # the service composes from (a) the vendored config's static bits, (b) the
+        # runtime env DEFAULTS — parsed from diarizer.py's getenv fallbacks, not the
+        # config's overridden 0.7046/12 — and (c) the pinned pyannote.audio version.
+        # A validated clustering-config change (an env default or the vendored
+        # config) fails this until the constant is re-pinned deliberately.
+        import json
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        models_dir = REPO_ROOT / "services" / "pyannote" / "models"
+        static = diarizer.read_pipeline_static_config(str(models_dir / "config.vendored.yaml"))
+        provenance = json.loads((models_dir / "provenance.json").read_text())
+
+        # Env defaults are the source of truth for the effective tunables. Read
+        # them from the source's getenv fallbacks so the recipe stays bound to the
+        # code and independent of any ambient PYANNOTE_* in the test environment.
+        src = (REPO_ROOT / "services" / "pyannote" / "app" / "diarizer.py").read_text()
+
+        def _default(name: str) -> str:
+            match = re.search(rf'os\.getenv\("{name}",\s*"([^"]+)"\)', src)
+            assert match is not None, f"diarizer.py lost its {name} getenv default"
+            return match.group(1)
+
+        expected = diarizer.compute_diarization_config_hash(
+            pipeline_class=static["pipeline_class"],
+            clustering=static["clustering"],
+            clustering_method=static["clustering_method"],
+            clustering_threshold=float(_default("PYANNOTE_CLUSTERING_THRESHOLD")),
+            clustering_min_cluster_size=int(_default("PYANNOTE_CLUSTERING_MIN_SIZE")),
+            segmentation_step=float(_default("PYANNOTE_SEGMENTATION_STEP")),
+            min_duration_off=float(_default("PYANNOTE_MIN_DURATION_OFF")),
+            embedding_exclude_overlap=bool(static["embedding_exclude_overlap"]),
+            engine_version=provenance["pyannote_audio_version"],
+        )
+        assert expected == _VALIDATED_DIARIZER_CONFIG_HASH, (
+            "service_identity._VALIDATED_DIARIZER_CONFIG_HASH drifted from the "
+            "effective-config recipe (env defaults + vendored config + pyannote "
+            "version) — recompute it"
+        )
+
+    def test_config_hash_float_canonicalization_is_legible(self) -> None:
+        # #129 review (Grok): the config hash's cross-platform stability rests on
+        # CPython's shortest-round-trip float repr feeding json.dumps. The recipe
+        # test above would catch a serializer drift, but only as an opaque digest
+        # mismatch. Lock the exact serialization of the validated float tunables so
+        # such a drift fails HERE with a readable diff instead.
+        import json
+
+        canonical = json.dumps(
+            {"clustering_threshold": 0.55, "segmentation_step": 0.5, "min_duration_off": 0.6},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        assert canonical == (
+            '{"clustering_threshold":0.55,"min_duration_off":0.6,"segmentation_step":0.5}'
+        ), "json.dumps float serialization drifted — the config hash recipe is no longer stable"
+
+    def test_docs_config_hash_literal_matches_console(self) -> None:
+        # #129 review (Kimi): docs/gpu-contracts.md quotes the validated config hash
+        # in prose — a fourth copy of the digest. Bind it so a deliberate re-pin
+        # cannot leave the doc showing a stale value.
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_DIARIZER_CONFIG_HASH
+
+        doc = (REPO_ROOT / "docs" / "gpu-contracts.md").read_text()
+        assert _VALIDATED_DIARIZER_CONFIG_HASH in doc, (
+            "docs/gpu-contracts.md no longer contains the validated diarization "
+            "config hash — update the doc prose when re-pinning the constant"
+        )
+
+    def test_console_asr_revision_constant_matches_dockerfiles(self) -> None:
+        # #125: the console's known-good whisper revision must be the baked
+        # large-v2 snapshot the images pin, so a stale/re-fetched revision under
+        # the validated name reads as a mismatch.
+        import re
+
+        from tests.contracts.conftest import REPO_ROOT
+        from voxint.api.service_identity import _VALIDATED_ASR_REVISION
+
+        dockerfile = (REPO_ROOT / "services" / "whisper" / "Dockerfile").read_text()
+        match = re.search(r"ARG WHISPER_HF_REVISION=([0-9a-f]{40})", dockerfile)
+        assert match is not None, "whisper Dockerfile lost its WHISPER_HF_REVISION default"
+        assert match.group(1) == _VALIDATED_ASR_REVISION, (
+            "service_identity._VALIDATED_ASR_REVISION drifted from the whisper "
+            "Dockerfile WHISPER_HF_REVISION ARG"
+        )
 
     def test_pyannote_vendored_config_references_baked_paths(self) -> None:
         # The vendored pipeline config must reference exactly the paths the
@@ -1498,4 +2255,10 @@ class TestWhisperOfflineStartup:
         assert "ENV HF_HUB_OFFLINE=1" in text, f"{dockerfile_name} lost HF_HUB_OFFLINE=1"
         assert "ENV WHISPER_REVISION=${WHISPER_HF_REVISION}" in text, (
             f"{dockerfile_name} runtime stage lost the WHISPER_REVISION pin"
+        )
+        # The startup resolver rejects an alternate model that still carries the
+        # baked SHA; that guard needs the baked reference in the image, sourced
+        # from the same ARG so it can never drift from WHISPER_REVISION.
+        assert "ENV WHISPER_BAKED_REVISION=${WHISPER_HF_REVISION}" in text, (
+            f"{dockerfile_name} lost the WHISPER_BAKED_REVISION resolver reference"
         )

@@ -115,5 +115,9 @@ def test_single_alembic_head() -> None:
     # operator-authored rules, issue #84; 0030 = pipeline_runs.sidecar frozen
     # YAML sidecar snapshot, issue #104; 0031 = operator annotation layer
     # (annotation_tags + transcript_annotations + annotation_tag_links), #86;
-    # 0032 = match_candidates observational match-decision evidence, issue #113).
-    assert list(heads) == ["0032"]
+    # 0032 = match_candidates observational match-decision evidence, issue #113;
+    # 0033 = pipeline_runs diarization speaker-count hint, issue #128; 0034 =
+    # pipeline_runs.initial_prompt provenance, issue #123; 0035 = segment_embeddings
+    # + embedding_jobs semantic-search spine, issue #121; 0036 = app_settings
+    # semantic-index feature flags, issue #121).
+    assert list(heads) == ["0036"]

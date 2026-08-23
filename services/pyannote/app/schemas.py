@@ -68,6 +68,24 @@ class HealthResponse(BaseModel):
     engine_version: str | None = None
     runtime: str | None = None
     runtime_version: str | None = None
+    # Additive v1 field: the pinned HF commit for an overridden pipeline
+    # (DIARIZER_REVISION). Null for the vendored/local default, whose config is
+    # itself the pin — the per-attempt provenance probe records null there.
+    model_revision: str | None = None
+    # Additive v1 field (#125): a digest over the actually-loaded checkpoint
+    # ``.bin`` files (segmentation + embedding), so a consumer can tell the
+    # vendored/validated weights from a same-named re-fetch. Composed as
+    # documented in docs/gpu-contracts.md. Null for a non-local (HF) source whose
+    # files are not hashed here; absent on services older than this field.
+    checkpoint_fingerprint: str | None = None
+    # Additive v1 field (#129): a digest over the *effective clustering config*
+    # the pipeline actually runs with (threshold, min-cluster-size, segmentation
+    # step, merge gap, pipeline class/method, engine version) — the pipeline
+    # identity, orthogonal to the weight ``checkpoint_fingerprint`` above. Batch
+    # sizes are deliberately excluded (throughput-only). Composed as documented in
+    # docs/gpu-contracts.md. Null for a non-local (HF) source with no local config
+    # to read; absent on services older than this field.
+    diarization_config_hash: str | None = None
     model_loaded: bool
     # Additive v1 field (hardware-aware processing, W1): optional nested
     # hardware telemetry. Absent on older services; an upgraded service always

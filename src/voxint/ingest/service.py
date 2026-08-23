@@ -251,6 +251,30 @@ def _effective_pack_name(
     return None
 
 
+def _resolve_speaker_hint(
+    diarization_max_speakers: int | None,
+    diarization_num_speakers: int | None,
+    sidecar: Sidecar | None,
+) -> tuple[int | None, int | None]:
+    """Resolve the effective per-run diarization speaker-count hint (issue #128).
+
+    Explicit caller arguments (the ``voxint submit`` flags) take priority per
+    field over the YAML sidecar keys. An exact count subsumes a bound: when a
+    ``num_speakers`` is in force the ``max`` is dropped, so the frozen row is
+    unambiguous (the exact count wins at diarize time regardless).
+    """
+    max_hint = diarization_max_speakers
+    num_hint = diarization_num_speakers
+    if sidecar is not None:
+        if max_hint is None:
+            max_hint = sidecar.max_speakers
+        if num_hint is None:
+            num_hint = sidecar.num_speakers
+    if num_hint is not None:
+        max_hint = None
+    return max_hint, num_hint
+
+
 def submit_media_item(
     session: Session,
     source_path: str,
@@ -258,6 +282,8 @@ def submit_media_item(
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
     sidecar: Sidecar | None = None,
+    diarization_max_speakers: int | None = None,
+    diarization_num_speakers: int | None = None,
 ) -> PipelineRun:
     """Create-or-reuse the MediaItem for ``source_path`` and queue a fresh run.
 
@@ -282,12 +308,17 @@ def submit_media_item(
         extra_name_seeds=sidecar.speakers if sidecar is not None else (),
     )
     media = _get_or_create_media(session, source_path)
+    max_hint, num_hint = _resolve_speaker_hint(
+        diarization_max_speakers, diarization_num_speakers, sidecar
+    )
     return submit(
         session,
         media.id,
         domain_pack=domain_pack,
         sidecar=sidecar.raw if sidecar is not None else None,
         operator_notes=sidecar.notes if sidecar is not None else None,
+        diarization_max_speakers=max_hint,
+        diarization_num_speakers=num_hint,
     )
 
 
@@ -298,6 +329,8 @@ def submit_media_item_if_new(
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
     sidecar: Sidecar | None = None,
+    diarization_max_speakers: int | None = None,
+    diarization_num_speakers: int | None = None,
 ) -> PipelineRun | None:
     """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
 
@@ -343,12 +376,17 @@ def submit_media_item_if_new(
         if existing is None:
             raise
         return None
+    max_hint, num_hint = _resolve_speaker_hint(
+        diarization_max_speakers, diarization_num_speakers, sidecar
+    )
     return submit(
         session,
         media.id,
         domain_pack=domain_pack,
         sidecar=sidecar.raw if sidecar is not None else None,
         operator_notes=sidecar.notes if sidecar is not None else None,
+        diarization_max_speakers=max_hint,
+        diarization_num_speakers=num_hint,
     )
 
 

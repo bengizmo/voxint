@@ -27,6 +27,173 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   The Docker images bake the model files; a native install fetches them from the
   pinned `minilm-onnx-v1` release asset, and `voxint-native.sh doctor` reports
   when they are missing.
+- **The models panel now also checks the diarizer's clustering configuration,
+  not just its weights.** A deployment could report the validated diarization
+  name and the validated weights while running a different clustering
+  configuration (the tuned threshold, minimum cluster size, segmentation step,
+  or merge gap), which changes the result. The diarization service now reports a
+  hash of its effective clustering configuration on `/healthz`, and the
+  "Pipeline models" panel classifies it as a second identity axis alongside the
+  weights: a drifted configuration reads as a mismatch with its own remedy (reset
+  the `PYANNOTE_CLUSTERING_*` values), separate from a weights mismatch (re-pull
+  or rebuild). The two axes are independent, so each points at the right fix.
+  Relatedly, on the built-in (validated) pipeline the service now refuses to
+  start if it rejects the tuned clustering settings, where before it logged a
+  warning and quietly ran with default values under the validated name; an
+  explicitly overridden pipeline keeps the previous tolerant behavior. The
+  default install is unaffected: it ships the validated configuration, starts
+  normally, and reads as validated. Batch sizes are excluded from the hash: they
+  are throughput-only and expected to vary per GPU. See `docs/gpu-contracts.md`
+  for the hash definition.
+- **The models panel now checks the actual model files, not just the model
+  name.** A deployment could report a validated model name while running
+  different weights: the diarization service does not distinguish the built-in
+  checkpoint from a re-fetched one by name alone, and the transcription service
+  would accept the validated `large-v2` name paired with a different revision.
+  The diarization service now reports a fingerprint of its loaded checkpoint
+  files on `/healthz`, and the "Pipeline models" panel classifies each service
+  by exact identity: the validated name with matching files reads as validated;
+  the validated name with different files reads as a weights mismatch and is not
+  trusted; the validated name whose files cannot be verified (a model loaded from
+  an online source) reads as unverified and is not trusted. The default install
+  is unaffected: it ships the validated files and reads as validated. See
+  `docs/gpu-contracts.md` for the fingerprint definition.
+- **Settings has a Glossary editor for expected proper nouns.** The settings page
+  now has a Glossary section that edits the operator's list of expected names,
+  places, organizations, and acronyms without re-running the setup wizard. Voxint
+  already feeds these terms to transcription as a decoding hint on every run; this
+  makes the list manageable after onboarding. The section reuses the wizard's
+  validation exactly (one term per line, deduplicated, at most 500 terms of up to
+  120 characters), replaces the whole list on save, and applies to runs that start
+  after you save, including any already queued. Terms are a hint, not a guarantee,
+  and a rejected save keeps your text and explains what to fix. The copy points a
+  recurring, identical mistranscription at the Corrections section instead, and
+  notes that a name split across a pause is handled here because the glossary
+  steers transcription before the words are grouped into lines. Decoding behaviour
+  is unchanged; only where the same list is edited moves.
+- **Run detail records the glossary a run decoded with.** The run-detail page now
+  shows the exact bounded vocabulary hint whisper saw for that run, the operator's
+  glossary unioned with the run's domain-pack words. The frozen domain-pack
+  snapshot only recorded the pack's words, so the operator's live-applied glossary
+  was previously unrecoverable per run; a new nullable `initial_prompt` column on
+  `pipeline_runs`, stamped by the transcribe stage once the decode succeeds, closes
+  that gap. A run not yet transcribed, one with no vocabulary, or one that finished
+  before this existed shows an honest empty state.
+- **Settings shows which models are running ("Pipeline models").** The settings
+  page now has a read-only panel that reads each model service live as the page
+  loads and shows the transcription, diarization, and speaker-embedding model
+  actually running, with its engine and revision where the service reports them.
+  A service running the validated default is marked as such; a transcription or
+  diarization service running anything else is flagged as an unvalidated override
+  with an honest accuracy caveat, distinct from a service that is simply
+  unavailable. The speaker-embedding model is fixed and shown without a warning.
+  The panel changes nothing itself: model selection is deployment-owned, so it
+  lists the `.env` keys to change and notes that only the affected service
+  restarts. It never displays `HF_TOKEN`.
+- **Run detail shows which models ran ("Pipeline models").** The run-detail page
+  now renders the per-attempt model identity recorded for the transcription and
+  diarization stages, taken from each stage's latest completed attempt, so a
+  retried stage shows the model that produced the result rather than a failed
+  attempt's stamp. Each service shows its model, engine, revision, and decode
+  configuration where the service reports them. A run that finished before this
+  provenance existed, or a stage whose service could not be reached, reads "Not
+  recorded" or "Not observed" rather than implying the model is unknown for a
+  subtle reason. The copy states plainly that this is observed immediately before
+  the attempt, not read back from the output.
+- **Per-attempt model-identity provenance on each stage run.** Every stage that
+  calls a model service now records, on its own `StageRun`, which model answered
+  it: the identity (`model`, `revision`, `engine`, `decode_config_hash` where the
+  service reports them) is read from the service `/healthz` immediately before the
+  attempt runs and stored under `StageRun.metrics.model_identity`. The read is
+  best-effort and never blocks a run: an unreachable or not-yet-loaded service
+  records a `reachable: false` marker and the stage proceeds. Because it lives on
+  the per-attempt claim row and is written in the same transaction that completes
+  the claim, a failed or lease-expired attempt can never overwrite a later
+  successful attempt's recorded identity. This is provenance observed just before
+  the call, not response-carried proof of the exact build; the groundwork for the
+  operator-facing pipeline-models surfaces that follow.
+- **Opt-in alternate transcription model (whisper), fully gated.** The shipped
+  `large-v2` stays the only validated model and its baked, offline path is
+  unchanged. An operator can now select an alternate model, but only by opting in
+  explicitly: a non-default `WHISPER_MODEL` requires both `WHISPER_ALLOW_DOWNLOAD=1`
+  and `WHISPER_REVISION` set to that model's full 40-character commit SHA, or the
+  whisper service refuses to start with a message naming exactly what to set.
+  Alternate weights download into a separate cache volume that never shadows the
+  baked default. Alternate models are an unvalidated mechanism (v3 and turbo
+  hallucinate); the startup warns, and the numerics guarantees cover `large-v2`
+  only.
+- **Reproducible pin for an overridden diarization model (`DIARIZER_REVISION`).**
+  Setting `DIARIZER_MODEL_NAME` to an alternate Hugging Face pipeline can now be
+  paired with `DIARIZER_REVISION` to pin that pipeline to an exact commit, so the
+  recorded provenance is reproducible instead of floating with the repo's default
+  branch. The pin is applied across pyannote's incompatible loader forms (3.1.x
+  pins via the `repo@revision` form with `use_auth_token`; 4.x via `revision=`
+  with `token=`) and surfaces in the service `/healthz` as `model_revision`. It
+  is not applicable to the vendored default (whose config is itself the pin) and
+  is ignored there with a warning. The validated default load path is unchanged.
+- **Installer can record an alternate pipeline model.** The guided installer
+  (`scripts/install.sh`) now offers one skippable advanced prompt for pointing
+  transcription or diarization at a non-default model. It defaults to skip and
+  writes nothing, so a normal install is unchanged. Opting in collects the
+  whisper model plus its required 40-character revision (and records
+  `WHISPER_ALLOW_DOWNLOAD=1` automatically), the diarizer model plus an optional
+  revision pin, and a Hugging Face token for a gated pipeline that is read
+  hidden, never echoed, and single-quoted when written. The prompt states
+  honestly that only the shipped models are validated. A new how-to,
+  [Changing pipeline models](docs/how-to/changing-pipeline-models.md), documents
+  the full procedure, the validated-versus-unvalidated tradeoff, and the
+  timeout note for slower models; the new keys are documented in `.env.example`.
+- **Operator-supplied speaker count for diarization (issue #128).** You can now
+  tell the pipeline how many speakers a recording has, so pyannote stops
+  over-segmenting one voice into many clusters on hard audio. Supply either a
+  bound (the most speakers to expect) or an exact count three ways: the
+  `voxint submit --max-speakers N` / `--num-speakers N` flags, the matching
+  `max_speakers:` / `num_speakers:` keys in a media file's YAML sidecar, or the
+  install-wide `DIARIZATION_MAX_SPEAKERS` ceiling (unset by default, so a stock
+  install sends no bound and the service's own default of 10 still applies). A
+  per-recording hint is frozen onto the run at submit and reused on requeue. The exact count is sent to the service as equal `min`/`max` bounds, so
+  it needs no change to the pyannote request contract. See
+  [docs/interpreting-diarization.md](docs/interpreting-diarization.md).
+
+### Fixed
+- **The run page no longer attributes a result to an older attempt's model
+  stamp.** When a stage was retried and the newest completed attempt carried no
+  recorded model identity, the "Pipeline models" panel fell back to an older
+  attempt's stamp, which could name a model that did not produce the shown
+  result. The panel now reads the identity only from the attempt that actually
+  completed the stage and says "Not recorded" when that attempt has none.
+  Display only; the worker stamps every completed attempt on the normal path,
+  so this surfaces only with hand-edited or partially migrated data.
+- **The transcription service can no longer silently load a local directory in
+  place of its model.** Any accepted `WHISPER_MODEL` value, a Hub id such as
+  `org/name` or the validated default's own spellings, can also name a real
+  directory next to the service, which faster-whisper loads verbatim, skipping
+  the pinned weights. The service now refuses to start when the resolved model
+  value names an existing local directory. Requires a colliding directory in
+  the service working directory; the stock container deployment was
+  unaffected.
+- **The transcription service no longer loads different weights under the
+  validated model name.** Setting `WHISPER_MODEL=large-v2` (the validated name)
+  together with a different valid `WHISPER_REVISION` previously took the default
+  path and loaded that other snapshot with no download gate and no warning. The
+  startup resolver now refuses to start in that case: the validated name loads
+  only the built-in snapshot, and an alternate build must go through the explicit
+  `WHISPER_ALLOW_DOWNLOAD=1` path with its own model id and commit SHA. Reachable
+  only in non-default setups (a custom image or a cleared offline flag); the
+  stock offline deployment was already safe.
+- **Whisper model services no longer fail to start under the configurable-model
+  compose pass-throughs.** The whisper overlays forward
+  `WHISPER_MODEL: ${WHISPER_MODEL:-}` and `WHISPER_REVISION: ${WHISPER_REVISION:-}`,
+  which set those container variables to the empty string when an operator does
+  not override them, shadowing the image's baked values. An empty model made the
+  fail-closed startup resolver refuse to start ("Invalid model size"), and an
+  empty revision made the offline load resolve the absent "main" ref and raise
+  `LocalEntryNotFoundError`. The model overlay now defaults to `large-v2`, and on
+  the default path the resolver restores the baked revision from
+  `WHISPER_BAKED_REVISION` (baked from the same ARG, never compose-forwarded), so
+  a stock deployment stays byte-identical and offline while an explicit override
+  still works. The default `-cpu`/`-rocm` deployments were unaffected only by
+  accident of an older compose; this closes the gap for all three overlays.
 
 ## [0.22.1] - 2026-08-21
 

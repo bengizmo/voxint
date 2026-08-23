@@ -1,0 +1,103 @@
+{# Settings → Pipeline models (configurable pipeline models): a READ-ONLY view of
+   the model each service is running right now, read live from its /healthz. Model
+   selection is deployment-owned (env/compose/installer), so this panel has no
+   form and no POST: it reports what the running containers say and points at the
+   .env keys that change it. Renders from _settings_context (pipeline_models =
+   collect_service_identity(settings)). Never renders HF_TOKEN. #}
+<section id="pipeline-models" aria-labelledby="pipeline-models-heading">
+<h2 id="pipeline-models-heading">Pipeline models</h2>
+<p class="muted">The models Voxint is running right now for transcription, speaker
+   diarization, and speaker embedding. This is read from each service as the page
+   loads, so it shows what is actually running. You cannot change models here.
+   Models are chosen when Voxint is installed or configured, and changing one is a
+   quick edit followed by a restart, described below.</p>
+
+{% for svc in pipeline_models %}
+<div class="model-stage">
+  <h3>{{ svc.label }}</h3>
+  {% if not svc.reachable %}
+  <p class="notice" role="status">Unavailable ({{ svc.detail }}). Voxint cannot read
+     this service right now, so its identity cannot be shown and jobs that need it
+     will not run until it is back. Its address is <code>{{ svc.url }}</code>.</p>
+  {% else %}
+  <dl>
+    <dt>Model</dt>
+    <dd>{% if svc.model %}<code>{{ svc.model }}</code>{% else %}<span class="muted">no model name reported</span>{% endif %}</dd>
+    {% if svc.engine %}<dt>Engine</dt><dd><code>{{ svc.engine }}</code></dd>{% endif %}
+    {% if svc.revision %}<dt>Revision</dt><dd><code>{{ svc.revision }}</code></dd>{% endif %}
+  </dl>
+  {% if not svc.configurable %}
+  <p class="muted">This model is fixed. Voxint depends on it for speaker identity,
+     so it is not something you change.</p>
+  {% elif svc.verdict == 'validated' %}
+  <p class="muted">This is the validated model. Voxint's accuracy is measured
+     against it.</p>
+  {% elif svc.verdict == 'mismatch' %}
+  {% if svc.role == 'asr' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but it is
+     running a different version of the weights, so the results cannot be trusted.
+     This happens when <code>WHISPER_REVISION</code> is set to a version other than
+     the one that ships with Voxint. Remove <code>WHISPER_REVISION</code> from your
+     <code>.env</code> (or set it back to the built-in value) and restart the
+     transcription service to return to the validated model.</p>
+  {% elif svc.identity_axis == 'config' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but its
+     clustering configuration does not match the validated one, so the results
+     cannot be trusted. This happens when a
+     <code>PYANNOTE_CLUSTERING_THRESHOLD</code>,
+     <code>PYANNOTE_CLUSTERING_MIN_SIZE</code>,
+     <code>PYANNOTE_SEGMENTATION_STEP</code>, or
+     <code>PYANNOTE_MIN_DURATION_OFF</code> value differs from the validated
+     default. Set those back to their built-in values (or remove them from your
+     <code>.env</code>) and restart the speaker diarization service.</p>
+  {% else %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but the
+     loaded model files do not match the validated ones. The results cannot be
+     trusted. This usually means the image or its model files were changed or are
+     incomplete: re-pull or rebuild the service to restore the validated model.</p>
+  {% endif %}
+  {% elif svc.verdict == 'unverified' %}
+  {% if svc.identity_axis == 'config' %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
+     cannot verify its clustering configuration on this deployment, so it is not
+     treated as validated. This happens when the pipeline is loaded from an online
+     source instead of the files that ship with Voxint. Use the built-in default for
+     a verified install.</p>
+  {% else %}
+  <p class="notice" role="alert">⚠ This reports the validated model name, but Voxint
+     cannot verify the loaded model files on this deployment, so it is not treated
+     as validated. This happens when the model is loaded from an online source
+     instead of the files that ship with Voxint. Use the built-in default for a
+     verified install.</p>
+  {% endif %}
+  {% elif svc.verdict == 'unvalidated' %}
+  <p class="notice" role="alert">⚠ This is not the validated model. It runs, but its
+     accuracy has not been measured and the results may be unreliable. Only
+     <code>large-v2</code> for transcription and
+     <code>pyannote/speaker-diarization-3.1</code> for diarization are validated.
+     If you did not mean to change this, set it back using the keys below.</p>
+  {% else %}
+  <p class="notice" role="status">Voxint could not classify this model's identity.
+     Check that the service is running the validated default, described below.</p>
+  {% endif %}
+  {% endif %}
+</div>
+{% endfor %}
+
+<h3>How to change a model</h3>
+<p class="muted">Models are set in your <code>.env</code> file, then applied by
+   restarting the one service that changed. Only that service restarts, so the rest
+   of Voxint keeps running.</p>
+<ul>
+  <li><strong>Transcription:</strong> <code>WHISPER_MODEL</code>,
+      <code>WHISPER_REVISION</code>, <code>WHISPER_ALLOW_DOWNLOAD</code></li>
+  <li><strong>Speaker diarization:</strong> <code>DIARIZER_MODEL_NAME</code>,
+      <code>DIARIZER_REVISION</code> (and <code>HF_TOKEN</code> for a gated
+      pipeline)</li>
+</ul>
+<p class="muted">After editing <code>.env</code>, restart just that service, for
+   example <code>docker compose ... up -d whisper</code>, and only its container is
+   recreated. A larger model takes longer to load and to run, and the first start
+   downloads it. For the exact steps, the validated-versus-unvalidated tradeoff, and
+   the timeout note for slower models, see the "Changing pipeline models" guide.</p>
+</section>

@@ -66,7 +66,8 @@ fi
 # Managed keys we own in .env. Unset any inherited shell exports of these so
 # they cannot silently shadow the .env values during Compose interpolation
 # (shell environment outranks the .env file). We do not touch DATABASE_URL etc.
-unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER VOXINT_RENDER_GID 2>/dev/null || true
+unset VOXINT_PASSWORD MEDIA_ROOT CSRF_SECRET POSTGRES_PORT REDIS_PORT API_PORT HF_TOKEN VOXINT_COMPOSE_TIER VOXINT_RENDER_GID \
+  WHISPER_MODEL WHISPER_REVISION WHISPER_ALLOW_DOWNLOAD DIARIZER_MODEL_NAME DIARIZER_REVISION 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Compute-tier state. COMPUTE_TIER_VALUE is what the user chose
@@ -81,6 +82,14 @@ COMPUTE_TIER_VALUE=""
 EFFECTIVE_TIER="none"
 RENDER_GID_VALUE=""
 COMPOSE_FILE_ARGS="-f compose.yaml"
+# Optional alternate-model overrides (advanced entry; empty = write nothing, keep
+# the validated defaults). Collected by prompt_advanced_models, written verbatim.
+WHISPER_MODEL_VALUE=""
+WHISPER_REVISION_VALUE=""
+WHISPER_ALLOW_DOWNLOAD_VALUE=""
+DIARIZER_MODEL_NAME_VALUE=""
+DIARIZER_REVISION_VALUE=""
+HF_TOKEN_VALUE=""
 
 # Installer-managed hardware defaults (issue #96). A generated, marker-headed
 # compose.hardware.yaml carries conservative single-GPU sizing; it is wired into
@@ -416,6 +425,105 @@ prompt_compute_tier() {
   done
 }
 
+# Refuse characters that would break dotenv / Compose parsing of an unquoted
+# value, so a typo in an advanced model field surfaces here with a clear message
+# instead of as an opaque "Compose validation failed" after the fact.
+_reject_unsafe_env_value() {
+  # $1 = human label, $2 = value.
+  case $2 in
+    *[[:space:]]*) fail "$1 must not contain spaces: '$2'." ;;
+    *\'*)          fail "$1 must not contain a single-quote (')." ;;
+    *'$'*)         fail "$1 must not contain a '\$' character." ;;
+    *'`'*)         fail "$1 must not contain a backtick." ;;
+  esac
+  case $2 in *\\) fail "$1 must not end with a backslash (\\)." ;; esac
+}
+
+_is_full_sha() {
+  # $1 = candidate; success iff exactly 40 lowercase hex chars (the whisper
+  # service's revision gate). Empty or any non-hex character fails. Bash 3.2.
+  case $1 in
+    *[!0-9a-f]*) return 1 ;;
+  esac
+  [ "${#1}" -eq 40 ]
+}
+
+# ---------------------------------------------------------------------------
+# Optional, advanced: point transcription or diarization at an alternate model.
+# Skipped by default -- the shipped whisper large-v2 and pyannote
+# speaker-diarization-3.1 are the only VALIDATED configs and need no setup, so
+# a default install answers 'no' and writes no new keys. Accepting writes the
+# operator's raw values verbatim; the model services enforce their own gates at
+# startup (a non-default whisper needs an explicit download opt-in plus a
+# full-SHA revision), and only large-v2 / pyannote-3.1 carry Voxint's numerics
+# guarantees -- whisper v3 and turbo hallucinate. HF_TOKEN is read hidden and
+# never echoed. Every field defaults to blank, meaning leave that key unset.
+# ---------------------------------------------------------------------------
+prompt_advanced_models() {
+  local ans model_ans
+  step "Alternate pipeline models (advanced, optional)"
+  say "  The shipped models -- whisper large-v2 and pyannote speaker-diarization-3.1"
+  say "  -- are the only validated ones and need no setup. Most installs skip this."
+  say "  You can point transcription or diarization at a different model, but its"
+  say "  accuracy is not measured (whisper v3 and turbo are known to hallucinate)."
+  printf 'Configure alternate models now? [y/N]: ' >&2
+  IFS= read -r ans || ans=""
+  case $ans in
+    y|Y|yes|Yes) : ;;
+    *) return 0 ;;  # default: skip -- write no model keys, keep the defaults
+  esac
+
+  # Transcription (whisper).
+  printf 'Alternate transcription model (blank = keep validated large-v2): ' >&2
+  IFS= read -r ans || ans=""
+  if [ -n "$ans" ]; then
+    _reject_unsafe_env_value "Transcription model" "$ans"
+    model_ans=$ans
+    say "  A non-default model must be downloaded once and pinned to an exact commit."
+    printf 'Transcription model revision (full 40-character lowercase commit SHA): ' >&2
+    IFS= read -r ans || ans=""
+    _reject_unsafe_env_value "Transcription revision" "$ans"
+    if _is_full_sha "$ans"; then
+      WHISPER_MODEL_VALUE=$model_ans
+      WHISPER_REVISION_VALUE=$ans
+      # The service refuses to start without BOTH a full-SHA revision (validated
+      # above) and this download opt-in, so record it only once the SHA is valid.
+      # This never writes a config the whisper container would reject at startup.
+      WHISPER_ALLOW_DOWNLOAD_VALUE=1
+      say "  Recorded WHISPER_ALLOW_DOWNLOAD=1 to permit the one-time download."
+    else
+      say "  That is not a full 40-character lowercase commit SHA. Keeping the"
+      say "  validated large-v2 instead; re-run the installer to set an alternate"
+      say "  model with its exact revision."
+    fi
+  fi
+
+  # Diarization (pyannote).
+  printf 'Alternate diarization model (blank = keep validated speaker-diarization-3.1): ' >&2
+  IFS= read -r ans || ans=""
+  if [ -n "$ans" ]; then
+    _reject_unsafe_env_value "Diarization model" "$ans"
+    DIARIZER_MODEL_NAME_VALUE=$ans
+    printf 'Diarization model revision (optional commit pin; blank = repo default): ' >&2
+    IFS= read -r ans || ans=""
+    if [ -n "$ans" ]; then
+      _reject_unsafe_env_value "Diarization revision" "$ans"
+      DIARIZER_REVISION_VALUE=$ans
+    fi
+    # A gated Hugging Face pipeline needs a token: read hidden, never echoed, and
+    # single-quoted when written so an odd character cannot break dotenv.
+    printf 'Hugging Face token for a gated diarization model (optional; hidden): ' >&2
+    IFS= read -r -s ans || ans=""
+    printf '\n' >&2
+    if [ -n "$ans" ]; then
+      # dotenv_squote (used to write it) requires no embedded single-quote or
+      # trailing backslash; enforce that here rather than emit a malformed .env.
+      _reject_unsafe_env_value "Hugging Face token" "$ans"
+      HF_TOKEN_VALUE=$ans
+    fi
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Render .env by streaming .env.example and replacing only the keys we manage
 # (matching commented defaults too), then validate the candidate with Compose
@@ -437,6 +545,15 @@ managed_replacement() {
     API_PORT)        if [ -n "${API_PORT_VALUE:-}" ]; then printf 'API_PORT=%s'     "$API_PORT_VALUE"; fi ;;
     VOXINT_COMPOSE_TIER) if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf 'VOXINT_COMPOSE_TIER=%s' "$COMPUTE_TIER_VALUE"; fi ;;
     VOXINT_RENDER_GID) if [ -n "${RENDER_GID_VALUE:-}" ]; then printf 'VOXINT_RENDER_GID=%s' "$RENDER_GID_VALUE"; fi ;;
+    # Advanced alternate-model overrides: written verbatim, and only when the
+    # operator opted in and supplied a value. HF_TOKEN is single-quoted like the
+    # password so a token with shell metacharacters cannot break dotenv parsing.
+    WHISPER_MODEL) if [ -n "${WHISPER_MODEL_VALUE:-}" ]; then printf 'WHISPER_MODEL=%s' "$WHISPER_MODEL_VALUE"; fi ;;
+    WHISPER_REVISION) if [ -n "${WHISPER_REVISION_VALUE:-}" ]; then printf 'WHISPER_REVISION=%s' "$WHISPER_REVISION_VALUE"; fi ;;
+    WHISPER_ALLOW_DOWNLOAD) if [ -n "${WHISPER_ALLOW_DOWNLOAD_VALUE:-}" ]; then printf 'WHISPER_ALLOW_DOWNLOAD=%s' "$WHISPER_ALLOW_DOWNLOAD_VALUE"; fi ;;
+    DIARIZER_MODEL_NAME) if [ -n "${DIARIZER_MODEL_NAME_VALUE:-}" ]; then printf 'DIARIZER_MODEL_NAME=%s' "$DIARIZER_MODEL_NAME_VALUE"; fi ;;
+    DIARIZER_REVISION) if [ -n "${DIARIZER_REVISION_VALUE:-}" ]; then printf 'DIARIZER_REVISION=%s' "$DIARIZER_REVISION_VALUE"; fi ;;
+    HF_TOKEN) if [ -n "${HF_TOKEN_VALUE:-}" ]; then printf 'HF_TOKEN=%s' "$(dotenv_squote "$HF_TOKEN_VALUE")"; fi ;;
   esac
   return 0  # never let a non-matching / empty branch fail under `set -e`
 }
@@ -451,6 +568,12 @@ managed_keys_with_values() {
   if [ -n "${API_PORT_VALUE:-}" ]; then printf '%s\n' API_PORT; fi
   if [ -n "${COMPUTE_TIER_VALUE:-}" ]; then printf '%s\n' VOXINT_COMPOSE_TIER; fi
   if [ -n "${RENDER_GID_VALUE:-}" ];   then printf '%s\n' VOXINT_RENDER_GID; fi
+  if [ -n "${WHISPER_MODEL_VALUE:-}" ];          then printf '%s\n' WHISPER_MODEL; fi
+  if [ -n "${WHISPER_REVISION_VALUE:-}" ];       then printf '%s\n' WHISPER_REVISION; fi
+  if [ -n "${WHISPER_ALLOW_DOWNLOAD_VALUE:-}" ]; then printf '%s\n' WHISPER_ALLOW_DOWNLOAD; fi
+  if [ -n "${DIARIZER_MODEL_NAME_VALUE:-}" ];    then printf '%s\n' DIARIZER_MODEL_NAME; fi
+  if [ -n "${DIARIZER_REVISION_VALUE:-}" ];      then printf '%s\n' DIARIZER_REVISION; fi
+  if [ -n "${HF_TOKEN_VALUE:-}" ];               then printf '%s\n' HF_TOKEN; fi
 }
 
 write_env() {
@@ -718,6 +841,8 @@ configure() {
     fail "The media folder cannot be the .env path."
   fi
   say "  Media folder: $MEDIA_ROOT_VALUE"
+
+  prompt_advanced_models
 
   if [ -f .env ]; then backup_env; fi
   write_env

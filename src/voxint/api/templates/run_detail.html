@@ -61,9 +61,10 @@ list and the review queue. All its data is intact; un-archive to restore it.</p>
 <p class="muted">This stage needs the model services (ASR / diarizer / embedder).
 If they aren't running, start a compute tier —
 <code>docker compose -f compose.yaml -f compose.gpu.yaml up -d</code> (NVIDIA GPU) or
-<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU;
-needs <code>HF_TOKEN</code> in <code>.env</code> either way) — wait for them to come
-up, then requeue.</p>
+<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU) —
+wait for them to come up, then requeue. The shipped models run offline; an
+<code>HF_TOKEN</code> is only needed if you overrode diarization to a gated
+pipeline.</p>
 {% endif %}
 {% endif %}
 
@@ -185,6 +186,56 @@ up, then requeue.</p>
 </section>
 
 {% include "fragments/run_assets.html" %}
+
+<section class="card">
+<h2>Pipeline models</h2>
+<p class="muted">The model each stage saw just before it ran. This is observed
+immediately before the attempt, not read back from the output, so it records
+which model answered rather than proving the exact build.</p>
+{% for stage in model_provenance %}
+<div class="model-stage">
+  <h3>{{ stage.label }}{% if stage.recorded and stage.attempt and stage.attempt > 1 %}
+    <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
+  {% if not stage.recorded %}
+  <p class="muted">Not recorded. This run finished before model provenance was
+  added, no attempt of this stage completed, or the latest completed attempt
+  did not record it.</p>
+  {% else %}
+  <dl>
+    {% for role in stage.roles %}
+    <dt>{{ role.label }}</dt>
+    {% if role.reachable %}
+    <dd>
+      {% if role.model %}<code>{{ role.model }}</code>{% else %}<span class="muted">no model name reported</span>{% endif %}
+      {% if role.engine %} <span class="muted">engine <code>{{ role.engine }}</code></span>{% endif %}
+      {% if role.revision %}<br><span class="muted">revision <code>{{ role.revision }}</code></span>{% endif %}
+      {% if role.decode_config_hash %}<br><span class="muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
+    </dd>
+    {% else %}
+    <dd><span class="muted">Not observed{% if role.detail %} ({{ role.detail }} when the stage ran){% endif %}.</span></dd>
+    {% endif %}
+    {% endfor %}
+  </dl>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+
+{# Glossary provenance (issue #123): the exact vocabulary hint whisper decoded this
+   run with, the operator's glossary unioned with the pack's words. Read-only; NULL
+   means the run had no vocabulary or predates this record. #}
+<section class="card">
+<h2>Glossary applied</h2>
+<p class="muted">The vocabulary hint transcription saw for this run, the terms from
+your glossary and the run's domain pack. It records what the model was told to expect,
+not that every term was spelled this way.</p>
+{% if run.initial_prompt %}
+<p><code>{{ run.initial_prompt }}</code></p>
+{% else %}
+<p class="muted">Not recorded. This run has not been transcribed yet, had no
+vocabulary, or it finished before Voxint began recording the applied glossary.</p>
+{% endif %}
+</section>
 
 <section class="card">
 <h2>Stage ledger</h2>
