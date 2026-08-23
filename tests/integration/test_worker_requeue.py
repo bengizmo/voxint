@@ -319,6 +319,103 @@ def test_recovery_sweep_continues_after_one_publish_outage(
     assert published == [str(post_run_id)]
 
 
+def _seed_stale_embedding_job(
+    session_factory: sessionmaker[Session], *, age: timedelta
+) -> uuid.UUID:
+    """A COMPLETED run holding one QUEUED embedding job created ``age`` ago.
+
+    The run is COMPLETED so the sweep's run pass ignores it — only the stranded
+    embedding job (issue #130) is under test."""
+    import hashlib
+
+    from voxint.db.models import EmbeddingJob, EmbeddingJobStatus
+    from voxint.embeddings.onnx_embedder import EMBEDDING_SPACE
+
+    run_id = submit_run(session_factory)
+    with session_factory() as session:
+        run = session.get(PipelineRun, run_id)
+        assert run is not None
+        run.status = RunStatus.COMPLETED.value
+        job = EmbeddingJob(
+            pipeline_run_id=run_id,
+            embedding_space=EMBEDDING_SPACE,
+            status=EmbeddingJobStatus.QUEUED.value,
+            cancel_requested=False,
+            source_content_hash=hashlib.sha256(str(run_id).encode()).hexdigest(),
+            created_at=datetime.now(UTC) - age,
+        )
+        session.add(job)
+        session.commit()
+        return job.id
+
+
+def test_recovery_sweep_redispatches_stale_queued_embedding_job(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A QUEUED embedding job stranded past the grace is re-dispatched by id, and
+    the row is left untouched — re-dispatch, not reclaim (issue #130)."""
+    from voxint.config import Settings
+    from voxint.db.models import EmbeddingJob, EmbeddingJobStatus
+    from voxint.worker import tasks
+
+    stale_id = _seed_stale_embedding_job(session_factory, age=timedelta(hours=2))
+    fresh_id = _seed_stale_embedding_job(session_factory, age=timedelta(seconds=5))
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: Settings(_env_file=None, queued_run_stale_seconds=60)
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        tasks.generate_segment_embeddings,
+        "apply_async",
+        lambda args, **kwargs: dispatched.append(args[0]),
+    )
+
+    result = tasks.recovery_sweep()
+
+    assert result["stale_embedding_jobs"] == 1
+    assert dispatched == [str(stale_id)]  # the fresh job is spared
+    with session_factory() as session:
+        row = session.get(EmbeddingJob, stale_id)
+        assert row is not None
+        assert row.status == EmbeddingJobStatus.QUEUED.value  # unmutated
+        assert row.started_at is None
+    assert fresh_id is not None  # referenced: the second, spared job
+
+
+def test_recovery_sweep_continues_after_one_embedding_redispatch_outage(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A broker failure re-dispatching one stale embedding job must not skip the
+    others (issue #130); the count still reflects everything selected."""
+    from celery.exceptions import OperationalError
+
+    from voxint.config import Settings
+    from voxint.worker import tasks
+
+    first_id = _seed_stale_embedding_job(session_factory, age=timedelta(hours=2))
+    second_id = _seed_stale_embedding_job(session_factory, age=timedelta(hours=3))
+
+    monkeypatch.setattr(
+        tasks, "get_settings", lambda: Settings(_env_file=None, queued_run_stale_seconds=60)
+    )
+    monkeypatch.setattr(tasks, "_runtime", lambda: (session_factory, None))
+    dispatched: list[str] = []
+
+    def flaky(args: tuple[str], **kwargs: object) -> None:
+        if args[0] == str(first_id):
+            raise OperationalError("broker down")
+        dispatched.append(args[0])
+
+    monkeypatch.setattr(tasks.generate_segment_embeddings, "apply_async", flaky)
+
+    result = tasks.recovery_sweep()
+
+    assert result["stale_embedding_jobs"] == 2
+    assert dispatched == [str(second_id)]  # the outage on first didn't abort
+
+
 def test_finish_pipeline_retries_its_own_transient_failure(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:

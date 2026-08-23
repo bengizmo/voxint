@@ -12,6 +12,7 @@ force-cancel fences the claim.
 import hashlib
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
 import pytest
@@ -33,10 +34,13 @@ from voxint.db.models import (
 from voxint.embeddings.onnx_embedder import EMBEDDING_SPACE, TextEmbedder
 from voxint.enrichment.embedding_jobs import (
     EmbeddingJobError,
+    active_job,
+    claim_job,
     create_jobs,
     execute_job,
     request_cancel,
     runs_needing_embeddings,
+    stale_queued_job_ids,
 )
 
 from .conftest import seed_onboarded
@@ -316,3 +320,54 @@ def test_autogenerate_skips_enqueue_when_weights_absent(
     )
     assert len(jobs) == 1
     assert dispatched == [str(jobs[0].id)]
+
+
+def test_active_job_returns_the_one_active_row(session: Session) -> None:
+    # The (run, space) slot the partial unique index guards — QUEUED then RUNNING,
+    # and None once the job resolves terminal (the slot the recovery lever reads).
+    settings = make_settings()
+    run_id = _seed_run(session, [("S0", "content to index")])
+    assert active_job(session, run_id) is None
+
+    job, _ = create_jobs(session, pipeline_run_id=run_id, settings=settings)
+    session.commit()
+    assert job is not None
+    queued = active_job(session, run_id)
+    assert queued is not None and queued.id == job.id
+    assert queued.status == EmbeddingJobStatus.QUEUED.value
+
+    claim_job(session, job.id)
+    session.expire_all()
+    running = active_job(session, run_id)
+    assert running is not None and running.status == EmbeddingJobStatus.RUNNING.value
+
+    assert request_cancel(session, job.id) is True
+    session.commit()
+    assert active_job(session, run_id) is None
+
+
+def test_stale_queued_job_ids_selects_by_age_and_status(session: Session) -> None:
+    # Only jobs left QUEUED past the cutoff are swept: a fresh QUEUED job is spared
+    # (it may still be waiting for a live worker), and a claimed (RUNNING) job is
+    # never swept even when old — RUNNING recovery is the deliberate v1 cut.
+    settings = make_settings()
+    run_id = _seed_run(session, [("S0", "content to index")])
+    job, _ = create_jobs(session, pipeline_run_id=run_id, settings=settings)
+    session.commit()
+    assert job is not None
+    now = datetime.now(UTC)
+
+    # A just-created QUEUED job is younger than a past cutoff → not swept.
+    assert stale_queued_job_ids(session, cutoff=now - timedelta(hours=1)) == []
+
+    # Age it into the past → now selected.
+    aged = session.get(EmbeddingJob, job.id)
+    assert aged is not None
+    aged.created_at = now - timedelta(hours=2)
+    session.commit()
+    assert stale_queued_job_ids(session, cutoff=now - timedelta(hours=1)) == [job.id]
+
+    # Claim it (QUEUED → RUNNING): an old RUNNING job is not swept.
+    claim_job(session, job.id)
+    session.expire_all()
+    assert stale_queued_job_ids(session, cutoff=now - timedelta(hours=1)) == []

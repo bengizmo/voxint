@@ -50,7 +50,7 @@ restart.
 | Flag | Default | Effect |
 |---|---|---|
 | `SEMANTIC_INDEX_ENABLED` | `true` | Turns the feature on. Off means no index is built or served. |
-| `SEMANTIC_INDEX_AUTOGENERATE` | `true` | Embeds each run as it completes, so search covers new recordings with no manual step. Best-effort: the completed run is never affected, but if the enqueue does not go through the run is left unindexed until you run `voxint embed backfill`. Requires `SEMANTIC_INDEX_ENABLED=true`. |
+| `SEMANTIC_INDEX_AUTOGENERATE` | `true` | Embeds each run as it completes, so search covers new recordings with no manual step. Best-effort: the completed run is never affected, and if the enqueue does not go through, a background recovery pass re-dispatches the stranded job on its own (you can also run `voxint embed backfill` to index it at once). Requires `SEMANTIC_INDEX_ENABLED=true`. |
 
 The defaults are set for the recommended Docker install, which always bakes the
 weights. See the "Transcript semantic search" block in `.env.example` for the
@@ -80,8 +80,11 @@ Behavior worth knowing:
 - A run with no resolvable transcript is a **per-run skip**, not a hard failure:
   a corpus sweep does not abort on one unindexable run.
 - Exit code 1 means at least one job actually failed. Exit 0 means no attempted
-  job failed; runs that were skipped (no resolvable transcript, or a job already
-  active for the run) may still be unindexed.
+  job failed. If an earlier run left an embedding job stranded in the queue,
+  backfill adopts and runs that job instead of skipping it. It skips a run only
+  when a job is actively running for it on a worker (let it finish, or cancel it
+  from the run page) or when the run has no resolvable transcript, so those may
+  still be unindexed.
 
 ## The weights requirement on native installs
 

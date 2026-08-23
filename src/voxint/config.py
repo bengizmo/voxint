@@ -296,6 +296,8 @@ class Settings(BaseSettings):
     recovery_sweep_seconds: int = 300
     # A QUEUED run untouched this long has no live task on the broker
     # (covers pending retry countdowns; keep it above retry_backoff_max_seconds).
+    # Also the grace after which the recovery sweep re-dispatches a QUEUED
+    # embedding job whose Celery dispatch evaporated (issue #130).
     queued_run_stale_seconds: int = 3600
 
     # Media retention / garbage collection (issue #15). File reclamation only:

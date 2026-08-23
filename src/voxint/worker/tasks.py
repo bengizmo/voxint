@@ -285,11 +285,13 @@ def _publish_finish_or_defer(run_id: uuid.UUID) -> bool:
 
 @app.task(name="voxint.recovery_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
 def recovery_sweep() -> dict[str, int]:
-    """Reclaim expired-lease runs and re-enqueue stale QUEUED runs.
+    """Reclaim expired-lease runs and re-enqueue stale QUEUED runs, and
+    re-dispatch stale QUEUED embedding jobs whose dispatch was lost (issue #130).
 
-    Duplicate enqueues are safe — stage claims and CAS arbitrate — so this errs
-    toward re-publishing. The staleness grace keeps it from stepping on
-    freshly-submitted runs and pending retry countdowns.
+    Duplicate enqueues are safe — stage claims and job-claim CAS arbitrate — so
+    this errs toward re-publishing. The staleness grace keeps it from stepping on
+    freshly-submitted runs, pending retry countdowns, and just-enqueued embedding
+    jobs still waiting for a worker.
     """
     settings = get_settings()
     factory, _ = _runtime()
@@ -347,10 +349,35 @@ def recovery_sweep() -> dict[str, int]:
                     rid,
                     exc_info=True,
                 )
+    # Stranded embedding jobs (issue #130): a job committed QUEUED whose Celery
+    # dispatch evaporated (crash/broker down between the row commit and .delay())
+    # holds the one-active slot forever, so the run stays unindexed and
+    # `voxint embed backfill` skips it as already-active. Re-dispatch each by id
+    # past the SAME staleness grace — no row mutation; the guarded queued→running
+    # claim CAS makes a duplicate delivery (or a live worker about to claim it) a
+    # no-op. RUNNING is deliberately untouched (the lane's force-cancel policy).
+    with factory() as session:
+        stale_embedding_jobs = embedding_jobs.stale_queued_job_ids(session, cutoff=cutoff)
+    if stale_embedding_jobs:
+        from celery.exceptions import OperationalError
+
+        for job_id in stale_embedding_jobs:
+            try:
+                generate_segment_embeddings.apply_async(
+                    (str(job_id),), ignore_result=True
+                )
+            except OperationalError:
+                logger.warning(
+                    "embedding recovery enqueue deferred (broker unavailable); "
+                    "job %s stays QUEUED for a later sweep",
+                    job_id,
+                    exc_info=True,
+                )
     return {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),
         "cancelled_claims_closed": len(cancelled_claims),
+        "stale_embedding_jobs": len(stale_embedding_jobs),
     }
 
 

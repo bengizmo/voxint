@@ -970,3 +970,128 @@ def test_embed_backfill_indexes_stale_runs(
     # Nothing is stale now.
     assert main(["embed", "backfill"]) == 0
     assert "up to date" in capsys.readouterr().out
+
+
+def _seed_stranded_queued_job(session: Session, run_id: uuid.UUID) -> uuid.UUID:
+    """A QUEUED embedding job holding the run's one-active slot — the state a
+    dispatch that evaporated leaves behind (issue #130)."""
+    from voxint.config import Settings
+    from voxint.enrichment.embedding_jobs import create_jobs
+
+    job, already = create_jobs(
+        session, pipeline_run_id=run_id, settings=Settings(_env_file=None)
+    )
+    session.commit()
+    assert job is not None and already is False
+    return job.id
+
+
+def test_embed_backfill_recovers_stranded_queued_job(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A run whose embedding job stranded in QUEUED (dispatch lost) is skipped by
+    # `create_jobs` as already-active. Backfill must adopt and run that exact job
+    # inline rather than skip it, so the run finally gets indexed (issue #130).
+    from .test_embedding_jobs import FakeEmbedder
+
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+        job_id = _seed_stranded_queued_job(session, run_id)
+
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "voxint.enrichment.embedding_jobs.get_text_embedder", lambda: FakeEmbedder()
+    )
+
+    assert main(["embed", "backfill"]) == 0
+    out = capsys.readouterr().out
+    assert f"recovering stranded run {run_id}" in out
+    assert f"{run_id}: succeeded" in out
+
+    from voxint.db.models import EmbeddingJob, EmbeddingJobStatus
+
+    with session_factory() as session:
+        finished = session.get(EmbeddingJob, job_id)
+        assert finished is not None
+        assert finished.status == EmbeddingJobStatus.SUCCEEDED.value
+        rows = (
+            session.execute(
+                select(SegmentEmbedding).where(SegmentEmbedding.pipeline_run_id == run_id)
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) >= 1
+
+
+def test_embed_backfill_skips_a_running_active_job(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # A RUNNING job has a live executor; backfill must NOT touch it (force-cancel
+    # is its lever) and must not count it as a failure — exit 0 (issue #130).
+    from voxint.enrichment.embedding_jobs import claim_job
+
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+        job_id = _seed_stranded_queued_job(session, run_id)
+        claim_job(session, job_id)  # queued → running
+
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: True
+    )
+
+    assert main(["embed", "backfill"]) == 0
+    out = capsys.readouterr().out
+    assert f"{run_id}: skipped — a job is already running" in out
+
+
+def test_embed_backfill_reports_lost_claim_race_not_failure(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The active job is QUEUED at lookup but a live worker claims it before the
+    # inline execute. The resulting RUNNING status means another worker won, NOT a
+    # failed embedding attempt: report it and exit 0 (issue #130).
+    from datetime import UTC, datetime
+
+    from voxint.config import Settings
+    from voxint.db.models import EmbeddingJob, EmbeddingJobStatus
+
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+        job_id = _seed_stranded_queued_job(session, run_id)
+
+    def racing_execute_job(
+        factory: sessionmaker[Session],
+        target: uuid.UUID,
+        *,
+        settings: Settings,
+        embedder: object | None = None,
+    ) -> None:
+        # Our inline claim lost to a live worker: the row is RUNNING, not terminal.
+        with factory() as session:
+            row = session.get(EmbeddingJob, target)
+            assert row is not None
+            row.status = EmbeddingJobStatus.RUNNING.value
+            row.started_at = datetime.now(UTC)
+            session.commit()
+
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: True
+    )
+    monkeypatch.setattr(
+        "voxint.enrichment.embedding_jobs.execute_job", racing_execute_job
+    )
+
+    assert main(["embed", "backfill"]) == 0
+    out = capsys.readouterr().out
+    assert f"recovering stranded run {run_id}" in out
+    assert f"{run_id}: claimed by another worker — skipped" in out
+    assert str(job_id) in out

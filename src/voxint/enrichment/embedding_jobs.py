@@ -35,6 +35,7 @@ Two concurrency subtleties, both from a pre-implementation review:
 
 import logging
 import uuid
+from datetime import datetime
 from typing import Any, cast
 
 from sqlalchemy import (
@@ -438,6 +439,49 @@ def _last_succeeded_hash(
     ).scalar_one_or_none()
 
 
+def active_job(
+    session: Session,
+    pipeline_run_id: uuid.UUID,
+    *,
+    embedding_space: str = EMBEDDING_SPACE,
+) -> EmbeddingJob | None:
+    """The one active (queued|running) job for the (run, space) slot, or None.
+
+    The partial unique index ``embedding_jobs_one_active_per_run_space`` guarantees
+    at most one, so this is what ``create_jobs`` collided with when it returned
+    ``already_active``. Callers that recover a stranded job (the CLI backfill lever
+    for #130) use it to tell a re-runnable QUEUED job from a live RUNNING one."""
+    return session.execute(
+        select(EmbeddingJob).where(
+            EmbeddingJob.pipeline_run_id == pipeline_run_id,
+            EmbeddingJob.embedding_space == embedding_space,
+            EmbeddingJob.status.in_(
+                (EmbeddingJobStatus.QUEUED.value, EmbeddingJobStatus.RUNNING.value)
+            ),
+        )
+    ).scalar_one_or_none()
+
+
+def stale_queued_job_ids(session: Session, *, cutoff: datetime) -> list[uuid.UUID]:
+    """Ids of jobs stuck in QUEUED since before ``cutoff`` (#130 recovery).
+
+    A job committed QUEUED whose Celery dispatch evaporated (process/broker died
+    between the row commit and ``.delay()``) sits QUEUED forever, holding the
+    one-active slot so no new job can be created for the run. ``created_at`` is the
+    only age signal — a QUEUED job has no ``started_at``, and its only legitimate
+    next transition is a guarded claim or a direct cancel, so it is never touched
+    before the cutoff. The recovery sweep re-dispatches these by id (no row
+    mutation); the guarded claim CAS makes a duplicate delivery a no-op."""
+    return list(
+        session.execute(
+            select(EmbeddingJob.id).where(
+                EmbeddingJob.status == EmbeddingJobStatus.QUEUED.value,
+                EmbeddingJob.created_at < cutoff,
+            )
+        ).scalars()
+    )
+
+
 def runs_needing_embeddings(
     session: Session, *, embedding_space: str = EMBEDDING_SPACE
 ) -> list[uuid.UUID]:
@@ -472,10 +516,12 @@ def runs_needing_embeddings(
 
 __all__ = [
     "EmbeddingJobError",
+    "active_job",
     "claim_job",
     "create_jobs",
     "embedding_gates_open",
     "execute_job",
     "request_cancel",
     "runs_needing_embeddings",
+    "stale_queued_job_ids",
 ]

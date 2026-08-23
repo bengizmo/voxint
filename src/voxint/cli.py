@@ -621,6 +621,7 @@ def _embed_backfill(args: argparse.Namespace) -> int:
     from voxint.embeddings.onnx_embedder import minilm_artifacts_available
     from voxint.enrichment.embedding_jobs import (
         EmbeddingJobError,
+        active_job,
         create_jobs,
         embedding_gates_open,
         execute_job,
@@ -679,7 +680,41 @@ def _embed_backfill(args: argparse.Namespace) -> int:
                 print(f"{run_id}: skipped — {exc}")
                 continue
         if already_active:
-            print(f"{run_id}: skipped — a job is already active for this run")
+            # A job already holds the run's one-active slot. If it is a stranded
+            # QUEUED job (dispatch evaporated; issue #130) the operator asked to
+            # index, so adopt and run it inline rather than skip — the same job
+            # the background sweep would re-dispatch, run here with no broker. A
+            # RUNNING job is left alone (force-cancel is its lever).
+            with factory() as session:
+                stranded = active_job(session, run_id)
+                stranded_id = stranded.id if stranded is not None else None
+                stranded_status = stranded.status if stranded is not None else None
+            if stranded_id is None:
+                # It resolved terminal between the slot conflict and this lookup.
+                print(f"{run_id}: active job changed — rerun backfill to index it")
+                continue
+            if stranded_status != "queued":
+                print(f"{run_id}: skipped — a job is already running for this run")
+                continue
+            print(f"job {stranded_id}: recovering stranded run {run_id} ...")
+            execute_job(factory, stranded_id, settings=settings)
+            with factory() as session:
+                recovered_job = session.get(EmbeddingJob, stranded_id)
+                assert recovered_job is not None
+                # "Observed QUEUED" did not guarantee we won the claim — a live
+                # worker can claim it between the lookup and execute_job. A
+                # non-terminal status after inline execution means another worker
+                # took it, not a failed embedding attempt.
+                if recovered_job.status == "running":
+                    print(f"{run_id}: claimed by another worker — skipped")
+                elif recovered_job.status == "queued":
+                    print(f"{run_id}: not claimed — rerun backfill to index it")
+                else:
+                    print(f"{run_id}: {recovered_job.status}")
+                    if recovered_job.error:
+                        print(f"error: {recovered_job.error}")
+                    if recovered_job.status == "failed":
+                        failures += 1
             continue
         assert job is not None
         job_id = job.id
