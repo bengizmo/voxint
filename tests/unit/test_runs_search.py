@@ -64,6 +64,10 @@ class TestParseSearchFilters:
         assert filters == SearchFilters(language="es")
         assert filters.active()
 
+    def test_language_is_stripped_like_q(self) -> None:
+        assert parse(language="  es  ").language == "es"
+        assert parse(language="   ") == SearchFilters()
+
     @pytest.mark.parametrize(
         "overrides",
         [

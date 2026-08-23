@@ -32,6 +32,7 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _PROBABILITY_CHECK = "pipeline_runs_detected_language_probability_check"
+_PAIRING_CHECK = "pipeline_runs_detected_language_pairing_check"
 
 
 def upgrade() -> None:
@@ -50,9 +51,18 @@ def upgrade() -> None:
         " OR (detected_language_probability >= 0"
         " AND detected_language_probability <= 1)",
     )
+    # A score describes a detected language: a probability with no language is
+    # contradictory provenance (a language with no score is the legitimate
+    # forced/fallback shape).
+    op.create_check_constraint(
+        _PAIRING_CHECK,
+        "pipeline_runs",
+        "detected_language_probability IS NULL OR detected_language IS NOT NULL",
+    )
 
 
 def downgrade() -> None:
+    op.drop_constraint(_PAIRING_CHECK, "pipeline_runs", type_="check")
     op.drop_constraint(_PROBABILITY_CHECK, "pipeline_runs", type_="check")
     op.drop_column("pipeline_runs", "detected_language_probability")
     op.drop_column("pipeline_runs", "detected_language")

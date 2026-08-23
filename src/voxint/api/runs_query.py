@@ -156,7 +156,8 @@ def parse_search_filters(
         # Any non-blank string is a legal facet value (exact match against the
         # stamped code; a value no run carries just yields an empty page) —
         # parameterized SQL, so no validation list to drift from the model.
-        language=language if language not in (None, "") else None,
+        # Stripped like q, so "es " from a hand-edited URL still matches.
+        language=(language.strip() or None) if language is not None else None,
     )
 
 
@@ -562,25 +563,36 @@ class LanguageFacet:
     label: str
 
 
-def searchable_languages(session: Session) -> list[LanguageFacet]:
-    """The distinct detected languages any run carries, for the filter facet.
+def searchable_languages(
+    session: Session, *, archived: bool = False, include: str | None = None
+) -> list[LanguageFacet]:
+    """The distinct detected languages the current view's runs carry, for the
+    filter facet.
 
     Reads the stamped codes (issue #124), labels them via the pinned map
     ("Spanish (es)"; a raw code for anything the map predates), and orders by
     display label so the dropdown reads alphabetically for a human. NULLs are
-    excluded — "not recorded" is not a language. A bounded, low-cardinality
-    scan (at most one row per distinct code), fine without an index for
+    excluded — "not recorded" is not a language. ``archived`` mirrors
+    :func:`list_runs`'s soft-archive scoping so the dropdown offers exactly the
+    languages the listing can show. ``include`` forces one extra code into the
+    options (the active filter): without it, a stale or hand-typed
+    ``?language=`` the current view lacks would render the select as "all"
+    while the predicate silently stays active. A bounded, low-cardinality scan
+    (at most one row per distinct code), fine without an index for
     single-operator data volumes.
     """
-    codes = (
-        session.execute(
-            sa_select(PipelineRun.detected_language)
-            .where(PipelineRun.detected_language.is_not(None))
-            .distinct()
-        )
-        .scalars()
-        .all()
+    stmt = (
+        sa_select(PipelineRun.detected_language)
+        .where(PipelineRun.detected_language.is_not(None))
+        .distinct()
     )
+    if archived:
+        stmt = stmt.where(PipelineRun.archived_at.is_not(None))
+    else:
+        stmt = stmt.where(PipelineRun.archived_at.is_(None))
+    codes = set(session.execute(stmt).scalars().all())
+    if include is not None:
+        codes.add(include)
     facets = [
         LanguageFacet(code=code, label=language_label(code))
         for code in codes

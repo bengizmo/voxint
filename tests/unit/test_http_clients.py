@@ -410,6 +410,22 @@ def test_transcribe_invalid_language_probability_raises_protocol_error(
         client.transcribe(AUDIO)
 
 
+@pytest.mark.parametrize("language", [None, ""])
+def test_transcribe_probability_without_language_is_protocol_error(
+    language: str | None,
+) -> None:
+    # A score describes a detected language; a null/empty language beside a
+    # non-null score is contradictory provenance and must be loud.
+    body = {
+        "language": language,
+        "language_probability": 0.9,
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
 @pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
 def test_transcribe_nonfinite_language_probability_raises_protocol_error(
     bad: str,

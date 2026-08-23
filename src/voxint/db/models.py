@@ -340,6 +340,14 @@ class PipelineRun(Base):
             " AND detected_language_probability <= 1)",
             name="pipeline_runs_detected_language_probability_check",
         ),
+        # A score describes a detected language: a probability with no language
+        # is contradictory provenance (the reverse — a language with no score —
+        # is the legitimate forced/fallback shape).
+        CheckConstraint(
+            "detected_language_probability IS NULL"
+            " OR detected_language IS NOT NULL",
+            name="pipeline_runs_detected_language_pairing_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)

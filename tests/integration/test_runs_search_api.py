@@ -479,6 +479,45 @@ class TestLanguageFacet:
                 ("zz", "zz"),
             ]
 
+    def test_searchable_languages_scoped_to_archive_view(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import datetime as dt
+
+        from voxint.api.runs_query import searchable_languages
+        from voxint.db.models import PipelineRun
+
+        with session_factory() as session:
+            make_run(session, language="es")
+            archived_run = make_run(session, language="fr")
+            run = session.get(PipelineRun, archived_run)
+            assert run is not None
+            run.archived_at = dt.now(tz=UTC)
+            session.commit()
+            # The dropdown offers exactly the languages the view can show: a
+            # language living only on archived runs must not appear in the
+            # active facet (it would filter to an empty page), and vice versa.
+            active = [f.code for f in searchable_languages(session)]
+            archived = [f.code for f in searchable_languages(session, archived=True)]
+            assert active == ["es"]
+            assert archived == ["fr"]
+
+    def test_searchable_languages_include_keeps_active_filter_visible(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from voxint.api.runs_query import searchable_languages
+
+        with session_factory() as session:
+            make_run(session, language="es")
+            # A stale or hand-typed ?language= the view lacks still renders as
+            # the selected option, never as a silently active "all".
+            # Label order: "French (fr)" sorts before "Spanish (es)".
+            codes = [f.code for f in searchable_languages(session, include="fr")]
+            assert codes == ["fr", "es"]
+            # An include already present does not duplicate.
+            codes = [f.code for f in searchable_languages(session, include="es")]
+            assert codes == ["es"]
+
 
 class TestSnippets:
     def test_first_matching_segment_and_variant_choice(
@@ -582,6 +621,17 @@ class TestRoute:
         assert '<option value="es" selected>' in page
         # The Older link and the archive toggle both keep the facet.
         assert "language=es" in page
+
+    def test_stale_language_filter_still_renders_selected(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            make_run(session, language="es")
+        # No run carries "fr": the page is honestly empty AND the select shows
+        # the active filter rather than a misleading "all".
+        page = client.get("/runs", params={"language": "fr"}).text
+        assert '<option value="fr" selected>' in page
+        assert "No runs match these filters" in page
 
     def test_language_snippet_colspan_tracks_column_count(
         self, client: TestClient, session_factory: sessionmaker[Session]

@@ -3726,7 +3726,11 @@ def _register_routes(app: FastAPI) -> None:
                     archived=not show_archived,
                 ),
                 "facet_speakers": searchable_speakers(session),
-                "facet_languages": searchable_languages(session),
+                "facet_languages": searchable_languages(
+                    session,
+                    archived=show_archived,
+                    include=search_filters.language,
+                ),
                 "next_url": next_url,
                 # Server-issued per-render ids: each namespaces its form's path and
                 # makes a double-submit idempotent (see POST /submit, POST /fetch).

@@ -121,6 +121,16 @@ def test_check_rejects_out_of_range_probability(
     assert "pipeline_runs_detected_language_probability_check" in str(exc_info.value)
 
 
+def test_check_rejects_probability_without_language(
+    engine: Engine, alembic_cfg: Config
+) -> None:
+    # A score with no language is contradictory provenance; the pairing CHECK
+    # refuses it (the reverse — a language with no score — is legitimate).
+    with engine.connect() as conn, pytest.raises(IntegrityError) as exc_info:
+        _insert_run(conn, language=None, probability=0.5)
+    assert "pipeline_runs_detected_language_pairing_check" in str(exc_info.value)
+
+
 def test_check_permits_boundaries_and_null(
     engine: Engine, alembic_cfg: Config
 ) -> None:

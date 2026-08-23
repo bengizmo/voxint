@@ -76,6 +76,11 @@ class HttpASRClient(ServiceHttpClient):
             language_probability = _parse_unit_interval(
                 body.get("language_probability"), "language_probability"
             )
+            # A score describes a detected language; a compliant service never
+            # pairs one with a null/empty language, so contradictory provenance
+            # is a loud contract violation, not something to persist.
+            if language_probability is not None and not language:
+                raise ProtocolError("language_probability requires a language")
             # Word timings (word_timestamps=True) are a flat, run-level list in
             # the v1 contract. A service or fake that OMITS the key predates #59;
             # treat that as "no word data". A present-but-null value is not
