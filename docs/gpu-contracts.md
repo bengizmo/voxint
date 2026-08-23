@@ -979,6 +979,79 @@ model-service numerics gates re-run.
 
 Gates A/R/E green fresh and Gate M carried at `8ac53a2`. Clear to tag v0.22.0.
 
+#### Verdict: v0.23.0, Gates A/R/E run fresh (all PASS), Gate M autodetect Tier-1 carries green from the #124 branch, other metal lanes carried (2026-08-23)
+
+Cut at `b0937f2`: the #121 transcript semantic-search spine (the ONNX MiniLM
+index plus Meaning search), #123 project glossary, #124 detected-language, #128
+speaker-count hint, and the #129/#131 diarizer clustering-identity work. `git
+diff v0.22.1..HEAD -- services/` is non-empty (whisper and pyannote both
+changed), so the model-service numerics gates re-run; `services/titanet/` is
+untouched.
+
+- **Gate A (CUDA parity) at `b0937f2` (maintainer NVIDIA hardware, RTX 3060) -
+  PASS.** Titanet CARRIES: `services/titanet/` and the committed titanet CUDA
+  reference are unchanged since v0.22.1, so the shipped titanet image's
+  `titanet-large-v1` embedding space (green at v0.22.0 Gate A, min cosine
+  0.9999998) is unmoved. Pyannote RE-MEASURED: the #129/#131 diarizer rework
+  (fail-closed hyperparameter validation, the #129 effective-clustering-config
+  identity hash, the #131 stricter override application) keeps the default
+  hyperparameters (threshold 0.55, min_duration_off 0.6, segmentation_step 0.5);
+  rebuilt from the release tree and run against the committed CUDA reference it
+  produced a byte-identical diarize response (3 speakers, 7 turns). The clustering
+  rework is numerically inert.
+- **Gate R (ROCm smoke) at `b0937f2` (maintainer AMD hardware, RX 9060 XT, render
+  gid 990) - PASS.** The whisper app code changed (#124 autodetect, #128
+  speaker-count hint, startup hardening); `Dockerfile.rocm` carries the same
+  sha-pinned CT2 4.8.1 wheel and large-v2 revision `f0fe815`, and was rebuilt from
+  the release tree. `/healthz`: `device: rocm`, `engine: faster-whisper`, `model:
+  large-v2`. `vad_true` transcript byte-identical to the committed CUDA reference
+  (confidence 0.847); `vad_false` differs by one word ("harbour" vs the
+  reference's "Haber", nearer the "harbor" ground truth), the expected
+  ROCm-vs-CUDA engine-level divergence, all corpus tokens present.
+- **Gate E does NOT carry** (pipeline-aware scope non-empty: `pipeline/`, `api/`,
+  `clients/`, `db/`, `enrichment/`, `frontend/`, `services/`; 43 files for
+  #121/#124/#128 and the diarizer). Both lanes run fresh at `b0937f2`:
+  - **Pipeline lane (maintainer AMD/ROCm hardware, real ROCm whisper plus CPU
+    pyannote/titanet, serial) - PASS.** `VOXINT_E2E=1 pytest tests/e2e`: 2 passed,
+    4 skipped (the unconfigured real-LLM sub-lane), no service restarts, service
+    identities exactly whisper=rocm / pyannote=cpu / titanet=cpu, persistence
+    invariants intact including the #121 embed stage writing segment_embeddings.
+  - **Browser review lane (maintainer hardware, Playwright, seed-only disposable
+    DB) - PASS.** Asserted on the review-stepper island: the confidence signal
+    (exactly 2 uncertain chips at indexes 1 and 3); verify-and-advance with the
+    replay teardown-guard (`play()` fires at the segment start after the verify's
+    segment-array patch, the `<audio>` element retained); keymap suppression on a
+    focused `<select>`; the #51 cheat-sheet dialog opened by `?` with behind-modal
+    keymap suppression and Escape dismissal; the unsaved-edit discard warning
+    (warn-then-verify, discarding the edit); edit+save (`Ctrl/⌘+Enter`) flipping
+    the header chip to "edited"; the #57 waveform strip (single `/peaks` fetch);
+    and the #83 pack-correction provenance marker. Network contract clean across
+    the session: exactly 2 `/verify` plus 1 `/text` plus 1 `/peaks`, with no write
+    leaked from any suppressed key press. Final reconcile against
+    `segment_review_states`: `RECONCILE PASS`, 2 of 5 verified at `[0, 1]`,
+    correction on segment 2.
+- **Gate M (Metal tier): the autodetect Tier-1 whisper lane carries green from
+  the #124 branch; the other metal lanes carry.** The new
+  `tests/parity/test_whisper_autodetect_en.py` (Gate M, #124) passed 76 of 76:
+  both engines (`ct2` and `ct2-legacy`) on the `language=None` autodetect path,
+  both vad modes, every English speech clip that auto-detects en, with the four
+  `TS3011a` params deselected (a TNO Dutch-accented-English AMI clip that
+  legitimately auto-detects Dutch, deferred to Tier-2 issue #132). That
+  measurement was taken on maintainer Apple Silicon during the #124 verification
+  session at branch tip `4cd804c`, not re-run against this tag; the whisper
+  service code and the gate's executable content are identical on this release
+  commit (the only delta is #132 issue-number comments), so the pass carries
+  validly. This is a whisper-lane gate only. The remaining metal lanes did not run
+  this cut and carry: `pyannote_metal` leans on the Gate-A byte-identity above,
+  `titanet_onnx` carries (titanet untouched since v0.22.1), and
+  `test_whisper_ct2_legacy_replay.py` / `test_whisper_ct2_self_parity.py` carry
+  from v0.21.0 (the autodetect gate reuses the frozen forced-en oracle those
+  replay lanes anchor, but did not re-anchor it).
+
+Gates A/R/E green fresh at `b0937f2`; Gate M autodetect Tier-1 carried green from
+the #124 branch on patch-identical content, with the remaining metal lanes
+carried. Clear to tag v0.23.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
