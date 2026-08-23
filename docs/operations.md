@@ -715,8 +715,23 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   "Not recorded". A **Detected language** block names the language and, when one
   was recorded, whisper's own **language-detection score**, labelled as the
   model's confidence in its own guess rather than a measure of transcript
-  accuracy; runs from before the feature read as unrecorded. See
+  accuracy; runs from before the feature read as unrecorded. A **Glossary
+  applied** block shows the exact bounded vocabulary hint whisper decoded with for
+  that run (the operator glossary unioned with the run's domain-pack words, from
+  the `pipeline_runs.initial_prompt` column stamped once the transcribe stage
+  succeeds; #123); a run not yet transcribed, one with no vocabulary, or one that
+  predates the column shows an honest empty state. See
   [Changing pipeline models](how-to/changing-pipeline-models.md).
+- **`GET /search`**: the transcript **meaning-search** page (#121), reached from
+  the **Meaning** tab beside the `/runs` search box. It ranks passages from across
+  the whole corpus by a reciprocal-rank fusion of pgvector cosine similarity, a
+  `simple` full-text arm, and an exact-quote arm (a `"quoted phrase"` is matched
+  verbatim and floated to the top), reading `segment_embeddings` directly in one
+  `REPEATABLE READ` transaction. Each hit deep-links the transcript at the passage
+  start. The page reports its own state honestly: `off` (semantic search disabled),
+  `unavailable` (the embedding weights are not installed), or `indexing` (on, but
+  nothing indexed yet, pointing at `voxint embed backfill`). See
+  [semantic-search.md](semantic-search.md).
 - **`GET /review`**: the adjudication queue of completed runs with at least one
   voice still needing a human ruling. Each row shows a **friendly title**, the
   recording **duration** and **age**, and a **resolved-of-total** progress bar,

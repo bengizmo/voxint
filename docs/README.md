@@ -20,7 +20,7 @@ Reference & internals:
 | `gpu-smoke.md` | Build + real-inference smoke procedure for the GPU service images |
 | `quality-gates.md` | Enhancement failure semantics, matching eligibility + grounding gates, confidence semantics |
 | `enrichment-triage.md` | Draft triage: the read-time, explainable review-priority score, its components, and the source-authority allowlist |
-| `interpreting-diarization.md` | Reading the output: segment labels vs the turn ledger, short-clip over-splitting |
+| `interpreting-diarization.md` | Reading the output: segment labels vs the turn ledger, short-clip over-splitting, and giving the pipeline a speaker count when it over-segments |
 | `timeouts-and-leases.md` | COMPUTE_TIER timing profiles: stage timeouts and worker leases per tier |
 | `harness.md` | Offline scoring harness: `voxint score` file contracts, verdict vocabularies, the cross-space invariant, and feeding it from live runs (`voxint.harness_export` + the `export_match_evidence` driver) |
 | `operations.md` | Deployment, migrations, pipeline operations, recovery, adjudication workflow |

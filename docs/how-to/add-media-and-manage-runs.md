@@ -303,6 +303,36 @@ the source, so the two are never confused.
 
 ---
 
+## Search your transcripts by meaning
+
+Once you have a few finished runs, you can search across all of them at once, not
+just inside one transcript. Voxint offers two ways to search, side by side at the
+top of the **Runs** page:
+
+- **Exact** browses your runs for the words you type, newest first. This is the
+  ordinary keyword search.
+- **Meaning** finds the passages that are *about* what you type, across every
+  transcript, even when the exact words differ. Ask for "the argument about the
+  parking budget" and it surfaces the right stretch of conversation whether or not
+  anyone said those words.
+
+Click **Meaning** to open the search page, type what you are looking for, and
+press **Search**. Each result names the recording, the speaker, and the time range,
+and shows a short snippet. Click a result to open that transcript scrolled to the
+passage, with the line briefly highlighted so you can find it. To match words
+exactly, put them in double quotes: a `"quoted phrase"` is found verbatim and
+floated to the top of the results.
+
+Meaning search runs entirely on your machine, with no LLM and no internet. It
+reads an index that Voxint builds from your finished transcripts, so a brand-new
+recording appears in results once its run has finished and been indexed. If the
+Meaning tab says search is off or that nothing is indexed yet, turn it on and, if
+needed, build the index for older recordings; the steps are in
+[Settings → Semantic search](settings-and-troubleshooting.md#semantic-search-optional)
+and, in more depth, in [semantic-search.md](../semantic-search.md).
+
+---
+
 ## Next: review the results
 
 When a run reaches **completed**, the last step is to read through it, fix any

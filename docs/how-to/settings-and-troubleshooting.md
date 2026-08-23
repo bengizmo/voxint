@@ -13,8 +13,9 @@ to your **next** run or job. That is by design: a run's settings are locked in
 the moment it starts, so nothing shifts underneath a job that is already going.
 
 ![The Voxint Settings page, showing the First-run setup, Appearance, Features,
-Media folders, Glossary, Corrections, LLM enhancement, Sources and research, and
-Guided tutorial sections stacked down the page.](../images/settings.png)
+Semantic search, Media folders, Glossary, Corrections, LLM enhancement, Sources
+and research, Pipeline models, and Guided tutorial sections stacked down the
+page.](../images/settings.png)
 
 ---
 
@@ -92,6 +93,31 @@ The optional features are:
 If LLM enhancement is off, the page reminds you that the LLM-dependent features
 above stay inactive even if you switch them On here; turn on LLM enhancement
 first.
+
+### Semantic search *(optional)*
+
+Meaning search lets you find a passage by what it means, across every transcript,
+even when you cannot remember the exact words. You use it from the **Meaning** tab
+beside the runs search box; to learn how, see [Add media and manage runs → Search
+your transcripts by meaning](add-media-and-manage-runs.md#search-your-transcripts-by-meaning).
+This section controls whether it is available and how the index behind it is built.
+
+Both controls use the same three settings as the Features section (**On**, **Off**,
+or **Use installation setting**, which hands the choice back to the installation
+default and tells you what that default is).
+
+- **Semantic search**: turns meaning search on or off. It runs fully on your
+  machine with a bundled model, so it uses no LLM and reaches no network.
+- **Index new runs automatically**: builds the index for each recording as its run
+  finishes. With this off, nothing is indexed on its own; you index runs on demand
+  from the command line instead. This needs semantic search itself to be on.
+
+> Meaning search works only when the small model that powers it is installed. A
+> normal Docker install includes it. If you installed Voxint another way and the
+> model is missing, this section says so plainly, and search stays off until you
+> reinstall with the model included. The full details, including how to build the
+> index for recordings you made before turning this on, are in
+> [semantic-search.md](../semantic-search.md).
 
 ### Media folders
 
@@ -242,6 +268,34 @@ of Voxint that deliberately reaches out to the internet.
 
 If LLM enhancement is off, this section reminds you that web-research enrichment
 stays inactive until you enable it.
+
+### Pipeline models
+
+A read-only panel that shows which model each part of the pipeline is running
+right now for transcription, speaker diarization, and speaker embedding. Voxint
+reads this live from each service as the page loads, so it reflects what is
+actually running, not what a config file claims.
+
+You cannot change models here: which model runs is decided when Voxint is
+installed or configured. The panel is there so you can confirm the running models
+are the ones Voxint's accuracy was measured against. Each service reads one of a
+few ways:
+
+- **The validated model.** The default that ships with Voxint. Its accuracy has
+  been measured, and this is what you want to see.
+- **A mismatch or an unvalidated model.** The service is running something other
+  than the validated default, or the validated name paired with different files or
+  settings, so its results cannot be trusted. The panel says which and names the
+  `.env` key to set back.
+- **Unavailable.** Voxint could not reach the service, so it cannot report what it
+  is running, and jobs that need it will not run until it is back.
+
+The speaker-embedding model is fixed and shown without a warning: Voxint depends
+on it for speaker identity, so it is not something you change.
+
+Changing a model is an advanced task that edits a file and restarts one service.
+The full procedure, and the tradeoff of leaving the validated default, is in
+[Changing pipeline models](changing-pipeline-models.md).
 
 ### Guided tutorial
 
