@@ -62,6 +62,7 @@ def search(
     source: str | None = None,
     created_from: date | None = None,
     created_to: date | None = None,
+    language: str | None = None,
     status: RunStatus | None = None,
     review: ReviewFilter | None = None,
     page_size: int = 50,
@@ -78,6 +79,7 @@ def search(
             source=source,
             created_from=created_from,
             created_to=created_to,
+            language=language,
         ),
     )
     return [item.run_id for item in page.items]
@@ -370,6 +372,114 @@ class TestKeysetUnderSearch:
             assert set(seen) == set(expected)
 
 
+class TestLanguageFacet:
+    def test_filters_by_detected_language_and_null_rows(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            spanish = make_run(session, language="es", language_probability=0.92)
+            english = make_run(session, language="en")
+            # A NULL-language row: queued/failed/legacy — never transcribed.
+            unrecorded = make_run(session, status=RunStatus.QUEUED)
+
+            assert search(session, language="es") == [spanish]
+            assert search(session, language="en") == [english]
+            # Unfiltered, NULL rows still appear...
+            assert set(search(session)) == {spanish, english, unrecorded}
+            # ...and a specific code never matches them.
+            assert unrecorded not in search(session, language="es")
+            # A code no run carries yields an empty page, not an error.
+            assert search(session, language="fr") == []
+
+    def test_items_carry_language_for_the_column(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            tagged = make_run(session, language="es")
+            untagged = make_run(session)
+            page = list_runs(
+                session,
+                status=None,
+                review=None,
+                cursor=None,
+                page_size=10,
+                filters=None,
+            )
+            by_id = {item.run_id: item.language for item in page.items}
+            assert by_id[tagged] == "es"
+            assert by_id[untagged] is None
+
+    def test_composes_with_status_and_search(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            match = make_run(
+                session,
+                language="es",
+                status=RunStatus.COMPLETED,
+                segments=[(None, "subcooling target", None)],
+            )
+            make_run(session, language="es", status=RunStatus.FAILED)
+            make_run(
+                session,
+                language="en",
+                status=RunStatus.COMPLETED,
+                segments=[(None, "subcooling target", None)],
+            )
+            assert search(
+                session, language="es", status=RunStatus.COMPLETED, q="subcooling"
+            ) == [match]
+
+    def test_keyset_pagination_with_active_language_filter(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            stamp = datetime(2026, 8, 14, 12, 0, 0, tzinfo=UTC)
+            expected = [
+                make_run(session, language="es", created_at=stamp)
+                for _ in range(5)
+            ]
+            make_run(session, language="en", created_at=stamp)  # must not appear
+            filters = SearchFilters(language="es")
+            seen: list[uuid.UUID] = []
+            cursor = None
+            while True:
+                page = list_runs(
+                    session,
+                    status=None,
+                    review=None,
+                    cursor=cursor,
+                    page_size=2,
+                    filters=filters,
+                )
+                seen.extend(item.run_id for item in page.items)
+                if page.next_cursor is None:
+                    break
+                cursor = page.next_cursor
+            assert len(seen) == len(set(seen)) == 5
+            assert set(seen) == set(expected)
+
+    def test_searchable_languages_distinct_labeled_and_ordered(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from voxint.api.runs_query import searchable_languages
+
+        with session_factory() as session:
+            # Duplicates collapse; codes order by display label (Spanish < Ukrainian
+            # < zz — an unmapped code labels as itself); NULLs are excluded.
+            make_run(session, language="uk")
+            make_run(session, language="es")
+            make_run(session, language="es")
+            make_run(session, language="zz")
+            make_run(session)
+            facets = searchable_languages(session)
+            assert [(f.code, f.label) for f in facets] == [
+                ("es", "Spanish (es)"),
+                ("uk", "Ukrainian (uk)"),
+                ("zz", "zz"),
+            ]
+
+
 class TestSnippets:
     def test_first_matching_segment_and_variant_choice(
         self, session_factory: sessionmaker[Session]
@@ -445,6 +555,46 @@ class TestRoute:
         assert client.get("/runs", params={"speaker": "nope"}).status_code == 422
         assert client.get("/runs", params={"created_from": "13/01"}).status_code == 422
         assert client.get("/runs", params={"created_to": "nope"}).status_code == 422
+
+    def test_language_column_facet_and_null_render(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            make_run(session, language="es", language_probability=0.92)
+            make_run(session)  # NULL language → em-dash cell
+        page = client.get("/runs").text
+        # Column header + labeled value, and the facet dropdown offers only
+        # languages some run carries.
+        assert '<th scope="col">Language</th>' in page
+        assert "Spanish (es)" in page
+        assert '<option value="es"' in page
+
+    def test_language_filter_selected_and_preserved_in_links(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            for _ in range(3):  # page_size=2 → an Older link
+                make_run(session, language="es")
+            make_run(session, language="en")
+        response = client.get("/runs", params={"language": "es"})
+        assert response.status_code == 200
+        page = response.text
+        assert '<option value="es" selected>' in page
+        # The Older link and the archive toggle both keep the facet.
+        assert "language=es" in page
+
+    def test_language_snippet_colspan_tracks_column_count(
+        self, client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            make_run(
+                session,
+                language="es",
+                segments=[(None, "colspan probe text", None)],
+            )
+        page = client.get("/runs", params={"q": "probe"}).text
+        assert 'colspan="6"' in page
+        assert 'colspan="5"' not in page
 
     def test_facet_dropdown_lists_archived_marked_and_hides_tombstones(
         self, client: TestClient, session_factory: sessionmaker[Session]

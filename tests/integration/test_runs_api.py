@@ -86,6 +86,8 @@ def make_run(
     stages: Iterable[dict[str, Any]] = (),
     segments: Iterable[tuple[str | None, str, str | None]] = (),
     audio: bool = False,
+    language: str | None = None,
+    language_probability: float | None = None,
 ) -> uuid.UUID:
     """Seed one media item + run with controllable review state.
 
@@ -99,7 +101,12 @@ def make_run(
     media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
     session.add(media)
     session.flush()
-    run = PipelineRun(media_item_id=media.id, status=status.value)
+    run = PipelineRun(
+        media_item_id=media.id,
+        status=status.value,
+        detected_language=language,
+        detected_language_probability=language_probability,
+    )
     if created_at is not None:
         run.created_at = created_at
     if claim is not None:
@@ -452,9 +459,8 @@ def test_run_detail_shows_stage_ledger(
     assert "asr exploded" in body  # the failed attempt's error surfaces
     assert "worker-a" in body and "worker-b" in body  # both attempts' workers
     # Chronological by started_at — prepare precedes the transcribe attempts.
-    # Scope the ordering check to the stage-ledger region: the glossary provenance
-    # panel above it (issue #123) renders "transcribed", which a whole-body search
-    # would otherwise match before the ledger's own rows.
+    # Scoped to the ledger table: cards above it (pipeline models, glossary,
+    # detected language) legitimately contain these stage words in prose.
     ledger = body[body.index("Stage ledger") :]
     assert ledger.index("prepare") < ledger.index("transcribe")
     # Responsive + a11y (issue #64): the 8-column ledger — the widest table in

@@ -106,6 +106,13 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     pipeline_run = session.get(PipelineRun, run_id)
     if pipeline_run is not None:
         pipeline_run.initial_prompt = prompt
+        # Detected-language provenance (issue #124): stamp what whisper actually
+        # reported, after a successful decode, in the transcript's transaction —
+        # same honesty rule as initial_prompt above. A re-run reflects its own
+        # final decode; a failed decode never reaches this line, so a committed
+        # stamp survives a later failed attempt's rollback.
+        pipeline_run.detected_language = result.language
+        pipeline_run.detected_language_probability = result.language_probability
     session.execute(
         delete(TranscriptSegment).where(TranscriptSegment.pipeline_run_id == run_id)
     )

@@ -44,6 +44,12 @@ class TranscriptionWord:
 class TranscriptionResult:
     segments: tuple[TranscriptionSegment, ...]
     language: str | None = None
+    # Whisper's language-detection score for ``language`` (#124): present only
+    # when the service actually ran detection (the client requests auto-detect);
+    # None when the service forced a language, predates the field, or
+    # substituted a fallback. A detection score, NOT calibrated confidence and
+    # NOT a code-switch signal.
+    language_probability: float | None = None
     # Flat, provider-ordered word timings for the whole transcript (empty when
     # the provider reports none — older services, fakes). Downstream buckets them
     # into segments by time; never inferred when absent. Order is preserved as

@@ -280,3 +280,64 @@ def test_render_glossary_empty_state_when_prompt_null(
     # A phrase unique to the glossary empty state (the models card also says
     # "Not recorded"), so this pins the glossary branch specifically.
     assert "began recording the applied glossary" in body
+
+
+def _seed_run_with_language(
+    session_factory: sessionmaker[Session],
+    *,
+    language: str | None,
+    probability: float | None,
+) -> uuid.UUID:
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4().hex}/source")
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.COMPLETED.value,
+            created_at=BASE,
+            updated_at=BASE,
+            detected_language=language,
+            detected_language_probability=probability,
+        )
+        session.add(run)
+        session.flush()
+        run_id = run.id
+        session.commit()
+        return run_id
+
+
+def test_render_shows_detected_language_with_score(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # The "Detected language" card (issue #124) shows the labeled language and
+    # the detection score with its honest framing.
+    run_id = _seed_run_with_language(
+        session_factory, language="es", probability=0.9234
+    )
+    body = client.get(f"/runs/{run_id}").text
+    assert "Detected language" in body
+    assert "Spanish (es)" in body
+    assert "Whisper language-detection score:\n0.92" in body
+    assert "not a measure of\ntranscript accuracy" in body
+
+
+def test_render_detected_language_without_score(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # Forced/fallback branches record a language with no score; the card says so
+    # rather than fabricating one.
+    run_id = _seed_run_with_language(session_factory, language="en", probability=None)
+    body = client.get(f"/runs/{run_id}").text
+    assert "English (en)" in body
+    assert "No detection score was recorded" in body
+
+
+def test_render_detected_language_empty_state(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    run_id = _seed_run_with_language(session_factory, language=None, probability=None)
+    body = client.get(f"/runs/{run_id}").text
+    assert "Detected language" in body
+    # A phrase unique to this card's empty state.
+    assert "began recording the detected language" in body

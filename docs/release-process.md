@@ -171,7 +171,10 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   replay the frozen CT2-CPU baseline with zero drift (run the full 15-AMI +
   synthetic sweep here, not just the fast synthetic subset) and, once shipping
   the shared `ct2` engine, `test_whisper_ct2_self_parity.py`, which must hold
-  `ct2 ≈ ct2-legacy` to ≤0.5pp pooled WER per vad mode; on arm64; see
+  `ct2 ≈ ct2-legacy` to ≤0.5pp pooled WER per vad mode, and
+  `test_whisper_autodetect_en.py` (#124), which must show `language=None`
+  auto-detection selecting en and matching the frozen forced-en oracle within
+  the replay tolerances on the speech entries; on arm64; see
   docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
   report. `VOXINT_PARITY_REQUIRED`
   is deliberately never set for these lanes; the compensating control is

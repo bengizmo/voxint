@@ -162,6 +162,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
     verify_csrf_token,
 )
+from voxint.api.languages import language_label
 from voxint.api.meaning_query import search_passages
 from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import (
@@ -199,6 +200,7 @@ from voxint.api.runs_query import (
     parse_search_filters,
     parse_status_filter,
     runs_url,
+    searchable_languages,
 )
 from voxint.api.service_identity import collect_service_identity
 from voxint.api.setup_wizard import (
@@ -1007,6 +1009,7 @@ templates.env.globals["format_duration"] = format_duration
 templates.env.globals["format_age"] = format_age
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
+templates.env.globals["language_label"] = language_label
 # Hardware-telemetry display helpers (W3): bytes -> GiB number, used-VRAM %.
 templates.env.globals["gib"] = gib
 templates.env.globals["vram_percent"] = vram_percent
@@ -3654,6 +3657,7 @@ def _register_routes(app: FastAPI) -> None:
         source: str | None = None,
         created_from: str | None = None,
         created_to: str | None = None,
+        language: str | None = None,
         archived: str | None = None,
     ) -> Response:
         settings: Settings = request.app.state.settings
@@ -3669,6 +3673,7 @@ def _register_routes(app: FastAPI) -> None:
                 source=source,
                 created_from=created_from,
                 created_to=created_to,
+                language=language,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -3721,6 +3726,7 @@ def _register_routes(app: FastAPI) -> None:
                     archived=not show_archived,
                 ),
                 "facet_speakers": searchable_speakers(session),
+                "facet_languages": searchable_languages(session),
                 "next_url": next_url,
                 # Server-issued per-render ids: each namespaces its form's path and
                 # makes a double-submit idempotent (see POST /submit, POST /fetch).

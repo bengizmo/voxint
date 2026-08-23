@@ -86,10 +86,16 @@ class RawResult:
     (``transcribe_raw``) the segments are already on the original timeline and
     the front assembles them without restoration. ``duration`` is the original
     file duration (raw path only; the VAD path uses the plan's duration).
+    ``language_probability`` is faster-whisper's detection score for
+    ``language`` — set ONLY when detection actually ran (auto-detect on a
+    multilingual model); ``None`` on the forced-language and
+    non-multilingual branches, so a forced request never reports a score for
+    a detection that did not happen (#124).
     """
 
     segments: list[Any] = field(default_factory=list)
     language: str | None = None
+    language_probability: float | None = None
     duration: float = 0.0
 
 
@@ -214,11 +220,12 @@ class Ct2Backend:
                 # multilingual model, detect on the unpadded features + the
                 # dummy -1.5 feature (matches legacy, incl. the no-speech case).
                 language = options.language
+                language_probability: float | None = None
                 if language is None:
                     if not self.model.model.is_multilingual:
                         language = "en"
                     else:
-                        language, _prob, _all = self.model.detect_language(
+                        language, language_probability, _all = self.model.detect_language(
                             features=np.concatenate(
                                 [
                                     *raw_features,
@@ -314,7 +321,11 @@ class Ct2Backend:
                                     temperature=fw_options.temperatures[0],
                                 )
                             )
-                return RawResult(segments=segments, language=language)
+                return RawResult(
+                    segments=segments,
+                    language=language,
+                    language_probability=language_probability,
+                )
             finally:
                 self.pipeline.last_speech_timestamp = 0.0
 
@@ -354,9 +365,20 @@ class Ct2Backend:
                 **anti_hallucination,
             )
             segments = list(segments_iter)
+            # Detection score only when detection actually ran: faster-whisper
+            # fills info.language_probability with a sentinel 1.0 on the forced
+            # and non-multilingual branches, which is not an honest score (#124).
+            language_probability = (
+                info.language_probability
+                if options.language is None and self.model.model.is_multilingual
+                else None
+            )
 
         return RawResult(
-            segments=segments, language=info.language, duration=info.duration
+            segments=segments,
+            language=info.language,
+            language_probability=language_probability,
+            duration=info.duration,
         )
 
     def cleanup_memory(self) -> None:

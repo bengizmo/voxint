@@ -2332,3 +2332,118 @@ class TestWhisperOfflineStartup:
         assert "ENV WHISPER_BAKED_REVISION=${WHISPER_HF_REVISION}" in text, (
             f"{dockerfile_name} lost the WHISPER_BAKED_REVISION resolver reference"
         )
+
+
+class TestDetectedLanguagePlumbing:
+    """#124: the language-detection score crosses backend -> front -> response
+    with per-branch honesty (a forced or substituted language carries no score).
+
+    The real detect_language/info paths need faster-whisper and run under the
+    parity lane on maintainer hardware; these tests pin the torch-free plumbing
+    and the fallback-forces-None rule with a stubbed decode stack.
+    """
+
+    def test_assemble_propagates_language_probability(self) -> None:
+        out = detector.assemble_transcription_output(
+            [], language="es", duration_seconds=1.0, language_probability=0.9
+        )
+        assert out.language_probability == 0.9
+
+    def test_assemble_defaults_probability_to_none(self) -> None:
+        out = detector.assemble_transcription_output(
+            [], language="en", duration_seconds=1.0
+        )
+        assert out.language_probability is None
+
+    def test_raw_result_probability_defaults_none(self) -> None:
+        # Every branch that does not detect must leave the field defined-None.
+        assert whisper_ct2.RawResult().language_probability is None
+
+    def _stub_decode_stack(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Make _transcribe_shared_windows runnable torch-free: stub av's
+        container probe and faster-whisper's audio/transcribe helpers."""
+        from contextlib import contextmanager
+        from types import ModuleType
+
+        av = ModuleType("av")
+
+        @contextmanager
+        def _open(path: str):  # type: ignore[no-untyped-def]
+            yield SimpleNamespace(streams=SimpleNamespace(audio=[object()]))
+
+        av.open = _open  # type: ignore[attr-defined]
+        fw = ModuleType("faster_whisper")
+        fw_audio = ModuleType("faster_whisper.audio")
+        fw_audio.decode_audio = (  # type: ignore[attr-defined]
+            lambda path, sampling_rate: np.zeros(16000, dtype="float32")
+        )
+        fw_transcribe = ModuleType("faster_whisper.transcribe")
+        fw_transcribe.restore_speech_timestamps = (  # type: ignore[attr-defined]
+            lambda segments, chunks, sampling_rate: list(segments)
+        )
+        fw.audio = fw_audio  # type: ignore[attr-defined]
+        fw.transcribe = fw_transcribe  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "av", av)
+        monkeypatch.setitem(sys.modules, "faster_whisper", fw)
+        monkeypatch.setitem(sys.modules, "faster_whisper.audio", fw_audio)
+        monkeypatch.setitem(sys.modules, "faster_whisper.transcribe", fw_transcribe)
+
+    def _run_front(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        vad_filter: bool,
+        language: str | None,
+        probability: float | None,
+    ) -> object:
+        from tests.contracts.conftest import service_package
+
+        self._stub_decode_stack(monkeypatch)
+        raw = whisper_ct2.RawResult(
+            segments=[],
+            language=language,
+            language_probability=probability,
+            duration=1.0,
+        )
+        backend = SimpleNamespace(
+            kind="shared_windows",
+            transcribe_raw=lambda path, options: raw,
+            decode_windows=lambda windows, options: raw,
+        )
+        transcriber = detector.WhisperTranscriber(backend=backend)
+        options = whisper_backends.TranscribeOptions(
+            language=None, initial_prompt=None, vad_filter=vad_filter
+        )
+        with service_package("whisper"):
+            import app.backends.vad_plan as vad_plan_mod
+
+            monkeypatch.setattr(
+                vad_plan_mod,
+                "build_vad_plan",
+                lambda audio: SimpleNamespace(
+                    windows=[], speech_chunks=[], duration_seconds=2.0
+                ),
+            )
+            return transcriber._transcribe_shared_windows("x.wav", options)
+
+    @pytest.mark.parametrize("vad_filter", [False, True])
+    def test_front_propagates_detected_language_and_score(
+        self, monkeypatch: pytest.MonkeyPatch, vad_filter: bool
+    ) -> None:
+        out = self._run_front(
+            monkeypatch, vad_filter=vad_filter, language="es", probability=0.92
+        )
+        assert out.language == "es"
+        assert out.language_probability == 0.92
+
+    @pytest.mark.parametrize("vad_filter", [False, True])
+    def test_front_language_fallback_forces_score_none(
+        self, monkeypatch: pytest.MonkeyPatch, vad_filter: bool
+    ) -> None:
+        # When the front substitutes "en" for a falsy backend language, any
+        # score described the language it replaced and must not survive.
+        out = self._run_front(
+            monkeypatch, vad_filter=vad_filter, language=None, probability=0.92
+        )
+        assert out.language == "en"
+        assert out.language_probability is None

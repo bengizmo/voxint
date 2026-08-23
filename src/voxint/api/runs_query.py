@@ -32,6 +32,7 @@ from voxint.adjudication.resolver import (
     unresolved_label_count,
     unresolved_label_exists,
 )
+from voxint.api.languages import language_label
 from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
     MediaItem,
@@ -98,10 +99,21 @@ class SearchFilters:
     source: str | None = None
     created_from: date | None = None
     created_to: date | None = None
+    # Detected-language facet (issue #124): the whisper language code stamped on
+    # the run. Exact match; NULL-language rows (queued/failed/legacy) never
+    # match a specific code.
+    language: str | None = None
 
     def active(self) -> bool:
         return any(
-            (self.q, self.speaker_id, self.source, self.created_from, self.created_to)
+            (
+                self.q,
+                self.speaker_id,
+                self.source,
+                self.created_from,
+                self.created_to,
+                self.language,
+            )
         )
 
 
@@ -112,6 +124,7 @@ def parse_search_filters(
     source: str | None,
     created_from: str | None,
     created_to: str | None,
+    language: str | None = None,
 ) -> SearchFilters:
     """Blank/absent values mean 'off', mirroring the status/review parsers."""
     speaker_id: uuid.UUID | None = None
@@ -140,6 +153,10 @@ def parse_search_filters(
         source=source if source not in (None, "") else None,
         created_from=parse_date(created_from, "created_from"),
         created_to=parse_date(created_to, "created_to"),
+        # Any non-blank string is a legal facet value (exact match against the
+        # stamped code; a value no run carries just yields an empty page) —
+        # parameterized SQL, so no validation list to drift from the model.
+        language=language if language not in (None, "") else None,
     )
 
 
@@ -177,6 +194,9 @@ class RunListItem:
     # Only ever True in the explicit archived view (?archived=1) — the default
     # listing excludes archived runs — but the flag lets the template pill them.
     archived: bool = False
+    # Detected language code (issue #124); None for runs not yet transcribed or
+    # transcribed before the column existed — the template renders an honest "—".
+    language: str | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +249,8 @@ def runs_url(
             params.append(("speaker", str(filters.speaker_id)))
         if filters.source is not None:
             params.append(("source", filters.source))
+        if filters.language is not None:
+            params.append(("language", filters.language))
         if filters.created_from is not None:
             params.append(("created_from", filters.created_from.isoformat()))
         if filters.created_to is not None:
@@ -390,6 +412,7 @@ def list_runs(
             PipelineRun.archived_at,
             MediaItem.source_path,
             PipelineRun.sidecar,
+            PipelineRun.detected_language,
             MediaSourceMetadata.title.label("source_title"),
             unresolved_label_count(PipelineRun.id).label("unresolved_count"),
             label_count(PipelineRun.id).label("label_count"),
@@ -467,6 +490,11 @@ def list_runs(
         stmt = stmt.where(
             MediaItem.source_path.ilike(f"%{_escape_like(filters.source)}%", escape="\\")
         )
+    if filters is not None and filters.language is not None:
+        # Exact match on the stamped code; NULL-language rows (queued/failed/
+        # legacy) are excluded by SQL NULL semantics, which is the honest read
+        # of "show me the Spanish runs".
+        stmt = stmt.where(PipelineRun.detected_language == filters.language)
     if filters is not None and filters.created_from is not None:
         stmt = stmt.where(
             PipelineRun.created_at
@@ -514,6 +542,7 @@ def list_runs(
             # #104) wins over the acquisition-metadata title. Display-only.
             title=title_from_snapshot(row.sidecar) or row.source_title,
             archived=row.archived_at is not None,
+            language=row.detected_language,
         )
         for row in rows
     ]
@@ -523,6 +552,43 @@ def list_runs(
         else None
     )
     return RunsPage(items=items, next_cursor=next_cursor)
+
+
+@dataclass(frozen=True)
+class LanguageFacet:
+    """One option in the runs browser's detected-language filter."""
+
+    code: str
+    label: str
+
+
+def searchable_languages(session: Session) -> list[LanguageFacet]:
+    """The distinct detected languages any run carries, for the filter facet.
+
+    Reads the stamped codes (issue #124), labels them via the pinned map
+    ("Spanish (es)"; a raw code for anything the map predates), and orders by
+    display label so the dropdown reads alphabetically for a human. NULLs are
+    excluded — "not recorded" is not a language. A bounded, low-cardinality
+    scan (at most one row per distinct code), fine without an index for
+    single-operator data volumes.
+    """
+    codes = (
+        session.execute(
+            sa_select(PipelineRun.detected_language)
+            .where(PipelineRun.detected_language.is_not(None))
+            .distinct()
+        )
+        .scalars()
+        .all()
+    )
+    facets = [
+        LanguageFacet(code=code, label=language_label(code))
+        for code in codes
+        # The WHERE clause excludes NULLs; the guard narrows the nullable
+        # column type for mypy without a cast.
+        if code is not None
+    ]
+    return sorted(facets, key=lambda f: f.label)
 
 
 @dataclass(frozen=True)

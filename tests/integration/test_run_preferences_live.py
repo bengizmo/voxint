@@ -264,6 +264,114 @@ def test_transcribe_records_null_prompt_when_no_vocabulary(
         assert stored.initial_prompt is None
 
 
+@pytest.mark.parametrize(
+    ("language", "probability"),
+    [("es", 0.92), ("en", None), (None, None)],
+)
+def test_transcribe_records_detected_language(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+    language: str | None,
+    probability: float | None,
+) -> None:
+    """The transcribe stage stamps the detected language + score exactly as the
+    ASR result reported them (issue #124), including a language with no score
+    (forced/fallback branches) and a result with neither."""
+    base_ctx = StageContext(
+        asr=FakeASR(language=language, language_probability=probability),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=(),
+    )
+    run_id = _seed_run(session_factory)
+
+    with session_factory() as session:
+        transcribe.run(base_ctx, session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.detected_language == language
+        assert stored.detected_language_probability == probability
+
+
+def test_transcribe_rerun_replaces_detected_language(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A re-run reflects its own final decode: the stamp is overwritten, never a
+    stale first-attempt value (mirrors the initial_prompt idempotence rule)."""
+    run_id = _seed_run(session_factory)
+
+    def ctx(asr: FakeASR) -> StageContext:
+        return StageContext(
+            asr=asr,
+            diarizer=FakeDiarizer(),
+            embedder=FakeEmbedder(),
+            llm=None,
+            media_root=tmp_path,
+            vocabulary=(),
+        )
+
+    with session_factory() as session:
+        transcribe.run(ctx(FakeASR(language="es", language_probability=0.9)), session, run_id)
+        session.commit()
+    with session_factory() as session:
+        transcribe.run(ctx(FakeASR(language="fr", language_probability=0.7)), session, run_id)
+        session.commit()
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.detected_language == "fr"
+        assert stored.detected_language_probability == 0.7
+
+
+def test_failed_rerun_rollback_keeps_committed_detected_language(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """A committed stamp survives a later failed attempt's rollback: the stamp
+    lands only after a successful decode, so a failed re-run changes nothing."""
+
+    class RaisingASR:
+        def transcribe(self, *args: object, **kwargs: object) -> object:
+            raise RuntimeError("asr unreachable")
+
+    run_id = _seed_run(session_factory)
+    good_ctx = StageContext(
+        asr=FakeASR(language="es", language_probability=0.9),
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=(),
+    )
+    with session_factory() as session:
+        transcribe.run(good_ctx, session, run_id)
+        session.commit()
+
+    bad_ctx = StageContext(
+        asr=RaisingASR(),  # type: ignore[arg-type]
+        diarizer=FakeDiarizer(),
+        embedder=FakeEmbedder(),
+        llm=None,
+        media_root=tmp_path,
+        vocabulary=(),
+    )
+    with session_factory() as session:
+        with pytest.raises(RuntimeError, match="asr unreachable"):
+            transcribe.run(bad_ctx, session, run_id)
+        session.rollback()
+
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert stored.detected_language == "es"
+        assert stored.detected_language_probability == 0.9
+
+
 def test_transcribe_leaves_prompt_null_when_decode_fails(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

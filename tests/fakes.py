@@ -38,10 +38,19 @@ def _fake_words(text: str, start: float, end: float) -> tuple[TranscriptionWord,
 
 
 class FakeASR:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        language: str | None = "en",
+        language_probability: float | None = None,
+    ) -> None:
         # Records the initial_prompt of the most recent transcribe call so tests
         # can assert which vocabulary actually reached ASR.
         self.last_initial_prompt: str | None = None
+        # What the fake reports as the detected language + score (#124);
+        # defaults mirror a pre-#124 service (en, no score).
+        self.language = language
+        self.language_probability = language_probability
 
     def transcribe(
         self, audio_path: Path, initial_prompt: str | None = None
@@ -57,7 +66,12 @@ class FakeASR:
             for seg in segments
             for w in _fake_words(seg.text, seg.start_seconds, seg.end_seconds)
         )
-        return TranscriptionResult(segments=segments, language="en", words=words)
+        return TranscriptionResult(
+            segments=segments,
+            language=self.language,
+            language_probability=self.language_probability,
+            words=words,
+        )
 
 
 class FakeDiarizer:

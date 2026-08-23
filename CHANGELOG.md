@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Voxint now detects each recording's language and records it on the run**
+  (#124). The pipeline previously told the transcription service to use English
+  on every request, so multilingual recordings were force-decoded as English.
+  The ASR client now requests auto-detection (the contract's documented
+  `language: null` path; the service's v1 omitted-field default stays `"en"`
+  for other callers), and the transcribe stage stamps the detected language and
+  whisper's detection score on the run after a successful decode. The runs
+  browser gains a "Detected language" filter and column showing names with
+  codes ("Spanish (es)"), and the run detail page shows the language with the
+  detection score, framed as the model's own score for its guess rather than a
+  calibrated confidence. Legacy runs stay unrecorded (no backfill: a
+  reconstructed language would fabricate provenance). The transcribe response
+  gains an additive nullable `language_probability` field within v1. Detection
+  covers the whole recording as one language; a low-confidence fallback
+  guardrail is a recorded non-goal for this release.
 - **Transcript semantic search (#121).** Voxint now finds a passage by what it
   means, across every transcript, not only by its exact words. A new **Meaning**
   tab beside the runs search box opens a ranked `/search` page: type what you are

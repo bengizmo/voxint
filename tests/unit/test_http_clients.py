@@ -353,6 +353,84 @@ def test_transcribe_malformed_words_raise_protocol_error(words: object) -> None:
         client.transcribe(AUDIO)
 
 
+def test_transcribe_request_opts_into_autodetect() -> None:
+    """The client sends an explicit ``language: null`` (#124): the contract's
+    documented auto-detect path, chosen over changing the v1 omitted-field
+    default (which is contract for other callers of a self-hosted service)."""
+    captured: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"language": "es", "segments": []})
+
+    client = make_client(HttpASRClient, handler)
+    client.transcribe(AUDIO)
+    assert "language" in captured[0]
+    assert captured[0]["language"] is None
+
+
+def test_transcribe_maps_language_probability() -> None:
+    body = {
+        "language": "es",
+        "language_probability": 0.92,
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hola"}],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    result = client.transcribe(AUDIO)
+    assert result.language == "es"
+    assert result.language_probability == 0.92
+
+
+@pytest.mark.parametrize("shape", ["absent", "null"])
+def test_transcribe_missing_language_probability_maps_to_none(shape: str) -> None:
+    # An absent key is an older service predating #124 (back-compat); a null is
+    # the documented "no detection ran" value. Both map to None, never a
+    # fabricated score.
+    body: dict[str, object] = {
+        "language": "en",
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+    }
+    if shape == "null":
+        body["language_probability"] = None
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    assert client.transcribe(AUDIO).language_probability is None
+
+
+@pytest.mark.parametrize("bad", [1.5, -0.1, "0.9", True, [0.9]])
+def test_transcribe_invalid_language_probability_raises_protocol_error(
+    bad: object,
+) -> None:
+    body = {
+        "language": "en",
+        "language_probability": bad,
+        "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}],
+    }
+    client = make_client(HttpASRClient, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
+@pytest.mark.parametrize("bad", ["NaN", "Infinity", "-Infinity"])
+def test_transcribe_nonfinite_language_probability_raises_protocol_error(
+    bad: str,
+) -> None:
+    # Python's json.loads accepts these nonstandard literals, so a misbehaving
+    # service CAN deliver them; sent as raw text because a strict serializer
+    # (httpx's mock included) refuses to emit them.
+    raw = (
+        f'{{"language": "en", "language_probability": {bad},'
+        ' "segments": [{"start_seconds": 0.0, "end_seconds": 1.0, "text": "hi"}]}'
+    )
+    client = make_client(
+        HttpASRClient,
+        lambda r: httpx.Response(
+            200, content=raw.encode(), headers={"content-type": "application/json"}
+        ),
+    )
+    with pytest.raises(ProtocolError):
+        client.transcribe(AUDIO)
+
+
 # ---------------------------------------------------------------- diarizer mapping
 
 

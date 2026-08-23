@@ -119,5 +119,6 @@ def test_single_alembic_head() -> None:
     # 0033 = pipeline_runs diarization speaker-count hint, issue #128; 0034 =
     # pipeline_runs.initial_prompt provenance, issue #123; 0035 = segment_embeddings
     # + embedding_jobs semantic-search spine, issue #121; 0036 = app_settings
-    # semantic-index feature flags, issue #121).
-    assert list(heads) == ["0036"]
+    # semantic-index feature flags, issue #121; 0037 = pipeline_runs detected
+    # language + detection score, issue #124).
+    assert list(heads) == ["0037"]

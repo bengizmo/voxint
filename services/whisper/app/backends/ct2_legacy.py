@@ -188,12 +188,21 @@ class Ct2LegacyBackend:
                 )
             # Consume the generator inside the lock (model is not thread-safe).
             segments = list(segments_iter)
+            # Detection score only when detection actually ran: faster-whisper
+            # fills info.language_probability with a sentinel 1.0 on the forced
+            # and non-multilingual branches, which is not an honest score (#124).
+            language_probability = (
+                info.language_probability
+                if language is None and self.model.model.is_multilingual
+                else None
+            )
 
         # Shared assembly (dedup'd into the front layer; byte-identity with the
         # frozen oracle is guarded by test_whisper_ct2_legacy_replay.py).
         return assemble_transcription_output(
             segments,
             language=info.language,
+            language_probability=language_probability,
             duration_seconds=info.duration,
         )
 

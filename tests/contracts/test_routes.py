@@ -7,6 +7,7 @@ and exercise the error mapping the schema tests can't see.
 
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -37,6 +38,7 @@ class TestWhisperRoutes:
         monkeypatch.setattr(mod, "_pending", 0)
         fake_output = SimpleNamespace(
             language="en",
+            language_probability=0.87,
             duration_seconds=2.0,
             transcript="hello",
             confidence=0.9,
@@ -83,6 +85,35 @@ class TestWhisperRoutes:
         body = response.json()
         assert body["transcript"] == "hello"
         assert body["segments"][0]["suspect"] is False
+        # Additive v1 field (#124): the response carries the transcriber's
+        # detection score verbatim.
+        assert body["language_probability"] == 0.87
+
+    def test_request_language_reaches_transcriber_verbatim(
+        self, mod: ModuleType, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The route passes the request's language through unchanged — an
+        omitted field resolves to the v1 default "en", and an explicit null
+        stays None (the auto-detect opt-in Voxint's client uses, #124)."""
+        seen: list[Any] = []
+        original = mod.transcriber.transcribe
+
+        def capture(path: str, language: Any, *rest: Any) -> Any:
+            seen.append(language)
+            return original(path, language, *rest)
+
+        monkeypatch.setattr(mod.transcriber, "transcribe", capture)
+        assert (
+            _client(mod).post("/v1/transcribe", json={"path": "audio.wav"}).status_code
+            == 200
+        )
+        assert (
+            _client(mod)
+            .post("/v1/transcribe", json={"path": "audio.wav", "language": None})
+            .status_code
+            == 200
+        )
+        assert seen == ["en", None]
 
     def test_healthz_ok(self, mod: ModuleType) -> None:
         response = _client(mod).get("/healthz")

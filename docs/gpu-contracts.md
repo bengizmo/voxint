@@ -277,7 +277,13 @@ Request (unknown fields rejected):
 ```
 
 - `language` (default `"en"`): target language code. `null` → auto-detect;
-  the response reports the effective language either way.
+  the response reports the effective language either way. The omitted-field
+  default stays `"en"` in v1 (changing it would be a semantic contract change,
+  reserved for a `/v2`); Voxint's own pipeline client sends an explicit `null`
+  since #124, so a stock install auto-detects. Detection judges the whole
+  recording as one language: a recording that switches languages mid-way still
+  gets a single detected language, and short or mostly silent input can produce
+  low-scoring or arbitrary detections.
 - `initial_prompt` (optional, ≤2000 chars): vocabulary/context prompt.
 - `vad_filter` (default `true`): Silero VAD via `BatchedInferencePipeline`.
   `false` bypasses the batched pipeline entirely and calls the raw
@@ -288,6 +294,7 @@ Response:
 ```json
 {
   "language": "en",
+  "language_probability": null,
   "duration_seconds": 3712.4,
   "transcript": "full flattened text ...",
   "confidence": 0.93,
@@ -309,6 +316,14 @@ Response:
 }
 ```
 
+- `language_probability` (additive v1 field, #124): faster-whisper's detection
+  score for the emitted `language`, a finite number in [0, 1]. Non-null ONLY
+  when detection actually ran — the request sent `language: null` on a
+  multilingual model. `null` when the language was forced, the model is
+  English-only, when the service substituted a fallback language (the score
+  described the language it replaced), or from an older service that predates
+  the field. It is the model's own score for its language guess, not a
+  calibrated confidence and not a code-switch signal.
 - Word timestamps are always requested from the model; `words` may still be
   empty when the model yields none (e.g. pure silence). Since #59 the pipeline
   consumes this flat list (it was previously dropped at the ASR client),

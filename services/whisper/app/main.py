@@ -193,6 +193,7 @@ async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
 
     return TranscribeResponse(
         language=result.language,
+        language_probability=result.language_probability,
         duration_seconds=result.duration_seconds,
         transcript=result.transcript,
         confidence=result.confidence,

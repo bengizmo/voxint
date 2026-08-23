@@ -237,6 +237,30 @@ vocabulary, or it finished before Voxint began recording the applied glossary.</
 {% endif %}
 </section>
 
+{# Detected language (issue #124): what whisper decided when it transcribed this
+   run. The score is whisper's own detection probability, shown with honest
+   framing: it is not a calibrated confidence and says nothing about a recording
+   that switches languages mid-way. #}
+<section class="card">
+<h2>Detected language</h2>
+{% if run.detected_language %}
+<p><strong>{{ language_label(run.detected_language) }}</strong></p>
+{% if run.detected_language_probability is not none %}
+<p class="muted">Whisper language-detection score:
+{{ "%.2f" | format(run.detected_language_probability) }}.
+This is the model's own score for its language guess, not a measure of
+transcript accuracy. It reflects the whole recording as one language; a
+recording that mixes languages still gets a single detected language. Short or
+mostly silent recordings can produce low or arbitrary detections.</p>
+{% else %}
+<p class="muted">No detection score was recorded for this run.</p>
+{% endif %}
+{% else %}
+<p class="muted">Not recorded. This run has not been transcribed yet, or it
+finished before Voxint began recording the detected language.</p>
+{% endif %}
+</section>
+
 <section class="card">
 <h2>Stage ledger</h2>
 {% if not stage_runs %}

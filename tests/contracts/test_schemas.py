@@ -37,6 +37,53 @@ class TestWhisperSchemas:
         )
         assert request.language is None
 
+    def test_omitted_language_still_defaults_to_en(
+        self, whisper_schemas: ModuleType
+    ) -> None:
+        """The v1 OMITTED-field default is contract for external callers (#124):
+        Voxint's client opts into auto-detect with an explicit null, and the
+        default must not silently move underneath everyone else."""
+        request = whisper_schemas.TranscribeRequest.model_validate({"path": "a.wav"})
+        assert request.language == "en"
+
+    def _response(self, whisper_schemas: ModuleType, **overrides: Any) -> Any:
+        base: dict[str, Any] = {
+            "language": "en",
+            "duration_seconds": 1.0,
+            "transcript": "hi",
+            "confidence": 0.9,
+            "segments": [],
+            "words": [],
+        }
+        base.update(overrides)
+        return whisper_schemas.TranscribeResponse.model_validate(base)
+
+    @pytest.mark.parametrize("value", [None, 0.0, 0.5, 1.0])
+    def test_language_probability_accepts_unit_interval(
+        self, whisper_schemas: ModuleType, value: float | None
+    ) -> None:
+        response = self._response(whisper_schemas, language_probability=value)
+        assert response.language_probability == value
+
+    def test_language_probability_defaults_none(
+        self, whisper_schemas: ModuleType
+    ) -> None:
+        # Additive within v1: an older payload without the field still parses.
+        assert self._response(whisper_schemas).language_probability is None
+
+    # A bool is missing on purpose: pydantic's lax mode coerces True -> 1.0 at
+    # the service edge; the CLIENT validator rejects bools loudly
+    # (test_http_clients), which is the boundary that guards the pipeline.
+    @pytest.mark.parametrize(
+        "value",
+        [-0.01, 1.01, float("nan"), float("inf"), float("-inf"), "high"],
+    )
+    def test_language_probability_rejects_out_of_contract(
+        self, whisper_schemas: ModuleType, value: Any
+    ) -> None:
+        with pytest.raises(ValidationError):
+            self._response(whisper_schemas, language_probability=value)
+
     def test_oversized_initial_prompt_rejected(self, whisper_schemas: ModuleType) -> None:
         with pytest.raises(ValidationError):
             whisper_schemas.TranscribeRequest.model_validate(

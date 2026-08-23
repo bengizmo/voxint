@@ -13,26 +13,37 @@ from voxint.clients.base import (
 from voxint.clients.errors import ProtocolError
 
 
-def _parse_confidence(raw: Any) -> float | None:
-    """A missing/null confidence stays None; anything present must be a finite
-    number in [0, 1] (the whisper service emits exp(avg_logprob) already
-    clamped). We validate rather than clamp so a malformed value is a loud
-    ProtocolError, never a silently-massaged score."""
+def _parse_unit_interval(raw: Any, field: str) -> float | None:
+    """A missing/null value stays None; anything present must be a finite
+    number in [0, 1]. We validate rather than clamp so a malformed value is a
+    loud ProtocolError, never a silently-massaged score."""
     if raw is None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        raise ProtocolError("segment confidence must be a number or null")
+        raise ProtocolError(f"{field} must be a number or null")
     value = float(raw)
     if not math.isfinite(value) or not (0.0 <= value <= 1.0):
-        raise ProtocolError("segment confidence must be finite in [0, 1]")
+        raise ProtocolError(f"{field} must be finite in [0, 1]")
     return value
+
+
+def _parse_confidence(raw: Any) -> float | None:
+    """Segment/word confidence: exp(avg_logprob), already clamped by the
+    whisper service."""
+    return _parse_unit_interval(raw, "segment confidence")
 
 
 class HttpASRClient(ServiceHttpClient):
     def transcribe(
         self, audio_path: Path, initial_prompt: str | None = None
     ) -> TranscriptionResult:
-        payload: dict[str, Any] = {"path": self.relative_path(audio_path)}
+        # language: null opts into the contract's documented auto-detect path
+        # (#124). Sent explicitly because the v1 OMITTED-field default is "en" —
+        # that default is contract for other callers and stays untouched.
+        payload: dict[str, Any] = {
+            "path": self.relative_path(audio_path),
+            "language": None,
+        }
         # Only send initial_prompt when non-empty: the whisper contract treats a
         # missing key as "no bias", and an empty string would be a wasted field.
         if initial_prompt:
@@ -60,6 +71,11 @@ class HttpASRClient(ServiceHttpClient):
             language = body["language"]
             if language is not None and not isinstance(language, str):
                 raise ProtocolError("language must be a string or null")
+            # Absent key = an older service that predates the field (#124);
+            # present-but-malformed is loud, mirroring segment confidence.
+            language_probability = _parse_unit_interval(
+                body.get("language_probability"), "language_probability"
+            )
             # Word timings (word_timestamps=True) are a flat, run-level list in
             # the v1 contract. A service or fake that OMITS the key predates #59;
             # treat that as "no word data". A present-but-null value is not
@@ -68,7 +84,10 @@ class HttpASRClient(ServiceHttpClient):
         except (KeyError, TypeError, ValueError) as exc:
             raise ProtocolError(f"malformed transcribe response: {exc!r}") from exc
         return TranscriptionResult(
-            segments=tuple(segments), language=language, words=words
+            segments=tuple(segments),
+            language=language,
+            language_probability=language_probability,
+            words=words,
         )
 
 

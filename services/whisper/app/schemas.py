@@ -54,6 +54,14 @@ class Segment(BaseModel):
 
 class TranscribeResponse(BaseModel):
     language: str
+    # Additive v1 field (#124): faster-whisper's language-detection score for
+    # the emitted ``language``. Present ONLY when detection actually ran (the
+    # request sent ``language: null`` on a multilingual model); ``null`` when
+    # the language was forced, the model is English-only, or the service
+    # substituted a fallback language. NOT a calibrated confidence.
+    language_probability: float | None = Field(
+        default=None, ge=0.0, le=1.0, allow_inf_nan=False
+    )
     duration_seconds: float
     transcript: str
     confidence: float

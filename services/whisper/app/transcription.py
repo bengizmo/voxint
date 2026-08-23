@@ -222,6 +222,10 @@ class TranscriptionOutput:
     words: list[dict[str, Any]]
     segments: list[dict[str, Any]] = field(default_factory=list)
     suspect_segment_count: int = 0
+    # Detection score for ``language`` (#124): set only when auto-detection
+    # actually ran; None when the language was forced, the model is
+    # English-only, or a fallback language was substituted.
+    language_probability: float | None = None
 
 
 def assemble_transcription_output(
@@ -229,6 +233,7 @@ def assemble_transcription_output(
     *,
     language: str,
     duration_seconds: float,
+    language_probability: float | None = None,
 ) -> TranscriptionOutput:
     """Assemble a ``TranscriptionOutput`` from faster-whisper ``Segment``s.
 
@@ -300,6 +305,7 @@ def assemble_transcription_output(
         words=words,
         segments=seg_annotations,
         suspect_segment_count=suspect_count,
+        language_probability=language_probability,
     )
 
 
@@ -481,6 +487,12 @@ class WhisperTranscriber:
                 raw.segments,
                 language=raw.language or "en",
                 duration_seconds=raw.duration,
+                # A substituted fallback language voids the detection score —
+                # the probability described the language the backend reported,
+                # not the "en" this layer substitutes (#124).
+                language_probability=(
+                    raw.language_probability if raw.language else None
+                ),
             )
 
         audio = decode_audio(audio_path, sampling_rate=SAMPLING_RATE)
@@ -493,4 +505,9 @@ class WhisperTranscriber:
             restored,
             language=raw.language or "en",
             duration_seconds=plan.duration_seconds,
+            # Same fallback rule as the raw path: a substituted language must
+            # not carry the score of the language it replaced (#124).
+            language_probability=(
+                raw.language_probability if raw.language else None
+            ),
         )

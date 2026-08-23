@@ -332,6 +332,14 @@ class PipelineRun(Base):
             " OR (diarization_num_speakers >= 1 AND diarization_num_speakers <= 20)",
             name="pipeline_runs_diarization_num_speakers_check",
         ),
+        # The detection score is a probability; anything outside [0, 1] is a
+        # malformed write, refused at the schema (#124).
+        CheckConstraint(
+            "detected_language_probability IS NULL"
+            " OR (detected_language_probability >= 0"
+            " AND detected_language_probability <= 1)",
+            name="pipeline_runs_detected_language_probability_check",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -397,6 +405,21 @@ class PipelineRun(Base):
     # transcribed, a run with no vocabulary (empty prompt), or a legacy run
     # transcribed before this column existed.
     initial_prompt: Mapped[str | None] = mapped_column(Text)
+    # The language whisper actually transcribed this run in (issue #124), as the
+    # service reported it (ISO-639-1 style code, e.g. "es"), stamped by the
+    # transcribe stage after a successful decode. Voxint's client requests
+    # auto-detection, so this records the model's decision, not operator input.
+    # NULL = a run not yet transcribed or a legacy run transcribed before this
+    # column existed (never backfilled — reconstructing it would fabricate
+    # provenance). Low-cardinality; deliberately unindexed (single-operator).
+    detected_language: Mapped[str | None] = mapped_column(Text)
+    # Whisper's language-detection score for detected_language: a probability in
+    # [0, 1] (CHECK-enforced), present only when detection actually ran. NOT a
+    # calibrated confidence and NOT a code-switch signal — surfaced on the run
+    # detail page with exactly that framing. NULL whenever detected_language is
+    # NULL, and also when the service forced a language or substituted a
+    # fallback (no honest score exists for a detection that did not happen).
+    detected_language_probability: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

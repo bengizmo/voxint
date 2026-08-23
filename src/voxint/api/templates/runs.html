@@ -92,6 +92,16 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
   <label>Source
     <input type="text" name="source" value="{{ filters.source or "" }}" placeholder="path contains…">
   </label>
+  {# Detected language (issue #124): the code whisper stamped on each run, so a
+     label like "Spanish (es)". Options are only languages some run carries. #}
+  <label>Detected language
+    <select name="language">
+      <option value="">all</option>
+      {% for lang in facet_languages %}
+      <option value="{{ lang.code }}"{% if filters.language == lang.code %} selected{% endif %}>{{ lang.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>From (UTC)
     <input type="date" name="created_from"
            value="{{ filters.created_from.isoformat() if filters.created_from else "" }}">
@@ -109,7 +119,7 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 <div class="table-wrap" role="region" aria-label="Runs" tabindex="0">
 <table>
   <thead>
-    <tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Review</th><th scope="col">Media</th><th scope="col">Created</th></tr>
+    <tr><th scope="col">Run</th><th scope="col">Status</th><th scope="col">Review</th><th scope="col">Media</th><th scope="col">Language</th><th scope="col">Created</th></tr>
   </thead>
   <tbody>
     {% for it in page.items %}
@@ -137,13 +147,16 @@ operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
         <span class="media-title" title="{{ it.source_path }}">{{ friendly_media_label(it.title, it.source_path) }}</span>
         <br><code class="muted">{{ it.source_path }}</code>
       </td>
+      {# Whisper's detected language (issue #124); "—" = not recorded (a run not
+         yet transcribed, or one that predates the stamp). #}
+      <td>{% if it.language %}{{ language_label(it.language) }}{% else %}<span class="muted">—</span>{% endif %}</td>
       <td><span title="{{ it.created_at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(it.created_at, now=now) }}</span></td>
     </tr>
     {% if it.snippet %}
     <tr class="snippet">
       {# snippet.html is server-escaped with only our <mark> injected — see
          runs_query._render_headline; transcript text itself is never trusted. #}
-      <td colspan="5" class="muted">
+      <td colspan="6" class="muted">
         ⏱ {{ "%d:%02d" | format(it.snippet.start_seconds // 60, it.snippet.start_seconds % 60) }}
         — {{ it.snippet.html }}
       </td>

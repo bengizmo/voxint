@@ -34,9 +34,9 @@ def parse(**overrides: str | None) -> SearchFilters:
 class TestParseSearchFilters:
     def test_blank_and_absent_mean_off(self) -> None:
         assert parse() == SearchFilters()
-        assert parse(q="", speaker="", source="", created_from="", created_to="") == (
-            SearchFilters()
-        )
+        assert parse(
+            q="", speaker="", source="", created_from="", created_to="", language=""
+        ) == (SearchFilters())
         assert not parse().active()
 
     def test_values_parse(self) -> None:
@@ -47,6 +47,7 @@ class TestParseSearchFilters:
             source="incoming/",
             created_from="2026-08-01",
             created_to="2026-08-14",
+            language="es",
         )
         assert filters == SearchFilters(
             q="compressor -brand",
@@ -54,7 +55,13 @@ class TestParseSearchFilters:
             source="incoming/",
             created_from=date(2026, 8, 1),
             created_to=date(2026, 8, 14),
+            language="es",
         )
+        assert filters.active()
+
+    def test_language_alone_is_active(self) -> None:
+        filters = parse(language="es")
+        assert filters == SearchFilters(language="es")
         assert filters.active()
 
     @pytest.mark.parametrize(
@@ -95,6 +102,7 @@ class TestRunsUrl:
             source="incoming/",
             created_from=date(2026, 8, 1),
             created_to=date(2026, 8, 14),
+            language="es",
         )
         url = runs_url(
             status=RunStatus.COMPLETED, review=ReviewFilter.RESOLVED, filters=filters
@@ -105,6 +113,7 @@ class TestRunsUrl:
         assert f"speaker={speaker}" in url
         assert "created_from=2026-08-01" in url
         assert "created_to=2026-08-14" in url
+        assert "language=es" in url
         # querystring-encoded, not raw
         assert "q=a+%22b+c%22+-d" in url
 
