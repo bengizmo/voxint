@@ -174,7 +174,13 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
   `ct2 ≈ ct2-legacy` to ≤0.5pp pooled WER per vad mode, and
   `test_whisper_autodetect_en.py` (#124), which must show `language=None`
   auto-detection selecting en and matching the frozen forced-en oracle within
-  the replay tolerances on the speech entries; on arm64; see
+  the replay tolerances on the English speech entries that auto-detect en (a few
+  AMI clips carry strongly-accented English from the TNO scenario meetings,
+  recorded with Dutch-first speakers, that auto-detection legitimately resolves
+  to the speaker's first language, e.g. `TS3011a` resolves to Dutch; like the
+  silence and hallucination-bait clips these sit outside the en-conditional
+  Tier-1 claim and belong to the Tier-2 follow-up, not asserted here); on arm64;
+  see
   docs/gpu-contracts.md "Metal tier"), and record/refresh the per-chip verdict
   report. `VOXINT_PARITY_REQUIRED`
   is deliberately never set for these lanes; the compensating control is
