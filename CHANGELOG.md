@@ -5,6 +5,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-08-23
+
+### Fixed
+- The Docker app image baked the transcript-search MiniLM weights (#121) into
+  directories the non-root runtime user could not enter, so a container built
+  from the 0.23.0 tree failed the moment it first touched the semantic index. The
+  weight files were copied read-only, which also stamped that read-only mode onto
+  the directories holding them and removed their traversal bit; the image now
+  restores directory traversal so the baked weights load. The 0.23.0 release build
+  failed on exactly this at the CPU smoke gate, so it never published an app image
+  or a PyPI package; 0.23.1 is the first shipped 0.23.x.
+
 ## [0.23.0] - 2026-08-23
 
 ### Added
