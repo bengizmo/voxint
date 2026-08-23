@@ -31,11 +31,15 @@ WORKDIR /app
 # layers, so a code or dependency change never re-copies the fat weight layer;
 # only a weights refresh (rare, immutable asset) invalidates it. --chmod=0444
 # makes the files world-readable regardless of the build host umask, so the
-# runtime `voxint` user can always load them.
+# runtime `voxint` user can always read them. But COPY --chmod also stamps that
+# mode onto the parent dirs it auto-creates, which drops their traversal (x) bit
+# and locks the non-root user OUT of the files (r-- dir, no search); the chmod
+# below restores read+traverse on the dirs while the files stay read-only.
 ARG MINILM_ONNX_SHA256=10f7a088420252b26caf819236ca2c9d2987afd0fc06fec7553b542a5655a05a
 ARG MINILM_TOKENIZER_SHA256=2c3387be76557bd40970cec13153b3bbf80407865484b209e655e5e4729076b8
 COPY --chmod=0444 vendor/minilm/model.onnx /app/models/minilm/model.onnx
 COPY --chmod=0444 vendor/minilm/tokenizer.json /app/models/minilm/tokenizer.json
+RUN chmod 0555 /app/models /app/models/minilm
 RUN printf '%s\n' \
       "${MINILM_ONNX_SHA256}  /app/models/minilm/model.onnx" \
       "${MINILM_TOKENIZER_SHA256}  /app/models/minilm/tokenizer.json" \
