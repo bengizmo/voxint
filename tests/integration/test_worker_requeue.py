@@ -381,7 +381,10 @@ def test_recovery_sweep_redispatches_stale_queued_embedding_job(
         assert row is not None
         assert row.status == EmbeddingJobStatus.QUEUED.value  # unmutated
         assert row.started_at is None
-    assert fresh_id is not None  # referenced: the second, spared job
+        # The fresh job stays QUEUED and untouched (not swept, not dispatched).
+        fresh = session.get(EmbeddingJob, fresh_id)
+        assert fresh is not None
+        assert fresh.status == EmbeddingJobStatus.QUEUED.value
 
 
 def test_recovery_sweep_continues_after_one_embedding_redispatch_outage(

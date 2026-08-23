@@ -1095,3 +1095,28 @@ def test_embed_backfill_reports_lost_claim_race_not_failure(
     assert f"recovering stranded run {run_id}" in out
     assert f"{run_id}: claimed by another worker — skipped" in out
     assert str(job_id) in out
+
+
+def test_embed_backfill_reports_active_job_changed(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The stranded slot resolves terminal (a worker finished it) between the
+    # create_jobs collision and the active_job lookup: report "active job changed"
+    # and exit 0, counting no failure (issue #130).
+    with session_factory() as session:
+        run_id = _seed_completed_run(session)
+        _seed_stranded_queued_job(session, run_id)
+
+    monkeypatch.setattr(
+        "voxint.embeddings.onnx_embedder.minilm_artifacts_available", lambda: True
+    )
+    # active_job resolves to None as if the slot cleared in the race window.
+    monkeypatch.setattr(
+        "voxint.enrichment.embedding_jobs.active_job",
+        lambda session, run_id, **kwargs: None,
+    )
+
+    assert main(["embed", "backfill"]) == 0
+    assert f"{run_id}: active job changed" in capsys.readouterr().out

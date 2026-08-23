@@ -81,6 +81,12 @@ from voxint.worker.app import app
 
 logger = logging.getLogger(__name__)
 
+# Oldest-first cap on stale QUEUED embedding jobs re-dispatched per recovery
+# sweep (#130). A mass stranding drains this many per sweep; the next sweep takes
+# the next batch. Bounds one pass's broker traffic and keeps a broker-down sweep
+# from stalling on a long series of connect timeouts.
+STALE_EMBEDDING_REDISPATCH_LIMIT = 100
+
 
 @lru_cache(maxsize=1)
 def _runtime() -> tuple[sessionmaker[Session], StageContext]:
@@ -356,8 +362,17 @@ def recovery_sweep() -> dict[str, int]:
     # past the SAME staleness grace — no row mutation; the guarded queued→running
     # claim CAS makes a duplicate delivery (or a live worker about to claim it) a
     # no-op. RUNNING is deliberately untouched (the lane's force-cancel policy).
+    #
+    # No dispatch lease is recorded (the deliberate no-mutation design), so a job
+    # that stays QUEUED — broker up but no worker consuming — is re-published every
+    # sweep until something claims it. Those duplicates are harmless (the claim CAS
+    # collapses them) but do accumulate on the broker, so the batch is oldest-first
+    # and bounded: a mass stranding drains STALE_EMBEDDING_REDISPATCH_LIMIT per
+    # sweep rather than flooding one pass.
     with factory() as session:
-        stale_embedding_jobs = embedding_jobs.stale_queued_job_ids(session, cutoff=cutoff)
+        stale_embedding_jobs = embedding_jobs.stale_queued_job_ids(
+            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        )
     if stale_embedding_jobs:
         from celery.exceptions import OperationalError
 

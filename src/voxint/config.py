@@ -297,8 +297,10 @@ class Settings(BaseSettings):
     # A QUEUED run untouched this long has no live task on the broker
     # (covers pending retry countdowns; keep it above retry_backoff_max_seconds).
     # Also the grace after which the recovery sweep re-dispatches a QUEUED
-    # embedding job whose Celery dispatch evaporated (issue #130).
-    queued_run_stale_seconds: int = 3600
+    # embedding job whose Celery dispatch evaporated (issue #130). Floored (ge=60)
+    # now that two lanes consume it: a sub-minute value would have every sweep
+    # re-dispatch everything still queued.
+    queued_run_stale_seconds: int = Field(default=3600, ge=60)
 
     # Media retention / garbage collection (issue #15). File reclamation only:
     # the GC sweep unlinks the large normalized-audio intermediate

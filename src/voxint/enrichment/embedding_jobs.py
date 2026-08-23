@@ -462,7 +462,9 @@ def active_job(
     ).scalar_one_or_none()
 
 
-def stale_queued_job_ids(session: Session, *, cutoff: datetime) -> list[uuid.UUID]:
+def stale_queued_job_ids(
+    session: Session, *, cutoff: datetime, limit: int | None = None
+) -> list[uuid.UUID]:
     """Ids of jobs stuck in QUEUED since before ``cutoff`` (#130 recovery).
 
     A job committed QUEUED whose Celery dispatch evaporated (process/broker died
@@ -471,15 +473,23 @@ def stale_queued_job_ids(session: Session, *, cutoff: datetime) -> list[uuid.UUI
     only age signal — a QUEUED job has no ``started_at``, and its only legitimate
     next transition is a guarded claim or a direct cancel, so it is never touched
     before the cutoff. The recovery sweep re-dispatches these by id (no row
-    mutation); the guarded claim CAS makes a duplicate delivery a no-op."""
-    return list(
-        session.execute(
-            select(EmbeddingJob.id).where(
-                EmbeddingJob.status == EmbeddingJobStatus.QUEUED.value,
-                EmbeddingJob.created_at < cutoff,
-            )
-        ).scalars()
+    mutation); the guarded claim CAS makes a duplicate delivery a no-op.
+
+    Oldest first and optionally capped (``limit``): a mass stranding drains a
+    bounded batch per sweep instead of publishing thousands in one pass (which,
+    with the broker down, would block the sweep on connect timeouts). The next
+    sweep takes the next batch — the same shape as the gc/notify sweeps."""
+    query = (
+        select(EmbeddingJob.id)
+        .where(
+            EmbeddingJob.status == EmbeddingJobStatus.QUEUED.value,
+            EmbeddingJob.created_at < cutoff,
+        )
+        .order_by(EmbeddingJob.created_at)
     )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(session.execute(query).scalars())
 
 
 def runs_needing_embeddings(

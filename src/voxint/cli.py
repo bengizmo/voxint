@@ -616,7 +616,7 @@ def _embed_backfill(args: argparse.Namespace) -> int:
 
     from voxint.app_settings import get_app_settings
     from voxint.config import SettingsError, get_settings
-    from voxint.db.models import EmbeddingJob, PipelineRun, RunStatus
+    from voxint.db.models import EmbeddingJob, EmbeddingJobStatus, PipelineRun, RunStatus
     from voxint.db.session import build_engine, build_session_factory
     from voxint.embeddings.onnx_embedder import minilm_artifacts_available
     from voxint.enrichment.embedding_jobs import (
@@ -693,8 +693,13 @@ def _embed_backfill(args: argparse.Namespace) -> int:
                 # It resolved terminal between the slot conflict and this lookup.
                 print(f"{run_id}: active job changed — rerun backfill to index it")
                 continue
-            if stranded_status != "queued":
-                print(f"{run_id}: skipped — a job is already running for this run")
+            if stranded_status != EmbeddingJobStatus.QUEUED.value:
+                # RUNNING has a live executor; leave it (force-cancel from the run
+                # page is its lever, including for a job that never finishes).
+                print(
+                    f"{run_id}: skipped — a job is already running for this run"
+                    " (cancel it from the run page if it is stuck)"
+                )
                 continue
             print(f"job {stranded_id}: recovering stranded run {run_id} ...")
             execute_job(factory, stranded_id, settings=settings)
@@ -705,15 +710,20 @@ def _embed_backfill(args: argparse.Namespace) -> int:
                 # worker can claim it between the lookup and execute_job. A
                 # non-terminal status after inline execution means another worker
                 # took it, not a failed embedding attempt.
-                if recovered_job.status == "running":
+                if recovered_job.status == EmbeddingJobStatus.RUNNING.value:
                     print(f"{run_id}: claimed by another worker — skipped")
-                elif recovered_job.status == "queued":
+                elif recovered_job.status == EmbeddingJobStatus.QUEUED.value:
                     print(f"{run_id}: not claimed — rerun backfill to index it")
                 else:
                     print(f"{run_id}: {recovered_job.status}")
                     if recovered_job.error:
                         print(f"error: {recovered_job.error}")
-                    if recovered_job.status == "failed":
+                    # Only a genuine FAILED embed counts toward exit 1. A CANCELLED
+                    # outcome here means an operator cancelled the job during the
+                    # inline run — their intent, not a backfill failure (this is
+                    # deliberately narrower than the freshly-created path below,
+                    # which treats any non-succeeded terminal as a failure).
+                    if recovered_job.status == EmbeddingJobStatus.FAILED.value:
                         failures += 1
             continue
         assert job is not None

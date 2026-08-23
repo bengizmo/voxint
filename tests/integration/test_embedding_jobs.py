@@ -371,3 +371,31 @@ def test_stale_queued_job_ids_selects_by_age_and_status(session: Session) -> Non
     claim_job(session, job.id)
     session.expire_all()
     assert stale_queued_job_ids(session, cutoff=now - timedelta(hours=1)) == []
+
+
+def test_execute_job_twice_claims_once(
+    session_factory: sessionmaker[Session], session: Session
+) -> None:
+    # The recovery design's keystone (issue #130): the sweep re-dispatches a stale
+    # QUEUED job with no row mutation, manufacturing duplicate deliveries on
+    # purpose, and the inline CLI can race a live worker for the same job. A second
+    # execution must be a no-op — the guarded queued→running claim CAS lets exactly
+    # one caller win, so only one generation is ever published.
+    settings = make_settings()
+    run_id = _seed_run(session, [("S0", "index me exactly once"), ("S1", "only once")])
+    job, _ = create_jobs(session, pipeline_run_id=run_id, settings=settings)
+    session.commit()
+    assert job is not None
+
+    execute_job(session_factory, job.id, settings=settings, embedder=FakeEmbedder())
+    # Second delivery: the row is already SUCCEEDED, so claim_job matches nothing.
+    execute_job(session_factory, job.id, settings=settings, embedder=FakeEmbedder())
+    session.expire_all()
+
+    rows = _rows(session, run_id)
+    assert {r.generation for r in rows} == {1}  # one generation, not two
+    assert [r.chunk_index for r in rows] == [0, 1]  # one chunk set, not doubled
+    finished = session.get(EmbeddingJob, job.id)
+    assert finished is not None
+    assert finished.status == EmbeddingJobStatus.SUCCEEDED.value
+    assert finished.generation == 1
