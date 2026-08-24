@@ -384,7 +384,7 @@ def test_fetch_maps_domain_pack_error_to_422(
             "would re-fire on the replacement of rule 'zb'"
         )
 
-    monkeypatch.setattr("voxint.api.app.submit_url", _raise)
+    monkeypatch.setattr("voxint.api.routers.legacy_runs.submit_url", _raise)
     resp = client.post("/fetch", data=_fd(url=_URL, submission_id=uuid.uuid4().hex))
     assert resp.status_code == 422
     detail = resp.json()["detail"]

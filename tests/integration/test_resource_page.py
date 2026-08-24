@@ -88,7 +88,7 @@ def _view(name: str, admission: AdmissionInfo | None) -> ServiceResourceView:
 
 def _patch_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: ResourceSnapshot) -> None:
     monkeypatch.setattr(
-        "voxint.api.app.collect_resource_status",
+        "voxint.api.routers.legacy_runs.collect_resource_status",
         lambda settings, **kw: snapshot,
     )
 
@@ -159,7 +159,7 @@ def test_probe_failure_degrades_to_unavailable(
     def _boom(settings: object, **kw: object) -> ResourceSnapshot:
         raise RuntimeError("nvml exploded")
 
-    monkeypatch.setattr("voxint.api.app.collect_resource_status", _boom)
+    monkeypatch.setattr("voxint.api.routers.legacy_runs.collect_resource_status", _boom)
     resp = client.get("/dashboard")
     assert resp.status_code == 200
     assert "Hardware status unavailable" in resp.text
