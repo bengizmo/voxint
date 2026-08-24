@@ -76,13 +76,15 @@ def _outline(client: TestClient, run_id: uuid.UUID) -> dict[str, Any]:
     return _island_props(body)["outline"]
 
 
-def _seed_mentions(session: Session, run_id: uuid.UUID, *, key: str = "m1") -> None:
+def _seed_mentions(
+    session: Session, run_id: uuid.UUID, *, key: str = "m1", schema_version: int = 1
+) -> None:
     record_asset(
         session,
         source=load_source(session, run_id),
         kind=RunAssetKind.ENTITY_MENTIONS,
         payload=VALID_MENTIONS,
-        payload_schema_version=1,
+        payload_schema_version=schema_version,
         producer="run_assets.llm",
         producer_version="1",
         model="test-model",
@@ -120,6 +122,20 @@ def test_outline_gated_off(session_factory: sessionmaker[Session]) -> None:
     outline = _outline(client, run_id)
     assert outline["available"] is False
     assert outline["gated"] is True
+
+
+def test_outline_unknown_schema_version_is_unavailable_not_empty(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # A mentions asset written under a schema version this reader does not know is
+    # left unavailable, never parsed through v1 keys into a fabricated "none found".
+    client = _build_client(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session)
+        _seed_mentions(session, run_id, schema_version=2)
+    outline = _outline(client, run_id)
+    assert outline["available"] is False
+    assert outline["mentions"] == []
 
 
 def test_outline_present_resolves_target(session_factory: sessionmaker[Session]) -> None:

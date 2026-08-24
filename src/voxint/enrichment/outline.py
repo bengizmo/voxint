@@ -75,10 +75,11 @@ class OutlineContext:
 class OutlineDiagnostics:
     """Counts of mentions the operator does not see, so completeness is honest.
 
-    ``dropped_unlocatable`` and ``dropped_out_of_run`` are carried from the
-    generator (offsets it could not locate, or references outside the run).
-    ``dropped_unresolved`` is this module's read-time drop: an occurrence whose
-    ``segment_index`` no longer maps to a live segment.
+    Counts are per occurrence, not per distinct entity: one entity dropped in
+    three places counts three. ``dropped_unlocatable`` and ``dropped_out_of_run``
+    are carried from the generator (offsets it could not locate, or references
+    outside the run). ``dropped_unresolved`` is this module's read-time drop: an
+    occurrence whose ``segment_index`` no longer maps to a live segment.
     """
 
     dropped_unlocatable: int
@@ -140,13 +141,13 @@ def _context_from_payloads(
     topics_payload: Mapping[str, Any] | None,
 ) -> OutlineContext:
     summary: str | None = None
-    if summary_payload is not None:
+    if isinstance(summary_payload, Mapping):
         value = summary_payload.get("summary")
         if isinstance(value, str) and value.strip():
             summary = value
 
     topics: list[str] = []
-    if topics_payload is not None:
+    if isinstance(topics_payload, Mapping):
         raw = topics_payload.get("topics")
         if isinstance(raw, Sequence) and not isinstance(raw, str | bytes):
             for topic in raw:
@@ -185,7 +186,11 @@ def resolve_outline(
 
     context = _context_from_payloads(summary_payload, topics_payload)
 
-    if mentions_payload is None:
+    # ``None`` means no entity_mentions asset. A non-Mapping payload should be
+    # impossible (the DB enforces jsonb_typeof = 'object'), but this pure core stays
+    # total for any caller: anything that is not a mapping reads as "no usable asset"
+    # here, never an AttributeError that 500s the flagship review transcript.
+    if not isinstance(mentions_payload, Mapping):
         return Outline(
             available=False,
             gated=gated,
@@ -218,7 +223,7 @@ def resolve_outline(
         if not isinstance(mention, Mapping):
             continue
         surface = mention.get("surface")
-        if not isinstance(surface, str) or not surface:
+        if not isinstance(surface, str) or not surface.strip():
             continue
         kind_raw = mention.get("kind")
         kind = kind_raw if isinstance(kind_raw, str) else None
@@ -309,10 +314,17 @@ def build_outline(
 
     mentions_payload: Mapping[str, Any] | None = None
     asset_stale = False
-    if mentions_asset is not None:
+    if (
+        mentions_asset is not None
+        and mentions_asset.payload_schema_version == OUTLINE_SCHEMA_VERSION
+    ):
         mentions_payload = mentions_asset.payload
         current_hash = source_content_hash(load_source(session, pipeline_run_id))
         asset_stale = mentions_asset.source_content_hash != current_hash
+    # A mentions asset written under a schema version this reader does not know
+    # is left unavailable rather than parsed as this version: rendering a v2 body
+    # through v1 keys would silently resolve to zero mentions and tell the operator
+    # "nothing was found" — the exact fabricated empty state this feature prevents.
 
     outline = resolve_outline(
         mentions_payload,

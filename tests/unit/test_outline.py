@@ -229,3 +229,26 @@ def test_malformed_mentions_payload_is_total() -> None:
     assert isinstance(out, Outline)
     assert out.available is True
     assert out.mentions == ()
+
+
+def test_non_mapping_mentions_payload_is_unavailable_never_raises() -> None:
+    # A top-level payload that is not a JSON object (list/str) must read as "no
+    # usable asset", never an AttributeError that 500s the review transcript.
+    out = resolve_outline(["not", "a", "dict"], None, None, STARTS, asset_stale=False, gated=True)  # type: ignore[arg-type]
+    assert out.available is False
+    assert out.gated is True
+    assert out.mentions == ()
+
+
+def test_non_mapping_context_payloads_are_ignored_never_raise() -> None:
+    # Bad summary/topics payloads are read as absent context, not a crash, and the
+    # context path runs even when there is no mentions asset (available=False).
+    out = resolve_outline(None, ["bad"], "also-bad", STARTS, asset_stale=False, gated=False)  # type: ignore[arg-type]
+    assert out.available is False
+    assert out.context == OutlineContext(summary=None, topics=())
+
+
+def test_whitespace_only_surface_is_skipped() -> None:
+    payload = _mentions(_mention("   ", "person", (0, "   ", 0)))
+    out = resolve_outline(payload, None, None, STARTS, asset_stale=False, gated=False)
+    assert out.mentions == ()

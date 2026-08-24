@@ -57,11 +57,12 @@
       transcript, so the quoted text may have changed. Regenerate it for an
       up-to-date outline.</p>
     {% endif %}
+    {% set dropped = outline.diagnostics.droppedUnlocatable + outline.diagnostics.droppedOutOfRun + outline.diagnostics.droppedUnresolved %}
     {% if outline.mentions %}
     <ul class="outline-entities">
       {% for mention in outline.mentions %}
       <li class="outline-entity">
-        <p class="outline-entity-head"><span class="outline-surface">{{ mention.surface }}</span>{% if mention.kind %}<span class="outline-kind muted"> · {{ mention.kind }}</span>{% endif %}</p>
+        <p class="outline-entity-head"><span class="outline-surface">{{ mention.surface }}</span>{% if mention.kind %}<span class="outline-kind muted"> · {{ mention.kind|capitalize }}</span>{% endif %}</p>
         <ul class="outline-occurrences">
           {% for occ in mention.occurrences %}
           <li><span class="outline-time">≈ {{ "%.2f"|format(occ.startSeconds) }}s</span>{% if occ.quote %} <span class="outline-quote muted">“{{ occ.quote }}”</span>{% endif %}</li>
@@ -71,6 +72,8 @@
       {% endfor %}
     </ul>
     <p class="muted">Read-only list. Jumping to a moment needs JavaScript.</p>
+    {% elif dropped > 0 %}
+    <p class="muted">{{ dropped }} mention{{ "" if dropped == 1 else "s" }} from an earlier version of the transcript could not be matched to the current text, so none are shown.</p>
     {% else %}
     <p class="muted">No people, organizations, or products were found in this transcript.</p>
     {% endif %}
@@ -81,9 +84,8 @@
       {% if outline.context.topics %}<ul class="outline-topics">{% for topic in outline.context.topics %}<li>{{ topic }}</li>{% endfor %}</ul>{% endif %}
     </div>
     {% endif %}
-    {% set dropped = outline.diagnostics.droppedUnlocatable + outline.diagnostics.droppedOutOfRun + outline.diagnostics.droppedUnresolved %}
-    {% if dropped > 0 %}
-    <p class="muted text-sm">{{ dropped }} mention{{ "" if dropped == 1 else "s" }} could not be located in the current transcript and {{ "is" if dropped == 1 else "are" }} not shown.</p>
+    {% if outline.mentions and dropped > 0 %}
+    <p class="muted text-sm">{{ dropped }} mention{{ "" if dropped == 1 else "s" }} could not be matched to the current transcript and {{ "is" if dropped == 1 else "are" }} not shown.</p>
     {% endif %}
     {% endif %}
   </section>
