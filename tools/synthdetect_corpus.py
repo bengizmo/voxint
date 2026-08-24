@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -198,8 +199,16 @@ def validate_clip(raw: Any, index: int) -> ClipEntry:
         raise CorpusError(f"{where}: sha256 must be 64 lowercase hex chars")
 
     duration_s = raw.get("duration_s")
-    if not isinstance(duration_s, (int, float)) or isinstance(duration_s, bool) or duration_s <= 0:
-        raise CorpusError(f"{where}: duration_s must be a number > 0, got {duration_s!r}")
+    # json.loads parses NaN/Infinity by default, and `nan <= 0` is False, so a
+    # non-finite duration would slip past a bare positivity check in a fail-closed
+    # module. Require a finite positive number.
+    if (
+        not isinstance(duration_s, (int, float))
+        or isinstance(duration_s, bool)
+        or not math.isfinite(duration_s)
+        or duration_s <= 0
+    ):
+        raise CorpusError(f"{where}: duration_s must be a finite number > 0, got {duration_s!r}")
 
     label = raw.get("label")
     if label not in LABELS:
@@ -233,6 +242,12 @@ def validate_clip(raw: Any, index: int) -> ClipEntry:
         raise CorpusError(f"{where}: parent_clip_id must be null or a safe token")
     if degradation is not None and parent_clip_id is None:
         raise CorpusError(f"{where}: a degraded clip must name its parent_clip_id")
+    # The coupling is bidirectional: a parent pointer without a degradation label
+    # is a dangling derivation, and a clip can never be its own parent.
+    if parent_clip_id is not None and degradation is None:
+        raise CorpusError(f"{where}: parent_clip_id set without a degradation label")
+    if parent_clip_id is not None and parent_clip_id == clip_id:
+        raise CorpusError(f"{where}: a clip cannot be its own parent")
 
     acquire = raw.get("acquire")
     if acquire is not None and (not isinstance(acquire, str) or not acquire.strip()):
@@ -285,6 +300,21 @@ def load_manifest(obj: Any) -> Manifest:
             raise CorpusError(
                 f"clip {c.clip_id!r}: parent_clip_id {c.parent_clip_id!r} is not in the manifest"
             )
+    # Speaker-disjointness is guaranteed by assign_splits, but a hand-edited
+    # manifest can stamp one speaker's clips into two splits and still validate;
+    # scoring would then trust a leaked split. Enforce it as a load-time invariant
+    # for clips that already carry a split.
+    split_of_speaker: dict[str, str] = {}
+    for c in clips:
+        if c.split is None:
+            continue
+        prior = split_of_speaker.get(c.speaker_id)
+        if prior is not None and prior != c.split:
+            raise CorpusError(
+                f"speaker {c.speaker_id!r} straddles splits {prior!r} and {c.split!r} "
+                "(splits must be speaker-disjoint)"
+            )
+        split_of_speaker[c.speaker_id] = c.split
     return Manifest(schema_version=MANIFEST_SCHEMA_VERSION, clips=clips)
 
 
@@ -326,6 +356,8 @@ def assign_splits(
     clips = list(clips)
     if not clips:
         raise CorpusError("assign_splits: no clips to assign")
+    if not math.isfinite(calibration_fraction) or not math.isfinite(holdout_fraction):
+        raise CorpusError("assign_splits: fractions must be finite")
     if calibration_fraction < 0 or holdout_fraction < 0:
         raise CorpusError("assign_splits: fractions must be non-negative")
     if calibration_fraction + holdout_fraction > 1.0 + 1e-9:

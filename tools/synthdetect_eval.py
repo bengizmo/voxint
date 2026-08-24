@@ -148,7 +148,9 @@ def eer_from_roc(fpr: Any, fnr: Any, thresholds: Any = None) -> tuple[float, flo
             thr = t1
         elif math.isfinite(t0):
             thr = t0
-    return float(eer), thr
+    # An EER is a rate; clamp to [0, 1] so float noise on a pathological curve
+    # can never surface a rate outside the unit interval.
+    return float(min(1.0, max(0.0, eer))), thr
 
 
 def _sigmoid(z: Any) -> Any:
@@ -175,6 +177,8 @@ def fit_platt(scores: Any, labels: Any, max_iter: int = 100) -> tuple[float, flo
     y = np.asarray(labels, dtype=float)
     if s.shape != y.shape or s.ndim != 1 or s.size == 0:
         raise EvalError("fit_platt: scores and labels must be equal-length 1-D arrays")
+    if not np.all(np.isfinite(s)):
+        raise EvalError("fit_platt: raw scores must be finite")
     prior1 = float(np.sum(y == 1.0))
     prior0 = float(np.sum(y == 0.0))
     if prior1 == 0.0 or prior0 == 0.0:
@@ -184,7 +188,11 @@ def fit_platt(scores: Any, labels: Any, max_iter: int = 100) -> tuple[float, flo
     lo = 1.0 / (prior0 + 2.0)
     t = np.where(y == 1.0, hi, lo)
 
-    a, b = 0.0, math.log((prior0 + 1.0) / (prior1 + 1.0))
+    # Init B to the smoothed spoof (positive-class) log-odds. LIBSVM's original
+    # models P=sigmoid(-(Af+B)); this module uses P(spoof)=sigmoid(A*s+B), so the
+    # positive prior goes in with a positive sign (a flipped sign only costs
+    # iterations, but the correct one converges faster on imbalanced cohorts).
+    a, b = 0.0, math.log((prior1 + 1.0) / (prior0 + 1.0))
     min_step, sigma = 1e-10, 1e-12
     for _ in range(max_iter):
         z = a * s + b
@@ -355,6 +363,8 @@ def bootstrap_eer_ci(
     """
     y = _check_two_class(labels)
     s = np.asarray(scores, dtype=float)
+    if s.shape != y.shape:
+        raise EvalError("bootstrap_eer_ci: labels and scores must be equal length")
     n = y.size
     rng = np.random.default_rng(_seed_int("bootstrap", context))
     eers: list[float] = []
@@ -368,10 +378,12 @@ def bootstrap_eer_ci(
     if not eers:
         raise EvalError(f"bootstrap_eer_ci[{context}]: no resample had both classes")
     arr = np.array(eers)
+    # Pin the quantile method so the committed-fixture metrics stay byte-stable
+    # across numpy versions (the default interpolation has changed before).
     return {
-        "lo": float(np.quantile(arr, alpha / 2.0)),
-        "hi": float(np.quantile(arr, 1.0 - alpha / 2.0)),
-        "n_valid": float(len(eers)),
+        "lo": float(np.quantile(arr, alpha / 2.0, method="linear")),
+        "hi": float(np.quantile(arr, 1.0 - alpha / 2.0, method="linear")),
+        "n_valid": len(eers),
     }
 
 
@@ -408,6 +420,18 @@ def _validate_header(header: Any) -> dict[str, Any]:
             raise EvalError(f"journal header.{key} must be a non-empty string")
     if not _is_sha256(header["manifest_sha256"]):
         raise EvalError("journal header.manifest_sha256 must be 64 lowercase hex chars")
+    # Bind the header to the registry: the model must be known (a typo'd or
+    # unregistered model can never produce official metrics) and its declared
+    # inference space must match the registry's, so a weights/runtime identity can
+    # never silently diverge from the model it claims to be.
+    model = MODELS.get(header["model_id"])
+    if model is None:
+        raise EvalError(f"journal header.model_id {header['model_id']!r} is not a known model")
+    if header["inference_space"] != model.inference_space:
+        raise EvalError(
+            f"journal header.inference_space {header['inference_space']!r} does not match the "
+            f"registry inference space {model.inference_space!r} for model {header['model_id']!r}"
+        )
     windowing = header.get("windowing")
     if not isinstance(windowing, dict) or "pooling" not in windowing:
         raise EvalError("journal header.windowing must be an object with a pooling policy")
@@ -612,6 +636,20 @@ def compare_journals(
     here, because two different functions can share an EER while disagreeing per
     clip.
     """
+    # Parity evidence requires the two runs to share an identity: comparing
+    # scores from different models, inference spaces, corpora, or windowing is
+    # meaningless. Fail closed on any mismatch (a 3-of-3 review finding).
+    for key in ("model_id", "inference_space", "manifest_sha256"):
+        if left.header.get(key) != right.header.get(key):
+            raise EvalError(
+                f"compare: journals disagree on header.{key} "
+                f"({left.header.get(key)!r} vs {right.header.get(key)!r})"
+            )
+    if left.header.get("windowing", {}).get("pooling") != right.header.get("windowing", {}).get(
+        "pooling"
+    ):
+        raise EvalError("compare: journals disagree on windowing pooling policy")
+
     left_by = {r.clip_id: r.raw_score for r in left.results if r.raw_score is not None}
     right_by = {r.clip_id: r.raw_score for r in right.results if r.raw_score is not None}
     common = sorted(set(left_by) & set(right_by))
@@ -623,6 +661,11 @@ def compare_journals(
     decisions_a = a >= decision_threshold
     decisions_b = b >= decision_threshold
     agree = int(np.sum(decisions_a == decisions_b))
+    # Asymmetric coverage weakens the parity gate invisibly (a windowing change
+    # that newly skips clips shrinks n_common with no other signal), so report
+    # each side's scored-only ids rather than silently intersecting them away.
+    left_only = sorted(set(left_by) - set(right_by))
+    right_only = sorted(set(right_by) - set(left_by))
     return {
         "kind": "synthdetect_compare_report",
         "n_common": len(common),
@@ -632,6 +675,10 @@ def compare_journals(
         "decision_threshold": float(decision_threshold),
         "decision_agreement": agree / len(common),
         "n_disagree": len(common) - agree,
+        "n_scored_left_only": len(left_only),
+        "n_scored_right_only": len(right_only),
+        "scored_left_only": left_only,
+        "scored_right_only": right_only,
     }
 
 
@@ -687,6 +734,17 @@ def calibrate_policy(
     labels = [c.label for c in scored]
     scores = [c.raw_score for c in scored]
     a, b = fit_platt(scores, labels)
+    # A non-positive Platt slope means spoof probability does NOT increase with
+    # the raw score: either the runner emitted reversed-polarity scores (a
+    # violation of the fixed higher-is-more-synthetic contract) or the detector
+    # carries no signal. Fail closed rather than committing an inverted or
+    # useless calibration policy; the runner must invert its scores upstream.
+    if a <= 0.0:
+        raise EvalError(
+            f"calibrate: fitted Platt slope A={a:.4g} is not positive; the raw scores do not "
+            "increase with spoofiness (reversed polarity or no signal). Fix the runner's score "
+            "polarity (higher = more synthetic) before calibrating."
+        )
     probs = apply_platt(scores, a, b)
     cohort_hash = hashlib.sha256(
         "\x00".join(sorted(c.clip_id for c in scored)).encode()
@@ -770,8 +828,24 @@ def _read_journal(path: str) -> Journal:
     return parse_journal(Path(path).read_text(encoding="utf-8"))
 
 
-def _read_manifest(path: str) -> Manifest:
-    return load_manifest(json.loads(Path(path).read_text(encoding="utf-8")))
+def _bind_manifest(journal: Journal, manifest_path: str) -> Manifest:
+    """Load the manifest and verify it is the one the journal was produced against.
+
+    The journal header carries the sha256 of the manifest bytes the runner
+    scored; here it is recomputed from the file actually supplied and any
+    mismatch is fatal. Without this the provenance rail is decorative: a journal
+    could be joined to a different manifest sharing clip ids, silently swapping
+    labels/strata/splits (a 3-of-3 review finding).
+    """
+    data = Path(manifest_path).read_bytes()
+    manifest = load_manifest(json.loads(data.decode("utf-8")))
+    actual = hashlib.sha256(data).hexdigest()
+    if journal.header["manifest_sha256"] != actual:
+        raise EvalError(
+            f"journal was produced against a different manifest: header manifest_sha256 "
+            f"{journal.header['manifest_sha256']} != sha256 of {manifest_path} ({actual})"
+        )
+    return manifest
 
 
 def _write(out: str | None, payload: Any) -> None:
@@ -789,9 +863,9 @@ def _write(out: str | None, payload: Any) -> None:
 
 
 def cmd_score(args: argparse.Namespace) -> int:
-    report = score_report(
-        _read_journal(args.journal), _read_manifest(args.manifest), split=args.split
-    )
+    journal = _read_journal(args.journal)
+    manifest = _bind_manifest(journal, args.manifest)
+    report = score_report(journal, manifest, split=args.split)
     _write(args.out, report)
     return 0
 
@@ -806,9 +880,9 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 
 def cmd_calibrate(args: argparse.Namespace) -> int:
-    policy = calibrate_policy(
-        _read_journal(args.journal), _read_manifest(args.manifest), policy_id=args.policy_id
-    )
+    journal = _read_journal(args.journal)
+    manifest = _bind_manifest(journal, args.manifest)
+    policy = calibrate_policy(journal, manifest, policy_id=args.policy_id)
     _write(args.out, policy)
     return 0
 

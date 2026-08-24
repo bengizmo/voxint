@@ -62,6 +62,27 @@ def test_eer_mismatched_arrays_raise() -> None:
         se.eer_from_roc(np.array([0.0, 1.0]), np.array([1.0]))
 
 
+def test_eer_inf_sentinel_threshold_falls_back() -> None:
+    # sklearn's roc_curve prepends an inf threshold at the FPR=0 point. When the
+    # crossing borders it, the interpolated threshold must fall back to the finite
+    # bound (never NaN/inf). This is the direct regression for the fixed bug.
+    fpr = np.array([0.0, 1.0, 1.0])
+    fnr = np.array([1.0, 1.0, 0.0])
+    thr = np.array([np.inf, 1.0, 0.0])
+    eer, threshold = se.eer_from_roc(fpr, fnr, thr)
+    assert eer == pytest.approx(1.0)
+    assert threshold == pytest.approx(1.0)
+    assert math.isfinite(threshold)
+
+
+def test_compute_eer_reversed_polarity_finite_threshold() -> None:
+    # A reversed pair (spoof scored below bona fide) exercises the sentinel branch
+    # through sklearn's real output; the threshold must stay finite.
+    eer, threshold = se.compute_eer([0, 1], [1.0, 0.0])
+    assert 0.0 <= eer <= 1.0
+    assert math.isfinite(threshold)
+
+
 # --------------------------------------------------------------------------- #
 # compute_eer / compute_auc (sklearn)
 # --------------------------------------------------------------------------- #

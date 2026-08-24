@@ -8,6 +8,7 @@ change how a raw-score journal becomes a metric.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -326,8 +327,14 @@ def _write_corpus(tmp_path: Path, split: str = "eval") -> tuple[Path, Path]:
         results.append({"clip_id": f"g{i}", "raw_score": 2.0 + i * 0.1})
     m_path = tmp_path / "m.json"
     j_path = tmp_path / "j.jsonl"
-    m_path.write_text(json.dumps({"schema_version": 1, "clips": clips}), encoding="utf-8")
-    j_path.write_text(_journal_text(_header(), results), encoding="utf-8")
+    manifest_text = json.dumps({"schema_version": 1, "clips": clips})
+    m_path.write_text(manifest_text, encoding="utf-8")
+    # The CLI binds the journal to the manifest by sha256 of its bytes, so the
+    # header must carry the real digest of the file we just wrote.
+    manifest_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+    j_path.write_text(
+        _journal_text(_header(manifest_sha256=manifest_sha), results), encoding="utf-8"
+    )
     return m_path, j_path
 
 
@@ -383,3 +390,65 @@ def test_cli_error_returns_2(tmp_path: Path, capsys: Any) -> None:
     rc = se.main(["score", "--journal", str(bad), "--manifest", str(m_path), "--split", "eval"])
     assert rc == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_cli_manifest_sha_mismatch_rejected(tmp_path: Path, capsys: Any) -> None:
+    # A journal whose header sha does not match the supplied manifest bytes must
+    # be refused (wrong-cohort scoring guard).
+    m_path, j_path = _write_corpus(tmp_path)
+    m_path.write_text(m_path.read_text() + "\n", encoding="utf-8")  # perturb the bytes
+    rc = se.main(["score", "--journal", str(j_path), "--manifest", str(m_path), "--split", "eval"])
+    assert rc == 2
+    assert "different manifest" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# header registry binding + reversed-polarity calibration guard
+# --------------------------------------------------------------------------- #
+def test_header_unknown_model_rejected() -> None:
+    with pytest.raises(se.EvalError, match="not a known model"):
+        se.parse_journal(_journal_text(
+            _header(model_id="made-up"), [{"clip_id": "c1", "raw_score": 0.1}]))
+
+
+def test_header_inference_space_mismatch_rejected() -> None:
+    with pytest.raises(se.EvalError, match="does not match the registry"):
+        se.parse_journal(_journal_text(
+            _header(inference_space="synthdetect-wrong-v9"),
+            [{"clip_id": "c1", "raw_score": 0.1}]))
+
+
+def test_calibrate_rejects_reversed_polarity() -> None:
+    # Spoof clips scored LOW, bona fide HIGH: Platt slope A < 0, which violates
+    # the higher-is-more-synthetic contract. Calibration must fail closed.
+    clips = []
+    results = []
+    for i in range(20):
+        clips.append(_clip(f"b{i}", "bona_fide", 0.0, "calibration"))
+        results.append({"clip_id": f"b{i}", "raw_score": 2.0 + i * 0.05})  # bona fide HIGH
+    for i in range(20):
+        clips.append(_clip(f"g{i}", "spoof", 0.0, "calibration"))
+        results.append({"clip_id": f"g{i}", "raw_score": -2.0 - i * 0.05})  # spoof LOW
+    manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+    journal = se.parse_journal(_journal_text(_header(), results))
+    with pytest.raises(se.EvalError, match="not positive"):
+        se.calibrate_policy(journal, manifest, policy_id="p")
+
+
+def test_compare_identity_mismatch_rejected() -> None:
+    j1 = se.parse_journal(_journal_text(_header(), [{"clip_id": "c1", "raw_score": 1.0}]))
+    j2 = se.parse_journal(_journal_text(
+        _header(manifest_sha256="d" * 64), [{"clip_id": "c1", "raw_score": 1.0}]))
+    with pytest.raises(se.EvalError, match="manifest_sha256"):
+        se.compare_journals(j1, j2, decision_threshold=0.0)
+
+
+def test_compare_reports_asymmetry() -> None:
+    j1 = se.parse_journal(_journal_text(_header(), [
+        {"clip_id": "c1", "raw_score": 1.0}, {"clip_id": "c2", "raw_score": 2.0}]))
+    j2 = se.parse_journal(_journal_text(_header(), [
+        {"clip_id": "c1", "raw_score": 1.0}, {"clip_id": "c3", "raw_score": 3.0}]))
+    result = se.compare_journals(j1, j2, decision_threshold=0.0)
+    assert result["n_scored_left_only"] == 1
+    assert result["n_scored_right_only"] == 1
+    assert result["scored_left_only"] == ["c2"]

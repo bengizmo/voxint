@@ -244,8 +244,9 @@ MODELS: Final[dict[str, ModelEntry]] = {
                 tolerance_status="provisional",
                 protocol=(
                     "ASVspoof 2021 DF eval, official keys; 64,600-sample crop; "
-                    "score polarity = higher-is-more-bonafide (invert if the "
-                    "checkpoint emits spoof logits); official ASVspoof scorer"
+                    "the runner journals scores as higher = more synthetic (invert "
+                    "the checkpoint's bona-fide logits before writing); official "
+                    "ASVspoof scorer"
                 ),
             ),
             ReproductionTarget(

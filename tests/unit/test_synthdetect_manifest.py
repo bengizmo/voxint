@@ -108,6 +108,45 @@ def test_non_positive_duration_rejected() -> None:
         corpus.load_manifest(_manifest([_bona_fide("c1", "s1", duration_s=0)]))
 
 
+def test_non_finite_duration_rejected() -> None:
+    # json.loads parses Infinity/NaN by default and `inf <= 0` is False, so a
+    # fail-closed module must reject non-finite durations explicitly.
+    with pytest.raises(corpus.CorpusError, match="finite"):
+        corpus.load_manifest(_manifest([_bona_fide("c1", "s1", duration_s=float("inf"))]))
+    with pytest.raises(corpus.CorpusError, match="finite"):
+        corpus.load_manifest(_manifest([_bona_fide("c1", "s1", duration_s=float("nan"))]))
+
+
+def test_self_parent_rejected() -> None:
+    bad = _bona_fide("c1", "s1", degradation="opus16", parent_clip_id="c1")
+    with pytest.raises(corpus.CorpusError, match="its own parent"):
+        corpus.load_manifest(_manifest([bad]))
+
+
+def test_parent_without_degradation_rejected() -> None:
+    parent = _bona_fide("c1", "s1")
+    child = _bona_fide("c2", "s1", parent_clip_id="c1")  # no degradation label
+    with pytest.raises(corpus.CorpusError, match="without a degradation"):
+        corpus.load_manifest(_manifest([parent, child]))
+
+
+def test_preassigned_split_speaker_straddle_rejected() -> None:
+    # Two clips from one speaker stamped into different splits must be refused;
+    # speaker-disjointness is a load-time invariant, not just an assign_splits one.
+    a = _bona_fide("c1", "spk1", split="calibration")
+    b = _bona_fide("c2", "spk1", split="eval")
+    with pytest.raises(corpus.CorpusError, match="straddles splits"):
+        corpus.load_manifest(_manifest([a, b]))
+
+
+def test_non_finite_fraction_rejected() -> None:
+    clips = _clips_for_split()
+    with pytest.raises(corpus.CorpusError, match="finite"):
+        corpus.assign_splits(
+            clips, eval_only_generators={"chatterbox"}, calibration_fraction=float("nan")
+        )
+
+
 def test_bad_label_rejected() -> None:
     with pytest.raises(corpus.CorpusError, match="label"):
         corpus.load_manifest(_manifest([_bona_fide("c1", "s1", label="maybe")]))
