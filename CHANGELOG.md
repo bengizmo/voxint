@@ -59,8 +59,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   GPU smoke passed (strict load, correct per-window counts and score polarity,
   resume without duplication, and weight/audio/header mismatch failing closed) and
   scores were bit-for-bit identical across four cold container starts. Evidence is
-  recorded under `docs/reports/` and `docs/gpu-contracts.md`. Reproducing the
-  published ASVspoof 2021 DF error rate remains a later milestone.
+  recorded under `docs/reports/` and `docs/gpu-contracts.md`. Contract tests now
+  bind the vendored model file to its pinned upstream hash and require the
+  `qualified` state to name existing GPU evidence, so neither the numerics-defining
+  bytes nor the qualification claim can drift silently. Reproducing the published
+  ASVspoof 2021 DF error rate remains a later milestone.
 
 ## [0.24.0] - 2026-08-23
 

@@ -720,13 +720,22 @@ def test_compute_weight_receipt_match_and_mismatch(tmp_path: Path) -> None:
     real = hashlib.sha256(data).hexdigest()
     w0 = MODEL.weights[0]
     (tmp_path / w0.filename).write_bytes(data)
-    pinned_model = replace(MODEL, weights=(replace(w0, sha256=real),))
+    pinned_model = replace(MODEL, weights=(replace(w0, sha256=real, size_bytes=len(data)),))
     receipt = si.compute_weight_receipt(tmp_path, pinned_model)
     assert receipt["files"][0]["verdict"] == "match"
+    assert receipt["files"][0]["registry_size_bytes"] == len(data)
 
     (tmp_path / w0.filename).write_bytes(b"different-bytes")
     receipt2 = si.compute_weight_receipt(tmp_path, pinned_model)
     assert receipt2["files"][0]["verdict"] == "MISMATCH"
+
+    # A correct sha but a wrong pinned size is a MISMATCH too, mirroring the real
+    # load gate (_verify_weight_bytes), so the receipt never says "match" for bytes
+    # the loader would reject on size.
+    (tmp_path / w0.filename).write_bytes(data)
+    size_pinned = replace(MODEL, weights=(replace(w0, sha256=real, size_bytes=len(data) + 1),))
+    receipt3 = si.compute_weight_receipt(tmp_path, size_pinned)
+    assert receipt3["files"][0]["verdict"] == "MISMATCH"
 
 
 # --------------------------------------------------------------------------- #
@@ -839,11 +848,14 @@ def test_cli_verify_sources_mismatch_exits_2(
     assert rc == 2
 
 
-def test_cli_run_fails_closed_without_engine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_cli_run_fails_closed_when_weights_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The pipeline reaches the (unwired) fairseq engine and fails closed honestly,
-    # without pretending to score. A fake torch keeps the determinism config happy.
+    # Post-S2b the real engine IS wired, so a run with no weight files present must
+    # fail closed at weight verification (the pins are frozen; the bytes are not
+    # mounted) with a clear message and a non-zero exit, never a stack trace or a
+    # fabricated score. A fake torch keeps the determinism config happy; the run
+    # never reaches a forward pass.
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     root, manifest, _ = _corpus(tmp_path, 1)
     manifest_path = tmp_path / "m.json"
@@ -856,4 +868,67 @@ def test_cli_run_fails_closed_without_engine(
         "run", "--manifest", str(manifest_path), "--corpus-root", str(root),
         "--out", str(tmp_path / "j.jsonl"), "--weights-dir", str(tmp_path),
     ])
-    assert rc == 1  # InferError from the unwired engine seam
+    assert rc == 1  # InferError, fail-closed
+    assert "not found" in capsys.readouterr().err  # weight file missing, not a crash
+
+
+def test_score_windows_returns_negated_column_1_as_float64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The load-bearing polarity transform: the engine journals the NEGATED
+    # bona-fide logit (column 1) as float64, so higher = more synthetic. This is
+    # the one numeric step the RECORDING fake engine cannot cover (it returns
+    # pre-made scores and never runs the negation), and it is otherwise exercised
+    # only on GPU. A numpy-backed fake `torch` drives the REAL _FairseqAASISTEngine
+    # unchanged, so a regression to column 0 or a dropped negation fails in plain
+    # CI (torch is deliberately not a host test dependency).
+    class _T:
+        def __init__(self, a: np.ndarray) -> None:
+            self._a = np.asarray(a)
+
+        def to(self, _device: Any) -> _T:
+            return self
+
+        def __neg__(self) -> _T:
+            return _T(-self._a)
+
+        def __getitem__(self, idx: Any) -> _T:
+            return _T(self._a[idx])
+
+        def double(self) -> _T:
+            return _T(self._a.astype(np.float64))
+
+        def detach(self) -> _T:
+            return self
+
+        def cpu(self) -> _T:
+            return self
+
+        def numpy(self) -> np.ndarray:
+            return self._a
+
+    logits = np.array([[2.0, -1.5], [0.0, 3.25], [-4.0, 0.0]], dtype=np.float32)
+
+    class _FakeTorch:
+        @staticmethod
+        def from_numpy(a: np.ndarray) -> _T:
+            return _T(a)
+
+        class inference_mode:
+            def __enter__(self) -> _FakeTorch.inference_mode:
+                return self
+
+            def __exit__(self, *exc: Any) -> bool:
+                return False
+
+    def _net(_x: Any) -> _T:
+        return _T(logits)
+
+    monkeypatch.setitem(sys.modules, "torch", _FakeTorch)
+    engine = si._FairseqAASISTEngine(_net, device="cpu")
+    scores = engine.score_windows(np.zeros((3, 4), dtype=np.float32))
+
+    assert scores.dtype == np.float64
+    np.testing.assert_array_equal(scores, -logits[:, 1].astype(np.float64))
+    # Sanity on the polarity direction: a high bona-fide logit -> low synthetic score.
+    assert scores[1] < scores[2] < scores[0]

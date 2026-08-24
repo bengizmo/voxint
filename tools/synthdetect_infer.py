@@ -906,6 +906,7 @@ def compute_weight_receipt(weights_dir: Path, model: ModelEntry) -> dict[str, An
             "role": w.role,
             "license_spdx": w.license_spdx,
             "registry_sha256": w.sha256,
+            "registry_size_bytes": w.size_bytes,
             "registry_state": "pinned" if w.pinned() else "candidate",
         }
         if not path.is_file():
@@ -919,7 +920,10 @@ def compute_weight_receipt(weights_dir: Path, model: ModelEntry) -> dict[str, An
             entry["actual_size_bytes"] = size
             if w.sha256 is None:
                 entry["verdict"] = "candidate-measured"
-            elif w.sha256 == digest:
+            elif w.sha256 == digest and (w.size_bytes is None or size == w.size_bytes):
+                # Mirror _verify_weight_bytes: a pinned file matches only when BOTH
+                # sha256 and (when pinned) size agree, so the receipt cannot report
+                # "match" for bytes the real load gate would reject on size.
                 entry["verdict"] = "match"
             else:
                 entry["verdict"] = "MISMATCH"
@@ -1089,6 +1093,21 @@ def _load_real_engine(model: ModelEntry, weights_dir: Path, device_index: int) -
     ssl_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(ssl_mod)
 
+    # Fail closed with a clean InferError (not a raw torch RuntimeError traceback)
+    # when the requested GPU is absent or the index is out of range. This is a
+    # pre-flight check only: a valid device is unaffected, so it never changes the
+    # scored numerics.
+    if not torch.cuda.is_available():
+        raise InferError(
+            "CUDA is not available: the real w2v2-aasist engine requires a GPU. "
+            "Run inside the eval container on GPU hardware."
+        )
+    visible = torch.cuda.device_count()
+    if device_index >= visible:
+        raise InferError(
+            f"CUDA device index {device_index} is out of range: only {visible} device(s) visible "
+            f"(pass --device cuda:<idx> for an index < {visible})"
+        )
     device = torch.device(f"cuda:{device_index}")
     # Construct with the weights dir as CWD so the upstream SSLModel's hard-coded
     # relative 'xlsr2_300m.pt' resolves to the mounted, sha-verified base.

@@ -10,6 +10,7 @@ in ``tests/contracts/test_service_logic.py`` and ``test_text_embedding_deps.py``
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -20,6 +21,9 @@ SVC = REPO / "services" / "synthdetect"
 DOCKERFILE = SVC / "Dockerfile.eval"
 REQUIREMENTS = SVC / "requirements.eval.txt"
 PROVENANCE = SVC / "provenance.eval.json"
+VENDOR = REPO / "tools" / "synthdetect_vendor"
+VENDOR_MODEL = VENDOR / "ssl_antispoofing_model.py"
+VENDOR_PROVENANCE = VENDOR / "provenance.json"
 
 sys.path.insert(0, str(REPO / "tools"))
 
@@ -73,8 +77,9 @@ def test_pinned_state_is_coherent() -> None:
     # S2b (2026-08-24) froze the weights from real bytes: the registry is pinned,
     # provenance carries the frozen shas/sizes, the model-repo commit, the fairseq
     # commit, and the base-image digest together, and they agree with the registry.
-    # The state is pinned_unqualified until the GPU determinism spike passes
-    # bit-exact (then it advances to qualified); see docs/gpu-contracts.md.
+    # Both pinned_unqualified (frozen shas only) and qualified (GPU determinism +
+    # smoke evidence) are coherent pinned states here; the qualified promotion is
+    # bound to its evidence separately by test_qualified_state_binds_its_evidence.
     prov = _provenance()
     model = default_model()
     assert model.weights_pinned() is True
@@ -87,6 +92,47 @@ def test_pinned_state_is_coherent() -> None:
     assert prov["base_image_digest"] is not None
     assert prov["model_repo"]["commit"] is not None
     assert prov["model_repo"]["commit"] == model.commit
+
+
+def test_vendored_model_bytes_match_provenance() -> None:
+    # The vendored ssl_antispoofing_model.py IS the numerics-defining model
+    # definition (loaded by file path at eval time), so a silent edit would change
+    # inference numerics while every pin still looked frozen. Both provenance files
+    # claim a contract test binds this hash; this is that test. Byte-identity to the
+    # pinned upstream commit is the integrity check.
+    vp = json.loads(VENDOR_PROVENANCE.read_text())["files"]["ssl_antispoofing_model.py"]
+    digest = hashlib.sha256(VENDOR_MODEL.read_bytes()).hexdigest()
+    assert digest == vp["sha256"], (
+        f"vendored ssl_antispoofing_model.py sha256 {digest} drifted from the pinned "
+        f"{vp['sha256']}; a change to the numerics-defining model must re-freeze provenance"
+    )
+
+
+def test_vendored_model_commit_matches_both_registries() -> None:
+    # The vendored file's upstream_commit must equal the model-repo commit recorded
+    # in BOTH the pins-as-data registry and provenance.eval.json, so the three
+    # never drift apart.
+    vp = json.loads(VENDOR_PROVENANCE.read_text())["files"]["ssl_antispoofing_model.py"]
+    model = default_model()
+    prov = _provenance()
+    assert vp["upstream_commit"] == model.commit
+    assert vp["upstream_commit"] == prov["model_repo"]["commit"]
+
+
+def test_qualified_state_binds_its_evidence() -> None:
+    # 'qualified' is a determinism + smoke claim, not merely frozen shas (that is
+    # pinned_unqualified). When provenance declares qualified, the dated evidence
+    # reports it rests on must be listed and present; otherwise the only other
+    # allowed pinned state is pinned_unqualified. This stops a silent promotion to
+    # qualified (or a downgrade that keeps the qualified label) from passing CI.
+    prov = _provenance()
+    state = prov["weights"]["qualification_state"]
+    assert state in ("pinned_unqualified", "qualified")
+    if state == "qualified":
+        reports = prov["weights"].get("qualification_evidence", {}).get("reports", [])
+        assert reports, "qualified state must list weights.qualification_evidence.reports"
+        for rel in reports:
+            assert (REPO / rel).is_file(), f"qualified evidence report missing: {rel}"
 
 
 def test_scoring_semantics_match_the_runner_header() -> None:

@@ -16,11 +16,13 @@ Two integrity rails ride on this module:
   not published a license). An ``unlicensed`` model is NOT runnable: the harness
   refuses to load it until the author grants a license, so the registry can name
   it for completeness without ever redistributing or executing it.
-* **Sha provenance.** Weight file shas and upstream commits are CANDIDATE in S1
-  (``sha256=None`` / ``commit=None``): they are placeholders the S2
-  ``verify-sources`` pass confirms against real downloaded bytes and freezes.
-  ``weights_pinned()`` is False until then, so no S1 code can claim a model is
-  serve-ready on the strength of an unverified sha.
+* **Sha provenance.** Weight file shas and upstream commits start CANDIDATE
+  (``sha256=None`` / ``commit=None``): placeholders the ``verify-sources`` pass
+  confirms against real downloaded bytes and freezes. ``weights_pinned()`` is
+  False until then, so no code can claim a model is serve-ready on the strength
+  of an unverified sha. As of S2b (2026-08-24) the default detector
+  ``w2v2-aasist`` is FROZEN (real-byte shas + commit pinned, ``weights_pinned()``
+  True); the other registered models remain CANDIDATE.
 
 The two versioned identities the plan separates (inference space vs calibration
 policy) are NOT both here: this module pins the inference-space INPUTS (weights +
