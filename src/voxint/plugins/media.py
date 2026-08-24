@@ -37,9 +37,10 @@ if TYPE_CHECKING:
 class RunAudioDescriptor:
     """A safe reference to a run's processed-audio artifact.
 
-    ``media_relative_path`` is the artifact row's path (relative to
-    ``media_root``); a caller resolves it through the same media gate the console
-    uses to actually read bytes. ``size_bytes`` is the on-disk size (or the
+    ``media_relative_path`` is the artifact's media-root-relative path, normalized
+    through the confinement resolve (symlinks and ``..`` collapsed); a caller
+    resolves it through the same media gate the console uses to actually read
+    bytes. ``size_bytes`` is the on-disk size (or the
     recorded reclaimed byte count once the file is gone). ``reclaimed`` is ``True``
     when the intermediate has been GC'd — the row survives, the file does not.
     """
@@ -100,6 +101,27 @@ def preprocessed_audio_row(
     return rows[0] if len(rows) == 1 else None
 
 
+def _confined_relative_path(media_root: Path, row_path: str) -> tuple[Path, str]:
+    """Resolve ``row_path`` under ``media_root``, failing closed if it escapes.
+
+    Returns ``(resolved_absolute, normalized_relative)``. Resolution collapses
+    symlinks and ``..``, so a path that lands outside the (resolved) media root
+    raises :class:`AudioUnconfined`; any resolution error (a symlink loop, a
+    permission failure) is normalized to :class:`AudioUnconfined` too, rather
+    than leaking a raw ``OSError`` / ``RuntimeError`` across the plugin boundary.
+    No file-existence assumption is made (``resolve`` is non-strict), so this is
+    also safe for a reclaimed artifact whose file is already gone.
+    """
+    try:
+        root = media_root.resolve()
+        resolved = (media_root / row_path).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise AudioUnconfined(f"cannot resolve {row_path}: {exc}") from exc
+    if not resolved.is_relative_to(root):
+        raise AudioUnconfined(f"{row_path} escapes the media root")
+    return resolved, str(resolved.relative_to(root))
+
+
 def run_audio_descriptor(
     session: Session, run_id: uuid.UUID, *, media_root: Path
 ) -> RunAudioDescriptor:
@@ -109,7 +131,9 @@ def run_audio_descriptor(
     :class:`AudioUnconfined` — the failure modes a plugin must fail closed on. A
     reclaimed intermediate is NOT an error: the descriptor is returned with
     ``reclaimed=True`` and the recorded byte count, so the caller decides whether
-    a re-run is needed.
+    a re-run is needed. The path is confined on both branches — a reclaimed row
+    that escapes ``media_root`` still fails closed rather than handing out an
+    unconfined path.
     """
     run = session.get(PipelineRun, run_id)
     if run is None or run.status != RunStatus.COMPLETED.value:
@@ -120,19 +144,18 @@ def run_audio_descriptor(
         raise AudioMissing(f"run {run_id} has no single preprocessed-audio artifact")
 
     if row.reclaimed_at is not None:
-        # The file is gone; the row is the only record. Report it rather than
-        # touching disk (there is nothing to confine).
+        # The file is gone; the row is the only record. Confine the path lexically
+        # (no disk access) so the descriptor never carries an escaping path.
+        _resolved, rel = _confined_relative_path(media_root, row.path)
         return RunAudioDescriptor(
             run_id=run_id,
             artifact_id=row.id,
-            media_relative_path=row.path,
+            media_relative_path=rel,
             size_bytes=row.reclaimed_bytes or 0,
             reclaimed=True,
         )
 
-    resolved = (media_root / row.path).resolve()
-    if not resolved.is_relative_to(media_root.resolve()):
-        raise AudioUnconfined(f"{row.path} escapes the media root")
+    resolved, rel = _confined_relative_path(media_root, row.path)
     try:
         st = resolved.stat()
     except OSError as exc:
@@ -143,7 +166,7 @@ def run_audio_descriptor(
     return RunAudioDescriptor(
         run_id=run_id,
         artifact_id=row.id,
-        media_relative_path=row.path,
+        media_relative_path=rel,
         size_bytes=st.st_size,
         reclaimed=False,
     )

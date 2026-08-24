@@ -182,9 +182,45 @@ def load_registry(
             key=lambda p: p.manifest.id,
         )
     )
+    _validate_active_contributions(active)
     unknown = frozenset(disabled - set(seen_ids))
     return PluginRegistry(
         plugins=active,
         disabled_ids=disabled,
         unknown_disabled_ids=unknown,
     )
+
+
+def _validate_active_contributions(active: Sequence[VoxintPlugin]) -> None:
+    """Fail loud on active-plugin aggregation collisions (routes, sections).
+
+    Task-name and id collisions are caught at the manifest level over ALL
+    builtins; these two checks need the instance hooks, so they run over the
+    active set (a killed plugin contributes nothing):
+
+    * ``task_routes`` may only route a task the plugin declares in its manifest.
+      Because manifest task names are already globally unique, keeping route keys
+      inside the manifest also makes a cross-plugin route overwrite impossible.
+    * ``settings_section().section_id`` is the stable settings anchor and dedupe
+      key; two active plugins sharing one would both render, so a collision is a
+      defect to surface at load, not at render.
+    """
+    seen_sections: dict[str, str] = {}
+    for plugin in active:
+        manifest = plugin.manifest
+        declared = set(manifest.task_names)
+        for name in plugin.task_routes():
+            if name not in declared:
+                raise PluginError(
+                    f"plugin {manifest.id!r} routes task {name!r} it does not "
+                    "declare in its manifest task_names"
+                )
+        section = plugin.settings_section()
+        if section is not None:
+            if section.section_id in seen_sections:
+                raise PluginError(
+                    f"duplicate settings section_id {section.section_id!r}: "
+                    f"claimed by both {seen_sections[section.section_id]} and "
+                    f"plugin {manifest.id!r}"
+                )
+            seen_sections[section.section_id] = f"plugin {manifest.id!r}"

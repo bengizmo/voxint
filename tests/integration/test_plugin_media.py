@@ -141,3 +141,33 @@ def test_escaping_path_is_unconfined(session: Session, media_root: Path) -> None
     _seed_artifact(session, media_root, rid, rel="../outside.wav", write_file=False)
     with pytest.raises(AudioUnconfined):
         run_audio_descriptor(session, rid, media_root=media_root)
+
+
+def test_reclaimed_escaping_path_still_fails_closed(
+    session: Session, media_root: Path
+) -> None:
+    # A reclaimed row must not hand out an unconfined path just because the file
+    # is gone: confinement is checked on both branches.
+    rid = _seed_run(session)
+    _seed_artifact(
+        session,
+        media_root,
+        rid,
+        rel="../outside.wav",
+        write_file=False,
+        reclaimed_bytes=999,
+    )
+    with pytest.raises(AudioUnconfined):
+        run_audio_descriptor(session, rid, media_root=media_root)
+
+
+def test_descriptor_returns_normalized_confined_path(
+    session: Session, media_root: Path
+) -> None:
+    # A path with a redundant in-root segment resolves to its normalized form; the
+    # descriptor carries the confined relative path, not the raw DB text.
+    rid = _seed_run(session)
+    _seed_artifact(session, media_root, rid, rel=f"artifacts/./{rid}/normalized.wav")
+    desc = run_audio_descriptor(session, rid, media_root=media_root)
+    assert desc.media_relative_path == f"artifacts/{rid}/normalized.wav"
+    assert desc.reclaimed is False

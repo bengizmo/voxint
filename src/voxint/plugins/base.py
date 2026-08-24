@@ -89,6 +89,9 @@ class PluginManifest:
         for prefix in self.settings_prefixes:
             if not prefix:
                 raise PluginError(f"plugin {self.id!r} has an empty settings prefix")
+        for task_name in self.task_names:
+            if not task_name or not task_name.strip():
+                raise PluginError(f"plugin {self.id!r} has an empty task name")
 
 
 @dataclass(frozen=True)

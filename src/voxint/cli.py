@@ -1076,17 +1076,31 @@ def _doctor(args: argparse.Namespace) -> int:
     from voxint.plugins import PluginError, load_plugins
     from voxint.plugins.doctor import format_plugins_status
 
+    plugins_ok = True
     try:
         plugins_status = format_plugins_status(load_plugins(settings))
     except PluginError as exc:
         print(f"\n[FAIL] plugins: {exc}")
+        plugins_ok = False
     else:
         if plugins_status is not None:
             print()
             print(plugins_status)
 
+    # A malformed builtin aborts real api/worker startup, so doctor must fail its
+    # verdict too rather than reporting green while a plugin cannot load.
     code = diagnostics.exit_code(results)
-    verdict = "all hard dependencies OK" if code == 0 else "a hard dependency is down"
+    hard_dep_down = code != 0
+    if not plugins_ok and code == 0:
+        code = 1
+    if not hard_dep_down and plugins_ok:
+        verdict = "all hard dependencies OK"
+    elif hard_dep_down and not plugins_ok:
+        verdict = "a hard dependency is down and a plugin failed to load"
+    elif hard_dep_down:
+        verdict = "a hard dependency is down"
+    else:
+        verdict = "a plugin failed to load"
     print(f"\ndoctor: {verdict}")
     return code
 

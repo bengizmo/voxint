@@ -67,32 +67,42 @@ def redispatch_stale_lane_jobs(
     row mutation — a job stays QUEUED until a worker claims it, and the claim CAS
     makes a duplicate delivery (or a live worker about to claim it) a no-op. A
     broker outage defers the lane's remaining jobs to a later sweep rather than
-    failing the sweep.
+    failing the sweep. Each lane is isolated the same way ``dispatch_run_completed``
+    isolates each plugin: a lane whose lookup or enqueue raises is logged and
+    skipped so the other lanes still run.
     """
     from celery.exceptions import OperationalError
 
     dispatched: dict[str, int] = {}
     for lane in lanes:
-        with session_factory() as session:
-            stale_ids = list(
-                lane.stale_queued_job_ids(session, cutoff=cutoff, limit=lane.limit)
+        try:
+            with session_factory() as session:
+                stale_ids = list(
+                    lane.stale_queued_job_ids(session, cutoff=cutoff, limit=lane.limit)
+                )
+            count = 0
+            for job_id in stale_ids:
+                try:
+                    send_task(
+                        lane.redispatch_task_name,
+                        args=(str(job_id),),
+                        ignore_result=True,
+                    )
+                except OperationalError:
+                    logger.warning(
+                        "lane %s recovery enqueue deferred (broker unavailable); job "
+                        "%s stays QUEUED for a later sweep",
+                        lane.redispatch_task_name,
+                        job_id,
+                    )
+                    break  # broker is down; stop this lane, retry next sweep
+                count += 1
+        except Exception:
+            logger.exception(
+                "lane %s recovery failed; other lanes still run",
+                lane.redispatch_task_name,
             )
-        count = 0
-        for job_id in stale_ids:
-            try:
-                send_task(
-                    lane.redispatch_task_name, args=(str(job_id),), ignore_result=True
-                )
-            except OperationalError:
-                logger.warning(
-                    "lane %s recovery enqueue deferred (broker unavailable); job "
-                    "%s stays QUEUED for a later sweep",
-                    lane.redispatch_task_name,
-                    job_id,
-                    exc_info=True,
-                )
-                break  # broker is down; stop this lane, retry next sweep
-            count += 1
+            continue
         if count:
             dispatched[lane.redispatch_task_name] = (
                 dispatched.get(lane.redispatch_task_name, 0) + count

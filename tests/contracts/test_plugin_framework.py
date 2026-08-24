@@ -60,14 +60,17 @@ def _concrete_plugin_imports(text: str) -> list[str]:
 
 
 def test_core_imports_plugin_classes_only_in_discover() -> None:
+    plugins_dir = _SRC / "plugins"
     offenders: dict[str, list[str]] = {}
     for path in _python_files(_SRC):
         # discover.py is the ONE sanctioned core->plugin import site.
-        if path.parent.name == "plugins" and path.name == "discover.py":
+        if path == plugins_dir / "discover.py":
             continue
-        # Files INSIDE a concrete plugin package legitimately import their own
-        # siblings; the rule constrains core (everything outside voxint/plugins).
-        if _SRC / "plugins" in path.parents or path.parent.name == "plugins":
+        # Files INSIDE a concrete plugin subpackage (plugins/<id>/...) legitimately
+        # import their own siblings; skip only those. The framework modules that
+        # are direct children of plugins/ (registry.py, hooks.py, ...) ARE scanned,
+        # so one of them importing a concrete plugin outside discover.py is caught.
+        if plugins_dir in path.parents and path.parent != plugins_dir:
             continue
         imported = _concrete_plugin_imports(path.read_text())
         if imported:

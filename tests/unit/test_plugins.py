@@ -151,6 +151,60 @@ def test_duplicate_task_name_fails_loud() -> None:
         )
 
 
+def test_manifest_rejects_empty_task_name() -> None:
+    with pytest.raises(PluginError, match="empty task name"):
+        _manifest("ok", task_names=("voxint.real", "  "))
+
+
+def test_task_routes_for_undeclared_task_fails_loud() -> None:
+    class Rogue(VoxintPlugin):
+        manifest = _manifest("rogue", task_names=("voxint.rogue",))
+
+        def task_routes(self) -> dict[str, dict[str, str]]:
+            # Routes a task this plugin never declares — would silently overwrite
+            # another plugin's route without the collision check.
+            return {"voxint.someone_else": {"queue": "post"}}
+
+    with pytest.raises(PluginError, match="routes task"):
+        load_registry([Rogue])
+
+
+def test_duplicate_settings_section_id_fails_loud() -> None:
+    def _sectioned(plugin_id: str) -> type[VoxintPlugin]:
+        class _P(VoxintPlugin):
+            manifest = _manifest(plugin_id)
+
+            def settings_section(self) -> SettingsSection:
+                return SettingsSection(
+                    section_id="shared", title="T", template="t.html"
+                )
+
+        _P.__name__ = f"Sec_{plugin_id}"
+        return _P
+
+    with pytest.raises(PluginError, match="duplicate settings section_id 'shared'"):
+        load_registry([_sectioned("aa"), _sectioned("bb")])
+
+
+def test_disabled_plugin_section_id_does_not_collide() -> None:
+    # A killed plugin contributes no section, so its id cannot collide with an
+    # active one — the check runs over the active set only.
+    class Off(VoxintPlugin):
+        manifest = _manifest("off")
+
+        def settings_section(self) -> SettingsSection:
+            return SettingsSection(section_id="shared", title="T", template="t.html")
+
+    class On(VoxintPlugin):
+        manifest = _manifest("on")
+
+        def settings_section(self) -> SettingsSection:
+            return SettingsSection(section_id="shared", title="T", template="t.html")
+
+    reg = load_registry([Off, On], disabled_ids=["off"])
+    assert [p.manifest.id for p in reg.plugins] == ["on"]
+
+
 def test_missing_manifest_fails_loud() -> None:
     class NoManifest(VoxintPlugin):
         pass
@@ -305,6 +359,50 @@ def test_redispatch_stops_a_lane_when_broker_is_down() -> None:
         cutoff=datetime.now(tz=UTC),
     )
     assert result == {}  # nothing counted; lane deferred to a later sweep
+
+
+def test_redispatch_isolates_a_lane_whose_lookup_raises() -> None:
+    # A lane whose stale-id lookup blows up must not abort the whole sweep; the
+    # healthy lane still redispatches (mirrors dispatch_run_completed isolation).
+    def bad_lookup(session: object, *, cutoff: datetime, limit: int) -> Sequence[uuid.UUID]:
+        raise RuntimeError("bad SQL")
+
+    bad_lane = JobLaneSpec(
+        stale_queued_job_ids=bad_lookup,  # type: ignore[arg-type]
+        redispatch_task_name="voxint.bad",
+        limit=100,
+    )
+    good_ids = [uuid.uuid4()]
+    sent: list[str] = []
+
+    def send_task(name: str, *, args: tuple[Any, ...], ignore_result: bool) -> None:
+        sent.append(name)
+
+    result = redispatch_stale_lane_jobs(
+        [bad_lane, _lane("voxint.good", good_ids)],
+        session_factory=lambda: _fake_factory(),  # type: ignore[arg-type]
+        send_task=send_task,
+        cutoff=datetime.now(tz=UTC),
+    )
+    assert result == {"voxint.good": 1}
+    assert sent == ["voxint.good"]
+
+
+def test_redispatch_isolates_a_lane_whose_send_raises_unexpectedly() -> None:
+    # A non-broker send error on lane A is contained; lane B still runs.
+    ids_a, ids_b = [uuid.uuid4()], [uuid.uuid4()]
+
+    def send_task(name: str, *, args: tuple[Any, ...], ignore_result: bool) -> None:
+        if name == "voxint.a":
+            raise ValueError("serialization boom")
+
+    result = redispatch_stale_lane_jobs(
+        [_lane("voxint.a", ids_a), _lane("voxint.b", ids_b)],
+        session_factory=lambda: _fake_factory(),  # type: ignore[arg-type]
+        send_task=send_task,
+        cutoff=datetime.now(tz=UTC),
+    )
+    assert result == {"voxint.b": 1}  # lane A contained, lane B unaffected
 
 
 # --------------------------------------------------------------------------- #
