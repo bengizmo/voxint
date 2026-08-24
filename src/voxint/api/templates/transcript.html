@@ -26,7 +26,38 @@
   {% endif %}
 </nav>
 
-{{ export_menu(run, text) }}
+{# Translation toggle (issue #133): one link per current generation. A fresh
+   generation links to the interleaved view (always on the reviewed text — a
+   translation is a rendition of the corrected transcript); a stale one links
+   to the run page card, where Re-translate lives. Absent in reading view and
+   when the run has no translations. #}
+{% if not read and translation_ctx.views %}
+<nav class="top tab-strip" aria-label="Translation">
+  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}"
+     {% if not translation_ctx.active %}aria-current="page"{% endif %}>Original only</a>
+  {% for tv in translation_ctx.views %}
+  {% if tv.stale %}
+  <a href="/runs/{{ run.id }}#run-translation-{{ run.id }}"
+     title="Out of date — the transcript changed since this translation was generated. Re-translate on the run page.">{{ tv.label }} (out of date)</a>
+  {% else %}
+  <a href="/runs/{{ run.id }}/transcript?translation={{ tv.code }}"
+     {% if translation_ctx.active and translation_ctx.active.language == tv.code %}aria-current="page"{% endif %}>{{ tv.label }}</a>
+  {% endif %}
+  {% endfor %}
+</nav>
+{% endif %}
+{% if not read and translation_ctx.note %}
+<p class="muted">{{ translation_ctx.note }}</p>
+{% endif %}
+{% if not read and translation_ctx.active %}
+<p class="muted">Machine-translated to {{ translation_ctx.active.label }}
+  {%- if translation_ctx.active.source_language %} from {{ language_label(translation_ctx.active.source_language) }}{% endif %}
+  by {{ translation_ctx.active.model }},
+  {{ translation_ctx.active.completed_at.strftime("%Y-%m-%d %H:%M") }} —
+  a working rendition, not a certified translation.</p>
+{% endif %}
+
+{{ export_menu(run, text, translation_ctx.fresh) }}
 
 {% if not lines %}
 <p>No transcript segments for this run.</p>
@@ -59,6 +90,12 @@
     {% if ln.diarization_label %}<span class="spk-badge">{{ ln.diarization_label }}</span>{% endif %}
     {% if ln.speaker != ln.diarization_label %}<strong>{{ ln.speaker }}:</strong>{% endif %}
     {{ ln.text }}
+    {# Interleaved translation (issue #133): the fresh generation's line, by
+       order — the same texts the hydrated island renders. Empty lines add no
+       row. #}
+    {% if translation_ctx.active and translation_ctx.active.texts[loop.index0] %}
+    <span class="tp-translation" lang="{{ translation_ctx.active.language }}">{{ translation_ctx.active.texts[loop.index0] }}</span>
+    {% endif %}
   </p>
   {% endfor %}
 </div>

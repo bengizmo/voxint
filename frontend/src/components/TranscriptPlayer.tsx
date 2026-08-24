@@ -226,6 +226,18 @@ export interface TranscriptPlayerProps {
   annotationSpans?: Map<number, AnnotationLineSpan[]>;
   staleLocators?: Set<number>;
   onTextSelect?: () => void;
+  // Interleaved translation (issue #133): present ONLY when the server resolved
+  // a FRESH generation for the selected language — staleness is decided
+  // server-side (the run-level source hash is the one freshness authority), so
+  // the island never renders translated lines against a changed transcript.
+  // `lines` is by line order, same length as `segments`; an empty string adds
+  // no row. Absent on the review surface (editing stays source-language only)
+  // and whenever no translation is selected.
+  translation?: {
+    language: string;
+    label: string;
+    lines: string[];
+  } | null;
   // Deep-link jump target (issue #121): a media-time in seconds a Meaning search
   // result carries in ?t=. On mount the matching line is scrolled into view and
   // briefly flashed, so the eye lands on the passage. No audio seek (a jump is a
@@ -299,6 +311,7 @@ export const TranscriptPlayer = forwardRef<
     annotationSpans,
     staleLocators,
     onTextSelect,
+    translation,
     jumpToSeconds,
   },
   ref,
@@ -701,6 +714,13 @@ export const TranscriptPlayer = forwardRef<
                   })()}
                 </span>
               )}
+              {translation?.lines[i] ? (
+                // Interleaved translated line (issue #133): same texts the
+                // JS-off fallback renders, so hydration changes nothing.
+                <span className="tp-translation" lang={translation.language}>
+                  {translation.lines[i]}
+                </span>
+              ) : null}
               {staleLocators?.has(i) && (
                 <span
                   className="hl-stale-locator"

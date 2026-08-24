@@ -8,7 +8,7 @@
    labels only, so it takes no variant. `timestamps=false` is honored by txt and
    md only (subtitle timing is structural; JSON keys are a frozen contract).
    `download` gives the saved file a run-named stem instead of "export.txt". #}
-{% macro export_menu(run, text_variant=none) %}
+{% macro export_menu(run, text_variant=none, translations=none) %}
 {% set stem = "voxint-" ~ run.id.hex[:8] %}
 {# `text_variant` (a TranscriptText) keeps the on-screen read link on whatever
    variant the page is showing, so opening it from a raw/enhanced view does not
@@ -101,6 +101,29 @@
         <a href="/review/{{ run.id }}/export.json?text=raw" download="{{ stem }}.json">raw</a>
       </div>
     </li>
+    {# Translated downloads (issue #133): FRESH generations only — a stale
+       translation gets no link (its export would refuse with 409), so the menu
+       can never offer a download that no longer matches the transcript.
+       Translated exports always render the reviewed text; subtitle timing
+       follows the original speech, so translated captions may read fast. #}
+    {% for tr in translations or [] %}
+    <li>
+      <strong>Translated</strong> {{ tr.label }}: the reviewed transcript
+      machine-translated to {{ tr.label }}. Subtitle timing follows the original
+      speech, so translated captions may read fast.
+      <div class="export-links">
+        <a href="/review/{{ run.id }}/export.txt?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.txt">.txt</a>
+        /
+        <a href="/review/{{ run.id }}/export.md?lang={{ tr.code }}&amp;timestamps=false" download="{{ stem }}-{{ tr.code }}.md">.md</a>
+        /
+        <a href="/review/{{ run.id }}/export.srt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.srt">.srt</a>
+        /
+        <a href="/review/{{ run.id }}/export.vtt?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.vtt">.vtt</a>
+        /
+        <a href="/review/{{ run.id }}/export.json?lang={{ tr.code }}" download="{{ stem }}-{{ tr.code }}.json">.json</a>
+      </div>
+    </li>
+    {% endfor %}
     <li>
       <strong>Speaker turns</strong> <code>.rttm</code>: who-spoke-when with the
       raw diarization labels (never the assigned names), for research and scoring

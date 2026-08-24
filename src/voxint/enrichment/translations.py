@@ -310,6 +310,18 @@ def current_translations(session: Session, pipeline_run_id: uuid.UUID) -> list[R
     )
 
 
+def translation_texts(row: RunTranslation) -> list[str]:
+    """The stored translated strings in line order — the ONLY read shape the
+    console and exports consume.
+
+    Order comes from the persisted array itself (the writer stores lines in
+    snapshot order); ``i`` and the structural fields stay frozen provenance,
+    never re-join keys. Callers must gate on freshness (hash compare) first —
+    this helper does no staleness checking of its own.
+    """
+    return [str(line["text"]) for line in row.lines]
+
+
 def current_translation(
     session: Session, pipeline_run_id: uuid.UUID, target_language: str
 ) -> RunTranslation | None:

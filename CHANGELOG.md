@@ -25,6 +25,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   partial generations never persist, and an edit landing mid-generation fails
   the job while keeping the previous translation current. Console rendering of
   translated lines and translated exports land in slice B. Migration 0038.
+- **Transcript translation, slice B: interleaved view, translated exports, and
+  the review-stepper Translate action** (#133). The transcript page gains a
+  Translation switcher: picking a translated language shows the translated
+  line beneath each original (in the hydrated player and the JS-off fallback
+  alike), with the model, source language, and generation time stated above.
+  Every transcript export format (`txt`/`md`/`srt`/`vtt`/`json`) accepts
+  `?lang=<code>` and serves the reviewed transcript with translated text
+  substituted, fail closed: 409 when no fresh translation exists (missing,
+  still generating, or out of date after an edit), 422 for an unknown code or
+  when combined with `text=raw|enhanced`, and never mixed-language output.
+  Subtitle cue timing is untouched, so translated captions can read fast (the
+  export menu and docs say so). The export menu lists translated downloads for
+  fresh generations only, and the review stepper's terminal block offers a
+  one-click Translate to the preferred language once every line is checked.
+  New how-to: `docs/how-to/translating-transcripts.md`.
 
 ### Fixed
 - A transcript could be left permanently out of semantic search if its

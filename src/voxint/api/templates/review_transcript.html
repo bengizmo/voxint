@@ -60,6 +60,13 @@
     {% if all_checked %}
     <div class="review-done card-actions">
       <a class="btn-primary" href="/runs/{{ run.id }}/transcript">Open the transcript to export</a>
+      {# Translate action, JS-off fallback (issue #133): starting a job needs a
+         POST + language choice, so this links to the run page card that owns
+         both. The island renders the one-click launcher once JS is on. Absent
+         when the LLM gates are closed, matching the card. #}
+      {% if island_props.translate %}
+      <a href="/runs/{{ run.id }}#run-translation-{{ run.id }}">Translate this recording</a>
+      {% endif %}
       <a href="/review">Back to Review</a>
     </div>
     {% endif %}

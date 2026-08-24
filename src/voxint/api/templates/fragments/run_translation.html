@@ -45,7 +45,11 @@ working rendition, not a certified translation.</p>
      the translated text no longer matches it. Re-translate to refresh; the old
      rendition is not shown against the changed transcript.</p>
   {% else %}
-  <p class="muted">Translated and stored with the run.</p>
+  <p class="muted">
+    <a href="/runs/{{ translation_state.run_id }}/transcript?translation={{ entry.translation.target_language }}">View
+    it beneath each line on the transcript page</a> — translated downloads are in
+    that page's export menu.
+  </p>
   {% endif %}
   <p class="muted">
     Generated {{ entry.translation.completed_at.strftime("%Y-%m-%d %H:%M") }}

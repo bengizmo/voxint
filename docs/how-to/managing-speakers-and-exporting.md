@@ -162,6 +162,10 @@ For every format except `.rttm`, you choose which wording to save:
 Plain text and Markdown also offer a **reading copy** (no timestamps) alongside
 the **timed** version.
 
+If you have translated the transcript, the menu also lists a row of downloads
+per translated language. See
+[Translate transcripts](translating-transcripts.md).
+
 | Format | Use this when… |
 |---|---|
 | **`.txt`** (plain text) | You want a readable transcript to open in a text editor or word processor, or to quote into a document. Choose the reading copy for clean pasting. |
@@ -232,6 +236,7 @@ If you want the timeline of who-spoke-when **with your assigned names**, use
 
 - [Add media & manage runs](add-media-and-manage-runs.md)
 - [Review & adjudicate](reviewing-and-adjudicating.md)
+- [Translate transcripts](translating-transcripts.md)
 - [Settings & troubleshooting](settings-and-troubleshooting.md)
 - [Setup](../setup.md): install Voxint on your OS and hardware.
 - [First-run walkthrough](../onboarding.md): the setup wizard and guided tutorial.

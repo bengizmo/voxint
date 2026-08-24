@@ -64,6 +64,19 @@ export interface ReviewStepperProps {
   annotationTags?: AnnotationTagShape[];
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
+  // Terminal Translate action (issue #133): present when the LLM gates are open.
+  // defaultTarget is the installation's preferred language (null when unset or
+  // equal to the run's detected language — then the action links to the run page
+  // card, where the language select lives). `active` = a translation job is
+  // already queued/running at page load. Null/absent ⇒ no Translate UI at all.
+  translate?: {
+    csrf: string;
+    defaultTarget: string | null;
+    defaultTargetLabel: string | null;
+    active: boolean;
+    runAnchor: string;
+    transcriptUrl: string;
+  } | null;
 }
 
 // A segment is a REVIEW TARGET when it is the queue entry for its parent and is
@@ -124,6 +137,7 @@ export function ReviewStepper({
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
   tagCsrf = null,
+  translate = null,
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
   // the (pure) player. Verify/correct responses patch this array in place.
@@ -185,6 +199,13 @@ export function ReviewStepper({
   const [rawOpen, setRawOpen] = useState<boolean>(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [reconOpen, setReconOpen] = useState<boolean>(false);
+  // Terminal Translate action (issue #133). "started" covers a job already
+  // active at page load AND one this button just launched — either way the
+  // honest message is "translating, view it on the transcript page".
+  const [translatePhase, setTranslatePhase] = useState<
+    "idle" | "starting" | "started" | "error"
+  >(translate?.active ? "started" : "idle");
+  const [translateError, setTranslateError] = useState<string | null>(null);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -854,6 +875,45 @@ export function ReviewStepper({
   // all_checked guard). Issue #117 Phase B.
   const done = progress.total > 0 && remaining === 0;
 
+  // Terminal Translate action (issue #133): fire the run card's own generate
+  // endpoint with the preferred language, asking for JSON (the island-json
+  // convention) so a card-level refusal ("already in progress", broker down)
+  // arrives as {started, error} rather than an HTML fragment to parse. The
+  // stepper only launches; freshness and progress live on the run page card.
+  const startTranslate = async () => {
+    if (!translate || !translate.defaultTarget) return;
+    setTranslatePhase("starting");
+    try {
+      const body = new URLSearchParams({
+        csrf_token: translate.csrf,
+        target_language: translate.defaultTarget,
+      });
+      const res = await apiFetch(`/runs/${runId}/translation/generate`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body,
+      });
+      const data = (await res.json()) as {
+        started: boolean;
+        error: string | null;
+      };
+      if (data.started) {
+        setTranslatePhase("started");
+      } else {
+        setTranslateError(data.error ?? "Translation could not start.");
+        setTranslatePhase("error");
+      }
+    } catch (err) {
+      setTranslateError(
+        err instanceof ApiError ? err.detail : "Translation could not start.",
+      );
+      setTranslatePhase("error");
+    }
+  };
+
   // Issue #83 derived view state for the current segment. `corrections` is the
   // pipeline provenance (null once superseded by an operator edit — see
   // applyResult); `shownEntries` are the rules that materially fired (only when the
@@ -925,6 +985,35 @@ export function ReviewStepper({
             <a className="btn-primary" href={`/runs/${runId}/transcript`}>
               Open the transcript to export
             </a>
+            {/* Translate action (issue #133): one click with the preferred
+                language; no preferred language ⇒ link to the run page card,
+                where the language select lives. Absent when the LLM gates are
+                closed. Generation is async — the honest post-launch message
+                points at where the result will appear, never claims it exists. */}
+            {translate &&
+              (translatePhase === "idle" ? (
+                translate.defaultTarget ? (
+                  <button type="button" onClick={() => void startTranslate()}>
+                    Translate to {translate.defaultTargetLabel}
+                  </button>
+                ) : (
+                  <a href={translate.runAnchor}>Translate this recording</a>
+                )
+              ) : translatePhase === "starting" ? (
+                <span className="muted text-sm">Starting translation…</span>
+              ) : translatePhase === "started" ? (
+                <span className="muted text-sm">
+                  Translating — it will appear on the{" "}
+                  <a href={translate.transcriptUrl}>transcript page</a> when it
+                  finishes (progress and cancel on the{" "}
+                  <a href={translate.runAnchor}>run page</a>).
+                </span>
+              ) : (
+                <span role="alert" className="text-sm">
+                  {translateError}{" "}
+                  <a href={translate.runAnchor}>Open the run page</a>
+                </span>
+              ))}
             <a href="/review">Back to Review</a>
           </div>
         )}

@@ -6,7 +6,7 @@ New to Voxint? Start here:
 |---|---|
 | [`setup.md`](setup.md) | **Install Voxint** on your operating system and hardware: prerequisites, guided vs. manual install, and every compute tier (CPU / NVIDIA / AMD / Apple) |
 | [`onboarding.md`](onboarding.md) | First-run path once it's installed: guided installer, setup wizard, and the bundled guided tutorial |
-| [`how-to/`](how-to/README.md) | **Day-to-day task guides** for non-technical operators: add media & manage runs, review & adjudicate, manage speakers & export, settings & troubleshooting, and (advanced) changing pipeline models |
+| [`how-to/`](how-to/README.md) | **Day-to-day task guides** for non-technical operators: add media & manage runs, review & adjudicate, manage speakers & export, translate transcripts, settings & troubleshooting, and (advanced) changing pipeline models |
 
 Reference & internals:
 

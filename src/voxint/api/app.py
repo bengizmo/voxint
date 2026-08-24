@@ -17,6 +17,7 @@ import secrets
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, BinaryIO, cast
@@ -368,9 +369,11 @@ from voxint.enrichment.translation_jobs import (
 )
 from voxint.enrichment.translations import (
     TranslationError,
+    current_translation,
     current_translations,
     load_translation_source,
     translation_source_hash,
+    translation_texts,
 )
 from voxint.enrichment.triage import (
     EvidenceRef,
@@ -3371,6 +3374,84 @@ def _run_translation_response(
     )
 
 
+def _transcript_translation_context(
+    session: Session,
+    run_id: uuid.UUID,
+    variant: TranscriptText,
+    line_count: int,
+    requested: str | None,
+) -> dict[str, Any]:
+    """The read-only transcript page's translation state (issue #133).
+
+    ``views`` lists every current generation with its freshness so the page can
+    offer a toggle; ``active`` carries the selected FRESH generation's texts for
+    interleaving (island props + server fallback); ``note`` is the honest
+    explanation when a requested translation cannot be shown. A stale or
+    missing generation never interleaves — the whole generation is stale as one
+    unit, matching the export policy. Only the reviewed (corrected) variant
+    pairs with a translation; on raw/enhanced the toggle is absent and a
+    hand-typed ``?translation=`` gets a note, not silently-mismatched lines.
+    """
+    heads = current_translations(session, run_id)
+    if not heads and requested is None:
+        return {"views": [], "active": None, "note": None, "fresh": []}
+    current_hash: str | None = None
+    # No readable source ⇒ every generation renders as out of date.
+    with contextlib.suppress(TranslationError):
+        current_hash = translation_source_hash(load_translation_source(session, run_id))
+    heads_by_code = {head.target_language: head for head in heads}
+    views = [
+        {
+            "code": head.target_language,
+            "label": language_label(head.target_language),
+            "stale": current_hash is None
+            or head.source_content_hash != current_hash
+            # Defensive: hash equality implies equal line counts, but a
+            # mismatch must degrade to "out of date", never misalign.
+            or len(head.lines) != line_count,
+        }
+        for head in heads
+    ]
+    active: dict[str, Any] | None = None
+    note: str | None = None
+    if requested is not None:
+        target = normalized_language(requested)
+        view = next((v for v in views if v["code"] == target), None)
+        if view is None or target is None:
+            note = "No such translation for this run — generate one from the run page."
+        elif variant is not TranscriptText.CORRECTED:
+            note = (
+                "Translations pair with the reviewed text only — showing the"
+                " original. Switch to the corrected version to see the translation."
+            )
+        elif view["stale"]:
+            note = (
+                f"The {view['label']} translation is out of date — the transcript"
+                " changed since it was generated. Re-translate from the run page;"
+                " the old rendition is not shown against the changed transcript."
+            )
+        else:
+            head = heads_by_code[target]
+            active = {
+                "language": head.target_language,
+                "label": language_label(head.target_language),
+                "texts": translation_texts(head),
+                "model": head.model,
+                "completed_at": head.completed_at,
+                "source_language": head.source_language,
+            }
+    return {
+        "views": views,
+        "active": active,
+        "note": note,
+        # Fresh generations only — the export menu's translated links (a stale
+        # generation gets NO link; its export would 409).
+        "fresh": [
+            {"code": v["code"], "label": v["label"]} for v in views if not v["stale"]
+        ],
+    }
+
+
 def _roster_context(request: Request, session: Session, error: str | None = None) -> dict[str, Any]:
     """Template context for the roster page and its htmx fragment."""
     overview = roster_overview(session)
@@ -4186,6 +4267,7 @@ def _register_routes(app: FastAPI) -> None:
         text: str | None = None,
         read: bool = False,
         timestamps: bool = True,
+        translation: str | None = None,
     ) -> Response:
         run = _run_or_404(session, run_id)
         try:
@@ -4230,6 +4312,11 @@ def _register_routes(app: FastAPI) -> None:
                     "read_timestamps": timestamps,
                     "text": variant,
                     "variants": list(TranscriptText),
+                    # Reading view stays original-language (no interleave), but
+                    # the export menu still lists fresh translated downloads.
+                    "translation_ctx": _transcript_translation_context(
+                        session, run_id, variant, len(lines), None
+                    ),
                     "active_nav": "runs",
                 },
             )
@@ -4246,6 +4333,18 @@ def _register_routes(app: FastAPI) -> None:
         island_props = _transcript_island_props(
             session, run_id, lines, palette, capability, settings
         )
+        # Interleaved translation view (issue #133): a fresh generation the
+        # operator selected renders each translated line beneath its original —
+        # in the island props AND the JS-off fallback, from the same texts.
+        translation_ctx = _transcript_translation_context(
+            session, run_id, variant, len(lines), translation
+        )
+        if translation_ctx["active"] is not None:
+            island_props["translation"] = {
+                "language": translation_ctx["active"]["language"],
+                "label": translation_ctx["active"]["label"],
+                "lines": translation_ctx["active"]["texts"],
+            }
         return templates.TemplateResponse(
             request,
             "transcript.html",
@@ -4259,6 +4358,7 @@ def _register_routes(app: FastAPI) -> None:
                 "low_confidence_threshold": settings.review_low_confidence_threshold,
                 "text": variant,
                 "variants": list(TranscriptText),
+                "translation_ctx": translation_ctx,
                 "active_nav": "runs",
             },
         )
@@ -4342,6 +4442,36 @@ def _register_routes(app: FastAPI) -> None:
         island_props["tagCsrf"] = mint_csrf_token(
             request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
         )
+        # Terminal Translate action (issue #133): once every line is checked, the
+        # stepper offers translation beside "Open the transcript to export". Only
+        # gate state + the preferred-language default are needed here — freshness
+        # lives on the run page card and the transcript view, not in this launcher.
+        # None when the LLM gates are closed (no dead button, matching the card).
+        translate_row = get_app_settings(session)
+        if translation_gates_open(settings, translate_row):
+            detected = normalized_language(run.detected_language)
+            preferred = normalized_language(
+                resolve_effective_translation_target_language(translate_row, settings)
+            )
+            translate_job = active_or_last_translation_job(session, run_id)
+            default_target = (
+                preferred if preferred is not None and preferred != detected else None
+            )
+            island_props["translate"] = {
+                "csrf": mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
+                ),
+                "defaultTarget": default_target,
+                "defaultTargetLabel": (
+                    language_label(default_target) if default_target else None
+                ),
+                "active": translate_job is not None
+                and translate_job.status in _TRANSLATION_ACTIVE_STATUSES,
+                "runAnchor": f"/runs/{run_id}#run-translation-{run_id}",
+                "transcriptUrl": f"/runs/{run_id}/transcript",
+            }
+        else:
+            island_props["translate"] = None
         return templates.TemplateResponse(
             request,
             "review_transcript.html",
@@ -5377,6 +5507,75 @@ def _register_routes(app: FastAPI) -> None:
     # ?text=corrected|enhanced|raw (default corrected: operator corrections applied
     # over enhanced/raw; enhanced = pipeline text, no corrections; raw = immutable
     # ASR evidence), except RTTM which is speaker-label-only.
+    def _export_translated_lines(
+        session: Session,
+        run_id: uuid.UUID,
+        lines: list[TranscriptLine],
+        lang: str,
+        variant: TranscriptText,
+    ) -> list[TranscriptLine]:
+        """The reviewed lines with translated text substituted, or an honest
+        HTTP failure — NEVER partial or mixed-language output (issue #133).
+
+        Fail-closed policy: 422 for an unknown code or a raw/enhanced variant
+        (a translation is a rendition of the reviewed transcript only), 409
+        when no current generation exists or the transcript has changed since
+        it was generated. Substitution is by line order within the generation;
+        the hash equality is what proves the order still describes this
+        transcript. Subtitle cue timing is untouched (no reflow) — translated
+        captions may read fast, and the docs say so.
+        """
+        target = normalized_language(lang)
+        if target is None or target not in LANGUAGE_NAMES:
+            raise HTTPException(
+                status_code=422, detail=f"unknown translation language code {lang!r}"
+            )
+        if variant is not TranscriptText.CORRECTED:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "a translation renders the reviewed transcript only — drop"
+                    " text= (or use text=corrected) with lang="
+                ),
+            )
+        label = language_label(target)
+        head = current_translation(session, run_id, target)
+        job = active_or_last_translation_job(session, run_id)
+        running = (
+            job is not None
+            and job.status in _TRANSLATION_ACTIVE_STATUSES
+            and job.target_language == target
+        )
+        if head is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"a {label} translation is still being generated — retry when"
+                    " it finishes"
+                    if running
+                    else f"no {label} translation exists for this run — generate"
+                    " one from the run page first"
+                ),
+            )
+        try:
+            current_hash = translation_source_hash(load_translation_source(session, run_id))
+        except TranslationError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        texts = translation_texts(head)
+        if head.source_content_hash != current_hash or len(texts) != len(lines):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"the {label} translation is out of date — the transcript"
+                    " changed since it was generated; re-translate from the run"
+                    " page and retry"
+                ),
+            )
+        return [
+            dataclass_replace(ln, text=translated)
+            for ln, translated in zip(lines, texts, strict=True)
+        ]
+
     def _export_transcript(
         run_id: uuid.UUID,
         session: Session,
@@ -5384,6 +5583,7 @@ def _register_routes(app: FastAPI) -> None:
         text: str | None,
         *,
         timestamps: bool = True,
+        lang: str | None = None,
     ) -> Response:
         _run_or_404(session, run_id)
         try:
@@ -5391,6 +5591,8 @@ def _register_routes(app: FastAPI) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         lines = attributed_transcript(session, run_id, text=variant)
+        if lang is not None:
+            lines = _export_translated_lines(session, run_id, lines, lang, variant)
         return Response(
             content=render_transcript(lines, fmt, timestamps=timestamps),
             media_type=MEDIA_TYPES[fmt.value],
@@ -5403,11 +5605,14 @@ def _register_routes(app: FastAPI) -> None:
         session: SessionDep,
         text: str | None = None,
         timestamps: bool = True,
+        lang: str | None = None,
     ) -> Response:
         # ?timestamps=false drops the [start end] bracket column for a clean
         # reading copy (issue #52). Only txt and md honor the flag.
+        # ?lang=<code> substitutes the current fresh translation (issue #133) —
+        # fail closed, see _export_translated_lines. All five formats take it.
         return _export_transcript(
-            run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps
+            run_id, session, TranscriptFormat.TXT, text, timestamps=timestamps, lang=lang
         )
 
     @protected.get("/review/{run_id}/export.md")
@@ -5417,30 +5622,48 @@ def _register_routes(app: FastAPI) -> None:
         session: SessionDep,
         text: str | None = None,
         timestamps: bool = True,
+        lang: str | None = None,
     ) -> Response:
         # Readable Markdown (issue #65): ## speaker headings + merged blockquotes.
         # ?timestamps=false drops the per-paragraph time range for a clean copy.
         return _export_transcript(
-            run_id, session, TranscriptFormat.MARKDOWN, text, timestamps=timestamps
+            run_id,
+            session,
+            TranscriptFormat.MARKDOWN,
+            text,
+            timestamps=timestamps,
+            lang=lang,
         )
 
     @protected.get("/review/{run_id}/export.srt")
     def export_transcript_srt(
-        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+        lang: str | None = None,
     ) -> Response:
-        return _export_transcript(run_id, session, TranscriptFormat.SRT, text)
+        return _export_transcript(run_id, session, TranscriptFormat.SRT, text, lang=lang)
 
     @protected.get("/review/{run_id}/export.vtt")
     def export_transcript_vtt(
-        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+        lang: str | None = None,
     ) -> Response:
-        return _export_transcript(run_id, session, TranscriptFormat.VTT, text)
+        return _export_transcript(run_id, session, TranscriptFormat.VTT, text, lang=lang)
 
     @protected.get("/review/{run_id}/export.json")
     def export_transcript_json(
-        run_id: uuid.UUID, operator: OperatorDep, session: SessionDep, text: str | None = None
+        run_id: uuid.UUID,
+        operator: OperatorDep,
+        session: SessionDep,
+        text: str | None = None,
+        lang: str | None = None,
     ) -> Response:
-        return _export_transcript(run_id, session, TranscriptFormat.JSON, text)
+        return _export_transcript(run_id, session, TranscriptFormat.JSON, text, lang=lang)
 
     @protected.get("/review/{run_id}/export.rttm")
     def export_transcript_rttm(
@@ -7051,10 +7274,19 @@ def _register_routes(app: FastAPI) -> None:
         language; a per-run choice overrides it for this generation only.
         Same-language, no-transcript, and gates-off requests come back as
         plain-language card errors, not HTTP failures — the card is the
-        operator's surface. Commit-before-publish like every enqueue."""
+        operator's surface. The review stepper's Translate action (issue #133
+        Slice B) asks for JSON instead (the island-json convention) and gets
+        ``{started, error}`` — the same truthful outcomes, without parsing the
+        card fragment. Commit-before-publish like every enqueue."""
         _require_csrf(request, CSRF_TRANSLATION_GENERATE, csrf_token)
         _run_or_404(session, run_id)
         settings: Settings = request.app.state.settings
+
+        def respond(error: str | None, *, started: bool) -> Response:
+            if _wants_island_json(request):
+                return JSONResponse({"started": started, "error": error})
+            return _run_translation_response(request, session, run_id, error=error)
+
         target = normalized_language(target_language)
         if target is None:
             target = normalized_language(
@@ -7063,12 +7295,10 @@ def _register_routes(app: FastAPI) -> None:
                 )
             )
         if target is None:
-            return _run_translation_response(
-                request,
-                session,
-                run_id,
-                error="Pick a language to translate into (or set a preferred"
+            return respond(
+                "Pick a language to translate into (or set a preferred"
                 " language in Settings → Translation).",
+                started=False,
             )
         try:
             job, already_active = create_translation_job(
@@ -7076,23 +7306,21 @@ def _register_routes(app: FastAPI) -> None:
             )
         except TranslationJobError as exc:
             session.rollback()
-            return _run_translation_response(request, session, run_id, error=str(exc))
+            return respond(str(exc), started=False)
         if already_active or job is None:
             session.rollback()
-            return _run_translation_response(
-                request, session, run_id, error="A translation is already in progress."
-            )
+            return respond("A translation is already in progress.", started=False)
         job_id = job.id
         session.commit()
         # Honest UX: a broker outage leaves a real QUEUED row with no recovery
         # sweep — say so instead of rendering a silently-stuck spinner.
-        notice = (
-            None
-            if _publish_translation_job(job_id)
-            else "worker broker unavailable — the queued job will not start;"
-            " cancel and retry once the worker is back"
+        if _publish_translation_job(job_id):
+            return respond(None, started=True)
+        return respond(
+            "worker broker unavailable — the queued job will not start;"
+            " cancel and retry once the worker is back",
+            started=False,
         )
-        return _run_translation_response(request, session, run_id, error=notice)
 
     @protected.post("/runs/{run_id}/translation/{job_id}/cancel")
     def run_translation_cancel(

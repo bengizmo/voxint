@@ -415,6 +415,11 @@
        the speaker accent, so uncertainty reads as a dashed amber underline plus
        a small "uncertain" chip — supplemental, never the only cue, and honest
        ("uncertain, not necessarily wrong"). */
+    /* Interleaved translated line (issue #133): a quieter block beneath the
+       original, indented past the play button so the two languages read as one
+       pair without competing. Tokens only; both themes come free. */
+    .tp-translation { display: block; margin: .1rem 0 0 2rem; color: var(--ink-2);
+                 font-style: italic; }
     .tp-uncertain { border-bottom: 1px dashed var(--uncertain); }
     .tp-uncertain-chip { font-size: .68rem; text-transform: uppercase; letter-spacing: .03em;
                  color: var(--uncertain); border: 1px solid var(--uncertain); border-radius: var(--r-sm);
