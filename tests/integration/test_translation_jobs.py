@@ -612,7 +612,7 @@ class TestCancelHardening:
     ) -> None:
         class ExplodingLLM:
             def chat_json(self, messages: object) -> dict[str, object]:
-                raise RuntimeError("secret internals: http://10.0.0.1/v1 said no")
+                raise RuntimeError("secret internals: http://192.0.2.1/v1 said no")
 
         with session_factory() as session:
             run_id = seed_run(session)
