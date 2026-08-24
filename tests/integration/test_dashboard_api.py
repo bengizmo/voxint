@@ -406,6 +406,53 @@ def test_dashboard_metrics_behind_disclosure_with_carveouts(
     assert body.index('<select name="since"') < details_at
 
 
+def test_windowed_counts_cutoff_and_all_time(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The Home stat switcher's counts (#152): inclusive cutoff, None = all time,
+    speaker enrollments keep counting after a merge/archive, and the run count
+    shares the archived-run exclusion with the rest of the stats."""
+    from voxint.api.stats_query import windowed_counts
+
+    now = datetime.now(UTC)
+    old = now - timedelta(days=3)
+    with session_factory() as session:
+        old_run_id = make_run(session, status=RunStatus.COMPLETED, created_at=old)
+        # make_run backdates only the run; backdate its media item too so the
+        # media cutoff is actually exercised.
+        old_run = session.get(PipelineRun, old_run_id)
+        assert old_run is not None
+        old_run.media_item.created_at = old
+        recent = make_run(session, status=RunStatus.COMPLETED)
+        # An archived recent run: its media item still counts as added; the run
+        # itself drops out (same policy as run_status_counts).
+        archived = make_run(session, status=RunStatus.COMPLETED)
+        run = session.get(PipelineRun, archived)
+        assert run is not None
+        run.archived_at = now
+        # One old speaker, one recent-but-archived speaker: the archive must not
+        # shrink the enrollment count.
+        session.add(Speaker(display_name="old voice", created_at=old))
+        session.add(Speaker(display_name="curated voice", deleted_at=now))
+        session.commit()
+
+    cutoff = now - timedelta(hours=1)
+    with session_factory() as session:
+        windowed = windowed_counts(session, since=cutoff)
+        assert windowed.since == cutoff
+        assert windowed.runs_started == 1  # recent only; archived excluded
+        assert windowed.media_added == 2  # both recent media items
+        assert windowed.speakers_enrolled == 1  # the archived-but-recent one
+
+        all_time = windowed_counts(session, since=None)
+        assert all_time.since is None
+        assert all_time.runs_started == 2
+        assert all_time.media_added == 3
+        assert all_time.speakers_enrolled == 2
+        # Sanity: the recent run is really there.
+        assert session.get(PipelineRun, recent) is not None
+
+
 def test_stats_exclude_archived_runs(session_factory: sessionmaker[Session]) -> None:
     """Archived runs (issue #5) drop out of the status counts and the created
     window so the dashboard / metrics / CLI all report *active* runs."""
