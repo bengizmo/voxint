@@ -20,8 +20,11 @@ or piece of operational ceremony must earn its place for this audience. When
 in doubt, leave it out.
 
 Public repo: `github.com/bengizmo/voxint` (releases are cut there; `release.yml`
-only runs on GitHub). Development also pushes to a private origin: **always push
-both remotes**. Agents may commit and push in this repo.
+only runs on GitHub). Development also pushes to a private origin. Push feature
+branches to **both remotes** so neither falls behind. GitHub `main` is
+branch-protected: it advances only by merging a PR whose CI has passed, never a
+direct push (see Development Workflow for the full flow). Agents may commit and
+push feature branches in this repo.
 
 ## Layout
 
@@ -150,7 +153,19 @@ ships inside the images too). Rules:
 
 ## Development Workflow
 
-- Feature branches, FF-merge to `main`; `main` is always releasable.
+- Feature branches; `main` is always releasable. GitHub `main` is
+  branch-protected (`enforce_admins=true`, so the rule binds maintainer sessions
+  too): it advances only by merging a PR whose required checks (`lint-test` +
+  `secrets-scan`) are green. Direct pushes to GitHub `main`, force-pushes, and
+  branch deletion are all rejected. No human reviewer is required (single
+  operator), so a green PR is yours to merge. The `frontend` CI job runs on every
+  push and PR but is not currently in the required set. Protection is `strict`,
+  so a PR must be up to date with `main` before it can merge; rebase or merge
+  `main` in if it moved.
+- After a PR merges on GitHub, sync the private origin (Forgejo `main` is not
+  protected): `git fetch github && git push origin github/main:main`. This keeps
+  both remotes' `main` identical. When the two ever diverge, merge, do not
+  rebase.
 - CHANGELOG in Keep a Changelog format: update under `[Unreleased]` as part
   of the change, stamp on release.
 - Update `docs/` in the same change that alters behavior (installer text,
