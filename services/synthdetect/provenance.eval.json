@@ -6,7 +6,7 @@
   "canonicalization_id": "pcm-s16le-mono-16000-v1",
   "canonicalization_note": "Corpus audio is canonicalized ONCE at acquisition to 16 kHz mono signed-16-bit little-endian PCM (no dither, no normalization, no silence trim). The manifest sha256 is the sha256 of the PCM data-chunk payload bytes only (no RIFF/WAV header). The runner does NO resampling: it asserts this format, hashes the payload, and fails closed on a mismatch. Changing this canonicalization is a new id, never a silent regeneration of corpus identity.",
   "base_image": "nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04",
-  "base_image_digest": null,
+  "base_image_digest": "sha256:8f9dd0d09d3ad3900357a1cf7f887888b5b74056636cd6ef03c160c3cd4b1d95",
   "runtime": {
     "python": "3.10",
     "torch": "2.1.0+cu118",
@@ -24,8 +24,8 @@
     "pyyaml": "6.0.1",
     "cython": "0.29.36",
     "fairseq_repo": "https://github.com/facebookresearch/fairseq.git",
-    "fairseq_commit": null,
-    "fairseq_commit_note": "CANDIDATE; passed to the Dockerfile as FAIRSEQ_COMMIT and frozen in S2b once the container builds and validates on a GPU. The build refuses to proceed without it."
+    "fairseq_commit": "a54021305d6b3c4c5959ac9395135f63202db8f1",
+    "fairseq_commit_note": "Frozen S2b (2026-08-24): the fairseq revision the upstream SSL_Anti-spoofing README pins for its wav2vec2-XLS-R front end. Passed to the Dockerfile as FAIRSEQ_COMMIT (the build refuses to proceed without it); a contract test binds this value once non-null."
   },
   "determinism_env": {
     "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
@@ -34,23 +34,31 @@
   },
   "model_repo": {
     "repo": "TakHemlata/SSL_Anti-spoofing",
-    "commit": null,
-    "commit_note": "CANDIDATE; the reviewed upstream commit is frozen in S2b alongside the weight shas via tools/synthdetect_infer.py verify-sources. Mirrors tools/synthdetect_sources.py MODELS['w2v2-aasist'].commit."
+    "commit": "4acaa61dcef5f7610f43aa4d0b29c4559b970cd2",
+    "commit_note": "Frozen S2b (2026-08-24). The vendored model definition tools/synthdetect_vendor/ssl_antispoofing_model.py is model.py at this commit (verbatim, sha256 08b2b99b...); see tools/synthdetect_vendor/provenance.json. Mirrors tools/synthdetect_sources.py MODELS['w2v2-aasist'].commit."
   },
   "weights": {
     "note": "CANDIDATE weight files, mounted read-only at eval time (never baked). Logical filename + role mirror tools/synthdetect_sources.py; size_bytes and sha256 are frozen in S2b from real downloaded bytes. Qualification state advances CANDIDATE -> PINNED_UNQUALIFIED (real-byte sha verified) -> QUALIFIED (GPU determinism + smoke evidence committed).",
-    "qualification_state": "candidate",
+    "qualification_state": "qualified",
+    "qualification_evidence": {
+      "reports": [
+        "docs/reports/synthdetect-weight-receipt-2026-08-24.md",
+        "docs/reports/synthdetect-gpu-smoke-2026-08-24.md"
+      ],
+      "note": "The dated evidence the qualified promotion rests on. A contract test (test_qualified_state_binds_its_evidence) requires every listed report to exist whenever qualification_state is qualified, so the label cannot outrun its evidence."
+    },
+    "qualification_state_note": "Qualified S2b (2026-08-24) on maintainer RTX 3060 (SM 8.6) hardware: the two weight shas below are frozen from real downloaded bytes (docs/reports/synthdetect-weight-receipt-2026-08-24.md), the GPU smoke passed (strict load, all-modules-eval, one finite score per window with correct counts and polarity, resume-without-duplication, weight/audio/header mismatch fail-closed), and the determinism spike was bit-exact across 4 cold container starts (max abs diff 0.0). See docs/reports/synthdetect-gpu-smoke-2026-08-24.md and docs/gpu-contracts.md. Qualified is a determinism + smoke claim for this frozen runtime/GPU-class/batch config, not a benchmark-reproduction claim (that is S3/S4).",
     "files": {
       "LA_model.pth": {
         "role": "aasist_checkpoint",
-        "size_bytes": null,
-        "sha256": null,
+        "size_bytes": 1271633441,
+        "sha256": "bd6f36097259fe54e7004eb983651e5304d807be81156dbd04faccb70d91e10c",
         "license": "MIT"
       },
       "xlsr2_300m.pt": {
         "role": "xlsr_ssl_base",
-        "size_bytes": null,
-        "sha256": null,
+        "size_bytes": 3808868242,
+        "sha256": "b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9",
         "license": "MIT"
       }
     }

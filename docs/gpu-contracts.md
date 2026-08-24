@@ -1399,10 +1399,10 @@ The reference runtime is a pinned CUDA container (`services/synthdetect/`):
 `Dockerfile.eval` bakes torch cu118 plus fairseq at a frozen commit,
 `requirements.eval.txt` lists the non-torch pins, and `provenance.eval.json`
 records the runtime identity, the canonicalization id, the scoring polarity, and
-the CANDIDATE weight and commit pins. A contract test
-(`tests/contracts/test_synthdetect_container.py`) binds that file to the
-Dockerfile, the requirements, the registry, and the runner. Weights are never
-baked: they are CANDIDATE, license-gated, and mounted read-only at run time.
+the weight and commit pins (CANDIDATE through S2a, frozen in the S2b freeze
+below). A contract test (`tests/contracts/test_synthdetect_container.py`) binds
+that file to the Dockerfile, the requirements, the registry, and the runner.
+Weights are never baked: they are license-gated and mounted read-only at run time.
 
 `tools/synthdetect_infer.py` runs inside the container with the GPU and writes the
 raw-score journal the S1 scorer already reads. Its engine seam is narrow: only the
@@ -1461,6 +1461,27 @@ is a failure. If exact repeatability is genuinely unavailable, the runtime stays
 unqualified and at least ten cold runs are collected so S3 can pre-declare and
 ratify max-absolute, percentile, and threshold-flip tolerances against that
 evidence; a tolerance is never invented after observing drift.
+
+#### Verdict: w2v2-aasist QUALIFIED on RTX 3060 (SM 8.6, 2026-08-24, S2b)
+
+The default candidate `w2v2-aasist` is qualified. The weight pins are frozen from
+real bytes (`LA_model.pth` sha256 `bd6f3609...`, `xlsr2_300m.pt` sha256
+`b0892759...`; receipt: `docs/reports/synthdetect-weight-receipt-2026-08-24.md`),
+the reference runtime is frozen (base image `nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04@sha256:8f9dd0d0...`,
+fairseq `a54021305d...`, model repo `TakHemlata/SSL_Anti-spoofing@4acaa61d...`,
+vendored verbatim at `tools/synthdetect_vendor/`), and `provenance.eval.json`
+carries `qualification_state: qualified`. The GPU smoke passed every check
+(strict load, all-modules-eval, finite one-score-per-window with correct counts
+and polarity, resume without duplication, and weight/audio/header mismatch
+failing closed), and the determinism spike was bit-exact across four cold
+container starts (identical `execution_identity_sha256`, maximum absolute
+difference `0.0`). The one stderr line, a torch `weight_norm` deprecation
+`UserWarning`, is a deterministic upstream API-naming notice, not a determinism
+warning: `use_deterministic_algorithms(True, warn_only=False)` raises rather than
+warns on a non-deterministic op, and the runs completed. Evidence:
+`docs/reports/synthdetect-gpu-smoke-2026-08-24.md`. This is a determinism and
+smoke claim for this frozen runtime, GPU class, and batch configuration; the
+ASVspoof 2021 DF reproduction target remains provisional and is S3/S4.
 
 **Two versioned identities, never conflated.** The **inference space id** (for
 the default candidate, `synthdetect-w2v2aasist-v1`) is weight shas plus
