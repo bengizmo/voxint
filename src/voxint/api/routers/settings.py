@@ -908,7 +908,7 @@ def _services_step_response(request: Request, session: Session) -> Response:
         session.rollback()
         context = _minimal_services_context(request, settings)
     context["doctor_checks"] = checks
-    return templates.TemplateResponse(request, "setup.html", context)
+    return templates.TemplateResponse(request, "settings/setup.html", context)
 
 
 def _persist_feature_flags(
@@ -1276,7 +1276,7 @@ def setup(request: Request, operator: OperatorDep, session: SessionDep) -> Respo
         # even when Postgres itself is down (that's exactly what it must show).
         return _services_step_response(request, session)
     context = _setup_context(request, session, step)
-    return templates.TemplateResponse(request, "setup.html", context)
+    return templates.TemplateResponse(request, "settings/setup.html", context)
 
 def _setup_redirect(step: WizardStep) -> RedirectResponse:
     return RedirectResponse(f"/setup?step={step.value}", status_code=303)
@@ -1295,7 +1295,7 @@ def _scan_response(request: Request, session: Session, result: ScanResult) -> Re
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
-            "fragments/setup_scan.html",
+            "settings/setup_scan.html",
             {
                 "request": request,
                 "result": result,
@@ -1363,7 +1363,7 @@ def setup_scan_confirm(
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
-            "fragments/setup_scan.html",
+            "settings/setup_scan.html",
             {
                 "request": request,
                 "result": confirmed,
@@ -1406,7 +1406,7 @@ def _folder_panel_response(
     )
     context["folder_error"] = error
     response = templates.TemplateResponse(
-        request, "fragments/folder_panel.html", {"request": request, **context}
+        request, "settings/folder_panel.html", {"request": request, **context}
     )
     # Authenticated fragment: keep it out of any shared/browser cache.
     response.headers["Cache-Control"] = "no-store"
@@ -1425,7 +1425,7 @@ def setup_folders_browse(
         session, settings, action_prefix="/setup/folders", csrf=csrf, path=path
     )
     response = templates.TemplateResponse(
-        request, "fragments/folder_panel.html", {"request": request, **context}
+        request, "settings/folder_panel.html", {"request": request, **context}
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -1458,7 +1458,7 @@ def setup_folders(
     def _error_page(message: str) -> Response:
         return templates.TemplateResponse(
             request,
-            "setup.html",
+            "settings/setup.html",
             _setup_context(
                 request, session, WizardStep.MEDIA, folder_path=path,
                 folder_error=message,
@@ -1492,7 +1492,7 @@ def setup_vocabulary(
     except SetupValidationError as exc:
         return templates.TemplateResponse(
             request,
-            "setup.html",
+            "settings/setup.html",
             _setup_context(
                 request,
                 session,
@@ -1534,7 +1534,7 @@ def setup_llm(
         # /settings/llm).
         return templates.TemplateResponse(
             request,
-            "setup.html",
+            "settings/setup.html",
             _setup_context(
                 request,
                 session,
@@ -1590,7 +1590,7 @@ def setup_finish(
             session.rollback()
             return templates.TemplateResponse(
                 request,
-                "setup.html",
+                "settings/setup.html",
                 _setup_context(
                     request, session, WizardStep.FINISH, tutorial_error=error
                 ),
@@ -1896,7 +1896,7 @@ def _settings_context(
 @router.get("/settings")
 def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
-        request, "settings.html", _settings_context(request, session)
+        request, "settings/settings.html", _settings_context(request, session)
     )
 
 @router.post("/settings/llm")
@@ -1918,7 +1918,7 @@ def settings_llm(
         # Password field, never prefilled: the submitted key is never echoed.
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, llm_error=error),
         )
 
@@ -1975,7 +1975,7 @@ def settings_features(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request, session, features_errors=errors, features_submitted=submitted
             ),
@@ -2011,7 +2011,7 @@ def settings_semantic(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request,
                 session,
@@ -2050,7 +2050,7 @@ def settings_translation(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request,
                 session,
@@ -2094,7 +2094,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, corrections_error=message),
             status_code=422,
         )
@@ -2120,7 +2120,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, corrections_error=message),
             status_code=422,
         )
@@ -2136,7 +2136,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, corrections_error=exc.message),
             status_code=422,
         )
@@ -2176,7 +2176,7 @@ def settings_glossary(
         submitted = [line for line in vocabulary.splitlines() if line.strip()]
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request,
                 session,
@@ -2213,7 +2213,7 @@ def settings_watch_folder(
     if watch_folder_enabled not in _FEATURE_FLAG_CHOICES:
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request,
                 session,
@@ -2268,7 +2268,7 @@ def settings_web_research(
         }
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(
                 request, session, web_research_errors=errors, web_research_submitted=submitted
             ),
@@ -2293,7 +2293,7 @@ def settings_folders_browse(
         session, settings, action_prefix="/settings/folders", csrf=csrf, path=path
     )
     response = templates.TemplateResponse(
-        request, "fragments/folder_panel.html", {"request": request, **context}
+        request, "settings/folder_panel.html", {"request": request, **context}
     )
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -2323,7 +2323,7 @@ def settings_folders(
     def _error_page(message: str) -> Response:
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, folder_path=path, folder_error=message),
         )
 
@@ -2357,7 +2357,7 @@ def tutorial_seed(
         session.rollback()
         return templates.TemplateResponse(
             request,
-            "settings.html",
+            "settings/settings.html",
             _settings_context(request, session, tutorial_error=error),
         )
     session.commit()

@@ -347,7 +347,7 @@ def _run_assets_response(
     secret = request.app.state.csrf_secret
     return templates.TemplateResponse(
         request,
-        "fragments/run_assets.html",
+        "legacy_runs/run_assets.html",
         {
             "request": request,
             "assets": _run_assets_state(
@@ -423,7 +423,7 @@ def _run_translation_response(
     secret = request.app.state.csrf_secret
     return templates.TemplateResponse(
         request,
-        "fragments/run_translation.html",
+        "legacy_runs/run_translation.html",
         {
             "request": request,
             "translation_state": _run_translation_state(
@@ -663,7 +663,7 @@ def runs(
     )
     return templates.TemplateResponse(
         request,
-        "runs.html",
+        "legacy_runs/runs.html",
         {
             "request": request,
             "page": page,
@@ -733,7 +733,7 @@ def search(
     )
     return templates.TemplateResponse(
         request,
-        "search.html",
+        "legacy_runs/search.html",
         {
             "request": request,
             "page": page,
@@ -872,7 +872,7 @@ def run_detail(
     )
     return templates.TemplateResponse(
         request,
-        "run_detail.html",
+        "legacy_runs/run_detail.html",
         {
             "request": request,
             "run": run,
@@ -997,7 +997,7 @@ def run_transcript(
         ]
         return templates.TemplateResponse(
             request,
-            "transcript.html",
+            "legacy_runs/transcript.html",
             {
                 "request": request,
                 "run": run,
@@ -1042,7 +1042,7 @@ def run_transcript(
         }
     return templates.TemplateResponse(
         request,
-        "transcript.html",
+        "legacy_runs/transcript.html",
         {
             "request": request,
             "run": run,
@@ -1430,7 +1430,7 @@ def dashboard(request: Request, operator: OperatorDep, session: SessionDep) -> R
         # The "Last finished run" task card: newest run by terminal-stage
         # completion, None when nothing has finished (honest empty state).
         context["last_completed"] = latest_completed_run(session)
-    template = "fragments/dashboard_metrics.html" if is_htmx else "dashboard.html"
+    template = "legacy_runs/dashboard_metrics.html" if is_htmx else "legacy_runs/dashboard.html"
     return templates.TemplateResponse(request, template, context)
 
 # ---- Hardware resource page (hardware-aware W3) -----------------------------
@@ -1451,9 +1451,9 @@ def resources(request: Request, operator: OperatorDep) -> Response:
         "active_nav": "resources",
     }
     template = (
-        "fragments/resource_status.html"
+        "legacy_runs/resource_status.html"
         if request.headers.get("HX-Request")
-        else "resources.html"
+        else "legacy_runs/resources.html"
     )
     return templates.TemplateResponse(request, template, context)
 

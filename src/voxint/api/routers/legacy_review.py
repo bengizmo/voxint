@@ -532,7 +532,7 @@ def _labels_response(
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
-            "fragments/labels.html",
+            "legacy_review/labels.html",
             _workbench_context(request, session, run, token),
         )
     return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
@@ -650,7 +650,7 @@ def review_transcript(
         island_props["translate"] = None
     return templates.TemplateResponse(
         request,
-        "review_transcript.html",
+        "legacy_review/review_transcript.html",
         {
             "request": request,
             "run": run,
@@ -687,7 +687,7 @@ def review_queue(request: Request, operator: OperatorDep, session: SessionDep) -
         sort = "oldest"
     return templates.TemplateResponse(
         request,
-        "queue.html",
+        "legacy_review/queue.html",
         {
             "request": request,
             "entries": adjudication_queue(session, sort=sort),
@@ -765,7 +765,7 @@ def workbench(
     context["tutorial"] = _tutorial_banner(
         request, session, page=TutorialPage.WORKBENCH, run_id=run_id, token=token
     )
-    return templates.TemplateResponse(request, "run.html", context)
+    return templates.TemplateResponse(request, "legacy_review/run.html", context)
 
 @router.post("/review/{run_id}/release")
 def release(
@@ -899,7 +899,7 @@ def merge_preview(
     )
     return templates.TemplateResponse(
         request,
-        "fragments/merge_confirm.html",
+        "legacy_review/merge_confirm.html",
         {
             "request": request,
             "run": run,

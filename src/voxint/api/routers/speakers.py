@@ -175,7 +175,7 @@ def _research_response(
     research mutation's response."""
     return templates.TemplateResponse(
         request,
-        "fragments/research.html",
+        "speakers/research.html",
         {
             "request": request,
             "research": _research_state(session, request.app.state.settings, speaker, error),
@@ -218,11 +218,11 @@ def _roster_response(request: Request, session: Session, error: str | None = Non
     error to show. CSRF/auth failures never come here; they stay real 403s."""
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            request, "fragments/roster.html", _roster_context(request, session, error)
+            request, "speakers/roster.html", _roster_context(request, session, error)
         )
     if error is not None:
         return templates.TemplateResponse(
-            request, "speakers.html", _roster_context(request, session, error)
+            request, "speakers/speakers.html", _roster_context(request, session, error)
         )
     return RedirectResponse("/speakers", status_code=303)
 
@@ -239,7 +239,7 @@ def _roster_response(request: Request, session: Session, error: str | None = Non
 @router.get("/speakers")
 def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
-        request, "speakers.html", _roster_context(request, session)
+        request, "speakers/speakers.html", _roster_context(request, session)
     )
 
 @router.post("/speakers/{speaker_id}/rename")

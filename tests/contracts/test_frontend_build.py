@@ -33,8 +33,8 @@ _PYPROJECT = REPO_ROOT / "pyproject.toml"
 _VITE_CONFIG = REPO_ROOT / "frontend" / "vite.config.ts"
 _MAIN_TS = REPO_ROOT / "frontend" / "src" / "main.ts"
 _ENTRIES_DIR = REPO_ROOT / "frontend" / "src" / "entries"
-_RUN_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "run.html"
-_LABELS_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "fragments" / "labels.html"
+_RUN_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review/run.html"
+_LABELS_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review" / "labels.html"
 
 
 # --------------------------------------------------------------------------- #
