@@ -28,8 +28,8 @@ Voxint.)*
 |---|---|
 | ![The adjudication queue: completed runs with voices still needing a decision](docs/images/review-queue.png) | ![The workbench: each voice shows its evidence: a confident match to accept, a heard name that is only a guess, or no name at all](docs/images/review-workbench.png) |
 | **Your review queue**: completed recordings waiting for your decisions. | **Attribute each voice**: accept a confident match, judge a heard name, or leave a voice unknown. |
-| ![The guided setup wizard's readiness checks, each dependency shown as ready, failed, or unverified](docs/images/setup-wizard.png) | ![The dashboard: run health, throughput, roster size, and per-stage timing](docs/images/dashboard.png) |
-| **Guided setup in the browser**: honest readiness checks, plain-language fixes. | **A dashboard** for run health and throughput at a glance. |
+| ![The guided setup wizard's readiness checks, each dependency shown as ready, failed, or unverified](docs/images/setup-wizard.png) | ![Home: needs-attention cards, quick actions, windowed activity counts, and recent activity](docs/images/home.png) |
+| **Guided setup in the browser**: honest readiness checks, plain-language fixes. | **Home** shows what needs your attention and how to add a recording. |
 
 ## What it does
 
