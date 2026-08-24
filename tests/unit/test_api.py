@@ -5,8 +5,8 @@ from celery.exceptions import OperationalError
 from fastapi.testclient import TestClient
 
 from voxint import __version__
-from voxint.api import app as app_module
 from voxint.api.app import app
+from voxint.api.routers import deps as deps_module
 
 
 def test_healthz() -> None:
@@ -23,8 +23,8 @@ def test_healthz() -> None:
 def test_publish_or_defer_returns_true_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_publish_run", lambda _run_id, **_kwargs: None)
-    assert app_module._publish_or_defer(uuid.uuid4()) is True
+    monkeypatch.setattr(deps_module, "_publish_run", lambda _run_id, **_kwargs: None)
+    assert deps_module._publish_or_defer(uuid.uuid4()) is True
 
 
 def test_publish_or_defer_swallows_broker_outage(
@@ -33,10 +33,10 @@ def test_publish_or_defer_swallows_broker_outage(
     def _down(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("Error 111 connecting to redis. Connection refused.")
 
-    monkeypatch.setattr(app_module, "_publish_run", _down)
+    monkeypatch.setattr(deps_module, "_publish_run", _down)
     # A broker outage is non-fatal: deferred, not raised — the committed QUEUED
     # run is left for the recovery sweep.
-    assert app_module._publish_or_defer(uuid.uuid4()) is False
+    assert deps_module._publish_or_defer(uuid.uuid4()) is False
 
 
 def test_publish_or_defer_reraises_unexpected_error(
@@ -45,11 +45,11 @@ def test_publish_or_defer_reraises_unexpected_error(
     def _bug(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise RuntimeError("a real bug in the publish path")
 
-    monkeypatch.setattr(app_module, "_publish_run", _bug)
+    monkeypatch.setattr(deps_module, "_publish_run", _bug)
     # Only OperationalError is swallowed; anything else must surface, not be
     # silently deferred as if the broker were down.
     with pytest.raises(RuntimeError, match="real bug"):
-        app_module._publish_or_defer(uuid.uuid4())
+        deps_module._publish_or_defer(uuid.uuid4())
 
 
 # --- ignore_result is load-bearing, not cosmetic ------------------------------
@@ -81,6 +81,6 @@ def test_publish_run_enqueues_with_ignore_result(
     # Patch apply_async (not _publish_run) so the REAL _publish_run body runs.
     monkeypatch.setattr(run_pipeline, "apply_async", _capture)
     run_id = uuid.uuid4()
-    app_module._publish_run(run_id)
+    deps_module._publish_run(run_id)
     assert captured["args"] == (str(run_id),)
     assert captured["kwargs"] == {"ignore_result": True}

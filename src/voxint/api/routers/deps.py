@@ -42,8 +42,10 @@ from voxint.api.resource_status import (
 )
 from voxint.app_settings import is_onboarded
 from voxint.config import Settings
-from voxint.db.models import PipelineRun
+from voxint.db.models import PipelineRun, Stage
 from voxint.db.session import build_engine, build_session_factory, session_scope
+from voxint.domain_packs.base import DomainPackError
+from voxint.domain_packs.corrections import operator_correction_message
 from voxint.media.serving import MediaGate
 
 logger = logging.getLogger(__name__)
@@ -223,3 +225,65 @@ def _require_csrf(request: Request, action: str, token: str | None) -> None:
     cross-site POST one uniform refusal before the DB is touched."""
     if not verify_csrf_token(request.app.state.csrf_secret, action, token):
         raise HTTPException(status_code=403, detail="invalid or missing CSRF token")
+
+
+def _publish_run(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
+    """Enqueue a fresh submission or stage-routed resumption (commit-before-publish).
+
+    The Celery/broker import stays out of the module top level so the read path
+    — and any DB-less import — never pulls in the broker.
+
+    ``ignore_result=True``: nothing in Voxint consumes ``run_pipeline``'s return
+    value (no ``.get()``/``AsyncResult`` anywhere; the status string is only for
+    logs), so registering a pending result is pure waste. It also makes a
+    dead-broker publish fail *precisely*: with a Redis result backend, plain
+    ``.delay()`` on a down broker raises a vague ``RuntimeError`` from the result
+    consumer's reconnect loop, whereas ignoring the result surfaces the broker
+    connect failure itself as ``kombu.exceptions.OperationalError`` — the exact
+    exception ``_publish_or_defer`` catches."""
+    from voxint.worker.tasks import pipeline_task_for_stage
+
+    pipeline_task_for_stage(stage).apply_async((str(run_id),), ignore_result=True)
+
+
+def _publish_or_defer(run_id: uuid.UUID, *, stage: Stage | None = None) -> bool:
+    """Publish the run's task, returning ``False`` (never raising) if the broker
+    is unreachable so the request can degrade cleanly.
+
+    Commit-before-publish means the durable QUEUED run already exists, so a Redis
+    outage is non-fatal: leaving the run QUEUED lets the beat recovery sweep
+    re-enqueue it once the broker returns. Only ``OperationalError`` — kombu's
+    wrapper for every transport/connection failure — is swallowed, so a genuine
+    bug in the publish path still raises rather than being silently deferred."""
+    # celery re-exports kombu's OperationalError as the same class; importing it
+    # from celery keeps the broker types under the existing celery.* mypy override
+    # and stays lazy so the read path never pulls the broker in.
+    from celery.exceptions import OperationalError
+
+    try:
+        _publish_run(run_id, stage=stage)
+    except OperationalError:
+        logger.warning(
+            "pipeline enqueue deferred (broker unavailable); run %s stays QUEUED "
+            "for the recovery sweep",
+            run_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
+
+def _submit_domain_pack_detail(exc: DomainPackError) -> str:
+    """Operator-facing text for a freeze-time ``DomainPackError`` at a submit boundary.
+
+    ``_run_domain_pack_snapshot`` raises this when the run's resolved domain pack
+    can't be applied — either an unresolvable pack name (issue #11) or an operator
+    correction that collides with the folder's pack (issue #84). Neutral wording
+    covers both, and the underlying reason is softened out of pack jargon so a
+    non-technical operator can act on it instead of seeing a 500."""
+    return (
+        "The domain pack for this media couldn't be applied: "
+        f"{operator_correction_message(str(exc))} "
+        "Check Settings → Corrections and the folder's domain-pack assignment."
+    )
