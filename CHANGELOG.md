@@ -15,6 +15,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   degrades to a readable, non-interactive list, which both surfaces now render
   from one shared template so the two fallbacks cannot drift. No new server
   data: the outline already rode in the shared transcript island props.
+- **Console 2.0 groundwork, P2a: the projects and media-folders schema** (#153,
+  epic #149). Additive schema with no operator-visible change on its own: new
+  `projects` and `media_folders` tables and a media location split
+  (`media_items.current_path`, backfilled to `source_path`, and a
+  `media_folder_id` folder membership FK), the relational foundation the console
+  library, projects, and project-scoped configuration build on. The migration
+  carries each registered folder over from the `app_settings` list, seeds folder
+  membership by deepest-ancestor, and refuses to change any run's effective
+  domain pack (an install with nested folder registrations is asked to reconcile
+  them first). The `app_settings.media_folders` / `folder_domain_packs` columns
+  are kept for one release as a rollback input.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as

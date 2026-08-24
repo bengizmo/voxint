@@ -59,3 +59,37 @@ not shift silently when a file is relocated.
   a folder.
 - Config resolution is auditable: given a run, the applied pack is a walk of
   stored relations, reproducible without reasoning about path strings.
+
+## Addendum (P2a, issue #153): resolution semantics and snapshot versioning
+
+The P2a slice makes decisions 3 and 4 concrete. Two points needed pinning
+before implementation:
+
+1. **Per-field replacement, not union.** Vocabulary and corrections each resolve
+   independently by first present layer, in the order: an explicit per-run pack
+   override (CLI or sidecar), then the project field, then the folder pack field,
+   then the global baseline. A folder layer is present when
+   `media_folders.domain_pack` is non-NULL. Project fields are nullable: NULL
+   means inherit the layer below, an empty list means "explicitly none" and wins.
+   This is what "the project wins" (decision 4) means in practice: a project with
+   its own vocabulary replaces, rather than adds to, what the folder pack or the
+   global baseline would have contributed.
+
+   The observable consequence, worth a release note: a media item that resolves
+   to an explicit folder pack now stops inheriting the global vocabulary and
+   corrections. Under the pre-P2a behavior both were unioned onto every run. A
+   media item with no project and no folder pack still resolves to the default
+   pack composed with the global settings exactly as before, so existing installs
+   that never set a per-folder pack see no change.
+
+2. **Snapshot versioning keeps frozen runs byte-identical.** Vocabulary was
+   applied live at run start (`pipeline/stages/context.py` unioned
+   `app_settings.vocabulary` onto the pack). Deterministic project-scoped
+   resolution requires freezing the effective vocabulary at submit alongside the
+   corrections. To avoid rewriting or reinterpreting any existing
+   `pipeline_runs.domain_pack` row, new snapshots carry a
+   `config_resolution_version: 2` key. The worker branches on it: version 2 uses
+   the frozen vocabulary and does not live-union `app_settings.vocabulary`; a
+   missing key (every pre-P2a row) keeps the exact live-union path. No migration
+   rewrites `pipeline_runs`, so requeuing an old run reproduces its original
+   behavior.

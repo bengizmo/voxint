@@ -199,6 +199,109 @@ def _enum_values(e: type[enum.StrEnum]) -> str:
     return ", ".join(f"'{m.value}'" for m in e)
 
 
+class Project(Base):
+    """A named grouping of media folders with project-scoped config (issue #153).
+
+    Console 2.0 (epic #149) organizes media into projects: a project owns zero or
+    more :class:`MediaFolder` rows and carries its own ``vocabulary`` and
+    ``corrections`` that override the folder pack and the global settings for new
+    runs (ADR 0002, per-field replacement). Membership is a foreign key, never a
+    path prefix.
+
+    ``vocabulary`` and ``corrections`` are **nullable to distinguish inherit from
+    explicit-empty**: NULL means "inherit the layer below" (folder pack, then
+    global), an empty list means "explicitly none" and wins over the lower layers.
+    ``corrections`` rows carry the same ``{id, match, replace, ...}`` shape as
+    ``app_settings.corrections`` and pass the same #80 validators at author time.
+    """
+
+    __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("length(btrim(name)) > 0", name="projects_name_nonempty_check"),
+        CheckConstraint(
+            "corrections IS NULL OR jsonb_typeof(corrections) = 'array'",
+            name="projects_corrections_array_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    # NULL = inherit the folder/global layer; [] = explicitly empty (wins).
+    vocabulary: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    folders: Mapped[list["MediaFolder"]] = relationship(back_populates="project")
+
+
+class MediaFolder(Base):
+    """A registered media folder, the relational successor to the app_settings list.
+
+    Pre-#153 the watched folders lived in ``app_settings.media_folders`` (a Text
+    array) with per-folder packs in ``app_settings.folder_domain_packs``. P2a moves
+    each registration to a first-class row so media membership is a foreign key
+    (ADR 0002) and a folder can join a :class:`Project`. ``path`` is MEDIA_ROOT-
+    relative POSIX (matching the old list), unique, and non-empty; overlapping
+    (nested) registrations are refused at write time by the shared registration
+    service, not by a DB constraint.
+
+    ``domain_pack`` is the per-folder pack name (was ``folder_domain_packs[path]``);
+    NULL means the folder inherits the default pack. ``watch`` mirrors the pre-#153
+    behavior where every registered folder is swept when the installation-wide
+    ``app_settings`` watch gate is on; the per-row flag lets a folder opt out later
+    without a schema change. The app_settings columns are retained for one release
+    (dropped in a later migration) as a rollback/audit input.
+    """
+
+    __tablename__ = "media_folders"
+    __table_args__ = (
+        CheckConstraint("length(path) > 0", name="media_folders_path_nonempty_check"),
+        Index("ix_media_folders_project_id", "project_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    path: Mapped[str] = mapped_column(Text, unique=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL")
+    )
+    domain_pack: Mapped[str | None] = mapped_column(Text)
+    watch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project | None"] = relationship(back_populates="folders")
+    media_items: Mapped[list["MediaItem"]] = relationship(back_populates="media_folder")
+
+
+def _seed_current_path(context: Any) -> str | None:
+    """Default ``current_path`` to ``source_path`` for ORM-created media rows.
+
+    ADR 0001 splits identity (``source_path``, immutable) from live location
+    (``current_path``, mutable). At ingest the two are equal, so every ORM insert
+    seeds ``current_path := source_path`` without the four call sites having to
+    pass it. The column stays nullable in P2a (raw-SQL test inserts omit it and no
+    reader treats it as a byte path until the P2c move slice, which enforces NOT
+    NULL); the migration backfills existing rows.
+    """
+    params = context.get_current_parameters()
+    value = params.get("source_path")
+    return str(value) if value is not None else None
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
     __table_args__ = (
@@ -209,10 +312,21 @@ class MediaItem(Base):
         CheckConstraint(
             "size_bytes IS NULL OR size_bytes >= 0", name="media_items_size_nonneg_check"
         ),
+        Index("ix_media_items_media_folder_id", "media_folder_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     source_path: Mapped[str] = mapped_column(Text, unique=True)
+    # Live filesystem location (ADR 0001), split from the immutable source_path
+    # identity. Equal to source_path at ingest (seeded by _seed_current_path);
+    # only a P2c move rewrites it. Nullable in P2a, NOT NULL from P2c.
+    current_path: Mapped[str | None] = mapped_column(Text, default=_seed_current_path)
+    # Folder membership (ADR 0002): the folder this media belongs to, set at
+    # ingest by the write-cutover slice and updated by a move. NULL for
+    # uploads/URLs/tutorial/unmatched media that sit outside a registered folder.
+    media_folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("media_folders.id", ondelete="SET NULL")
+    )
     # Provenance for URL-ingested media (nullable, non-unique): the origin URL a
     # run was fetched from. NULL means local/uploaded media that already sits at
     # source_path, so the ACQUIRE stage no-ops. Set only by the URL submission
@@ -227,6 +341,9 @@ class MediaItem(Base):
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
         back_populates="media_item"
+    )
+    media_folder: Mapped["MediaFolder | None"] = relationship(
+        back_populates="media_items"
     )
 
 
