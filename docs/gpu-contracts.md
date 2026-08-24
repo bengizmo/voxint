@@ -1390,8 +1390,77 @@ The S1 scaffolding that stands this up is CI-only (no GPU, no weights): the
 pins-as-data registry (`tools/synthdetect_sources.py`), the host scorer
 (`tools/synthdetect_eval.py`), the manifest schema and seeded split assignment
 (`tools/synthdetect_corpus.py`), and their unit suites
-(`tests/unit/test_synthdetect_{sources,metrics,manifest,journal}.py`). The
-containerized runner (pinned fairseq) and the measured gates land in S2+.
+(`tests/unit/test_synthdetect_{sources,metrics,manifest,journal}.py`). S2 adds the
+eval container and the inference runner (below); the measured gates land in S3+.
+
+### S2: the eval container and inference runner
+
+The reference runtime is a pinned CUDA container (`services/synthdetect/`):
+`Dockerfile.eval` bakes torch cu118 plus fairseq at a frozen commit,
+`requirements.eval.txt` lists the non-torch pins, and `provenance.eval.json`
+records the runtime identity, the canonicalization id, the scoring polarity, and
+the CANDIDATE weight and commit pins. A contract test
+(`tests/contracts/test_synthdetect_container.py`) binds that file to the
+Dockerfile, the requirements, the registry, and the runner. Weights are never
+baked: they are CANDIDATE, license-gated, and mounted read-only at run time.
+
+`tools/synthdetect_infer.py` runs inside the container with the GPU and writes the
+raw-score journal the S1 scorer already reads. Its engine seam is narrow: only the
+fairseq forward pass is GPU-bound and weights-bound, and everything that decides
+corpus identity or the scored numbers (canonical-PCM verification, windowing,
+repeat-padding, batching, pooling, journaling, resume, and the determinism
+provenance) is pure and covered in CI without torch, a GPU, or weights.
+
+Two properties are load-bearing for reproducibility:
+
+- **The runner does not resample.** Corpus audio is canonicalized once at
+  acquisition to `pcm-s16le-mono-16000-v1` (16 kHz mono signed-16-bit
+  little-endian PCM, no dither, normalization, or trim). The manifest `sha256` is
+  the digest of the PCM `data` payload bytes only, and the runner asserts that
+  format, hashes the payload, and fails closed on a mismatch. Corpus identity
+  therefore never depends on the container's decoder or resampler. Changing the
+  canonicalization is a new id, never a silent regeneration of corpus identity.
+- **The journal header carries the full determinism provenance.** Its `runtime`
+  block records the image digest, provenance sha, runner commit, and the torch,
+  fairseq, CUDA, cuDNN, and device-capability versions; its `flags` block records
+  the deterministic-algorithms state (with `warn_only` false), cuDNN determinism
+  and benchmark, TF32 for cuDNN and matmul, the matmul precision, the cuBLAS
+  workspace, the seeds, the batch size, and the asserted eval-mode result. A
+  `--resume` recomputes a canonical `execution_identity_sha256` over the immutable
+  header projection (excluding only timestamps, run id, host, and path) and
+  refuses to continue a journal whose weights, runtime, flags, windowing, scoring,
+  manifest, or selection differ.
+
+### Qualification states and the S2b GPU gate
+
+A weight pin advances through three states, and they are never conflated:
+
+1. **CANDIDATE.** No real bytes have been verified. This is the S1 and S2a state;
+   `weights_pinned()` is False, and `provenance.eval.json` carries null shas and a
+   `candidate` qualification state.
+2. **PINNED_UNQUALIFIED.** `synthdetect_infer.py verify-sources` has hashed the
+   downloaded bytes and the sha is frozen in the registry and provenance. This is
+   a fact about bytes; it does not depend on model accuracy or GPU determinism.
+3. **QUALIFIED.** Dated GPU evidence has passed. Only then does the runtime earn
+   the "deterministic" label, and a benchmark reproduction claim needs the full
+   pinned dataset, protocol, and keys on top of that.
+
+S2b (a maintainer action on the local 3060) commits three dated artifacts before
+any pin is called qualified: a weight receipt (retrieval date, authoritative URL,
+byte size, sha256, license disposition, upstream commit, verification tool), a GPU
+smoke bundle (strict checkpoint load with no missing or unexpected keys, an
+all-modules-in-eval assertion, finite one-score-per-window outputs with correct
+counts and polarity, a resume that does not duplicate, and a deliberate
+weight/audio/header mismatch that fails closed), and a determinism report. The
+determinism spike runs at least three cold processes on the same cohort, GPU,
+order, and batch size; it passes only if the per-window logits and pooled scores
+are bit-for-bit identical (maximum absolute difference exactly zero) with
+deterministic algorithms on and warn-only and cuDNN benchmark off. A NaN, an
+infinity, a warning, a crash, a differing score, or a changed execution identity
+is a failure. If exact repeatability is genuinely unavailable, the runtime stays
+unqualified and at least ten cold runs are collected so S3 can pre-declare and
+ratify max-absolute, percentile, and threshold-flip tolerances against that
+evidence; a tolerance is never invented after observing drift.
 
 **Two versioned identities, never conflated.** The **inference space id** (for
 the default candidate, `synthdetect-w2v2aasist-v1`) is weight shas plus

@@ -1,0 +1,71 @@
+{
+  "note": "Runtime provenance for the synthdetect EVAL container (issue #144, M1 S2). NOT a shipped service image: this pins the maintainer eval runtime (Dockerfile.eval + requirements.eval.txt) that tools/synthdetect_infer.py runs inside. Fields marked null are CANDIDATE, frozen in S2b (the first GPU build + validation) against real bytes, exactly like the weight shas in tools/synthdetect_sources.py. A contract test (tests/contracts/test_synthdetect_container.py) binds this file to the Dockerfile ARG, the requirements pins, the registry, and the runner's canonicalization id.",
+  "for_model": "w2v2-aasist",
+  "inference_space": "synthdetect-w2v2aasist-v1",
+  "reference_runtime": "fairseq",
+  "canonicalization_id": "pcm-s16le-mono-16000-v1",
+  "canonicalization_note": "Corpus audio is canonicalized ONCE at acquisition to 16 kHz mono signed-16-bit little-endian PCM (no dither, no normalization, no silence trim). The manifest sha256 is the sha256 of the PCM data-chunk payload bytes only (no RIFF/WAV header). The runner does NO resampling: it asserts this format, hashes the payload, and fails closed on a mismatch. Changing this canonicalization is a new id, never a silent regeneration of corpus identity.",
+  "base_image": "nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04",
+  "base_image_digest": null,
+  "runtime": {
+    "python": "3.10",
+    "torch": "2.1.0+cu118",
+    "torchaudio": "2.1.0+cu118",
+    "cuda": "11.8",
+    "numpy": "1.23.5",
+    "omegaconf": "2.0.6",
+    "hydra-core": "1.0.7",
+    "bitarray": "2.9.2",
+    "sacrebleu": "2.4.0",
+    "tensorboardX": "2.6.2.2",
+    "soundfile": "0.12.1",
+    "soxr": "0.3.7",
+    "scipy": "1.10.1",
+    "pyyaml": "6.0.1",
+    "cython": "0.29.36",
+    "fairseq_repo": "https://github.com/facebookresearch/fairseq.git",
+    "fairseq_commit": null,
+    "fairseq_commit_note": "CANDIDATE; passed to the Dockerfile as FAIRSEQ_COMMIT and frozen in S2b once the container builds and validates on a GPU. The build refuses to proceed without it."
+  },
+  "determinism_env": {
+    "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+    "PYTHONHASHSEED": "0",
+    "note": "Baked into the image; required for torch.use_deterministic_algorithms(True) under CUDA. The runner asserts CUBLAS_WORKSPACE_CONFIG before CUDA init and records both in the journal flags."
+  },
+  "model_repo": {
+    "repo": "TakHemlata/SSL_Anti-spoofing",
+    "commit": null,
+    "commit_note": "CANDIDATE; the reviewed upstream commit is frozen in S2b alongside the weight shas via tools/synthdetect_infer.py verify-sources. Mirrors tools/synthdetect_sources.py MODELS['w2v2-aasist'].commit."
+  },
+  "weights": {
+    "note": "CANDIDATE weight files, mounted read-only at eval time (never baked). Logical filename + role mirror tools/synthdetect_sources.py; size_bytes and sha256 are frozen in S2b from real downloaded bytes. Qualification state advances CANDIDATE -> PINNED_UNQUALIFIED (real-byte sha verified) -> QUALIFIED (GPU determinism + smoke evidence committed).",
+    "qualification_state": "candidate",
+    "files": {
+      "LA_model.pth": {
+        "role": "aasist_checkpoint",
+        "size_bytes": null,
+        "sha256": null,
+        "license": "MIT"
+      },
+      "xlsr2_300m.pt": {
+        "role": "xlsr_ssl_base",
+        "size_bytes": null,
+        "sha256": null,
+        "license": "MIT"
+      }
+    }
+  },
+  "scoring_semantics": {
+    "output_column": 1,
+    "output_column_meaning": "bona-fide logit (upstream Tak SSL_Anti-spoofing convention)",
+    "journaled_score": "negated output column 1 (higher = more synthetic; positive class = spoof)",
+    "note": "The upstream checkpoint emits column 1 = bona-fide logit; the runner journals its negation so the stored raw score is comparable across models under the fixed polarity. Unit-tested against the fake engine."
+  },
+  "s2b_freeze_checklist": [
+    "download LA_model.pth (Google Drive) and xlsr2_300m.pt (dl.fbaipublicfiles.com); record retrieval date + authoritative URL + byte size + sha256 in a dated weight receipt",
+    "freeze fairseq_commit, base_image_digest, model_repo.commit, and the two weight shas here and in tools/synthdetect_sources.py together",
+    "build the container with --build-arg FAIRSEQ_COMMIT=<frozen>; commit a dated GPU smoke bundle (strict checkpoint load, all-modules-eval assertion, finite one-score-per-window, polarity, resume-without-duplication, deliberate-mismatch fail-closed)",
+    "run the determinism spike (>=3 cold runs; bit-for-bit identical per-window logits and pooled scores, max abs diff exactly 0); commit a dated determinism report",
+    "only then advance weights.qualification_state to qualified and flip weights_pinned() True"
+  ]
+}
