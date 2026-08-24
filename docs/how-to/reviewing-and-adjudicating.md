@@ -47,7 +47,7 @@ leaves your computer.
 
 ### 1. Open Review and claim a run
 
-Click **Review** in the top navigation. The **Review** page lists every
+Click **Review** in the sidebar. The **Review** page lists every
 completed run that still has voices needing a human ruling. Each row shows:
 
 - a **friendly title** (the recording's own title when it has one, otherwise a
@@ -339,7 +339,7 @@ cards all show a decision, not "needs ruling"). Checking the words in Step 2 is
 recommended, and it is how you get a transcript you can fully trust, but it is
 not what removes the run from Review. A run can drop off the list with some lines
 still unchecked. To keep checking or to export it afterwards, reopen it from
-**Runs**.
+the **Runs** page (**Media** in the sidebar).
 
 Now read or export it. The **Download transcript** menu on either the workbench
 or the transcript page offers plain text, Markdown, subtitles (SubRip / WebVTT),

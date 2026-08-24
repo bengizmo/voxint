@@ -1931,7 +1931,7 @@ def _settings_context(
     context.update(overrides)
     return context
 
-@router.get("/settings")
+@router.get("/settings", name="settings_page")
 def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
         request, "settings/settings.html", _settings_context(request, session)

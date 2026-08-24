@@ -135,13 +135,14 @@ def test_onboarded_request_reaches_the_handler(
     assert resp.status_code == 200
 
 
-def test_index_redirects_to_review_when_onboarded(
+def test_index_renders_home_when_onboarded(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
+    # P1 (#152): / is the real Home page now, not a redirect to /review.
     seed_onboarded(session_factory)
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/review"
+    assert resp.status_code == 200
+    assert "<h1>Home</h1>" in resp.text
 
 
 def test_gate_reads_onboarding_fresh_each_request(

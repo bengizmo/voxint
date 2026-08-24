@@ -44,6 +44,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
+from voxint.api.routers.home import router as home_router
 from voxint.api.routers.legacy_review import router as review_router
 from voxint.api.routers.legacy_review import transcript_router as review_transcript_router
 from voxint.api.routers.legacy_runs import (
@@ -371,7 +372,12 @@ def _register_routes(app: FastAPI) -> None:
     # (setup_router, registered on `app` so the onboarding gate exempts it).
     app.include_router(setup_router)
 
-    # ---- Index + run submission/browsing/transcript: moved to
+    # ---- Home (Console 2.0 P1, #152): the landing page at /. Registered
+    # first among the console families so the root route sits early in the
+    # match/inventory order, where the old index redirect lived.
+    console.include_router(home_router)
+
+    # ---- Run submission/browsing/transcript: moved to
     # routers/legacy_runs.py; included here to keep registration order.
     console.include_router(runs_core_router)
 
@@ -502,6 +508,15 @@ def _register_routes(app: FastAPI) -> None:
         console.include_router(gated_plugins)
 
     app.include_router(console)
+
+    # Console area-flag guard (#152 review): the sidebar and Home render a
+    # dark-shipped area's links only when its flag is on AND its routes exist,
+    # so flipping CONSOLE_PROJECTS_ENABLED before the projects phase lands can
+    # never advertise a guaranteed 404. Computed once here (the route table is
+    # fixed after startup); the shell context processor reads it per request.
+    app.state.projects_routed = any(
+        route.path == "/projects" for route in _iter_api_routes(app.routes)
+    )
 
 
 app = create_app()

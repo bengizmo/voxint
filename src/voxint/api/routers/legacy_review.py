@@ -517,7 +517,7 @@ def _labels_response(
     return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
 
 
-@transcript_router.get("/review/{run_id}/transcript")
+@transcript_router.get("/review/{run_id}/transcript", name="review_transcript")
 def review_transcript(
     run_id: uuid.UUID,
     request: Request,
@@ -656,7 +656,7 @@ def review_transcript(
     )
 
 
-@router.get("/review")
+@router.get("/review", name="review_queue")
 def review_queue(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     # Whitelist the sort so a bookmarked/garbage value degrades to the
     # default FIFO order rather than erroring (issue #56).
@@ -722,7 +722,7 @@ def claim(
             suffix = "&tutorial=adjudicate"
     return RedirectResponse(f"/review/{run_id}?token={token}{suffix}", status_code=303)
 
-@router.get("/review/{run_id}")
+@router.get("/review/{run_id}", name="workbench")
 def workbench(
     run_id: uuid.UUID,
     request: Request,
