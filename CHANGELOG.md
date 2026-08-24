@@ -7,17 +7,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Added
 - **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
-  registry into every core seam so a converted feature will activate through
-  generic loops instead of a hand-wired copy: API router mounting with route
-  collision rejection, the settings-section and run-detail-panel render loops,
-  the Features-section flag merge, namespaced plugin templates, the Celery task
+  registry into every core seam so a future plugin activates through generic
+  loops instead of a hand-wired copy: API router mounting with route collision
+  rejection, the settings-section and run-detail-panel render loops, the
+  Features-section flag merge, namespaced plugin templates, the Celery task
   include and routing merge with a guard against a plugin shadowing a core task,
   the post-completion hook fan-out, the stale-job recovery sweep generalized from
   the embedding lane, the CLI subcommand loop, and a boot-time plugin invariant
   check. This change is dormant: the registry is empty, so behavior is
-  byte-identical and nothing an operator sees changes yet. As the optional
-  features convert in later changes, the translation and embedding job lanes gain
-  the generic recovery sweep.
+  byte-identical and nothing an operator sees changes yet. The framework is for
+  future greenfield plugins; the existing optional features stay native (epic
+  #136, ADR 0006).
 - **Console 2.0 groundwork, P0a: contracts, characterization tests, and a
   content-hash backfill** (#150, epic #149). Schema-free foundation for the
   review-console information-architecture refactor. It adds architecture
@@ -31,13 +31,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `sha256` for media rows that lack it (an integrity aid, never identity;
   idempotent, and a row whose bytes are gone is reported and retried later).
 - **Plugin framework substrate** (#137, epic #136). Internal groundwork for
-  turning Voxint's optional features into self-contained, flag-gated plugins.
-  This change ships the framework only: an empty registry, the plugin interface,
-  and the guard tests that keep the coming conversions safe. Nothing an operator
-  sees changes yet. One new setting is documented: `VOXINT_PLUGINS_DISABLED`, a
-  comma-separated kill switch for turning built-in feature plugins off in a
-  process (inert until the features are converted in later changes); `voxint
-  doctor` reports active plugins and flags an unknown id in the switch.
+  building self-contained, flag-gated plugins on top of Voxint. This change ships
+  the framework only: an empty registry, the plugin interface, and the guard
+  tests that keep future plugins safe (route and task inventories,
+  import-direction checks). Nothing an operator sees changes yet. One new setting
+  is documented: `VOXINT_PLUGINS_DISABLED`, a comma-separated kill switch for
+  turning built-in plugins off in a process (inert while the registry is empty);
+  `voxint doctor` reports active plugins and flags an unknown id in the switch.
+  The framework is for future greenfield plugins; the existing optional features
+  stay native (ADR 0006).
 - **Groundwork for synthetic-speech (audio deepfake) detection (#143, #144).**
   This change adds the maintainer evaluation harness only; nothing is exposed to
   users yet. The first milestone is a CI-only scoring toolkit: a pins-as-data
