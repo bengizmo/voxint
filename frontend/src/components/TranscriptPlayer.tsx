@@ -539,7 +539,19 @@ export const TranscriptPlayer = forwardRef<
     () => ({
       playSegment: (index: number) => {
         const seg = segments[index];
-        if (seg) play(seg);
+        if (!seg) return;
+        // Reveal the line even when audio seek is unavailable: an outline or
+        // keyboard jump is a reading act first (mirrors a waveform-region click),
+        // so the target must scroll into view regardless of playback. When seek is
+        // trusted, `play` then advances the playhead and following keeps it in view.
+        const el = listRef.current?.querySelector<HTMLElement>(
+          `[data-seg-index="${index}"]`,
+        );
+        if (el) {
+          scrollGuardUntil.current = performance.now() + SCROLL_GUARD_MS;
+          el.scrollIntoView({ block: "nearest" });
+        }
+        play(seg);
       },
     }),
     // `play` closes over audioRef + seek (both stable for a given render);

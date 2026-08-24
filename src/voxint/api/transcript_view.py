@@ -39,6 +39,7 @@ from voxint.db.models import (
     SegmentSplitBoundary,
     TranscriptSegment,
 )
+from voxint.enrichment.outline import build_outline
 from voxint.media.peaks import peaks_artifact_row
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,13 @@ def _transcript_island_props(
         "segments": [
             _island_segment(ln, palette, rule_index) for ln in lines
         ],
+        # Navigable outline (issue #87): grounded entity-mention jump targets plus
+        # inert summary/topics context. Read-only navigation, so it rides in the
+        # SHARED props both surfaces build; only the review-stepper renders the
+        # panel today. The client resolves each target's startSeconds to a current
+        # line at click time (segment ordinals can diverge from rendered lines
+        # after a split), so no line index is baked here.
+        "outline": build_outline(session, run_id, settings),
     }
 
 
