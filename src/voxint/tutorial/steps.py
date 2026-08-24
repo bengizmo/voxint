@@ -85,6 +85,24 @@ STEP_PAGE: dict[TutorialStep, TutorialPage] = {
 }
 
 
+# Which FastAPI route renders each tutorial page (Console 2.0 P1, issue #152).
+# The banner's "continue" links resolve their paths through this map (via
+# ``app.url_path_for``) instead of hardcoding URLs, so when a later epic phase
+# moves a page — the review queue folding into the editor, say — remapping the
+# tutorial is a one-line change here, not a link hunt through the API layer.
+# Each name is pinned explicitly (``name=...``) on its GET route; the contract
+# test ``tests/contracts/test_tutorial_route_map.py`` asserts every mapped name
+# resolves to exactly one GET route on the built app, so a route rename or
+# removal that would strand the tutorial fails loudly.
+PAGE_ROUTE_NAME: dict[TutorialPage, str] = {
+    TutorialPage.RUN_DETAIL: "run_detail",
+    TutorialPage.REVIEW_QUEUE: "review_queue",
+    TutorialPage.WORKBENCH: "workbench",
+    TutorialPage.TRANSCRIPT: "review_transcript",
+    TutorialPage.SETTINGS: "settings_page",
+}
+
+
 @dataclass(frozen=True)
 class StepCopy:
     """Clean-room banner wording for one step (no real brands/PII)."""

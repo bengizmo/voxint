@@ -32,6 +32,8 @@ def _sample() -> SystemStats:
         roster_size=7,
         runs_created_since=_NOW - timedelta(hours=24),
         runs_created_count=5,
+        media_added_count=6,
+        speakers_enrolled_count=2,
         generated_at=_NOW,
         since=_NOW - timedelta(hours=24),
     )
@@ -80,6 +82,10 @@ def test_format_stats_text_shows_nonzero_statuses_and_ends_with_newline() -> Non
     assert any(line.startswith("  failed") and line.endswith("3") for line in lines)
     assert any(line.startswith("  queued") and line.endswith("1") for line in lines)
     assert "Roster size: 7" in text
+    assert any(line.startswith("Media added since ") and line.endswith("6") for line in lines)
+    assert any(
+        line.startswith("Speakers enrolled since ") and line.endswith("2") for line in lines
+    )
     assert any(line.startswith("  transcribe") and line.endswith("2") for line in lines)
     assert "42.50s" in text
     assert text.endswith("\n")
@@ -93,6 +99,8 @@ def test_format_stats_text_empty_sections() -> None:
         roster_size=0,
         runs_created_since=_NOW,
         runs_created_count=0,
+        media_added_count=0,
+        speakers_enrolled_count=0,
         generated_at=_NOW,
         since=_NOW,
     )
@@ -112,6 +120,8 @@ def test_stats_to_json_zero_fills_every_status_and_serialises() -> None:
     assert decoded["status_counts"]["completed"] == 20
     assert decoded["roster_size"] == 7
     assert decoded["runs_created_count"] == 5
+    assert decoded["media_added_count"] == 6
+    assert decoded["speakers_enrolled_count"] == 2
     assert decoded["stage_durations"][0]["avg_seconds"] == 42.5
 
 

@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}Voxint — home{% endblock %}
+{% block body %}
+<h1>Home</h1>
+<p class="muted">What needs your attention, and where to start.</p>
+
+{# Needs-attention cards (issue #152): the review backlog and the unresolved
+   voice count derive from the SAME adjudication_queue call, and the failed
+   count from the same stats snapshot as the cards below, so the numbers here
+   can never disagree with the pages they link to. A zero card renders as
+   quiet non-interactive text (the dashboard's #117 convention): no link that
+   invites a click to nothing. #}
+<ul class="task-cards" aria-label="Needs attention">
+  <li class="task-card">
+    {% if review_backlog %}
+    <a class="task-link" href="/review">
+      <span class="task-title">Continue review ({{ review_backlog }})</span>
+      <span class="task-note">Recordings that finished and still need you to confirm who is speaking.</span>
+    </a>
+    {% else %}
+    <div class="task-link is-empty">
+      <span class="task-title">Continue review</span>
+      <span class="task-note">Nothing is waiting for review right now.</span>
+    </div>
+    {% endif %}
+  </li>
+  <li class="task-card">
+    {% if unresolved_voices %}
+    <a class="task-link" href="/review">
+      <span class="task-title">Unidentified voices ({{ unresolved_voices }})</span>
+      <span class="task-note">Voices in reviewed recordings without a confirmed speaker.</span>
+    </a>
+    {% else %}
+    <div class="task-link is-empty">
+      <span class="task-title">Unidentified voices</span>
+      <span class="task-note">Every voice in the review queue has been ruled on.</span>
+    </div>
+    {% endif %}
+  </li>
+  <li class="task-card">
+    {% if failed_runs %}
+    <a class="task-link" href="/runs?status=failed">
+      <span class="task-title">Failed runs ({{ failed_runs }})</span>
+      <span class="task-note">Runs that stopped with an error and may need a requeue.</span>
+    </a>
+    {% else %}
+    <div class="task-link is-empty">
+      <span class="task-title">Failed runs</span>
+      <span class="task-note">No runs have failed.</span>
+    </div>
+    {% endif %}
+  </li>
+</ul>
+
+{# Quick actions: one primary per screen (Add media); the rest stay quiet. #}
+<div class="action-row" aria-label="Quick actions">
+  <a class="btn-primary" href="/runs#add-media">Add media</a>
+  {% if shell.projects_enabled %}<a href="/projects">New project</a>{% endif %}
+  <a href="/speakers">Review speakers</a>
+</div>
+
+<section class="card">
+  <h2>Activity</h2>
+  {# The window switch is a plain GET reload; option strings match what
+     stats_query resolves, and the counts come from the same query functions
+     voxint stats uses, so the two surfaces agree for the same cutoff. #}
+  <div class="lib-toolbar">
+    <nav class="view-toggle" aria-label="Time window">
+      {% for value, label in windows %}
+      <a href="/?window={{ value }}"{% if value == window %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    {% if window_invalid %}
+    <p class="muted">Unrecognized <code>?window=</code> value, showing the last day.</p>
+    {% endif %}
+  </div>
+  <div class="stat-cards">
+    <div class="stat-card">
+      <div class="stat-value">{{ counts.media_added }}</div>
+      <div class="stat-label">Media added</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">{{ counts.runs_started }}</div>
+      <div class="stat-label">Runs started</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">{{ counts.speakers_enrolled }}</div>
+      <div class="stat-label">Speakers enrolled</div>
+    </div>
+  </div>
+
+  <h3>Recent</h3>
+  {% if activity %}
+  <div class="lib-table">
+    <table>
+      <thead><tr><th>When</th><th>What happened</th></tr></thead>
+      <tbody>
+        {% for item in activity %}
+        <tr>
+          <td><span title="{{ item.at.strftime("%Y-%m-%d %H:%M UTC") }}">{{ format_age(item.at, now=now) }}</span></td>
+          <td>
+            {% if item.kind == "speaker_enrolled" %}
+            Speaker enrolled: <a href="/speakers">{{ item.title }}</a>
+            {% else %}
+            {% if item.kind == "run_started" %}Run started{% elif item.kind == "run_completed" %}Run finished{% else %}Run failed{% endif %}:
+            <a href="/runs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Nothing has happened yet. Add a recording to get started.</p>
+  {% endif %}
+</section>
+{% endblock %}

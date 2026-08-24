@@ -1,8 +1,8 @@
 """The hardware resource surfaces (hardware-aware W3) end to end.
 
 The pure curation/rendering is covered in ``tests/unit/test_resource_status.py``;
-these pin the wiring the unit tests cannot see: that the dashboard strip, the
-dedicated ``/resources`` page (full + htmx fragment), and ``/metrics`` all render
+these pin the wiring the unit tests cannot see: that the hardware strip, the
+``/resources`` page it opens (full + htmx fragment), and ``/metrics`` all render
 one cached ``ResourceSnapshot``, that a probe failure degrades honestly instead
 of 500-ing, and that a mixed-version deploy (a GPU-reporting service beside an
 old service without a ``resources`` block) renders without crashing.
@@ -126,7 +126,7 @@ def test_resources_htmx_fragment_omits_chrome(
     assert "GPU aaaaaaaa" in body  # but the live detail is present
 
 
-def test_dashboard_strip_shows_thermal_warning_with_remedy(
+def test_resource_strip_shows_thermal_warning_with_remedy(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snap = ResourceSnapshot(
@@ -135,19 +135,19 @@ def test_dashboard_strip_shows_thermal_warning_with_remedy(
         collected_age_seconds=0.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    body = client.get("/dashboard").text
+    body = client.get("/resources").text
     assert "slowing itself down to stay cool" in body
     assert "fans and air vents" in body  # the one-step remedy
 
 
-def test_dashboard_strip_unavailable_when_empty(
+def test_resource_strip_unavailable_when_empty(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _patch_snapshot(
         monkeypatch,
         ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0),
     )
-    body = client.get("/dashboard").text
+    body = client.get("/resources").text
     assert "Hardware status unavailable" in body
 
 
@@ -160,7 +160,7 @@ def test_probe_failure_degrades_to_unavailable(
         raise RuntimeError("nvml exploded")
 
     monkeypatch.setattr("voxint.api.routers.legacy_runs.collect_resource_status", _boom)
-    resp = client.get("/dashboard")
+    resp = client.get("/resources")
     assert resp.status_code == 200
     assert "Hardware status unavailable" in resp.text
 
@@ -219,7 +219,7 @@ def test_mixed_version_old_service_without_resources(
     assert "unavailable" in body
 
 
-def test_dashboard_strip_names_partial_telemetry_loss(
+def test_resource_strip_names_partial_telemetry_loss(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # One service reports, another reported nothing: the strip must not claim
@@ -233,7 +233,7 @@ def test_dashboard_strip_names_partial_telemetry_loss(
         collected_age_seconds=0.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    body = client.get("/dashboard").text
+    body = client.get("/resources").text
     assert "Telemetry unavailable for: speaker embedding" in body
 
 

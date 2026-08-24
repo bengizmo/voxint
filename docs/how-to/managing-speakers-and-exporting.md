@@ -29,7 +29,7 @@ Two things to understand from the start:
 
 ## The roster
 
-Open **Speakers** in the top navigation bar (or go to
+Open **Speakers** in the sidebar (or go to
 [http://127.0.0.1:8080/speakers](http://127.0.0.1:8080/speakers)). Each speaker
 is a card showing their name, how many voice samples ("enrollments") Voxint
 holds for them, how many times Voxint has proposed them on recordings, and when

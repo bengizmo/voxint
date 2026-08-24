@@ -40,7 +40,8 @@ one out of sight, free up disk space, and jot down notes.
 
 This is the most direct way, and it needs nothing but the file on your computer.
 
-1. Open **Runs** (`http://127.0.0.1:8080/runs`).
+1. Open **Media** in the sidebar; it opens the **Runs** page
+   (`http://127.0.0.1:8080/runs`).
 2. At the top of the page, find the **Upload media** control. Click it and pick
    an audio or video file.
 3. Click **Submit for transcription**.

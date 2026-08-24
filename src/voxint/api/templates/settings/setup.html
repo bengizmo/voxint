@@ -8,8 +8,11 @@
   "finish": "Finish",
 } %}
 {% block title %}Voxint setup — {{ labels[step.value] }}{% endblock %}
-{# The wizard runs before onboarding, so the protected top nav (Runs / Review)
-   would only bounce the operator back here. Replace it with a step indicator. #}
+{# The wizard runs before onboarding, so the app shell's protected links would
+   only bounce the operator back here. Render shellless: no sidebar, no topbar
+   (#152), a step indicator in place of the nav. #}
+{% block sidebar %}{% endblock %}
+{% block topbar %}{% endblock %}
 {% block nav %}
 <ol class="wizard-steps" aria-label="Setup steps">
   {% for s in steps %}

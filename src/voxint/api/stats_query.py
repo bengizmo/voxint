@@ -30,7 +30,15 @@ from sqlalchemy import Float, func
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
-from voxint.db.models import PipelineRun, RunStatus, Speaker, Stage, StageRun, StageStatus
+from voxint.db.models import (
+    MediaItem,
+    PipelineRun,
+    RunStatus,
+    Speaker,
+    Stage,
+    StageRun,
+    StageStatus,
+)
 
 _RELATIVE_SINCE = re.compile(r"^(\d+)([hd])$")
 
@@ -69,6 +77,13 @@ class SystemStats:
     roster_size: int
     runs_created_since: datetime
     runs_created_count: int
+    # Companion windowed counts over the same ``since`` cutoff (Console 2.0 P1,
+    # issue #152): Home and ``voxint stats`` render these from the one snapshot
+    # so they cannot disagree. Named for what the rows are — media items added
+    # and roster speakers enrolled — not for outcomes the timestamps cannot
+    # attest ("processed", "identified").
+    media_added_count: int
+    speakers_enrolled_count: int
     generated_at: datetime
     since: datetime
 
@@ -176,24 +191,82 @@ def roster_size(session: Session) -> int:
     return session.execute(sa_select(func.count()).select_from(Speaker)).scalar_one()
 
 
-def runs_created_since(session: Session, *, since: datetime) -> int:
-    """Count runs created at or after ``since`` (inclusive), excluding archived."""
-    return session.execute(
+def runs_created_since(session: Session, *, since: datetime | None) -> int:
+    """Count runs created at or after ``since`` (inclusive), excluding archived.
+
+    ``since=None`` means all time (no cutoff) — the Home window switch's "all"
+    option, expressed explicitly rather than as a sentinel datetime Postgres
+    would have to compare against.
+    """
+    stmt = (
         sa_select(func.count())
         .select_from(PipelineRun)
-        .where(PipelineRun.created_at >= since, PipelineRun.archived_at.is_(None))
-    ).scalar_one()
+        .where(PipelineRun.archived_at.is_(None))
+    )
+    if since is not None:
+        stmt = stmt.where(PipelineRun.created_at >= since)
+    return session.execute(stmt).scalar_one()
+
+
+def media_added_since(session: Session, *, since: datetime | None) -> int:
+    """Count media items added at or after ``since`` (``None`` = all time)."""
+    stmt = sa_select(func.count()).select_from(MediaItem)
+    if since is not None:
+        stmt = stmt.where(MediaItem.created_at >= since)
+    return session.execute(stmt).scalar_one()
+
+
+def speakers_enrolled_since(session: Session, *, since: datetime | None) -> int:
+    """Count roster speakers enrolled at or after ``since`` (``None`` = all time).
+
+    Counts enrollment events by ``created_at``, deliberately including speakers
+    later merged or archived: a merge does not un-happen the enrollment, and a
+    windowed activity count that shrank when the roster was curated would read
+    as data loss.
+    """
+    stmt = sa_select(func.count()).select_from(Speaker)
+    if since is not None:
+        stmt = stmt.where(Speaker.created_at >= since)
+    return session.execute(stmt).scalar_one()
+
+
+@dataclass(frozen=True)
+class WindowedCounts:
+    """The three windowed activity counts Home's stat switcher renders (#152).
+
+    ``since=None`` is the "all time" window. The counts share their query
+    functions with :func:`collect_stats`, so Home and ``voxint stats`` cannot
+    drift for the same cutoff.
+    """
+
+    since: datetime | None
+    media_added: int
+    runs_started: int
+    speakers_enrolled: int
+
+
+def windowed_counts(session: Session, *, since: datetime | None) -> WindowedCounts:
+    """The windowed activity counts over one cutoff (``None`` = all time)."""
+    return WindowedCounts(
+        since=since,
+        media_added=media_added_since(session, since=since),
+        runs_started=runs_created_since(session, since=since),
+        speakers_enrolled=speakers_enrolled_since(session, since=since),
+    )
 
 
 def collect_stats(session: Session, *, since: datetime, now: datetime) -> SystemStats:
     """Assemble a :class:`SystemStats` snapshot from the individual queries."""
+    windowed = windowed_counts(session, since=since)
     return SystemStats(
         status_counts=run_status_counts(session),
         stage_failure_counts=tuple(stage_failure_counts(session)),
         stage_durations=tuple(stage_duration_stats(session)),
         roster_size=roster_size(session),
         runs_created_since=since,
-        runs_created_count=runs_created_since(session, since=since),
+        runs_created_count=windowed.runs_started,
+        media_added_count=windowed.media_added,
+        speakers_enrolled_count=windowed.speakers_enrolled,
         generated_at=now,
         since=since,
     )
@@ -218,6 +291,12 @@ def format_stats_text(stats: SystemStats) -> str:
     lines.append(f"Roster size: {stats.roster_size}")
     lines.append(
         f"Runs created since {stats.runs_created_since.isoformat()}: {stats.runs_created_count}"
+    )
+    lines.append(
+        f"Media added since {stats.since.isoformat()}: {stats.media_added_count}"
+    )
+    lines.append(
+        f"Speakers enrolled since {stats.since.isoformat()}: {stats.speakers_enrolled_count}"
     )
 
     lines.append("")
@@ -252,6 +331,8 @@ def stats_to_json(stats: SystemStats) -> dict[str, object]:
         "roster_size": stats.roster_size,
         "runs_created_since": stats.runs_created_since.isoformat(),
         "runs_created_count": stats.runs_created_count,
+        "media_added_count": stats.media_added_count,
+        "speakers_enrolled_count": stats.speakers_enrolled_count,
         "stage_failure_counts": {f.stage: f.attempt_count for f in stats.stage_failure_counts},
         "stage_durations": [
             {

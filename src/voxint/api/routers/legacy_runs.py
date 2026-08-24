@@ -28,7 +28,6 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response, Streamin
 from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import review_backlog_count
 from voxint.adjudication.transcript import (
     TranscriptText,
     attributed_transcript,
@@ -77,7 +76,6 @@ from voxint.api.runs_query import (
     Cursor,
     InvalidCursorError,
     ReviewFilter,
-    latest_completed_run,
     list_runs,
     parse_review_filter,
     parse_search_filters,
@@ -86,7 +84,7 @@ from voxint.api.runs_query import (
     searchable_languages,
 )
 from voxint.api.speaker_colors import speaker_palette
-from voxint.api.stats_query import DEFAULT_WINDOW, collect_stats, parse_since, render_prometheus
+from voxint.api.stats_query import DEFAULT_WINDOW, collect_stats, render_prometheus
 from voxint.api.transcript_view import (
     _run_label_universe,
     _transcript_island_props,
@@ -588,14 +586,6 @@ def _stream_file(fh: BinaryIO, start: int, length: int) -> Iterator[bytes]:
             yield chunk
 
 
-@core_router.get("/", include_in_schema=False)
-def index(operator: OperatorDep) -> RedirectResponse:
-    # On the protected router: when onboarded the gate passes and we land on
-    # the review queue; when not, the gate has already redirected to /setup,
-    # so this stays an unconditional redirect (no second onboarding read).
-    return RedirectResponse("/review", status_code=303)
-
-
 @core_router.get("/runs")
 def runs(
     request: Request,
@@ -833,7 +823,7 @@ def fetch_media_url(
     session.commit()
     return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
 
-@core_router.get("/runs/{run_id}")
+@core_router.get("/runs/{run_id}", name="run_detail")
 def run_detail(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
@@ -1375,63 +1365,14 @@ def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Res
     )
 
 # ---- Operator dashboard (issue #13) ----------------------------------------
-# The HTML sibling of /metrics: the same collect_stats() snapshot, rendered
-# for a human instead of a scraper. Protected like every non-/healthz page.
-# An htmx poll (hx-trigger="every 15s") re-requests this same route with an
-# HX-Request header; we answer that with just the numbers fragment so the
-# nav/chrome are not re-swapped. A malformed ?since= degrades to the 24h
-# default rather than 500-ing a bookmarked or hand-edited URL.
+# The dashboard folded into Home (Console 2.0 P1, #152): the task cards and
+# stat figures live at / now, and the hardware strip stays on /resources. The
+# route remains as a permanent authenticated redirect so bookmarks and muscle
+# memory keep working (REDIRECT_MAP row in the characterization contract).
 
 @dashboards_router.get("/dashboard")
-def dashboard(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
-    now = datetime.now(UTC)
-    raw_since = request.query_params.get("since")
-    since = now - DEFAULT_WINDOW
-    since_invalid = False
-    if raw_since:
-        try:
-            since = parse_since(raw_since, now=now)
-        except ValueError:
-            # A bad/bookmarked value degrades to the default window rather
-            # than 500-ing; we still tell the operator we ignored it so the
-            # page never silently shows a different window than was asked for.
-            since_invalid = True
-    stats = collect_stats(session, since=since, now=now)
-    # The 15s htmx poll re-requests this route and swaps ONLY the metrics
-    # fragment; the task-card queries (issue #117 Phase C) feed the static full
-    # page, never that fragment, so skip them on the poll rather than paying for
-    # two queries whose results would be discarded.
-    is_htmx = bool(request.headers.get("HX-Request"))
-    context = {
-        "request": request,
-        "stats": stats,
-        # Curated hardware strip (W3): rendered inside the htmx-swapped
-        # fragment so it refreshes on the same 15s poll as the run figures.
-        "resource_strip": build_resource_strip(_resource_snapshot(request)),
-        "active_nav": "dashboard",
-        # Iterate the enum (not the sparse status_counts map) so the status
-        # table renders in a stable order and zero-fills empty statuses, the
-        # same contract format_stats_text/render_prometheus hold.
-        "run_statuses": list(RunStatus),
-        # Carry the accepted window through the 15s htmx poll so a custom
-        # ?since= isn't lost on the first refresh. Only echo a value we
-        # actually honored (an invalid one falls back to the default, so we
-        # drop it from the poll URL too).
-        "since_param": "" if since_invalid or not raw_since else raw_since,
-        "since_invalid": since_invalid,
-    }
-    if not is_htmx:
-        # The count of runs actually eligible for review, sharing the queue's
-        # own predicate (issue #117). It powers the static "Continue review (N)"
-        # task card; review_backlog_count derives from adjudication_queue and
-        # cannot drift from it. It is deliberately the ONLY copy of this number
-        # on the page — no live stat-card duplicate that could contradict it.
-        context["review_backlog"] = review_backlog_count(session)
-        # The "Last finished run" task card: newest run by terminal-stage
-        # completion, None when nothing has finished (honest empty state).
-        context["last_completed"] = latest_completed_run(session)
-    template = "legacy_runs/dashboard_metrics.html" if is_htmx else "legacy_runs/dashboard.html"
-    return templates.TemplateResponse(request, template, context)
+def dashboard(operator: OperatorDep) -> RedirectResponse:
+    return RedirectResponse("/", status_code=303)
 
 # ---- Hardware resource page (hardware-aware W3) -----------------------------
 # The fuller live view behind the dashboard strip: the aggregated GPU card
