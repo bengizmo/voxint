@@ -138,36 +138,55 @@ def test_dockerfile_entrypoint_is_the_runner() -> None:
     assert not re.search(r"^HEALTHCHECK\b", df, flags=re.MULTILINE)
 
 
-def _requirement_pin(name: str) -> str | None:
-    for line in REQUIREMENTS.read_text().splitlines():
-        line = line.strip()
-        m = re.match(rf"^{re.escape(name)}==(\S+)$", line)
-        if m:
-            return m.group(1)
-    return None
+def _pins(text: str) -> dict[str, str]:
+    """Every ``name==version`` pin in a file, keyed by name (case-insensitive)."""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"([A-Za-z0-9_.-]+)==([0-9][0-9A-Za-z.+-]*)", text):
+        out.setdefault(m.group(1).lower(), m.group(2))
+    return out
 
 
-def test_requirements_pins_mirror_provenance_runtime() -> None:
-    # The reviewable pin set (requirements.eval.txt) and the recorded runtime
-    # (provenance.eval.json) must agree, so neither drifts silently.
-    prov = _provenance()["runtime"]
-    for req_name, prov_key in (
-        ("numpy", "numpy"),
-        ("omegaconf", "omegaconf"),
-        ("hydra-core", "hydra_core"),
-        ("soundfile", "soundfile"),
-        ("soxr", "soxr"),
-        ("scipy", "scipy"),
-    ):
-        assert _requirement_pin(req_name) == prov[prov_key], (
-            f"requirements.eval.txt {req_name} drifted from provenance.eval.json runtime.{prov_key}"
+def test_every_requirements_pin_is_recorded_in_provenance() -> None:
+    # EVERY pin in requirements.eval.txt (not a hand-picked subset) must appear in
+    # provenance.eval.json runtime with the same version, so no dependency drifts
+    # silently between the reviewable pin set and the recorded runtime.
+    prov = {k.lower(): v for k, v in _provenance()["runtime"].items() if isinstance(v, str)}
+    for name, version in _pins(REQUIREMENTS.read_text()).items():
+        assert prov.get(name) == version, (
+            f"requirements.eval.txt {name}=={version} not recorded in provenance.eval.json runtime"
         )
 
 
-def test_dockerfile_torch_pin_matches_provenance() -> None:
+def test_every_dockerfile_package_pin_is_recorded_in_provenance() -> None:
+    # Same for the pins the Dockerfile installs directly (torch/torchaudio from the
+    # cu118 index, cython, and the fairseq runtime companions): each must match
+    # provenance. pip/setuptools/wheel are build tooling, not runtime, so they are
+    # exempted here.
+    prov = {k.lower(): v for k, v in _provenance()["runtime"].items() if isinstance(v, str)}
+    exempt = {"pip", "setuptools", "wheel"}
+    for name, version in _pins(_dockerfile()).items():
+        if name in exempt:
+            continue
+        assert prov.get(name) == version, (
+            f"Dockerfile.eval {name}=={version} not recorded in provenance.eval.json runtime"
+        )
+
+
+def test_frozen_digests_bind_the_dockerfile_when_present() -> None:
+    # In S2a the base-image digest and fairseq commit are CANDIDATE (null) and the
+    # Dockerfile carries a mutable tag + a no-default ARG. When S2b freezes them,
+    # this binds the frozen values into the Dockerfile so the image cannot claim
+    # provenance for different bytes: a pinned digest must appear in FROM, and a
+    # pinned fairseq commit must become the ARG default.
     df = _dockerfile()
-    prov = _provenance()["runtime"]
-    # torch/torchaudio come from the cu118 index in the Dockerfile, not the
-    # requirements file; bind their pins to provenance directly.
-    assert f"torch=={prov['torch']}" in df
-    assert f"torchaudio=={prov['torchaudio']}" in df
+    prov = _provenance()
+    digest = prov["base_image_digest"]
+    if digest is not None:
+        assert re.search(rf"^FROM \S+@{re.escape(digest)}", df, flags=re.MULTILINE), (
+            "base_image_digest is frozen but the Dockerfile FROM does not pin it"
+        )
+    commit = prov["runtime"]["fairseq_commit"]
+    if commit is not None:
+        assert re.search(rf"^ARG FAIRSEQ_COMMIT={re.escape(commit)}\s*$", df, flags=re.MULTILINE), (
+            "fairseq_commit is frozen but the Dockerfile ARG default does not pin it"
+        )

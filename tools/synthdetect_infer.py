@@ -44,6 +44,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
@@ -95,6 +96,29 @@ class CanonicalAudio:
     n_samples: int
 
 
+def _riff_data_chunk_size(path: Path) -> int:
+    """Return the declared byte size of the WAV ``data`` chunk (fail-closed).
+
+    The stdlib ``wave`` reader floors an odd-sized ``data`` chunk to whole frames,
+    so an orphan trailing byte (a non-canonical or truncated payload) would slip
+    past a frame-count check. Reading the RIFF chunk size directly lets the caller
+    reject a payload whose declared size is not a whole number of frames.
+    """
+    with path.open("rb") as fh:
+        riff = fh.read(12)
+        if len(riff) < 12 or riff[:4] != b"RIFF" or riff[8:12] != b"WAVE":
+            raise InferError(f"{path}: not a RIFF/WAVE file")
+        while True:
+            hdr = fh.read(8)
+            if len(hdr) < 8:
+                raise InferError(f"{path}: no data chunk found")
+            chunk_id = hdr[:4]
+            size = int.from_bytes(hdr[4:8], "little")
+            if chunk_id == b"data":
+                return size
+            fh.seek(size + (size & 1), 1)  # skip payload plus its RIFF pad byte
+
+
 def read_canonical_pcm(path: Path) -> CanonicalAudio:
     """Read a canonical-PCM WAV, failing closed on any non-canonical property.
 
@@ -128,11 +152,20 @@ def read_canonical_pcm(path: Path) -> CanonicalAudio:
             f"{path}: {width * 8}-bit; canonical audio must be signed 16-bit "
             f"({CANONICALIZATION_ID})"
         )
-    # A truncated data chunk (byte count not a whole number of int16 frames) is a
-    # corrupt clip, not something to silently round.
-    if len(frames) != n_frames * CANONICAL_SAMPLE_WIDTH:
+    # Cross-check the declared RIFF data-chunk size: wave silently floors an odd
+    # chunk to whole frames, so an orphan trailing byte would otherwise pass. A
+    # payload that is not a whole number of frames, or shorter than declared, is a
+    # corrupt clip, not something to round.
+    block_align = channels * width
+    declared = _riff_data_chunk_size(path)
+    if declared % block_align != 0:
         raise InferError(
-            f"{path}: data payload is truncated ({len(frames)} bytes for {n_frames} frames)"
+            f"{path}: data chunk is {declared} bytes, not a whole number of "
+            f"{block_align}-byte frames (orphan byte)"
+        )
+    if len(frames) != declared or len(frames) != n_frames * block_align:
+        raise InferError(
+            f"{path}: data payload is truncated ({len(frames)} bytes read, {declared} declared)"
         )
     samples = np.frombuffer(frames, dtype="<i2")
     return CanonicalAudio(
@@ -382,16 +415,49 @@ def build_header(
     return header
 
 
+def _validate_resume_record(obj: Any, lineno: int) -> str:
+    """Validate one completed result line the way the S1 scorer will, returning its id.
+
+    A resume must not treat any JSON object with a ``clip_id`` as done: a line that
+    violates the score/skip XOR or carries a bad ``n_windows`` is one the host
+    scorer would later reject, so skipping its clip would strand an unscoreable
+    journal. This mirrors ``synthdetect_eval._validate_result``'s essentials.
+    """
+    if not isinstance(obj, dict):
+        raise InferError(f"resume journal line {lineno}: result must be an object")
+    clip_id = obj.get("clip_id")
+    if not isinstance(clip_id, str) or not clip_id:
+        raise InferError(f"resume journal line {lineno}: result missing a clip_id")
+    has_score = obj.get("raw_score") is not None
+    has_skip = obj.get("skip_reason") is not None
+    if has_score == has_skip:
+        raise InferError(
+            f"resume journal line {lineno} ({clip_id}): exactly one of raw_score / skip_reason"
+        )
+    if has_score:
+        score = obj["raw_score"]
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(
+            float(score)
+        ):
+            raise InferError(f"resume journal line {lineno} ({clip_id}): raw_score must be finite")
+    n_windows = obj.get("n_windows", 0)
+    if not isinstance(n_windows, int) or isinstance(n_windows, bool) or n_windows < 0:
+        raise InferError(f"resume journal line {lineno} ({clip_id}): n_windows must be int >= 0")
+    return clip_id
+
+
 def parse_resume_journal(text: str) -> tuple[dict[str, Any], list[str]]:
-    """Parse an existing journal for resume: header + completed clip ids.
+    """Parse a whole (already de-torned) journal for resume: header + completed ids.
 
     Unlike the scorer's ``parse_journal`` (which rejects a header-only journal
     because it cannot be scored), a runner resume MUST accept one: the write-ahead
     order is header-then-results, so an interruption right after the header is a
-    valid, resumable state. Returns the header and the ordered ids of the fully
-    written result lines. Fails closed on a missing/broken header, a duplicate
-    clip, or a malformed COMPLETED line; a torn final line (an interrupted flush)
-    is tolerated only as the LAST line and is dropped so the run rewrites it.
+    valid, resumable state. Every result line is validated against the S1 result
+    contract (:func:`_validate_resume_record`), so a completed id is never trusted
+    from a record the scorer would reject. Fails closed on a missing/broken header,
+    a malformed line, or a duplicate clip. Any torn final line is removed by
+    :func:`prepare_journal` BEFORE this runs, so a malformed line here is real
+    corruption, not an interrupted flush.
     """
     lines = [ln for ln in text.splitlines() if ln.strip()]
     if not lines:
@@ -404,33 +470,102 @@ def parse_resume_journal(text: str) -> tuple[dict[str, Any], list[str]]:
         raise InferError("resume journal first line is not a synthdetect_journal header")
     completed: list[str] = []
     seen: set[str] = set()
-    for idx, line in enumerate(lines[1:], start=1):
+    for idx, line in enumerate(lines[1:], start=2):
         try:
             obj = json.loads(line)
         except json.JSONDecodeError as exc:
-            # A torn write is only acceptable as the very last line.
-            if idx == len(lines) - 1:
-                break
-            raise InferError(
-                f"resume journal line {idx + 1}: malformed non-final JSON: {exc}"
-            ) from exc
-        clip_id = obj.get("clip_id") if isinstance(obj, dict) else None
-        if not isinstance(clip_id, str) or not clip_id:
-            raise InferError(f"resume journal line {idx + 1}: result missing a clip_id")
+            raise InferError(f"resume journal line {idx}: malformed JSON: {exc}") from exc
+        clip_id = _validate_resume_record(obj, idx)
         if clip_id in seen:
-            raise InferError(f"resume journal line {idx + 1}: duplicate clip_id {clip_id!r}")
+            raise InferError(f"resume journal line {idx}: duplicate clip_id {clip_id!r}")
         seen.add(clip_id)
         completed.append(clip_id)
     return header, completed
+
+
+def _valid_prefix_len(raw: bytes) -> int:
+    """The byte length of ``raw`` up to the last newline-terminated line.
+
+    ``JournalWriter`` writes and fsyncs each line as a whole record ending in a
+    newline, so an interruption can only leave a final partial line with NO
+    trailing newline. Truncating to the last newline therefore drops exactly the
+    torn record and nothing complete. A file that already ends in a newline (or is
+    empty) needs no truncation.
+    """
+    if not raw or raw.endswith(b"\n"):
+        return len(raw)
+    cut = raw.rfind(b"\n")
+    return cut + 1 if cut != -1 else 0
+
+
+def prepare_journal(
+    out: Path, header: dict[str, Any], *, resume: bool,
+    selected_ids: frozenset[str] | set[str] | None = None,
+) -> frozenset[str]:
+    """Open-or-create the journal for this run and return the resume skip set.
+
+    A fresh run creates the file exclusively (so a race never appends to another
+    run's journal) and writes the header exactly once. A resume physically
+    truncates any torn final line off the existing file, then fully re-validates
+    the prior header: it recomputes the stored ``execution_identity_sha256`` from
+    the header itself (a tampered header keeping an old digest is rejected) and
+    requires it to equal both the stored value and this run's identity. Completed
+    ids must all belong to ``selected_ids``. An existing file without ``--resume``
+    fails closed rather than appending onto stale content.
+    """
+    if out.exists():
+        if not resume:
+            raise InferError(
+                f"{out} already exists; pass --resume to continue it or remove it first "
+                "(refusing to append to an existing journal)"
+            )
+        raw = out.read_bytes()
+        valid = _valid_prefix_len(raw)
+        if valid != len(raw):
+            # Preserve the torn bytes for forensics, then truncate so the append
+            # never concatenates onto a partial record.
+            out.with_suffix(out.suffix + ".torn").write_bytes(raw[valid:])
+            with out.open("r+b") as fh:
+                fh.truncate(valid)
+                fh.flush()
+                os.fsync(fh.fileno())
+        prior_header, completed = parse_resume_journal(raw[:valid].decode("utf-8"))
+        stored = prior_header.get("execution_identity_sha256")
+        if not isinstance(stored, str) or execution_identity_sha256(prior_header) != stored:
+            raise InferError(
+                "cannot resume: the existing journal's header does not match its own recorded "
+                "execution identity (the header was edited or corrupted)"
+            )
+        if stored != header["execution_identity_sha256"]:
+            raise InferError(
+                "cannot resume: the existing journal's execution identity differs from this run "
+                "(weights, runtime, flags, windowing, scoring, manifest, or selection changed)"
+            )
+        if selected_ids is not None:
+            unknown = sorted(set(completed) - set(selected_ids))
+            if unknown:
+                raise InferError(
+                    f"cannot resume: journal has completed ids not in this selection: {unknown}"
+                )
+        return frozenset(completed)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive create: fail closed if it appeared between the exists() check and here.
+    with out.open("x", encoding="utf-8") as fh:
+        line = json.dumps(header, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        fh.write(line + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    return frozenset()
 
 
 class JournalWriter:
     """Append-only write-ahead JSONL journal that flushes every complete line.
 
     Each result is written and flushed (data ``fsync``'d) before the next clip is
-    scored, so an interruption leaves at most the final line torn -- exactly what
-    :func:`parse_resume_journal` tolerates. The header is written once on a fresh
-    journal; on resume the file is opened for append and the header is preserved.
+    scored, so an interruption leaves at most the final line torn -- which
+    :func:`prepare_journal` truncates before any append. The header is written by
+    :func:`prepare_journal` (exclusive create) on a fresh journal; this writer only
+    ever appends result lines, so it never emits a second header.
     """
 
     def __init__(self, path: Path) -> None:
@@ -475,6 +610,29 @@ class ClipOutcome:
         return rec
 
 
+def score_windows_batched(engine: Engine, batch: np.ndarray, batch_size: int) -> np.ndarray:
+    """Score a window matrix in fixed-size chunks, preserving order (pure).
+
+    Sending every window of a long production clip in one engine call can exhaust
+    VRAM, and the header would then claim a batch size that never shaped the
+    computation. Chunk by ``batch_size`` (order preserved), concatenate the
+    scores, and fail closed on a non-positive batch size or a per-chunk shape
+    mismatch.
+    """
+    if batch_size <= 0:
+        raise InferError(f"batch_size must be positive, got {batch_size}")
+    out: list[np.ndarray] = []
+    for start in range(0, batch.shape[0], batch_size):
+        chunk = batch[start:start + batch_size]
+        scores = np.asarray(engine.score_windows(chunk), dtype=np.float64)
+        if scores.shape != (chunk.shape[0],):
+            raise InferError(
+                f"engine returned {scores.shape} scores for a {chunk.shape[0]}-window chunk"
+            )
+        out.append(scores)
+    return np.concatenate(out) if out else np.empty((0,), dtype=np.float64)
+
+
 def score_clip(
     entry: ClipEntry,
     corpus_root: Path,
@@ -482,21 +640,21 @@ def score_clip(
     model: ModelEntry,
     *,
     windowing_mode: str,
+    batch_size: int = 8,
 ) -> ClipOutcome:
     """Score one clip end to end (verify -> window -> engine -> pool), fail-closed.
 
     Reads the canonical PCM, verifies its payload sha against the manifest, plans
-    windows, prepares the fixed-width float32 batch, scores it through the engine,
-    and pools to one raw score. Any fail-closed problem is re-raised (the caller
-    decides whether a per-clip failure stops the run).
+    windows, prepares the fixed-width float32 batch, scores it through the engine
+    in ``batch_size`` chunks, and pools to one raw score. Any fail-closed problem
+    is re-raised (the caller decides whether a per-clip failure stops the run).
     """
     audio = read_canonical_pcm(corpus_root / entry.rel_path)
     verify_clip_sha(entry, audio)
     width = model_input_samples(model.windowing)
     plan = plan_windows(audio.n_samples, model.windowing, mode=windowing_mode)
     batch = build_batch(audio, plan, width)
-    window_scores = engine.score_windows(batch)
-    window_scores = np.asarray(window_scores, dtype=np.float64)
+    window_scores = score_windows_batched(engine, batch, batch_size)
     if window_scores.shape != (len(plan.spans),):
         raise InferError(
             f"clip {entry.clip_id!r}: engine returned {window_scores.shape} scores for "
@@ -525,6 +683,7 @@ def run_inference(
     header: dict[str, Any],
     writer: JournalWriter,
     windowing_mode: str,
+    batch_size: int = 8,
     already_done: frozenset[str] = frozenset(),
     stop_on_error: bool = True,
 ) -> dict[str, int]:
@@ -542,7 +701,10 @@ def run_inference(
             counts["resumed"] += 1
             continue
         try:
-            outcome = score_clip(entry, corpus_root, engine, model, windowing_mode=windowing_mode)
+            outcome = score_clip(
+                entry, corpus_root, engine, model,
+                windowing_mode=windowing_mode, batch_size=batch_size,
+            )
             counts["scored"] += 1
         except InferError:
             if stop_on_error:
@@ -561,24 +723,56 @@ def run_inference(
 # --------------------------------------------------------------------------- #
 # 6. Determinism provenance capture (lazy torch; injectable for tests)
 # --------------------------------------------------------------------------- #
-def capture_runtime(torch_mod: Any, *, image_digest: str | None, provenance_sha256: str | None,
-                    fairseq_version: str | None) -> dict[str, Any]:
+# The two workspace strings torch accepts for deterministic cuBLAS; any other
+# value (or none) means cuBLAS may pick a nondeterministic algorithm.
+_ALLOWED_CUBLAS = (":4096:8", ":16:8")
+DEFAULT_SEED = 0
+
+
+def parse_device_index(device: str) -> int:
+    """Parse a CUDA device string ('cuda' or 'cuda:N') to its index (fail-closed).
+
+    The runner evaluates on CUDA only; a CPU or MPS device would produce scores in
+    a different numeric space than the pinned reference, so anything but ``cuda``
+    is rejected rather than silently accepted.
+    """
+    if device == "cuda":
+        return 0
+    if device.startswith("cuda:"):
+        suffix = device.split(":", 1)[1]
+        if suffix.isdigit():
+            return int(suffix)
+    raise InferError(f"device must be 'cuda' or 'cuda:N', got {device!r}")
+
+
+def _cuda_driver_version(torch_mod: Any) -> int | None:
+    """Best-effort CUDA driver version (a kernel-affecting fact); None if unknown."""
+    try:
+        return int(torch_mod._C._cuda_getDriverVersion())
+    except (AttributeError, RuntimeError, OSError, ValueError):
+        return None
+
+
+def capture_runtime(torch_mod: Any, *, device_index: int, image_digest: str | None,
+                    provenance_sha256: str | None, fairseq_version: str | None) -> dict[str, Any]:
     """Read the runtime identity from a torch module (injectable for tests).
 
-    Load-bearing fields (torch/cuda/cudnn versions, device capability) come from
-    torch; the image digest and provenance sha are passed in from the container
-    environment because torch cannot know them.
+    Load-bearing fields (torch/cuda/cudnn versions, device capability, driver
+    version) come from torch for the SELECTED device; the image digest and
+    provenance sha are passed in from the container because torch cannot know them.
     """
     cuda = bool(torch_mod.cuda.is_available())
-    dev_name = torch_mod.cuda.get_device_name(0) if cuda else None
-    dev_cap = list(torch_mod.cuda.get_device_capability(0)) if cuda else None
+    dev_name = torch_mod.cuda.get_device_name(device_index) if cuda else None
+    dev_cap = list(torch_mod.cuda.get_device_capability(device_index)) if cuda else None
     cudnn_v = torch_mod.backends.cudnn.version() if cuda else None
     return {
         "torch": str(torch_mod.__version__),
         "cuda": torch_mod.version.cuda,
         "cudnn": cudnn_v,
+        "cuda_driver_version": _cuda_driver_version(torch_mod) if cuda else None,
         "fairseq": fairseq_version,
         "python": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+        "device_index": device_index,
         "device_name": dev_name,
         "device_capability": dev_cap,
         "image_digest": image_digest,
@@ -586,13 +780,15 @@ def capture_runtime(torch_mod: Any, *, image_digest: str | None, provenance_sha2
     }
 
 
-def capture_flags(torch_mod: Any, *, batch_size: int, model_eval: bool) -> dict[str, Any]:
+def capture_flags(torch_mod: Any, *, batch_size: int, model_eval: bool,
+                  seeds: dict[str, int]) -> dict[str, Any]:
     """Snapshot the determinism-relevant torch flags into the journal header.
 
     Records the values that decide numeric reproducibility (deterministic
     algorithms, cuDNN determinism/benchmark/TF32, matmul TF32 + precision, the
-    cuBLAS workspace) plus the batch size and the asserted eval-mode result. The
-    values are read, not set, here -- :func:`configure_determinism` sets them.
+    cuBLAS workspace, the RNG seeds) plus the batch size and the MEASURED eval-mode
+    result. The flags are read, not set, here -- :func:`configure_determinism` sets
+    them and :func:`seed_everything` sets the seeds.
     """
     return {
         "deterministic_algorithms": bool(torch_mod.are_deterministic_algorithms_enabled()),
@@ -609,24 +805,44 @@ def capture_flags(torch_mod: Any, *, batch_size: int, model_eval: bool) -> dict[
         "autocast_dtype": None,
         "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
         "python_hash_seed": os.environ.get("PYTHONHASHSEED"),
+        "seeds": seeds,
         "batch_size": batch_size,
         "model_eval": model_eval,
         "inference_mode": True,
     }
 
 
+def seed_everything(torch_mod: Any, seed: int = DEFAULT_SEED) -> dict[str, int]:
+    """Seed Python, NumPy, and torch (CPU + all CUDA), returning the seed map.
+
+    Seeded before the engine is built so any RNG the model touches at load or
+    inference is reproducible across the cold-process runs the determinism spike
+    compares. The returned map is recorded in the journal flags.
+    """
+    import random
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch_mod.manual_seed(seed)
+    torch_mod.cuda.manual_seed_all(seed)
+    return {"python": seed, "numpy": seed, "torch": seed, "torch_cuda": seed}
+
+
 def configure_determinism(torch_mod: Any) -> None:
     """Pin torch to the deterministic, TF32-off configuration (fail-closed on env).
 
-    Asserts CUBLAS_WORKSPACE_CONFIG is set BEFORE touching CUDA (torch requires it
-    for deterministic cuBLAS and raises later otherwise), then disables TF32,
+    Requires CUBLAS_WORKSPACE_CONFIG to be one of the exact values torch accepts
+    for deterministic cuBLAS BEFORE touching CUDA (a merely non-empty but invalid
+    value would let cuBLAS pick a nondeterministic algorithm), then disables TF32,
     enables deterministic algorithms without warn-only, and turns cuDNN benchmark
     off. The chosen values are what the journal flags then record.
     """
-    if not os.environ.get("CUBLAS_WORKSPACE_CONFIG"):
+    cublas = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    if cublas not in _ALLOWED_CUBLAS:
         raise InferError(
-            "CUBLAS_WORKSPACE_CONFIG is unset; deterministic cuBLAS needs it (the eval image "
-            "bakes ':4096:8'). Refusing to run non-deterministically."
+            f"CUBLAS_WORKSPACE_CONFIG={cublas!r} is not one of {_ALLOWED_CUBLAS}; deterministic "
+            "cuBLAS needs an exact value (the eval image bakes ':4096:8'). Refusing to run "
+            "non-deterministically."
         )
     torch_mod.backends.cudnn.allow_tf32 = False
     torch_mod.backends.cuda.matmul.allow_tf32 = False
@@ -658,6 +874,21 @@ def runner_git_provenance(repo: Path = REPO) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 7. verify-sources: real-byte weight receipt (the S2 freeze mechanism)
 # --------------------------------------------------------------------------- #
+def _hash_file(path: Path, *, block_size: int = 1 << 20) -> tuple[str, int]:
+    """Stream a file's sha256 and byte count in blocks (never load it whole).
+
+    Weight checkpoints are gigabyte-scale; reading one into memory to hash it can
+    OOM the S2b verification host, so hash it a megabyte at a time.
+    """
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as fh:
+        for block in iter(lambda: fh.read(block_size), b""):
+            digest.update(block)
+            size += len(block)
+    return digest.hexdigest(), size
+
+
 def compute_weight_receipt(weights_dir: Path, model: ModelEntry) -> dict[str, Any]:
     """Hash the mounted weight files and compare them to the registry pins.
 
@@ -682,11 +913,10 @@ def compute_weight_receipt(weights_dir: Path, model: ModelEntry) -> dict[str, An
             entry["verdict"] = "missing"
             all_present = False
         else:
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
+            digest, size = _hash_file(path)
             entry["present"] = True
             entry["actual_sha256"] = digest
-            entry["actual_size_bytes"] = len(data)
+            entry["actual_size_bytes"] = size
             if w.sha256 is None:
                 entry["verdict"] = "candidate-measured"
             elif w.sha256 == digest:
@@ -708,15 +938,33 @@ def compute_weight_receipt(weights_dir: Path, model: ModelEntry) -> dict[str, An
 # --------------------------------------------------------------------------- #
 # 8. CLI
 # --------------------------------------------------------------------------- #
-def _load_real_engine(
-    model: ModelEntry, weights_dir: Path, device: str
-) -> tuple[Engine, dict[str, Any], str | None]:
+@dataclass(frozen=True)
+class LoadedEngine:
+    """A built engine plus the provenance only the adapter can measure.
+
+    ``weights`` is the verified {filename: {sha256, size_bytes}} map that went into
+    the model; ``model_eval`` is the MEASURED assertion that every module is in
+    eval mode after device placement (not a hard-coded hope); ``fairseq_version``
+    is the installed runtime version. All three flow into the journal header.
+    """
+
+    engine: Engine
+    weights: dict[str, Any]
+    fairseq_version: str | None
+    model_eval: bool
+
+
+def _load_real_engine(model: ModelEntry, weights_dir: Path, device_index: int) -> LoadedEngine:
     """Lazily import fairseq/torch and build the real engine (GPU/weights-bound).
 
     Imported here, never at module load, so the pure orchestration above stays
     importable and unit-tested without torch, fairseq, a GPU, or weights. The
     concrete fairseq adapter lands with the S2b GPU validation; until then this
-    fails closed with an explicit, honest message rather than pretending.
+    fails closed with an explicit, honest message rather than pretending. When it
+    is wired it MUST: verify each weight sha against the mounted bytes, load the
+    checkpoint strictly (no missing/unexpected keys), move the whole model to the
+    device and THEN call eval, and assert every module is out of training mode
+    (the measured value it returns in ``model_eval``).
     """
     raise InferError(
         "the fairseq engine adapter is not wired yet (S2b): build the eval container, mount the "
@@ -731,49 +979,43 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     model = get_model(args.model_id)
     assert_runnable(model)
+    device_index = parse_device_index(args.device)
     manifest_bytes = Path(args.manifest).read_bytes()
     manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
     manifest = load_manifest(json.loads(manifest_bytes.decode("utf-8")))
     clips = select_clips(manifest, args.split)
+    if args.batch_size <= 0:
+        raise InferError(f"--batch-size must be positive, got {args.batch_size}")
 
     configure_determinism(torch)
-    engine, weights_map, fairseq_version = _load_real_engine(
-        model, Path(args.weights_dir), args.device
-    )
+    seeds = seed_everything(torch, args.seed)
+    loaded = _load_real_engine(model, Path(args.weights_dir), device_index)
     runtime = capture_runtime(
-        torch, image_digest=os.environ.get("SYNTHDETECT_IMAGE_DIGEST"),
-        provenance_sha256=_provenance_sha256(), fairseq_version=fairseq_version,
+        torch, device_index=device_index, image_digest=os.environ.get("SYNTHDETECT_IMAGE_DIGEST"),
+        provenance_sha256=_provenance_sha256(), fairseq_version=loaded.fairseq_version,
     )
-    flags = capture_flags(torch, batch_size=args.batch_size, model_eval=True)
+    flags = capture_flags(
+        torch, batch_size=args.batch_size, model_eval=loaded.model_eval, seeds=seeds,
+    )
 
     header = build_header(
         model=model, manifest_sha256=manifest_sha, split=args.split,
         selected_clip_ids=[c.clip_id for c in clips], windowing_mode=args.windowing,
-        runtime=runtime, flags=flags, weights=weights_map,
+        runtime=runtime, flags=flags, weights=loaded.weights,
         runner_git=runner_git_provenance(), created_at=_utcnow(), run_id=args.run_id or _utcnow(),
         host=os.uname().nodename,
     )
 
     out = Path(args.out)
-    already: frozenset[str] = frozenset()
-    if args.resume and out.exists():
-        prior_header, done = parse_resume_journal(out.read_text(encoding="utf-8"))
-        if prior_header.get("execution_identity_sha256") != header["execution_identity_sha256"]:
-            raise InferError(
-                "cannot resume: the existing journal's execution identity differs from this run "
-                "(weights, runtime, flags, windowing, scoring, manifest, or selection changed)"
-            )
-        already = frozenset(done)
-    elif not out.exists():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        with JournalWriter(out) as w:
-            w.write_line(header)
+    already = prepare_journal(
+        out, header, resume=args.resume, selected_ids=frozenset(c.clip_id for c in clips),
+    )
 
     with JournalWriter(out) as writer:
         counts = run_inference(
-            clips=clips, corpus_root=Path(args.corpus_root), engine=engine, model=model,
+            clips=clips, corpus_root=Path(args.corpus_root), engine=loaded.engine, model=model,
             header=header, writer=writer, windowing_mode=args.windowing,
-            already_done=already, stop_on_error=not args.skip_errors,
+            batch_size=args.batch_size, already_done=already, stop_on_error=not args.skip_errors,
         )
     sys.stdout.write(json.dumps({"ok": True, "journal": str(out), **counts}, sort_keys=True) + "\n")
     return 0
@@ -822,7 +1064,8 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--split", default=None, help="restrict to one manifest split")
     p_run.add_argument("--windowing", default="upstream", choices=("upstream", "production"))
     p_run.add_argument("--batch-size", type=int, default=8)
-    p_run.add_argument("--device", default="cuda")
+    p_run.add_argument("--device", default="cuda", help="cuda or cuda:N")
+    p_run.add_argument("--seed", type=int, default=DEFAULT_SEED)
     p_run.add_argument("--run-id", default=None)
     p_run.add_argument("--resume", action="store_true", help="continue an existing journal")
     p_run.add_argument(

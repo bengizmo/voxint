@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import struct
 import sys
 import wave
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pytest
@@ -152,6 +153,30 @@ def test_read_canonical_pcm_rejects_unreadable(tmp_path: Path) -> None:
         si.read_canonical_pcm(p)
 
 
+def _write_raw_wav(path: Path, data_payload: bytes, declared_data_size: int) -> None:
+    """Hand-build a mono/16k/16-bit WAV with an explicit (possibly odd) data size."""
+    fmt = struct.pack("<HHIIHH", 1, 1, 16000, 32000, 2, 16)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", declared_data_size) + data_payload
+    path.write_bytes(b"RIFF" + struct.pack("<I", len(body)) + body)
+
+
+def test_read_canonical_pcm_rejects_orphan_byte(tmp_path: Path) -> None:
+    # A 3-byte data chunk is not a whole number of 2-byte frames; stdlib wave
+    # would silently floor it to one frame, so the RIFF-size cross-check must catch
+    # the orphan byte.
+    p = tmp_path / "orphan.wav"
+    _write_raw_wav(p, b"\x01\x00\x02", 3)
+    with pytest.raises(si.InferError, match="orphan byte"):
+        si.read_canonical_pcm(p)
+
+
+def test_riff_data_chunk_size_reads_declared_size(tmp_path: Path) -> None:
+    p = tmp_path / "sz.wav"
+    _write_raw_wav(p, b"\x01\x00\x02\x00", 4)
+    assert si._riff_data_chunk_size(p) == 4
+
+
 def test_verify_clip_sha_match_and_mismatch(tmp_path: Path) -> None:
     samples = np.arange(-3, 3, dtype="<i2")
     sha = _write_wav(tmp_path / "c.wav", samples)
@@ -220,6 +245,20 @@ def test_build_batch_shape_scale_and_recording_sensitivity() -> None:
     assert batch[0, 0] == pytest.approx(-100 / 32768.0)
 
 
+def test_score_windows_batched_chunks_preserve_order_and_values() -> None:
+    engine = RecordingEngine()
+    batch = np.arange(5 * WIDTH, dtype=np.float32).reshape(5, WIDTH)
+    one = engine.score_windows(batch)  # reference: all at once
+    batched = si.score_windows_batched(RecordingEngine(), batch, batch_size=2)
+    assert batched.shape == (5,)
+    np.testing.assert_allclose(batched, one)
+
+
+def test_score_windows_batched_rejects_bad_batch_size() -> None:
+    with pytest.raises(si.InferError, match="batch_size must be positive"):
+        si.score_windows_batched(RecordingEngine(), np.zeros((2, WIDTH), np.float32), 0)
+
+
 def test_pool_scores_logit_mean_and_failures() -> None:
     assert si.pool_scores(np.array([1.0, 3.0]), "logit-mean") == pytest.approx(2.0)
     with pytest.raises(si.InferError, match="empty score vector"):
@@ -275,12 +314,12 @@ def test_parse_resume_journal_header_only_is_valid() -> None:
     assert done == []
 
 
-def test_parse_resume_journal_collects_completed_and_tolerates_torn_tail() -> None:
+def test_parse_resume_journal_collects_validated_records() -> None:
     h = json.dumps(_header())
     r1 = json.dumps({"clip_id": "a", "raw_score": 1.0, "n_windows": 1})
-    torn = '{"clip_id": "b", "raw_sc'  # interrupted final flush
-    _, done = si.parse_resume_journal("\n".join([h, r1, torn]) + "\n")
-    assert done == ["a"]
+    r2 = json.dumps({"clip_id": "b", "skip_reason": "too-short", "n_windows": 0})
+    _, done = si.parse_resume_journal("\n".join([h, r1, r2]) + "\n")
+    assert done == ["a", "b"]
 
 
 def test_parse_resume_journal_rejects_bad_states() -> None:
@@ -289,10 +328,18 @@ def test_parse_resume_journal_rejects_bad_states() -> None:
         si.parse_resume_journal("\n")
     with pytest.raises(si.InferError, match="not a synthdetect_journal header"):
         si.parse_resume_journal(json.dumps({"kind": "other"}) + "\n")
-    # malformed NON-final line is fatal
+    # A malformed complete line is fatal (prepare_journal removes only a torn tail).
     bad = "\n".join([h, "{not json", json.dumps({"clip_id": "z", "raw_score": 1.0})])
-    with pytest.raises(si.InferError, match="malformed non-final"):
+    with pytest.raises(si.InferError, match="malformed JSON"):
         si.parse_resume_journal(bad + "\n")
+    # A record violating the S1 score/skip XOR must NOT be trusted as completed.
+    xor = "\n".join([h, json.dumps({"clip_id": "a", "raw_score": 1.0, "skip_reason": "x"})])
+    with pytest.raises(si.InferError, match="exactly one of raw_score"):
+        si.parse_resume_journal(xor + "\n")
+    # A non-finite score is rejected.
+    inf = "\n".join([h, json.dumps({"clip_id": "a"})])  # neither score nor skip
+    with pytest.raises(si.InferError, match="exactly one of raw_score"):
+        si.parse_resume_journal(inf + "\n")
     # duplicate clip id
     dup = "\n".join([h, json.dumps({"clip_id": "a", "raw_score": 1.0}),
                      json.dumps({"clip_id": "a", "raw_score": 2.0})])
@@ -302,6 +349,86 @@ def test_parse_resume_journal_rejects_bad_states() -> None:
     miss = "\n".join([h, json.dumps({"raw_score": 1.0})])
     with pytest.raises(si.InferError, match="missing a clip_id"):
         si.parse_resume_journal(miss + "\n")
+
+
+# --------------------------------------------------------------------------- #
+# prepare_journal: exclusive create, torn-tail truncation, resume identity
+# --------------------------------------------------------------------------- #
+def test_prepare_journal_fresh_writes_header_once(tmp_path: Path) -> None:
+    out = tmp_path / "sub" / "j.jsonl"
+    header = _header(selected_clip_ids=["a"])
+    already = si.prepare_journal(out, header, resume=False)
+    assert already == frozenset()
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["kind"] == "synthdetect_journal"
+
+
+def test_prepare_journal_refuses_existing_without_resume(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    header = _header()
+    si.prepare_journal(out, header, resume=False)
+    with pytest.raises(si.InferError, match="already exists; pass --resume"):
+        si.prepare_journal(out, header, resume=False)
+
+
+def test_prepare_journal_resume_matches_and_skips(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    header = _header(selected_clip_ids=["a", "b"])
+    si.prepare_journal(out, header, resume=False)
+    with out.open("a") as fh:
+        fh.write(json.dumps({"clip_id": "a", "raw_score": 1.0, "n_windows": 1}) + "\n")
+    already = si.prepare_journal(out, header, resume=True,
+                                 selected_ids=frozenset({"a", "b"}))
+    assert already == frozenset({"a"})
+
+
+def test_prepare_journal_truncates_torn_tail_and_keeps_recovery(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    header = _header(selected_clip_ids=["a", "b"])
+    si.prepare_journal(out, header, resume=False)
+    with out.open("a") as fh:
+        fh.write(json.dumps({"clip_id": "a", "raw_score": 1.0, "n_windows": 1}) + "\n")
+        fh.write('{"clip_id": "b", "raw_sc')  # torn: no trailing newline
+    already = si.prepare_journal(out, header, resume=True,
+                                 selected_ids=frozenset({"a", "b"}))
+    assert already == frozenset({"a"})
+    # the torn bytes were removed and preserved for forensics
+    text = out.read_text()
+    assert text.endswith("\n")
+    assert '"clip_id": "b"' not in text  # the torn "b" record is gone
+    assert '"clip_id": "a"' in text  # the complete "a" record survived
+    assert (tmp_path / "j.jsonl.torn").read_text().startswith('{"clip_id": "b"')
+
+
+def test_prepare_journal_rejects_tampered_identity(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    header = _header()
+    # Write a header whose stored identity does NOT match its own content.
+    tampered = dict(header)
+    tampered["execution_identity_sha256"] = "f" * 64
+    out.write_text(json.dumps(tampered) + "\n")
+    with pytest.raises(si.InferError, match="does not match its own recorded"):
+        si.prepare_journal(out, header, resume=True)
+
+
+def test_prepare_journal_rejects_identity_mismatch(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    prior = _header(manifest_sha256="a" * 64)
+    si.prepare_journal(out, prior, resume=False)
+    current = _header(manifest_sha256="b" * 64)  # different run
+    with pytest.raises(si.InferError, match="execution identity differs"):
+        si.prepare_journal(out, current, resume=True)
+
+
+def test_prepare_journal_rejects_unknown_completed_id(tmp_path: Path) -> None:
+    out = tmp_path / "j.jsonl"
+    header = _header(selected_clip_ids=["a"])
+    si.prepare_journal(out, header, resume=False)
+    with out.open("a") as fh:
+        fh.write(json.dumps({"clip_id": "ghost", "raw_score": 1.0, "n_windows": 1}) + "\n")
+    with pytest.raises(si.InferError, match="not in this selection"):
+        si.prepare_journal(out, header, resume=True, selected_ids=frozenset({"a"}))
 
 
 # --------------------------------------------------------------------------- #
@@ -459,9 +586,14 @@ class FakeTorch:
         def get_device_capability(_i: int) -> tuple[int, int]:
             return (8, 6)
 
+        @staticmethod
+        def manual_seed_all(_seed: int) -> None:
+            FakeTorch.seeded.append(("cuda", _seed))
+
     backends = _Backends
     _det = False
     _warn = False
+    seeded: ClassVar[list[tuple[str, int]]] = []
 
     @classmethod
     def are_deterministic_algorithms_enabled(cls) -> bool:
@@ -480,15 +612,37 @@ class FakeTorch:
         cls._det = value
         cls._warn = warn_only
 
+    @classmethod
+    def manual_seed(cls, seed: int) -> None:
+        cls.seeded.append(("cpu", seed))
+
 
 def test_capture_runtime_reads_device_and_versions() -> None:
-    rt = si.capture_runtime(FakeTorch, image_digest="sha256:abc",
+    rt = si.capture_runtime(FakeTorch, device_index=2, image_digest="sha256:abc",
                             provenance_sha256="p" * 64, fairseq_version="1.0.0a0+deadbee")
     assert rt["torch"] == "2.1.0+cu118"
     assert rt["cuda"] == "11.8"
+    assert rt["device_index"] == 2
     assert rt["device_capability"] == [8, 6]
+    assert rt["cuda_driver_version"] is None  # FakeTorch has no _C; fail-soft to None
     assert rt["image_digest"] == "sha256:abc"
     assert rt["fairseq"] == "1.0.0a0+deadbee"
+
+
+def test_parse_device_index_and_rejects_non_cuda() -> None:
+    assert si.parse_device_index("cuda") == 0
+    assert si.parse_device_index("cuda:2") == 2
+    for bad in ("cpu", "mps", "cuda:x", "0"):
+        with pytest.raises(si.InferError, match="device must be"):
+            si.parse_device_index(bad)
+
+
+def test_seed_everything_seeds_all_rngs() -> None:
+    FakeTorch.seeded = []
+    seeds = si.seed_everything(FakeTorch, 7)
+    assert seeds == {"python": 7, "numpy": 7, "torch": 7, "torch_cuda": 7}
+    assert ("cpu", 7) in FakeTorch.seeded
+    assert ("cuda", 7) in FakeTorch.seeded
 
 
 def test_configure_determinism_sets_flags_and_requires_cublas(
@@ -497,16 +651,21 @@ def test_configure_determinism_sets_flags_and_requires_cublas(
     monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
     with pytest.raises(si.InferError, match="CUBLAS_WORKSPACE_CONFIG"):
         si.configure_determinism(FakeTorch)
+    # A non-empty but INVALID value must also fail closed (not just an unset one).
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":2:2")
+    with pytest.raises(si.InferError, match="not one of"):
+        si.configure_determinism(FakeTorch)
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     si.configure_determinism(FakeTorch)
     assert FakeTorch.backends.cudnn.allow_tf32 is False
     assert FakeTorch.backends.cuda.matmul.allow_tf32 is False
     assert FakeTorch.backends.cudnn.benchmark is False
     assert FakeTorch.are_deterministic_algorithms_enabled() is True
-    flags = si.capture_flags(FakeTorch, batch_size=8, model_eval=True)
+    flags = si.capture_flags(FakeTorch, batch_size=8, model_eval=True, seeds={"python": 0})
     assert flags["deterministic_algorithms"] is True
     assert flags["deterministic_warn_only"] is False
     assert flags["cublas_workspace_config"] == ":4096:8"
+    assert flags["seeds"] == {"python": 0}
     assert flags["batch_size"] == 8
     assert flags["inference_mode"] is True
 
@@ -519,6 +678,15 @@ def test_runner_git_provenance_shape() -> None:
 # --------------------------------------------------------------------------- #
 # verify-sources receipt
 # --------------------------------------------------------------------------- #
+def test_hash_file_streams_matching_sha_and_size(tmp_path: Path) -> None:
+    data = b"abc" * 100000
+    p = tmp_path / "big.bin"
+    p.write_bytes(data)
+    digest, size = si._hash_file(p, block_size=4096)
+    assert digest == hashlib.sha256(data).hexdigest()
+    assert size == len(data)
+
+
 def test_compute_weight_receipt_missing_and_measured(tmp_path: Path) -> None:
     # No files present -> missing verdicts, all_present False.
     receipt = si.compute_weight_receipt(tmp_path, MODEL)
