@@ -640,3 +640,102 @@ def test_research_search_row_disable_wins_over_env_enable(
     monkeypatch.setattr(research, "web_search", _boom)
     assert main(["research", "search", "anything"]) == 2
     assert "disabled" in capsys.readouterr().out
+
+
+def test_media_requires_subcommand() -> None:
+    # The `media` group has required=True, so bare `voxint media` is a usage
+    # error, not a silent no-op.
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["media"])
+
+
+def test_media_backfill_hashes_reports_settings_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A bad settings resolution exits 2 before any DB access.
+    import voxint.config as config
+    import voxint.db.session as db_session
+
+    def _bad_settings() -> object:
+        raise config.SettingsError("MEDIA_ROOT missing")
+
+    def _no_db(*_a: object, **_k: object) -> object:
+        raise AssertionError("must not reach the DB on a settings error")
+
+    monkeypatch.setattr(config, "get_settings", _bad_settings)
+    monkeypatch.setattr(db_session, "build_engine", _no_db)
+    assert main(["media", "backfill-hashes"]) == 2
+    assert "MEDIA_ROOT missing" in capsys.readouterr().out
+
+
+class _FakeEngineWithDispose:
+    disposed = False
+
+    def dispose(self) -> None:
+        self.disposed = True
+
+
+def _stub_backfill_db(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: object, result: object
+) -> _FakeEngineWithDispose:
+    """Wire the backfill handler's settings/engine/session/backfill to fakes.
+
+    Returns the fake engine so a test can assert it was disposed.
+    """
+    import contextlib as _contextlib
+
+    import voxint.cli as cli
+    import voxint.config as config
+    import voxint.db.session as db_session
+    import voxint.media.integrity as integrity
+    from voxint.config import Settings
+
+    monkeypatch.setattr(config, "get_settings", lambda: Settings(media_root=tmp_path))  # type: ignore[arg-type]
+    engine = _FakeEngineWithDispose()
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (engine, 0))
+
+    @_contextlib.contextmanager
+    def _cm() -> object:
+        yield object()
+
+    monkeypatch.setattr(db_session, "build_session_factory", lambda _e: (lambda: _cm()))
+    monkeypatch.setattr(integrity, "backfill_sha256", lambda *_a, **_k: result)
+    return engine
+
+
+def test_media_backfill_hashes_happy_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    import voxint.media.integrity as integrity
+
+    result = integrity.BackfillResult(hashed=3, skipped_missing=("gone.wav",))
+    engine = _stub_backfill_db(monkeypatch, tmp_path, result)
+    assert main(["media", "backfill-hashes"]) == 0
+    out = capsys.readouterr().out
+    assert "hashed 3 media row(s)" in out
+    assert "gone.wav" in out
+    assert engine.disposed is True  # the engine is always disposed
+
+
+def test_media_backfill_hashes_nothing_to_do(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    import voxint.media.integrity as integrity
+
+    result = integrity.BackfillResult(hashed=0, skipped_missing=())
+    _stub_backfill_db(monkeypatch, tmp_path, result)
+    assert main(["media", "backfill-hashes"]) == 0
+    assert "nothing to backfill" in capsys.readouterr().out
+
+
+def test_media_backfill_hashes_engine_error_exits_2(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    # A malformed DATABASE_URL maps to a sanitized exit 2 via _engine_or_report.
+    import voxint.cli as cli
+    import voxint.config as config
+    from voxint.config import Settings
+
+    monkeypatch.setattr(config, "get_settings", lambda: Settings(media_root=tmp_path))  # type: ignore[arg-type]
+    monkeypatch.setattr(cli, "_engine_or_report", lambda **_k: (None, 2))
+    assert main(["media", "backfill-hashes"]) == 2
