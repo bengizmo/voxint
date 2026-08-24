@@ -526,6 +526,16 @@ class Settings(BaseSettings):
     translation_target_language: str | None = None
     translation_autogenerate: bool = False
 
+    # Plugin kill switch (#137, epic #136). Comma-separated ids of builtin
+    # plugins to remove entirely from this process — their routes 404, their
+    # background tasks re-check their gate and no-op. This is the operator's
+    # recovery lever: a baked-in plugin that fails to load otherwise aborts
+    # startup loudly (a shipped plugin is code, not untrusted input). Must be set
+    # identically for the api and the worker. Empty ⇒ every builtin is active. An
+    # id that names no builtin is reported by `voxint doctor`, never an error.
+    # Parsed by voxint.plugins.parse_disabled_ids.
+    voxint_plugins_disabled: str = ""
+
     @model_validator(mode="after")
     def _apply_compute_tier_profile(self) -> "Settings":
         # Defined FIRST so the scaled values are what every later invariant

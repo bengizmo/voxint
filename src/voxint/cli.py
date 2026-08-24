@@ -1069,6 +1069,22 @@ def _doctor(args: argparse.Namespace) -> int:
         # Telemetry is advisory; a probe failure must never fail doctor.
         pass
 
+    # Plugin framework status (#137): active builtins + kill-switch state. Prints
+    # nothing while the registry is empty, so doctor output is unchanged until a
+    # plugin lands. A malformed builtin (which fails real startup) is surfaced
+    # here rather than crashing the command.
+    from voxint.plugins import PluginError, load_plugins
+    from voxint.plugins.doctor import format_plugins_status
+
+    try:
+        plugins_status = format_plugins_status(load_plugins(settings))
+    except PluginError as exc:
+        print(f"\n[FAIL] plugins: {exc}")
+    else:
+        if plugins_status is not None:
+            print()
+            print(plugins_status)
+
     code = diagnostics.exit_code(results)
     verdict = "all hard dependencies OK" if code == 0 else "a hard dependency is down"
     print(f"\ndoctor: {verdict}")
