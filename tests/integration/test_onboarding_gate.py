@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from voxint.api.app import create_app, require_onboarded
+from voxint.api.app import create_app
+from voxint.api.routers.deps import require_onboarded
 from voxint.config import Settings
 
 CREDS = ("reviewer", "s3cret")

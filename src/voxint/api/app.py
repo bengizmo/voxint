@@ -16,7 +16,6 @@ from typing import Any
 
 from fastapi import (
     APIRouter,
-    Depends,
     FastAPI,
     HTTPException,
     Request,
@@ -35,7 +34,6 @@ from voxint.api.routers.deps import (
     _APP_ASSETS_DIR,
     OperatorDep,
     _looks_hashed,
-    require_onboarded,
 )
 from voxint.api.routers.legacy_review import router as review_router
 from voxint.api.routers.legacy_review import transcript_router as review_transcript_router
@@ -310,12 +308,16 @@ def create_app(
 
 def _register_routes(app: FastAPI) -> None:
     # Two registrars: `app` carries the onboarding-gate-EXEMPT routes (liveness,
-    # the htmx asset, and the setup wizard); `protected` carries everything else
-    # behind one router-level gate (require_onboarded). Exemption is structural —
-    # a route is exempt iff it is registered on `app` rather than `protected`, so
-    # there is no path allow-list to keep in sync. New console routes should
-    # default to `protected` (the route-inventory test guards against a slip).
-    protected = APIRouter(dependencies=[Depends(require_onboarded)])
+    # the static asset routes, and the setup wizard's setup_router); `console`
+    # aggregates every per-area router, and each of those declares its own
+    # router-level require_onboarded dependency (routers/deps.py). The gate
+    # rides the family router, not this aggregator, because an outer router's
+    # dependencies do not appear in a nested route's dependant tree on this
+    # FastAPI, which is where the characterization contract reads gating from.
+    # Exemption stays structural: a route is exempt iff it reaches the app
+    # outside a gated family router (the route-inventory and onboarding-gate
+    # tests guard against a slip). New console routes go on their area router.
+    console = APIRouter()
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
@@ -327,7 +329,7 @@ def _register_routes(app: FastAPI) -> None:
 
     # ---- Index + run submission/browsing/transcript: moved to
     # routers/legacy_runs.py; included here to keep registration order.
-    protected.include_router(runs_core_router)
+    console.include_router(runs_core_router)
 
     @app.get("/static/htmx.min.js")
     def htmx_asset(operator: OperatorDep) -> FileResponse:
@@ -364,33 +366,33 @@ def _register_routes(app: FastAPI) -> None:
             headers["Cache-Control"] = "public, max-age=31536000, immutable"
         return FileResponse(candidate, media_type=media_type, headers=headers)
 
-    protected.include_router(review_transcript_router)
+    console.include_router(review_transcript_router)
 
     # ---- Run actions (requeue/cancel/archive/notes/export): moved to
     # routers/legacy_runs.py; included here to keep registration order.
-    protected.include_router(runs_actions_router)
+    console.include_router(runs_actions_router)
 
     # ---- Review queue, workbench, annotations (issues #16/#86): moved to
     # routers/legacy_review.py; included here to keep registration order.
-    protected.include_router(review_router)
+    console.include_router(review_router)
 
     # ---- Metrics, dashboard, resources: moved to routers/legacy_runs.py;
     # included here to keep registration order.
-    protected.include_router(runs_dashboards_router)
+    console.include_router(runs_dashboards_router)
 
     # ---- Settings + guided-tutorial lifecycle: moved to routers/settings.py;
     # included here to keep registration order.
-    protected.include_router(settings_router)
+    console.include_router(settings_router)
 
     # ---- Speaker roster + web research (issue #7 / #42): moved to
     # routers/speakers.py; included here to keep registration order.
-    protected.include_router(speakers_router)
+    console.include_router(speakers_router)
 
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
-    protected.include_router(runs_tail_router)
+    console.include_router(runs_tail_router)
 
-    app.include_router(protected)
+    app.include_router(console)
 
 
 app = create_app()

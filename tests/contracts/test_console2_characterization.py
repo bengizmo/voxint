@@ -34,8 +34,9 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from tests.contracts.conftest import REPO_ROOT
-from voxint.api.app import create_app, require_onboarded
+from voxint.api.app import create_app
 from voxint.api.auth import require_operator
+from voxint.api.routers.deps import require_onboarded
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
