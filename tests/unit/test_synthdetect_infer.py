@@ -688,16 +688,22 @@ def test_hash_file_streams_matching_sha_and_size(tmp_path: Path) -> None:
 
 
 def test_compute_weight_receipt_missing_and_measured(tmp_path: Path) -> None:
+    # Uses a model whose weights are still CANDIDATE so the measured branch is
+    # exercised; the default w2v2-aasist is PINNED since S2b, which
+    # test_compute_weight_receipt_match_and_mismatch covers.
+    candidate = get_model("antideepfake-xlsr-2b")
+    assert candidate.weights_pinned() is False
+
     # No files present -> missing verdicts, all_present False.
-    receipt = si.compute_weight_receipt(tmp_path, MODEL)
+    receipt = si.compute_weight_receipt(tmp_path, candidate)
     assert receipt["all_present"] is False
     assert receipt["weights_pinned"] is False
     assert {f["verdict"] for f in receipt["files"]} == {"missing"}
 
     # Present but registry sha is CANDIDATE (None) -> candidate-measured.
-    for w in MODEL.weights:
+    for w in candidate.weights:
         (tmp_path / w.filename).write_bytes(b"weight-bytes-" + w.filename.encode())
-    receipt2 = si.compute_weight_receipt(tmp_path, MODEL)
+    receipt2 = si.compute_weight_receipt(tmp_path, candidate)
     assert receipt2["all_present"] is True
     for f in receipt2["files"]:
         assert f["verdict"] == "candidate-measured"
@@ -721,6 +727,90 @@ def test_compute_weight_receipt_match_and_mismatch(tmp_path: Path) -> None:
     (tmp_path / w0.filename).write_bytes(b"different-bytes")
     receipt2 = si.compute_weight_receipt(tmp_path, pinned_model)
     assert receipt2["files"][0]["verdict"] == "MISMATCH"
+
+
+# --------------------------------------------------------------------------- #
+# _verify_weight_bytes + _pushd: the pure (non-torch) parts of the S2b adapter
+# --------------------------------------------------------------------------- #
+def _pinned_two_weight_model(tmp_path: Path, *, la: bytes = b"la-bytes",
+                             xlsr: bytes = b"xlsr-bytes") -> Any:
+    """A w2v2-aasist copy whose two weight pins match small files written to disk."""
+    from dataclasses import replace
+
+    (tmp_path / "LA_model.pth").write_bytes(la)
+    (tmp_path / "xlsr2_300m.pt").write_bytes(xlsr)
+    w_la, w_xlsr = MODEL.weights
+    return replace(MODEL, weights=(
+        replace(w_la, sha256=hashlib.sha256(la).hexdigest(), size_bytes=len(la)),
+        replace(w_xlsr, sha256=hashlib.sha256(xlsr).hexdigest(), size_bytes=len(xlsr)),
+    ))
+
+
+def test_verify_weight_bytes_ok(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    verified, by_role = si._verify_weight_bytes(model, tmp_path)
+    assert set(verified) == {"LA_model.pth", "xlsr2_300m.pt"}
+    assert verified["LA_model.pth"]["size_bytes"] == len(b"la-bytes")
+    assert by_role["aasist_checkpoint"].name == "LA_model.pth"
+    assert by_role["xlsr_ssl_base"].name == "xlsr2_300m.pt"
+
+
+def test_verify_weight_bytes_missing_raises(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    (tmp_path / "LA_model.pth").unlink()
+    with pytest.raises(si.InferError, match="not found"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_verify_weight_bytes_candidate_raises(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    (tmp_path / "LA_model.pth").write_bytes(b"x")
+    (tmp_path / "xlsr2_300m.pt").write_bytes(b"y")
+    w_la, w_xlsr = MODEL.weights
+    cand = replace(MODEL, weights=(replace(w_la, sha256=None), replace(w_xlsr, sha256=None)))
+    with pytest.raises(si.InferError, match="CANDIDATE"):
+        si._verify_weight_bytes(cand, tmp_path)
+
+
+def test_verify_weight_bytes_sha_mismatch_raises(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    (tmp_path / "LA_model.pth").write_bytes(b"tampered")
+    with pytest.raises(si.InferError, match="sha256 mismatch"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_verify_weight_bytes_size_mismatch_raises(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    data = b"la-bytes"
+    (tmp_path / "LA_model.pth").write_bytes(data)
+    (tmp_path / "xlsr2_300m.pt").write_bytes(b"xlsr")
+    w_la, w_xlsr = MODEL.weights
+    model = replace(MODEL, weights=(
+        replace(w_la, sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data) + 1),
+        replace(w_xlsr, sha256=hashlib.sha256(b"xlsr").hexdigest(), size_bytes=len(b"xlsr")),
+    ))
+    with pytest.raises(si.InferError, match="size mismatch"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_pushd_changes_and_restores(tmp_path: Path) -> None:
+    import os
+
+    before = os.getcwd()
+    with si._pushd(tmp_path):
+        assert Path(os.getcwd()).resolve() == tmp_path.resolve()
+    assert os.getcwd() == before
+
+
+def test_pushd_restores_on_exception(tmp_path: Path) -> None:
+    import os
+
+    before = os.getcwd()
+    with pytest.raises(ValueError, match="boom"), si._pushd(tmp_path):
+        raise ValueError("boom")
+    assert os.getcwd() == before
 
 
 # --------------------------------------------------------------------------- #

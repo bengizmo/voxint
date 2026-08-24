@@ -954,23 +954,167 @@ class LoadedEngine:
     model_eval: bool
 
 
+# The verbatim, sha-pinned upstream model definition (SSL_Anti-spoofing model.py).
+# Loaded by file path so it never has to be on sys.path as a package, and only
+# when the real engine is built (it imports fairseq/torch). Provenance +
+# integrity hash live in tools/synthdetect_vendor/provenance.json; a contract
+# test binds that hash to the pinned model_repo.commit.
+_VENDORED_MODEL_PATH = (
+    Path(__file__).resolve().parent / "synthdetect_vendor" / "ssl_antispoofing_model.py"
+)
+
+# The upstream SSLModel hard-codes this relative XLS-R checkpoint filename; the
+# adapter resolves it by constructing the model with the weights dir as CWD, so
+# the vendored file stays byte-identical to upstream.
+_XLSR_UPSTREAM_FILENAME = "xlsr2_300m.pt"
+
+
+@contextlib.contextmanager
+def _pushd(target: Path) -> Any:
+    """Temporarily change the working directory (Python 3.10 has no contextlib.chdir).
+
+    The eval image is Python 3.10, and the vendored upstream ``SSLModel`` loads
+    its XLS-R base from a hard-coded relative path. Constructing the model inside
+    this context makes that relative path resolve against the mounted weights dir
+    without editing the vendored file.
+    """
+    prev = os.getcwd()
+    os.chdir(target)
+    try:
+        yield
+    finally:
+        os.chdir(prev)
+
+
+def _verify_weight_bytes(
+    model: ModelEntry, weights_dir: Path
+) -> tuple[dict[str, Any], dict[str, Path]]:
+    """Hash each mounted weight and fail closed unless it matches the frozen pin.
+
+    Returns the ``{filename: {sha256, size_bytes}}`` map that flows into the
+    journal header and a ``{role: path}`` map for loading. A CANDIDATE (null) pin,
+    a missing file, or any sha/size mismatch raises: the engine never runs against
+    bytes the registry has not frozen.
+    """
+    verified: dict[str, Any] = {}
+    by_role: dict[str, Path] = {}
+    for w in model.weights:
+        path = weights_dir / w.filename
+        if not path.is_file():
+            raise InferError(f"weight file {w.filename!r} not found under {weights_dir}")
+        if w.sha256 is None:
+            raise InferError(
+                f"weight {w.filename!r} is CANDIDATE (sha256=None): freeze the registry pins "
+                "(S2b) before running the real engine. Use 'verify-sources' for the receipt."
+            )
+        digest, size = _hash_file(path)
+        if digest != w.sha256:
+            raise InferError(
+                f"weight {w.filename!r} sha256 mismatch: mounted {digest} != pinned {w.sha256}"
+            )
+        if w.size_bytes is not None and size != w.size_bytes:
+            raise InferError(
+                f"weight {w.filename!r} size mismatch: mounted {size} != pinned {w.size_bytes}"
+            )
+        verified[w.filename] = {"sha256": digest, "size_bytes": size}
+        by_role[w.role] = path
+    return verified, by_role
+
+
+class _FairseqAASISTEngine:
+    """Real forward pass for w2v2-aasist: prepared windows -> synthetic-ness score.
+
+    Receives an already-preprocessed ``[n_windows, 64600]`` float32 batch (all
+    cropping/repeat-padding done in the pure layer), runs the fine-tuned
+    wav2vec2-XLS-R + AASIST model, and returns a finite float64 score per window
+    in the fixed polarity. The upstream checkpoint emits column 1 = bona-fide
+    logit, so the score is its NEGATION (higher = more synthetic). No decoding,
+    windowing, or pooling happens here.
+    """
+
+    def __init__(self, net: Any, device: Any) -> None:
+        self._net = net
+        self._device = device
+
+    def score_windows(self, batch: np.ndarray) -> np.ndarray:
+        import torch
+
+        if batch.ndim != 2:
+            raise InferError(
+                f"engine expects a 2-D [n_windows, width] batch, got shape {batch.shape}"
+            )
+        x = torch.from_numpy(np.ascontiguousarray(batch, dtype=np.float32)).to(self._device)
+        # inference_mode (not just no_grad) matches what the journal header records
+        # under flags.inference_mode; numerically identical to a plain forward.
+        with torch.inference_mode():
+            out = self._net(x)  # [n_windows, 2]; column 1 = bona-fide logit
+            scores = (-out[:, 1]).double().detach().cpu().numpy()
+        return np.asarray(scores, dtype=np.float64)
+
+
 def _load_real_engine(model: ModelEntry, weights_dir: Path, device_index: int) -> LoadedEngine:
     """Lazily import fairseq/torch and build the real engine (GPU/weights-bound).
 
     Imported here, never at module load, so the pure orchestration above stays
-    importable and unit-tested without torch, fairseq, a GPU, or weights. The
-    concrete fairseq adapter lands with the S2b GPU validation; until then this
-    fails closed with an explicit, honest message rather than pretending. When it
-    is wired it MUST: verify each weight sha against the mounted bytes, load the
-    checkpoint strictly (no missing/unexpected keys), move the whole model to the
-    device and THEN call eval, and assert every module is out of training mode
-    (the measured value it returns in ``model_eval``).
+    importable and unit-tested without torch, fairseq, a GPU, or weights. Steps,
+    in order (each fails closed): verify every weight sha against the mounted
+    bytes; load the vendored upstream model definition; construct it, move the
+    WHOLE model to the device, and THEN call eval; assert every module is out of
+    training mode (the MEASURED bool returned in ``model_eval``, which flows into
+    the journal flags). The XLS-R base is loaded by the upstream ``SSLModel`` from
+    a hard-coded relative path, so construction happens with the weights dir as
+    CWD; the AASIST checkpoint is loaded strictly (no missing/unexpected keys).
     """
-    raise InferError(
-        "the fairseq engine adapter is not wired yet (S2b): build the eval container, mount the "
-        "weights, and land the adapter with the GPU smoke + determinism evidence. The pure "
-        "orchestration and journal contract in this module are complete and CI-covered; only the "
-        "real forward pass is pending. Use 'verify-sources' to produce the weight receipt now."
+    import importlib.util
+
+    import torch
+
+    verified, by_role = _verify_weight_bytes(model, weights_dir)
+    try:
+        xlsr_path = by_role["xlsr_ssl_base"]
+        aasist_path = by_role["aasist_checkpoint"]
+    except KeyError as exc:
+        raise InferError(f"registry for {model.model_id} is missing weight role {exc}") from exc
+    if xlsr_path.name != _XLSR_UPSTREAM_FILENAME:
+        raise InferError(
+            f"the vendored SSLModel loads the XLS-R base from the hard-coded relative name "
+            f"{_XLSR_UPSTREAM_FILENAME!r}, but the registry names it {xlsr_path.name!r}"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "synthdetect_ssl_antispoofing_model", _VENDORED_MODEL_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise InferError(f"cannot load the vendored model definition at {_VENDORED_MODEL_PATH}")
+    ssl_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ssl_mod)
+
+    device = torch.device(f"cuda:{device_index}")
+    # Construct with the weights dir as CWD so the upstream SSLModel's hard-coded
+    # relative 'xlsr2_300m.pt' resolves to the mounted, sha-verified base.
+    with _pushd(weights_dir):
+        net = ssl_mod.Model(None, device)
+    net = net.to(device)
+    # weights_only=False (torch 2.1 default): the checkpoint is a pickled state
+    # dict, and its bytes are already sha-verified above, so this loads no
+    # untrusted code. strict=True rejects any missing or unexpected key.
+    state = torch.load(str(aasist_path), map_location=device, weights_only=False)
+    net.load_state_dict(state, strict=True)
+    net.eval()
+
+    model_eval = all(not m.training for m in net.modules())
+    if not model_eval:
+        raise InferError(
+            "a module is still in training mode after eval(): the run would be non-deterministic "
+            "(dropout / batchnorm active). Refusing to score."
+        )
+
+    import fairseq
+
+    fairseq_version = getattr(fairseq, "__version__", None)
+    engine = _FairseqAASISTEngine(net, device)
+    return LoadedEngine(
+        engine=engine, weights=verified, fairseq_version=fairseq_version, model_eval=model_eval
     )
 
 
@@ -1041,9 +1185,13 @@ def _provenance_sha256() -> str | None:
 
 
 def _utcnow() -> str:
-    from datetime import UTC, datetime
+    # Use timezone.utc, not the 3.11+ datetime alias: this runner executes in the
+    # py3.10 eval image, where that alias does not exist. Ruff UP017 would rewrite
+    # this to the 3.11-only form, so the file is exempt from UP017 in pyproject.toml
+    # and a static guard in test_synthdetect_container.py backs it.
+    from datetime import datetime, timezone
 
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def main(argv: list[str] | None = None) -> int:

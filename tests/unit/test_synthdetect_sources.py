@@ -47,9 +47,18 @@ def test_licensed_models_are_runnable() -> None:
         src.assert_runnable(model)  # does not raise
 
 
-def test_shas_are_candidate_in_s1() -> None:
-    # No model is weights-pinned yet; every weight sha is CANDIDATE (None).
+def test_default_model_pinned_others_candidate() -> None:
+    # S2b (2026-08-24) froze the default candidate w2v2-aasist from real bytes: its
+    # weights carry real shas + sizes and a model-repo commit, so weights_pinned()
+    # is True. Every other model stays CANDIDATE until its own freeze.
+    default = src.default_model()
+    assert default.model_id == "w2v2-aasist"
+    assert default.weights_pinned() is True
+    assert all(w.sha256 is not None and w.size_bytes is not None for w in default.weights)
+    assert default.commit is not None
     for model in src.MODELS.values():
+        if model.model_id == default.model_id:
+            continue
         assert model.weights_pinned() is False
         assert all(w.sha256 is None for w in model.weights)
         assert model.commit is None

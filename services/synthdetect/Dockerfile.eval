@@ -10,7 +10,7 @@
 # CUDA 11.8 / cuDNN8 devel on Ubuntu 22.04, matching the titanet image (a
 # known-good base on the maintainer 3060 hardware); fairseq is compiled and needs
 # the devel toolchain.
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04@sha256:8f9dd0d09d3ad3900357a1cf7f887888b5b74056636cd6ef03c160c3cd4b1d95
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -33,13 +33,14 @@ RUN pip3 install --no-cache-dir \
 
 # The reference SSL/CM runtime: fairseq installed from a PINNED git commit. The
 # PyPI 0.12.2 release does not build against a modern torch/omegaconf; the git
-# revision is the reviewable, reproducible pin. FAIRSEQ_COMMIT has NO default:
-# it is frozen in S2b (the first GPU build + validation) and recorded in
-# provenance.eval.json under runtime.fairseq_commit; a contract test binds the
-# two, and the build FAILS here if the ARG is not supplied, so an unpinned
-# runtime can never be built by accident.
-ARG FAIRSEQ_COMMIT
-RUN test -n "${FAIRSEQ_COMMIT}" || (echo "FAIRSEQ_COMMIT build-arg is required (frozen in S2b; see provenance.eval.json)" >&2; exit 1)
+# revision is the reviewable, reproducible pin. Frozen in S2b (2026-08-24) to the
+# revision upstream SSL_Anti-spoofing pins for its wav2vec2-XLS-R front end, and
+# recorded in provenance.eval.json under runtime.fairseq_commit; a contract test
+# binds the two. It stays an ARG (overridable for experiments) but defaults to the
+# frozen commit, and the non-empty guard still fails an explicitly-blank override,
+# so an unpinned runtime can never be built by accident.
+ARG FAIRSEQ_COMMIT=a54021305d6b3c4c5959ac9395135f63202db8f1
+RUN test -n "${FAIRSEQ_COMMIT}" || (echo "FAIRSEQ_COMMIT build-arg must not be blank (frozen default in provenance.eval.json)" >&2; exit 1)
 RUN pip3 install --no-cache-dir --no-build-isolation \
     "git+https://github.com/facebookresearch/fairseq.git@${FAIRSEQ_COMMIT}#egg=fairseq"
 

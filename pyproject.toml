@@ -167,7 +167,14 @@ src = ["src", "tests"]
 # byte-identical is what makes the vendored hashes meaningful. force-exclude so
 # the dir is skipped even when its files are passed explicitly (pre-commit,
 # ad-hoc `ruff check <path>`), not only during a directory scan.
-extend-exclude = ["tests/parity/bakeoff/_vendor/openai_whisper_normalizers"]
+extend-exclude = [
+    "tests/parity/bakeoff/_vendor/openai_whisper_normalizers",
+    # Verbatim, sha-pinned SSL_Anti-spoofing model definition for the synthdetect
+    # eval runtime (issue #144); its integrity check is the digest in the sibling
+    # provenance.json, not lint. Byte-identity to the pinned upstream commit is
+    # what makes the vendored hash meaningful.
+    "tools/synthdetect_vendor",
+]
 force-exclude = true
 
 [tool.ruff.lint]
@@ -182,6 +189,9 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # (the v0.22.0 model-service boot bug). Keep pyupgrade off the py3.10 service
 # code; the static guard in tests/contracts/test_resource_telemetry.py backs it.
 "services/*/app/*.py" = ["UP017"]
+# The synthdetect eval runner executes inside the py3.10 eval image
+# (services/synthdetect/Dockerfile.eval), so it has the same datetime.UTC hazard.
+"tools/synthdetect_infer.py" = ["UP017"]
 
 [tool.mypy]
 strict = true
