@@ -225,11 +225,13 @@
               padding: var(--space-2) var(--space-4);
               background: var(--surface); border-bottom: 1px solid var(--line); }
     .topbar .spacer { flex: 1; }
-    /* Narrow viewports: the sidebar becomes an in-flow disclosure under the
-       topbar (no overlay, no focus trap), opened by the same Menu button and
-       never persisted. Gated on .js so a no-JS visitor keeps the nav. The
-       open rule out-specifies both the narrow hide and a stale persisted
-       desktop hide. */
+    /* Narrow viewports: the sidebar becomes an in-flow disclosure at the top
+       of the page (the aside precedes .shell-main in the DOM; the toggle
+       script moves focus to the first nav link on open so keyboard traversal
+       reaches it). No overlay, no focus trap; opened by the same Menu button
+       and never persisted. Gated on .js so a no-JS visitor keeps the nav.
+       The open rule out-specifies ((0,3,0) vs (0,2,0)) both the narrow hide
+       and a stale persisted desktop hide. */
     @media (max-width: 50rem) {
       .app-shell { display: block; }
       :root.js .sidebar { display: none; }
@@ -917,8 +919,14 @@
   {# Sidebar toggle (#152). One Menu button, viewport-aware: on a wide screen
      it toggles + persists the desktop hide (pre-paint resolver in <head>); on
      a narrow screen it opens the in-flow nav disclosure and persists nothing.
-     Crossing the breakpoint closes the disclosure so the two states never
-     conflate. Inert on shellless pages (no #sidebar-toggle in the DOM). #}
+     The opened disclosure sits ABOVE the topbar in DOM and visual order (the
+     aside precedes .shell-main), so opening it moves keyboard focus to the
+     first nav link — without that, Tab from the Menu button would walk past
+     the revealed nav entirely (review finding). Crossing the breakpoint
+     closes the disclosure so the two states never conflate. A storage
+     listener mirrors the theme wiring so a second tab's persisted hide stays
+     in sync (it never touches the per-tab mobile disclosure). Inert on
+     shellless pages (no #sidebar-toggle in the DOM). #}
   <script>
   (function () {
     var KEY = "voxint-sidebar";
@@ -932,12 +940,17 @@
         : root.getAttribute("data-sidebar") !== "hidden";
       button.setAttribute("aria-expanded", expanded ? "true" : "false");
     }
+    function storedHidden() {
+      try { return localStorage.getItem(KEY) === "hidden"; } catch (e) { return false; }
+    }
     button.addEventListener("click", function () {
       if (narrow.matches) {
         if (root.getAttribute("data-mobile-nav") === "open") {
           root.removeAttribute("data-mobile-nav");
         } else {
           root.setAttribute("data-mobile-nav", "open");
+          var first = document.querySelector("#app-sidebar a");
+          if (first) { first.focus(); }
         }
       } else if (root.getAttribute("data-sidebar") === "hidden") {
         root.removeAttribute("data-sidebar");
@@ -954,6 +967,13 @@
         syncButton();
       });
     }
+    window.addEventListener("storage", function (e) {
+      if (e.key !== null && e.key !== KEY) { return; }
+      var hidden = e.key === null ? storedHidden() : e.newValue === "hidden";
+      if (hidden) { root.setAttribute("data-sidebar", "hidden"); }
+      else { root.removeAttribute("data-sidebar"); }
+      syncButton();
+    });
     window.addEventListener("pageshow", syncButton);
     syncButton();
   })();

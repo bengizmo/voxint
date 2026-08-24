@@ -210,6 +210,15 @@ def test_home_empty_states_are_quiet_not_links(client: TestClient) -> None:
     """Zero cards render as honest non-interactive text, never a dead link."""
     body = client.get("/").text
     assert "Nothing is waiting for review right now." in body
+    # All three attention cards take the non-interactive branch: no card links
+    # and no "(0)" counts (the sidebar's Review entry is the one /review link).
+    assert re.search(
+        r'<div class="task-link is-empty">\s*'
+        r'<span class="task-title">Continue review</span>',
+        body,
+    )
+    assert "Continue review (" not in body
+    assert 'class="task-link" href=' not in body
     assert re.search(
         r'<div class="task-link is-empty">\s*'
         r'<span class="task-title">Unidentified voices</span>',

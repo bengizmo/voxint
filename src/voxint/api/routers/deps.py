@@ -227,12 +227,17 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
 
     The area flags let unfinished console areas ship dark (config.py,
     ``console_*_enabled``): the sidebar and quick actions render an area's entry
-    only when its flag is on.
+    only when its flag is on AND its routes actually exist
+    (``app.state.projects_routed``, stamped at the end of route registration),
+    so an early flag flip can never advertise a dead link.
     """
     settings: Settings = request.app.state.settings
     return {
         "shell": {
-            "projects_enabled": settings.console_projects_enabled,
+            "projects_enabled": (
+                settings.console_projects_enabled
+                and getattr(request.app.state, "projects_routed", False)
+            ),
         }
     }
 

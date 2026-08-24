@@ -509,5 +509,14 @@ def _register_routes(app: FastAPI) -> None:
 
     app.include_router(console)
 
+    # Console area-flag guard (#152 review): the sidebar and Home render a
+    # dark-shipped area's links only when its flag is on AND its routes exist,
+    # so flipping CONSOLE_PROJECTS_ENABLED before the projects phase lands can
+    # never advertise a guaranteed 404. Computed once here (the route table is
+    # fixed after startup); the shell context processor reads it per request.
+    app.state.projects_routed = any(
+        route.path == "/projects" for route in _iter_api_routes(app.routes)
+    )
+
 
 app = create_app()

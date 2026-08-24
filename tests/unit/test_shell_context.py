@@ -11,8 +11,11 @@ from voxint.api.routers.deps import _shell_template_context, templates
 from voxint.config import Settings
 
 
-def _request_with(settings: Settings) -> Request:
-    app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+def _request_with(settings: Settings, *, projects_routed: bool | None = None) -> Request:
+    state = SimpleNamespace(settings=settings)
+    if projects_routed is not None:
+        state.projects_routed = projects_routed
+    app = SimpleNamespace(state=state)
     return cast(Request, SimpleNamespace(app=app))
 
 
@@ -22,15 +25,23 @@ def test_console_area_flags_default_off() -> None:
     assert settings.console_projects_enabled is False
 
 
-def test_shell_context_reflects_settings() -> None:
-    settings = Settings(
-        database_url="postgresql+psycopg://x/x", console_projects_enabled=True
-    )
-    context = _shell_template_context(_request_with(settings))
-    assert context == {"shell": {"projects_enabled": True}}
-
-    settings_off = Settings(database_url="postgresql+psycopg://x/x")
-    assert _shell_template_context(_request_with(settings_off)) == {
+def test_shell_context_requires_flag_and_route() -> None:
+    """An area's links render only when its flag is on AND its routes exist —
+    an early flag flip must never advertise a dead /projects link (review)."""
+    on = Settings(database_url="postgresql+psycopg://x/x", console_projects_enabled=True)
+    off = Settings(database_url="postgresql+psycopg://x/x")
+    assert _shell_template_context(_request_with(on, projects_routed=True)) == {
+        "shell": {"projects_enabled": True}
+    }
+    # Flag on, no /projects route registered yet (today's reality): stays dark.
+    assert _shell_template_context(_request_with(on, projects_routed=False)) == {
+        "shell": {"projects_enabled": False}
+    }
+    # A stale app with no stamp at all fails closed too.
+    assert _shell_template_context(_request_with(on)) == {
+        "shell": {"projects_enabled": False}
+    }
+    assert _shell_template_context(_request_with(off, projects_routed=True)) == {
         "shell": {"projects_enabled": False}
     }
 

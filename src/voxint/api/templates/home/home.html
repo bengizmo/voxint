@@ -12,16 +12,17 @@
    invites a click to nothing. #}
 <ul class="task-cards" aria-label="Needs attention">
   <li class="task-card">
+    {% if review_backlog %}
     <a class="task-link" href="/review">
       <span class="task-title">Continue review ({{ review_backlog }})</span>
-      <span class="task-note">
-        {%- if review_backlog -%}
-        Recordings that finished and still need you to confirm who is speaking.
-        {%- else -%}
-        Nothing is waiting for review right now.
-        {%- endif -%}
-      </span>
+      <span class="task-note">Recordings that finished and still need you to confirm who is speaking.</span>
     </a>
+    {% else %}
+    <div class="task-link is-empty">
+      <span class="task-title">Continue review</span>
+      <span class="task-note">Nothing is waiting for review right now.</span>
+    </div>
+    {% endif %}
   </li>
   <li class="task-card">
     {% if unresolved_voices %}

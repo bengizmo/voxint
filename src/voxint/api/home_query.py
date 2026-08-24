@@ -15,7 +15,7 @@ most ``3 * limit`` rows regardless of table sizes.
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func
 from sqlalchemy import select as sa_select
@@ -106,7 +106,9 @@ def _run_rows(
             kind = "run_started"
         items.append(
             ActivityItem(
-                at=row.at,
+                # TIMESTAMPTZ comes back in the session timezone; normalize so
+                # the template's "... UTC" title label is always true.
+                at=row.at.astimezone(UTC),
                 kind=kind,
                 title=title_from_snapshot(row.sidecar) or row.source_title,
                 source_path=row.source_path,
@@ -124,7 +126,7 @@ def _speaker_rows(session: Session, *, limit: int) -> list[ActivityItem]:
     )
     return [
         ActivityItem(
-            at=row.created_at,
+            at=row.created_at.astimezone(UTC),
             kind="speaker_enrolled",
             title=row.display_name,
             source_path="",
