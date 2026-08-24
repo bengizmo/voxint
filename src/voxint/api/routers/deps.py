@@ -8,6 +8,14 @@ backs ``asset_url``. Area-specific helpers stay with their area module.
 
 This module must stay acyclic: it never imports ``voxint.api.app`` or any
 router module.
+
+Monkeypatch contract: the publish seams (``_publish_run``, ``_publish_or_defer``,
+``_submit_domain_pack_detail``) are always called as ``deps.X(...)`` by their
+consumers, so patching them on THIS module reaches every call site. Every other
+name here is imported by value into its consumers at import time, so a test must
+patch the consumer module's binding (for example
+``voxint.api.routers.legacy_runs._require_csrf``) or mutate the shared object
+itself; rebinding the name on this module would silently miss.
 """
 
 from __future__ import annotations
@@ -33,6 +41,7 @@ from voxint.api.presentation import (
     friendly_media_label,
     humanize_stage,
     humanize_status,
+    title_from_snapshot,
 )
 from voxint.api.resource_status import (
     device_state,
@@ -157,10 +166,14 @@ def require_onboarded(
 ) -> None:
     """First-run gate: redirect an un-onboarded operator to the setup wizard.
 
-    Wired as a single router-level dependency on the *protected* router that
-    carries every non-exempt route (``/healthz``, the htmx asset, and ``/setup``
-    stay on ``app`` and so are structurally exempt — no path matching to keep in
-    sync). It depends on ``OperatorDep`` so authentication runs first: an
+    Wired as a router-level dependency on EACH per-area router (routers/*.py);
+    the ``console`` aggregator and the app itself carry no gate, because on this
+    FastAPI an outer router's dependencies do not appear in a nested route's
+    dependant tree, which is where the characterization contract reads gating
+    from. Exemption stays structural — ``/healthz``, ``/static/htmx.min.js``,
+    ``/static/app/*``, and the setup wizard's ``setup_router`` register outside
+    any gated router, so there is no path allow-list to keep in sync. It depends
+    on ``OperatorDep`` so authentication runs first: an
     unauthenticated request gets a 401 challenge, never a redirect that would leak
     onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
     dependency cache hands the gate the same ``Session`` the route handler uses —
@@ -185,6 +198,19 @@ def require_onboarded(
     raise HTTPException(status_code=303, headers={"Location": "/setup"})
 
 
+def run_source_title(run: PipelineRun) -> str:
+    """A non-blank, operator-recognizable source label for a run (issue #86):
+    the run's sidecar title (issue #104, operator intent), else the
+    acquisition-metadata title (issue #36), else a cleaned filename from the
+    source path — the same display precedence the run listing uses. Registered
+    as a Jinja global (issue #117) so every console surface that names a run
+    resolves the title through the one precedence."""
+    title = title_from_snapshot(run.sidecar)
+    if title is None and run.media_item.source_metadata is not None:
+        title = run.media_item.source_metadata.title
+    return friendly_media_label(title, run.media_item.source_path)
+
+
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Island bundle lookup for base.html: `asset_url('main')` / `asset_url('tailwind')`
 # resolve to the hashed built file, or None (guarded in the template) when unbuilt.
@@ -197,6 +223,7 @@ templates.env.globals["format_age"] = format_age
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
 templates.env.globals["language_label"] = language_label
+templates.env.globals["run_source_title"] = run_source_title
 # Hardware-telemetry display helpers (W3): bytes -> GiB number, used-VRAM %.
 templates.env.globals["gib"] = gib
 templates.env.globals["vram_percent"] = vram_percent
@@ -278,7 +305,6 @@ def _publish_or_defer(run_id: uuid.UUID, *, stage: Stage | None = None) -> bool:
         )
         return False
     return True
-
 
 
 def _submit_domain_pack_detail(exc: DomainPackError) -> str:

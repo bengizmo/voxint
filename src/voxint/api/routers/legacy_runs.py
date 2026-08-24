@@ -205,7 +205,6 @@ def _export_raw_host_only(raw: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-
 def _publish_translation_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed translation job, returning False on a broker outage.
 
@@ -357,8 +356,6 @@ def _run_assets_response(
             "csrf_assets_cancel": mint_csrf_token(secret, CSRF_ASSETS_CANCEL),
         },
     )
-
-
 
 
 def _run_translation_state(
@@ -526,7 +523,6 @@ def _transcript_translation_context(
             {"code": v["code"], "label": v["label"]} for v in views if not v["stale"]
         ],
     }
-
 
 
 def _peaks_cache_trusted(
@@ -723,7 +719,7 @@ def search(
     # read-only REPEATABLE READ snapshot that wraps all ranking arms so a
     # concurrent publish cannot straddle them). SessionDep still runs first,
     # so the factory is initialized and the basic-auth + onboarding gates on
-    # the `protected` router have already passed. The feature/weights/indexing
+    # this router have already passed. The feature/weights/indexing
     # state comes back on the page object, which the template renders honestly.
     settings: Settings = request.app.state.settings
     page = search_passages(
@@ -1058,8 +1054,8 @@ def run_transcript(
         },
     )
 
-# /review/{run_id}/transcript: moved to routers/legacy_review.py
-# (transcript_router); included here to keep registration order.
+# /review/{run_id}/transcript registers between core_router and actions_router
+# (legacy_review.transcript_router, included in app.py's registration order).
 
 @actions_router.post("/runs/{run_id}/requeue")
 def requeue_run(
@@ -1721,7 +1717,4 @@ def media_peaks(
     row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
     session.commit()
     return _peaks_cache_response(request, payload.to_json_bytes(), row_id)
-
-# Mount the gated routes last: every @protected route above is now attached to
-# `app` behind require_onboarded, while the @app routes stay exempt.
 

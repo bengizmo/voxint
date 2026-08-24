@@ -3,8 +3,9 @@
 Builds the props, per-segment shapes, and reconcile payload the React
 transcript islands hydrate from, plus the split/correction lookups those
 shapes need and the label universe both transcript surfaces render. Used by
-the run transcript (app.py), the review transcript, and the review mutations
-(routers/legacy_review.py), so it lives in a neutral module none of them own.
+the run transcript (routers/legacy_runs.py) and the review transcript and
+mutations (routers/legacy_review.py), so it lives in a neutral module none
+of them own.
 
 Moved verbatim from ``api/app.py`` in the P0b router decomposition (#151).
 """
@@ -64,7 +65,6 @@ def _run_label_universe(session: Session, run_id: uuid.UUID) -> set[str]:
         .distinct()
     ).scalars()
     return {*turn_labels, *(label for label in segment_labels if label is not None)}
-
 
 
 def _wants_island_json(request: Request) -> bool:

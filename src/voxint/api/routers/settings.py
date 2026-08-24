@@ -159,7 +159,6 @@ def _try_seed_tutorial(
     return run_id, None
 
 
-
 def _setup_context(
     request: Request,
     session: Session,
@@ -1252,7 +1251,6 @@ def _persist_web_research(
     row.web_search_api_key = cand_key
     row.source_authority_domains = cand_domains
     return []
-
 
 
 # ---- First-run setup wizard (issue #3) -------------------------------------

@@ -97,7 +97,6 @@ from voxint.api.csrf import (
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.playback import playback_capability, representative_turns
-from voxint.api.presentation import friendly_media_label, title_from_snapshot
 from voxint.api.routers.deps import (
     _TRANSLATION_ACTIVE_STATUSES,
     OperatorDep,
@@ -109,6 +108,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
+from voxint.api.routers.deps import run_source_title as _run_source_title
 from voxint.api.speaker_colors import speaker_palette
 from voxint.api.transcript_view import (
     _load_run_rule_index,
@@ -203,7 +203,6 @@ def _label_previews(
             ).scalars()
         )
     return previews
-
 
 
 def _workbench_context(
@@ -420,25 +419,6 @@ def _annotations_payload(
     }
 
 
-def _run_source_title(run: PipelineRun) -> str:
-    """A non-blank, operator-recognizable source label for a pull-quote citation
-    (issue #86): the run's sidecar title (issue #104, operator intent), else the
-    acquisition-metadata title (issue #36), else a cleaned filename from the source
-    path — the same display precedence the run listing uses."""
-    title = title_from_snapshot(run.sidecar)
-    if title is None and run.media_item.source_metadata is not None:
-        title = run.media_item.source_metadata.title
-    return friendly_media_label(title, run.media_item.source_path)
-
-
-# Register the friendly-title helper as a Jinja global (issue #117): every console
-# surface that names a run (queue, workbench, transcript, dashboard) resolves the
-# title through the one precedence, so the pages never disagree. Registered here,
-# after the definition, rather than in the globals block above (the function is
-# not yet defined there).
-templates.env.globals["run_source_title"] = _run_source_title
-
-
 def _pull_quote_markdown(
     resolved: ResolvedAnnotation,
     lines: Sequence[TranscriptLine],
@@ -520,7 +500,6 @@ def _verify_annotation_claim(session: Session, run_id: uuid.UUID, token: uuid.UU
         ) from exc
 
 
-
 def _labels_response(
     request: Request,
     session: Session,
@@ -536,7 +515,6 @@ def _labels_response(
             _workbench_context(request, session, run, token),
         )
     return RedirectResponse(f"/review/{run.id}?token={token}", status_code=303)
-
 
 
 @transcript_router.get("/review/{run_id}/transcript")
@@ -859,7 +837,7 @@ def merge_preview(
     optimistic-concurrency token (each label's current effective ruling id)
     echoed into the confirm form so :func:`merge_apply` can reject a stale
     confirm. Claim-gated like every workbench mutation; JS-off never reaches
-    here (the panel enhances progressively — see fragments/labels.html).
+    here (the panel enhances progressively — see legacy_review/labels.html).
 
     ``target`` is the single unambiguous survivor chooser from the panel: the
     sentinel ``"new"`` (enroll ``new_name``) or an existing speaker's UUID.

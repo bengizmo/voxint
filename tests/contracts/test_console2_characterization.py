@@ -101,7 +101,7 @@ def _iter_api_routes(routes: Iterable[object]) -> Iterator[APIRoute]:
     """Every APIRoute reachable from ``routes``, descending included sub-routers.
 
     FastAPI mounts an included router as a sub-route reachable through
-    ``original_router``, and P0b nests those (``protected.include_router(area)``),
+    ``original_router``, and P0b nests those (``console.include_router(area)``),
     so the walk recurses rather than descending a single level. Gate and auth are
     then read from each route's dependency tree, not from where it sits in the
     mount topology, so a route keeps its classification whichever router holds it.

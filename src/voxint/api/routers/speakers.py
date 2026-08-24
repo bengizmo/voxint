@@ -102,7 +102,6 @@ def _publish_research_job(job_id: uuid.UUID) -> bool:
     return True
 
 
-
 # The claim fields the web-research review surface serves; NAME stays on the
 # workbench's dedicated suggestion flow.
 _PROFILE_FIELDS = (ClaimField.BIO.value, ClaimField.AFFILIATION.value, ClaimField.LINK.value)
@@ -184,7 +183,6 @@ def _research_response(
     )
 
 
-
 def _roster_context(request: Request, session: Session, error: str | None = None) -> dict[str, Any]:
     """Template context for the roster page and its htmx fragment."""
     overview = roster_overview(session)
@@ -225,7 +223,6 @@ def _roster_response(request: Request, session: Session, error: str | None = Non
             request, "speakers/speakers.html", _roster_context(request, session, error)
         )
     return RedirectResponse("/speakers", status_code=303)
-
 
 
 # ---- Speaker roster curation (issue #7) ------------------------------------
