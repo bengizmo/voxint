@@ -12,10 +12,17 @@ import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from voxint.plugins import (
+    get_plugins,
+    load_plugins,
+    parse_disabled_ids,
+    reset_plugins_cache,
+)
 from voxint.plugins.base import (
     FeatureFlag,
     JobLaneSpec,
@@ -26,6 +33,7 @@ from voxint.plugins.base import (
     SettingsSection,
     VoxintPlugin,
 )
+from voxint.plugins.deps import PluginRouteDeps
 from voxint.plugins.doctor import format_plugins_status
 from voxint.plugins.hooks import dispatch_run_completed, redispatch_stale_lane_jobs
 from voxint.plugins.registry import find_route_collisions, load_registry
@@ -64,6 +72,32 @@ def test_manifest_is_frozen() -> None:
     manifest = _manifest("ok")
     with pytest.raises(dataclasses.FrozenInstanceError):
         manifest.id = "other"  # type: ignore[misc]
+
+
+def test_manifest_rejects_empty_settings_prefix() -> None:
+    with pytest.raises(PluginError, match="empty settings prefix"):
+        _manifest("ok", settings_prefixes=("valid_", ""))
+
+
+# --------------------------------------------------------------------------- #
+# VoxintPlugin base-class hook defaults (fail-closed / empty contract).
+# --------------------------------------------------------------------------- #
+def test_base_hook_defaults_are_fail_closed_and_empty() -> None:
+    plugin = _plugin("bare")()  # instantiate the bare subclass
+
+    # enabled defaults False (a feature never turns on by accident), and the
+    # collection-returning hooks default to empty, None-returning hooks to None.
+    assert plugin.enabled(None, None) is False  # type: ignore[arg-type]
+    assert plugin.invariant_errors(None, None) == []  # type: ignore[arg-type]
+    assert plugin.settings_section() is None
+    assert plugin.run_detail_panels() == ()
+    assert plugin.build_router(None) is None  # type: ignore[arg-type]
+    assert plugin.task_modules() == ()
+    assert plugin.task_routes() == {}
+    assert plugin.job_lanes() == ()
+    # Side-effect-only hooks return None; the defaults must simply not raise.
+    plugin.on_run_completed(_event())
+    plugin.add_cli_commands(None)  # type: ignore[arg-type]
 
 
 # --------------------------------------------------------------------------- #
@@ -289,3 +323,85 @@ def test_doctor_status_lists_active_disabled_and_unknown() -> None:
     assert "plugins active: keep" in status
     assert "plugins disabled (kill switch): off" in status
     assert "unknown plugin ids: ghost" in status
+
+
+# --------------------------------------------------------------------------- #
+# PluginRouteDeps bundle (frozen, exact surface).
+# --------------------------------------------------------------------------- #
+def test_plugin_route_deps_holds_its_fields_and_is_frozen() -> None:
+    templates = object()
+    get_session = object()
+    verify_csrf = object()
+    render_settings_page = object()
+    deps = PluginRouteDeps(
+        templates=templates,  # type: ignore[arg-type]
+        get_session=get_session,  # type: ignore[arg-type]
+        verify_csrf=verify_csrf,  # type: ignore[arg-type]
+        render_settings_page=render_settings_page,  # type: ignore[arg-type]
+    )
+    assert deps.templates is templates
+    assert deps.get_session is get_session
+    assert deps.verify_csrf is verify_csrf
+    assert deps.render_settings_page is render_settings_page
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        deps.templates = object()  # type: ignore[misc, assignment]
+
+
+# --------------------------------------------------------------------------- #
+# Process registry cache (parse / load / get / reset).
+# --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _clean_registry_cache() -> Iterator[None]:
+    reset_plugins_cache()
+    yield
+    reset_plugins_cache()
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("", ()),
+        ("a,b,c", ("a", "b", "c")),
+        ("  a , , b ,", ("a", "b")),  # trim, drop empties, preserve order
+        ("Keep,Case", ("Keep", "Case")),  # case is matched exactly, not coerced
+    ],
+)
+def test_parse_disabled_ids(raw: str, expected: tuple[str, ...]) -> None:
+    assert parse_disabled_ids(raw) == expected
+
+
+def test_load_plugins_builds_from_empty_builtin_and_caches() -> None:
+    settings = SimpleNamespace(voxint_plugins_disabled="")
+    reg = load_plugins(settings)  # type: ignore[arg-type]
+    # BUILTIN is empty in #137, so the built registry is empty and dormant.
+    assert reg.plugins == ()
+    # get_plugins returns the same cached instance without rebuilding.
+    assert get_plugins() is reg
+
+
+def test_load_plugins_threads_the_kill_switch_through() -> None:
+    settings = SimpleNamespace(voxint_plugins_disabled="ghost, other")
+    reg = load_plugins(settings)  # type: ignore[arg-type]
+    # No builtins to filter, but the parsed ids reach the registry and surface
+    # as unknown for the doctor.
+    assert reg.disabled_ids == frozenset({"ghost", "other"})
+    assert reg.unknown_disabled_ids == frozenset({"ghost", "other"})
+
+
+def test_get_plugins_lazy_fallback_builds_from_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # No prior load_plugins call: get_plugins memoizes on first access via
+    # get_settings() rather than being ordering-fragile.
+    settings = SimpleNamespace(voxint_plugins_disabled="")
+    monkeypatch.setattr("voxint.config.get_settings", lambda: settings)
+    reg = get_plugins()
+    assert reg.plugins == ()
+    assert get_plugins() is reg  # second access is the cached instance
+
+
+def test_reset_plugins_cache_forces_a_rebuild() -> None:
+    first = load_plugins(SimpleNamespace(voxint_plugins_disabled=""))  # type: ignore[arg-type]
+    reset_plugins_cache()
+    second = load_plugins(SimpleNamespace(voxint_plugins_disabled=""))  # type: ignore[arg-type]
+    assert first is not second  # a fresh process / test starts empty
