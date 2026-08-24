@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 groundwork, P0a: contracts, characterization tests, and a
+  content-hash backfill** (#150, epic #149). Schema-free foundation for the
+  review-console information-architecture refactor. It adds architecture
+  decision records under `docs/adr/` (media identity versus location with a
+  grep-verified byte-opener audit, project membership, editor run selection,
+  claim lifecycle, speaker profile provenance), characterization contract tests
+  that pin the current route surface (path, method, onboarding gate, operator
+  auth), the CSRF coverage of every mutating route, and a declarative redirect
+  map for later phases to extend. Nothing an operator sees changes yet. One new
+  maintenance command ships: `voxint media backfill-hashes` computes and stores
+  `sha256` for media rows that lack it (an integrity aid, never identity;
+  idempotent, and a row whose bytes are gone is reported and retried later).
 - **Plugin framework substrate** (#137, epic #136). Internal groundwork for
   turning Voxint's optional features into self-contained, flag-gated plugins.
   This change ships the framework only: an empty registry, the plugin interface,
