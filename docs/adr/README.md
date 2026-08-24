@@ -19,7 +19,9 @@ superseded rather than edited away.
 | [`0003-editor-run-selection.md`](0003-editor-run-selection.md) | The `/media/{id}` editor opens the latest completed run by default, with an explicit `?run=` override and version chooser. |
 | [`0004-claim-lifecycle.md`](0004-claim-lifecycle.md) | Review claims are `(media, run)`-scoped, acquired on first edit intent (never on GET), reused per operator, and renewed by heartbeat. |
 | [`0005-speaker-profile-provenance.md`](0005-speaker-profile-provenance.md) | Speaker aggregation reads effective-resolution output, and `speaker_profiles` carries per-field provenance for manual vs accepted-enrichment values. |
+| [`0006-plugin-scope-native-vs-greenfield.md`](0006-plugin-scope-native-vs-greenfield.md) | The existing optional features (translation, semantic search, LLM enrichment) stay native; the merged plugin framework ships dormant and is reserved for greenfield features that render on their own surface. |
 
-These records back the Console 2.0 refactor (epic #149). The full phased plan
-lives in the maintainer's internal notes; the current-state contracts they pin
-are tested in [`tests/contracts/test_console2_characterization.py`](../../tests/contracts/test_console2_characterization.py).
+Records 0001-0005 back the Console 2.0 refactor (epic #149); their current-state
+contracts are tested in [`tests/contracts/test_console2_characterization.py`](../../tests/contracts/test_console2_characterization.py).
+Record 0006 fixes the scope of the plugin architecture (epic #136). The full
+phased plans live in the maintainer's internal notes.
