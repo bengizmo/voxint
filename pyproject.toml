@@ -203,6 +203,14 @@ ignore_missing_imports = true
 module = ["sklearn", "sklearn.*"]
 ignore_missing_imports = true
 
+# torch + fairseq are the synthdetect eval-container runtime (tools/synthdetect_infer.py,
+# issue #144): they live ONLY inside services/synthdetect/Dockerfile.eval, never in the
+# host env or the voxint package, and are imported lazily so the pure runner orchestration
+# type-checks and runs without them. No stubs on the host; ignore the missing imports.
+[[tool.mypy.overrides]]
+module = ["torch", "torch.*", "fairseq", "fairseq.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
