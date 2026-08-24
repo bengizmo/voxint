@@ -1,0 +1,25 @@
+# Architecture decision records
+
+Short, numbered records of the load-bearing decisions behind a significant
+change. An ADR captures the context, the decision, and the consequences at the
+time it was made, so a later reader can see why the code is shaped the way it is
+without reconstructing the argument from a diff.
+
+These are maintainer artifacts in the technical lane. Each opens with a
+`> **Status:**` line and stays immutable once accepted: a decision that is later
+reversed gets a new ADR that supersedes the old one, and the old one is marked
+superseded rather than edited away.
+
+## Index
+
+| ADR | Decision |
+|---|---|
+| [`0001-media-identity-vs-location.md`](0001-media-identity-vs-location.md) | Media identity is `media_items.id` anchored to an immutable `source_path`; physical location moves to a future `current_path`. Includes the grep-verified byte-opener audit. |
+| [`0002-project-membership-invariant.md`](0002-project-membership-invariant.md) | Media belongs to a project through exactly one `media_folders` row via an FK, never by path-prefix inference. |
+| [`0003-editor-run-selection.md`](0003-editor-run-selection.md) | The `/media/{id}` editor opens the latest completed run by default, with an explicit `?run=` override and version chooser. |
+| [`0004-claim-lifecycle.md`](0004-claim-lifecycle.md) | Review claims are `(media, run)`-scoped, acquired on first edit intent (never on GET), reused per operator, and renewed by heartbeat. |
+| [`0005-speaker-profile-provenance.md`](0005-speaker-profile-provenance.md) | Speaker aggregation reads effective-resolution output, and `speaker_profiles` carries per-field provenance for manual vs accepted-enrichment values. |
+
+These records back the Console 2.0 refactor (epic #149). The full phased plan
+lives in the maintainer's internal notes; the current-state contracts they pin
+are tested in [`tests/contracts/test_console2_characterization.py`](../../tests/contracts/test_console2_characterization.py).

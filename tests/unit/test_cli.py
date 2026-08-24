@@ -640,3 +640,94 @@ def test_research_search_row_disable_wins_over_env_enable(
     monkeypatch.setattr(research, "web_search", _boom)
     assert main(["research", "search", "anything"]) == 2
     assert "disabled" in capsys.readouterr().out
+
+
+def test_media_requires_subcommand() -> None:
+    # The `media` group has required=True, so bare `voxint media` is a usage
+    # error, not a silent no-op.
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["media"])
+
+
+def test_media_backfill_hashes_reports_settings_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A bad settings resolution exits 2 before any DB access.
+    import voxint.config as config
+    import voxint.db.session as db_session
+
+    def _bad_settings() -> object:
+        raise config.SettingsError("MEDIA_ROOT missing")
+
+    def _no_db(*_a: object, **_k: object) -> object:
+        raise AssertionError("must not reach the DB on a settings error")
+
+    monkeypatch.setattr(config, "get_settings", _bad_settings)
+    monkeypatch.setattr(db_session, "build_engine", _no_db)
+    assert main(["media", "backfill-hashes"]) == 2
+    assert "MEDIA_ROOT missing" in capsys.readouterr().out
+
+
+def test_media_backfill_hashes_happy_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    import contextlib as _contextlib
+
+    import voxint.config as config
+    import voxint.db.session as db_session
+    import voxint.media.integrity as integrity
+    from voxint.config import Settings
+
+    settings = Settings(media_root=tmp_path)  # type: ignore[arg-type]
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+
+    @_contextlib.contextmanager
+    def _factory_cm() -> object:
+        yield object()
+
+    class _Factory:
+        def __call__(self) -> object:
+            return _factory_cm()
+
+    monkeypatch.setattr(db_session, "build_engine", lambda *_a, **_k: object())
+    monkeypatch.setattr(db_session, "build_session_factory", lambda _e: _Factory())
+
+    captured: dict[str, object] = {}
+
+    def _fake_backfill(session: object, media_root: object, **_k: object) -> object:
+        captured["media_root"] = media_root
+        return integrity.BackfillResult(hashed=3, skipped_missing=("gone.wav",))
+
+    monkeypatch.setattr(integrity, "backfill_sha256", _fake_backfill)
+    assert main(["media", "backfill-hashes"]) == 0
+    out = capsys.readouterr().out
+    assert "hashed 3 media row(s)" in out
+    assert "gone.wav" in out
+    assert captured["media_root"] == tmp_path
+
+
+def test_media_backfill_hashes_nothing_to_do(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: object
+) -> None:
+    import contextlib as _contextlib
+
+    import voxint.config as config
+    import voxint.db.session as db_session
+    import voxint.media.integrity as integrity
+    from voxint.config import Settings
+
+    monkeypatch.setattr(config, "get_settings", lambda: Settings(media_root=tmp_path))  # type: ignore[arg-type]
+
+    @_contextlib.contextmanager
+    def _cm() -> object:
+        yield object()
+
+    monkeypatch.setattr(db_session, "build_engine", lambda *_a, **_k: object())
+    monkeypatch.setattr(db_session, "build_session_factory", lambda _e: (lambda: _cm()))
+    monkeypatch.setattr(
+        integrity,
+        "backfill_sha256",
+        lambda *_a, **_k: integrity.BackfillResult(hashed=0, skipped_missing=()),
+    )
+    assert main(["media", "backfill-hashes"]) == 0
+    assert "nothing to backfill" in capsys.readouterr().out

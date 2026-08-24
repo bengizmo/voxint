@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
     from voxint.app_settings import EffectiveWebResearch
     from voxint.config import Settings
-    from voxint.db.models import Stage
+    from voxint.db.models import MediaItem, Stage
 
 # Operational imports (settings, SQLAlchemy, DB models) live inside the
 # handlers: `voxint score …` is file-only and must not pay for — or be able to
@@ -863,6 +863,48 @@ def _tutorial_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _media_backfill_hashes(args: argparse.Namespace) -> int:
+    """Compute and store ``sha256`` for media rows missing it (issue #150).
+
+    An integrity aid, never identity: content hashes let tooling detect a silent
+    byte change and content-deduplicate, while ``media_items.id`` (anchored to
+    the immutable ``source_path``) stays the identity. Idempotent — only rows
+    with a NULL hash are read, so re-running after a full pass does nothing; a
+    row whose bytes are absent under MEDIA_ROOT is reported and left NULL to be
+    retried later, not treated as a failure. Exit 2 only on a settings error.
+    """
+    del args
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_engine, build_session_factory
+    from voxint.media.integrity import backfill_sha256
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    def _report(media: "MediaItem") -> None:
+        print(f"{media.id}: {media.sha256[:12] if media.sha256 else '?'}...")
+
+    factory = build_session_factory(build_engine(settings.database_url))
+    with factory() as session:
+        result = backfill_sha256(session, settings.media_root, on_hashed=_report)
+
+    if result.scanned == 0:
+        print("nothing to backfill — every media row already has a sha256")
+        return 0
+    print(f"hashed {result.hashed} media row(s)")
+    if result.skipped_missing:
+        print(
+            f"skipped {len(result.skipped_missing)} row(s) whose bytes were not"
+            " found under MEDIA_ROOT (left NULL, retried on the next run):"
+        )
+        for source_path in result.skipped_missing:
+            print(f"  - {source_path}")
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -1509,6 +1551,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="optional bounded note handed to the researcher as seed context",
     )
     rspeaker_p.set_defaults(fn=_research_speaker)
+
+    media_p = sub.add_parser("media", help="media-item maintenance")
+    media_sub = media_p.add_subparsers(dest="media_command", required=True)
+    media_bf_p = media_sub.add_parser(
+        "backfill-hashes",
+        help="compute sha256 for media rows missing it (integrity aid; idempotent)",
+    )
+    media_bf_p.set_defaults(fn=_media_backfill_hashes)
 
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
