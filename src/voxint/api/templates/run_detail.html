@@ -294,4 +294,9 @@ finished before Voxint began recording the detected language.</p>
 </div>
 {% endif %}
 </section>
+{#- Plugin run-detail panels (issue #138): each active plugin's fragments, in
+    (slot, order) order. Empty registry ⇒ no iterations ⇒ zero bytes. -#}
+{%- for panel in plugin_run_detail_panels %}
+{% include panel.template %}
+{%- endfor %}
 {% endblock %}

@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
+  registry into every core seam so a converted feature will activate through
+  generic loops instead of a hand-wired copy: API router mounting with route
+  collision rejection, the settings-section and run-detail-panel render loops,
+  the Features-section flag merge, namespaced plugin templates, the Celery task
+  include and routing merge with a guard against a plugin shadowing a core task,
+  the post-completion hook fan-out, the stale-job recovery sweep generalized from
+  the embedding lane, the CLI subcommand loop, and a boot-time plugin invariant
+  check. This change is dormant: the registry is empty, so behavior is
+  byte-identical and nothing an operator sees changes yet. As the optional
+  features convert in later changes, the translation and embedding job lanes gain
+  the generic recovery sweep.
 - **Console 2.0 groundwork, P0a: contracts, characterization tests, and a
   content-hash backfill** (#150, epic #149). Schema-free foundation for the
   review-console information-architecture refactor. It adds architecture

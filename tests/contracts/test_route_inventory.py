@@ -16,7 +16,9 @@ seam-wiring and conversion tests (#138+) reuse to build both.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 
+import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
@@ -27,21 +29,35 @@ from voxint.plugins import load_registry
 _GOLDEN = REPO_ROOT / "tests" / "contracts" / "fixtures" / "route_inventory.json"
 
 
+def _iter_api_routes(routes: Iterable[object]) -> list[APIRoute]:
+    """Every APIRoute reachable from ``routes``, descending mounted sub-routers.
+
+    FastAPI mounts an included ``APIRouter`` as a sub-route exposing
+    ``original_router`` rather than flattening it, so the gated ``protected``
+    router — and each plugin router included *under* it (#138) — nests one level
+    deeper each. A single-level walk misses the plugin routes, which would let the
+    all-enabled inventory silently drop a converted plugin's routes (#139+); recurse
+    so a conversion that moves a route into a plugin still shows it here.
+    """
+    found: list[APIRoute] = []
+    for route in routes:  # type: ignore[attr-defined]
+        if isinstance(route, APIRoute):
+            found.append(route)
+        else:
+            sub = getattr(route, "original_router", None)
+            if sub is not None:
+                found.extend(_iter_api_routes(sub.routes))
+    return found
+
+
 def app_route_inventory(app: FastAPI) -> list[list[object]]:
     """``[path, [methods…]]`` for every APIRoute, sorted and HEAD-stripped.
 
-    Walks the included ``protected`` router through ``original_router`` (FastAPI
-    mounts it as a sub-route, so its APIRoutes are not on ``app.routes``), matching
-    the onboarding-gate inventory walk.
+    Recurses through every mounted sub-router (:func:`_iter_api_routes`), so the
+    gated ``protected`` routes and any plugin routes nested under it are all
+    captured — the all-enabled vs core-only comparison the conversions rely on.
     """
-    routes: list[APIRoute] = []
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            routes.append(route)
-        elif hasattr(route, "original_router"):
-            routes.extend(
-                r for r in route.original_router.routes if isinstance(r, APIRoute)
-            )
+    routes = _iter_api_routes(app.routes)
     inventory = [
         [r.path, sorted(m for m in r.methods if m != "HEAD")] for r in routes
     ]
@@ -64,3 +80,42 @@ def test_framework_is_dormant() -> None:
     # all-enabled route inventories are the same app. #138 wires the registry into
     # create_app and this invariant becomes the with/without-plugins comparison.
     assert load_registry().plugins == ()
+
+
+def test_inventory_captures_nested_plugin_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A plugin route nested under ``protected`` must appear in the inventory.
+
+    Guards the recursive walk (#138): plugin routers mount as sub-routers two
+    levels deep, so a single-level walk drops them silently — which would make the
+    all-enabled vs core-only comparison the conversions rely on meaningless (a
+    converted route would vanish from the inventory rather than move). If this
+    regresses, the golden inventories stop guarding conversions.
+    """
+    from fastapi import APIRouter
+    from fastapi.responses import JSONResponse
+
+    from voxint.plugins import reset_plugins_cache
+    from voxint.plugins.base import PluginManifest, VoxintPlugin
+    from voxint.plugins.deps import PluginRouteDeps
+
+    class InventoryPlugin(VoxintPlugin):
+        manifest = PluginManifest(id="invplug", name="Inv", description="d")
+
+        def build_router(self, deps: PluginRouteDeps) -> APIRouter:
+            router = APIRouter()
+
+            @router.get("/plugins/invplug/ping")
+            def ping() -> JSONResponse:
+                return JSONResponse({"ok": True})
+
+            return router
+
+    monkeypatch.setattr("voxint.plugins.BUILTIN", (InventoryPlugin,))
+    reset_plugins_cache()
+    try:
+        inventory = app_route_inventory(create_app())
+    finally:
+        reset_plugins_cache()
+    assert ["/plugins/invplug/ping", ["GET"]] in inventory
