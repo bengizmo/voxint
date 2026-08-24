@@ -10,6 +10,7 @@ in ``tests/contracts/test_service_logic.py`` and ``test_text_embedding_deps.py``
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -20,6 +21,9 @@ SVC = REPO / "services" / "synthdetect"
 DOCKERFILE = SVC / "Dockerfile.eval"
 REQUIREMENTS = SVC / "requirements.eval.txt"
 PROVENANCE = SVC / "provenance.eval.json"
+VENDOR = REPO / "tools" / "synthdetect_vendor"
+VENDOR_MODEL = VENDOR / "ssl_antispoofing_model.py"
+VENDOR_PROVENANCE = VENDOR / "provenance.json"
 
 sys.path.insert(0, str(REPO / "tools"))
 
@@ -69,19 +73,66 @@ def test_provenance_weight_files_match_registry() -> None:
         assert prov["weights"]["files"][w.filename]["license"] == w.license_spdx
 
 
-def test_candidate_state_is_coherent() -> None:
-    # In S2a nothing is frozen yet: the registry weights are CANDIDATE, so
-    # provenance must not claim a qualified/pinned state or carry frozen shas.
+def test_pinned_state_is_coherent() -> None:
+    # S2b (2026-08-24) froze the weights from real bytes: the registry is pinned,
+    # provenance carries the frozen shas/sizes, the model-repo commit, the fairseq
+    # commit, and the base-image digest together, and they agree with the registry.
+    # Both pinned_unqualified (frozen shas only) and qualified (GPU determinism +
+    # smoke evidence) are coherent pinned states here; the qualified promotion is
+    # bound to its evidence separately by test_qualified_state_binds_its_evidence.
     prov = _provenance()
     model = default_model()
-    assert model.weights_pinned() is False
-    assert prov["weights"]["qualification_state"] == "candidate"
-    for f in prov["weights"]["files"].values():
-        assert f["sha256"] is None
-        assert f["size_bytes"] is None
-    assert prov["runtime"]["fairseq_commit"] is None
-    assert prov["base_image_digest"] is None
-    assert prov["model_repo"]["commit"] is None
+    assert model.weights_pinned() is True
+    assert prov["weights"]["qualification_state"] in ("pinned_unqualified", "qualified")
+    for w in model.weights:
+        f = prov["weights"]["files"][w.filename]
+        assert f["sha256"] is not None and f["sha256"] == w.sha256
+        assert f["size_bytes"] is not None and f["size_bytes"] == w.size_bytes
+    assert prov["runtime"]["fairseq_commit"] is not None
+    assert prov["base_image_digest"] is not None
+    assert prov["model_repo"]["commit"] is not None
+    assert prov["model_repo"]["commit"] == model.commit
+
+
+def test_vendored_model_bytes_match_provenance() -> None:
+    # The vendored ssl_antispoofing_model.py IS the numerics-defining model
+    # definition (loaded by file path at eval time), so a silent edit would change
+    # inference numerics while every pin still looked frozen. Both provenance files
+    # claim a contract test binds this hash; this is that test. Byte-identity to the
+    # pinned upstream commit is the integrity check.
+    vp = json.loads(VENDOR_PROVENANCE.read_text())["files"]["ssl_antispoofing_model.py"]
+    digest = hashlib.sha256(VENDOR_MODEL.read_bytes()).hexdigest()
+    assert digest == vp["sha256"], (
+        f"vendored ssl_antispoofing_model.py sha256 {digest} drifted from the pinned "
+        f"{vp['sha256']}; a change to the numerics-defining model must re-freeze provenance"
+    )
+
+
+def test_vendored_model_commit_matches_both_registries() -> None:
+    # The vendored file's upstream_commit must equal the model-repo commit recorded
+    # in BOTH the pins-as-data registry and provenance.eval.json, so the three
+    # never drift apart.
+    vp = json.loads(VENDOR_PROVENANCE.read_text())["files"]["ssl_antispoofing_model.py"]
+    model = default_model()
+    prov = _provenance()
+    assert vp["upstream_commit"] == model.commit
+    assert vp["upstream_commit"] == prov["model_repo"]["commit"]
+
+
+def test_qualified_state_binds_its_evidence() -> None:
+    # 'qualified' is a determinism + smoke claim, not merely frozen shas (that is
+    # pinned_unqualified). When provenance declares qualified, the dated evidence
+    # reports it rests on must be listed and present; otherwise the only other
+    # allowed pinned state is pinned_unqualified. This stops a silent promotion to
+    # qualified (or a downgrade that keeps the qualified label) from passing CI.
+    prov = _provenance()
+    state = prov["weights"]["qualification_state"]
+    assert state in ("pinned_unqualified", "qualified")
+    if state == "qualified":
+        reports = prov["weights"].get("qualification_evidence", {}).get("reports", [])
+        assert reports, "qualified state must list weights.qualification_evidence.reports"
+        for rel in reports:
+            assert (REPO / rel).is_file(), f"qualified evidence report missing: {rel}"
 
 
 def test_scoring_semantics_match_the_runner_header() -> None:
@@ -99,12 +150,17 @@ def test_scoring_semantics_match_the_runner_header() -> None:
     assert header["scoring"]["polarity"] == "higher-is-more-synthetic"
 
 
-def test_dockerfile_requires_fairseq_commit_arg_without_default() -> None:
-    # FAIRSEQ_COMMIT must be an ARG with NO default so an unpinned runtime can
-    # never be built by accident; the build asserts it is non-empty.
+def test_dockerfile_pins_frozen_fairseq_commit() -> None:
+    # S2b froze FAIRSEQ_COMMIT: the ARG carries the pinned commit as its default
+    # (its value is bound to provenance by
+    # test_frozen_digests_bind_the_dockerfile_when_present), and the non-empty
+    # guard remains so an explicitly-blank override still fails the build, keeping
+    # an unpinned runtime unbuildable.
     df = _dockerfile()
-    assert re.search(r"^ARG FAIRSEQ_COMMIT\s*$", df, flags=re.MULTILINE), (
-        "Dockerfile.eval must declare `ARG FAIRSEQ_COMMIT` with no default"
+    commit = _provenance()["runtime"]["fairseq_commit"]
+    assert commit is not None
+    assert re.search(rf"^ARG FAIRSEQ_COMMIT={re.escape(commit)}\s*$", df, flags=re.MULTILINE), (
+        "Dockerfile.eval must default `ARG FAIRSEQ_COMMIT` to the frozen commit"
     )
     assert 'test -n "${FAIRSEQ_COMMIT}"' in df
 
@@ -114,7 +170,13 @@ def test_dockerfile_base_image_matches_provenance() -> None:
     prov = _provenance()
     match = re.search(r"^FROM (\S+)", df, flags=re.MULTILINE)
     assert match is not None
-    assert match.group(1) == prov["base_image"]
+    ref = match.group(1)
+    # After the S2b freeze FROM carries an @sha256 digest; the tag portion must
+    # still be the recorded base_image, and the full ref its base_image@digest.
+    assert ref.split("@", 1)[0] == prov["base_image"]
+    digest = prov.get("base_image_digest")
+    if digest is not None:
+        assert ref == f"{prov['base_image']}@{digest}"
 
 
 def test_dockerfile_bakes_determinism_env_matching_provenance() -> None:
@@ -170,6 +232,36 @@ def test_every_dockerfile_package_pin_is_recorded_in_provenance() -> None:
         assert prov.get(name) == version, (
             f"Dockerfile.eval {name}=={version} not recorded in provenance.eval.json runtime"
         )
+
+
+def test_runner_is_py310_safe() -> None:
+    # The eval image is nvidia/cuda:*-ubuntu22.04 (system Python 3.10). A 3.11+-only
+    # construct in the runner or its container-time imports crash-loops the runner
+    # at execution: S2b's GPU smoke first failed because `_utcnow` used
+    # `from datetime import UTC` (3.11+). The host test runner is newer, so importing
+    # the module never catches it; guard the source statically. When a new 3.11+-only
+    # name bites, add it here. (The scorer synthdetect_eval.py runs on the host, not
+    # in the container, so it is not covered.)
+    banned = {
+        "from datetime import UTC": "datetime.UTC is 3.11+; use timezone.utc",
+        "datetime.UTC": "datetime.UTC is 3.11+; use timezone.utc",
+    }
+    runtime_sources = [
+        REPO / "tools" / "synthdetect_infer.py",
+        REPO / "tools" / "synthdetect_corpus.py",
+        REPO / "tools" / "synthdetect_sources.py",
+        REPO / "tools" / "synthdetect_vendor" / "ssl_antispoofing_model.py",
+    ]
+    offenders = [
+        f"{path.relative_to(REPO)}: {needle!r} ({reason})"
+        for path in runtime_sources
+        for needle, reason in banned.items()
+        if needle in path.read_text()
+    ]
+    assert not offenders, (
+        "synthdetect eval-container code must stay Python 3.10-compatible:\n"
+        + "\n".join(offenders)
+    )
 
 
 def test_frozen_digests_bind_the_dockerfile_when_present() -> None:

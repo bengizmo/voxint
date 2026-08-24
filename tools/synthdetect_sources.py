@@ -16,11 +16,13 @@ Two integrity rails ride on this module:
   not published a license). An ``unlicensed`` model is NOT runnable: the harness
   refuses to load it until the author grants a license, so the registry can name
   it for completeness without ever redistributing or executing it.
-* **Sha provenance.** Weight file shas and upstream commits are CANDIDATE in S1
-  (``sha256=None`` / ``commit=None``): they are placeholders the S2
-  ``verify-sources`` pass confirms against real downloaded bytes and freezes.
-  ``weights_pinned()`` is False until then, so no S1 code can claim a model is
-  serve-ready on the strength of an unverified sha.
+* **Sha provenance.** Weight file shas and upstream commits start CANDIDATE
+  (``sha256=None`` / ``commit=None``): placeholders the ``verify-sources`` pass
+  confirms against real downloaded bytes and freezes. ``weights_pinned()`` is
+  False until then, so no code can claim a model is serve-ready on the strength
+  of an unverified sha. As of S2b (2026-08-24) the default detector
+  ``w2v2-aasist`` is FROZEN (real-byte shas + commit pinned, ``weights_pinned()``
+  True); the other registered models remain CANDIDATE.
 
 The two versioned identities the plan separates (inference space vs calibration
 policy) are NOT both here: this module pins the inference-space INPUTS (weights +
@@ -209,7 +211,7 @@ MODELS: Final[dict[str, ModelEntry]] = {
         inference_space="synthdetect-w2v2aasist-v1",
         family="wav2vec2-xls-r + aasist",
         repo="TakHemlata/SSL_Anti-spoofing",
-        commit=None,  # CANDIDATE: pinned in S2 verify-sources
+        commit="4acaa61dcef5f7610f43aa4d0b29c4559b970cd2",  # frozen S2b (2026-08-24)
         license_class="shippable",
         code_license_spdx="MIT",
         weights_license_spdx="MIT",
@@ -221,17 +223,18 @@ MODELS: Final[dict[str, ModelEntry]] = {
             WeightFile(
                 filename="LA_model.pth",
                 role="aasist_checkpoint",
-                url="https://drive.google.com/TakHemlata/SSL_Anti-spoofing",  # provenance only
-                sha256=None,  # CANDIDATE
-                size_bytes=None,
+                # provenance only: the checkpoint lives in the upstream Drive folder
+                url="https://drive.google.com/drive/folders/1c4ywztEVlYVijfwbGLl9OEa1SNtFKppB",
+                sha256="bd6f36097259fe54e7004eb983651e5304d807be81156dbd04faccb70d91e10c",
+                size_bytes=1271633441,
                 license_spdx="MIT",
             ),
             WeightFile(
                 filename="xlsr2_300m.pt",
                 role="xlsr_ssl_base",
                 url="https://dl.fbaipublicfiles.com/fairseq/wav2vec/xlsr2_300m.pt",
-                sha256=None,  # CANDIDATE
-                size_bytes=None,
+                sha256="b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9",
+                size_bytes=3808868242,
                 license_spdx="MIT",
             ),
         ),

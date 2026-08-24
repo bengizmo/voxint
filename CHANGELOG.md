@@ -98,6 +98,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   execution identity matches. A `verify-sources` pass produces a dated weight
   receipt for the S2b freeze. The weight pins stay CANDIDATE until a maintainer
   freezes real bytes and commits GPU determinism evidence.
+- **Synthetic-speech detection: default detector frozen and qualified on GPU
+  (#144).** Still maintainer-only, nothing user-facing. This wires the real
+  fairseq forward pass behind the runner's engine seam (the upstream
+  wav2vec2-XLS-R plus AASIST model, vendored verbatim and sha-pinned under
+  `tools/synthdetect_vendor/`), freezes the default detector's weight, runtime,
+  and model-repository pins from real downloaded bytes, and advances the eval
+  runtime to `qualified`. The engine verifies each weight against its frozen
+  sha256 before loading, loads the checkpoint strictly, and asserts every module
+  is in eval mode so the run is deterministic. On maintainer RTX 3060 hardware the
+  GPU smoke passed (strict load, correct per-window counts and score polarity,
+  resume without duplication, and weight/audio/header mismatch failing closed) and
+  scores were bit-for-bit identical across four cold container starts. Evidence is
+  recorded under `docs/reports/` and `docs/gpu-contracts.md`. Contract tests now
+  bind the vendored model file to its pinned upstream hash and require the
+  `qualified` state to name existing GPU evidence, so neither the numerics-defining
+  bytes nor the qualification claim can drift silently. Reproducing the published
+  ASVspoof 2021 DF error rate remains a later milestone.
 
 ## [0.24.0] - 2026-08-23
 

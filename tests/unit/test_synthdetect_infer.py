@@ -688,16 +688,22 @@ def test_hash_file_streams_matching_sha_and_size(tmp_path: Path) -> None:
 
 
 def test_compute_weight_receipt_missing_and_measured(tmp_path: Path) -> None:
+    # Uses a model whose weights are still CANDIDATE so the measured branch is
+    # exercised; the default w2v2-aasist is PINNED since S2b, which
+    # test_compute_weight_receipt_match_and_mismatch covers.
+    candidate = get_model("antideepfake-xlsr-2b")
+    assert candidate.weights_pinned() is False
+
     # No files present -> missing verdicts, all_present False.
-    receipt = si.compute_weight_receipt(tmp_path, MODEL)
+    receipt = si.compute_weight_receipt(tmp_path, candidate)
     assert receipt["all_present"] is False
     assert receipt["weights_pinned"] is False
     assert {f["verdict"] for f in receipt["files"]} == {"missing"}
 
     # Present but registry sha is CANDIDATE (None) -> candidate-measured.
-    for w in MODEL.weights:
+    for w in candidate.weights:
         (tmp_path / w.filename).write_bytes(b"weight-bytes-" + w.filename.encode())
-    receipt2 = si.compute_weight_receipt(tmp_path, MODEL)
+    receipt2 = si.compute_weight_receipt(tmp_path, candidate)
     assert receipt2["all_present"] is True
     for f in receipt2["files"]:
         assert f["verdict"] == "candidate-measured"
@@ -714,13 +720,106 @@ def test_compute_weight_receipt_match_and_mismatch(tmp_path: Path) -> None:
     real = hashlib.sha256(data).hexdigest()
     w0 = MODEL.weights[0]
     (tmp_path / w0.filename).write_bytes(data)
-    pinned_model = replace(MODEL, weights=(replace(w0, sha256=real),))
+    pinned_model = replace(MODEL, weights=(replace(w0, sha256=real, size_bytes=len(data)),))
     receipt = si.compute_weight_receipt(tmp_path, pinned_model)
     assert receipt["files"][0]["verdict"] == "match"
+    assert receipt["files"][0]["registry_size_bytes"] == len(data)
 
     (tmp_path / w0.filename).write_bytes(b"different-bytes")
     receipt2 = si.compute_weight_receipt(tmp_path, pinned_model)
     assert receipt2["files"][0]["verdict"] == "MISMATCH"
+
+    # A correct sha but a wrong pinned size is a MISMATCH too, mirroring the real
+    # load gate (_verify_weight_bytes), so the receipt never says "match" for bytes
+    # the loader would reject on size.
+    (tmp_path / w0.filename).write_bytes(data)
+    size_pinned = replace(MODEL, weights=(replace(w0, sha256=real, size_bytes=len(data) + 1),))
+    receipt3 = si.compute_weight_receipt(tmp_path, size_pinned)
+    assert receipt3["files"][0]["verdict"] == "MISMATCH"
+
+
+# --------------------------------------------------------------------------- #
+# _verify_weight_bytes + _pushd: the pure (non-torch) parts of the S2b adapter
+# --------------------------------------------------------------------------- #
+def _pinned_two_weight_model(tmp_path: Path, *, la: bytes = b"la-bytes",
+                             xlsr: bytes = b"xlsr-bytes") -> Any:
+    """A w2v2-aasist copy whose two weight pins match small files written to disk."""
+    from dataclasses import replace
+
+    (tmp_path / "LA_model.pth").write_bytes(la)
+    (tmp_path / "xlsr2_300m.pt").write_bytes(xlsr)
+    w_la, w_xlsr = MODEL.weights
+    return replace(MODEL, weights=(
+        replace(w_la, sha256=hashlib.sha256(la).hexdigest(), size_bytes=len(la)),
+        replace(w_xlsr, sha256=hashlib.sha256(xlsr).hexdigest(), size_bytes=len(xlsr)),
+    ))
+
+
+def test_verify_weight_bytes_ok(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    verified, by_role = si._verify_weight_bytes(model, tmp_path)
+    assert set(verified) == {"LA_model.pth", "xlsr2_300m.pt"}
+    assert verified["LA_model.pth"]["size_bytes"] == len(b"la-bytes")
+    assert by_role["aasist_checkpoint"].name == "LA_model.pth"
+    assert by_role["xlsr_ssl_base"].name == "xlsr2_300m.pt"
+
+
+def test_verify_weight_bytes_missing_raises(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    (tmp_path / "LA_model.pth").unlink()
+    with pytest.raises(si.InferError, match="not found"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_verify_weight_bytes_candidate_raises(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    (tmp_path / "LA_model.pth").write_bytes(b"x")
+    (tmp_path / "xlsr2_300m.pt").write_bytes(b"y")
+    w_la, w_xlsr = MODEL.weights
+    cand = replace(MODEL, weights=(replace(w_la, sha256=None), replace(w_xlsr, sha256=None)))
+    with pytest.raises(si.InferError, match="CANDIDATE"):
+        si._verify_weight_bytes(cand, tmp_path)
+
+
+def test_verify_weight_bytes_sha_mismatch_raises(tmp_path: Path) -> None:
+    model = _pinned_two_weight_model(tmp_path)
+    (tmp_path / "LA_model.pth").write_bytes(b"tampered")
+    with pytest.raises(si.InferError, match="sha256 mismatch"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_verify_weight_bytes_size_mismatch_raises(tmp_path: Path) -> None:
+    from dataclasses import replace
+
+    data = b"la-bytes"
+    (tmp_path / "LA_model.pth").write_bytes(data)
+    (tmp_path / "xlsr2_300m.pt").write_bytes(b"xlsr")
+    w_la, w_xlsr = MODEL.weights
+    model = replace(MODEL, weights=(
+        replace(w_la, sha256=hashlib.sha256(data).hexdigest(), size_bytes=len(data) + 1),
+        replace(w_xlsr, sha256=hashlib.sha256(b"xlsr").hexdigest(), size_bytes=len(b"xlsr")),
+    ))
+    with pytest.raises(si.InferError, match="size mismatch"):
+        si._verify_weight_bytes(model, tmp_path)
+
+
+def test_pushd_changes_and_restores(tmp_path: Path) -> None:
+    import os
+
+    before = os.getcwd()
+    with si._pushd(tmp_path):
+        assert Path(os.getcwd()).resolve() == tmp_path.resolve()
+    assert os.getcwd() == before
+
+
+def test_pushd_restores_on_exception(tmp_path: Path) -> None:
+    import os
+
+    before = os.getcwd()
+    with pytest.raises(ValueError, match="boom"), si._pushd(tmp_path):
+        raise ValueError("boom")
+    assert os.getcwd() == before
 
 
 # --------------------------------------------------------------------------- #
@@ -749,11 +848,14 @@ def test_cli_verify_sources_mismatch_exits_2(
     assert rc == 2
 
 
-def test_cli_run_fails_closed_without_engine(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_cli_run_fails_closed_when_weights_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The pipeline reaches the (unwired) fairseq engine and fails closed honestly,
-    # without pretending to score. A fake torch keeps the determinism config happy.
+    # Post-S2b the real engine IS wired, so a run with no weight files present must
+    # fail closed at weight verification (the pins are frozen; the bytes are not
+    # mounted) with a clear message and a non-zero exit, never a stack trace or a
+    # fabricated score. A fake torch keeps the determinism config happy; the run
+    # never reaches a forward pass.
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     root, manifest, _ = _corpus(tmp_path, 1)
     manifest_path = tmp_path / "m.json"
@@ -766,4 +868,67 @@ def test_cli_run_fails_closed_without_engine(
         "run", "--manifest", str(manifest_path), "--corpus-root", str(root),
         "--out", str(tmp_path / "j.jsonl"), "--weights-dir", str(tmp_path),
     ])
-    assert rc == 1  # InferError from the unwired engine seam
+    assert rc == 1  # InferError, fail-closed
+    assert "not found" in capsys.readouterr().err  # weight file missing, not a crash
+
+
+def test_score_windows_returns_negated_column_1_as_float64(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The load-bearing polarity transform: the engine journals the NEGATED
+    # bona-fide logit (column 1) as float64, so higher = more synthetic. This is
+    # the one numeric step the RECORDING fake engine cannot cover (it returns
+    # pre-made scores and never runs the negation), and it is otherwise exercised
+    # only on GPU. A numpy-backed fake `torch` drives the REAL _FairseqAASISTEngine
+    # unchanged, so a regression to column 0 or a dropped negation fails in plain
+    # CI (torch is deliberately not a host test dependency).
+    class _T:
+        def __init__(self, a: np.ndarray) -> None:
+            self._a = np.asarray(a)
+
+        def to(self, _device: Any) -> _T:
+            return self
+
+        def __neg__(self) -> _T:
+            return _T(-self._a)
+
+        def __getitem__(self, idx: Any) -> _T:
+            return _T(self._a[idx])
+
+        def double(self) -> _T:
+            return _T(self._a.astype(np.float64))
+
+        def detach(self) -> _T:
+            return self
+
+        def cpu(self) -> _T:
+            return self
+
+        def numpy(self) -> np.ndarray:
+            return self._a
+
+    logits = np.array([[2.0, -1.5], [0.0, 3.25], [-4.0, 0.0]], dtype=np.float32)
+
+    class _FakeTorch:
+        @staticmethod
+        def from_numpy(a: np.ndarray) -> _T:
+            return _T(a)
+
+        class inference_mode:
+            def __enter__(self) -> _FakeTorch.inference_mode:
+                return self
+
+            def __exit__(self, *exc: Any) -> bool:
+                return False
+
+    def _net(_x: Any) -> _T:
+        return _T(logits)
+
+    monkeypatch.setitem(sys.modules, "torch", _FakeTorch)
+    engine = si._FairseqAASISTEngine(_net, device="cpu")
+    scores = engine.score_windows(np.zeros((3, 4), dtype=np.float32))
+
+    assert scores.dtype == np.float64
+    np.testing.assert_array_equal(scores, -logits[:, 1].astype(np.float64))
+    # Sanity on the polarity direction: a high bona-fide logit -> low synthetic score.
+    assert scores[1] < scores[2] < scores[0]
