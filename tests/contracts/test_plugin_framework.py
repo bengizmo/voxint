@@ -31,7 +31,7 @@ _ENV_EXAMPLE = (REPO_ROOT / ".env.example").read_text()
 # The framework modules of voxint.plugins. Any OTHER submodule of the package is a
 # concrete plugin, importable from core only via discover.BUILTIN.
 _FRAMEWORK_MODULES = frozenset(
-    {"__init__", "base", "discover", "registry", "hooks", "media", "deps", "doctor"}
+    {"__init__", "base", "discover", "registry", "hooks", "media", "deps", "doctor", "boot"}
 )
 
 

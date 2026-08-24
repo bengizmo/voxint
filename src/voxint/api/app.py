@@ -10,12 +10,13 @@ appends; the newest ruling per label wins at read time).
 """
 
 import contextlib
+import inspect
 import json
 import logging
 import re
 import secrets
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.templating import Jinja2Templates
+from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PrefixLoader
 from sqlalchemy import Engine, exists, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -145,6 +147,7 @@ from voxint.api.csrf import (
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_NOTES,
+    CSRF_PLUGIN,
     CSRF_PROFILE_DECISION,
     CSRF_REQUEUE,
     CSRF_RESEARCH_CANCEL,
@@ -437,6 +440,14 @@ from voxint.media.serving import (
 from voxint.media.source_metadata import RAW_URL_KEYS
 from voxint.pipeline.stages.context import StageDataError, normalized_audio_path
 from voxint.pipeline.transitions import InvalidTransitionError, StaleRevisionError
+from voxint.plugins import (
+    PluginError,
+    PluginRegistry,
+    load_plugins,
+)
+from voxint.plugins.boot import validate_boot
+from voxint.plugins.deps import PluginRouteDeps
+from voxint.plugins.registry import find_route_collisions
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import (
     RosterError,
@@ -810,6 +821,17 @@ def create_app(
     )
     resolved = settings or get_settings()
     app.state.settings = resolved
+    # Plugin framework (issue #138): build + validate the registry once at app
+    # startup and store it on app.state for the route / settings / template seams.
+    # Boot fails loud on a malformed builtin or an env-sourced plugin invariant
+    # violation (validate_boot), matching the worker's import-time fail-loud. The
+    # template loader is (re)configured from it so plugin templates render
+    # namespaced as <plugin_id>/foo.html. Dormant while BUILTIN is empty: no
+    # plugins, no contributions, and the loader stays the pristine core loader.
+    registry = load_plugins(resolved)
+    validate_boot(registry, settings=resolved)
+    app.state.plugins = registry
+    _configure_template_loader(_plugin_template_dirs(registry))
     # CSRF signing secret: the configured value (persistent, shared by every
     # worker) or a random per-process fallback so the console works with zero
     # config. A per-process secret invalidates open forms on restart and mismatches
@@ -1068,6 +1090,55 @@ templates.env.globals["short_uuid"] = short_uuid
 templates.env.globals["device_state"] = device_state
 
 
+# Plugin template loading (issue #138, rule 10). Plugin settings sections and
+# run-detail panels render their own templates, namespaced ``<plugin_id>/foo.html``
+# and shipped under the plugin package's ``templates/`` dir. The Jinja environment
+# is a process global shared across every create_app call, so the loader is rebuilt
+# from a captured-once pristine core loader rather than by wrapping the current one
+# (repeated wrapping would nest loaders and leak a prior app's plugin paths into a
+# later empty-registry app). Empty registry ⇒ no plugin dirs ⇒ the pristine core
+# loader, byte-for-byte unchanged.
+_CORE_TEMPLATE_LOADER: BaseLoader | None = None
+
+
+def _plugin_template_dirs(registry: PluginRegistry) -> dict[str, str]:
+    """Map each active plugin id to its on-disk ``templates/`` dir, when present.
+
+    The dir is derived from the plugin class's module location — templates move
+    with the plugin (rule 10) — and included only when it exists, so a plugin that
+    ships no templates contributes no prefix. Empty registry ⇒ empty mapping.
+    """
+    dirs: dict[str, str] = {}
+    for plugin in registry.plugins:
+        candidate = Path(inspect.getfile(type(plugin))).parent / "templates"
+        if candidate.is_dir():
+            dirs[plugin.manifest.id] = str(candidate)
+    return dirs
+
+
+def _configure_template_loader(plugin_dirs: Mapping[str, str]) -> None:
+    """Point the shared Jinja loader at the core templates plus any plugin dirs.
+
+    Idempotent and leak-free: the pristine core loader is captured once, and every
+    call rebuilds from it — a :class:`ChoiceLoader` over a :class:`PrefixLoader`
+    when there are plugin dirs, or the pristine core loader restored *exactly* when
+    there are none (the #138 dormant path). Never wraps the current loader, so
+    repeated create_app calls cannot nest or leak.
+    """
+    global _CORE_TEMPLATE_LOADER
+    if _CORE_TEMPLATE_LOADER is None:
+        _CORE_TEMPLATE_LOADER = templates.env.loader
+    core = _CORE_TEMPLATE_LOADER
+    assert core is not None  # Jinja2Templates always installs a FileSystemLoader
+    if plugin_dirs:
+        prefix = PrefixLoader(
+            {pid: FileSystemLoader(path) for pid, path in plugin_dirs.items()}
+        )
+        templates.env.loader = ChoiceLoader([core, prefix])
+    else:
+        templates.env.loader = core
+
+
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -1117,6 +1188,19 @@ def _require_csrf(request: Request, action: str, token: str | None) -> None:
     cross-site POST one uniform refusal before the DB is touched."""
     if not verify_csrf_token(request.app.state.csrf_secret, action, token):
         raise HTTPException(status_code=403, detail="invalid or missing CSRF token")
+
+
+def _verify_plugin_csrf(request: Request) -> None:
+    """CSRF check a plugin mutating route calls before acting (issue #138).
+
+    The capped :class:`~voxint.plugins.deps.PluginRouteDeps` bundle exposes one
+    uniform ``verify_csrf(request)`` rather than the core routes' per-form
+    ``(action, token)`` pair, so a plugin never reaches into the app's CSRF
+    constants. The token rides the ``X-CSRF-Token`` header under the shared
+    ``CSRF_PLUGIN`` action; a missing or mis-signed token 403s exactly like the
+    core check.
+    """
+    _require_csrf(request, CSRF_PLUGIN, request.headers.get("x-csrf-token"))
 
 
 def _label_previews(
@@ -2499,6 +2583,36 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
 )
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
 _FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
+
+
+def _effective_feature_flag_meta(
+    registry: PluginRegistry,
+) -> tuple[tuple[str, str, str], ...]:
+    """Core Features-section flags plus any a plugin's settings section contributes.
+
+    The Features section render loop iterates this, so a converted plugin's
+    tri-state flags render alongside the core ones (issue #138, rule 3). Returns
+    the core ``_FEATURE_FLAG_META`` object *unchanged* when no plugin contributes a
+    flag — the #138 dormant path, byte-identical to before.
+
+    ⚠ This is the merge MECHANISM only. A plugin flag is fully coupled to its
+    ``AppSettings`` column + ``Settings`` field + ``resolve_effective_*`` helper:
+    the Features render loop reads ``feature_flag_state(row, name)`` and
+    ``getattr(settings, name)``, and the POST persists the column — none of which
+    exist until the conversion that introduces the plugin (#141). That conversion
+    must, in the same change, add the column + Settings field, the resolver, the
+    ``settings_features`` POST persistence + allowlist entry, and its candidate
+    invariant validation. Until then the registry is empty, so no plugin flag ever
+    reaches this merge, renders, or is submitted.
+    """
+    plugin_flags = tuple(
+        (flag.name, flag.label, flag.help_text)
+        for section in registry.settings_sections()
+        for flag in section.feature_flags
+    )
+    if not plugin_flags:
+        return _FEATURE_FLAG_META
+    return _FEATURE_FLAG_META + plugin_flags
 
 # Operator-plain copy for the invariant violations the settings sections surface
 # (Features #62 + Sources & research #76). validate_effective_flags is the SINGLE
@@ -4275,6 +4389,10 @@ def _register_routes(app: FastAPI) -> None:
                     request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
                 ),
                 "active_nav": "runs",
+                # Plugin run-detail panels (issue #138): each active plugin's
+                # fragments, ordered by (slot, order), rendered by the panel loop
+                # in run_detail.html. Empty registry ⇒ () ⇒ nothing rendered.
+                "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
             },
         )
 
@@ -6204,7 +6322,9 @@ def _register_routes(app: FastAPI) -> None:
         )
         # Features section (issue #62): one tri-state row per live-read flag. On an
         # invariant-rejected save, render the operator's submitted choices back
-        # (``features_submitted``); otherwise render the stored raw tri-state.
+        # (``features_submitted``); otherwise render the stored raw tri-state. The
+        # effective meta (issue #138) appends any plugin-contributed flags to the
+        # core set; empty registry ⇒ the core set unchanged.
         features_submitted: dict[str, str] | None = overrides.pop("features_submitted", None)
         feature_flags = [
             {
@@ -6218,7 +6338,9 @@ def _register_routes(app: FastAPI) -> None:
                 ),
                 "env_default": bool(getattr(settings, name)),
             }
-            for name, label, help_text in _FEATURE_FLAG_META
+            for name, label, help_text in _effective_feature_flag_meta(
+                request.app.state.plugins
+            )
         ]
         # Semantic search section (issue #121): two tri-state rows (the feature +
         # its autogenerate rider). On an invariant-rejected save, render the
@@ -6448,6 +6570,11 @@ def _register_routes(app: FastAPI) -> None:
         # confirm). Best-effort; an unreachable service renders "unavailable",
         # never breaking the page.
         context["pipeline_models"] = collect_service_identity(settings)
+        # Plugin settings sections (issue #138): each active plugin's section,
+        # ordered by (order, section_id), rendered after the hand-built core
+        # sections by the section loop in settings.html. Empty registry ⇒ () ⇒
+        # nothing rendered, and the core sections are untouched.
+        context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
         context.update(overrides)
         return context
 
@@ -6518,6 +6645,15 @@ def _register_routes(app: FastAPI) -> None:
         # name is not declared is silently dropped by Starlette, and
         # _persist_feature_flags then reads it as "inherit" and clears any stored
         # override. test_features_route_declares_every_flag guards this pairing.
+        #
+        # ⚠ Plugin seam (issue #138): the Features section renders the EFFECTIVE
+        # meta (core + plugin flags), but this handler stays core-only. That is
+        # sound only because the registry is empty, so no plugin flag renders or is
+        # submitted. The conversion (#141) that contributes the first plugin
+        # FeatureFlag MUST, in the same change, add its AppSettings column + its
+        # resolve_effective_* helper, a Form param / generic read + persistence for
+        # it here, and its candidate invariant validation — render and save wire
+        # together, never one without the other.
         submitted = {
             "enrichment_names_enabled": enrichment_names_enabled,
             "enrichment_names_llm_enabled": enrichment_names_llm_enabled,
@@ -7464,6 +7600,40 @@ def _register_routes(app: FastAPI) -> None:
         row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
         session.commit()
         return _peaks_cache_response(request, payload.to_json_bytes(), row_id)
+
+    # Plugin routers (issue #138): build each active plugin's router with the
+    # capped deps bundle, reject any (path, method) claimed by two plugins BEFORE
+    # mounting (the route-inventory contract test additionally catches a plugin
+    # colliding with a CORE route), then mount each on the gated `protected` router
+    # so plugin routes inherit require_onboarded like every console route. URLs are
+    # frozen contract, so no prefix is forced. Empty registry ⇒ nothing built,
+    # nothing mounted, byte-identical route table.
+    registry: PluginRegistry = app.state.plugins
+    plugin_deps = PluginRouteDeps(
+        templates=templates,
+        get_session=_get_session,
+        verify_csrf=_verify_plugin_csrf,
+        render_settings_page=lambda request, session: templates.TemplateResponse(
+            request, "settings.html", _settings_context(request, session)
+        ),
+    )
+    built_routers: list[APIRouter] = []
+    routes_by_plugin: dict[str, list[tuple[str, str]]] = {}
+    for plugin in registry.plugins:
+        router = plugin.build_router(plugin_deps)
+        if router is None:
+            continue
+        built_routers.append(router)
+        routes_by_plugin[plugin.manifest.id] = [
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in (getattr(route, "methods", None) or ())
+        ]
+    collisions = find_route_collisions(routes_by_plugin)
+    if collisions:
+        raise PluginError("plugin route collisions: " + "; ".join(collisions))
+    for router in built_routers:
+        protected.include_router(router)
 
     # Mount the gated routes last: every @protected route above is now attached to
     # `app` behind require_onboarded, while the @app routes stay exempt.

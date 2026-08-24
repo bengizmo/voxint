@@ -1522,6 +1522,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     score_cli.register(sub)
 
+    # Plugin subcommands (issue #138): each active plugin registers its own
+    # `voxint <cmd>` group after the core subparsers. Empty registry ⇒ no plugins
+    # ⇒ no extra commands, an unchanged parser.
+    from voxint.plugins import get_plugins
+
+    for plugin in get_plugins().plugins:
+        plugin.add_cli_commands(sub)
+
     return parser
 
 

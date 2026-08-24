@@ -77,6 +77,8 @@ from voxint.pipeline.transitions import (
     StaleRevisionError,
     cas_update_run,
 )
+from voxint.plugins import RunCompletedEvent, get_plugins
+from voxint.plugins.hooks import dispatch_run_completed, redispatch_stale_lane_jobs
 from voxint.worker.app import app
 
 logger = logging.getLogger(__name__)
@@ -240,6 +242,17 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             _autogenerate_run_assets(factory, run_id, settings)
             _autogenerate_segment_embeddings(factory, run_id, settings)
             _autogenerate_translation(factory, run_id, settings)
+            # Generic post-completion fan-out (issue #138): each active plugin's
+            # on_run_completed runs alongside the three hard-coded producers above
+            # (which convert into plugins in #139-#141). Per-plugin failures are
+            # contained by dispatch_run_completed; the run stays COMPLETED. Empty
+            # registry ⇒ no plugins ⇒ no-op.
+            dispatch_run_completed(
+                get_plugins().plugins,
+                RunCompletedEvent(
+                    run_id=run_id, session_factory=factory, settings=settings
+                ),
+            )
         elif final.status is RunStatus.QUEUED and final.current_stage in POST_SEGMENT:
             # This covers both the first GPU→post handoff and a duplicate GPU
             # delivery observing an already-parked run. Re-publishing is safe:
@@ -389,11 +402,23 @@ def recovery_sweep() -> dict[str, int]:
                     job_id,
                     exc_info=True,
                 )
+    # Generic stale-QUEUED recovery for plugin job lanes (issue #138): the same
+    # oldest-first, bounded, no-mutation redispatch the embedding block above does
+    # (issue #130), driven by each active plugin's JobLaneSpec. The embedding lane
+    # stays hard-coded until #140 converts it and declares its own lane. Empty
+    # registry ⇒ no lanes ⇒ {}.
+    plugin_lane_counts = redispatch_stale_lane_jobs(
+        get_plugins().job_lanes(),
+        session_factory=factory,
+        send_task=app.send_task,
+        cutoff=cutoff,
+    )
     return {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),
         "cancelled_claims_closed": len(cancelled_claims),
         "stale_embedding_jobs": len(stale_embedding_jobs),
+        "plugin_lanes": sum(plugin_lane_counts.values()),
     }
 
 

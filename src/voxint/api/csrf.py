@@ -110,6 +110,13 @@ CSRF_RUN_MEDIA_DELETE = "run-media-delete"
 # context, so they are CSRF-gated like run notes and never share a token with a
 # run-scoped mutation.
 CSRF_ANNOTATION_TAGS = "annotation-tags"
+# Plugin mutating routes (issue #138). One shared action for every builtin
+# plugin's POST surface: the capped PluginRouteDeps bundle exposes a single
+# uniform ``verify_csrf(request)`` (token carried in the ``X-CSRF-Token`` header)
+# rather than the core routes' per-form (action, token) pair, so a plugin never
+# reaches into the app's per-surface CSRF constants. Same-operator, same-origin
+# replay across a plugin's own forms is harmless (mirrors CSRF_SETTINGS).
+CSRF_PLUGIN = "plugin"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:
