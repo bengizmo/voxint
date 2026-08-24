@@ -19,6 +19,9 @@ so they run in the plain unit lane and survive routers moving between modules:
 3. Redirect map: the declarative ``REDIRECT_MAP`` seam future phases extend, with
    a structural guard that each declared redirect has a real source route. A live
    HTTP check of the same table lives in ``tests/integration/test_console2_redirects``.
+4. Registration order: the route table in traversal (= matching) order. The
+   sorted golden above cannot see a reorder, and Starlette matches in
+   registration order, so the P0b router moves pin the order separately.
 """
 
 from __future__ import annotations
@@ -126,6 +129,32 @@ def console_route_records(app: FastAPI) -> list[RouteRecord]:
         auth = any(c is require_operator for c in calls)
         records.append(RouteRecord(r.path, methods, gate, auth))
     return sorted(records)
+
+
+_ORDER_GOLDEN = (
+    REPO_ROOT / "tests" / "contracts" / "fixtures" / "console2_route_order.json"
+)
+
+
+def test_route_registration_order_matches_golden() -> None:
+    """The route table in traversal order — the order Starlette matches in.
+
+    The characterization golden is sorted, so it cannot detect two routes
+    swapping registration positions. Order is contract during the P0b
+    decomposition (the issue requires registration order preserved), and
+    ``_iter_api_routes`` yields depth-first in registration order, which is the
+    order request matching walks.
+    """
+    golden = json.loads(_ORDER_GOLDEN.read_text())
+    actual = [
+        [r.path, sorted(m for m in r.methods if m != "HEAD")]
+        for r in _iter_api_routes(create_app().routes)
+    ]
+    assert actual == golden, (
+        "console route REGISTRATION ORDER changed. A behavior-preserving router "
+        f"move must keep it; if a reorder is deliberate, regenerate "
+        f"{_ORDER_GOLDEN.relative_to(REPO_ROOT)} and justify it in the commit."
+    )
 
 
 def _mutating_routes(app: FastAPI) -> list[APIRoute]:

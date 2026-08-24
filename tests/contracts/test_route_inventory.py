@@ -16,6 +16,7 @@ seam-wiring and conversion tests (#138+) reuse to build both.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -30,18 +31,21 @@ _GOLDEN = REPO_ROOT / "tests" / "contracts" / "fixtures" / "route_inventory.json
 def app_route_inventory(app: FastAPI) -> list[list[object]]:
     """``[path, [methods…]]`` for every APIRoute, sorted and HEAD-stripped.
 
-    Walks the included ``protected`` router through ``original_router`` (FastAPI
-    mounts it as a sub-route, so its APIRoutes are not on ``app.routes``), matching
-    the onboarding-gate inventory walk.
+    Walks included routers through ``original_router`` (FastAPI mounts an
+    included router as a sub-route, so its APIRoutes are not on ``app.routes``),
+    recursively: P0b nests per-area routers inside the ``protected`` router, so
+    a single-level walk would silently drop the nested family routes.
     """
+
+    def collect(candidates: Iterable[object], into: list[APIRoute]) -> None:
+        for route in candidates:
+            if isinstance(route, APIRoute):
+                into.append(route)
+            elif hasattr(route, "original_router"):
+                collect(route.original_router.routes, into)
+
     routes: list[APIRoute] = []
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            routes.append(route)
-        elif hasattr(route, "original_router"):
-            routes.extend(
-                r for r in route.original_router.routes if isinstance(r, APIRoute)
-            )
+    collect(app.routes, routes)
     inventory = [
         [r.path, sorted(m for m in r.methods if m != "HEAD")] for r in routes
     ]
