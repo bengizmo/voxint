@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from voxint.api.csrf import CSRF_CLAIM, CSRF_SETTINGS, mint_csrf_token
 from voxint.app_settings import ready_tutorial_run_id
 from voxint.tutorial.steps import (
+    PAGE_ROUTE_NAME,
     STEP_COPY,
     STEP_PAGE,
     WALKTHROUGH_TOTAL,
@@ -27,6 +28,21 @@ from voxint.tutorial.steps import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _step_path(request: Request, step: TutorialStep, **path_params: object) -> str:
+    """The URL path of the page a step renders on, resolved from the route table.
+
+    Goes through ``STEP_PAGE`` + ``PAGE_ROUTE_NAME`` (issue #152) so the banner's
+    continue-links follow a page wherever a later phase moves it — remap the step
+    in ``voxint.tutorial.steps`` and every derived link updates with it.
+    """
+    name = PAGE_ROUTE_NAME[STEP_PAGE[step]]
+    # request.app is typed Any; str() keeps the declared return honest (URLPath
+    # is a str subclass).
+    return str(
+        request.app.url_path_for(name, **{k: str(v) for k, v in path_params.items()})
+    )
 
 def _tutorial_banner(
     request: Request,
@@ -83,7 +99,7 @@ def _tutorial_banner(
         "csrf_settings": None,
     }
     if step is TutorialStep.RUN:
-        banner["next_href"] = "/review?tutorial=review"
+        banner["next_href"] = f"{_step_path(request, TutorialStep.REVIEW)}?tutorial=review"
         banner["next_label"] = "Open the review console →"
     elif step is TutorialStep.REVIEW:
         banner["claim_run_id"] = tutorial_run_id
@@ -92,9 +108,10 @@ def _tutorial_banner(
         if token is not None:
             # Step 1 → Step 2: hand off to the transcript stepper (issue #117 Phase
             # B), carrying the live claim token so verify/edit stay enabled there.
-            banner["next_href"] = (
-                f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=check_words"
+            transcript = _step_path(
+                request, TutorialStep.CHECK_WORDS, run_id=tutorial_run_id
             )
+            banner["next_href"] = f"{transcript}?token={token}&tutorial=check_words"
             banner["next_label"] = "Continue to checking the words →"
         else:
             # No live claim on this tab — offer to (re)claim and continue rather
@@ -105,9 +122,8 @@ def _tutorial_banner(
         if token is not None:
             # Step 2 → export: stay on the transcript page (both steps share it),
             # keeping the claim token so a returning tab is still writable.
-            banner["next_href"] = (
-                f"/review/{tutorial_run_id}/transcript?token={token}&tutorial=export"
-            )
+            transcript = _step_path(request, TutorialStep.EXPORT, run_id=tutorial_run_id)
+            banner["next_href"] = f"{transcript}?token={token}&tutorial=export"
             banner["next_label"] = "I've checked the words →"
         else:
             # A stale/absent token here means the workbench claim is gone; recover

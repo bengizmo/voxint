@@ -5,7 +5,30 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
+  its new frame: a collapsible left sidebar (Home, Media, Projects behind a
+  dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as
+  interim links so nothing loses its path), a top bar with a theme cycle
+  button, and shared library primitives for the area pages later phases
+  build. `/` is now a real Home page: needs-attention cards (continue
+  review, unidentified voices, failed runs) whose counts derive from the
+  queues they link to, quick actions, activity counts (media added, runs
+  started, speakers enrolled) with an hour/day/week/all switch that shares
+  its query functions with `voxint stats`, and a recent-activity feed
+  derived from existing tables. `voxint stats` and `GET /metrics`'s JSON
+  sibling gain the two new windowed counts. The guided tutorial's
+  page-to-route map is data-driven now, and unfinished console areas ship
+  dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
+
 ### Changed
+- **The dashboard folded into Home** (#152). `/dashboard` now issues a
+  permanent redirect to `/`, and `/` no longer redirects to `/review`. The
+  dashboard's task cards and stat figures live on Home; the hardware strip
+  stays on the Resources page (sidebar: Hardware); the per-status and
+  stage-timing detail tables are retired from HTML (the same figures remain
+  on `GET /metrics` and `voxint stats`). The pre-onboarding setup wizard
+  renders without the new shell.
 - **Console 2.0 groundwork, P0b: the console API is decomposed into per-area
   routers** (#151, epic #149). Internal refactor with no operator-visible
   change: the single 7.5k-line `api/app.py` module is split into

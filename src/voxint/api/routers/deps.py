@@ -214,7 +214,37 @@ def run_source_title(run: PipelineRun) -> str:
     return friendly_media_label(title, run.media_item.source_path)
 
 
-templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+def _shell_template_context(request: Request) -> dict[str, Any]:
+    """Per-request shell state for base.html (Console 2.0 P1, issue #152).
+
+    Registered as a Starlette context processor so every ``TemplateResponse``
+    carries it without threading the same keys through ~30 handlers. Everything
+    lives under the one ``shell`` key: a context processor is merged AFTER the
+    handler-supplied context and would silently overwrite a same-named handler
+    key, so the namespace keeps that hazard to a single reserved name. Keep this
+    pure and cheap (settings reads only, no DB): it also runs for every htmx
+    fragment render.
+
+    The area flags let unfinished console areas ship dark (config.py,
+    ``console_*_enabled``): the sidebar and quick actions render an area's entry
+    only when its flag is on AND its routes actually exist
+    (``app.state.projects_routed``, stamped at the end of route registration),
+    so an early flag flip can never advertise a dead link.
+    """
+    settings: Settings = request.app.state.settings
+    return {
+        "shell": {
+            "projects_enabled": (
+                settings.console_projects_enabled
+                and getattr(request.app.state, "projects_routed", False)
+            ),
+        }
+    }
+
+
+templates = Jinja2Templates(
+    directory=str(_TEMPLATES_DIR), context_processors=[_shell_template_context]
+)
 # Island bundle lookup for base.html: `asset_url('main')` / `asset_url('tailwind')`
 # resolve to the hashed built file, or None (guarded in the template) when unbuilt.
 templates.env.globals["asset_url"] = asset_url

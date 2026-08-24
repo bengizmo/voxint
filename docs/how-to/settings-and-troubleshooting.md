@@ -5,7 +5,7 @@ likely to hit.*
 
 Almost everything about Voxint is configurable from your browser. Open the
 console at `http://127.0.0.1:8080/`, sign in (it uses a simple username and
-password), and click **Settings** in the top navigation bar. Every option on
+password), and click **Settings** in the sidebar. Every option on
 this page saves right there, with no files to edit and no services to restart.
 
 Changes you save do **not** touch runs that are already in progress. They apply
@@ -366,9 +366,10 @@ down.](../images/setup-wizard.png)
 
 ### Checking your hardware
 
-If runs feel slow or keep failing, the **Resources** tab in the top navigation
-shows what your graphics card is doing. The dashboard also carries a compact
-version of the same strip. Both are quiet on purpose: a card running flat out
+If runs feel slow or keep failing, the **Hardware** link in the sidebar opens
+the Resources page: a compact status strip up top, then the full readout of
+what your graphics card is doing. Both are quiet on purpose: a card running
+flat out
 during a transcription is healthy, not a warning, so most of the time the strip
 just tells you each service is working.
 

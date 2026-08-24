@@ -267,10 +267,10 @@ class RedirectRule(NamedTuple):
     auth: bool
 
 
-# Initially only the index redirect exists (issue #150: "empty of redirects
-# beyond /"). ``/`` is unconditional once past the onboarding gate.
+# P1 (#152): ``/`` became the real Home page (it left this map), and the
+# retired ``/dashboard`` redirects there.
 REDIRECT_MAP: tuple[RedirectRule, ...] = (
-    RedirectRule(source="/", target="/review", status=303, auth=True),
+    RedirectRule(source="/dashboard", target="/", status=303, auth=True),
 )
 
 
