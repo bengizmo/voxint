@@ -1065,6 +1065,37 @@ re-proven at release time by `release.yml`'s own CPU smoke gate, which exercises
 the baked MiniLM weights per arch and which the v0.23.0 build failed on. Clear to
 tag v0.23.1.
 
+#### Verdict: v0.24.0, Gates A/R/M carry, Gate E re-run fresh (all lanes PASS) (2026-08-23)
+
+0.24.0's headline is the #133 LLM transcript translation feature (plus the #130
+stranded-embedding-job recovery fix). `git diff v0.23.1..HEAD -- services/` is
+empty and no metal-lane path changed, so **Gates A, R, and M carry** their
+v0.23.0 verdicts above (v0.23.1 itself carried; the CUDA/ROCm/metal numerics
+paths have not moved). The Gate E pipeline-aware scope is non-empty
+(`src/voxint/{enrichment,api,db}` and `frontend/` changed), so **Gate E re-ran
+in full** on maintainer hardware before tagging:
+
+- **Pipeline lane** (AMD host, serial): `tests/e2e/test_real_pipeline.py`
+  against live model services (whisper `/healthz` `device=rocm model=large-v2`,
+  pyannote cpu diarization-3.1, titanet cpu onnxruntime, all
+  `model_loaded=true`) on a disposable database — **2 passed, exit 0**, no
+  service restarts.
+- **Real-LLM enrichment sub-lane** (configured, therefore must-pass):
+  `tests/e2e/test_enrich_assets_real_llm.py` against the maintainer's real
+  OpenAI-compatible endpoint — **4 passed, exit 0**, coherent real-model
+  summary output.
+- **Browser review lane** (translation-focused, `voxint-e2e-review` over
+  `tools/e2e_browser_lifecycle.py`): interleaved translated lines in the
+  hydrated island and the JS-off fallback, the export ladder live over the
+  wire (200 fresh / 422 unknown-code / 409 no-fresh-translation), the review
+  stepper's Translate action starting a generation and the card cancelling it,
+  edit-marks-stale everywhere with translated export links gone, and a
+  RECONCILE PASS on `segment_review_states`. Run on the release content
+  (the only later deltas are a test-fixture literal and the version pins).
+
+Gates A/R/M carried on empty diffs; Gate E green fresh across all three lanes.
+Clear to tag v0.24.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the
