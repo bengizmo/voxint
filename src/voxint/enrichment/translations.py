@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, select, text, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.languages import LANGUAGE_NAMES
@@ -295,10 +295,18 @@ def record_translation(
 
 
 def current_translations(session: Session, pipeline_run_id: uuid.UUID) -> list[RunTranslation]:
-    """Every current (unsuperseded) translation head for the run, newest first."""
+    """Every current (unsuperseded) translation head for the run, newest first.
+
+    ``lines`` is deferred: the callers are freshness/metadata surfaces (the run
+    card, the transcript page's toggle) that never read the payload for a head
+    the operator did not select, and a head can be megabytes of JSONB.
+    Touching ``.lines`` on a returned row still works — SQLAlchemy loads the
+    column on demand with one extra SELECT.
+    """
     return list(
         session.execute(
             select(RunTranslation)
+            .options(defer(RunTranslation.lines))
             .where(
                 RunTranslation.pipeline_run_id == pipeline_run_id,
                 RunTranslation.superseded_by_translation_id.is_(None),

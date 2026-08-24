@@ -110,6 +110,23 @@ class TestTranscriptView:
         assert "pair with the reviewed text" in body
         assert "ES:Hello there." not in body
 
+    def test_toggle_absent_on_raw_and_enhanced_variants(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # Translations pair with the reviewed text: raw/enhanced views must not
+        # advertise a switcher whose links silently change the rendition.
+        with session_factory() as session:
+            run_id = seed_run(session)
+        _translate(session_factory, run_id)
+        client = _build_client(session_factory)
+        assert (
+            'aria-label="Translation"'
+            in client.get(f"/runs/{run_id}/transcript").text
+        )
+        for text in ("raw", "enhanced"):
+            body = client.get(f"/runs/{run_id}/transcript?text={text}").text
+            assert 'aria-label="Translation"' not in body, text
+
     def test_stale_translation_never_interleaves(
         self, session_factory: sessionmaker[Session]
     ) -> None:
@@ -234,6 +251,28 @@ class TestExports:
         client = _build_client(session_factory)
         response = client.get(f"/review/{run_id}/export.txt?lang=es")
         assert response.status_code == 409
+
+    def test_unreadable_source_marks_run_card_out_of_date(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # The run card must fail closed like the view and exports: with the
+        # source transcript gone, the generation renders "out of date", never a
+        # "view it" promise the transcript page would refuse.
+        with session_factory() as session:
+            run_id = seed_run(session)
+        _translate(session_factory, run_id)
+        with session_factory() as session:
+            for segment in session.execute(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.pipeline_run_id == run_id
+                )
+            ).scalars():
+                session.delete(segment)
+            session.commit()
+        client = _build_client(session_factory)
+        body = client.get(f"/runs/{run_id}/translation").text
+        assert "out of date" in body
+        assert "View it beneath each line" not in body
 
     def test_lang_with_raw_or_enhanced_is_422(
         self, session_factory: sessionmaker[Session]

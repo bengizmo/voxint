@@ -206,6 +206,9 @@ export function ReviewStepper({
     "idle" | "starting" | "started" | "error"
   >(translate?.active ? "started" : "idle");
   const [translateError, setTranslateError] = useState<string | null>(null);
+  // Synchronous re-entry guard, same pattern as busyRef: state flips a render
+  // too late to stop a fast double-activation from firing two generate POSTs.
+  const translateBusyRef = useRef<boolean>(false);
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -881,7 +884,9 @@ export function ReviewStepper({
   // arrives as {started, error} rather than an HTML fragment to parse. The
   // stepper only launches; freshness and progress live on the run page card.
   const startTranslate = async () => {
+    if (translateBusyRef.current) return;
     if (!translate || !translate.defaultTarget) return;
+    translateBusyRef.current = true;
     setTranslatePhase("starting");
     try {
       const body = new URLSearchParams({
@@ -911,6 +916,8 @@ export function ReviewStepper({
         err instanceof ApiError ? err.detail : "Translation could not start.",
       );
       setTranslatePhase("error");
+    } finally {
+      translateBusyRef.current = false;
     }
   };
 
@@ -1002,11 +1009,15 @@ export function ReviewStepper({
               ) : translatePhase === "starting" ? (
                 <span className="muted text-sm">Starting translation…</span>
               ) : translatePhase === "started" ? (
+                // Neutral copy shared by "just launched" and "already active at
+                // page load": a queued job stranded by a broker outage never
+                // finishes, so this promises where to check, not that the
+                // result will arrive (review finding).
                 <span className="muted text-sm">
-                  Translating — it will appear on the{" "}
-                  <a href={translate.transcriptUrl}>transcript page</a> when it
-                  finishes (progress and cancel on the{" "}
-                  <a href={translate.runAnchor}>run page</a>).
+                  A translation is queued or running — check progress (or
+                  cancel) on the <a href={translate.runAnchor}>run page</a>;
+                  the result appears on the{" "}
+                  <a href={translate.transcriptUrl}>transcript page</a>.
                 </span>
               ) : (
                 <span role="alert" className="text-sm">

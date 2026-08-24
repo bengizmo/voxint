@@ -27,20 +27,21 @@
 </nav>
 
 {# Translation toggle (issue #133): one link per current generation. A fresh
-   generation links to the interleaved view (always on the reviewed text — a
-   translation is a rendition of the corrected transcript); a stale one links
-   to the run page card, where Re-translate lives. Absent in reading view and
-   when the run has no translations. #}
-{% if not read and translation_ctx.views %}
+   generation links to the interleaved view; a stale one links to the run page
+   card, where Re-translate lives. Rendered on the CORRECTED variant only —
+   translations pair with the reviewed text, so raw/enhanced views never
+   advertise a toggle whose links would silently switch the rendition (review
+   finding). Absent in reading view and when the run has no translations. #}
+{% if not read and text.value == "corrected" and translation_ctx.views %}
 <nav class="top tab-strip" aria-label="Translation">
-  <a href="/runs/{{ run.id }}/transcript?text={{ text.value }}"
+  <a href="/runs/{{ run.id }}/transcript?text=corrected"
      {% if not translation_ctx.active %}aria-current="page"{% endif %}>Original only</a>
   {% for tv in translation_ctx.views %}
   {% if tv.stale %}
   <a href="/runs/{{ run.id }}#run-translation-{{ run.id }}"
      title="Out of date — the transcript changed since this translation was generated. Re-translate on the run page.">{{ tv.label }} (out of date)</a>
   {% else %}
-  <a href="/runs/{{ run.id }}/transcript?translation={{ tv.code }}"
+  <a href="/runs/{{ run.id }}/transcript?text=corrected&amp;translation={{ tv.code }}"
      {% if translation_ctx.active and translation_ctx.active.language == tv.code %}aria-current="page"{% endif %}>{{ tv.label }}</a>
   {% endif %}
   {% endfor %}

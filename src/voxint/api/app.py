@@ -3337,8 +3337,13 @@ def _run_translation_state(
         "translations": [
             {
                 "translation": head,
-                "stale": current_hash is not None
-                and head.source_content_hash != current_hash,
+                # Fail closed like the transcript view and exports: an
+                # unreadable source (current_hash None) marks every generation
+                # out of date rather than dressing it up as viewable (review
+                # finding — the card must never promise a view the transcript
+                # page and ?lang= exports would refuse).
+                "stale": current_hash is None
+                or head.source_content_hash != current_hash,
             }
             for head in heads
         ],
@@ -3400,15 +3405,18 @@ def _transcript_translation_context(
     with contextlib.suppress(TranslationError):
         current_hash = translation_source_hash(load_translation_source(session, run_id))
     heads_by_code = {head.target_language: head for head in heads}
+    # The hash is the ONLY freshness signal (issue #133 invariant): no readable
+    # source fails closed to stale. The displayed variant's line count must NOT
+    # feed this — raw/enhanced/read renders could differ from the corrected
+    # translation source and would falsely stale a fresh generation (review
+    # finding); the count defense lives at interleave time below, where the
+    # variant is provably CORRECTED.
     views = [
         {
             "code": head.target_language,
             "label": language_label(head.target_language),
             "stale": current_hash is None
-            or head.source_content_hash != current_hash
-            # Defensive: hash equality implies equal line counts, but a
-            # mismatch must degrade to "out of date", never misalign.
-            or len(head.lines) != line_count,
+            or head.source_content_hash != current_hash,
         }
         for head in heads
     ]
@@ -3432,14 +3440,26 @@ def _transcript_translation_context(
             )
         else:
             head = heads_by_code[target]
-            active = {
-                "language": head.target_language,
-                "label": language_label(head.target_language),
-                "texts": translation_texts(head),
-                "model": head.model,
-                "completed_at": head.completed_at,
-                "source_language": head.source_language,
-            }
+            texts = translation_texts(head)
+            # Defensive count check, HERE only: the variant is CORRECTED on
+            # this branch, so line_count is the translation source's own
+            # geometry. Hash equality implies equality; a corrupt row must
+            # degrade to "out of date", never misalign.
+            if len(texts) != line_count:
+                note = (
+                    f"The {view['label']} translation is out of date — the"
+                    " transcript changed since it was generated. Re-translate"
+                    " from the run page."
+                )
+            else:
+                active = {
+                    "language": head.target_language,
+                    "label": language_label(head.target_language),
+                    "texts": texts,
+                    "model": head.model,
+                    "completed_at": head.completed_at,
+                    "source_language": head.source_language,
+                }
     return {
         "views": views,
         "active": active,
@@ -5540,13 +5560,16 @@ def _register_routes(app: FastAPI) -> None:
             )
         label = language_label(target)
         head = current_translation(session, run_id, target)
-        job = active_or_last_translation_job(session, run_id)
-        running = (
-            job is not None
-            and job.status in _TRANSLATION_ACTIVE_STATUSES
-            and job.target_language == target
-        )
         if head is None:
+            # Job lookup only on the failure path (review finding): a
+            # successful export must not scan the run's job history just to
+            # phrase a 409 it will never raise.
+            job = active_or_last_translation_job(session, run_id)
+            running = (
+                job is not None
+                and job.status in _TRANSLATION_ACTIVE_STATUSES
+                and job.target_language == target
+            )
             raise HTTPException(
                 status_code=409,
                 detail=(
