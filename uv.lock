@@ -3724,6 +3724,11 @@ parity = [
     { name = "setuptools" },
     { name = "soundfile" },
 ]
+synthdetect-eval = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "scikit-learn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -3739,6 +3744,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "noisereduce", marker = "extra == 'parity'", specifier = "==2.0.1" },
     { name = "numpy", specifier = ">=1.26" },
+    { name = "numpy", marker = "extra == 'synthdetect-eval'", specifier = ">=1.26" },
     { name = "onnxruntime", specifier = "==1.28.0" },
     { name = "pgvector", specifier = ">=0.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
@@ -3754,6 +3760,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0" },
     { name = "regex", marker = "extra == 'parity'", specifier = "==2026.7.19" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
+    { name = "scikit-learn", marker = "extra == 'synthdetect-eval'", specifier = ">=1.4,<2" },
     { name = "scipy", specifier = ">=1.13" },
     { name = "scipy-stubs", marker = "extra == 'dev'" },
     { name = "setuptools", marker = "extra == 'parity'", specifier = ">=70,<81" },
@@ -3764,7 +3771,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
     { name = "yt-dlp", specifier = ">=2024.8" },
 ]
-provides-extras = ["dev", "parity", "eval-quality"]
+provides-extras = ["dev", "parity", "eval-quality", "synthdetect-eval"]
 
 [[package]]
 name = "watchfiles"

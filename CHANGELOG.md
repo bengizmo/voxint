@@ -14,6 +14,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   comma-separated kill switch for turning built-in feature plugins off in a
   process (inert until the features are converted in later changes); `voxint
   doctor` reports active plugins and flags an unknown id in the switch.
+- **Groundwork for synthetic-speech (audio deepfake) detection (#143, #144).**
+  This change adds the maintainer evaluation harness only; nothing is exposed to
+  users yet. The first milestone is a CI-only scoring toolkit: a pins-as-data
+  model registry that gates each detector by license class (a model with no
+  license refuses to run), a manifest schema with seeded, speaker-disjoint corpus
+  splits, and a host-side scorer for equal-error rate, paired per-clip
+  comparison, and Platt calibration. The pre-registered evaluation gates and
+  tolerances are recorded in `docs/gpu-contracts.md` before any measurement runs.
+  The detector itself, its model service, and the review-console plugin come in
+  later milestones (#145, #146).
 
 ## [0.24.0] - 2026-08-23
 

@@ -111,6 +111,22 @@ eval-quality = [
     # are compiled extensions with wheels for linux-x86_64 and macos-arm64.
     "meeteval==0.4.3",
 ]
+# Host-side synthetic-speech-detection eval scorer (tools/synthdetect_eval.py,
+# issue #144): EER / bootstrap-CI / operating points / Platt calibration over a
+# raw-score journal. Maintainer instrument only, NEVER shipped to users and
+# NEVER installed into a service image. Kept in its own extra, isolated from the
+# service runtime pins (the detector container ships pinned fairseq + torch,
+# resolved separately in services/synthdetect/, and never shares this env). Only
+# scikit-learn's roc_curve / roc_auc_score are used from the extra; every other
+# metric (EER crossing, seeded bootstrap, Platt, Brier, reliability) is pure
+# numpy in the tool, so the surface that can drift the committed fixture scores
+# is a single vetted implementation. numpy is already a main dep; it is listed
+# here so the extra is self-contained. Run: `uv run --isolated --extra
+# synthdetect-eval tools/synthdetect_eval.py score …`.
+synthdetect-eval = [
+    "numpy>=1.26",
+    "scikit-learn>=1.4,<2",
+]
 
 [project.scripts]
 voxint = "voxint.cli:main"
@@ -179,6 +195,12 @@ ignore_missing_imports = true
 # The in-process text embedder (#121) runtime deps ship no type stubs.
 [[tool.mypy.overrides]]
 module = ["onnxruntime", "onnxruntime.*", "tokenizers", "tokenizers.*"]
+ignore_missing_imports = true
+
+# scikit-learn (synthdetect-eval extra, tools/synthdetect_eval.py) ships no
+# py.typed marker; only its roc_curve/roc_auc_score are used, behind lazy imports.
+[[tool.mypy.overrides]]
+module = ["sklearn", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
