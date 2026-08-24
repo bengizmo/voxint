@@ -93,9 +93,10 @@ Dockerfile's `sha256sum -c` gate rejects any mismatch.
 - **`frontend`** (CI, issue #48) runs `npm ci` → lint → typecheck → `npm run
   build` (which includes `tsc --noEmit`, `vite build`, and the no-CDN
   `check-no-cdn-urls.mjs` offline-self-host check over the built `dist/` bytes)
-  → `npm audit --omit=dev --audit-level=high`. It gates merge on the same
-  footing as `ruff`/`mypy`/`pytest` and runs independently (no Postgres
-  coupling). It is a **required status check** on `main`. The Dockerfile runs
+  → `npm audit --omit=dev --audit-level=high`. It runs independently (no Postgres
+  coupling) on the same footing as `ruff`/`mypy`/`pytest`, on every push and PR.
+  The required status checks enforced on `main` are `lint-test` and `secrets-scan`
+  only; `frontend` is not currently in the required set (a candidate to add). The Dockerfile runs
   the identical frontend build stage as part of the single image build, so no
   standalone release job is needed. Building in both CI and the Dockerfile is
   intentional (CI fails fast without a full Docker build; the Dockerfile stage
@@ -273,7 +274,9 @@ model assets) voids it for the gate it feeds.
 
 ## Cutting a release
 
-1. **Release commit** on `main`: bump the version in `pyproject.toml` AND
+1. **Release commit** on a release branch (GitHub `main` is branch-protected, so
+   it lands via the PR in step 2, not a direct push): bump the version in
+   `pyproject.toml` AND
    `src/voxint/__init__.py`, and bump the `VOXINT_IMAGE_TAG` default pin in
    **all six image-bearing compose files**: `compose.yaml` + `compose.gpu.yaml`
    + `compose.cpu.yaml` + `compose.rocm.yaml` + `compose.ytdlp-egress.yaml` (the
@@ -295,11 +298,22 @@ model assets) voids it for the gate it feeds.
    `main` leaks, and a shallow local scan will not reproduce it. The remedy is to
    exempt that exact value in `main`'s `.gitleaks.toml`, byte-identical to the
    entry the source branch already carries so the two configs converge on merge;
-   never widen it to a broad pattern. As a
+   never widen it to a broad pattern. When a leak has already landed on `main`
+   (published history that cannot be rewritten), the remedy is different: scrub
+   the worktree to a safe value (for a private IP, an RFC 5737 TEST-NET address
+   such as `192.0.2.1`), and exempt the offending commit by SHA in the
+   `commits = [...]` allowlist at the end of `.gitleaks.toml`. Add a comment
+   naming the short SHA, the benign literal, and the follow-up commit that
+   scrubbed it, matching the existing `29ce5b5a`/`33c4dc2a`/`2c6307eb` entries.
+   As a
    security-posture checkpoint, glance at
    [`security/audit-2026-08-18.md`](security/audit-2026-08-18.md) for the standing
    findings still open (web console, research, supply chain, media) before cutting.
-2. Push to both remotes; wait for `ci` to go green on GitHub.
+2. Open a PR against GitHub `main` with the release commit; when the required
+   checks (`lint-test` + `secrets-scan`) are green, merge it (no reviewer is
+   required). Then sync the private origin: `git fetch github && git push origin
+   github/main:main`. GitHub `main` is branch-protected, so the release commit
+   lands through the PR, not a direct push.
 3. **Tag**: `git tag -a vX.Y.Z -m "Voxint vX.Y.Z" && git push github vX.Y.Z`
    (push the tag to the private origin too). The tag must point at the release
    commit so images are built from exactly what the compose files pin.

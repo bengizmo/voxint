@@ -43,6 +43,23 @@ independently (currently Python 3.10, dictated by the CUDA base images).
   provenance files recording upstream revisions and license attribution (see
   NOTICE and the provenance JSONs referenced there).
 
+## How changes land
+
+Work on a feature branch and open a pull request against `main` on GitHub.
+`main` is branch-protected: it advances only by merging a PR whose required
+status checks are green, never by a direct push. The required checks are:
+
+| Check | What it runs |
+|---|---|
+| `lint-test` | `ruff`, `mypy` (strict), and `pytest` (unit + integration) against a pgvector Postgres service. |
+| `secrets-scan` | Pinned gitleaks over history and the working tree, using `.gitleaks.toml`. |
+
+The `frontend` job (lint, typecheck, build, audit) also runs on every push and
+PR; it is not currently a required check but should still pass before you merge.
+Force-pushes to `main` and branch deletion are rejected. Protection binds
+everyone, maintainers included. No human reviewer is required, so once a PR's
+checks are green it is ready to merge.
+
 ## Documentation
 
 Docs are part of the change, not an afterthought. Update `docs/` in the same
