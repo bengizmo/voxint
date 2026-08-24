@@ -3,6 +3,18 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
+## [Unreleased]
+
+### Added
+- **Plugin framework substrate** (#137, epic #136). Internal groundwork for
+  turning Voxint's optional features into self-contained, flag-gated plugins.
+  This change ships the framework only: an empty registry, the plugin interface,
+  and the guard tests that keep the coming conversions safe. Nothing an operator
+  sees changes yet. One new setting is documented: `VOXINT_PLUGINS_DISABLED`, a
+  comma-separated kill switch for turning built-in feature plugins off in a
+  process (inert until the features are converted in later changes); `voxint
+  doctor` reports active plugins and flags an unknown id in the switch.
+
 ## [0.24.0] - 2026-08-23
 
 ### Added

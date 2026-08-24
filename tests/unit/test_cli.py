@@ -198,6 +198,39 @@ def test_doctor_prints_results_and_maps_exit_code(
     assert "a hard dependency is down" in out
 
 
+def test_doctor_fails_verdict_when_a_plugin_cannot_load(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Dependencies all green, but a builtin that would abort real api/worker
+    # startup must not let doctor report "all hard dependencies OK".
+    import voxint.db.session as db_session
+    import voxint.diagnostics as diagnostics
+    import voxint.plugins as plugins
+
+    class _Engine:
+        def dispose(self) -> None:
+            pass
+
+    monkeypatch.setattr(db_session, "build_engine", lambda *a, **k: _Engine())
+    monkeypatch.setattr(
+        diagnostics,
+        "run_diagnostics",
+        lambda *a, **k: [diagnostics.CheckResult("postgres", True, True, "connected")],
+    )
+
+    def _boom(_settings: object) -> object:
+        raise plugins.PluginError("duplicate plugin id 'x'")
+
+    # _doctor does `from voxint.plugins import load_plugins` at call time, so the
+    # module attribute is what it binds.
+    monkeypatch.setattr(plugins, "load_plugins", _boom)
+
+    assert main(["doctor"]) == 1
+    out = capsys.readouterr().out
+    assert "[FAIL] plugins: duplicate plugin id 'x'" in out
+    assert "a plugin failed to load" in out
+
+
 # ---- watch / submit --wait: the poll loop (no DB, injected clock/sleep) ------
 
 
