@@ -503,3 +503,83 @@ def test_reset_plugins_cache_forces_a_rebuild() -> None:
     reset_plugins_cache()
     second = load_plugins(SimpleNamespace(voxint_plugins_disabled=""))  # type: ignore[arg-type]
     assert first is not second  # a fresh process / test starts empty
+
+
+# --------------------------------------------------------------------------- #
+# validate_boot (issue #138): env-sourced plugin invariants fail boot loud.
+# --------------------------------------------------------------------------- #
+def test_validate_boot_no_op_on_empty_registry() -> None:
+    from voxint.plugins.boot import validate_boot
+
+    reg = load_registry([])
+    # Nothing to iterate: a dormant (#138) registry boots clean.
+    validate_boot(reg, settings=SimpleNamespace())  # type: ignore[arg-type]
+
+
+def test_validate_boot_passes_when_invariants_clean() -> None:
+    from voxint.plugins.boot import validate_boot
+
+    class Clean(VoxintPlugin):
+        manifest = _manifest("clean")
+
+        def invariant_errors(self, row: Any, settings: Any) -> list[str]:
+            return []
+
+    reg = load_registry([Clean])
+    validate_boot(reg, settings=SimpleNamespace())  # type: ignore[arg-type]
+
+
+def test_validate_boot_calls_hook_with_env_reading() -> None:
+    from voxint.plugins.boot import validate_boot
+
+    seen: list[Any] = []
+
+    class Spy(VoxintPlugin):
+        manifest = _manifest("spy")
+
+        def invariant_errors(self, row: Any, settings: Any) -> list[str]:
+            seen.append(row)
+            return []
+
+    reg = load_registry([Spy])
+    validate_boot(reg, settings=SimpleNamespace())  # type: ignore[arg-type]
+    # Boot reads the env-sourced config: row is None (no candidate AppSettings).
+    assert seen == [None]
+
+
+def test_validate_boot_aggregates_violations_with_plugin_ids() -> None:
+    from voxint.plugins.boot import validate_boot
+
+    class Bad(VoxintPlugin):
+        manifest = _manifest("bad")
+
+        def invariant_errors(self, row: Any, settings: Any) -> list[str]:
+            return ["needs a base url", "needs a key"]
+
+    class AlsoBad(VoxintPlugin):
+        manifest = _manifest("alsobad")
+
+        def invariant_errors(self, row: Any, settings: Any) -> list[str]:
+            return ["something else"]
+
+    reg = load_registry([Bad, AlsoBad])
+    with pytest.raises(PluginError) as exc:
+        validate_boot(reg, settings=SimpleNamespace())  # type: ignore[arg-type]
+    message = str(exc.value)
+    assert "[bad] needs a base url" in message
+    assert "[bad] needs a key" in message
+    assert "[alsobad] something else" in message
+
+
+def test_validate_boot_wraps_a_raising_hook() -> None:
+    from voxint.plugins.boot import validate_boot
+
+    class Explodes(VoxintPlugin):
+        manifest = _manifest("explodes")
+
+        def invariant_errors(self, row: Any, settings: Any) -> list[str]:
+            raise RuntimeError("kaboom")
+
+    reg = load_registry([Explodes])
+    with pytest.raises(PluginError, match="plugin 'explodes' invariant check failed"):
+        validate_boot(reg, settings=SimpleNamespace())  # type: ignore[arg-type]

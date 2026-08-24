@@ -20,6 +20,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   registration-order golden added in this change.
 
 ### Added
+- **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
+  registry into every core seam so a converted feature will activate through
+  generic loops instead of a hand-wired copy: API router mounting with route
+  collision rejection, the settings-section and run-detail-panel render loops,
+  the Features-section flag merge, namespaced plugin templates, the Celery task
+  include and routing merge with a guard against a plugin shadowing a core task,
+  the post-completion hook fan-out, the stale-job recovery sweep generalized from
+  the embedding lane, the CLI subcommand loop, and a boot-time plugin invariant
+  check. This change is dormant: the registry is empty, so behavior is
+  byte-identical and nothing an operator sees changes yet. As the optional
+  features convert in later changes, the translation and embedding job lanes gain
+  the generic recovery sweep.
 - **Console 2.0 groundwork, P0a: contracts, characterization tests, and a
   content-hash backfill** (#150, epic #149). Schema-free foundation for the
   review-console information-architecture refactor. It adds architecture
@@ -50,6 +62,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   tolerances are recorded in `docs/gpu-contracts.md` before any measurement runs.
   The detector itself, its model service, and the review-console plugin come in
   later milestones (#145, #146).
+- **Synthetic-speech detection eval container and inference runner (#144).**
+  Still maintainer-only, nothing user-facing. This adds the pinned CUDA eval
+  container (`services/synthdetect/`, torch cu118 plus fairseq at a frozen
+  commit, with weights mounted rather than baked) and the inference runner
+  (`tools/synthdetect_infer.py`) that scores a corpus into the raw-score journal
+  the host scorer reads. The runner verifies each clip against a fixed
+  canonical-PCM digest without resampling, records the full determinism
+  provenance in the journal header, and resumes an interrupted run only when the
+  execution identity matches. A `verify-sources` pass produces a dated weight
+  receipt for the S2b freeze. The weight pins stay CANDIDATE until a maintainer
+  freezes real bytes and commits GPU determinism evidence.
 
 ## [0.24.0] - 2026-08-23
 

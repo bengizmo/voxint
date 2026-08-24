@@ -20,20 +20,22 @@ itself; rebinding the name on this module would silently miss.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Annotated, Any, cast
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
+from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PrefixLoader
 from sqlalchemy.orm import Session
 
 from voxint.api.auth import require_operator
-from voxint.api.csrf import verify_csrf_token
+from voxint.api.csrf import CSRF_PLUGIN, verify_csrf_token
 from voxint.api.languages import language_label
 from voxint.api.presentation import (
     format_age,
@@ -56,6 +58,7 @@ from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import operator_correction_message
 from voxint.media.serving import MediaGate
+from voxint.plugins import PluginRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +234,55 @@ templates.env.globals["short_uuid"] = short_uuid
 templates.env.globals["device_state"] = device_state
 
 
+# Plugin template loading (issue #138, rule 10). Plugin settings sections and
+# run-detail panels render their own templates, namespaced ``<plugin_id>/foo.html``
+# and shipped under the plugin package's ``templates/`` dir. The Jinja environment
+# is a process global shared across every create_app call, so the loader is rebuilt
+# from a captured-once pristine core loader rather than by wrapping the current one
+# (repeated wrapping would nest loaders and leak a prior app's plugin paths into a
+# later empty-registry app). Empty registry => no plugin dirs => the pristine core
+# loader, byte-for-byte unchanged.
+_CORE_TEMPLATE_LOADER: BaseLoader | None = None
+
+
+def _plugin_template_dirs(registry: PluginRegistry) -> dict[str, str]:
+    """Map each active plugin id to its on-disk ``templates/`` dir, when present.
+
+    The dir is derived from the plugin class's module location — templates move
+    with the plugin (rule 10) — and included only when it exists, so a plugin that
+    ships no templates contributes no prefix. Empty registry => empty mapping.
+    """
+    dirs: dict[str, str] = {}
+    for plugin in registry.plugins:
+        candidate = Path(inspect.getfile(type(plugin))).parent / "templates"
+        if candidate.is_dir():
+            dirs[plugin.manifest.id] = str(candidate)
+    return dirs
+
+
+def _configure_template_loader(plugin_dirs: Mapping[str, str]) -> None:
+    """Point the shared Jinja loader at the core templates plus any plugin dirs.
+
+    Idempotent and leak-free: the pristine core loader is captured once, and every
+    call rebuilds from it — a :class:`ChoiceLoader` over a :class:`PrefixLoader`
+    when there are plugin dirs, or the pristine core loader restored *exactly* when
+    there are none (the #138 dormant path). Never wraps the current loader, so
+    repeated create_app calls cannot nest or leak.
+    """
+    global _CORE_TEMPLATE_LOADER
+    if _CORE_TEMPLATE_LOADER is None:
+        _CORE_TEMPLATE_LOADER = templates.env.loader
+    core = _CORE_TEMPLATE_LOADER
+    assert core is not None  # Jinja2Templates always installs a FileSystemLoader
+    if plugin_dirs:
+        prefix = PrefixLoader(
+            {pid: FileSystemLoader(path) for pid, path in plugin_dirs.items()}
+        )
+        templates.env.loader = ChoiceLoader([core, prefix])
+    else:
+        templates.env.loader = core
+
+
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
     run = session.get(PipelineRun, run_id)
     if run is None:
@@ -320,3 +372,16 @@ def _submit_domain_pack_detail(exc: DomainPackError) -> str:
         f"{operator_correction_message(str(exc))} "
         "Check Settings → Corrections and the folder's domain-pack assignment."
     )
+
+
+def _verify_plugin_csrf(request: Request) -> None:
+    """CSRF check a plugin mutating route calls before acting (issue #138).
+
+    The capped :class:`~voxint.plugins.deps.PluginRouteDeps` bundle exposes one
+    uniform ``verify_csrf(request)`` rather than the core routes' per-form
+    ``(action, token)`` pair, so a plugin never reaches into the app's CSRF
+    constants. The token rides the ``X-CSRF-Token`` header under the shared
+    ``CSRF_PLUGIN`` action; a missing or mis-signed token 403s exactly like the
+    core check.
+    """
+    _require_csrf(request, CSRF_PLUGIN, request.headers.get("x-csrf-token"))

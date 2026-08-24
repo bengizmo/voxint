@@ -6,8 +6,50 @@ from celery import Celery
 from kombu import Queue  # type: ignore[import-untyped]
 
 from voxint.config import Settings, get_settings
+from voxint.plugins import load_plugins
+from voxint.plugins.base import PluginError
+from voxint.plugins.boot import validate_boot
 
 settings = get_settings()
+
+# Plugin framework (issue #138). Build and validate the registry at worker import,
+# BEFORE constructing Celery, so a malformed builtin or an env-sourced plugin
+# invariant violation stops the worker, beat, and task inspection loudly rather
+# than half-starting one broken feature (mirrors the api's create_app fail-loud).
+# Dormant while BUILTIN is empty: no plugins, no contributions, identical config.
+_registry = load_plugins(settings)
+validate_boot(_registry, settings=settings)
+
+# The core Celery task names, pinned by tests/contracts/fixtures/task_inventory.json.
+# The registry only rejects a plugin task name that collides with ANOTHER plugin;
+# a plugin shadowing a CORE task name is caught here, at the one worker-assembly
+# seam, WITHOUT importing the task modules (that would perturb registration order
+# and risk a circular import — worker.tasks imports this module).
+_CORE_TASK_NAMES: frozenset[str] = frozenset(
+    {
+        "voxint.finish_pipeline",
+        "voxint.gc_sweep",
+        "voxint.generate_run_asset",
+        "voxint.generate_segment_embeddings",
+        "voxint.notify_sweep",
+        "voxint.recovery_sweep",
+        "voxint.research_speaker",
+        "voxint.run_pipeline",
+        "voxint.translate_run",
+        "voxint.watch_sweep",
+    }
+)
+_core_task_collisions = sorted(_CORE_TASK_NAMES.intersection(_registry.task_names()))
+if _core_task_collisions:
+    raise PluginError(
+        "plugin Celery task name(s) collide with core tasks: "
+        + ", ".join(_core_task_collisions)
+    )
+# Every active plugin's task modules, appended to the core include. Empty ⇒ the
+# include list carries only the core module, unchanged.
+_plugin_task_modules = [
+    module for plugin in _registry.plugins for module in plugin.task_modules()
+]
 
 POST_QUEUE = "post"
 
@@ -53,7 +95,7 @@ app = Celery(
     "voxint",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["voxint.worker.tasks"],
+    include=["voxint.worker.tasks", *_plugin_task_modules],
 )
 app.conf.task_acks_late = True
 app.conf.worker_prefetch_multiplier = 1
@@ -80,6 +122,9 @@ app.conf.task_routes = {
     "voxint.gc_sweep": {"queue": POST_QUEUE},
     "voxint.notify_sweep": {"queue": POST_QUEUE},
     "voxint.watch_sweep": {"queue": POST_QUEUE},
+    # Active plugins' post-queue routes (registry validates a plugin only routes a
+    # task it declares). Empty ⇒ no extra keys, an equal dict.
+    **_registry.task_routes(),
 }
 # Acks-late + Redis: an unacked task is redelivered after this horizon, so it
 # must exceed the longest single lane-task execution (run_pipeline or

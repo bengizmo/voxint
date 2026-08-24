@@ -102,6 +102,7 @@ from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.translation_jobs import translation_gates_open
 from voxint.enrichment.triage import validate_authority_domains
 from voxint.ingest import submit_media_item_if_new
+from voxint.plugins import PluginRegistry
 from voxint.tutorial.seed import seed_tutorial_run
 
 logger = logging.getLogger(__name__)
@@ -723,6 +724,36 @@ _FEATURE_FLAG_META: tuple[tuple[str, str, str], ...] = (
     ),
 )
 _FEATURE_FLAG_NAMES: tuple[str, ...] = tuple(name for name, _, _ in _FEATURE_FLAG_META)
+
+
+def _effective_feature_flag_meta(
+    registry: PluginRegistry,
+) -> tuple[tuple[str, str, str], ...]:
+    """Core Features-section flags plus any a plugin's settings section contributes.
+
+    The Features section render loop iterates this, so a converted plugin's
+    tri-state flags render alongside the core ones (issue #138, rule 3). Returns
+    the core ``_FEATURE_FLAG_META`` object *unchanged* when no plugin contributes a
+    flag — the #138 dormant path, byte-identical to before.
+
+    ⚠ This is the merge MECHANISM only. A plugin flag is fully coupled to its
+    ``AppSettings`` column + ``Settings`` field + ``resolve_effective_*`` helper:
+    the Features render loop reads ``feature_flag_state(row, name)`` and
+    ``getattr(settings, name)``, and the POST persists the column — none of which
+    exist until the conversion that introduces the plugin (#141). That conversion
+    must, in the same change, add the column + Settings field, the resolver, the
+    ``settings_features`` POST persistence + allowlist entry, and its candidate
+    invariant validation. Until then the registry is empty, so no plugin flag ever
+    reaches this merge, renders, or is submitted.
+    """
+    plugin_flags = tuple(
+        (flag.name, flag.label, flag.help_text)
+        for section in registry.settings_sections()
+        for flag in section.feature_flags
+    )
+    if not plugin_flags:
+        return _FEATURE_FLAG_META
+    return _FEATURE_FLAG_META + plugin_flags
 _FEATURE_FLAG_CHOICES: tuple[str, ...] = ("on", "off", "inherit")
 
 # Operator-plain copy for the invariant violations the settings sections surface
@@ -1644,7 +1675,9 @@ def _settings_context(
     )
     # Features section (issue #62): one tri-state row per live-read flag. On an
     # invariant-rejected save, render the operator's submitted choices back
-    # (``features_submitted``); otherwise render the stored raw tri-state.
+    # (``features_submitted``); otherwise render the stored raw tri-state. The
+    # effective meta (issue #138) appends any plugin-contributed flags to the
+    # core set; empty registry => the core set unchanged.
     features_submitted: dict[str, str] | None = overrides.pop("features_submitted", None)
     feature_flags = [
         {
@@ -1658,7 +1691,9 @@ def _settings_context(
             ),
             "env_default": bool(getattr(settings, name)),
         }
-        for name, label, help_text in _FEATURE_FLAG_META
+        for name, label, help_text in _effective_feature_flag_meta(
+            request.app.state.plugins
+        )
     ]
     # Semantic search section (issue #121): two tri-state rows (the feature +
     # its autogenerate rider). On an invariant-rejected save, render the
@@ -1888,6 +1923,11 @@ def _settings_context(
     # confirm). Best-effort; an unreachable service renders "unavailable",
     # never breaking the page.
     context["pipeline_models"] = collect_service_identity(settings)
+    # Plugin settings sections (issue #138): each active plugin's section,
+    # ordered by (order, section_id), rendered after the hand-built core
+    # sections by the section loop in settings.html. Empty registry => () =>
+    # nothing rendered, and the core sections are untouched.
+    context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
     context.update(overrides)
     return context
 
@@ -1958,6 +1998,15 @@ def settings_features(
     # name is not declared is silently dropped by Starlette, and
     # _persist_feature_flags then reads it as "inherit" and clears any stored
     # override. test_features_route_declares_every_flag guards this pairing.
+    #
+    # ⚠ Plugin seam (issue #138): the Features section renders the EFFECTIVE
+    # meta (core + plugin flags), but this handler stays core-only. That is
+    # sound only because the registry is empty, so no plugin flag renders or is
+    # submitted. The conversion (#141) that contributes the first plugin
+    # FeatureFlag MUST, in the same change, add its AppSettings column + its
+    # resolve_effective_* helper, a Form param / generic read + persistence for
+    # it here, and its candidate invariant validation — render and save wire
+    # together, never one without the other.
     submitted = {
         "enrichment_names_enabled": enrichment_names_enabled,
         "enrichment_names_llm_enabled": enrichment_names_llm_enabled,

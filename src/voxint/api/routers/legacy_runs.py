@@ -946,6 +946,10 @@ def run_detail(
                 request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
             ),
             "active_nav": "runs",
+            # Plugin run-detail panels (issue #138): each active plugin's
+            # fragments, ordered by (slot, order), rendered by the panel loop
+            # in run_detail.html. Empty registry => () => nothing rendered.
+            "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
         },
     )
 

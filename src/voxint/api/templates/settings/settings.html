@@ -43,5 +43,10 @@
 {% include "settings/_sources.html" %}
 {% include "settings/_models.html" %}
 {% include "settings/_tutorial.html" %}
+{#- Plugin settings sections (issue #138): rendered after the core sections, in
+    (order, section_id) order. Empty registry ⇒ no iterations ⇒ zero bytes. -#}
+{%- for section in plugin_settings_sections %}
+{% include section.template %}
+{%- endfor %}
 </div>
 {% endblock %}

@@ -11,11 +11,13 @@ appends; the newest ruling per label wins at read time).
 
 import logging
 import secrets
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
 from fastapi import (
     APIRouter,
+    Depends,
     FastAPI,
     HTTPException,
     Request,
@@ -24,6 +26,7 @@ from fastapi.responses import (
     FileResponse,
     Response,
 )
+from fastapi.routing import APIRoute
 from starlette.datastructures import MutableHeaders
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -33,7 +36,13 @@ from voxint.api.routers.deps import (
     _APP_ASSET_MEDIA_TYPES,
     _APP_ASSETS_DIR,
     OperatorDep,
+    _configure_template_loader,
+    _get_session,
     _looks_hashed,
+    _plugin_template_dirs,
+    _verify_plugin_csrf,
+    require_onboarded,
+    templates,
 )
 from voxint.api.routers.legacy_review import router as review_router
 from voxint.api.routers.legacy_review import transcript_router as review_transcript_router
@@ -49,10 +58,14 @@ from voxint.api.routers.legacy_runs import (
 from voxint.api.routers.legacy_runs import (
     tail_router as runs_tail_router,
 )
+from voxint.api.routers.settings import _settings_context, setup_router
 from voxint.api.routers.settings import router as settings_router
-from voxint.api.routers.settings import setup_router
 from voxint.api.routers.speakers import router as speakers_router
 from voxint.config import Settings, get_settings
+from voxint.plugins import PluginError, PluginRegistry, load_plugins
+from voxint.plugins.boot import validate_boot
+from voxint.plugins.deps import PluginRouteDeps
+from voxint.plugins.registry import find_route_collisions
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +286,17 @@ def create_app(
     )
     resolved = settings or get_settings()
     app.state.settings = resolved
+    # Plugin framework (issue #138): build + validate the registry once at app
+    # startup and store it on app.state for the route / settings / template seams.
+    # Boot fails loud on a malformed builtin or an env-sourced plugin invariant
+    # violation (validate_boot), matching the worker's import-time fail-loud. The
+    # template loader is (re)configured from it so plugin templates render
+    # namespaced as <plugin_id>/foo.html. Dormant while BUILTIN is empty: no
+    # plugins, no contributions, and the loader stays the pristine core loader.
+    registry = load_plugins(resolved)
+    validate_boot(registry, settings=resolved)
+    app.state.plugins = registry
+    _configure_template_loader(_plugin_template_dirs(registry))
     # CSRF signing secret: the configured value (persistent, shared by every
     # worker) or a random per-process fallback so the console works with zero
     # config. A per-process secret invalidates open forms on restart and mismatches
@@ -304,6 +328,26 @@ def create_app(
     app.add_exception_handler(Exception, _security_headers_on_error)
     _register_routes(app)
     return app
+
+
+def _iter_api_routes(routes: Iterable[object]) -> Iterator[APIRoute]:
+    """Yield every :class:`APIRoute` reachable from ``routes``, descending mounts.
+
+    FastAPI mounts an included ``APIRouter`` as a sub-route that exposes the
+    original router on ``original_router`` rather than flattening its routes, so
+    each per-area router under the ``console`` aggregator — and each plugin
+    router included alongside them (#138) — sits nested. A single-level walk
+    misses those routes entirely, which is why the plugin-vs-core collision
+    guard and the route-inventory contract test both recurse here. Non-APIRoute
+    mounts without an ``original_router`` (static-file mounts) yield nothing.
+    """
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        else:
+            sub = getattr(route, "original_router", None)
+            if sub is not None:
+                yield from _iter_api_routes(sub.routes)
 
 
 def _register_routes(app: FastAPI) -> None:
@@ -391,6 +435,71 @@ def _register_routes(app: FastAPI) -> None:
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
     console.include_router(runs_tail_router)
+
+    # Plugin routers (issue #138): build each active plugin's router with the
+    # capped deps bundle, reject any (path, method) claimed by two plugins BEFORE
+    # mounting (the route-inventory contract test additionally catches a plugin
+    # colliding with a CORE route), then mount each behind a gated wrapper so
+    # plugin routes run behind require_onboarded like every console route. The
+    # wrapper is needed because the `console` aggregator is ungated (P0b: the
+    # gate rides each per-area router); on main's pre-P0b layout the gated
+    # `protected` router provided this at runtime. URLs are frozen contract, so
+    # no prefix is forced. Empty registry => nothing built, nothing mounted,
+    # byte-identical route table.
+    registry: PluginRegistry = app.state.plugins
+    plugin_deps = PluginRouteDeps(
+        templates=templates,
+        get_session=_get_session,
+        verify_csrf=_verify_plugin_csrf,
+        render_settings_page=lambda request, session: templates.TemplateResponse(
+            request, "settings/settings.html", _settings_context(request, session)
+        ),
+    )
+    built_routers: list[APIRouter] = []
+    routes_by_plugin: dict[str, list[tuple[str, str]]] = {}
+    for plugin in registry.plugins:
+        router = plugin.build_router(plugin_deps)
+        if router is None:
+            continue
+        built_routers.append(router)
+        routes_by_plugin[plugin.manifest.id] = [
+            (getattr(route, "path", ""), method)
+            for route in router.routes
+            for method in (getattr(route, "methods", None) or ())
+        ]
+    collisions = find_route_collisions(routes_by_plugin)
+    if collisions:
+        raise PluginError("plugin route collisions: " + "; ".join(collisions))
+    # Plugin-vs-core collisions (issue #138): a plugin claiming a (path, method)
+    # a core route already owns fails boot too, mirroring the worker's
+    # _CORE_TASK_NAMES guard. find_route_collisions above only catches
+    # plugin-vs-plugin; without this a converted plugin (#139+) that squats a core
+    # route would mount an unreachable shadow that route dispatch order hides.
+    # Core routes are the exempt app-level routes plus every route already on
+    # `console` (mounted below, so not yet on `app`).
+    core_pairs = {
+        (route.path, method)
+        for route in (
+            *_iter_api_routes(app.routes),
+            *_iter_api_routes(console.routes),
+        )
+        for method in (route.methods or ())
+    }
+    core_conflicts = sorted(
+        f"{method.upper()} {path}: claimed by plugin {plugin_id} and a core route"
+        for plugin_id, routes in routes_by_plugin.items()
+        for path, method in routes
+        if (path, method.upper()) in core_pairs
+    )
+    if core_conflicts:
+        raise PluginError(
+            "plugin route collisions with core: " + "; ".join(core_conflicts)
+        )
+    if built_routers:
+        gated_plugins = APIRouter(dependencies=[Depends(require_onboarded)])
+        for router in built_routers:
+            gated_plugins.include_router(router)
+        console.include_router(gated_plugins)
 
     app.include_router(console)
 
