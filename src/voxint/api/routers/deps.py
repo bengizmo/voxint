@@ -42,13 +42,20 @@ from voxint.api.resource_status import (
 )
 from voxint.app_settings import is_onboarded
 from voxint.config import Settings
-from voxint.db.models import PipelineRun, Stage
+from voxint.db.models import PipelineRun, Stage, TranslationJobStatus
 from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import operator_correction_message
 from voxint.media.serving import MediaGate
 
 logger = logging.getLogger(__name__)
+
+# A translation job the console treats as in flight (shared by the run
+# translation panel and the review transcript context).
+_TRANSLATION_ACTIVE_STATUSES = (
+    TranslationJobStatus.QUEUED.value,
+    TranslationJobStatus.RUNNING.value,
+)
 
 _TEMPLATES_DIR = Path(__file__).parent.parent / "templates"
 
