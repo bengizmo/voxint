@@ -136,7 +136,6 @@ from voxint.adjudication.transcript import (
     paragraphize_transcript,
     parse_transcript_text,
 )
-from voxint.api.auth import require_operator
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_ASSETS_CANCEL,
@@ -163,7 +162,6 @@ from voxint.api.csrf import (
     CSRF_TRANSLATION_CANCEL,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
-    verify_csrf_token,
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
 from voxint.api.meaning_query import search_passages
@@ -192,6 +190,13 @@ from voxint.api.resource_status import (
     render_resource_prometheus,
     short_uuid,
     vram_percent,
+)
+from voxint.api.routers.deps import (
+    OperatorDep,
+    SessionDep,
+    _get_media_gate,
+    _require_csrf,
+    require_onboarded,
 )
 from voxint.api.runs_query import (
     Cursor,
@@ -241,7 +246,6 @@ from voxint.app_settings import (
     feature_flag_state,
     get_app_settings,
     get_or_create,
-    is_onboarded,
     llm_bundled_active,
     llm_endpoint_form_fields,
     mark_tutorial_complete,
@@ -301,7 +305,6 @@ from voxint.db.models import (
     TranslationJob,
     TranslationJobStatus,
 )
-from voxint.db.session import build_engine, build_session_factory, session_scope
 from voxint.diagnostics import check_state, run_diagnostics
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import (
@@ -430,7 +433,6 @@ from voxint.media.peaks import (
 from voxint.media.reclaim import run_intermediate_reclaimed_at
 from voxint.media.redaction import provenance_host
 from voxint.media.serving import (
-    MediaGate,
     RangeNotSatisfiableError,
     parse_range,
 )
@@ -843,22 +845,6 @@ def create_app(
     return app
 
 
-def _get_session(request: Request) -> Iterator[Session]:
-    # Delegates the commit-on-success / rollback-on-exception body to the single
-    # session_scope contextmanager rather than duplicating it: FastAPI resumes a
-    # yield-dependency past its `yield` on success and throws the route's
-    # exception back in on failure, which is exactly the control flow the `with`
-    # needs to drive session_scope's commit/rollback. Mutations that commit
-    # before publishing (POST /submit, /runs/{id}/requeue) make the trailing
-    # commit here a harmless no-op — nothing is left pending.
-    factory = request.app.state.session_factory
-    if factory is None:
-        factory = build_session_factory(build_engine(request.app.state.settings.database_url))
-        request.app.state.session_factory = factory
-    with session_scope(factory) as session:
-        yield session
-
-
 def _publish_run(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
     """Enqueue a fresh submission or stage-routed resumption (commit-before-publish).
 
@@ -997,58 +983,6 @@ def _submit_domain_pack_detail(exc: DomainPackError) -> str:
     )
 
 
-def _get_media_gate(request: Request) -> MediaGate:
-    gate = cast(MediaGate | None, request.app.state.media_gate)
-    if gate is None:
-        settings: Settings = request.app.state.settings
-        gate = MediaGate(
-            settings.media_root,
-            ffprobe_bin=settings.ffprobe_bin,
-            timeout_seconds=settings.media_probe_timeout_seconds,
-        )
-        request.app.state.media_gate = gate
-    return gate
-
-
-SessionDep = Annotated[Session, Depends(_get_session)]
-OperatorDep = Annotated[str, Depends(require_operator)]
-
-
-def require_onboarded(
-    request: Request,
-    operator: OperatorDep,
-    session: SessionDep,
-) -> None:
-    """First-run gate: redirect an un-onboarded operator to the setup wizard.
-
-    Wired as a single router-level dependency on the *protected* router that
-    carries every non-exempt route (``/healthz``, the htmx asset, and ``/setup``
-    stay on ``app`` and so are structurally exempt — no path matching to keep in
-    sync). It depends on ``OperatorDep`` so authentication runs first: an
-    unauthenticated request gets a 401 challenge, never a redirect that would leak
-    onboarding state. It depends on ``SessionDep`` so FastAPI's per-request
-    dependency cache hands the gate the same ``Session`` the route handler uses —
-    one connection, not two.
-
-    The onboarding read is cached on ``request.state`` for the life of the request
-    only. It is deliberately NOT cached on ``app.state``: the Celery worker can
-    flip ``onboarding_complete`` in its own process, so a cross-request cache would
-    serve a stale answer. Not onboarded ⇒ ``303`` to ``/setup`` for an ordinary
-    navigation, or a ``204`` carrying ``HX-Redirect`` for an htmx request (htmx
-    performs the client-side redirect; a 303's body would be swapped into the page
-    instead of navigating).
-    """
-    onboarded = getattr(request.state, "onboarded", None)
-    if onboarded is None:
-        onboarded = is_onboarded(session)
-        request.state.onboarded = onboarded
-    if onboarded:
-        return
-    if request.headers.get("HX-Request"):
-        raise HTTPException(status_code=204, headers={"HX-Redirect": "/setup"})
-    raise HTTPException(status_code=303, headers={"Location": "/setup"})
-
-
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 # Island bundle lookup for base.html: `asset_url('main')` / `asset_url('tailwind')`
 # resolve to the hashed built file, or None (guarded in the template) when unbuilt.
@@ -1108,15 +1042,6 @@ def _media_delete_banner(request: Request) -> dict[str, int] | None:
         "missing": _count("missing"),
         "failed": _count("failed"),
     }
-
-
-def _require_csrf(request: Request, action: str, token: str | None) -> None:
-    """403 unless ``token`` is a valid CSRF token for ``action`` — call before any
-    state change. A missing token and a mis-signed one BOTH 403 (the field is
-    Optional, so FastAPI never turns an absent token into a 422), giving a forged
-    cross-site POST one uniform refusal before the DB is touched."""
-    if not verify_csrf_token(request.app.state.csrf_secret, action, token):
-        raise HTTPException(status_code=403, detail="invalid or missing CSRF token")
 
 
 def _label_previews(
