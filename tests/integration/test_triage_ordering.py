@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from voxint.api.app import _name_suggestions, _research_state
+from voxint.api.routers.speakers import _research_state
+from voxint.api.triage_view import _name_suggestions
 from voxint.config import Settings
 from voxint.db.models import (
     ClaimField,
