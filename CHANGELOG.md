@@ -20,6 +20,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   registration-order golden added in this change.
 
 ### Added
+- **Navigable outline: grounded entity-mention jump targets** (#87, epic #47).
+  The review transcript gains an Outline panel that turns grounded entity
+  mentions into clickable jump targets: each seeks the player to the mention's
+  segment timestamp. Summaries and topics have no source spans, so they render
+  as inert context, never as click-to-seek navigation. The panel is honest by
+  construction: the seek target is the segment's immutable start time, so a jump
+  stays valid even when the quoted text has drifted; an occurrence whose segment
+  no longer exists is dropped and counted; an outline built from an earlier
+  version of the transcript shows a single "may be out of date" banner while
+  jumps keep working; and the empty state distinguishes "none generated yet" from
+  the feature being off. Gated on LLM enhancement plus the run-assets feature.
+  The server ships each target's start time only and the client resolves it to
+  the current line at click time, so a jump lands correctly after a segment
+  split. Includes a JS-off read-only fallback that lists the same grounded
+  entities as inert text.
 - **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
   registry into every core seam so a converted feature will activate through
   generic loops instead of a hand-wired copy: API router mounting with route

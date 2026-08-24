@@ -11,8 +11,10 @@ import { writeClipboard } from "../lib/clipboard";
 import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
+import type { OutlineProps } from "../lib/outline";
 import { useAnnotations } from "./AnnotationLayer";
 import { KeymapHelp } from "./KeymapHelp";
+import { OutlinePanel } from "./OutlinePanel";
 import {
   ASSIGN_DIGIT_MAX,
   ASSIGN_DIGIT_MIN,
@@ -64,6 +66,10 @@ export interface ReviewStepperProps {
   annotationTags?: AnnotationTagShape[];
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
+  // Navigable outline (issue #87): grounded entity-mention jump targets plus inert
+  // summary/topics context, from the shared transcript island props. Defaulted, so
+  // a props payload without it simply renders no panel.
+  outline?: OutlineProps;
   // Terminal Translate action (issue #133): present when the LLM gates are open.
   // defaultTarget is the installation's preferred language (null when unset or
   // equal to the run's detected language — then the action links to the run page
@@ -137,6 +143,7 @@ export function ReviewStepper({
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
   tagCsrf = null,
+  outline,
   translate = null,
 }: ReviewStepperProps) {
   // Own the segments so a correction re-renders its line without reaching into
@@ -945,7 +952,18 @@ export function ReviewStepper({
   ).length;
 
   return (
-    <div ref={annotationRootRef}>
+    <>
+      {/* Navigable outline (issue #87): mounted OUTSIDE annotationRootRef so
+          selecting an entity quote never starts an annotation. onJump is goTo,
+          which scrolls the transcript below and plays from there when seek is
+          available. */}
+      <OutlinePanel
+        outline={outline}
+        segments={segments}
+        capability={capability}
+        onJump={goTo}
+      />
+      <div ref={annotationRootRef}>
       {/* The unclaimed notice is server-rendered OUTSIDE this island (the
           template owns it, JS on or off) — rendering a copy here doubled it up
           after hydration (review finding). */}
@@ -1435,6 +1453,7 @@ export function ReviewStepper({
           render only when this tab holds the claim. Placed after the transcript so
           "Jump" moves the cursor into the list above. */}
       {annotationPanel}
-    </div>
+      </div>
+    </>
   );
 }

@@ -39,6 +39,55 @@
    island — stated honestly, never faked. The progress track (issue #92) keeps
    the count as visible text; the bar is aria-hidden decoration. #}
 <div data-island="review-stepper" data-props='{{ island_props|tojson }}'>
+  {# Navigable outline (issue #87): a read-only INERT list for JS-off /
+     pre-hydration. Grounded entity mentions carry their segment time and quote
+     but are NOT jump links here: seeking needs the island, and a link that only
+     works with JS would be a broken promise. Hydration replaces this innerHTML
+     with the interactive panel. Skipped entirely when the feature is gated off,
+     so it never nags a persistent panel onto every review page. #}
+  {% set outline = island_props.outline %}
+  {% if outline and (outline.available or not outline.gated) %}
+  <section class="outline-panel" aria-label="Outline">
+    <h2>Outline</h2>
+    {% if not outline.available %}
+    <p class="muted">No outline was generated for this transcript.</p>
+    {% else %}
+    {% if outline.assetStale %}
+    <p class="notice text-sm">This outline was built from an earlier version of the
+      transcript, so the quoted text may have changed. Regenerate it for an
+      up-to-date outline.</p>
+    {% endif %}
+    {% if outline.mentions %}
+    <ul class="outline-entities">
+      {% for mention in outline.mentions %}
+      <li class="outline-entity">
+        <p class="outline-entity-head"><span class="outline-surface">{{ mention.surface }}</span>{% if mention.kind %}<span class="outline-kind muted"> · {{ mention.kind }}</span>{% endif %}</p>
+        <ul class="outline-occurrences">
+          {% for occ in mention.occurrences %}
+          <li><span class="outline-time">≈ {{ "%.2f"|format(occ.startSeconds) }}s</span>{% if occ.quote %} <span class="outline-quote muted">“{{ occ.quote }}”</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="muted">Read-only list. Jumping to a moment needs JavaScript.</p>
+    {% else %}
+    <p class="muted">No people, organizations, or products were found in this transcript.</p>
+    {% endif %}
+    {% if outline.context.summary or outline.context.topics %}
+    <div class="outline-context">
+      <p class="muted text-sm">Summary and topics are context only. They are not linked to specific moments.</p>
+      {% if outline.context.summary %}<p class="outline-summary">{{ outline.context.summary }}</p>{% endif %}
+      {% if outline.context.topics %}<ul class="outline-topics">{% for topic in outline.context.topics %}<li>{{ topic }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+    {% endif %}
+    {% set dropped = outline.diagnostics.droppedUnlocatable + outline.diagnostics.droppedOutOfRun + outline.diagnostics.droppedUnresolved %}
+    {% if dropped > 0 %}
+    <p class="muted text-sm">{{ dropped }} mention{{ "" if dropped == 1 else "s" }} could not be located in the current transcript and {{ "is" if dropped == 1 else "are" }} not shown.</p>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
   {# Same card the hydrated island renders, so JS-off/island-failure does not
      drop the flagship surface (hydration replaces this innerHTML wholesale). #}
   {% set all_checked = progress.total > 0 and progress.verified >= progress.total %}
