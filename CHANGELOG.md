@@ -3,7 +3,7 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
-## [Unreleased]
+## [0.24.0] - 2026-08-23
 
 ### Added
 - **Transcript translation, slice A: settings, jobs, and the run-page card**

@@ -35,7 +35,7 @@ services:
   ytdlp-egress-proxy:
     # Same pinned app image (one VOXINT_IMAGE_TAG pin, machine-checked by the
     # pin-parity contract test) — no extra image in the supply chain.
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.23.1}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.24.0}
     pull_policy: missing
     command: ["python", "-m", "voxint.media.egress_proxy", "--listen", "0.0.0.0:3128"]
     restart: unless-stopped
