@@ -875,7 +875,7 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     """
     del args
     from voxint.config import SettingsError, get_settings
-    from voxint.db.session import build_engine, build_session_factory
+    from voxint.db.session import build_session_factory
     from voxint.media.integrity import backfill_sha256
 
     try:
@@ -887,9 +887,16 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     def _report(media: "MediaItem") -> None:
         print(f"{media.id}: {media.sha256[:12] if media.sha256 else '?'}...")
 
-    factory = build_session_factory(build_engine(settings.database_url))
-    with factory() as session:
-        result = backfill_sha256(session, settings.media_root, on_hashed=_report)
+    # _engine_or_report maps a malformed DATABASE_URL to a sanitized exit 2 (the
+    # DSN can carry a password), matching the other DB commands.
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        with build_session_factory(engine)() as session:
+            result = backfill_sha256(session, settings.media_root, on_hashed=_report)
+    finally:
+        engine.dispose()
 
     if result.scanned == 0:
         print("nothing to backfill — every media row already has a sha256")
@@ -897,8 +904,8 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     print(f"hashed {result.hashed} media row(s)")
     if result.skipped_missing:
         print(
-            f"skipped {len(result.skipped_missing)} row(s) whose bytes were not"
-            " found under MEDIA_ROOT (left NULL, retried on the next run):"
+            f"skipped {len(result.skipped_missing)} row(s) whose bytes could not be"
+            " read under MEDIA_ROOT (left NULL, retried on the next run):"
         )
         for source_path in result.skipped_missing:
             print(f"  - {source_path}")

@@ -51,25 +51,30 @@ The pins that constrain the design:
 
 ## Byte-opener audit
 
-Grep-verified enumeration of every `source_path` reference in `src/voxint/`
-(130 references across 24 files) classified by the operation it performs.
+Grep-verified enumeration of every `source_path` reference in `src/voxint/`,
+as of P0a, classified by the operation it performs. The base audit covered the
+130 references across 24 files present before this slice; P0a itself adds one
+new opener (`media/integrity.py`, the sha256 backfill), listed below.
 
 | Category | Count | Meaning |
 |---|---|---|
 | IDENTITY/WRITE | 68 | Written at ingest, or used as a uniqueness/dedup/equality key. Stays on `source_path`. |
 | DISPLAY | 41 | Rendered to a human, logged, or returned as a JSON field. Stays on `source_path`. |
 | SCHEMA/DEF | 14 | Column, ORM mapping, or DTO field declaration. Structural. |
-| BYTE-OPENER | 7 | Derives a filesystem path to touch bytes. Two are executable; five are comments annotating them. |
+| BYTE-OPENER | 7 | Derives a filesystem path to touch bytes (pre-P0a). Two are executable; five are comments annotating them. P0a adds a third executable opener in `media/integrity.py`. |
 
-The load-bearing finding: only **two executable statements** derive a byte path
-from the column, and only one is a post-ingest read.
+The load-bearing finding: **three executable statements** derive a byte path
+from the column, two of them post-ingest reads (PREPARE and the P0a backfill).
+Line numbers are as of P0a and will drift; the symbol column is the durable
+anchor. Re-derive with `rg -n 'source_path' src/voxint` and reclassify.
 
 ### Byte-opener list (executable statements)
 
-| Location | Function | Nature | Migration action |
-|---|---|---|---|
-| `src/voxint/pipeline/stages/prepare.py:30` | `prepare.run()` | `source = media_root / media.source_path`, then `source.is_file()`, `normalize_to_wav(source, ...)` ffmpeg input, `source.stat()` | **Switch to `current_path`.** The canonical post-ingest read: PREPARE reopens the acquired file to normalize it to WAV. Unambiguous. |
-| `src/voxint/pipeline/stages/acquire.py:72` | `acquire.run()` (URL media) | `dest = (media_root / media.source_path).resolve()`, then `dest.is_file()` / `dest.stat()` / `_sha256(dest)` / `os.link(produced, dest)` | **Acquisition write, see ambiguous case A.** This materializes the bytes and their hash at the `source_path` location; it is the ingest, not a post-ingest read. |
+| Symbol (location as of P0a) | Nature | Migration action |
+|---|---|---|
+| `prepare.run` (`pipeline/stages/prepare.py:30`) | `source = media_root / media.source_path`, then `source.is_file()`, `normalize_to_wav(source, ...)` ffmpeg input, `source.stat()` | **Switch to `current_path`.** The canonical post-ingest read: PREPARE reopens the acquired file to normalize it to WAV. Unambiguous. |
+| `acquire.run` (`pipeline/stages/acquire.py:72`, URL media) | `dest = (media_root / media.source_path).resolve()`, then `dest.is_file()` / `dest.stat()` / `_sha256(dest)` / `os.link(produced, dest)` | **Acquisition write, see ambiguous case A.** This materializes the bytes and their hash at the `source_path` location; it is the ingest, not a post-ingest read. |
+| `backfill_sha256` (`media/integrity.py:118`, via `openable_source`) | `openable_source(media_root, media.source_path)` then `sha256_file(path)` | **Switch to `current_path`.** A post-ingest maintenance read that hashes the media content. After a move, the live bytes are at `current_path`, so the backfill must open there (content is move-preserved, so a pre-move digest still matches). Reads `source_path` today only because `current_path` does not exist yet. |
 
 No other code opens, stats, hashes, serves, or deletes bytes via `source_path`.
 Verified negatives worth recording, because they look like byte-openers and are
@@ -116,10 +121,10 @@ live location, or both.
 - A file move updates `current_path` and `media_folder_id` only. Identity, dedup,
   frozen snapshots, and past adjudications are untouched, because they key on
   `id` and `source_path`.
-- The migration surface is small and known: one post-ingest read
-  (`prepare.py:30`) switches to `current_path`, plus the deliberate decision at
-  the acquisition write (case A). The other roughly 120 reads are proven not to
-  open bytes.
+- The migration surface is small and known: two post-ingest reads (PREPARE in
+  `prepare.py` and the `backfill_sha256` maintenance read in `media/integrity.py`)
+  switch to `current_path`, plus the deliberate decision at the acquisition write
+  (case A). The other roughly 120 reads are proven not to open bytes.
 - `sha256` becomes populated corpus-wide via the backfill, enabling later
   integrity and content-dedup features without ever becoming identity.
 - The audit is a point-in-time snapshot. Any new `source_path` reader added
@@ -227,6 +232,13 @@ be re-derived without re-running the audit.
 |---|---|---|
 | 27, 84, 86, 198 | IDENTITY | comments (seed row is pre-COMPLETED; ACQUIRE/PREPARE never read it) |
 | 159, 167, 172, 184, 187 | IDENTITY/WRITE | dedup lookups and the seeded identity write |
+
+### `media/integrity.py` (added in P0a)
+
+| Symbol | Category | Note |
+|---|---|---|
+| `backfill_sha256` / `openable_source` (line 118) | BYTE-OPENER | EXEC: post-ingest maintenance read; switches to `current_path` at the split |
+| module docstring, `sha256_file` doc | IDENTITY | notes that the hash is integrity, never identity |
 
 ### `config.py`, `db/models.py`
 

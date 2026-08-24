@@ -58,6 +58,11 @@ def openable_source(media_root: Path, source_path: str) -> Path | None:
     file. A path that escapes, is missing, is a directory, or contains a NUL
     byte fails closed to None rather than raising, so the caller can record it
     as an honest skip.
+
+    A residual symlink-swap race (a checked path replaced with an out-of-root
+    symlink before the caller opens it) is out of the single-operator threat
+    model here: the media root is the operator's own directory, not an untrusted
+    drop point.
     """
     root = media_root.resolve()
     candidate = media_root / source_path
@@ -79,8 +84,9 @@ class BackfillResult:
     """Outcome of one backfill sweep.
 
     ``hashed`` counts rows newly given a digest; ``skipped_missing`` is the
-    ``source_path`` of each NULL row whose bytes could not be opened under the
-    media root (retried on a later run if the file returns).
+    ``source_path`` of each NULL row whose bytes could not be read under the
+    media root, whether absent, unreadable, or vanished mid-hash (retried on a
+    later run if the file returns).
     """
 
     hashed: int
@@ -119,7 +125,15 @@ def backfill_sha256(
         if path is None:
             missing.append(media.source_path)
             continue
-        media.sha256 = sha256_file(path)
+        try:
+            digest = sha256_file(path)
+        except OSError:
+            # Vanished or became unreadable between the guard and the open, or a
+            # read error partway through: leave the row NULL and report it rather
+            # than aborting the sweep. It is retried on a later run.
+            missing.append(media.source_path)
+            continue
+        media.sha256 = digest
         session.commit()
         hashed += 1
         if on_hashed is not None:

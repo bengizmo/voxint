@@ -229,6 +229,85 @@ def test_backfill_invokes_callback_per_hashed_row(
     assert sorted(seen) == ["a.wav", "b.wav"]
 
 
+def test_backfill_continues_past_an_unreadable_file(
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # openable_source passes (the file exists) but the read raises OSError, e.g.
+    # a permission error or a file vanishing mid-hash. The sweep must record it
+    # and keep going, not abort and lose the remaining rows.
+    _write(media_root, "unreadable.wav", b"x")
+    _write(media_root, "good.wav", b"y")
+    with session_factory() as session:
+        session.add(MediaItem(source_path="unreadable.wav"))
+        session.add(MediaItem(source_path="good.wav"))
+        session.commit()
+
+    import voxint.media.integrity as integrity
+
+    real = integrity.sha256_file
+
+    def _flaky(path: Path, **kwargs: object) -> str:
+        if path.name == "unreadable.wav":
+            raise OSError("permission denied")
+        return real(path)
+
+    monkeypatch.setattr(integrity, "sha256_file", _flaky)
+
+    with session_factory() as session:
+        result = integrity.backfill_sha256(session, media_root)
+
+    assert result.hashed == 1
+    assert result.skipped_missing == ("unreadable.wav",)
+    with session_factory() as session:
+        rows = {
+            r.source_path: r.sha256
+            for r in session.execute(select(MediaItem)).scalars()
+        }
+    assert rows["good.wav"] is not None
+    assert rows["unreadable.wav"] is None
+
+
+def test_backfill_per_row_commit_persists_before_a_midway_abort(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # The documented guarantee: each hashed row is committed on its own, so a
+    # sweep that dies partway keeps the rows it already finished. Force an abort
+    # after the second row via the callback, then prove the first two digests are
+    # durable in a fresh session while the third stays NULL.
+    for name in ("a.wav", "b.wav", "c.wav"):
+        _write(media_root, name, name.encode())
+    with session_factory() as session:
+        for name in ("a.wav", "b.wav", "c.wav"):
+            session.add(MediaItem(source_path=name))
+        session.commit()
+
+    calls = {"n": 0}
+
+    def _boom_on_second(_media: MediaItem) -> None:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("interrupted")
+
+    with (
+        session_factory() as session,
+        pytest.raises(RuntimeError, match="interrupted"),
+    ):
+        backfill_sha256(session, media_root, on_hashed=_boom_on_second)
+
+    with session_factory() as session:
+        rows = {
+            r.source_path: r.sha256
+            for r in session.execute(select(MediaItem)).scalars()
+        }
+    # commit precedes the callback, so the two processed rows are durable and the
+    # third (never reached) stays NULL. Row order among equal timestamps is not
+    # deterministic, so assert the counts, not which row.
+    assert sum(1 for h in rows.values() if h is not None) == 2
+    assert sum(1 for h in rows.values() if h is None) == 1
+
+
 def test_backfill_result_scanned_property() -> None:
     result = BackfillResult(hashed=2, skipped_missing=("x", "y", "z"))
     assert result.scanned == 5

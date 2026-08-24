@@ -10,10 +10,12 @@ Three characterizations, all read off the FastAPI route table (no HTTP, no DB),
 so they run in the plain unit lane and survive routers moving between modules:
 
 1. Route characterization golden: path, methods, onboarding gate, operator auth
-   for every route. Pins the surface without pinning which module defines it.
-2. CSRF coverage: every mutating route carries one of the two mutation defenses
-   (the ``csrf_token`` form token, or the ``token`` review-claim token that is
-   itself the CSRF defense for claim-gated review mutations).
+   for every route, read from each route's dependency tree so it survives a route
+   moving between routers. Pins the surface without pinning which module defines it.
+2. CSRF coverage, in two layers: a WIRING check that every mutating route accepts
+   a ``csrf_token`` or review-claim ``token`` field, and an ENFORCEMENT check that
+   the handler body actually calls a defense verifier (so a route that accepts a
+   token and never checks it is caught, which field presence alone cannot do).
 3. Redirect map: the declarative ``REDIRECT_MAP`` seam future phases extend, with
    a structural guard that each declared redirect has a real source route. A live
    HTTP check of the same table lives in ``tests/integration/test_console2_redirects``.
@@ -29,11 +31,11 @@ from fastapi import FastAPI
 from fastapi.routing import APIRoute
 
 from tests.contracts.conftest import REPO_ROOT
-from voxint.api.app import create_app
+from voxint.api.app import create_app, require_onboarded
 from voxint.api.auth import require_operator
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
     from fastapi.dependencies.models import Dependant
 
@@ -44,16 +46,31 @@ _GOLDEN = (
 # HTTP methods that change state and therefore need a mutation defense.
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 
-# The two form fields that carry a mutation defense (app.py: the URL-borne claim
+# The form fields that carry a mutation defense (app.py: the URL-borne claim
 # ``token`` is "both the review lock and the CSRF defense for claim-gated
 # mutations", so a review route protected by it needs no separate csrf_token).
+# Presence of the field is a WIRING signal only, not proof of enforcement; the
+# enforcement contract is _VERIFICATION_SINKS below.
 _CSRF_FIELDS = {"csrf_token", "token"}
 
-# Read-only POST routes that intentionally carry no mutation defense because they
-# write nothing (a POST body is only how the client ships a large selection). Each
-# entry needs the "persists nothing" reason recorded at the handler. Keep this
-# minimal: a genuinely new mutating route must NOT be added here, so that the
-# coverage test catches it.
+# The functions that actually VERIFY a mutation defense: the CSRF-token check and
+# the claim-token verifiers (each raises on a bad or missing token). A mutating
+# handler that does not call one of these in its body is unprotected even if it
+# accepts a token field. A new verifier is added here deliberately, as a
+# reviewable change; a route that switches to one not listed here fails the
+# enforcement test until it is added (the safe direction).
+_VERIFICATION_SINKS = (
+    "_require_csrf",
+    "verify_claim",
+    "_verify_annotation_claim",
+    "release_run",
+)
+
+# Mutating routes that intentionally carry no mutation defense because they write
+# nothing (a POST body is only how the client ships a large selection). Each entry
+# needs the "persists nothing" reason recorded at the handler. Keep this minimal:
+# a genuinely new mutating route must NOT be added here, so the coverage tests
+# catch it.
 _CSRF_EXEMPT_READONLY = frozenset(
     {
         # Renders an UNSAVED annotation selection to Markdown; persists nothing
@@ -76,54 +93,43 @@ def _walk_calls(dependant: Dependant) -> Iterator[object]:
         yield from _walk_calls(sub)
 
 
+def _iter_api_routes(routes: Iterable[object]) -> Iterator[APIRoute]:
+    """Every APIRoute reachable from ``routes``, descending included sub-routers.
+
+    FastAPI mounts an included router as a sub-route reachable through
+    ``original_router``, and P0b nests those (``protected.include_router(area)``),
+    so the walk recurses rather than descending a single level. Gate and auth are
+    then read from each route's dependency tree, not from where it sits in the
+    mount topology, so a route keeps its classification whichever router holds it.
+    """
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif hasattr(route, "original_router"):
+            yield from _iter_api_routes(route.original_router.routes)
+
+
 def console_route_records(app: FastAPI) -> list[RouteRecord]:
     """Every APIRoute as ``(path, methods, gate, auth)``, sorted.
 
-    ``gate`` is ``exempt`` for routes registered directly on ``app`` (liveness,
-    the htmx asset, the setup wizard) and ``onboarding`` for routes on the
-    ``protected`` router, which FastAPI mounts as a sub-route reachable through
-    ``original_router``. ``auth`` is whether ``require_operator`` appears anywhere
-    in the route's dependency tree.
+    ``gate`` is ``onboarding`` when ``require_onboarded`` is in the route's
+    dependency tree (the onboarding gate is a router-level dependency FastAPI
+    propagates onto each route) and ``exempt`` otherwise. ``auth`` is whether
+    ``require_operator`` is in the tree. Both are read from the dependency graph,
+    so a behavior-preserving router move does not change the record.
     """
     records: list[RouteRecord] = []
-    for route in app.routes:
-        if isinstance(route, APIRoute):
-            pairs: list[tuple[APIRoute, bool]] = [(route, False)]
-        elif hasattr(route, "original_router"):
-            pairs = [
-                (r, True)
-                for r in route.original_router.routes
-                if isinstance(r, APIRoute)
-            ]
-        else:
-            pairs = []
-        for r, onboarding in pairs:
-            methods = sorted(m for m in r.methods if m != "HEAD")
-            auth = any(call is require_operator for call in _walk_calls(r.dependant))
-            records.append(
-                RouteRecord(
-                    r.path, methods, "onboarding" if onboarding else "exempt", auth
-                )
-            )
+    for r in _iter_api_routes(app.routes):
+        methods = sorted(m for m in r.methods if m != "HEAD")
+        calls = list(_walk_calls(r.dependant))
+        gate = "onboarding" if any(c is require_onboarded for c in calls) else "exempt"
+        auth = any(c is require_operator for c in calls)
+        records.append(RouteRecord(r.path, methods, gate, auth))
     return sorted(records)
 
 
 def _mutating_routes(app: FastAPI) -> list[APIRoute]:
-    routes: list[APIRoute] = []
-    for route in app.routes:
-        candidates = (
-            [route]
-            if isinstance(route, APIRoute)
-            else (
-                [r for r in route.original_router.routes if isinstance(r, APIRoute)]
-                if hasattr(route, "original_router")
-                else []
-            )
-        )
-        for r in candidates:
-            if _MUTATING & set(r.methods):
-                routes.append(r)
-    return routes
+    return [r for r in _iter_api_routes(app.routes) if _MUTATING & set(r.methods)]
 
 
 def test_route_characterization_matches_golden() -> None:
@@ -136,18 +142,40 @@ def test_route_characterization_matches_golden() -> None:
     )
 
 
-def mutation_defense_gaps(app: FastAPI) -> tuple[list[str], set[tuple[str, str]]]:
+def _has_defense_field(route: APIRoute) -> bool:
+    """The handler accepts a csrf_token or review-claim token form field."""
+    return bool(_CSRF_FIELDS & set(inspect.signature(route.endpoint).parameters))
+
+
+def _verifies_a_defense(route: APIRoute) -> bool:
+    """The handler body calls one of the mutation-defense verifiers.
+
+    This reads the handler source, so it proves a verification call exists rather
+    than merely that a token field is accepted. It sees only the handler's own
+    body: every current mutating handler calls its verifier directly there (a
+    delegated verifier would need adding to _VERIFICATION_SINKS or would fail this
+    check, which is the safe direction).
+    """
+    try:
+        source = inspect.getsource(route.endpoint)
+    except OSError:
+        return False
+    return any(sink in source for sink in _VERIFICATION_SINKS)
+
+
+def mutation_gaps(
+    app: FastAPI, is_covered: Callable[[APIRoute], bool]
+) -> tuple[list[str], set[tuple[str, str]]]:
     """Return ``(uncovered, matched_exemptions)`` for the app's mutating routes.
 
-    ``uncovered`` is every mutating route with no csrf_token/token field that is
-    not on the read-only allowlist; ``matched_exemptions`` is the allowlist
-    entries that were actually hit (so a stale entry is detectable).
+    ``uncovered`` is every mutating route for which ``is_covered`` is false and
+    which is not on the read-only allowlist; ``matched_exemptions`` is the
+    allowlist entries actually hit, so a stale entry is detectable.
     """
     uncovered: list[str] = []
     seen_exempt: set[tuple[str, str]] = set()
     for route in _mutating_routes(app):
-        params = set(inspect.signature(route.endpoint).parameters)
-        if _CSRF_FIELDS & params:
+        if is_covered(route):
             continue
         methods = sorted(m for m in route.methods if m != "HEAD")
         matched = {(m, route.path) for m in methods} & _CSRF_EXEMPT_READONLY
@@ -158,21 +186,37 @@ def mutation_defense_gaps(app: FastAPI) -> tuple[list[str], set[tuple[str, str]]
     return uncovered, seen_exempt
 
 
-def test_every_mutating_route_has_a_mutation_defense() -> None:
-    """Every state-changing route accepts a csrf_token or a review-claim token.
-
-    Signature presence is the wiring signal that survives P0b (a handler keeps
-    its form fields whichever module it moves to). A new mutating router that
-    forgets both defenses shows up here as an uncovered route.
-    """
-    uncovered, seen_exempt = mutation_defense_gaps(create_app())
-    assert not uncovered, (
-        "mutating route(s) with no CSRF defense (neither a csrf_token form field "
-        "nor a review-claim token): " + "; ".join(sorted(uncovered))
+def _assert_no_gaps(
+    is_covered: Callable[[APIRoute], bool], what: str
+) -> None:
+    uncovered, seen_exempt = mutation_gaps(create_app(), is_covered)
+    assert not uncovered, f"mutating route(s) with no {what}: " + "; ".join(
+        sorted(uncovered)
     )
-    # A stale allowlist entry (its route was removed or renamed) is itself drift.
     stale = _CSRF_EXEMPT_READONLY - seen_exempt
     assert not stale, f"stale _CSRF_EXEMPT_READONLY entr(ies): {sorted(stale)}"
+
+
+def test_every_mutating_route_exposes_a_defense_field() -> None:
+    """WIRING check: every state-changing route accepts a csrf_token or claim token.
+
+    Field presence is only a smoke signal, not proof of enforcement (a handler
+    could accept the field and ignore it). It survives P0b because a handler keeps
+    its form fields whichever module it moves to, and it fails fast on a new route
+    that forgets the field entirely. The enforcement contract is the next test.
+    """
+    _assert_no_gaps(_has_defense_field, "csrf_token / review-claim token field")
+
+
+def test_every_mutating_route_verifies_its_defense() -> None:
+    """ENFORCEMENT check: every state-changing route calls a defense verifier.
+
+    Reads each handler's source and asserts it calls one of _VERIFICATION_SINKS
+    (the CSRF check or a claim verifier). This catches the case a field-presence
+    check cannot: a handler that accepts a correctly named token and never
+    verifies it. Only the read-only allowlist is exempt.
+    """
+    _assert_no_gaps(_verifies_a_defense, "mutation-defense verifier call in its body")
 
 
 # --- Redirect map: the seam future phases extend --------------------------
@@ -226,44 +270,78 @@ def test_redirect_sources_have_a_real_route() -> None:
 # --- Seeded-drift proofs: the checkers actually catch a regression ---------
 
 
-def _synthetic_app(*, with_defense: bool) -> FastAPI:
+def _synthetic_app(kind: Literal["verified", "field_only", "none"]) -> FastAPI:
     from typing import Annotated
 
     from fastapi import Depends, Form
 
     from voxint.api.auth import require_operator
 
+    def _require_csrf(*_a: object) -> None:  # stand-in for the real verifier name
+        return None
+
     app = FastAPI()
 
-    if with_defense:
+    if kind == "verified":
 
         @app.post("/thing", dependencies=[Depends(require_operator)])
         def _mutate(csrf_token: Annotated[str, Form()]) -> dict[str, str]:
+            _require_csrf(csrf_token)
+            return {"ok": csrf_token}
+    elif kind == "field_only":
+        # Accepts the field but never verifies it: the exact false positive a
+        # field-presence check misses.
+        @app.post("/thing", dependencies=[Depends(require_operator)])
+        def _mutate_unverified(csrf_token: Annotated[str, Form()]) -> dict[str, str]:
             return {"ok": csrf_token}
     else:
 
         @app.post("/thing", dependencies=[Depends(require_operator)])
-        def _mutate_unprotected(payload: Annotated[str, Form()]) -> dict[str, str]:
+        def _mutate_none(payload: Annotated[str, Form()]) -> dict[str, str]:
             return {"ok": payload}
 
     return app
 
 
-def test_csrf_check_catches_an_unprotected_mutation() -> None:
-    covered, _ = mutation_defense_gaps(_synthetic_app(with_defense=True))
-    assert covered == []
-    uncovered, _ = mutation_defense_gaps(_synthetic_app(with_defense=False))
-    assert uncovered == ["POST /thing"], (
-        "the CSRF-coverage check must flag a mutating route that carries neither "
-        "a csrf_token nor a review-claim token"
-    )
+def test_wiring_check_catches_a_missing_field() -> None:
+    assert mutation_gaps(_synthetic_app("verified"), _has_defense_field)[0] == []
+    assert mutation_gaps(_synthetic_app("field_only"), _has_defense_field)[0] == []
+    assert mutation_gaps(_synthetic_app("none"), _has_defense_field)[0] == ["POST /thing"]
+
+
+def test_enforcement_check_catches_a_declared_but_unverified_defense() -> None:
+    # The point the wiring check cannot make: a handler that accepts a correctly
+    # named token and never verifies it must still be flagged.
+    assert mutation_gaps(_synthetic_app("verified"), _verifies_a_defense)[0] == []
+    assert mutation_gaps(_synthetic_app("field_only"), _verifies_a_defense)[0] == [
+        "POST /thing"
+    ]
+
+
+def _gated_route_app() -> FastAPI:
+    from fastapi import Depends
+
+    app = FastAPI()
+
+    @app.get("/gated", dependencies=[Depends(require_onboarded)])
+    def _g() -> dict[str, str]:
+        return {}
+
+    return app
+
+
+def test_gate_is_read_from_dependencies_not_topology() -> None:
+    """A require_onboarded route registered directly on the app (no original_router
+    wrapper) must still classify as onboarding. The old mount-shape heuristic would
+    have mislabeled it exempt, breaking the golden on a behavior-preserving move."""
+    records = {rec.path: rec for rec in console_route_records(_gated_route_app())}
+    assert records["/gated"].gate == "onboarding"
 
 
 def test_route_records_capture_gate_and_auth() -> None:
     """The enumerator distinguishes exempt/onboarding and auth/no-auth, so the
     golden would catch a route silently re-gated or stripped of auth."""
-    records = console_route_records(create_app())
-    by_path = {rec.path: rec for rec in records}
+    by_path = {rec.path: rec for rec in console_route_records(create_app())}
     # /healthz is the one exempt, unauthenticated liveness route.
     assert by_path["/healthz"].gate == "exempt"
     assert by_path["/healthz"].auth is False

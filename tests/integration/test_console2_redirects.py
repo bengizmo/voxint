@@ -33,19 +33,25 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-@pytest.fixture()
-def client(
-    session_factory: sessionmaker[Session], settings: Settings
+def _client(
+    session_factory: sessionmaker[Session], settings: Settings, *, auth: bool
 ) -> TestClient:
     app = create_app(settings=settings, session_factory=session_factory)
     client = TestClient(app)
-    client.auth = CREDS
+    if auth:
+        client.auth = CREDS
     seed_onboarded(session_factory)
     return client
 
 
 @pytest.mark.parametrize("rule", REDIRECT_MAP, ids=lambda r: r.source)
-def test_redirect_map_is_live(client: TestClient, rule: RedirectRule) -> None:
+def test_redirect_map_is_live(
+    session_factory: sessionmaker[Session], settings: Settings, rule: RedirectRule
+) -> None:
+    # Honor rule.auth: an auth-gated source is driven with credentials, so the
+    # redirect (not the 401 challenge) is what we assert; a future unauthenticated
+    # rule is driven without them.
+    client = _client(session_factory, settings, auth=rule.auth)
     response = client.get(rule.source, follow_redirects=False)
     assert response.status_code == rule.status, (
         f"{rule.source} should {rule.status}-redirect, got {response.status_code}"
