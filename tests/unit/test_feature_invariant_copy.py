@@ -8,7 +8,7 @@ reachable violation and asserts the exact message it produces is a mapping key,
 so a reworded invariant in #74 cannot silently fall back to jargon in the UI.
 """
 
-from voxint.api.app import _FEATURE_INVARIANT_COPY
+from voxint.api.routers.settings import _FEATURE_INVARIANT_COPY
 from voxint.app_settings import EffectiveFlags, validate_effective_flags
 
 

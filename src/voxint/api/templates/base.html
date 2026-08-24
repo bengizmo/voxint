@@ -8,7 +8,12 @@
      resolution, or the first painted frame flashes the wrong theme. Guarded:
      unreadable storage or an unknown value falls back to System (no
      attribute). All other theme wiring lives at the end of <body>. #}
-  <script>(function(){try{var t=localStorage.getItem("voxint-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}})();</script>
+  <script>(function(){try{var t=localStorage.getItem("voxint-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t);}}catch(e){}
+  /* Sidebar pre-paint (#152): apply the persisted desktop hide before first
+     paint, same guarded pattern as the theme. The `js` class gates the
+     narrow-viewport nav collapse so a no-JS visitor always sees the nav. */
+  try{if(localStorage.getItem("voxint-sidebar")==="hidden"){document.documentElement.setAttribute("data-sidebar","hidden");}}catch(e){}
+  document.documentElement.classList.add("js");})();</script>
   <title>{% block title %}Voxint review{% endblock %}</title>
   <script src="/static/htmx.min.js"></script>
   {# Island stylesheet (issue #48). Placed BEFORE the inline <style> so the
@@ -117,6 +122,11 @@
       --space-5: 1.25rem; --space-6: 1.5rem; --space-7: 2rem;
       --card-pad: var(--space-4) var(--space-5);
 
+      /* App-shell metrics (#152). Theme-agnostic like the spacing scale (no
+         dark override); the sidebar and topbar colour from the existing
+         surface/ink/line tokens so both dark blocks stay untouched. */
+      --sidebar-w: 13rem;
+
       /* Primary-action pair (issue #92): text on an --accent fill, and the kbd
          chip overlay inside it. White fails AA on the LIGHTER dark-theme accent,
          so the contrast color flips with the theme rather than hardcoding white.
@@ -175,10 +185,90 @@
       }
     }
 
-    body { font-family: var(--font-ui); margin: var(--space-7) auto; max-width: 72rem;
-           padding: 0 1rem; line-height: 1.55; overflow-wrap: break-word;
-           background: var(--paper); color: var(--ink);
+    /* The body is the full canvas (#152): the app shell below owns the layout,
+       and .content-wrap carries the old 72rem centered column so every
+       existing page renders at its accustomed width inside the shell. */
+    body { font-family: var(--font-ui); margin: 0; line-height: 1.55;
+           overflow-wrap: break-word; background: var(--paper); color: var(--ink);
            -webkit-font-smoothing: antialiased; }
+    /* Console 2.0 app shell (#152): fixed-width sidebar + fluid main column.
+       Flex, not grid, so a shellless page (setup overrides the sidebar/topbar
+       blocks empty) collapses to a plain full-width column with no reserved
+       rail. min-width: 0 on the main column keeps wide tables scrolling inside
+       their own .table-wrap instead of widening the page. */
+    .app-shell { display: flex; min-height: 100vh; }
+    .shell-main { flex: 1; min-width: 0; }
+    .content-wrap { max-width: 74rem; margin: 0 auto;
+                    padding: var(--space-6) 1rem var(--space-7); }
+    .sidebar { flex: none; width: var(--sidebar-w); box-sizing: border-box;
+               display: flex; flex-direction: column; gap: var(--space-4);
+               padding: var(--space-4) var(--space-3);
+               background: var(--surface); border-right: 1px solid var(--line);
+               position: sticky; top: 0; align-self: flex-start;
+               max-height: 100vh; overflow-y: auto; }
+    :root[data-sidebar="hidden"] .sidebar { display: none; }
+    .sidebar .brand { font-weight: 700; font-size: var(--t-md); color: var(--ink);
+               text-decoration: none; padding: 0 var(--space-2); }
+    nav.side { display: flex; flex-direction: column; gap: 2px; }
+    nav.side a { display: block; padding: .4rem var(--space-2);
+               border-radius: var(--r-sm); color: var(--ink-2);
+               text-decoration: none; font-size: var(--t-base); }
+    nav.side a:hover { background: var(--surface-2); color: var(--ink); }
+    nav.side a[aria-current="page"] { background: var(--accent-soft);
+               color: var(--accent-ink); font-weight: 600; }
+    /* Interim links kept while their replacements are built (no dead ends):
+       pinned to the sidebar foot, visually quieter than the primary set. */
+    .side-secondary { margin-top: auto; border-top: 1px solid var(--line);
+               padding-top: var(--space-3); }
+    .side-secondary a { font-size: var(--t-sm); }
+    .topbar { display: flex; align-items: center; gap: var(--space-3);
+              padding: var(--space-2) var(--space-4);
+              background: var(--surface); border-bottom: 1px solid var(--line); }
+    .topbar .spacer { flex: 1; }
+    /* Narrow viewports: the sidebar becomes an in-flow disclosure at the top
+       of the page (the aside precedes .shell-main in the DOM; the toggle
+       script moves focus to the first nav link on open so keyboard traversal
+       reaches it). No overlay, no focus trap; opened by the same Menu button
+       and never persisted. Gated on .js so a no-JS visitor keeps the nav.
+       The open rule out-specifies ((0,3,0) vs (0,2,0)) both the narrow hide
+       and a stale persisted desktop hide. */
+    @media (max-width: 50rem) {
+      .app-shell { display: block; }
+      :root.js .sidebar { display: none; }
+      :root.js[data-mobile-nav="open"] .sidebar { display: flex; position: static;
+              width: auto; max-height: none; border-right: 0;
+              border-bottom: 1px solid var(--line); }
+      .sidebar { position: static; width: auto; max-height: none;
+              border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+    /* Print: content only, and no reserved rail (the shell is flex, so hiding
+       the chrome collapses it). Both dark token blocks are already
+       screen-scoped, so print stays light ink on paper. */
+    @media print { .sidebar, .topbar { display: none; } }
+    /* Shared library primitives (#152): the list-view kit the area pages build
+       on (Media, Projects, Jobs land in later phases; Home's activity list
+       uses .lib-table now). One toolbar row, a card/table view toggle, a card
+       grid, a plain rows table, and a right-rail split that stacks narrow. */
+    .lib-toolbar { display: flex; flex-wrap: wrap; align-items: center;
+               gap: var(--space-2) var(--space-3); margin: var(--space-4) 0; }
+    .view-toggle { display: inline-flex; border: 1px solid var(--line);
+               border-radius: var(--r-md); overflow: hidden; }
+    .view-toggle a, .view-toggle button { padding: .25rem .6rem; border: 0;
+               border-radius: 0; font-size: var(--t-sm); color: var(--ink-2);
+               text-decoration: none; background: var(--surface); }
+    .view-toggle a[aria-current="true"], .view-toggle .is-active {
+               background: var(--surface-2); color: var(--ink); font-weight: 600; }
+    .lib-table { overflow-x: auto; max-width: 100%; }
+    .lib-table table { margin: var(--space-3) 0; }
+    .lib-cards { list-style: none; display: grid; padding: 0;
+               grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+               gap: var(--space-4); margin: var(--space-4) 0; }
+    .lib-cards > li { background: var(--surface); border: 1px solid var(--line);
+               border-radius: var(--r-lg); box-shadow: var(--shadow-1);
+               padding: var(--card-pad); }
+    .lib-rail { display: grid; grid-template-columns: minmax(0, 1fr) 20rem;
+               gap: var(--space-6); align-items: start; }
+    @media (max-width: 60rem) { .lib-rail { grid-template-columns: 1fr; } }
     h1 { font-size: var(--t-xl); line-height: 1.2; letter-spacing: -.012em; }
     h2 { font-size: var(--t-lg); line-height: 1.2; letter-spacing: -.008em; }
     h3 { font-size: var(--t-md); line-height: 1.25; }
@@ -700,29 +790,64 @@
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0;
                        margin: -1px; overflow: hidden; clip: rect(0 0 0 0);
                        white-space: nowrap; border: 0; }
-    @media (max-width: 40rem) { body { margin: 1rem auto; } h1 { font-size: var(--t-lg); } }
+    @media (max-width: 40rem) { .content-wrap { padding-top: var(--space-4); }
+                                h1 { font-size: var(--t-lg); } }
   </style>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
-  {% block nav %}
-  <nav class="top">
-    <a href="/dashboard"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>Dashboard</a>
-    <a href="/resources"{% if active_nav == "resources" %} aria-current="page"{% endif %}>Resources</a>
-    <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Runs</a>
-    <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review</a>
-    <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
-    <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
-  </nav>
-  {% endblock %}
-  <main id="main" tabindex="-1">
-  {# Guided-tutorial banner: present only when the API layer resolved a real
-     tutorial-run/step for this page. Injected here (outside every page's body
-     block, and outside the workbench htmx swap target) so fragment swaps never
-     remove it. #}
-  {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
-  {% block body %}{% endblock %}
-  </main>
+  <div class="app-shell">
+    {# App shell (#152). The sidebar and topbar are overridable blocks so the
+       pre-onboarding setup wizard renders shellless (its links would only
+       bounce back to /setup); overriding both empty collapses the flex shell
+       to a plain column. Focus order: skip-link, sidebar nav, topbar, main. #}
+    {% block sidebar %}
+    <aside class="sidebar" id="app-sidebar">
+      <a class="brand" href="/">Voxint</a>
+      {# Console 2.0 IA (#152). Media and Jobs both point at /runs until their
+         own areas ship (issue decision: nothing may 404); only Media ever
+         carries aria-current so the two never both read as "you are here".
+         Projects renders only behind its dark-ship flag. #}
+      <nav class="side" aria-label="Primary">
+        <a href="/"{% if active_nav == "home" %} aria-current="page"{% endif %}>Home</a>
+        <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Media</a>
+        {% if shell.projects_enabled %}<a href="/projects"{% if active_nav == "projects" %} aria-current="page"{% endif %}>Projects</a>{% endif %}
+        <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
+        <a href="/runs">Jobs</a>
+        <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
+      </nav>
+      {# Interim destinations (no dead ends): Review stays reachable until the
+         editor replaces it in a later phase; Hardware is the /resources
+         telemetry view, demoted from the primary set. #}
+      <nav class="side side-secondary" aria-label="More">
+        <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review</a>
+        <a href="/resources"{% if active_nav == "resources" %} aria-current="page"{% endif %}>Hardware</a>
+      </nav>
+    </aside>
+    {% endblock %}
+    <div class="shell-main">
+      {% block topbar %}
+      <header class="topbar">
+        <button type="button" class="secondary" id="sidebar-toggle"
+                aria-controls="app-sidebar" aria-expanded="true">Menu</button>
+        <div class="spacer"></div>
+        {# Reserved: global search and the activity feed land here in P7. #}
+        <button type="button" class="secondary" data-theme-cycle>Theme: System</button>
+      </header>
+      {% endblock %}
+      <div class="content-wrap">
+        {% block nav %}{% endblock %}
+        <main id="main" tabindex="-1">
+        {# Guided-tutorial banner: present only when the API layer resolved a real
+           tutorial-run/step for this page. Injected here (outside every page's body
+           block, and outside the workbench htmx swap target) so fragment swaps never
+           remove it. #}
+        {% if tutorial %}{% include "fragments/tutorial_banner.html" %}{% endif %}
+        {% block body %}{% endblock %}
+        </main>
+      </div>
+    </div>
+  </div>
   {# Theme wiring (#94). The <head> resolver owns first paint; this owns the
      rest. Split on purpose (multi-model plan review): applyDom never persists
      and the storage handler never writes back, so cross-tab events cannot
@@ -753,24 +878,104 @@
         radios[i].checked = radios[i].value === (v || "system");
       }
     }
+    /* Topbar cycle button (#152): System -> Light -> Dark -> System. Shares
+       applyDom/persist/syncRadios with the Settings radios, so the two
+       controls can never disagree; the label always names the CURRENT state. */
+    function syncToggle(v) {
+      var label = v === "light" ? "Light" : v === "dark" ? "Dark" : "System";
+      var buttons = document.querySelectorAll("[data-theme-cycle]");
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].textContent = "Theme: " + label;
+      }
+    }
+    function syncAll(v) { syncRadios(v); syncToggle(v); }
     document.addEventListener("change", function (e) {
       var el = e.target;
       if (!el || el.name !== "theme-choice" || !el.checked) { return; }
       var v = normalize(el.value);
-      applyDom(v); persist(v); syncRadios(v);
+      applyDom(v); persist(v); syncAll(v);
+    });
+    document.addEventListener("click", function (e) {
+      var el = e.target && e.target.closest ? e.target.closest("[data-theme-cycle]") : null;
+      if (!el) { return; }
+      var order = [null, "light", "dark"];
+      var next = order[(order.indexOf(stored()) + 1) % order.length];
+      applyDom(next); persist(next); syncAll(next);
     });
     window.addEventListener("storage", function (e) {
       if (e.key !== null && e.key !== KEY) { return; }
       var v = e.key === null ? stored() : normalize(e.newValue);
-      applyDom(v); syncRadios(v);
+      applyDom(v); syncAll(v);
     });
     window.addEventListener("pageshow", function () {
-      var v = stored(); applyDom(v); syncRadios(v);
+      var v = stored(); applyDom(v); syncAll(v);
     });
-    document.addEventListener("htmx:afterSwap", function () { syncRadios(stored()); });
+    document.addEventListener("htmx:afterSwap", function () { syncAll(stored()); });
     var initial = stored();
     applyDom(initial);
-    syncRadios(initial);
+    syncAll(initial);
+  })();
+  </script>
+  {# Sidebar toggle (#152). One Menu button, viewport-aware: on a wide screen
+     it toggles + persists the desktop hide (pre-paint resolver in <head>); on
+     a narrow screen it opens the in-flow nav disclosure and persists nothing.
+     The opened disclosure sits ABOVE the topbar in DOM and visual order (the
+     aside precedes .shell-main), so opening it moves keyboard focus to the
+     first nav link — without that, Tab from the Menu button would walk past
+     the revealed nav entirely (review finding). Crossing the breakpoint
+     closes the disclosure so the two states never conflate. A storage
+     listener mirrors the theme wiring so a second tab's persisted hide stays
+     in sync (it never touches the per-tab mobile disclosure). Inert on
+     shellless pages (no #sidebar-toggle in the DOM). #}
+  <script>
+  (function () {
+    var KEY = "voxint-sidebar";
+    var root = document.documentElement;
+    var button = document.getElementById("sidebar-toggle");
+    if (!button) { return; }
+    var narrow = window.matchMedia("(max-width: 50rem)");
+    function syncButton() {
+      var expanded = narrow.matches
+        ? root.getAttribute("data-mobile-nav") === "open"
+        : root.getAttribute("data-sidebar") !== "hidden";
+      button.setAttribute("aria-expanded", expanded ? "true" : "false");
+    }
+    function storedHidden() {
+      try { return localStorage.getItem(KEY) === "hidden"; } catch (e) { return false; }
+    }
+    button.addEventListener("click", function () {
+      if (narrow.matches) {
+        if (root.getAttribute("data-mobile-nav") === "open") {
+          root.removeAttribute("data-mobile-nav");
+        } else {
+          root.setAttribute("data-mobile-nav", "open");
+          var first = document.querySelector("#app-sidebar a");
+          if (first) { first.focus(); }
+        }
+      } else if (root.getAttribute("data-sidebar") === "hidden") {
+        root.removeAttribute("data-sidebar");
+        try { localStorage.removeItem(KEY); } catch (e) {}
+      } else {
+        root.setAttribute("data-sidebar", "hidden");
+        try { localStorage.setItem(KEY, "hidden"); } catch (e) {}
+      }
+      syncButton();
+    });
+    if (narrow.addEventListener) {
+      narrow.addEventListener("change", function () {
+        root.removeAttribute("data-mobile-nav");
+        syncButton();
+      });
+    }
+    window.addEventListener("storage", function (e) {
+      if (e.key !== null && e.key !== KEY) { return; }
+      var hidden = e.key === null ? storedHidden() : e.newValue === "hidden";
+      if (hidden) { root.setAttribute("data-sidebar", "hidden"); }
+      else { root.removeAttribute("data-sidebar"); }
+      syncButton();
+    });
+    window.addEventListener("pageshow", syncButton);
+    syncButton();
   })();
   </script>
   {# Shared island loader (issue #48): the ONLY script every page pulls in. It

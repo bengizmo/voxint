@@ -1,7 +1,8 @@
 """Responsive + accessibility baseline of the server-rendered console (issue #64).
 
 The shell markup and stylesheet live in ``base.html``, so every 200 HTML page
-carries them; ``/dashboard`` is the cheapest onboarded page to assert them on.
+carries them; the Home page at ``/`` is the cheapest onboarded page to assert
+them on.
 These are literal substring/attribute checks on ``resp.text`` — the same seam
 every other server-page test uses (there is no template-render harness). Whether
 the layout is *actually* free of horizontal overflow at phone widths is a browser
@@ -44,7 +45,7 @@ def test_skip_link_and_main_landmark(client: TestClient) -> None:
     """A keyboard/AT user gets a skip-link that targets a real ``<main>`` landmark;
     the landmark is programmatically focusable (tabindex=-1) so activating the
     skip-link moves focus, not merely the scroll position."""
-    body = client.get("/dashboard").text
+    body = client.get("/").text
     assert '<a class="skip-link" href="#main">Skip to main content</a>' in body
     assert '<main id="main" tabindex="-1">' in body
     # The skip-link target and the landmark id agree.
@@ -58,7 +59,7 @@ def test_focus_ring_and_responsive_css_shipped(client: TestClient) -> None:
     not false-fail) but still assert the actual declaration, not just a selector
     name — a gutted ``:focus-visible {}`` must NOT satisfy the ring check
     (multi-model review: token-only assertions were vacuous)."""
-    body = client.get("/dashboard").text
+    body = client.get("/").text
     # The focus ring actually draws an outline from a defined var, not nothing.
     assert re.search(r":focus-visible\s*\{[^}]*outline:\s*2px solid var\(--focus-ring\)", body)
     # The ring follows the teal brand accent (issue #91), which is itself a real
@@ -97,7 +98,7 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
     OS) and the explicit ``:root[data-theme="dark"]`` sibling. Both dark blocks
     must carry the themed accent/danger values, or one of the two dark modes
     loses its focus ring / error legibility."""
-    raw = client.get("/dashboard").text
+    raw = client.get("/").text
     # The stylesheet's own comments name these selectors, so structural index
     # checks work on a comment-stripped copy; literal value assertions run on
     # it too (a value living only inside a comment must not pass).

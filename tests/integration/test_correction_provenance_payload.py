@@ -20,7 +20,7 @@ from tests.fakes import FakeASR, FakeDiarizer, FakeEmbedder
 from voxint.adjudication.corrections_view import run_reconciliation
 from voxint.adjudication.review_state import set_correction
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
-from voxint.api.app import (
+from voxint.api.transcript_view import (
     _island_segment,
     _load_run_rule_index,
 )

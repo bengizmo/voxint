@@ -6,6 +6,55 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
+  its new frame: a collapsible left sidebar (Home, Media, Projects behind a
+  dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as
+  interim links so nothing loses its path), a top bar with a theme cycle
+  button, and shared library primitives for the area pages later phases
+  build. `/` is now a real Home page: needs-attention cards (continue
+  review, unidentified voices, failed runs) whose counts derive from the
+  queues they link to, quick actions, activity counts (media added, runs
+  started, speakers enrolled) with an hour/day/week/all switch that shares
+  its query functions with `voxint stats`, and a recent-activity feed
+  derived from existing tables. `voxint stats` and `GET /metrics`'s JSON
+  sibling gain the two new windowed counts. The guided tutorial's
+  page-to-route map is data-driven now, and unfinished console areas ship
+  dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
+
+### Changed
+- **The dashboard folded into Home** (#152). `/dashboard` now issues a
+  permanent redirect to `/`, and `/` no longer redirects to `/review`. The
+  dashboard's task cards and stat figures live on Home; the hardware strip
+  stays on the Resources page (sidebar: Hardware); the per-status and
+  stage-timing detail tables are retired from HTML (the same figures remain
+  on `GET /metrics` and `voxint stats`). The pre-onboarding setup wizard
+  renders without the new shell.
+- **Console 2.0 groundwork, P0b: the console API is decomposed into per-area
+  routers** (#151, epic #149). Internal refactor with no operator-visible
+  change: the single 7.5k-line `api/app.py` module is split into
+  `api/routers/{speakers,settings,legacy_review,legacy_runs}.py` plus shared
+  dependency, triage, transcript-island, and tutorial-banner modules, with
+  empty scaffolds for the areas later phases fill (home, media, projects,
+  jobs, editor) and template files grouped into matching per-area
+  directories. `app.py` keeps only the application factory, middleware, and
+  route registration. Every route's path, method, status codes, onboarding
+  gate, operator auth, CSRF verification, and registration order are pinned
+  unchanged by the P0a characterization contracts plus a new
+  registration-order golden added in this change.
+
+### Added
+- **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
+  registry into every core seam so a converted feature will activate through
+  generic loops instead of a hand-wired copy: API router mounting with route
+  collision rejection, the settings-section and run-detail-panel render loops,
+  the Features-section flag merge, namespaced plugin templates, the Celery task
+  include and routing merge with a guard against a plugin shadowing a core task,
+  the post-completion hook fan-out, the stale-job recovery sweep generalized from
+  the embedding lane, the CLI subcommand loop, and a boot-time plugin invariant
+  check. This change is dormant: the registry is empty, so behavior is
+  byte-identical and nothing an operator sees changes yet. As the optional
+  features convert in later changes, the translation and embedding job lanes gain
+  the generic recovery sweep.
 - **Console 2.0 groundwork, P0a: contracts, characterization tests, and a
   content-hash backfill** (#150, epic #149). Schema-free foundation for the
   review-console information-architecture refactor. It adds architecture

@@ -17,7 +17,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from voxint.api.app import create_app, require_onboarded
+from voxint.api.app import create_app
+from voxint.api.routers.deps import require_onboarded
 from voxint.config import Settings
 
 CREDS = ("reviewer", "s3cret")
@@ -134,13 +135,14 @@ def test_onboarded_request_reaches_the_handler(
     assert resp.status_code == 200
 
 
-def test_index_redirects_to_review_when_onboarded(
+def test_index_renders_home_when_onboarded(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
+    # P1 (#152): / is the real Home page now, not a redirect to /review.
     seed_onboarded(session_factory)
     resp = client.get("/", follow_redirects=False)
-    assert resp.status_code == 303
-    assert resp.headers["location"] == "/review"
+    assert resp.status_code == 200
+    assert "<h1>Home</h1>" in resp.text
 
 
 def test_gate_reads_onboarding_fresh_each_request(
@@ -171,17 +173,19 @@ def test_every_route_is_gated_or_explicitly_exempt() -> None:
             found.extend(dependency_calls(sub))
         return found
 
+    def collect(routes: list[object], into: list[APIRoute]) -> None:
+        # This FastAPI mounts an included router as a sub-route; reach its
+        # APIRoutes through original_router rather than app.routes. Recursive:
+        # P0b nests per-area routers inside the protected router.
+        for route in routes:
+            if isinstance(route, APIRoute):
+                into.append(route)
+            elif hasattr(route, "original_router"):
+                collect(route.original_router.routes, into)
+
     def api_routes() -> list[APIRoute]:
         routes: list[APIRoute] = []
-        for route in app.routes:
-            if isinstance(route, APIRoute):
-                routes.append(route)
-            elif hasattr(route, "original_router"):
-                # This FastAPI mounts an included router as a sub-route; reach its
-                # APIRoutes through original_router rather than app.routes.
-                routes.extend(
-                    r for r in route.original_router.routes if isinstance(r, APIRoute)
-                )
+        collect(app.routes, routes)
         return routes
 
     routes = api_routes()

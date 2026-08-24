@@ -19,8 +19,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from voxint.api.app import _SEMANTIC_FLAG_NAMES, create_app
+from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, mint_csrf_token
+from voxint.api.routers.settings import _SEMANTIC_FLAG_NAMES
 from voxint.app_settings import get_app_settings, get_or_create
 from voxint.config import Settings
 from voxint.db.models import AppSettings

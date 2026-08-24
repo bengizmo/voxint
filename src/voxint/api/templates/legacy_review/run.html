@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% from "fragments/export_menu.html" import export_menu %}
-{% from "fragments/review_journey.html" import review_journey %}
+{% from "legacy_review/review_journey.html" import review_journey %}
 {% block title %}Voxint — review {{ run_source_title(run) }}{% endblock %}
 {% block body %}
 <p><a href="/review">← queue</a></p>
@@ -53,6 +53,6 @@
 </section>
 
 <div id="labels">
-  {% include "fragments/labels.html" %}
+  {% include "legacy_review/labels.html" %}
 </div>
 {% endblock %}

@@ -568,26 +568,22 @@ companion `voxint_stage_duration_attempts{stage}` (so "no finished attempts" is
 distinguishable from a genuinely 0-second average), `voxint_roster_speakers`, and
 `voxint_runs_created_24h`.
 
-For a human at the console, the **Dashboard** page (`GET /dashboard`, first in the
-top nav) leads with a task-first spine: three cards for **Add audio** (to the Runs
-add-media section), **Continue review** (the canonical review-backlog count, to
-`/review`), and **Last finished run** (to its detail page, with an honest empty
-state). The task cards render on page load and refresh only on a full reload, so
-the count is a plain figure, never styled as live.
+For a human at the console, the **Home** page (`GET /`) leads with a task-first
+spine: needs-attention cards for **Continue review** (the canonical
+review-backlog count), **Unidentified voices**, and **Failed runs** (each count
+derived from the queue or figures it links to, so they cannot disagree), then
+quick actions and the activity counts (**media added, runs started, speakers
+enrolled**) with an hour / day / week / all-time window switch. The counts share
+their query functions with `voxint stats`, so the two surfaces agree for the
+same cutoff; a malformed `?window=` degrades to the day window and says so. A
+recent-activity list (runs started, runs finished or failed, speakers enrolled)
+closes the page. The cards render on page load and refresh only on a full
+reload, so every count is a plain figure, never styled as live.
 
-The *same* aggregates `/metrics` and `voxint stats` report (runs by status, the
-review backlog, per-stage timing and failures, roster size, and runs created in
-the window) sit below the task cards behind a **Show run details** disclosure.
-The invalid-`?since=` notice and the time-window control stay outside that
-disclosure so an error and an input are never hidden. The page is authenticated
-like every non-`/healthz` page and shares the `stats_query` data layer with
-`/metrics` and `voxint stats`, so the three surfaces always agree. Stage names
-render in plain language ("Diarize & embed") while the machine `/metrics`, JSON,
-and `voxint stats` outputs keep their raw identifiers. The metrics fragment
-auto-refreshes every 15 seconds (an htmx fragment poll, no external assets). The
-throughput window is a **24h / 7d / 30d picker on the page**; the same `?since=`
-query param still overrides it directly (any span/ISO-8601 syntax `voxint stats
---since` accepts), degrading to 24h if malformed.
+The old `/dashboard` page folded into Home and now issues a permanent redirect
+to `/`. Its per-status and stage-timing HTML tables are retired; the same
+figures remain on `GET /metrics` and `voxint stats` (raw identifiers there,
+plain language in the console).
 
 #### Hardware resource telemetry
 
@@ -623,8 +619,8 @@ depth), `voxint stats --json` carries it under a `resources` key, `GET /metrics`
 appends `voxint_gpu_*` and `voxint_service_admission_*` gauges, and the console
 renders it in two places.
 
-The **Dashboard** carries a compact hardware strip, refreshed on the same 15s
-poll as the run figures. It is deliberately quiet: it shows each GPU's activity
+The **Resources** page (sidebar: **Hardware**) opens with a compact hardware
+strip, refreshed on its 15s poll. It is deliberately quiet: it shows each GPU's activity
 (idle / working / busy, never an alarm, since 100% during a transcription is
 healthy) and raises an amber warning only for the two conditions an operator can
 act on, each with one plain-language remedy:
@@ -765,7 +761,7 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   CAS/revision bump (like operator notes), and idempotent. A *live* run refuses
   archive (`409`, cancel it first), and an **archived run refuses requeue/claim**
   so a stale tab can't drive a hidden run back to live. `/runs` hides archived by
-  default; `?archived=1` shows the archived-only view. Dashboard, `/metrics`, and
+  default; `?archived=1` shows the archived-only view. Home, `/metrics`, and
   `voxint stats` exclude archived runs from their counts.
 - **`POST /runs/{id}/media/delete`**: **destructive**, terminal-only. Deletes
   only *this run's* derived audio (its `AudioArtifact` + `AudioChunk` rows and
@@ -1327,8 +1323,9 @@ mutations are gated by their per-run claim token.
 |---|---|
 | `GET /healthz` | Liveness (no DB access; schema readiness is the migrate gate's job) |
 | `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth`) |
-| `GET /dashboard` | Operator dashboard: task cards (add audio, continue review, last finished run) plus the curated hardware strip, with the throughput and stage metrics behind a "Show run details" disclosure; optional `?since=` window, 15s htmx auto-refresh of the metrics fragment |
-| `GET /resources` | Hardware resource page: the fuller live GPU + admission view behind the dashboard strip; 15s htmx auto-refresh |
+| `GET /` | Home: needs-attention cards (continue review, unidentified voices, failed runs), quick actions, windowed activity counts (`?window=hour|day|week|all`), recent activity |
+| `GET /dashboard` | Permanent 303 redirect to `/` (the dashboard folded into Home) |
+| `GET /resources` | Hardware resource page: the compact strip plus the fuller live GPU + admission view; 15s htmx auto-refresh |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |

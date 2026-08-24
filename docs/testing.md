@@ -10,7 +10,7 @@ doctrine: see [`gpu-contracts.md`](gpu-contracts.md) and the parity notes below.
 |---|---|---|---|
 | Unit | `tests/unit/` | Pure logic: config parsing, CLI, API helpers, formatters, scoring, redaction, review-auth, validation. No database. | nothing |
 | Contracts | `tests/contracts/` | Invariants that would rot silently: version-pin parity across pyproject/compose/`.env.example`, Dockerfile sha ARGs ↔ provenance, restart policies, routes/schemas, the **frontend build/island wiring** (`test_frontend_build.py`). | nothing |
-| Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, dashboard, migrations). | a pgvector database |
+| Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, Home, migrations). | a pgvector database |
 | Parity | `tests/parity/` | Model-output equivalence gates (mel / vector / decision) against committed CUDA references. Real audio fixtures live under `tests/parity/fixtures/`. | strict mode: `VOXINT_PARITY_REQUIRED=1` |
 | E2E | `tests/e2e/` | The **real** pipeline against the **real** model services (faster-whisper + pyannote + TitaNet in their containers): submit the tutorial clip, run every stage, assert the persistence invariants. Plus a **real-LLM** enrichment lane (real `HttpLLMClient` → real endpoint) that gates the summary chain. Maintainer-run, opt-in gate, **never public CI**. | `VOXINT_E2E=1` + `VOXINT_TEST_DATABASE_URL` + the model services running; the LLM lane also needs the enrichment LLM env (see below) |
 

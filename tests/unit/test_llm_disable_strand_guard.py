@@ -12,8 +12,8 @@ keeps `_LLM_DEPENDENCY_LABELS` in lockstep with the shared validator's messages.
 
 import pytest
 
-from voxint.api import app as app_module
-from voxint.api.app import (
+from voxint.api.routers import settings as settings_module
+from voxint.api.routers.settings import (
     _LLM_DEPENDENCY_LABELS,
     _join_operator_labels,
     _llm_disable_strand_error,
@@ -104,7 +104,7 @@ def test_defensive_fallback_on_unmapped_new_violation(
     def fake_validate(effective: EffectiveFlags) -> list[str]:
         return [novel] if not effective.llm_enabled else []
 
-    monkeypatch.setattr(app_module, "validate_effective_flags", fake_validate)
+    monkeypatch.setattr(settings_module, "validate_effective_flags", fake_validate)
     message = _llm_disable_strand_error(None, _settings(llm_enabled=True))
     assert message is not None
     assert "Another feature still needs LLM enhancement" in message

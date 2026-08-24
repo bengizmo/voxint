@@ -10,13 +10,15 @@ from pathlib import Path
 
 import pytest
 
-_FRAGMENTS = Path(__file__).resolve().parents[2] / "src/voxint/api/templates/fragments"
+_TEMPLATES = Path(__file__).resolve().parents[2] / "src/voxint/api/templates"
 _FORBIDDEN = ("ENRICHMENT_", "VOXINT_", "LLM_ENABLED", "YTDLP_")
 
 
-@pytest.mark.parametrize("name", ["run_assets.html", "research.html"])
+@pytest.mark.parametrize(
+    "name", ["legacy_runs/run_assets.html", "speakers/research.html"]
+)
 def test_gated_fragment_has_no_env_var_remediation(name: str) -> None:
-    text = (_FRAGMENTS / name).read_text(encoding="utf-8")
+    text = (_TEMPLATES / name).read_text(encoding="utf-8")
     for token in _FORBIDDEN:
         assert token not in text, f"{name} still names env var {token} as remediation"
     # It must instead send the operator to Settings.

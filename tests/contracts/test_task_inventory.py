@@ -28,3 +28,17 @@ def test_task_inventory_matches_golden() -> None:
         f"or a deliberate rename), regenerate {_GOLDEN.relative_to(REPO_ROOT)}; a "
         "grandfathered task name must never change during a plugin conversion."
     )
+
+
+def test_core_task_names_guard_matches_inventory() -> None:
+    """The worker's plugin-vs-core collision guard (#138) must know every core task.
+
+    ``worker/app.py`` hardcodes ``_CORE_TASK_NAMES`` to reject a plugin declaring a
+    task that shadows a core one, deriving it WITHOUT importing the task modules.
+    Pin it to the golden so adding a core task without updating the guard (which
+    would silently let a plugin squat the new name) fails here.
+    """
+    from voxint.worker.app import _CORE_TASK_NAMES
+
+    golden = json.loads(_GOLDEN.read_text())
+    assert sorted(_CORE_TASK_NAMES) == golden

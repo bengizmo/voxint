@@ -161,7 +161,7 @@ def test_seed_storage_failure_rolls_back_and_shows_bounded_message(
 ) -> None:
     client = _client(session_factory, settings, onboarded=True)
     monkeypatch.setattr(
-        "voxint.api.app.seed_tutorial_run",
+        "voxint.api.routers.settings.seed_tutorial_run",
         _seed_raises(PermissionError("/secret/media/root denied")),
     )
     resp = client.post(
@@ -185,7 +185,7 @@ def test_seed_asset_failure_shows_asset_message(
 ) -> None:
     client = _client(session_factory, settings, onboarded=True)
     monkeypatch.setattr(
-        "voxint.api.app.seed_tutorial_run",
+        "voxint.api.routers.settings.seed_tutorial_run",
         _seed_raises(FileNotFoundError("sample-3speaker.wav")),
     )
     resp = client.post(
@@ -209,7 +209,7 @@ def test_unclassified_seed_error_propagates_not_masked(
     client.auth = CREDS
     seed_onboarded(session_factory)
     monkeypatch.setattr(
-        "voxint.api.app.seed_tutorial_run",
+        "voxint.api.routers.settings.seed_tutorial_run",
         _seed_raises(TutorialSeedError("grounded label drifted")),
     )
     resp = client.post(
@@ -263,7 +263,7 @@ def test_setup_finish_seed_failure_aborts_onboarding(
 ) -> None:
     client = _client(session_factory, settings, onboarded=False)
     monkeypatch.setattr(
-        "voxint.api.app.seed_tutorial_run",
+        "voxint.api.routers.settings.seed_tutorial_run",
         _seed_raises(PermissionError("denied")),
     )
     resp = client.post(

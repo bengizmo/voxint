@@ -4,8 +4,8 @@
 <h1>Resources</h1>
 <p class="muted">
   Live hardware status from the model services, the same readings behind
-  <code>GET /metrics</code>, <code>voxint stats</code>, and the dashboard strip,
-  refreshed automatically.
+  <code>GET /metrics</code> and <code>voxint stats</code>, refreshed
+  automatically.
 </p>
 {# The htmx poll re-requests /resources every 15s; the route answers the
    HX-Request with just the fragment below, swapped into this container so the
@@ -13,6 +13,6 @@
    polling container (and its hx-get) persists unchanged across polls. #}
 <div id="resource-status"
      hx-get="/resources" hx-trigger="every 15s" hx-swap="innerHTML">
-  {% include "fragments/resource_status.html" %}
+  {% include "legacy_runs/resource_status.html" %}
 </div>
 {% endblock %}

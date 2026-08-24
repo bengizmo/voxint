@@ -1579,6 +1579,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     score_cli.register(sub)
 
+    # Plugin subcommands (issue #138): each active plugin registers its own
+    # `voxint <cmd>` group after the core subparsers. Empty registry ⇒ no plugins
+    # ⇒ no extra commands, an unchanged parser.
+    #
+    # Enumerate the builtins WITHOUT forcing full Settings validation. build_parser
+    # runs for every invocation — including `--help`, `--version`, and the
+    # settings-free `score` command above — which must work even under an invalid
+    # deployment configuration (each plugin subcommand validates settings in its
+    # own handler when it actually runs). So honor the kill switch from settings
+    # when they load, and fall back to the environment directly when they do not,
+    # rather than letting a bad config break the parser itself.
+    import os
+
+    from voxint.config import SettingsError, get_settings
+    from voxint.plugins import BUILTIN, load_registry, parse_disabled_ids
+
+    try:
+        disabled = parse_disabled_ids(get_settings().voxint_plugins_disabled)
+    except SettingsError:
+        disabled = parse_disabled_ids(os.environ.get("VOXINT_PLUGINS_DISABLED", ""))
+    for plugin in load_registry(BUILTIN, disabled_ids=disabled).plugins:
+        plugin.add_cli_commands(sub)
+
     return parser
 
 

@@ -16,8 +16,9 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
-from voxint.api.app import MAX_OPERATOR_NOTES_CHARS, create_app
+from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_NOTES, mint_csrf_token
+from voxint.api.routers.legacy_runs import MAX_OPERATOR_NOTES_CHARS
 from voxint.config import Settings
 from voxint.db.models import (
     MediaItem,

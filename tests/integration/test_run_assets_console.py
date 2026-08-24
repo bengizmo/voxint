@@ -60,7 +60,7 @@ class TestConsole:
     @pytest.fixture()
     def published(self, monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
         sink: list[uuid.UUID] = []
-        monkeypatch.setattr("voxint.api.app._publish_run_asset_job", sink.append)
+        monkeypatch.setattr("voxint.api.routers.legacy_runs._publish_run_asset_job", sink.append)
         return sink
 
     def test_run_detail_includes_asset_block(self, session_factory: sessionmaker[Session]) -> None:
@@ -232,7 +232,9 @@ class TestConsoleHardening:
     ) -> None:
         from voxint.api.csrf import CSRF_ASSETS_CANCEL, mint_csrf_token
 
-        monkeypatch.setattr("voxint.api.app._publish_run_asset_job", lambda _job_id: True)
+        monkeypatch.setattr(
+            "voxint.api.routers.legacy_runs._publish_run_asset_job", lambda _job_id: True
+        )
         client = _build_client(session_factory)
         with session_factory() as session:
             run_id = seed_run(session)
@@ -251,7 +253,9 @@ class TestConsoleHardening:
     def test_broker_outage_is_reported_inline(
         self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("voxint.api.app._publish_run_asset_job", lambda _job_id: False)
+        monkeypatch.setattr(
+            "voxint.api.routers.legacy_runs._publish_run_asset_job", lambda _job_id: False
+        )
         client = _build_client(session_factory)
         with session_factory() as session:
             run_id = seed_run(session)
