@@ -13,6 +13,6 @@
    polling container (and its hx-get) persists unchanged across polls. #}
 <div id="resource-status"
      hx-get="/resources" hx-trigger="every 15s" hx-swap="innerHTML">
-  {% include "fragments/resource_status.html" %}
+  {% include "legacy_runs/resource_status.html" %}
 </div>
 {% endblock %}

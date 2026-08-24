@@ -363,7 +363,7 @@ class TestStepperTranslate:
             published.append(job_id)
             return True
 
-        monkeypatch.setattr("voxint.api.app._publish_translation_job", _sink)
+        monkeypatch.setattr("voxint.api.routers.legacy_runs._publish_translation_job", _sink)
         with session_factory() as session:
             run_id = seed_run(session)
         client = _build_client(session_factory)
@@ -401,7 +401,7 @@ class TestStepperTranslate:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setattr(
-            "voxint.api.app._publish_translation_job", lambda job_id: False
+            "voxint.api.routers.legacy_runs._publish_translation_job", lambda job_id: False
         )
         with session_factory() as session:
             run_id = seed_run(session)

@@ -20,15 +20,17 @@ from typing import Any
 import pytest
 from jinja2 import TemplateNotFound
 
-from voxint.api.app import (
-    _FEATURE_FLAG_META,
+from voxint.api.csrf import CSRF_PLUGIN, mint_csrf_token
+from voxint.api.routers.deps import (
     _configure_template_loader,
-    _effective_feature_flag_meta,
     _plugin_template_dirs,
     _verify_plugin_csrf,
     templates,
 )
-from voxint.api.csrf import CSRF_PLUGIN, mint_csrf_token
+from voxint.api.routers.settings import (
+    _FEATURE_FLAG_META,
+    _effective_feature_flag_meta,
+)
 from voxint.plugins.base import (
     FeatureFlag,
     PluginManifest,

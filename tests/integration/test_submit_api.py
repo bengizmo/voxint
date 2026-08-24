@@ -84,7 +84,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     """Capture commit-before-publish enqueues without a live broker."""
     calls: list[uuid.UUID] = []
     monkeypatch.setattr(
-        "voxint.api.app._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
+        "voxint.api.routers.deps._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
     )
     return calls
 
@@ -204,7 +204,7 @@ def test_broker_down_submit_leaves_run_queued_and_flags_banner(
     def _broker_down(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("Error 111 connecting to redis. Connection refused.")
 
-    monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)
+    monkeypatch.setattr("voxint.api.routers.deps._publish_run", _broker_down)
 
     sub = uuid.uuid4().hex
     resp = client.post(

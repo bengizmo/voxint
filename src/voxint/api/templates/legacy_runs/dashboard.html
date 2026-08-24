@@ -88,7 +88,7 @@
   <div id="dashboard-metrics"
        hx-get="/dashboard{% if since_param %}?since={{ since_param | urlencode }}{% endif %}"
        hx-trigger="every 15s" hx-swap="innerHTML">
-    {% include "fragments/dashboard_metrics.html" %}
+    {% include "legacy_runs/dashboard_metrics.html" %}
   </div>
 </details>
 {% endblock %}
