@@ -1375,6 +1375,96 @@ sha-pinned, digest-pinned model whose serving profile is fixed by measurement.
   re-measure addendum, which records the measured regression that motivated
   keeping the prompt intact).
 
+## Synthetic-speech detection (synthdetect): pre-registered eval gates (issue #144)
+
+Synthdetect (audio deepfake detection) ships eventually as the first greenfield
+plugin, but Milestone 1 is the maintainer evaluation capability that must exist
+before any detector is productionized: a reference corpus, a detector harness,
+and reproduction of the upstream published numbers. This section is the
+pre-registration, recorded here BEFORE any GPU run per the numerics doctrine.
+The protocol pins and tolerances below are frozen first; dated verdict blocks
+are appended per session (the whisper-bakeoff pattern above), and a miss is a
+STOP, never a silent tolerance widening.
+
+The S1 scaffolding that stands this up is CI-only (no GPU, no weights): the
+pins-as-data registry (`tools/synthdetect_sources.py`), the host scorer
+(`tools/synthdetect_eval.py`), the manifest schema and seeded split assignment
+(`tools/synthdetect_corpus.py`), and their unit suites
+(`tests/unit/test_synthdetect_{sources,metrics,manifest,journal}.py`). The
+containerized runner (pinned fairseq) and the measured gates land in S2+.
+
+**Two versioned identities, never conflated.** The **inference space id** (for
+the default candidate, `synthdetect-w2v2aasist-v1`) is weight shas plus
+preprocessing plus windowing/aggregation plus the runtime implementation
+(fairseq is the reference; a numerically different runtime is a new space even
+with identical weights). The **calibration policy id** (`synthdetect-cal-v1`) is
+the Platt parameters plus operating threshold plus the calibration cohort hash;
+recalibration bumps it WITHOUT bumping the inference space and without rescoring,
+because the durable, universal output contract is the **raw score** and the
+probability and flags are recomputable from stored raw scores. The console
+presents a **calibrated risk score**, never a portable real-world probability
+(it is valid only under the calibration distribution). Score polarity is fixed
+once: a higher raw score means more likely synthetic. A checkpoint that natively
+emits bona-fide logits is inverted in the runner, so the stored raw score is
+comparable across models.
+
+### Three separate gates (never conflate these)
+
+1. **Benchmark reproduction.** Run the UNMODIFIED upstream eval stack (the
+   author's repo at a pinned commit, its own eval script and 64,600-sample crop
+   rule, the official keys) and hit the published number. Gate-1 scoring uses the
+   **official ASVspoof scorer** (EER implementations differ enough to eat the
+   tolerance); the harness sklearn scorer is cross-checked against it once and
+   used everywhere else. Proves the weights, data, and protocol are right.
+2. **Implementation parity.** Paired per-clip comparison of our runner against
+   the upstream runner on identical clips: max-abs logit delta, rank correlation,
+   and decision agreement (`tools/synthdetect_eval.py compare`). Aggregate EER
+   matching is NOT accepted as equivalence evidence: two different functions can
+   share an EER while disagreeing per clip.
+3. **Deployment evaluation and calibration.** Our runner, our production
+   windowing (merge same-speaker turns separated by under 1 s, chunk into 4 s
+   windows, logit-mean pool), our domain corpus. Produces the shipped
+   calibration policy. Production windowing is validated against upstream
+   windowing on the domain corpus; if pooling degrades separability or
+   calibration, the fallback is exposing per-window scores without pooling.
+
+### Pre-registered reproduction targets (provisional tolerances)
+
+Every tolerance is PROVISIONAL until ratified from measured rerun variance in S3,
+before the full anchor is run. The `license_class` is printed beside every model
+so a non-commercial or unlicensed result is never mistaken for a shippable one.
+
+| Model | License class | Anchor | Published | Tolerance |
+|---|---|---|---|---|
+| `w2v2-aasist` (upstream runner) | shippable (MIT) | ASVspoof 2021 DF eval, official keys | 2.85 % EER | provisional ±0.3 pp |
+| our runner vs upstream runner | shippable (MIT) | paired per-clip, same clips | (equivalence) | measured then ratcheted: max-abs logit + rank-corr + decision agreement |
+| `antideepfake-xlsr-2b` | noncommercial (CC-BY-NC-SA-4.0 weights) | In-the-Wild | 1.23 % EER | provisional ±0.5 pp |
+| `audioseal` (harness-only; not shipped in v1) | shippable (MIT) | marked + unmarked clips | ~99 % TPR clean | TPR ≥ 99 % clean AND an unmarked-audio FPR gate |
+| `nes2net` | unlicensed (no license file) | ASVspoof 2021 DF | 1.49 % EER | BLOCKED: refuses to run until the author grants a license |
+
+**Sequencing.** Shake out the harness on the pre-registered seeded 10 % subset
+first, then run the full (~611k-trial) anchor once, overnight, on a 3090-class
+node. The subset NEVER inherits the full-set EER tolerance: after the anchor its
+role is paired per-clip regression against frozen reference scores (a score diff,
+not an EER).
+
+### Calibration and holdout discipline
+
+The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
+fide clips is quantile noise, reported as a diagnostic only. Platt scaling is fit
+on RAW logits over the calibration split, and **degraded bona fide strata are
+included in that split**: codec artifacts on genuine audio are the dominant field
+false-positive driver, so the operating point must see them. The `holdout` split
+is opened exactly once, after every runtime and calibration choice is frozen; any
+later tuning requires a new versioned holdout cohort.
+
+The always-on fixture gate (`tests/parity/test_synthdetect_fixture_scores.py`,
+S2+) replays committed CC0 journals to byte-stable metrics. The DECISION-level
+fixture gate applies only to fixtures outside a guard band of roughly 3x the
+measured drift tolerance around the threshold: near-threshold fixtures flip
+spuriously across driver, cuDNN, and torch revisions and are covered by the
+raw-logit drift level instead.
+
 ## Contract tests
 
 `tests/contracts/` validates (CPU-only, no model deps) that:
