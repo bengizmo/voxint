@@ -125,6 +125,16 @@ class TestTranscriptView:
         assert "ES:Hello there." not in body
         assert 'class="tp-translation"' not in body
 
+    def test_no_translations_renders_no_toggle(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+        client = _build_client(session_factory)
+        body = client.get(f"/runs/{run_id}/transcript").text
+        assert 'aria-label="Translation"' not in body
+        assert 'class="tp-translation"' not in body
+
     def test_unknown_translation_shows_note(
         self, session_factory: sessionmaker[Session]
     ) -> None:
@@ -204,6 +214,26 @@ class TestExports:
         response = client.get(f"/review/{run_id}/export.txt?lang=es")
         assert response.status_code == 409
         assert "still being generated" in response.json()["detail"]
+
+    def test_unreadable_source_is_409(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        # A generation whose source transcript is gone (segments deleted after
+        # the fact) must fail closed, never serve the orphaned rendition.
+        with session_factory() as session:
+            run_id = seed_run(session)
+        _translate(session_factory, run_id)
+        with session_factory() as session:
+            for segment in session.execute(
+                select(TranscriptSegment).where(
+                    TranscriptSegment.pipeline_run_id == run_id
+                )
+            ).scalars():
+                session.delete(segment)
+            session.commit()
+        client = _build_client(session_factory)
+        response = client.get(f"/review/{run_id}/export.txt?lang=es")
+        assert response.status_code == 409
 
     def test_lang_with_raw_or_enhanced_is_422(
         self, session_factory: sessionmaker[Session]
@@ -325,6 +355,30 @@ class TestStepperTranslate:
         payload = again.json()
         assert payload["started"] is False
         assert "already in progress" in payload["error"]
+
+    def test_generate_json_reports_broker_outage(
+        self,
+        session_factory: sessionmaker[Session],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(
+            "voxint.api.app._publish_translation_job", lambda job_id: False
+        )
+        with session_factory() as session:
+            run_id = seed_run(session)
+        client = _build_client(session_factory)
+        response = client.post(
+            f"/runs/{run_id}/translation/generate",
+            data={
+                "csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_TRANSLATION_GENERATE),
+                "target_language": "es",
+            },
+            headers={"Accept": "application/json"},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["started"] is False
+        assert "broker unavailable" in payload["error"]
 
     def test_generate_without_target_reports_json_error(
         self, session_factory: sessionmaker[Session]
