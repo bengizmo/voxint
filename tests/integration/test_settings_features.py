@@ -312,7 +312,7 @@ def test_features_route_accepts_every_rendered_flag(
     # inherit (NULL) — exactly how llm_bundled_enabled shipped broken. Submitting
     # an explicit Off for every flag (which violates no cross-flag invariant) and
     # asserting each column stored False catches any flag the route fails to accept.
-    from voxint.api.app import _FEATURE_FLAG_NAMES
+    from voxint.api.routers.settings import _FEATURE_FLAG_NAMES
 
     client, _ = make_client(session_factory, media_root)
     resp = client.post(

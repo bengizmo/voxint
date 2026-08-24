@@ -69,7 +69,7 @@
   </div>
 
   {% set research = research_by_speaker.get(entry.speaker.id) %}
-  {% if research %}{% include "fragments/research.html" %}{% endif %}
+  {% if research %}{% include "speakers/research.html" %}{% endif %}
 
   {% if entry.embeddings %}
   <details class="embeddings">

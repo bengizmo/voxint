@@ -54,8 +54,9 @@ def app_route_inventory(app: FastAPI) -> list[list[object]]:
     """``[path, [methods…]]`` for every APIRoute, sorted and HEAD-stripped.
 
     Recurses through every mounted sub-router (:func:`_iter_api_routes`), so the
-    gated ``protected`` routes and any plugin routes nested under it are all
-    captured — the all-enabled vs core-only comparison the conversions rely on.
+    per-area routers nested under the ``console`` aggregator (P0b) and any
+    plugin routes nested under it (#138) are all captured — the all-enabled vs
+    core-only comparison the conversions rely on.
     """
     routes = _iter_api_routes(app.routes)
     inventory = [

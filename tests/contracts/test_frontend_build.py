@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from tests.contracts.conftest import REPO_ROOT
 from voxint.api import app as app_module
 from voxint.api.app import create_app
+from voxint.api.routers import deps as deps_module
 from voxint.config import Settings
 
 CREDS = ("reviewer", "s3cret")
@@ -32,8 +33,8 @@ _PYPROJECT = REPO_ROOT / "pyproject.toml"
 _VITE_CONFIG = REPO_ROOT / "frontend" / "vite.config.ts"
 _MAIN_TS = REPO_ROOT / "frontend" / "src" / "main.ts"
 _ENTRIES_DIR = REPO_ROOT / "frontend" / "src" / "entries"
-_RUN_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "run.html"
-_LABELS_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "fragments" / "labels.html"
+_RUN_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review/run.html"
+_LABELS_HTML = REPO_ROOT / "src" / "voxint" / "api" / "templates" / "legacy_review" / "labels.html"
 
 
 # --------------------------------------------------------------------------- #
@@ -269,17 +270,17 @@ def test_built_wheel_contains_static_app_tree(tmp_path: Path) -> None:
 # Manifest helper + hash detection (module-level, no route).
 # --------------------------------------------------------------------------- #
 def test_looks_hashed_distinguishes_fingerprinted_names() -> None:
-    assert app_module._looks_hashed("main-D_zxMlff.js")
-    assert app_module._looks_hashed("transcript-player-aYPQ60Ce.js")
-    assert not app_module._looks_hashed("main.js")
-    assert not app_module._looks_hashed("tailwind.css")
+    assert deps_module._looks_hashed("main-D_zxMlff.js")
+    assert deps_module._looks_hashed("transcript-player-aYPQ60Ce.js")
+    assert not deps_module._looks_hashed("main.js")
+    assert not deps_module._looks_hashed("tailwind.css")
 
 
 def test_load_asset_manifest_missing_returns_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(app_module, "_APP_MANIFEST_PATH", tmp_path / "absent.json")
-    assert app_module._load_asset_manifest() == {}
+    monkeypatch.setattr(deps_module, "_APP_MANIFEST_PATH", tmp_path / "absent.json")
+    assert deps_module._load_asset_manifest() == {}
 
 
 def test_load_asset_manifest_invalid_json_returns_empty(
@@ -287,8 +288,8 @@ def test_load_asset_manifest_invalid_json_returns_empty(
 ) -> None:
     bad = tmp_path / "manifest.json"
     bad.write_text("{not json")
-    monkeypatch.setattr(app_module, "_APP_MANIFEST_PATH", bad)
-    assert app_module._load_asset_manifest() == {}
+    monkeypatch.setattr(deps_module, "_APP_MANIFEST_PATH", bad)
+    assert deps_module._load_asset_manifest() == {}
 
 
 def test_load_asset_manifest_maps_entry_stem_to_url(
@@ -305,8 +306,8 @@ def test_load_asset_manifest_maps_entry_stem_to_url(
     }
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
-    monkeypatch.setattr(app_module, "_APP_MANIFEST_PATH", path)
-    resolved = app_module._load_asset_manifest()
+    monkeypatch.setattr(deps_module, "_APP_MANIFEST_PATH", path)
+    resolved = deps_module._load_asset_manifest()
     assert resolved == {
         "main": "/static/app/assets/main-D_zxMlff.js",
         "tailwind": "/static/app/assets/tailwind-BVSDHUy6.css",
@@ -316,10 +317,10 @@ def test_load_asset_manifest_maps_entry_stem_to_url(
 
 def test_asset_url_reads_the_loaded_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        app_module, "_APP_ASSET_URLS", {"main": "/static/app/assets/main-abc12345.js"}
+        deps_module, "_APP_ASSET_URLS", {"main": "/static/app/assets/main-abc12345.js"}
     )
-    assert app_module.asset_url("main") == "/static/app/assets/main-abc12345.js"
-    assert app_module.asset_url("nope") is None
+    assert deps_module.asset_url("main") == "/static/app/assets/main-abc12345.js"
+    assert deps_module.asset_url("nope") is None
 
 
 # --------------------------------------------------------------------------- #

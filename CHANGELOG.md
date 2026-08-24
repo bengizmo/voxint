@@ -5,6 +5,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Console 2.0 groundwork, P0b: the console API is decomposed into per-area
+  routers** (#151, epic #149). Internal refactor with no operator-visible
+  change: the single 7.5k-line `api/app.py` module is split into
+  `api/routers/{speakers,settings,legacy_review,legacy_runs}.py` plus shared
+  dependency, triage, transcript-island, and tutorial-banner modules, with
+  empty scaffolds for the areas later phases fill (home, media, projects,
+  jobs, editor) and template files grouped into matching per-area
+  directories. `app.py` keeps only the application factory, middleware, and
+  route registration. Every route's path, method, status codes, onboarding
+  gate, operator auth, CSRF verification, and registration order are pinned
+  unchanged by the P0a characterization contracts plus a new
+  registration-order golden added in this change.
+
 ### Added
 - **Plugin seam wiring** (#138, epic #136). Wires the (still empty) plugin
   registry into every core seam so a converted feature will activate through

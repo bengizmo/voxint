@@ -792,7 +792,7 @@ def test_start_route_creates_job_and_publishes(
     session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     published: list[uuid.UUID] = []
-    monkeypatch.setattr("voxint.api.app._publish_research_job", published.append)
+    monkeypatch.setattr("voxint.api.routers.speakers._publish_research_job", published.append)
     client = _build_client(session_factory)
     speaker_id = seed_speaker(session_factory)
     response = client.post(

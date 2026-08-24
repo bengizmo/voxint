@@ -55,7 +55,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[tuple[uuid.UUID, Stage | 
     def capture(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:
         calls.append((run_id, stage))
 
-    monkeypatch.setattr("voxint.api.app._publish_run", capture)
+    monkeypatch.setattr("voxint.api.routers.deps._publish_run", capture)
     return calls
 
 
@@ -280,7 +280,7 @@ def test_broker_down_requeue_stays_queued_and_flags_banner(
     def _broker_down(_run_id: uuid.UUID, **_kwargs: object) -> None:
         raise OperationalError("Error 111 connecting to redis. Connection refused.")
 
-    monkeypatch.setattr("voxint.api.app._publish_run", _broker_down)
+    monkeypatch.setattr("voxint.api.routers.deps._publish_run", _broker_down)
 
     resp = client.post(
         f"/runs/{run_id}/requeue",

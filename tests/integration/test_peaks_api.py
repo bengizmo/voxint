@@ -163,7 +163,7 @@ def test_second_request_serves_cache_without_recompute(
     def boom(*args: object, **kwargs: object) -> None:
         raise AssertionError("cache hit must not recompute")
 
-    monkeypatch.setattr("voxint.api.app.compute_peaks", boom)
+    monkeypatch.setattr("voxint.api.routers.legacy_runs.compute_peaks", boom)
     second = client.get(f"/media/{run_id}/peaks")
     assert second.status_code == 200
     assert second.content == first.content

@@ -52,7 +52,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     """Capture any enqueue — cancel must publish NOTHING (it is pure DB state)."""
     calls: list[uuid.UUID] = []
     monkeypatch.setattr(
-        "voxint.api.app._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
+        "voxint.api.routers.deps._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
     )
     return calls
 

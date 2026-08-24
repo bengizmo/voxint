@@ -70,7 +70,7 @@ class TestConsole:
             sink.append(job_id)
             return True
 
-        monkeypatch.setattr("voxint.api.app._publish_translation_job", _sink)
+        monkeypatch.setattr("voxint.api.routers.legacy_runs._publish_translation_job", _sink)
         return sink
 
     def test_run_detail_includes_translation_card(

@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
-import voxint.api.app as app_module
+import voxint.api.routers.settings as settings_module
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.service_identity import ModelVerdict, ServiceIdentityView
@@ -101,7 +101,7 @@ def _diarizer_view(
 def test_pipeline_models_panel_renders_each_state(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: _views())
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: _views())
     body = client.get("/settings").text
 
     # The panel and its heading are present.
@@ -146,7 +146,7 @@ def test_pipeline_models_panel_marks_fixed_embedder(
         env_keys=(),
     )
     views[2] = reachable_embedder
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "nvidia/speakerverification_en_titanet_large" in body
     assert "This model is fixed" in body
@@ -159,7 +159,7 @@ def test_pipeline_models_panel_renders_weights_mismatch(
     # mismatch copy, not the validated confirmation.
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.MISMATCH)
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "do not match the validated" in body
     assert "This is the validated model" in body  # asr is still validated
@@ -187,7 +187,7 @@ def test_pipeline_models_panel_renders_asr_mismatch_with_revision_guidance(
         detail=None,
         env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
     )
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "different version of the weights" in body
     assert "Remove <code>WHISPER_REVISION</code>" in body
@@ -201,7 +201,7 @@ def test_pipeline_models_panel_renders_unverified(
     # renders the amber unverified copy.
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.UNVERIFIED)
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "cannot verify the loaded model files" in body
 
@@ -214,7 +214,7 @@ def test_pipeline_models_panel_renders_config_mismatch(
     # weights re-pull/rebuild copy.
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.MISMATCH, identity_axis="config")
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "clustering configuration does not match" in body
     assert "PYANNOTE_CLUSTERING_THRESHOLD" in body
@@ -228,6 +228,6 @@ def test_pipeline_models_panel_renders_config_unverified(
     # config-axis unverified copy, distinct from the weights-files copy.
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.UNVERIFIED, identity_axis="config")
-    monkeypatch.setattr(app_module, "collect_service_identity", lambda _settings: views)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings").text
     assert "cannot verify its clustering configuration" in body

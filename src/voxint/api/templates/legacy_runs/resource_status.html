@@ -5,7 +5,7 @@
    are labelled separately so a peak is never read as the current value. ALL
    markup lives in this fragment so the innerHTML poll swaps identical structure
    (initial render == refresh). #}
-{% include "fragments/resource_strip.html" %}
+{% include "legacy_runs/resource_strip.html" %}
 
 <p class="muted">
   Snapshot age {{ "%.0f"|format(snapshot.collected_age_seconds) }}s. Readings marked
