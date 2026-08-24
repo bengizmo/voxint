@@ -180,6 +180,40 @@ def test_colliding_plugin_routes_fail_startup(
         create_app(settings=settings, session_factory=session_factory)
 
 
+def test_plugin_route_colliding_with_core_fails_startup(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A plugin claiming a (path, method) a CORE route owns must fail boot too.
+
+    find_route_collisions only catches plugin-vs-plugin; this guards the runtime
+    plugin-vs-core check (#138) that mirrors the worker's core-task-name guard, so
+    a converted plugin (#139+) squatting a core route stops boot rather than
+    mounting an unreachable shadow the route-inventory test alone would have to
+    catch.
+    """
+
+    class CoreClash(VoxintPlugin):
+        manifest = PluginManifest(id="coreclash", name="Core Clash", description="d")
+
+        def build_router(self, deps: PluginRouteDeps) -> APIRouter:
+            router = APIRouter()
+
+            @router.get("/settings")  # GET /settings is a core protected route
+            def clash() -> JSONResponse:
+                return JSONResponse({"clash": True})
+
+            return router
+
+    _install(monkeypatch, (CoreClash,))
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+    )
+    with pytest.raises(PluginError, match="collisions with core"):
+        create_app(settings=settings, session_factory=session_factory)
+
+
 # --------------------------------------------------------------------------- #
 # Settings section render (seam #4).
 # --------------------------------------------------------------------------- #

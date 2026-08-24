@@ -16,7 +16,7 @@ import logging
 import re
 import secrets
 import uuid
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime
@@ -43,6 +43,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
+from fastapi.routing import APIRoute
 from fastapi.templating import Jinja2Templates
 from jinja2 import BaseLoader, ChoiceLoader, FileSystemLoader, PrefixLoader
 from sqlalchemy import Engine, exists, func, select
@@ -1137,6 +1138,26 @@ def _configure_template_loader(plugin_dirs: Mapping[str, str]) -> None:
         templates.env.loader = ChoiceLoader([core, prefix])
     else:
         templates.env.loader = core
+
+
+def _iter_api_routes(routes: Iterable[object]) -> Iterator[APIRoute]:
+    """Yield every :class:`APIRoute` reachable from ``routes``, descending mounts.
+
+    FastAPI mounts an included ``APIRouter`` as a sub-route that exposes the
+    original router on ``original_router`` rather than flattening its routes, so
+    the gated ``protected`` router — and each plugin router included *under* it
+    (#138) — sits nested. A single-level walk misses the plugin routes entirely,
+    which is why the plugin-vs-core collision guard and the route-inventory
+    contract test both recurse here. Non-APIRoute mounts without an
+    ``original_router`` (static-file mounts) yield nothing.
+    """
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        else:
+            sub = getattr(route, "original_router", None)
+            if sub is not None:
+                yield from _iter_api_routes(sub.routes)
 
 
 def _run_or_404(session: Session, run_id: uuid.UUID) -> PipelineRun:
@@ -7632,6 +7653,31 @@ def _register_routes(app: FastAPI) -> None:
     collisions = find_route_collisions(routes_by_plugin)
     if collisions:
         raise PluginError("plugin route collisions: " + "; ".join(collisions))
+    # Plugin-vs-core collisions (issue #138): a plugin claiming a (path, method)
+    # a core route already owns fails boot too, mirroring the worker's
+    # _CORE_TASK_NAMES guard. find_route_collisions above only catches
+    # plugin-vs-plugin; without this a converted plugin (#139+) that squats a core
+    # route would mount an unreachable shadow that route dispatch order hides. Core
+    # routes are the exempt app-level routes plus every route already on
+    # `protected` (mounted below, so not yet on `app`).
+    core_pairs = {
+        (route.path, method)
+        for route in (
+            *_iter_api_routes(app.routes),
+            *_iter_api_routes(protected.routes),
+        )
+        for method in (route.methods or ())
+    }
+    core_conflicts = sorted(
+        f"{method.upper()} {path}: claimed by plugin {plugin_id} and a core route"
+        for plugin_id, routes in routes_by_plugin.items()
+        for path, method in routes
+        if (path, method.upper()) in core_pairs
+    )
+    if core_conflicts:
+        raise PluginError(
+            "plugin route collisions with core: " + "; ".join(core_conflicts)
+        )
     for router in built_routers:
         protected.include_router(router)
 

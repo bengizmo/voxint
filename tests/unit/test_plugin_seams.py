@@ -155,8 +155,9 @@ def test_build_parser_registers_plugin_subcommands(
             p = subparsers.add_parser("fakecmd", help="a plugin command")
             p.set_defaults(fn=lambda args: marker.__setitem__("ran", True) or 0)
 
-    reg = load_registry([CliPlugin])
-    monkeypatch.setattr("voxint.plugins.get_plugins", lambda: reg)
+    # build_parser enumerates BUILTIN directly (not the settings-forcing
+    # get_plugins), so inject through the builtin set.
+    monkeypatch.setattr("voxint.plugins.BUILTIN", (CliPlugin,))
 
     from voxint.cli import build_parser
 
@@ -170,13 +171,34 @@ def test_build_parser_registers_plugin_subcommands(
 def test_build_parser_without_plugins_has_no_extra_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    reg = load_registry([])
-    monkeypatch.setattr("voxint.plugins.get_plugins", lambda: reg)
+    monkeypatch.setattr("voxint.plugins.BUILTIN", ())
     from voxint.cli import build_parser
 
     parser = build_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["fakecmd"])  # no such command
+
+
+def test_build_parser_survives_invalid_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """build_parser must not force full Settings validation (issue #138).
+
+    ``--help``, ``--version``, and the settings-free ``score`` command all
+    construct the parser, so a broken deployment configuration must not break
+    parser construction. When settings fail to load, plugin-subcommand enumeration
+    falls back to the environment kill switch rather than raising.
+    """
+    from voxint import config
+    from voxint.cli import build_parser
+
+    def _raise() -> object:
+        raise config.SettingsError("invalid settings")
+
+    monkeypatch.setattr(config, "get_settings", _raise)
+    monkeypatch.setattr("voxint.plugins.BUILTIN", ())
+    parser = build_parser()  # must not raise
+    assert parser is not None
 
 
 # --------------------------------------------------------------------------- #

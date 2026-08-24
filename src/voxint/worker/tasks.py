@@ -405,21 +405,27 @@ def recovery_sweep() -> dict[str, int]:
     # Generic stale-QUEUED recovery for plugin job lanes (issue #138): the same
     # oldest-first, bounded, no-mutation redispatch the embedding block above does
     # (issue #130), driven by each active plugin's JobLaneSpec. The embedding lane
-    # stays hard-coded until #140 converts it and declares its own lane. Empty
-    # registry ⇒ no lanes ⇒ {}.
-    plugin_lane_counts = redispatch_stale_lane_jobs(
-        get_plugins().job_lanes(),
-        session_factory=factory,
-        send_task=app.send_task,
-        cutoff=cutoff,
-    )
-    return {
+    # stays hard-coded until #140 converts it and declares its own lane.
+    lanes = get_plugins().job_lanes()
+    result = {
         "recovered": len(recovered),
         "stale_queued": len(stale_queued),
         "cancelled_claims_closed": len(cancelled_claims),
         "stale_embedding_jobs": len(stale_embedding_jobs),
-        "plugin_lanes": sum(plugin_lane_counts.values()),
     }
+    # Surface the plugin-lane count only when a plugin actually declares a lane, so
+    # an empty registry (the #138 dormant state) returns the exact pre-change
+    # four-key result — no new key for result consumers, logs, or monitoring to
+    # trip over. A converted lane (#140) adds the key when its lane exists.
+    if lanes:
+        plugin_lane_counts = redispatch_stale_lane_jobs(
+            lanes,
+            session_factory=factory,
+            send_task=app.send_task,
+            cutoff=cutoff,
+        )
+        result["plugin_lanes"] = sum(plugin_lane_counts.values())
+    return result
 
 
 @app.task(name="voxint.gc_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
