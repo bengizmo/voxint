@@ -833,7 +833,7 @@ def fetch_media_url(
     session.commit()
     return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
 
-@core_router.get("/runs/{run_id}")
+@core_router.get("/runs/{run_id}", name="run_detail")
 def run_detail(
     run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
