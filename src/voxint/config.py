@@ -500,6 +500,14 @@ class Settings(BaseSettings):
     # config snapshot); the staleness hash always covers the full source.
     run_assets_max_input_chars: int = Field(default=48_000, ge=1_000)
 
+    # Console 2.0 area flags (epic #149, P1 #152). Each later phase ships its
+    # pages dark behind one of these and flips the default at its release, so a
+    # half-built area never appears in the sidebar. Environment-only on purpose
+    # (no DB override, no settings UI): the flip is a release action, not a
+    # runtime toggle. Projects is the first flagged area; its sidebar entry and
+    # the "New project" quick action render only when this is true.
+    console_projects_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above
