@@ -100,6 +100,14 @@ def test_df_sibling_shares_runtime_but_is_a_distinct_inference_space() -> None:
     df_base = next(w for w in df.weights if w.role == "xlsr_ssl_base")
     la_base = next(w for w in default.weights if w.role == "xlsr_ssl_base")
     assert df_base.sha256 == la_base.sha256
+    # The DF checkpoint was saved from a DataParallel model: it declares the
+    # "module." key-prefix strip as data. The default loads verbatim (None), so
+    # its already-qualified load path is untouched.
+    df_ckpt_w = next(w for w in df.weights if w.role == "aasist_checkpoint")
+    la_ckpt_w = next(w for w in default.weights if w.role == "aasist_checkpoint")
+    assert df_ckpt_w.state_dict_key_prefix == "module."
+    assert la_ckpt_w.state_dict_key_prefix is None
+    assert la_base.state_dict_key_prefix is None
 
 
 def test_df_anchor_is_the_only_asvspoof_df_stop_gate() -> None:
@@ -181,7 +189,7 @@ def test_windowing_pooling_is_logit_mean() -> None:
 def test_sources_version_pinned() -> None:
     # A registry SHAPE change (a new field/model) must move the version so a
     # reshuffle or pin refresh is a visible, deliberate event in artifacts.
-    assert src.SOURCES_VERSION == "synthdetect-sources-v2"
+    assert src.SOURCES_VERSION == "synthdetect-sources-v3"
 
 
 def test_pinned_weight_shas_and_commits_have_real_shape() -> None:
@@ -217,6 +225,17 @@ def test_validator_rejects_pinned_weight_without_size() -> None:
     bad = replace(default, weights=(bad_weight, *default.weights[1:]))
     with pytest.raises(src.SourcesError, match="positive size_bytes"):
         src._validate_registry(_registry_with("w2v2-aasist", bad))
+
+
+def test_validator_rejects_unknown_state_dict_key_prefix() -> None:
+    # The prefix vocabulary is closed: only None (load verbatim) or "module." (the
+    # DataParallel unwrap). A new transform must be a deliberate registry change.
+    default = src.get_model("w2v2-aasist")
+    bad_weight = replace(default.weights[0], state_dict_key_prefix="mod.")
+    bad = replace(default, weights=(bad_weight, *default.weights[1:]))
+    with pytest.raises(src.SourcesError, match="unknown state_dict_key_prefix"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad))
+    assert set(src.STATE_DICT_KEY_PREFIXES) == {None, "module."}
 
 
 def test_validator_rejects_malformed_commit() -> None:

@@ -23,9 +23,12 @@ Two integrity rails ride on this module:
   of an unverified sha. As of S2b (2026-08-24) the default detector
   ``w2v2-aasist`` is FROZEN and QUALIFIED (real-byte shas + commit pinned,
   ``weights_pinned()`` True, GPU determinism + smoke evidence dated). As of S3
-  (2026-08-25) its DF-tuned sibling ``w2v2-aasist-df`` is PINNED_UNQUALIFIED (the
-  DF-checkpoint sha is frozen from real bytes, but its GPU qualification is a
-  separate dated verdict); the remaining registered models are still CANDIDATE.
+  (2026-08-25) its DF-tuned sibling ``w2v2-aasist-df`` is likewise FROZEN and
+  QUALIFIED: its DF-checkpoint sha is frozen from real bytes and its own dated GPU
+  determinism + smoke verdict passed on RTX 3060 hardware
+  (``docs/reports/synthdetect-gpu-smoke-df-2026-08-25.md``), including the strict
+  ``module.`` DataParallel-unwrap load. The remaining registered models are still
+  CANDIDATE.
 
 The two versioned identities the plan separates (inference space vs calibration
 policy) are NOT both here: this module pins the inference-space INPUTS (weights +
@@ -47,7 +50,9 @@ from typing import Final
 # Bump when the registry SHAPE or the selection seed changes -- recorded in a
 # manifest/report so a reshuffle or a pin refresh is a visible, deliberate event.
 # v2 (2026-08-25, S3): added ReproductionTarget.gate_role + the DF sibling model.
-SOURCES_VERSION: Final = "synthdetect-sources-v2"
+# v3 (2026-08-25, S3): added WeightFile.state_dict_key_prefix (DF checkpoint's
+#     nn.DataParallel "module." unwrap), declared as data + closed vocabulary.
+SOURCES_VERSION: Final = "synthdetect-sources-v3"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
 # lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
@@ -59,6 +64,12 @@ _COMMIT_RE: Final = re.compile(r"^[0-9a-f]{40}$")
 # these is a registry bug (asserted at import, alongside gate_role).
 METRICS: Final = ("eer", "tpr_clean", "fpr_unmarked")
 TOLERANCE_STATUSES: Final = ("provisional", "ratified")
+
+# The only state-dict key prefixes a checkpoint may declare (WeightFile). None is
+# load-verbatim (the shipped default); ``"module."`` is the nn.DataParallel-save
+# unwrap. A new transform must be a deliberate, reviewed registry change, not an
+# accident, so the set is closed and asserted at import.
+STATE_DICT_KEY_PREFIXES: Final = (None, "module.")
 
 # The one seed for every deterministic choice this harness makes downstream
 # (corpus split assignment, bootstrap resampling). A single named constant so a
@@ -99,6 +110,15 @@ class WeightFile:
     sha256: str | None
     size_bytes: int | None
     license_spdx: str
+    # A state-dict key prefix this checkpoint's bytes carry that the runner must
+    # strip before a strict load, declared as data (never inferred at load time).
+    # ``"module."`` marks a checkpoint saved from an ``nn.DataParallel``-wrapped
+    # model: every key is ``module.``-prefixed, and on a single GPU the unwrapped
+    # forward is numerically identical. None (the default) means load the bytes
+    # verbatim -- the shipped default's proven path. The runner fails closed unless
+    # every key uniformly carries the declared prefix, and keeps ``strict=True``
+    # after stripping, so a mis-declared prefix can never mask a wrong checkpoint.
+    state_dict_key_prefix: str | None = None
 
     def pinned(self) -> bool:
         """True once the real sha is frozen (S2); False while CANDIDATE."""
@@ -311,10 +331,11 @@ MODELS: Final[dict[str, ModelEntry]] = {
     # DIFFERENT aasist checkpoint (Best_LA_model_for_DF.pth) and therefore a
     # DIFFERENT inference space. This is the checkpoint that produces the upstream
     # 2.85% ASVspoof 2021 DF EER, so it -- not the production default -- carries
-    # the hard DF stop-gate (S3 decision, 2026-08-25). PINNED_UNQUALIFIED: the
-    # weight sha is frozen from real bytes (receipt below), but the GPU
-    # determinism + smoke qualification ceremony is a separate dated verdict
-    # (S3/S4), exactly as w2v2-aasist was before S2b.
+    # the hard DF stop-gate (S3 decision, 2026-08-25). QUALIFIED (S3, 2026-08-25):
+    # the weight sha is frozen from real bytes (receipt below) AND its own dated
+    # GPU determinism + smoke verdict passed on RTX 3060 hardware, including the
+    # strict "module." DataParallel-unwrap load
+    # (docs/reports/synthdetect-gpu-smoke-df-2026-08-25.md).
     "w2v2-aasist-df": ModelEntry(
         model_id="w2v2-aasist-df",
         inference_space="synthdetect-w2v2aasistdf-v1",
@@ -339,6 +360,12 @@ MODELS: Final[dict[str, ModelEntry]] = {
                 sha256="1cf904f1d84c867c278cd42161df5367939d61cc28bfefd239bc995af59c2804",
                 size_bytes=1271642081,
                 license_spdx="MIT",
+                # This checkpoint was saved from an nn.DataParallel-wrapped model:
+                # all 674 keys are ``module.``-prefixed (the default's are not).
+                # Declared here so the runner strips it before a strict load; on a
+                # single GPU this is numerically identical to upstream's eval.
+                # Verified cold on maintainer GPU hardware (S3 smoke, 2026-08-25).
+                state_dict_key_prefix="module.",
             ),
             # The XLS-R front end is byte-identical to the default's base.
             WeightFile(
@@ -370,7 +397,8 @@ MODELS: Final[dict[str, ModelEntry]] = {
         ),
         notes=(
             "DF-tuned checkpoint (Best_LA_model_for_DF.pth); the upstream 2.85% "
-            "ASVspoof 2021 DF anchor. PINNED_UNQUALIFIED until its own GPU verdict."
+            "ASVspoof 2021 DF anchor. QUALIFIED (S3, 2026-08-25): dated GPU "
+            "determinism + smoke verdict on RTX 3060, strict module.-unwrap load."
         ),
     ),
     # Best raw generalization but NON-COMMERCIAL weights: harness-eval and
@@ -636,6 +664,12 @@ def _validate_registry(
                 raise SourcesError(
                     f"model {key!r} weight {weight.filename!r} is sha-pinned but has "
                     f"no positive size_bytes ({weight.size_bytes!r})"
+                )
+            if weight.state_dict_key_prefix not in STATE_DICT_KEY_PREFIXES:
+                raise SourcesError(
+                    f"model {key!r} weight {weight.filename!r} declares an unknown "
+                    f"state_dict_key_prefix {weight.state_dict_key_prefix!r} "
+                    f"(allowed: {STATE_DICT_KEY_PREFIXES})"
                 )
         for target in model.reproduction_targets:
             if target.benchmark not in benchmarks:

@@ -1,10 +1,10 @@
 > **Status:** S3 pre-registration evidence. Dated weight receipt for the
 > synthdetect DF reproduction checkpoint `w2v2-aasist-df` (issue #144, Milestone 1
 > Session S3). Records the real downloaded bytes that the registry pins now
-> reference. Qualification state after this receipt is `pinned_unqualified`; it
-> advances to `qualified` only after this checkpoint's own GPU determinism plus
-> smoke verdict passes (see `docs/gpu-contracts.md`). This receipt is a byte
-> fact, not a reproduction or determinism claim.
+> reference. This receipt records a byte fact only. The checkpoint's own GPU
+> determinism plus smoke verdict has since passed
+> (`synthdetect-gpu-smoke-df-2026-08-25.md`), advancing it to `qualified`; see the
+> "Qualification" section below and `docs/gpu-contracts.md`.
 
 # synthdetect weight receipt: w2v2-aasist-df (2026-08-25)
 
@@ -65,13 +65,22 @@ byte-identical to `model.py` at the pinned model-repository commit (sha256
 `08b2b99b9cc0e90732746471325185f2eb144795ee35338e0a02951015a856c6`), and is shared
 with the default detector: the two models differ only in the aasist checkpoint.
 
-## Not yet qualified
+## Qualification (verdict passed 2026-08-25)
 
-This receipt freezes bytes. It does not run the checkpoint. Promoting
-`w2v2-aasist-df` to `qualified` needs its own dated GPU evidence: a strict
-state-dict load with no missing or unexpected keys (a fairseq checkpoint may carry
-optimizer or `cfg` state, so the load is proven cold, not assumed from the
-default), an all-modules-in-eval assertion, finite one-score-per-window outputs
-with correct counts and polarity, a resume that does not duplicate, a deliberate
-mismatch that fails closed, and a determinism spike that is bit-for-bit identical
-across cold container starts. That verdict is the next GPU step in S3.
+This receipt freezes bytes; it does not run the checkpoint. Promotion to
+`qualified` needed its own dated GPU evidence, which has now passed and is recorded
+in `docs/reports/synthdetect-gpu-smoke-df-2026-08-25.md`: a strict state-dict load
+with no missing or unexpected keys, an all-modules-in-eval assertion, finite
+one-score-per-window outputs with correct counts and polarity, a resume that does
+not duplicate, deliberate mismatches that fail closed, and a determinism spike that
+is bit-for-bit identical across four cold container starts.
+
+Proving the load cold was warranted. Both the default and DF checkpoints are bare
+state dicts (no optimizer or `cfg` wrapper), but the DF checkpoint's 674 keys are
+each `module.`-prefixed (it was saved from an `nn.DataParallel`-wrapped model),
+while the default's are unprefixed. The registry declares that prefix as data on
+the checkpoint's `WeightFile` (`state_dict_key_prefix="module."`,
+`SOURCES_VERSION=synthdetect-sources-v3`), and the runner strips it from the keys
+and the `_metadata` map before the strict load; on a single GPU this is numerically
+identical to upstream's DataParallel evaluation. The registry entry is now
+QUALIFIED.
