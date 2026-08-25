@@ -9,9 +9,9 @@ old service without a ``resources`` block) renders without crashing.
 
 The route probes the model services live (behind a cache); with none running in
 the test env that would just degrade to empty, so each test instead patches
-``voxint.api.app.collect_resource_status`` to return a crafted snapshot — the
-route still runs ``build_resource_strip`` / ``render_resource_prometheus`` for
-real over it.
+``voxint.api.resource_status.collect_resource_status`` to return a crafted
+snapshot — the route still runs ``build_resource_strip`` /
+``render_resource_prometheus`` for real over it.
 """
 
 from pathlib import Path
@@ -87,8 +87,12 @@ def _view(name: str, admission: AdmissionInfo | None) -> ServiceResourceView:
 
 
 def _patch_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: ResourceSnapshot) -> None:
+    # Patch the canonical source (resource_status). The guarded reader every page
+    # shares — collect_resource_status_or_empty (#160) — resolves this module
+    # global at call time, so one patch covers the resource page, /metrics, and
+    # the Jobs strip alike.
     monkeypatch.setattr(
-        "voxint.api.routers.legacy_runs.collect_resource_status",
+        "voxint.api.resource_status.collect_resource_status",
         lambda settings, **kw: snapshot,
     )
 
@@ -154,12 +158,12 @@ def test_resource_strip_unavailable_when_empty(
 def test_probe_failure_degrades_to_unavailable(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A probe that raises must never break the page: _resource_snapshot swallows
-    # it into an empty snapshot, so the strip shows "unavailable", not a 500.
+    # A probe that raises must never break the page: collect_resource_status_or_empty
+    # swallows it into an empty snapshot, so the strip shows "unavailable", not a 500.
     def _boom(settings: object, **kw: object) -> ResourceSnapshot:
         raise RuntimeError("nvml exploded")
 
-    monkeypatch.setattr("voxint.api.routers.legacy_runs.collect_resource_status", _boom)
+    monkeypatch.setattr("voxint.api.resource_status.collect_resource_status", _boom)
     resp = client.get("/resources")
     assert resp.status_code == 200
     assert "Hardware status unavailable" in resp.text

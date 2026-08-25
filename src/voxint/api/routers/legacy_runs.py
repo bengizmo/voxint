@@ -58,7 +58,7 @@ from voxint.api.presentation import title_from_snapshot
 from voxint.api.resource_status import (
     ResourceSnapshot,
     build_resource_strip,
-    collect_resource_status,
+    collect_resource_status_or_empty,
     render_resource_prometheus,
 )
 from voxint.api.routers import deps
@@ -824,10 +824,25 @@ def fetch_media_url(
     session.commit()
     return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
 
-@core_router.get("/runs/{run_id}", name="run_detail")
-def run_detail(
-    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def build_run_detail_context(
+    run_id: uuid.UUID,
+    request: Request,
+    session: Session,
+    *,
+    active_nav: str = "runs",
+    tutorial: bool = True,
+) -> dict[str, Any]:
+    """The full run-detail render context, shared by ``/runs/{id}`` and the
+    Console 2.0 ``/jobs/{id}`` page (#160).
+
+    Promoted out of the ``run_detail`` handler so the Jobs area can render the
+    identical run-detail sections without duplicating the mutation surface: the
+    same forms post to the same ``/runs/{id}/...`` action endpoints (Track C
+    owns the eventual legacy_runs retirement, so this extraction is in-remit).
+    ``active_nav`` selects the highlighted sidebar entry; ``tutorial`` gates the
+    guided-tour banner (off on ``/jobs/{id}``, which is dark-shipped and not in
+    the tutorial's route map — see the deferred activation slice).
+    """
     run = _run_or_404(session, run_id)
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
@@ -857,91 +872,106 @@ def run_detail(
     transcript_available = bool(
         session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
     )
+    return {
+        "request": request,
+        "run": run,
+        "stage_runs": stage_runs,
+        # Which model actually answered each stage, from that stage's
+        # latest completed attempt (A1 provenance). "Not recorded" for
+        # legacy runs stamped before this existed.
+        "model_provenance": select_run_model_identity(stage_runs),
+        # The frozen sidecar title (issue #104), shown as the run's
+        # display name above the raw path. Tolerant read: None when the
+        # run has no sidecar (or a tampered one).
+        "sidecar_title": title_from_snapshot(run.sidecar),
+        # Provenance for a URL run, reduced to a bare host — the raw
+        # source_url (which can carry a signed token in its query) is
+        # NEVER passed to the template; None for a local/uploaded run
+        # renders as a neutral placeholder.
+        "provenance": provenance_host(run.media_item.source_url),
+        "audio_available": audio_available,
+        "media_reclaimed_at": media_reclaimed_at,
+        "transcript_available": transcript_available,
+        # Read as a bare boolean (never echoed): a submit/requeue whose
+        # enqueue was deferred by a broker outage redirects here with it.
+        "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
+        # CSRF token for the requeue form (rendered only when FAILED).
+        "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
+        # CSRF token for the cancel form (rendered only for a live run:
+        # queued / running / awaiting_adjudication — issue #5).
+        "csrf_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_CANCEL),
+        # Soft-archive + derived-media deletion (issue #5, slice 2). The
+        # buttons render only for a terminal run; un-archive replaces
+        # archive once the run carries a stamp.
+        "run_archived": run.archived_at is not None,
+        "run_terminal": run.status
+        in (
+            RunStatus.COMPLETED.value,
+            RunStatus.FAILED.value,
+            RunStatus.CANCELLED.value,
+        ),
+        "csrf_run_archive": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_RUN_ARCHIVE
+        ),
+        "csrf_run_unarchive": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_RUN_UNARCHIVE
+        ),
+        "csrf_run_media_delete": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_RUN_MEDIA_DELETE
+        ),
+        # Post-redirect banner after a derived-media deletion (PRG): the
+        # non-negative counts are read as bare ints, never echoed as text.
+        "media_delete_result": _media_delete_banner(request),
+        # Acquisition context (issue #36): the write-once snapshot, or
+        # None for uploads / pre-capture URL runs. Scraped metadata and
+        # the operator's own notes render in separate sections.
+        "source_metadata": run.media_item.source_metadata,
+        "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
+        # Run-level assets (issue #41): current summary/topics/entity
+        # mentions with staleness, plus generation controls.
+        "assets": _run_assets_state(session, settings, run_id),
+        "csrf_assets_generate": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
+        ),
+        "csrf_assets_cancel": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_ASSETS_CANCEL
+        ),
+        # Transcript translation (issue #133): current generation(s)
+        # with staleness, plus generation controls.
+        "translation_state": _run_translation_state(session, settings, run_id),
+        "csrf_translation_generate": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
+        ),
+        "csrf_translation_cancel": mint_csrf_token(
+            request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
+        ),
+        # The guided-tour banner is suppressed on /jobs/{id}: that page is
+        # dark-shipped and not in the tutorial's route map, so advancing the
+        # tour from it would be incoherent until the activation slice remaps
+        # PAGE_ROUTE_NAME[RUN_DETAIL].
+        "tutorial": (
+            _tutorial_banner(
+                request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
+            )
+            if tutorial
+            else None
+        ),
+        "active_nav": active_nav,
+        # Plugin run-detail panels (issue #138): each active plugin's
+        # fragments, ordered by (slot, order), rendered by the panel loop
+        # in run_detail.html. Empty registry => () => nothing rendered.
+        "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
+    }
+
+
+@core_router.get("/runs/{run_id}", name="run_detail")
+def run_detail(
+    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
     return templates.TemplateResponse(
         request,
         "legacy_runs/run_detail.html",
-        {
-            "request": request,
-            "run": run,
-            "stage_runs": stage_runs,
-            # Which model actually answered each stage, from that stage's
-            # latest completed attempt (A1 provenance). "Not recorded" for
-            # legacy runs stamped before this existed.
-            "model_provenance": select_run_model_identity(stage_runs),
-            # The frozen sidecar title (issue #104), shown as the run's
-            # display name above the raw path. Tolerant read: None when the
-            # run has no sidecar (or a tampered one).
-            "sidecar_title": title_from_snapshot(run.sidecar),
-            # Provenance for a URL run, reduced to a bare host — the raw
-            # source_url (which can carry a signed token in its query) is
-            # NEVER passed to the template; None for a local/uploaded run
-            # renders as a neutral placeholder.
-            "provenance": provenance_host(run.media_item.source_url),
-            "audio_available": audio_available,
-            "media_reclaimed_at": media_reclaimed_at,
-            "transcript_available": transcript_available,
-            # Read as a bare boolean (never echoed): a submit/requeue whose
-            # enqueue was deferred by a broker outage redirects here with it.
-            "enqueue_deferred": request.query_params.get("enqueue") == "deferred",
-            # CSRF token for the requeue form (rendered only when FAILED).
-            "csrf_requeue": mint_csrf_token(request.app.state.csrf_secret, CSRF_REQUEUE),
-            # CSRF token for the cancel form (rendered only for a live run:
-            # queued / running / awaiting_adjudication — issue #5).
-            "csrf_cancel": mint_csrf_token(request.app.state.csrf_secret, CSRF_CANCEL),
-            # Soft-archive + derived-media deletion (issue #5, slice 2). The
-            # buttons render only for a terminal run; un-archive replaces
-            # archive once the run carries a stamp.
-            "run_archived": run.archived_at is not None,
-            "run_terminal": run.status
-            in (
-                RunStatus.COMPLETED.value,
-                RunStatus.FAILED.value,
-                RunStatus.CANCELLED.value,
-            ),
-            "csrf_run_archive": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_RUN_ARCHIVE
-            ),
-            "csrf_run_unarchive": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_RUN_UNARCHIVE
-            ),
-            "csrf_run_media_delete": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_RUN_MEDIA_DELETE
-            ),
-            # Post-redirect banner after a derived-media deletion (PRG): the
-            # non-negative counts are read as bare ints, never echoed as text.
-            "media_delete_result": _media_delete_banner(request),
-            # Acquisition context (issue #36): the write-once snapshot, or
-            # None for uploads / pre-capture URL runs. Scraped metadata and
-            # the operator's own notes render in separate sections.
-            "source_metadata": run.media_item.source_metadata,
-            "csrf_notes": mint_csrf_token(request.app.state.csrf_secret, CSRF_NOTES),
-            # Run-level assets (issue #41): current summary/topics/entity
-            # mentions with staleness, plus generation controls.
-            "assets": _run_assets_state(session, settings, run_id),
-            "csrf_assets_generate": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_ASSETS_GENERATE
-            ),
-            "csrf_assets_cancel": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_ASSETS_CANCEL
-            ),
-            # Transcript translation (issue #133): current generation(s)
-            # with staleness, plus generation controls.
-            "translation_state": _run_translation_state(session, settings, run_id),
-            "csrf_translation_generate": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_TRANSLATION_GENERATE
-            ),
-            "csrf_translation_cancel": mint_csrf_token(
-                request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
-            ),
-            "tutorial": _tutorial_banner(
-                request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
-            ),
-            "active_nav": "runs",
-            # Plugin run-detail panels (issue #138): each active plugin's
-            # fragments, ordered by (slot, order), rendered by the panel loop
-            # in run_detail.html. Empty registry => () => nothing rendered.
-            "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
-        },
+        build_run_detail_context(run_id, request, session),
     )
 
 @core_router.get("/runs/{run_id}/transcript")
@@ -1352,13 +1382,11 @@ def _resource_snapshot(request: Request) -> ResourceSnapshot:
 
     ``/metrics`` and the dashboard/resource pages read this cached value
     (never ``force``): a 15s poll across tabs shares one probe, and a probe
-    failure degrades to an empty snapshot rather than breaking the page.
+    failure degrades to an empty snapshot rather than breaking the page. The
+    guard lives in :func:`collect_resource_status_or_empty` so the Jobs page
+    (#160) shares one never-raise contract with this one.
     """
-    try:
-        return collect_resource_status(request.app.state.settings)
-    except Exception:
-        # Telemetry is advisory; a probe failure must never break a render.
-        return ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0)
+    return collect_resource_status_or_empty(request.app.state.settings)
 
 @dashboards_router.get("/metrics")
 def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
