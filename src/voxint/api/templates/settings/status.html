@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Voxint — status{% endblock %}
+{% block body %}
+{# Console 2.0 P6 status sub-page (issue #161): install kind, component health,
+   and the live hardware snapshot. The doctor checks self-contain every dependency
+   failure and the snapshot degrades to empty on a probe failure, so this renders a
+   200 even with Postgres, Redis, or the model services down. #}
+<div class="settings">
+<h1>Status and health</h1>
+<p><a href="/settings">← Settings</a></p>
+
+<section aria-labelledby="install-heading">
+<h2 id="install-heading">Install</h2>
+<p>Install kind: <strong>{{ install_kind }}</strong>{% if install_kind == "unknown" %}
+   <span class="muted">(not detected on this deployment)</span>{% endif %}</p>
+</section>
+
+<section aria-labelledby="health-heading">
+<h2 id="health-heading">Component health</h2>
+<p class="muted">Checked live as this page loads. A failed component means the work
+   that needs it will not run until it is back.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th scope="col">Component</th><th scope="col">State</th><th scope="col">Detail</th>
+  </tr></thead>
+  <tbody>
+    {% for c in doctor_checks %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td><span class="pill {{ c.state }}">{{ c.state }}</span></td>
+      <td>{{ c.detail }}{% if c.state != "ready" and c.remediation %}<br>
+        <span class="muted">{{ c.remediation }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+
+<section aria-labelledby="snapshot-heading">
+<h2 id="snapshot-heading">Hardware snapshot</h2>
+{% include "legacy_runs/resource_status.html" %}
+</section>
+</div>
+{% endblock %}

@@ -572,6 +572,14 @@
     true
   ],
   [
+    "/settings/database",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/features",
     [
       "POST"
@@ -604,6 +612,14 @@
     true
   ],
   [
+    "/settings/hardware",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/llm",
     [
       "POST"
@@ -612,9 +628,33 @@
     true
   ],
   [
+    "/settings/plugins",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/plugins/{plugin_id}",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/settings/semantic",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/status",
+    [
+      "GET"
     ],
     "onboarding",
     true

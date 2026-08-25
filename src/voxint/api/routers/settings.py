@@ -26,8 +26,13 @@ from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from voxint.api import settings_view
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.api.languages import LANGUAGE_NAMES
+from voxint.api.resource_status import (
+    build_resource_strip,
+    collect_resource_status_or_empty,
+)
 from voxint.api.routers import deps
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -1813,11 +1818,105 @@ def _settings_context(
     context.update(overrides)
     return context
 
+def _settings_page_template(request: Request) -> str:
+    """The /settings page template for the current flag state (Console 2.0 P6,
+    #161). The flag branches CONTENT, not access: off is the current single long
+    page byte-identically; on is the regrouped hub that keeps every mutable
+    section (and its anchors) inline and links out to the read-only sub-pages.
+    Both render from the same _settings_context, so a POST error re-render lands
+    on whichever page the operator is using and loses no data."""
+    settings: Settings = request.app.state.settings
+    return (
+        "settings/hub.html"
+        if settings.console_settings_enabled
+        else "settings/settings.html"
+    )
+
+
 @router.get("/settings", name="settings_page")
 def settings_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     return templates.TemplateResponse(
-        request, "settings/settings.html", _settings_context(request, session)
+        request, _settings_page_template(request), _settings_context(request, session)
     )
+
+
+def _sub_page_context(request: Request, **page: Any) -> dict[str, Any]:
+    """Base context for a read-only settings sub-page (nav + page keys).
+
+    Sub-pages are GET-only and stateless, so they need only the shell nav marker
+    (``active_nav``) plus their own view; the shell's sidebar keys come from the
+    template context processor.
+    """
+    return {"request": request, "active_nav": "settings", **page}
+
+
+@router.get("/settings/status", name="settings_status")
+def settings_status_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    # Doctor readiness (self-contains every dependency failure) + the hardware
+    # snapshot strip (guarded to an empty snapshot on any probe failure), so this
+    # renders a 200 even with Postgres/Redis/model services down.
+    settings: Settings = request.app.state.settings
+    snapshot = collect_resource_status_or_empty(settings)
+    context = _sub_page_context(
+        request,
+        install_kind=settings_view.install_kind(),
+        doctor_checks=_doctor_checks(request, session),
+        snapshot=snapshot,
+        resource_strip=build_resource_strip(snapshot),
+    )
+    return templates.TemplateResponse(request, "settings/status.html", context)
+
+
+@router.get("/settings/hardware", name="settings_hardware")
+def settings_hardware_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    settings: Settings = request.app.state.settings
+    view = settings_view.build_hardware_view(
+        settings, tuple(collect_service_identity(settings))
+    )
+    # pipeline_models feeds the reused settings/_models.html panel (same live
+    # service identity the flat page's Pipeline models section rendered).
+    context = _sub_page_context(request, hardware=view, pipeline_models=view.services)
+    return templates.TemplateResponse(request, "settings/hardware.html", context)
+
+
+@router.get("/settings/database", name="settings_database")
+def settings_database_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    settings: Settings = request.app.state.settings
+    view = settings_view.build_database_view(session, settings)
+    context = _sub_page_context(request, database=view)
+    return templates.TemplateResponse(request, "settings/database.html", context)
+
+
+@router.get("/settings/plugins", name="settings_plugins")
+def settings_plugins_page(
+    request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    settings: Settings = request.app.state.settings
+    registry: PluginRegistry = request.app.state.plugins
+    row = get_app_settings(session)
+    view = settings_view.build_plugins_view(registry, row, settings)
+    context = _sub_page_context(request, plugins=view)
+    return templates.TemplateResponse(request, "settings/plugins.html", context)
+
+
+@router.get("/settings/plugins/{plugin_id}", name="settings_plugin_detail")
+def settings_plugin_detail_page(
+    plugin_id: str, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    settings: Settings = request.app.state.settings
+    registry: PluginRegistry = request.app.state.plugins
+    row = get_app_settings(session)
+    view = settings_view.build_plugin_detail(registry, plugin_id, row, settings)
+    if view is None:
+        raise HTTPException(status_code=404, detail="Unknown plugin")
+    context = _sub_page_context(request, plugin=view)
+    return templates.TemplateResponse(request, "settings/plugin_detail.html", context)
 
 @router.post("/settings/llm")
 def settings_llm(
@@ -1838,7 +1937,7 @@ def settings_llm(
         # Password field, never prefilled: the submitted key is never echoed.
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, llm_error=error),
         )
 
@@ -1904,7 +2003,7 @@ def settings_features(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request, session, features_errors=errors, features_submitted=submitted
             ),
@@ -1940,7 +2039,7 @@ def settings_semantic(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request,
                 session,
@@ -1979,7 +2078,7 @@ def settings_translation(
     if errors:
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request,
                 session,
@@ -2023,7 +2122,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, corrections_error=message),
             status_code=422,
         )
@@ -2049,7 +2148,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, corrections_error=message),
             status_code=422,
         )
@@ -2065,7 +2164,7 @@ def settings_corrections(
             )
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, corrections_error=exc.message),
             status_code=422,
         )
@@ -2105,7 +2204,7 @@ def settings_glossary(
         submitted = [line for line in vocabulary.splitlines() if line.strip()]
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request,
                 session,
@@ -2142,7 +2241,7 @@ def settings_watch_folder(
     if watch_folder_enabled not in _FEATURE_FLAG_CHOICES:
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request,
                 session,
@@ -2197,7 +2296,7 @@ def settings_web_research(
         }
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(
                 request, session, web_research_errors=errors, web_research_submitted=submitted
             ),
@@ -2252,7 +2351,7 @@ def settings_folders(
     def _error_page(message: str) -> Response:
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, folder_path=path, folder_error=message),
         )
 
@@ -2286,7 +2385,7 @@ def tutorial_seed(
         session.rollback()
         return templates.TemplateResponse(
             request,
-            "settings/settings.html",
+            _settings_page_template(request),
             _settings_context(request, session, tutorial_error=error),
         )
     session.commit()

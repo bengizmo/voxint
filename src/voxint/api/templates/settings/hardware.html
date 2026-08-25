@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Voxint — hardware{% endblock %}
+{% block body %}
+{# Console 2.0 P6 hardware sub-page (issue #161): read plus guided edit. It shows
+   the effective value, the exact .env key, and the restart needed to apply a
+   change. It never edits your environment or restarts anything. The "restart
+   pending" badge appears only when the running app booted with a different value
+   than the environment now holds, which can happen after a native install's .env
+   is edited in place and never under Docker Compose. #}
+<div class="settings">
+<h1>Hardware</h1>
+<p><a href="/settings">← Settings</a></p>
+
+{% if hardware.restart_pending %}
+<section class="notice" role="status">
+  <p><strong>Restart pending.</strong> The running app has not picked up a recent
+     change to one or more settings below. Restart Voxint to apply it. For Docker
+     Compose run <code>docker compose up -d</code>; for a native install, restart
+     the Voxint service.</p>
+</section>
+{% endif %}
+
+<section aria-labelledby="config-heading">
+<h2 id="config-heading">Configuration</h2>
+<p class="muted">These values are read from the environment when Voxint starts. To
+   change one, set the shown key in your <code>.env</code> and restart Voxint.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th scope="col">Setting</th><th scope="col">Environment key</th>
+    <th scope="col">Running value</th>
+  </tr></thead>
+  <tbody>
+    {% for f in hardware.fields %}
+    <tr>
+      <td>{{ f.label }}</td>
+      <td><code>{{ f.env_key }}</code></td>
+      <td>{{ f.running }}{% if f.restart_pending %}<br>
+        <span class="pill warn">restart pending</span>
+        <span class="muted">environment now: {{ f.pending }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+
+{% include "settings/_models.html" %}
+</div>
+{% endblock %}

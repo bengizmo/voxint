@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Voxint — plugins{% endblock %}
+{% block body %}
+{# Console 2.0 P6 plugins sub-page (issue #161): the plugin registry. No plugins
+   ship yet, so the honest default is an empty list; the machinery is here for the
+   first plugin. Kill-switched ids are listed by id only because the registry does
+   not keep a disabled plugin's name or description. #}
+<div class="settings">
+<h1>Plugins</h1>
+<p><a href="/settings">← Settings</a></p>
+
+<section aria-labelledby="installed-heading">
+<h2 id="installed-heading">Installed plugins</h2>
+{% if plugins.active %}
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th scope="col">Plugin</th><th scope="col">State</th><th scope="col">Description</th>
+  </tr></thead>
+  <tbody>
+    {% for p in plugins.active %}
+    <tr>
+      <td><a href="/settings/plugins/{{ p.plugin_id }}">{{ p.name }}</a></td>
+      <td><span class="pill {{ "ready" if p.enabled else "unverified" }}">
+        {{ "on" if p.enabled else "off" }}</span></td>
+      <td>{{ p.description }}{% for w in p.warnings %}<br>
+        <span class="muted">{{ w }}</span>{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No plugins are installed. Plugins are optional add-ons that
+   contribute their own settings here; when one is installed, it will appear in
+   this list with its own page.</p>
+{% endif %}
+</section>
+
+{% if plugins.killed_ids %}
+<section aria-labelledby="killed-heading">
+<h2 id="killed-heading">Turned off by the kill switch</h2>
+<p class="muted">These plugins are installed but have been switched off with
+   <code>VOXINT_PLUGINS_DISABLED</code>. Remove an id from that list and restart to
+   turn it back on.</p>
+<ul>
+  {% for pid in plugins.killed_ids %}<li><code>{{ pid }}</code></li>{% endfor %}
+</ul>
+</section>
+{% endif %}
+
+{% if plugins.unknown_disabled_ids %}
+<section aria-labelledby="unknown-heading">
+<h2 id="unknown-heading">Unknown ids in the kill switch</h2>
+<p class="notice" role="status"><code>VOXINT_PLUGINS_DISABLED</code> names ids that
+   match no installed plugin, so they do nothing. This is usually a typo. Check
+   these entries:</p>
+<ul>
+  {% for pid in plugins.unknown_disabled_ids %}<li><code>{{ pid }}</code></li>{% endfor %}
+</ul>
+</section>
+{% endif %}
+</div>
+{% endblock %}

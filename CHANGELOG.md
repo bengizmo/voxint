@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 P6a: settings sub-pages and plugins UI, dark-shipped** (#161,
+  epic #149 Track D). Behind a new `CONSOLE_SETTINGS_ENABLED` flag (off by
+  default), `/settings` becomes a hub that keeps every existing section inline
+  (its anchors intact, so deep-links keep working) grouped into everyday and
+  advanced categories, and links out to four new read-only sub-pages: `/settings/
+  status` (install kind, live component health, hardware snapshot), `/settings/
+  hardware` (effective configuration with the exact env key and restart to change
+  it, and a restart-pending badge when the environment changed after boot),
+  `/settings/database` (size, per-table row estimates, retention settings, backup
+  guidance), and `/settings/plugins` plus `/settings/plugins/{id}` (the plugin
+  registry with an honest empty state today and per-plugin pages that render a
+  plugin's own settings section). The sub-pages are registered unconditionally
+  and reachable by URL regardless of the flag, fail soft when a dependency is
+  down, and never edit the environment or restart a service. No `/resources`
+  redirect or version bump ships here: that activation is a later slice.
 - **Console 2.0 Jobs area, dark-shipped** (#160, epic #149 Track C). Two new
   console pages: `/jobs` shows a per-stage pipeline-activity strip
   (queued/active), the per-service hardware-health strip, a compact recent-runs

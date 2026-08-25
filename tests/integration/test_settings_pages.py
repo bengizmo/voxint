@@ -1,0 +1,281 @@
+"""Console 2.0 P6 settings hub + sub-pages (issue #161).
+
+The flag ``console_settings_enabled`` branches the ``/settings`` CONTENT: off is
+the current flat page byte-for-byte (its sections and anchors intact), on is the
+regrouped hub that keeps those same mutable sections inline and links out to the
+read-only sub-pages. The four sub-pages (status, hardware, database, plugins) are
+always registered and reachable regardless of the flag (dark-ship), fail soft
+when a dependency is down, and never write config or restart anything.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
+
+from tests.integration.conftest import seed_onboarded
+from voxint.api.app import create_app
+from voxint.api.csrf import CSRF_SETTINGS, mint_csrf_token
+from voxint.api.service_identity import ServiceIdentityView
+from voxint.api.settings_view import build_hardware_view
+from voxint.config import Settings
+from voxint.plugins import reset_plugins_cache
+from voxint.plugins.base import PluginManifest, SettingsSection, VoxintPlugin
+from voxint.plugins.deps import PluginRouteDeps
+
+CREDS = ("reviewer", "s3cret")
+
+
+@pytest.fixture(autouse=True)
+def _reset_registry() -> Iterator[None]:
+    reset_plugins_cache()
+    yield
+    reset_plugins_cache()
+
+
+def _client(
+    session_factory: sessionmaker[Session], **overrides: object
+) -> TestClient:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        csrf_secret="settings-page-test-csrf-key",
+        **overrides,
+    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client.auth = CREDS
+    seed_onboarded(session_factory)
+    return client
+
+
+# --------------------------------------------------------------------------- #
+# Flag branches /settings content; anchors and form posts survive.
+# --------------------------------------------------------------------------- #
+# Anchors external files deep-link into, plus the mutation endpoints; both must
+# survive the hub regroup, since the deep-linking files are outside Track D.
+_PRESERVED_ANCHORS = ('id="llm"', 'id="features"', 'id="glossary"')
+_PRESERVED_POSTS = ("/settings/llm", "/settings/features", "/settings/glossary")
+
+
+def test_flag_off_renders_flat_page(session_factory: sessionmaker[Session]) -> None:
+    client = _client(session_factory)  # flag defaults off
+    body = client.get("/settings").text
+    for marker in (*_PRESERVED_ANCHORS, *_PRESERVED_POSTS):
+        assert marker in body
+    # The hub-only sub-page nav is absent on the flat page.
+    assert "/settings/status" not in body
+    assert "Everyday settings" not in body
+
+
+def test_flag_on_hub_keeps_anchors_and_links_subpages(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory, console_settings_enabled=True)
+    body = client.get("/settings").text
+    # Anchors and form posts still resolve on the hub (deep-links keep working).
+    for marker in (*_PRESERVED_ANCHORS, *_PRESERVED_POSTS):
+        assert marker in body
+    # The hub adds the sub-page nav and the plain-language groupings.
+    for link in (
+        "/settings/status",
+        "/settings/hardware",
+        "/settings/database",
+        "/settings/plugins",
+    ):
+        assert link in body
+    assert "Everyday settings" in body
+
+
+def test_flag_on_post_error_rerenders_hub(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # An invariant violation re-renders in place (200, not a redirect). With the
+    # flag on that re-render must be the hub, so the operator does not jump to the
+    # flat page mid-edit. names_llm on + names off (with env LLM off) violates the
+    # cross-flag invariants, so nothing is written and the page re-renders.
+    client = _client(session_factory, console_settings_enabled=True)
+    resp = client.post(
+        "/settings/features",
+        data={
+            "csrf_token": mint_csrf_token("settings-page-test-csrf-key", CSRF_SETTINGS),
+            "enrichment_names_enabled": "off",
+            "enrichment_names_llm_enabled": "on",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Everyday settings" in resp.text  # hub chrome, not the flat page
+
+
+# --------------------------------------------------------------------------- #
+# Sub-pages are always registered (both flag states) and fail soft.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("flag", [False, True])
+@pytest.mark.parametrize(
+    "path", ["/settings/status", "/settings/hardware", "/settings/database", "/settings/plugins"]
+)
+def test_subpages_reachable_regardless_of_flag(
+    session_factory: sessionmaker[Session], flag: bool, path: str
+) -> None:
+    client = _client(session_factory, console_settings_enabled=flag)
+    assert client.get(path).status_code == 200
+
+
+def test_status_page_reports_health_and_unknown_install(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # No model services in the test env, so this proves the doctor checks render
+    # and the page is a 200 even with dependencies down (fail-soft).
+    client = _client(session_factory)
+    body = client.get("/settings/status").text
+    assert "Component health" in body
+    assert "unknown" in body  # install kind
+
+
+def test_hardware_page_shows_env_keys(session_factory: sessionmaker[Session]) -> None:
+    client = _client(session_factory)
+    body = client.get("/settings/hardware").text
+    assert "ASR_URL" in body and "COMPUTE_TIER" in body
+    # No environment change after boot, so nothing is pending.
+    assert "restart pending" not in body
+
+
+def test_database_page_shows_size_or_honest_failure(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory)
+    body = client.get("/settings/database").text
+    # The real migrated test DB is up, so size renders (not the failure state).
+    assert "Total database size" in body
+    assert "Retention and cleanup" in body
+
+
+# --------------------------------------------------------------------------- #
+# Restart-pending is the honest configured-vs-environment comparison. Proven at
+# the builder with two Settings so it is deterministic (a fresh Settings() would
+# otherwise pick up any repo-root .env); this IS "flip an env-resolved value".
+# --------------------------------------------------------------------------- #
+def test_restart_pending_flips_when_env_value_changes() -> None:
+    boot = Settings(_env_file=None, compute_tier="gpu")  # type: ignore[call-arg]
+    unchanged = build_hardware_view(boot, (), environ_settings=boot)
+    assert unchanged.restart_pending is False
+
+    changed_env = Settings(_env_file=None, compute_tier="cpu")  # type: ignore[call-arg]
+    pending = build_hardware_view(boot, (), environ_settings=changed_env)
+    assert pending.restart_pending is True
+    tier = next(f for f in pending.fields if f.env_key == "COMPUTE_TIER")
+    assert tier.running == "gpu" and tier.pending == "cpu"
+
+
+def test_hardware_view_redacts_url_credentials() -> None:
+    boot = Settings(  # type: ignore[call-arg]
+        _env_file=None, asr_url="http://user:secret@asr.local:8022"
+    )
+    view = build_hardware_view(boot, (), environ_settings=boot)
+    asr = next(f for f in view.fields if f.env_key == "ASR_URL")
+    assert "secret" not in asr.running and "asr.local" in asr.running
+
+
+# --------------------------------------------------------------------------- #
+# Plugins: honest empty state, kill-switch cases, and a real per-plugin page.
+# --------------------------------------------------------------------------- #
+def test_plugins_page_empty_registry_is_honest(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory)
+    body = client.get("/settings/plugins").text
+    assert "No plugins are installed" in body
+
+
+def test_plugins_page_reports_unknown_kill_switch_id(
+    session_factory: sessionmaker[Session],
+) -> None:
+    client = _client(session_factory, voxint_plugins_disabled="ghostplugin")
+    body = client.get("/settings/plugins").text
+    assert "Unknown ids in the kill switch" in body
+    assert "ghostplugin" in body
+
+
+def test_plugin_detail_unknown_id_404(session_factory: sessionmaker[Session]) -> None:
+    client = _client(session_factory)
+    assert client.get("/settings/plugins/nope").status_code == 404
+
+
+class RenderPlugin(VoxintPlugin):
+    manifest = PluginManifest(id="fakeplug", name="Fake Plugin", description="d")
+
+    def enabled(self, row: object, settings: object) -> bool:
+        return True
+
+    def settings_section(self) -> SettingsSection:
+        return SettingsSection(
+            section_id="fakeplug", title="Fake", template="fakeplug/section.html"
+        )
+
+    def build_router(self, deps: PluginRouteDeps) -> APIRouter:
+        router = APIRouter()
+
+        @router.get("/plugins/fakeplug/ping")
+        def ping() -> JSONResponse:
+            return JSONResponse({"ok": True})
+
+        return router
+
+
+def test_plugin_detail_renders_active_plugin_section(
+    session_factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    tdir = tmp_path / "fakeplug_templates"
+    tdir.mkdir()
+    (tdir / "section.html").write_text(
+        '<section id="fakeplug"><h2>FAKE-SECTION-MARKER</h2></section>'
+    )
+    monkeypatch.setattr("voxint.plugins.BUILTIN", (RenderPlugin,))
+    monkeypatch.setattr(
+        "voxint.api.app._plugin_template_dirs",
+        lambda registry: {"fakeplug": str(tdir)},
+    )
+    reset_plugins_cache()
+    client = _client(session_factory)
+    # Listed on the registry page, linking to its detail page.
+    listing = client.get("/settings/plugins").text
+    assert "Fake Plugin" in listing
+    assert "/settings/plugins/fakeplug" in listing
+    # Detail page renders the plugin's own contributed section.
+    detail = client.get("/settings/plugins/fakeplug").text
+    assert "FAKE-SECTION-MARKER" in detail
+
+
+def test_service_identity_view_renders_on_hardware(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Inject a validated identity so the reused _models.html panel renders a
+    # concrete model, proving the hardware page's model panel is wired.
+    view = ServiceIdentityView(
+        role="asr",
+        label="Transcription",
+        url="http://asr.local:8022",
+        reachable=True,
+        model="large-v2",
+        revision=None,
+        engine="faster-whisper",
+        configurable=True,
+        verdict="validated",  # type: ignore[arg-type]
+        identity_axis=None,
+        detail=None,
+        env_keys=("WHISPER_MODEL",),
+    )
+    monkeypatch.setattr(
+        "voxint.api.routers.settings.collect_service_identity", lambda settings: [view]
+    )
+    client = _client(session_factory)
+    body = client.get("/settings/hardware").text
+    assert "large-v2" in body
