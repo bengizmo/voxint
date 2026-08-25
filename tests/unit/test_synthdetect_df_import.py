@@ -227,3 +227,27 @@ def test_select_subset_rejects_empty_cohort() -> None:
     recs = _corpus(4)
     with pytest.raises(di.DfImportError, match="empty cohort"):
         di.select_subset(recs)
+
+
+# --------------------------------------------------------------------------- #
+# Reproducibility pins
+# --------------------------------------------------------------------------- #
+
+
+def test_official_archive_pins_cover_keys_and_all_four_parts() -> None:
+    # The emitter refuses any archive whose basename is absent from the pin map,
+    # so a dropped entry silently narrows what can enter the native tree. Pin the
+    # exact set: the keys archive plus the four Zenodo eval parts, each a 64-hex
+    # sha256. The digests themselves are cross-checked against Zenodo out of band
+    # (md5) at the acceptance run, not re-derived here.
+    pins = di.OFFICIAL_ARCHIVE_SHA256
+    assert set(pins) == {
+        "DF-keys-full.tar.gz",
+        "ASVspoof2021_DF_eval_part00.tar.gz",
+        "ASVspoof2021_DF_eval_part01.tar.gz",
+        "ASVspoof2021_DF_eval_part02.tar.gz",
+        "ASVspoof2021_DF_eval_part03.tar.gz",
+    }
+    for name, digest in pins.items():
+        assert len(digest) == 64, name
+        assert all(c in "0123456789abcdef" for c in digest), name

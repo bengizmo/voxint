@@ -40,7 +40,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   partial or misbound corpus is never left behind; an audio-free `select` verb
   emits just the trial list and selection receipt. The shape was chosen after an
   independent two-model design review; see the S3 pre-registration refinement note
-  in `docs/gpu-contracts.md`.
+  in `docs/gpu-contracts.md`. The four official ASVspoof 2021 DF eval archives
+  are now pinned by sha256 (each cross-checked against the md5 Zenodo publishes),
+  and the emission verb has an acceptance run on the real archives: it extracted
+  the full 611,829-clip native tree, transcoded the 53,392-clip subset, and
+  reproduced the pre-registered cohort hash, with the manifest, receipt, and
+  native FLAC shas all agreeing on sampled clips (see
+  `docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`).
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer
   arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the
   exact span of the run's normalized 16 kHz audio the highlight covers, cut with

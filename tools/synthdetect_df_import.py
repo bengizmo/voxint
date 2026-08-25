@@ -368,16 +368,26 @@ _OFFICIAL_TO_SCHEMA_LABEL = {"bonafide": "bona_fide", "spoof": "spoof"}
 
 # Pinned sha256 digests of the public official archives (reproducibility pins,
 # not secrets). Keys: the asvspoof.org DF keys+metadata archive. Audio: the
-# Zenodo record 4835108 eval tarballs. A digest is listed only once verified;
-# the emitter refuses any archive whose basename is absent here, so an
-# unpinned byte-stream can never enter the native tree. The remaining audio
-# parts are pinned as each is cross-checked at the S3 acceptance run.
+# four Zenodo record 4835108 eval tarballs. A digest is listed only once
+# verified; the emitter refuses any archive whose basename is absent here, so
+# an unpinned byte-stream can never enter the native tree. The four audio parts
+# were cross-checked at the S3 acceptance run: each local sha256 matches, and
+# each local md5 equals the official md5 Zenodo publishes for that file.
 OFFICIAL_ARCHIVE_SHA256: dict[str, str] = {
     "DF-keys-full.tar.gz": (
         "426f93e1cdaf507bf36c355c00c0567137ba1fe8bc177b17281eeae6f4d870a6"
     ),
     "ASVspoof2021_DF_eval_part00.tar.gz": (
         "99273ef077604afa8f79f25070755bf99f3524f9fc55397e59ab0c00661165ea"
+    ),
+    "ASVspoof2021_DF_eval_part01.tar.gz": (
+        "5c3c749c47ba60808c4e088e36d865984a65cd0a436bc656f3fd9b8f4a670e17"
+    ),
+    "ASVspoof2021_DF_eval_part02.tar.gz": (
+        "04f2fb7a057363483892132f075feeabc41e1debfdbe69e783c5ca258d81ae97"
+    ),
+    "ASVspoof2021_DF_eval_part03.tar.gz": (
+        "a45bdae8ce6f35e3d03b24eae8d70cb486d4cc0d7d75225d8ba6e9cd371ec7ab"
     ),
 }
 
