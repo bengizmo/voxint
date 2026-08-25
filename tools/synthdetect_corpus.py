@@ -125,17 +125,18 @@ class ImportedBenchmarkProvenance:
 
     Records only what the source benchmark actually publishes for the clip: its
     official trial id, the source dataset and codec condition, the official split
-    the row belongs to, and (for spoof clips) the attack system and vocoder family.
-    A field the benchmark leaves unset is ``None`` -- it is never coerced to a
-    placeholder. A bona fide clip carries no attack system or vocoder family.
+    the row belongs to, the vocoder family (always published: a real family, the
+    literal ``unknown``, or ``bonafide`` for genuine speech), and the attack system
+    (published for spoof clips, ``None`` for bona fide). An unset field is ``None``,
+    never coerced to a placeholder.
     """
 
     official_trial_id: str
     source_dataset: str
     codec_condition: str
     official_split: str
+    vocoder_family: str
     attack_system: str | None
-    vocoder_family: str | None
 
 
 @dataclass(frozen=True)
@@ -226,10 +227,13 @@ def _validate_imported_provenance(
 ) -> ImportedBenchmarkProvenance:
     """Validate a v2 imported-benchmark provenance block (fail closed).
 
-    ``official_trial_id``/``source_dataset``/``codec_condition``/``official_split``
-    are always required non-empty strings. ``attack_system``/``vocoder_family`` are
-    required for a spoof clip (the benchmark supplies them) and must be null for a
-    bona fide clip (the benchmark leaves them unset). No field may be a sentinel.
+    ``official_trial_id``/``source_dataset``/``codec_condition``/``official_split``/
+    ``vocoder_family`` are always required non-empty strings; the four identity
+    fields must not be sentinels. ``vocoder_family`` is exempt from the sentinel
+    scan because the official metadata uses the literal ``unknown`` as a real
+    vocoder family (and ``bonafide`` for genuine speech). ``attack_system`` is the
+    one label-coupled field: an attack id for a spoof clip, and null for a bona
+    fide clip. A field the benchmark leaves unset is present-and-null, not omitted.
     """
     if not isinstance(raw, dict):
         raise CorpusError(f"{where}: imported_provenance must be an object")
@@ -240,6 +244,12 @@ def _validate_imported_provenance(
     extra = set(raw) - allowed
     if extra:
         raise CorpusError(f"{where}: imported_provenance has unexpected keys {sorted(extra)}")
+    # Honest provenance records absence as an explicit null, so an officially-absent
+    # attack must be present-and-null rather than omitted. Require the full field
+    # set; a missing key is not the same assertion as a null one.
+    missing = allowed - set(raw)
+    if missing:
+        raise CorpusError(f"{where}: imported_provenance is missing keys {sorted(missing)}")
 
     for key in ("official_trial_id", "source_dataset", "codec_condition", "official_split"):
         val = raw.get(key)
@@ -247,30 +257,23 @@ def _validate_imported_provenance(
             raise CorpusError(f"{where}: imported_provenance.{key} must be a non-empty string")
         _reject_sentinel(val, f"{where}: imported_provenance.{key}")
 
-    attack = raw.get("attack_system")
+    # The vocoder family is always officially supplied (a real family, the literal
+    # ``unknown``, or ``bonafide`` for genuine speech); required, never sentinel-scanned.
     vocoder = raw.get("vocoder_family")
-    for key, val in (("attack_system", attack), ("vocoder_family", vocoder)):
-        if val is None:
-            continue
-        if not isinstance(val, str) or not val.strip():
-            raise CorpusError(
-                f"{where}: imported_provenance.{key} must be a non-empty string or null"
-            )
-        _reject_sentinel(val, f"{where}: imported_provenance.{key}")
+    if not isinstance(vocoder, str) or not vocoder.strip():
+        raise CorpusError(f"{where}: imported_provenance.vocoder_family must be a non-empty string")
 
-    # A spoof clip's attack system and vocoder family are officially supplied; a
-    # bona fide clip has neither. Absence is null, presence is real data.
-    if label == "spoof":
-        if attack is None or vocoder is None:
-            raise CorpusError(
-                f"{where}: a spoof imported clip must name its attack_system and vocoder_family"
-            )
-    else:
-        if attack is not None or vocoder is not None:
-            raise CorpusError(
-                f"{where}: a bona_fide imported clip must not carry "
-                "an attack_system or vocoder_family"
-            )
+    # The attack system is the one label-coupled field: present for a spoof clip,
+    # null for a bona fide clip. Presence is real data, absence is an explicit null.
+    attack = raw.get("attack_system")
+    if attack is not None and (not isinstance(attack, str) or not attack.strip()):
+        raise CorpusError(
+            f"{where}: imported_provenance.attack_system must be a non-empty string or null"
+        )
+    if label == "spoof" and attack is None:
+        raise CorpusError(f"{where}: a spoof imported clip must name its attack_system")
+    if label != "spoof" and attack is not None:
+        raise CorpusError(f"{where}: a bona_fide imported clip must not carry an attack_system")
 
     return ImportedBenchmarkProvenance(
         official_trial_id=raw["official_trial_id"],
@@ -286,10 +289,13 @@ def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHE
     """Validate one raw clip record into a :class:`ClipEntry` (fail closed).
 
     Enforces the required-field set and types, the label/split vocabularies, a
-    real content sha, a positive duration, and the label<->generator coupling (a
-    spoof clip MUST carry generator provenance; a bona fide clip MUST NOT). A
-    degraded clip (``degradation`` set) must name its ``parent_clip_id`` so the
-    derivation is never anonymous.
+    real content sha, and a positive duration for both corpus kinds. For a v1
+    ``synthesis`` clip it enforces the label<->generator coupling (a spoof clip
+    MUST carry generator provenance; a bona fide clip MUST NOT) and the
+    degradation/``parent_clip_id`` derivation. For a v2 ``imported_benchmark``
+    clip it forbids the synthesis keys, requires an ``imported_provenance`` block,
+    and binds that block to the clip (official trial id equals the clip id, the
+    clip is eval-only, and the stratum matches the official label and codec).
     """
     where = f"clip {index}"
     if not isinstance(raw, dict):
@@ -368,6 +374,29 @@ def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHE
         if prov_raw is None:
             raise CorpusError(f"{where}: an imported clip must carry imported_provenance")
         imported_provenance = _validate_imported_provenance(prov_raw, where, label=label)
+        # Bind the provenance to this clip's scoring identity: the block must
+        # describe THIS trial, the clip must be eval-only with the official split
+        # agreeing, and the stratum must match the official label and codec. Each
+        # field validates in isolation above; these checks stop a manifest from
+        # attaching one trial's audio to another trial's provenance or grouping.
+        if imported_provenance.official_trial_id != clip_id:
+            raise CorpusError(
+                f"{where}: imported_provenance.official_trial_id "
+                f"{imported_provenance.official_trial_id!r} must equal clip_id {clip_id!r}"
+            )
+        if split != "eval":
+            raise CorpusError(f"{where}: an imported clip must have split 'eval', got {split!r}")
+        if imported_provenance.official_split != "eval":
+            raise CorpusError(
+                f"{where}: imported_provenance.official_split must be 'eval', "
+                f"got {imported_provenance.official_split!r}"
+            )
+        expected_stratum = f"{label}|{imported_provenance.codec_condition}"
+        if raw["stratum"] != expected_stratum:
+            raise CorpusError(
+                f"{where}: stratum {raw['stratum']!r} must be {expected_stratum!r} "
+                "(label and official codec condition)"
+            )
     else:
         generator_raw = raw.get("generator")
         if label == "spoof":
@@ -456,6 +485,7 @@ def load_manifest(obj: Any) -> Manifest:
         benchmark = obj.get("benchmark")
         if not isinstance(benchmark, str) or not benchmark.strip():
             raise CorpusError("a v2 manifest must name a non-empty benchmark")
+        _reject_sentinel(benchmark, "manifest benchmark")
     else:
         corpus_kind = CORPUS_KIND_SYNTHESIS
         benchmark = None
@@ -604,6 +634,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
             {
                 "ok": True,
                 "schema_version": manifest.schema_version,
+                "corpus_kind": manifest.corpus_kind,
+                "benchmark": manifest.benchmark,
                 "clips": len(manifest.clips),
                 "labels": {
                     label: sum(1 for c in manifest.clips if c.label == label) for label in LABELS

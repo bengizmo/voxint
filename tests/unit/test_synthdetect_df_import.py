@@ -90,6 +90,30 @@ def test_parse_rejects_empty() -> None:
         di.parse_trial_metadata("\n  \n")
 
 
+def test_parse_rejects_unknown_split() -> None:
+    # An unknown split would otherwise be silently dropped by the eval filter.
+    with pytest.raises(di.DfImportError, match="split must be one of"):
+        di.parse_trial_metadata(_row(trial_id="DF_E_1", split="evl"))
+
+
+def test_parse_rejects_spoof_without_attack() -> None:
+    with pytest.raises(di.DfImportError, match=r"spoof trial .* must carry an attack_system"):
+        di.parse_trial_metadata(_row(trial_id="DF_E_1", label="spoof", attack="-"))
+
+
+def test_parse_rejects_bonafide_with_attack() -> None:
+    with pytest.raises(di.DfImportError, match=r"bona fide trial .* must not carry"):
+        di.parse_trial_metadata(
+            _row(trial_id="DF_E_1", label="bonafide", attack="A09", vocoder="bonafide")
+        )
+
+
+def test_parse_accepts_unknown_vocoder_for_spoof() -> None:
+    # 'unknown' is a real official vocoder family; the parser records it as-is.
+    (rec,) = di.parse_trial_metadata(_row(trial_id="DF_E_1", label="spoof", vocoder="unknown"))
+    assert rec.vocoder_family == "unknown"
+
+
 # --------------------------------------------------------------------------- #
 # stratum_key
 # --------------------------------------------------------------------------- #
@@ -196,3 +220,10 @@ def test_select_subset_rejects_bad_fraction(num: int, den: int) -> None:
     recs = _corpus(10)
     with pytest.raises(di.DfImportError, match="fraction"):
         di.select_subset(recs, fraction_num=num, fraction_den=den)
+
+
+def test_select_subset_rejects_empty_cohort() -> None:
+    # Every stratum has n=4, so round(4/10)=0 in each: a vacuous draw must fail.
+    recs = _corpus(4)
+    with pytest.raises(di.DfImportError, match="empty cohort"):
+        di.select_subset(recs)

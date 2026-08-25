@@ -340,7 +340,7 @@ def _imported_bona_fide(clip_id: str, speaker: str, **over: Any) -> dict[str, An
         "label": "bona_fide",
         "language": "und",
         "license_spdx": "LicenseRef-ASVspoof2021-DF",
-        "stratum": "bonafide|nocodec",
+        "stratum": "bona_fide|nocodec",
         "source": "asvspoof2021-df",
         "speaker_id": speaker,
         "split": "eval",
@@ -350,7 +350,7 @@ def _imported_bona_fide(clip_id: str, speaker: str, **over: Any) -> dict[str, An
             "codec_condition": "nocodec",
             "official_split": "eval",
             "attack_system": None,
-            "vocoder_family": None,
+            "vocoder_family": "bonafide",
         },
     }
     rec.update(over)
@@ -395,10 +395,12 @@ def test_imported_manifest_loads() -> None:
     assert spoof.imported_provenance is not None
     assert spoof.imported_provenance.attack_system == "A09"
     assert spoof.imported_provenance.vocoder_family == "traditional_vocoder"
-    # A bona fide imported clip carries the provenance block but no attack system.
+    # A bona fide imported clip carries the provenance block but no attack system;
+    # its vocoder family is the official 'bonafide' marker, not null.
     bona = m.clips[0]
     assert bona.imported_provenance is not None
     assert bona.imported_provenance.attack_system is None
+    assert bona.imported_provenance.vocoder_family == "bonafide"
 
 
 def test_imported_spoof_missing_provenance_rejected() -> None:
@@ -437,10 +439,19 @@ def test_imported_provenance_sentinel_rejected(sentinel: str) -> None:
         corpus.load_manifest(_imported_manifest([bad]))
 
 
-def test_imported_provenance_sentinel_attack_rejected() -> None:
+def test_imported_spoof_unknown_vocoder_accepted() -> None:
+    # 'unknown' is a real official vocoder family; it must NOT be sentinel-rejected.
+    ok = _imported_spoof("DF_E_1", "s1")
+    ok["imported_provenance"]["vocoder_family"] = "unknown"
+    m = corpus.load_manifest(_imported_manifest([ok]))
+    assert m.clips[0].imported_provenance is not None
+    assert m.clips[0].imported_provenance.vocoder_family == "unknown"
+
+
+def test_imported_provenance_null_vocoder_rejected() -> None:
     bad = _imported_spoof("DF_E_1", "s1")
-    bad["imported_provenance"]["attack_system"] = "unknown"
-    with pytest.raises(corpus.CorpusError, match="placeholder"):
+    bad["imported_provenance"]["vocoder_family"] = None
+    with pytest.raises(corpus.CorpusError, match="vocoder_family must be a non-empty string"):
         corpus.load_manifest(_imported_manifest([bad]))
 
 
@@ -481,4 +492,46 @@ def test_v1_manifest_with_top_level_corpus_kind_rejected() -> None:
     m = _manifest([_bona_fide("c1", "s1")])
     m["corpus_kind"] = "imported_benchmark"
     with pytest.raises(corpus.CorpusError, match="unexpected top-level keys"):
+        corpus.load_manifest(m)
+
+
+# --- v2 cross-field consistency + honesty (multi-model review hardening) ----- #
+def test_imported_provenance_missing_key_rejected() -> None:
+    # An officially-absent field must be present-and-null, never omitted.
+    bad = _imported_bona_fide("DF_E_1", "s1")
+    del bad["imported_provenance"]["attack_system"]
+    with pytest.raises(corpus.CorpusError, match="missing keys"):
+        corpus.load_manifest(_imported_manifest([bad]))
+
+
+def test_imported_trial_id_must_match_clip_id() -> None:
+    bad = _imported_spoof("DF_E_1", "s1")
+    bad["imported_provenance"]["official_trial_id"] = "DF_E_999"
+    with pytest.raises(corpus.CorpusError, match="must equal clip_id"):
+        corpus.load_manifest(_imported_manifest([bad]))
+
+
+def test_imported_clip_must_be_eval_split() -> None:
+    bad = _imported_spoof("DF_E_1", "s1", split="holdout")
+    with pytest.raises(corpus.CorpusError, match="must have split 'eval'"):
+        corpus.load_manifest(_imported_manifest([bad]))
+
+
+def test_imported_official_split_must_be_eval() -> None:
+    bad = _imported_spoof("DF_E_1", "s1")
+    bad["imported_provenance"]["official_split"] = "progress"
+    with pytest.raises(corpus.CorpusError, match="official_split must be 'eval'"):
+        corpus.load_manifest(_imported_manifest([bad]))
+
+
+def test_imported_stratum_must_match_label_and_codec() -> None:
+    bad = _imported_spoof("DF_E_1", "s1", stratum="bona_fide|low_mp3")
+    with pytest.raises(corpus.CorpusError, match="stratum"):
+        corpus.load_manifest(_imported_manifest([bad]))
+
+
+@pytest.mark.parametrize("sentinel", ["unknown", "n/a", "-", "None"])
+def test_imported_manifest_benchmark_sentinel_rejected(sentinel: str) -> None:
+    m = _imported_manifest([_imported_spoof("DF_E_1", "s1")], benchmark=sentinel)
+    with pytest.raises(corpus.CorpusError, match=r"placeholder|non-empty benchmark"):
         corpus.load_manifest(m)

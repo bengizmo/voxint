@@ -12,12 +12,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `imported_benchmark` variant so an acquired evaluation benchmark can be scored
   by the frozen runner without fabricating synthesis provenance: a v2 clip carries
   an `imported_provenance` block (official trial id, source dataset, codec
-  condition, official split, and for spoof clips the attack system and vocoder
-  family), `generator` is always null, and an officially-absent field is null
-  rather than a placeholder (sentinel strings are rejected). Only `load_manifest`
-  learns the variant; the scoring fields and `cmd_run` are unchanged, and v1
-  validation is byte-for-byte identical (v1 now also rejects unexpected top-level
-  keys). A new `tools/synthdetect_df_import.py` holds the audio-free importer core:
+  condition, official split, vocoder family, and for spoof clips the attack
+  system), `generator` is always null, and an officially-absent field is null
+  rather than a placeholder (sentinel strings are rejected on the identity fields;
+  the vocoder family is recorded as-is because the official metadata uses the
+  literal `unknown` as a real family). A v2 clip's
+  provenance is bound to its scoring identity: the official trial id must equal
+  the clip id, the clip is eval-only, and the stratum must match the official
+  label and codec. Only `load_manifest` learns the variant; the scoring fields
+  and `cmd_run` are unchanged, and v1 acceptance is unchanged for every valid v1
+  manifest (both v1 and v2 now also reject unexpected top-level keys, consistent
+  with the module's existing per-clip unexpected-key rule). A new
+  `tools/synthdetect_df_import.py` holds the audio-free importer core:
   a fail-closed parser for the official `trial_metadata.txt` and the frozen,
   seeded (`voxint-synthdetect-144`), stratified (label by codec condition, `eval`
   split only) hash-rank selection of the 10 % subset, emitting a canonically

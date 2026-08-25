@@ -55,9 +55,15 @@ _COL_LABEL = 5
 _COL_SPLIT = 7
 _COL_VOCODER = 8
 
-# The official label vocabulary (as written in the metadata) and the canonical
-# scored partition. A sentinel single dash marks an officially-absent value.
+# The official label and split vocabularies (as written in the metadata) and the
+# canonical scored partition. In the official DF metadata the attack-system column
+# is the single dash for every bona fide trial and a real id for every spoof trial,
+# while the vocoder-family column is ALWAYS populated (the literal ``bonafide`` for
+# genuine speech, and for spoof a family that legitimately includes the token
+# ``unknown``). So the honest, data-faithful coupling is "attack id present iff
+# spoof", and the vocoder column is never treated as a placeholder.
 OFFICIAL_LABELS = ("bonafide", "spoof")
+OFFICIAL_SPLITS = ("eval", "progress", "hidden")
 SCORED_SPLIT = "eval"
 ABSENT = "-"
 
@@ -100,9 +106,17 @@ def parse_trial_metadata(text: str) -> tuple[TrialRecord, ...]:
     """Parse the official ``trial_metadata.txt`` into validated records (fail closed).
 
     Every non-empty line must have exactly ``TRIAL_METADATA_COLUMNS`` whitespace
-    separated fields and a known label; anything else raises rather than being
-    skipped, so a truncated or reformatted keys file can never silently shrink the
-    cohort. Trial ids must be unique.
+    separated fields, a known label, and a known split; the label must agree with
+    the attack-system column (a spoof row carries an attack id, a bona fide row
+    carries the absent dash). Anything else raises rather than being skipped, so a
+    truncated or reformatted keys file can never silently shrink the cohort, and an
+    unknown split can never be dropped without a word. Trial ids must be unique.
+
+    Field integrity beyond structure is the job of the pinned keys-archive sha, not
+    a per-token placeholder scan: the official metadata legitimately uses tokens
+    that look like placeholders (``unknown`` is a real vocoder family; ``bonafide``
+    is the vocoder-column value for genuine speech), so a sentinel scan here would
+    reject real official rows.
     """
     records: list[TrialRecord] = []
     seen: set[str] = set()
@@ -121,20 +135,44 @@ def parse_trial_metadata(text: str) -> tuple[TrialRecord, ...]:
                 f"trial_metadata line {lineno}: label must be one of "
                 f"{OFFICIAL_LABELS}, got {label!r}"
             )
+        split = fields[_COL_SPLIT]
+        if split not in OFFICIAL_SPLITS:
+            # An unknown split would otherwise be silently dropped by the eval
+            # filter, shrinking the cohort without a word. Fail closed instead.
+            raise DfImportError(
+                f"trial_metadata line {lineno}: split must be one of "
+                f"{OFFICIAL_SPLITS}, got {split!r}"
+            )
         trial_id = fields[_COL_TRIAL_ID]
         if trial_id in seen:
             raise DfImportError(f"trial_metadata line {lineno}: duplicate trial id {trial_id!r}")
         seen.add(trial_id)
+
+        attack_system = _absent_or(fields[_COL_ATTACK])
+        vocoder_family = _absent_or(fields[_COL_VOCODER])
+        # The one clean official invariant: an attack id is present for exactly the
+        # spoof trials. The vocoder column is always populated and is recorded as-is.
+        if label == "spoof" and attack_system is None:
+            raise DfImportError(
+                f"trial_metadata line {lineno}: spoof trial {trial_id!r} "
+                "must carry an attack_system"
+            )
+        if label == "bonafide" and attack_system is not None:
+            raise DfImportError(
+                f"trial_metadata line {lineno}: bona fide trial {trial_id!r} "
+                "must not carry an attack_system"
+            )
+
         records.append(
             TrialRecord(
                 speaker_id=fields[_COL_SPEAKER],
                 trial_id=trial_id,
                 codec=fields[_COL_CODEC],
                 source=fields[_COL_SOURCE],
-                attack_system=_absent_or(fields[_COL_ATTACK]),
+                attack_system=attack_system,
                 label=label,
-                split=fields[_COL_SPLIT],
-                vocoder_family=_absent_or(fields[_COL_VOCODER]),
+                split=split,
+                vocoder_family=vocoder_family,
                 raw=line,
             )
         )
@@ -230,6 +268,13 @@ def select_subset(
         )
 
     trial_ids = tuple(sorted(selected))
+    if not trial_ids:
+        # Every stratum rounded to zero (all strata smaller than the reciprocal of
+        # the fraction). A vacuous cohort is a mistake, not a valid selection.
+        raise DfImportError(
+            "selection produced an empty cohort; the eval strata are too small "
+            f"for fraction {fraction_num}/{fraction_den}"
+        )
     cohort_hash = hashlib.sha256(("\n".join(trial_ids) + "\n").encode()).hexdigest()
     return SubsetSelection(
         seed=seed,
