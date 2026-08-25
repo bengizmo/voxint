@@ -1663,6 +1663,19 @@ official DF archives carry the Open Database License (DbCL-1.0 contents over an
 ODbL-1.0 database); imported clips record `license_spdx: ODbL-1.0` and, as the
 per-clip language is not published for this multi-source eval, `language: und`.
 
+**Acceptance (2026-08-25): emit run on the real archives.** The verb was first
+exercised only on synthetic tar fixtures, so it was run end to end on the four
+official public archives before the DF corpus is trusted. It extracted the full
+611,829-clip native FLAC tree, transcoded the 53,392-clip subset, and published
+both staged roots by per-root atomic renames after the whole-corpus re-audit; the
+emitted `cohort_hash` equals the pre-registered `13c4607c…`, and for sampled
+clips the manifest PCM-payload sha equals the receipt's canonical PCM sha, while
+the receipt's native FLAC sha equals the recomputed sha of the FLAC on disk
+(these are two separate equalities, since the FLAC bytes and the decoded PCM
+bytes are different payloads). The four part sha256 digests are now pinned (each
+cross-checked against the md5 Zenodo publishes). Evidence:
+`docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`.
+
 #### Verdict: w2v2-aasist-df eval runtime QUALIFIED (RTX 3060, SM 8.6, 2026-08-25)
 
 The DF anchor `w2v2-aasist-df` earned its own dated GPU determinism plus smoke
