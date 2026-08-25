@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Navigable outline on the read-only transcript** (#87 follow-up). The
+  `/runs/{id}/transcript` page now shows the same navigable outline the review
+  workbench does: grounded people, organizations, and products become
+  click-to-seek jump targets above the transcript, with summary and topics as
+  inert context. A jump reveals the line (and plays from it when audio seek is
+  available), so it works even on a media-less run. Without JavaScript the panel
+  degrades to a readable, non-interactive list, which both surfaces now render
+  from one shared template so the two fallbacks cannot drift. No new server
+  data: the outline already rode in the shared transcript island props.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as

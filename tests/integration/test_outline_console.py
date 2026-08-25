@@ -197,3 +197,51 @@ def test_review_fallback_lists_grounded_entities_inert(
     outline_section = body.split('aria-label="Outline"', 1)[1].split("</section>", 1)[0]
     assert "outline-jump" not in outline_section
     assert "<button" not in outline_section
+
+
+def test_readonly_transcript_ships_outline_props(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The read-only run transcript reuses the SAME shared island props, so a
+    # present outline rides to the transcript-player island exactly as it does to
+    # the review-stepper — the client renders the OutlinePanel over it (issue #87
+    # follow-up). _outline() already reads /runs/{id}/transcript's props.
+    client = _build_client(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session)
+        _seed_mentions(session, run_id)
+    outline = _outline(client, run_id)
+    assert outline["available"] is True
+    assert len(outline["mentions"]) == 1
+    assert outline["mentions"][0]["surface"] == "Acme Corp"
+
+
+def test_readonly_transcript_fallback_lists_grounded_entities_inert(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The read-only surface renders the SAME inert JS-off outline fallback the
+    # review workbench does (shared macro): grounded entities as text, the honest
+    # no-JS limitation, and no seek control in the outline section.
+    client = _build_client(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session)
+        _seed_mentions(session, run_id)
+    body = client.get(f"/runs/{run_id}/transcript").text
+    assert 'aria-label="Outline"' in body
+    assert "Acme Corp" in body
+    assert "Jumping to a moment needs JavaScript" in body
+    outline_section = body.split('aria-label="Outline"', 1)[1].split("</section>", 1)[0]
+    assert "outline-jump" not in outline_section
+    assert "<button" not in outline_section
+
+
+def test_readonly_transcript_outline_hidden_when_gated_off(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # Gated off with no asset: the read-only fallback stays hidden (the macro's
+    # gated-off guard) rather than nagging a persistent panel onto the page.
+    client = _build_client(session_factory, gates_open=False)
+    with session_factory() as session:
+        run_id = seed_run(session)
+    body = client.get(f"/runs/{run_id}/transcript").text
+    assert 'aria-label="Outline"' not in body
