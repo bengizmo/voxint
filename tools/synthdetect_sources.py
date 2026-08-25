@@ -21,8 +21,11 @@ Two integrity rails ride on this module:
   confirms against real downloaded bytes and freezes. ``weights_pinned()`` is
   False until then, so no code can claim a model is serve-ready on the strength
   of an unverified sha. As of S2b (2026-08-24) the default detector
-  ``w2v2-aasist`` is FROZEN (real-byte shas + commit pinned, ``weights_pinned()``
-  True); the other registered models remain CANDIDATE.
+  ``w2v2-aasist`` is FROZEN and QUALIFIED (real-byte shas + commit pinned,
+  ``weights_pinned()`` True, GPU determinism + smoke evidence dated). As of S3
+  (2026-08-25) its DF-tuned sibling ``w2v2-aasist-df`` is PINNED_UNQUALIFIED (the
+  DF-checkpoint sha is frozen from real bytes, but its GPU qualification is a
+  separate dated verdict); the remaining registered models are still CANDIDATE.
 
 The two versioned identities the plan separates (inference space vs calibration
 policy) are NOT both here: this module pins the inference-space INPUTS (weights +
@@ -37,12 +40,25 @@ until ratified from measured rerun variance (see ``docs/gpu-contracts.md``).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Final
 
 # Bump when the registry SHAPE or the selection seed changes -- recorded in a
 # manifest/report so a reshuffle or a pin refresh is a visible, deliberate event.
-SOURCES_VERSION: Final = "synthdetect-sources-v1"
+# v2 (2026-08-25, S3): added ReproductionTarget.gate_role + the DF sibling model.
+SOURCES_VERSION: Final = "synthdetect-sources-v2"
+
+# A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
+# lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
+# cannot masquerade as a real pin (a non-None sha alone is not evidence).
+_SHA256_RE: Final = re.compile(r"^[0-9a-f]{64}$")
+_COMMIT_RE: Final = re.compile(r"^[0-9a-f]{40}$")
+
+# The reproduction-target metric and tolerance vocabularies. A value outside
+# these is a registry bug (asserted at import, alongside gate_role).
+METRICS: Final = ("eer", "tpr_clean", "fpr_unmarked")
+TOLERANCE_STATUSES: Final = ("provisional", "ratified")
 
 # The one seed for every deterministic choice this harness makes downstream
 # (corpus split assignment, bootstrap resampling). A single named constant so a
@@ -52,6 +68,11 @@ SELECTION_SEED: Final = "voxint-synthdetect-144"
 # The license class vocabulary, ordered from most to least permissive. A model
 # whose class is not one of these is a registry bug (asserted at import).
 LICENSE_CLASSES: Final = ("shippable", "noncommercial", "unlicensed")
+
+# The reproduction-target gate roles. A ``stop_gate`` target's ratified miss is
+# a STOP; a ``diagnostic`` target is measured and reported but never gates. A
+# target whose role is not one of these is a registry bug (asserted at import).
+GATE_ROLES: Final = ("stop_gate", "diagnostic")
 
 
 class SourcesError(Exception):
@@ -92,6 +113,17 @@ class ReproductionTarget:
     rerun variance (a miss is a STOP, never a silent tolerance widening). The
     ``protocol`` note pins the score polarity / crop rule / key file so the gate
     is unambiguous before any GPU run (the pre-registration doctrine).
+
+    ``gate_role`` separates a hard reproduction gate from a tracked observation:
+
+    * ``stop_gate`` -- the published number is a checkpoint-and-protocol-exact
+      anchor; a miss (once the tolerance is ratified) is a STOP.
+    * ``diagnostic`` -- the number is MEASURED and REPORTED but is NOT a
+      stop-gate, because a checkpoint-exact, citable anchor for THIS model on
+      THIS benchmark is not pinned. A diagnostic is generalization evidence, not
+      a pass/fail bar. (S3 decision, 2026-08-25: the In-the-Wild number for the
+      ASVspoof2019-LA-trained ``w2v2-aasist`` checkpoint is diagnostic; the one
+      hard DF anchor lives on ``w2v2-aasist-df`` with its DF-trained checkpoint.)
     """
 
     benchmark: str
@@ -100,6 +132,8 @@ class ReproductionTarget:
     tolerance_pp: float
     tolerance_status: str  # "provisional" | "ratified"
     protocol: str
+    gate_role: str  # "stop_gate" | "diagnostic" -- REQUIRED, no default: a
+    # forgotten role must be a construction error, never a silent hard STOP.
 
 
 @dataclass(frozen=True)
@@ -155,8 +189,18 @@ class ModelEntry:
         return self.license_class != "unlicensed"
 
     def weights_pinned(self) -> bool:
-        """True only when every weight file has a frozen (non-CANDIDATE) sha."""
-        return bool(self.weights) and all(w.pinned() for w in self.weights)
+        """True only when the model commit AND every weight file sha are frozen.
+
+        The pin doctrine freezes the code identity (``commit``) and the weight
+        shas together, so a model with real shas but a CANDIDATE (``None``)
+        commit is not serve-ready. Requiring both here keeps ``weights_pinned``
+        honest with the freeze ceremony rather than sha-only.
+        """
+        return (
+            self.commit is not None
+            and bool(self.weights)
+            and all(w.pinned() for w in self.weights)
+        )
 
 
 @dataclass(frozen=True)
@@ -239,6 +283,74 @@ MODELS: Final[dict[str, ModelEntry]] = {
             ),
         ),
         reproduction_targets=(
+            # The published 2.85% ASVspoof 2021 DF EER is NOT a property of this
+            # ASVspoof2019-LA-trained checkpoint: it is achieved by the DF-tuned
+            # Best_LA_model_for_DF.pth, pinned as `w2v2-aasist-df` below. This
+            # entry stays the production DEFAULT (shippable MIT weights), and its
+            # only reproduction number is a DIAGNOSTIC In-the-Wild generalization
+            # observation, measured and reported but never a stop-gate (no
+            # checkpoint-exact citable ITW anchor for THIS checkpoint). (S3
+            # decision, 2026-08-25; see docs/gpu-contracts.md.)
+            ReproductionTarget(
+                benchmark="itw",
+                metric="eer",
+                published_pct=10.5,
+                tolerance_pp=1.0,
+                tolerance_status="provisional",
+                protocol="In-the-Wild, author condition; 64,600-sample crop",
+                gate_role="diagnostic",
+            ),
+        ),
+        notes=(
+            "318M params; PyTorch + pinned fairseq; Google-Drive checkpoint. "
+            "The production DEFAULT (LA_model.pth, ASVspoof2019 LA); the hard DF "
+            "reproduction anchor lives on w2v2-aasist-df."
+        ),
+    ),
+    # The DF-tuned sibling of the default: SAME code/runtime/XLS-R base, a
+    # DIFFERENT aasist checkpoint (Best_LA_model_for_DF.pth) and therefore a
+    # DIFFERENT inference space. This is the checkpoint that produces the upstream
+    # 2.85% ASVspoof 2021 DF EER, so it -- not the production default -- carries
+    # the hard DF stop-gate (S3 decision, 2026-08-25). PINNED_UNQUALIFIED: the
+    # weight sha is frozen from real bytes (receipt below), but the GPU
+    # determinism + smoke qualification ceremony is a separate dated verdict
+    # (S3/S4), exactly as w2v2-aasist was before S2b.
+    "w2v2-aasist-df": ModelEntry(
+        model_id="w2v2-aasist-df",
+        inference_space="synthdetect-w2v2aasistdf-v1",
+        family="wav2vec2-xls-r + aasist",
+        repo="TakHemlata/SSL_Anti-spoofing",
+        commit="4acaa61dcef5f7610f43aa4d0b29c4559b970cd2",  # same vendored model.py
+        license_class="shippable",
+        code_license_spdx="MIT",
+        weights_license_spdx="MIT",
+        attribution="Tak et al., SSL_Anti-spoofing (MIT)",
+        default=False,
+        harness_only=False,
+        windowing=_AASIST_WINDOWING,
+        weights=(
+            WeightFile(
+                filename="Best_LA_model_for_DF.pth",
+                role="aasist_checkpoint",
+                # provenance only: the DF-tuned checkpoint in the upstream Drive
+                # folder (upstream README's designated DF checkpoint). Receipt:
+                # docs/reports/synthdetect-weight-receipt-df-2026-08-25.md
+                url="https://drive.google.com/uc?id=1JHBClArVdM-Cr1b8In1iakTV_TvC3HvG",
+                sha256="1cf904f1d84c867c278cd42161df5367939d61cc28bfefd239bc995af59c2804",
+                size_bytes=1271642081,
+                license_spdx="MIT",
+            ),
+            # The XLS-R front end is byte-identical to the default's base.
+            WeightFile(
+                filename="xlsr2_300m.pt",
+                role="xlsr_ssl_base",
+                url="https://dl.fbaipublicfiles.com/fairseq/wav2vec/xlsr2_300m.pt",
+                sha256="b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9",
+                size_bytes=3808868242,
+                license_spdx="MIT",
+            ),
+        ),
+        reproduction_targets=(
             ReproductionTarget(
                 benchmark="asvspoof2021_df",
                 metric="eer",
@@ -249,19 +361,17 @@ MODELS: Final[dict[str, ModelEntry]] = {
                     "ASVspoof 2021 DF eval, official keys; 64,600-sample crop; "
                     "the runner journals scores as higher = more synthetic (invert "
                     "the checkpoint's bona-fide logits before writing); official "
-                    "ASVspoof scorer"
+                    "ASVspoof scorer. The Gate-1 PASS is the FULL eval cohort "
+                    "(~611k trials); a seeded subset is a preflight + Gate-2 "
+                    "cohort only and never inherits the full-set EER tolerance."
                 ),
-            ),
-            ReproductionTarget(
-                benchmark="itw",
-                metric="eer",
-                published_pct=10.5,
-                tolerance_pp=1.0,
-                tolerance_status="provisional",
-                protocol="In-the-Wild, author condition; 64,600-sample crop",
+                gate_role="stop_gate",
             ),
         ),
-        notes="318M params; PyTorch + pinned fairseq; Google-Drive checkpoint.",
+        notes=(
+            "DF-tuned checkpoint (Best_LA_model_for_DF.pth); the upstream 2.85% "
+            "ASVspoof 2021 DF anchor. PINNED_UNQUALIFIED until its own GPU verdict."
+        ),
     ),
     # Best raw generalization but NON-COMMERCIAL weights: harness-eval and
     # user-fetched opt-in only, never redistributed. Raw scores only -- the
@@ -297,6 +407,7 @@ MODELS: Final[dict[str, ModelEntry]] = {
                 tolerance_pp=0.5,
                 tolerance_status="provisional",
                 protocol="In-the-Wild, XLS-R-2B zero-shot; arbitrary-length 16 kHz input",
+                gate_role="stop_gate",
             ),
         ),
         notes="Best zero-shot ITW EER; ~2B params (tight on a 3060); non-commercial weights.",
@@ -337,6 +448,7 @@ MODELS: Final[dict[str, ModelEntry]] = {
                 tolerance_pp=1.0,
                 tolerance_status="provisional",
                 protocol="AudioSeal-marked clips, clean; TPR >= 99% AND an unmarked-audio FPR gate",
+                gate_role="stop_gate",
             ),
         ),
         notes="Harness-only in M1; watermark detection deferred to a v1.1 decision.",
@@ -375,6 +487,12 @@ MODELS: Final[dict[str, ModelEntry]] = {
                 tolerance_pp=0.5,
                 tolerance_status="provisional",
                 protocol="ASVspoof 2021 DF; 64,600-sample crop (blocked: unlicensed)",
+                # A checkpoint-exact DF anchor, so its role IS stop_gate -- but the
+                # model is unlicensed and never runnable, so the import-time
+                # "one runnable DF stop-gate" rail excludes it. If a license lands,
+                # that rail fires (two runnable DF stop-gates) and forces a
+                # deliberate resolution rather than a silent second hard gate.
+                gate_role="stop_gate",
             ),
         ),
         notes="~511k-param back-end; SOTA acc/param; DISABLED until a license is granted.",
@@ -458,14 +576,38 @@ def get_model(model_id: str) -> ModelEntry:
         raise SourcesError(f"unknown model {model_id!r}; known: {sorted(MODELS)}") from None
 
 
-def _validate_registry() -> None:
+def _validate_registry(
+    models: dict[str, ModelEntry] = MODELS,
+    benchmarks: dict[str, BenchmarkDataset] = BENCHMARKS,
+) -> None:
     """Assert registry integrity at import (a bad pin is a bug, not runtime data).
 
-    Checks: every model's key matches its ``model_id``; ``license_class`` is a
-    known value; an ``unlicensed`` model is never runnable; exactly one default;
-    every reproduction target names a known benchmark; benchmark keys match ids.
+    Structural rails: every model's key matches its ``model_id``;
+    ``license_class`` is a known value; an ``unlicensed`` model is never
+    runnable; exactly one default; ``inference_space`` ids are unique across
+    models; benchmark keys match ids.
+
+    Pin rails: a non-None weight ``sha256`` is a 64-char lowercase hex digest
+    with a positive ``size_bytes``, and a non-None model ``commit`` is a 40-char
+    lowercase hex sha -- a truncated or placeholder value must not pass for a
+    real freeze.
+
+    Reproduction-target rails: every target names a known ``benchmark``,
+    ``metric``, ``tolerance_status``, and ``gate_role``, with a positive
+    ``tolerance_pp``.
+
+    Gate rails (the S3 doctrine, now machine-checked, not test-only): the shipped
+    default carries NO ``stop_gate`` target (it must not gate on a checkpoint it
+    is not), and at most one RUNNABLE model may claim the ASVspoof-DF EER
+    stop-gate (a second, e.g. an unblocked Nes2Net, must be resolved deliberately
+    rather than silently activating a competing hard gate).
+
+    Parameterised on ``models``/``benchmarks`` so the failure paths are testable;
+    the import-time call below validates the real registry.
     """
-    for key, model in MODELS.items():
+    seen_spaces: dict[str, str] = {}
+    runnable_df_stop_gates: list[str] = []
+    for key, model in models.items():
         if key != model.model_id:
             raise SourcesError(f"model registry key {key!r} != model_id {model.model_id!r}")
         if model.license_class not in LICENSE_CLASSES:
@@ -474,14 +616,69 @@ def _validate_registry() -> None:
             )
         if model.license_class == "unlicensed" and runnable(model):
             raise SourcesError(f"unlicensed model {key!r} must not be runnable")
+        if model.inference_space in seen_spaces:
+            raise SourcesError(
+                f"model {key!r} reuses inference_space {model.inference_space!r} "
+                f"already claimed by {seen_spaces[model.inference_space]!r}"
+            )
+        seen_spaces[model.inference_space] = key
+        if model.commit is not None and not _COMMIT_RE.match(model.commit):
+            raise SourcesError(
+                f"model {key!r} commit {model.commit!r} is not a 40-char hex sha"
+            )
+        for weight in model.weights:
+            if weight.sha256 is not None and not _SHA256_RE.match(weight.sha256):
+                raise SourcesError(
+                    f"model {key!r} weight {weight.filename!r} sha256 "
+                    f"{weight.sha256!r} is not a 64-char hex digest"
+                )
+            if weight.sha256 is not None and not (weight.size_bytes and weight.size_bytes > 0):
+                raise SourcesError(
+                    f"model {key!r} weight {weight.filename!r} is sha-pinned but has "
+                    f"no positive size_bytes ({weight.size_bytes!r})"
+                )
         for target in model.reproduction_targets:
-            if target.benchmark not in BENCHMARKS:
+            if target.benchmark not in benchmarks:
                 raise SourcesError(
                     f"model {key!r} target names unknown benchmark {target.benchmark!r}"
                 )
-    if sum(1 for m in MODELS.values() if m.default) != 1:
+            if target.metric not in METRICS:
+                raise SourcesError(
+                    f"model {key!r} target has unknown metric {target.metric!r}"
+                )
+            if target.tolerance_status not in TOLERANCE_STATUSES:
+                raise SourcesError(
+                    f"model {key!r} target has unknown tolerance_status "
+                    f"{target.tolerance_status!r}"
+                )
+            if target.tolerance_pp <= 0:
+                raise SourcesError(
+                    f"model {key!r} target has non-positive tolerance_pp {target.tolerance_pp!r}"
+                )
+            if target.gate_role not in GATE_ROLES:
+                raise SourcesError(
+                    f"model {key!r} target has unknown gate_role {target.gate_role!r}"
+                )
+            if (
+                runnable(model)
+                and target.benchmark == "asvspoof2021_df"
+                and target.metric == "eer"
+                and target.gate_role == "stop_gate"
+            ):
+                runnable_df_stop_gates.append(key)
+            if model.default and target.gate_role == "stop_gate":
+                raise SourcesError(
+                    f"default model {key!r} must not carry a stop_gate target "
+                    f"(benchmark {target.benchmark!r}); it cannot gate on a checkpoint it is not"
+                )
+    if sum(1 for m in models.values() if m.default) != 1:
         raise SourcesError("registry must declare exactly one default model")
-    for key, bench in BENCHMARKS.items():
+    if len(runnable_df_stop_gates) > 1:
+        raise SourcesError(
+            f"more than one runnable model claims the ASVspoof-DF EER stop-gate: "
+            f"{runnable_df_stop_gates!r}; exactly one DF anchor may gate at a time"
+        )
+    for key, bench in benchmarks.items():
         if key != bench.dataset_id:
             raise SourcesError(f"benchmark key {key!r} != dataset_id {bench.dataset_id!r}")
 
