@@ -7,6 +7,7 @@ derived-speaker precedence (a human adjudication over a grounded cosine match),
 which reuses ``resolver.label_states``.
 """
 
+import json
 import re
 import uuid
 from datetime import UTC, datetime
@@ -18,7 +19,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
-from voxint.api.csrf import CSRF_PROJECT_ASSIGN, mint_csrf_token
+from voxint.api.csrf import (
+    CSRF_PROJECT_ASSIGN,
+    CSRF_PROJECT_CORRECTIONS,
+    CSRF_PROJECT_VOCAB,
+    mint_csrf_token,
+)
 from voxint.api.projects_query import project_detail
 from voxint.config import Settings
 from voxint.db.models import (
@@ -434,3 +440,213 @@ def test_archived_and_unfinished_runs_contribute_no_speakers(
         detail = project_detail(session, pid)
     assert detail is not None
     assert detail.speakers == []
+
+
+# ---- project config editors (issue #153, P2a precedence freeze) -------------
+
+
+def _vocab_token(client: TestClient) -> str:
+    return mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_VOCAB)
+
+
+def _corr_token(client: TestClient) -> str:
+    return mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_CORRECTIONS)
+
+
+def test_project_detail_renders_config_editors(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    html = client.get(f"/projects/{pid}").text
+    assert "Project vocabulary" in html
+    assert "Project corrections" in html
+    assert 'data-island="corrections-editor"' in html
+
+
+def test_set_project_vocabulary_persists_override(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "set", "vocabulary": "Alpha\nBeta", "csrf_token": _vocab_token(client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).vocabulary == ["Alpha", "Beta"]
+
+
+def test_set_project_vocabulary_empty_set_is_explicit_none(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "set", "vocabulary": "   ", "csrf_token": _vocab_token(client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        # An explicit empty list — distinct from inherit (NULL) — and it wins.
+        assert session.get(Project, pid).vocabulary == []
+
+
+def test_set_project_vocabulary_inherit_clears_to_null(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.vocabulary = ["Was", "Set"]
+        pid = project.id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "inherit", "vocabulary": "ignored", "csrf_token": _vocab_token(client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).vocabulary is None
+
+
+def test_set_project_vocabulary_rejects_overlong_term(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "set", "vocabulary": "x" * 121, "csrf_token": _vocab_token(client)},
+    )
+    assert resp.status_code == 422
+    with session_factory() as session:
+        assert session.get(Project, pid).vocabulary is None  # nothing written
+
+
+def test_project_vocabulary_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "set", "vocabulary": "Alpha", "csrf_token": "forged"},
+    )
+    assert resp.status_code == 403
+    with session_factory() as session:
+        assert session.get(Project, pid).vocabulary is None
+
+
+def test_set_project_corrections_island_persists(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    rules = json.dumps(
+        [
+            {
+                "id": "a",
+                "match": "foo",
+                "replace": "bar",
+                "case_sensitive": False,
+                "whole_word": False,
+            }
+        ]
+    )
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"rules": rules, "csrf_token": _corr_token(client)},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    with session_factory() as session:
+        stored = session.get(Project, pid).corrections
+        assert stored is not None
+        assert [rule["match"] for rule in stored] == ["foo"]
+
+
+def test_set_project_corrections_inherit_clears_to_null(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = [
+            {
+                "id": "a",
+                "match": "foo",
+                "replace": "bar",
+                "case_sensitive": False,
+                "whole_word": False,
+            }
+        ]
+        pid = project.id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"mode": "inherit", "csrf_token": _corr_token(client)},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        assert session.get(Project, pid).corrections is None
+
+
+def test_set_project_corrections_empty_set_is_explicit_none(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"rules": "[]", "csrf_token": _corr_token(client)},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["corrections"] == []
+    with session_factory() as session:
+        # Explicitly none (an empty array), distinct from inherit (NULL).
+        assert session.get(Project, pid).corrections == []
+
+
+def test_set_project_corrections_invalid_rule_is_422(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    rules = json.dumps([{"id": "a", "match": "", "replace": "x"}])  # empty match
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"rules": rules, "csrf_token": _corr_token(client)},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    with session_factory() as session:
+        assert session.get(Project, pid).corrections is None  # nothing written
+
+
+def test_project_corrections_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"rules": "[]", "csrf_token": "forged"},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 403

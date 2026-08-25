@@ -17,7 +17,7 @@ snapshot is a deterministic run/enrichment error, never a silent fallback.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -36,6 +36,25 @@ class DomainPackError(Exception):
     loudly rather than substituting the generic pack, which would produce
     plausible-but-inconsistent output.
     """
+
+
+def dedup_order_preserving(items: Iterable[str]) -> tuple[str, ...]:
+    """First occurrence wins; blank/whitespace-only entries dropped.
+
+    The one canonicalization for an effective vocabulary list, shared by the
+    worker's live layering (:mod:`voxint.pipeline.stages.context`) and the
+    submit-time freeze (:mod:`voxint.ingest.service`). Keeping a single
+    definition is load-bearing for issue #153: the v2 snapshot freezes the
+    already-canonicalized effective vocabulary, so it must be byte-identical to
+    what the v1 worker computed live — ``D(pack + D(app)) == D(pack + app)``
+    holds only because both sides run THIS function.
+    """
+    seen: dict[str, None] = {}
+    for item in items:
+        stripped = item.strip()
+        if stripped and stripped not in seen:
+            seen[stripped] = None
+    return tuple(seen)
 
 
 def _str_tuple(value: Any, field_name: str) -> tuple[str, ...]:

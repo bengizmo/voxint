@@ -70,6 +70,68 @@
 </section>
 
 <section class="card">
+  <h2>Project vocabulary</h2>
+  <p class="muted">Names, jargon, and acronyms this project's recordings use. When
+     set, it replaces the folder pack's and the global glossary for this project's
+     new runs; leave it inheriting to use those instead.</p>
+  {% if vocabulary_error %}<p class="notice" role="alert">{{ vocabulary_error }}</p>{% endif %}
+  <form method="post" action="/projects/{{ detail.id }}/vocabulary" class="upload">
+    <input type="hidden" name="csrf_token" value="{{ csrf_vocab }}">
+    <fieldset>
+      <legend>Source</legend>
+      <label><input type="radio" name="mode" value="inherit"{% if detail.vocabulary is none %} checked{% endif %}>
+        Inherit from the folder pack or global settings</label>
+      <label><input type="radio" name="mode" value="set"{% if detail.vocabulary is not none %} checked{% endif %}>
+        Set for this project (an empty list means explicitly none)</label>
+    </fieldset>
+    <label>Terms, one per line
+      <textarea name="vocabulary" rows="6">{{ vocabulary_text }}</textarea>
+    </label>
+    <div class="action-row">
+      <button type="submit" class="primary">Save vocabulary</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Project corrections</h2>
+  <p class="muted">Find-and-replace fixes for this project — a name, an acronym, a
+     piece of jargon. When set, they replace the folder pack's and global
+     corrections for this project's new runs.</p>
+  {% if corrections_error %}<p class="notice" role="alert">{{ corrections_error }}</p>{% endif %}
+  {% if detail.corrections is none %}
+  <p class="muted">Inheriting the folder pack or global corrections. Add rules below
+     to set corrections for this project instead.</p>
+  {% endif %}
+  <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
+    {# No-JS fallback: the editor needs JavaScript, stated honestly. The current
+       rules render read-only so the section is never blank. #}
+    <noscript><p class="muted">Editing corrections needs JavaScript. This project's
+       current rules are shown below.</p></noscript>
+    {% if detail.corrections %}
+    <ul class="corrections-fallback">
+      {% for rule in detail.corrections %}
+      <li><code>{{ rule.match }}</code> → <code>{{ rule.replace }}</code>
+        <span class="muted">({{ "case-sensitive" if rule.case_sensitive else "any case" }},
+        {{ "whole word" if rule.whole_word else "anywhere" }})</span></li>
+      {% endfor %}
+    </ul>
+    {% elif detail.corrections is not none %}
+    <p class="muted">No correction rules (explicitly none).</p>
+    {% endif %}
+  </div>
+  {% if detail.corrections is not none %}
+  <form method="post" action="/projects/{{ detail.id }}/corrections" class="my-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_corrections }}">
+    <input type="hidden" name="mode" value="inherit">
+    <div class="action-row">
+      <button type="submit">Reset to inherited corrections</button>
+    </div>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Speakers</h2>
   <p class="muted">Everyone Voxint has resolved across this project's finished recordings.</p>
   {% if detail.speakers %}

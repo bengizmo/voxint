@@ -118,7 +118,23 @@
     true
   ],
   [
+    "/projects/{project_id}/corrections",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/folders",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/vocabulary",
     [
       "POST"
     ],

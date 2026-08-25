@@ -102,6 +102,18 @@
   ]
  ],
  [
+  "/projects/{project_id}/vocabulary",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}/corrections",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/runs",
   [
    "GET"

@@ -205,18 +205,20 @@ def test_submit_unions_operator_corrections_into_snapshot(
         ]
 
 
-def test_submit_unions_after_pack_corrections(
+def test_submit_unions_operator_corrections_onto_default_pack(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
 ) -> None:
-    # A pack with its OWN correction plus a non-colliding operator rule: the freeze
-    # keeps pack rules first, then the operator's.
+    # The GLOBAL-BASELINE path (no explicit name, no folder pack) still unions the
+    # operator's console corrections onto the default pack, pack rules first
+    # (ADR 0002 leaves the baseline unioning the glossary exactly as before). Here
+    # civic is the configured default pack.
     _write_pack(
         tmp_path,
         "civic",
         corrections=[{"id": "cd", "match": "c d b g", "replace": "CDBG"}],
     )
-    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    settings = Settings(_env_file=None, domain_pack_path=tmp_path / "civic")
     with session_factory() as session:
         row = get_or_create(session, llm_enabled_default=False)
         row.corrections = [
@@ -230,9 +232,7 @@ def test_submit_unions_after_pack_corrections(
         ]
         session.commit()
     with session_factory() as session:
-        run = submit_media_item(
-            session, "incoming/a.wav", settings=settings, domain_pack_name="civic"
-        )
+        run = submit_media_item(session, "incoming/a.wav", settings=settings)
         session.commit()
         run_id = run.id
     with session_factory() as session:
@@ -241,20 +241,20 @@ def test_submit_unions_after_pack_corrections(
         assert [rule["id"] for rule in stored.domain_pack["corrections"]] == ["cd", "teh"]
 
 
-def test_submit_raises_on_operator_pack_correction_collision(
+def test_submit_raises_on_operator_default_pack_correction_collision(
     session_factory: sessionmaker[Session],
     tmp_path: Path,
 ) -> None:
-    """A folder/default pack whose rules collide with a stored operator rule is a
-    visible freeze-time DomainPackError — never a silent drop. (The console's
-    author-time check guards the default pack; a differently-scoped pack collision
-    surfaces here, which is what this proves.)"""
+    """A DEFAULT (global-baseline) pack whose rules collide with a stored operator
+    rule is a visible freeze-time DomainPackError — never a silent drop. Only the
+    global baseline unions the glossary now, so this is where a submit-time
+    collision can still surface (ADR 0002)."""
     _write_pack(
         tmp_path,
         "civic",
         corrections=[{"id": "zb", "match": "zoom board", "replace": "Zoning Board"}],
     )
-    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    settings = Settings(_env_file=None, domain_pack_path=tmp_path / "civic")
     with session_factory() as session:
         row = get_or_create(session, llm_enabled_default=False)
         # "Board" would re-fire on the pack's "Zoning Board" replacement.
@@ -269,9 +269,47 @@ def test_submit_raises_on_operator_pack_correction_collision(
         ]
         session.commit()
     with session_factory() as session, pytest.raises(DomainPackError):
-        submit_media_item(
+        submit_media_item(session, "incoming/a.wav", settings=settings)
+
+
+def test_submit_explicit_pack_drops_operator_corrections(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    """An explicit CLI/sidecar pack override is layer 1 (ADR 0002) and stops
+    inheriting the global glossary/corrections: a stored operator rule is NOT
+    unioned onto the named pack, so it can neither extend nor collide with it. The
+    frozen list is the pack's own rules alone."""
+    _write_pack(
+        tmp_path,
+        "civic",
+        corrections=[{"id": "zb", "match": "zoom board", "replace": "Zoning Board"}],
+    )
+    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    with session_factory() as session:
+        row = get_or_create(session, llm_enabled_default=False)
+        # Would collide with the pack's "Zoning Board" replacement if unioned; it
+        # is dropped instead, so the submit succeeds.
+        row.corrections = [
+            {
+                "id": "b",
+                "match": "Board",
+                "replace": "Committee",
+                "case_sensitive": True,
+                "whole_word": True,
+            }
+        ]
+        session.commit()
+    with session_factory() as session:
+        run = submit_media_item(
             session, "incoming/a.wav", settings=settings, domain_pack_name="civic"
         )
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        stored = session.get(PipelineRun, run_id)
+        assert stored is not None
+        assert [rule["id"] for rule in stored.domain_pack["corrections"]] == ["zb"]
 
 
 def test_submit_media_item_reuses_media_but_mints_new_run(

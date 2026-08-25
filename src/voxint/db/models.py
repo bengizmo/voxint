@@ -229,8 +229,11 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text)
     # NULL = inherit the folder/global layer; [] = explicitly empty (wins).
     vocabulary: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # none_as_null so a Python None is stored as SQL NULL (inherit), never a JSONB
+    # `null` scalar — the latter reads back as None too but fails the array CHECK,
+    # so writing the inherit sentinel would 500 without it.
     corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql")
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

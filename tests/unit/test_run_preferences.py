@@ -124,6 +124,59 @@ def test_apply_unions_pack_and_user_vocab_order_preserving() -> None:
     assert ctx.vocabulary == ("Pack", "Shared", "User")
 
 
+def test_apply_v1_snapshot_live_unions_glossary_default() -> None:
+    """A pre-#153 (unversioned/v1) run keeps the live-union path byte-identical:
+    a glossary edited AFTER submit still reaches the run. This is the invariant the
+    version-2 freeze must not disturb (config_resolution_version defaults to 1)."""
+    base = make_base_ctx(vocabulary=("Pack",))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base, make_settings(), prefs, base.domain_pack, llm_api_key=""
+    )
+    assert ctx.vocabulary == ("Pack", "Edited-Later")
+
+
+def test_apply_v2_snapshot_uses_frozen_vocab_without_live_union() -> None:
+    """A version-2 snapshot (issue #153) froze the effective vocabulary at submit,
+    so the worker must NOT re-union the live glossary — a later settings edit can
+    never leak into a deterministically-frozen run."""
+    base = make_base_ctx(vocabulary=("Frozen-A", "Frozen-B"))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base,
+        make_settings(),
+        prefs,
+        base.domain_pack,
+        llm_api_key="",
+        config_resolution_version=2,
+    )
+    assert ctx.vocabulary == ("Frozen-A", "Frozen-B")
+    # The frozen vocab is what renders into the enhancement context, too.
+    assert "Edited-Later" not in ctx.enhancement_context
+
+
+def test_apply_unrecognized_version_falls_through_to_live_union() -> None:
+    """An unknown future version is treated as the live-union path, never silently
+    reinterpreted as a freeze it may not be (only version 2 is a freeze)."""
+    base = make_base_ctx(vocabulary=("Pack",))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["User"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base,
+        make_settings(),
+        prefs,
+        base.domain_pack,
+        llm_api_key="",
+        config_resolution_version=99,
+    )
+    assert ctx.vocabulary == ("Pack", "User")
+
+
 def test_apply_renders_vocab_into_enhancement_context() -> None:
     base = make_base_ctx(vocabulary=(), enhancement_context="PACK-FRAGMENT")
     prefs = resolve_run_preferences(

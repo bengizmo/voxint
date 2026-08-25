@@ -48,6 +48,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   governs whether the sidebar shows the Projects link; the routes are always
   registered so the console route inventory is stable but return 404 until the
   flag is on.
+- **Console 2.0 P2a: project-scoped vocabulary and corrections** (#153, epic
+  #149). The project detail page gains two editors: a vocabulary list and the
+  corrections editor (the same one Settings uses, with the same validation).
+  Once set, a project's vocabulary or corrections apply to every new run under
+  the project's folders in place of the folder pack's and the global settings'.
+  Each editor can inherit (use the folder pack or global settings) or be set for
+  the project, where an empty list means explicitly none. This applies to new
+  runs only; existing runs keep the configuration they were frozen with.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as
@@ -76,6 +84,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   refused, so every file belongs to exactly one folder; register only the parent
   or only the child. The `app_settings.media_folders` / `folder_domain_packs`
   columns are no longer written and remain only as a one-release rollback input.
+- **Console 2.0 P2a: per-field config resolution and the submit-time freeze**
+  (#153, epic #149). A new run's effective vocabulary and corrections now resolve
+  by first present layer, each independently: an explicit per-run pack (a CLI or
+  sidecar name), then the project, then the folder pack, then the global baseline
+  (the default pack plus the operator's glossary and corrections). Both fields
+  are frozen at submit into the run's snapshot, tagged
+  `config_resolution_version: 2`, so a later settings edit cannot change a run
+  already queued. One behavior change worth noting: a run that resolves to an
+  explicit folder pack, or to an explicit CLI or sidecar pack, no longer also
+  inherits the global glossary and corrections; before, both were added to every
+  run. A run with no project and no folder pack still resolves to the default
+  pack plus the global settings exactly as before, so an install that never set a
+  per-folder pack sees no change. Existing runs are untouched; no migration
+  rewrites their snapshots.
 - **The dashboard folded into Home** (#152). `/dashboard` now issues a
   permanent redirect to `/`, and `/` no longer redirects to `/review`. The
   dashboard's task cards and stat figures live on Home; the hardware strip

@@ -123,6 +123,12 @@ CSRF_PLUGIN = "plugin"
 # mints and verifies under its own action.
 CSRF_PROJECT_CREATE = "project-create"
 CSRF_PROJECT_ASSIGN = "project-assign"
+# Project-scoped config editors (issue #153, P2a precedence freeze). The
+# vocabulary and corrections overrides are independent mutations under their own
+# per-action tokens; each also carries an "inherit" reset (write NULL) under the
+# same action as its save.
+CSRF_PROJECT_VOCAB = "project-vocabulary"
+CSRF_PROJECT_CORRECTIONS = "project-corrections"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

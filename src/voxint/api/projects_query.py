@@ -77,9 +77,13 @@ class ProjectDetail:
     id: uuid.UUID
     name: str
     description: str | None
-    # A project with its own vocabulary or corrections overrides its folders'
-    # packs (ADR 0002 per-field replacement). No editor exists yet (P2c), so this
-    # is False today; the assign note reads differently once it can be True.
+    # The project's OWN config overrides (ADR 0002 per-field replacement). Each is
+    # nullable: None = inherit the folder pack / global baseline, [] = explicitly
+    # none (wins). The editors on the detail page write these directly.
+    vocabulary: list[str] | None
+    corrections: list[dict[str, object]] | None
+    # True when either override is set (not None): the project replaces its
+    # folders' packs for those fields, and the assign note reads accordingly.
     has_own_config: bool
     folders: list[ProjectFolder]
     speakers: list[ProjectSpeaker]
@@ -195,13 +199,19 @@ def project_detail(
     project = session.get(Project, project_id)
     if project is None:
         return None
+    vocabulary = list(project.vocabulary) if project.vocabulary is not None else None
+    corrections = (
+        [dict(rule) for rule in project.corrections]
+        if project.corrections is not None
+        else None
+    )
     return ProjectDetail(
         id=project.id,
         name=project.name,
         description=project.description,
-        has_own_config=(
-            project.vocabulary is not None or project.corrections is not None
-        ),
+        vocabulary=vocabulary,
+        corrections=corrections,
+        has_own_config=(vocabulary is not None or corrections is not None),
         folders=_member_folders(session, project_id),
         speakers=_derived_speakers(session, project_id),
         assignable=_assignable_folders(session),

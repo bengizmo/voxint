@@ -88,7 +88,19 @@
     ]
   ],
   [
+    "/projects/{project_id}/corrections",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/projects/{project_id}/folders",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/vocabulary",
     [
       "POST"
     ]
