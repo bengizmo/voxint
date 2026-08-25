@@ -133,20 +133,32 @@ _ACTIVE_JOB_STATUSES = (ResearchJobStatus.QUEUED.value, ResearchJobStatus.RUNNIN
 
 
 def _research_state(
-    session: Session, settings: Settings, speaker: Speaker, error: str | None = None
+    session: Session,
+    settings: Settings,
+    speaker: Speaker,
+    error: str | None = None,
+    *,
+    include_aliases: bool = False,
 ) -> dict[str, Any]:
-    """One speaker's research block: latest job, budgets, reviewable drafts."""
+    """One speaker's research block: latest job, budgets, reviewable drafts.
+
+    ``include_aliases`` (the Console 2.0 surfaces, #159) also gathers drafts
+    recorded under ids since merged into this speaker — the accept path
+    canonicalizes on write anyway. The legacy roster keeps the single-id read
+    so the flag-off page stays exactly as it always rendered.
+    """
     job = session.execute(
         select(ResearchJob)
         .where(ResearchJob.speaker_id == speaker.id)
         .order_by(ResearchJob.created_at.desc(), ResearchJob.id.desc())
         .limit(1)
     ).scalar_one_or_none()
-    # Alias-aware (#159): drafts recorded under an id later merged into this
-    # speaker stay reviewable — the accept path canonicalizes on write anyway.
+    sids = (
+        sorted(alias_ids(session, speaker.id), key=str) if include_aliases else [speaker.id]
+    )
     views = [
         view
-        for sid in sorted(alias_ids(session, speaker.id), key=str)
+        for sid in sids
         for view in candidates_for_speaker(session, sid)
         if view.candidate.field in _PROFILE_FIELDS
     ]
@@ -212,7 +224,13 @@ def _research_response(
         "speakers/research.html",
         {
             "request": request,
-            "research": _research_state(session, request.app.state.settings, speaker, error),
+            "research": _research_state(
+                session,
+                request.app.state.settings,
+                speaker,
+                error,
+                include_aliases=_speakers_flag_on(request),
+            ),
             "research_qs": _research_qs(request),
             **_research_csrf(request),
         },
@@ -487,6 +505,13 @@ def research_start(
     recovery — the operator cancels and retries)."""
     _require_csrf(request, CSRF_RESEARCH_START, csrf_token)
     speaker = _speaker_or_404(session, speaker_id)
+    # Archived speakers are read-only (#159 review): the pages hide the form,
+    # and a stale tab's POST must not spend research budget on one either.
+    if speaker.deleted_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="speaker is archived; restore it before starting research",
+        )
     settings: Settings = request.app.state.settings
     if (
         session.execute(
@@ -562,6 +587,14 @@ def decide_profile_candidate(
     its own terminal ruling. Writes the profile-review trail only."""
     _require_csrf(request, CSRF_PROFILE_DECISION, csrf_token)
     speaker = _speaker_or_404(session, speaker_id)
+    # Archived speakers are read-only (#159 review): rulings that could
+    # materialize profile rows wait until the speaker is restored. Cancelling
+    # an already-running job stays allowed.
+    if speaker.deleted_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="speaker is archived; restore it before deciding drafts",
+        )
     try:
         decision = ProfileDecision(verdict)
     except ValueError as exc:
@@ -600,7 +633,9 @@ def decide_profile_candidate(
         if not request.headers.get("HX-Request"):
             return RedirectResponse(f"/speakers/{speaker.id}", status_code=303)
         research_html = templates.env.get_template("speakers/research.html").render(
-            research=_research_state(session, request.app.state.settings, speaker),
+            research=_research_state(
+                session, request.app.state.settings, speaker, include_aliases=True
+            ),
             research_qs=_research_qs(request),
             **_research_csrf(request),
         )
@@ -662,7 +697,7 @@ def _profile_context(
         "gates": gates,
         "enrollments": enrollment_count(session, speaker.id),
         "runs_by_id": runs_by_id,
-        "research": _research_state(session, settings, speaker),
+        "research": _research_state(session, settings, speaker, include_aliases=True),
         "research_qs": "?page=profile",
         "active_nav": "speakers",
         "now": datetime.now(UTC),

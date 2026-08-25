@@ -131,20 +131,24 @@ def aggregate_speakers(session: Session) -> AggregateResult:
         for interval in attributed_intervals(session, run_id):
             if interval.speaker_id is None:
                 continue
-            tally = tallies.setdefault(interval.speaker_id, _Tally())
             duration = interval.end_seconds - interval.start_seconds
+            if duration <= 0:
+                # A degenerate (empty or malformed) interval attributes
+                # nothing and must not inflate the segment count or drag the
+                # seconds total (#159 review).
+                continue
+            tally = tallies.setdefault(interval.speaker_id, _Tally())
             tally.seconds += duration
             tally.segments += 1
-            if duration > 0:
-                if interval.resolution is Resolution.HUMAN_ASSIGN:
-                    tally.human = True
-                elif (
-                    interval.resolution is Resolution.GROUNDED_COSINE
-                    and interval.diarization_label is not None
-                ):
-                    grounded.setdefault(interval.speaker_id, set()).add(
-                        (run_id, interval.diarization_label)
-                    )
+            if interval.resolution is Resolution.HUMAN_ASSIGN:
+                tally.human = True
+            elif (
+                interval.resolution is Resolution.GROUNDED_COSINE
+                and interval.diarization_label is not None
+            ):
+                grounded.setdefault(interval.speaker_id, set()).add(
+                    (run_id, interval.diarization_label)
+                )
         for speaker_id, tally in tallies.items():
             per_speaker.setdefault(speaker_id, []).append(
                 SpeakerAppearance(

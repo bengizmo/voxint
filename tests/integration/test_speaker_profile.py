@@ -301,3 +301,63 @@ def test_concurrent_accept_serializes_on_speaker_lock(
         row = profile_for(session, speaker)["bio"]
         assert row.value == "accepted bio"
         assert row.provenance == "enrichment"
+
+
+def test_clear_survives_identical_accept_replay(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """accept -> clear -> identical replay: the clear tombstone stands, the
+    cleared value is never resurrected (#159 pre-landing review, codex)."""
+    with session_factory() as session:
+        speaker = _speaker(session, "Hana")
+        cand = _candidate(session, speaker, "bio", "Old accepted bio.")
+        _accept(session, cand, key="k-hana")
+        session.commit()
+        assert profile_for(session, speaker)["bio"].value == "Old accepted bio."
+
+        clear_profile_field(session, speaker_id=speaker, field="bio", operator="ben")
+        session.commit()
+        assert "bio" not in profile_for(session, speaker)
+        # The tombstone row is the durable marker of the clearing act.
+        row = session.query(SpeakerProfile).filter_by(speaker_id=speaker).one()
+        assert row.value is None
+        assert row.provenance == "manual"
+        assert row.accepted_candidate_id is None
+
+        # Identical replay (same idempotency key, e.g. a stale tab resubmit).
+        _accept(session, cand, key="k-hana")
+        session.commit()
+        assert "bio" not in profile_for(session, speaker)
+
+
+def test_clear_survives_reconcile(session_factory: sessionmaker[Session]) -> None:
+    """accept -> clear -> reconcile: the repair pass sees the tombstone as a
+    later manual act and creates nothing (#159 pre-landing review, codex)."""
+    with session_factory() as session:
+        speaker = _speaker(session, "Iris")
+        cand = _candidate(session, speaker, "affiliation", "Old Institute")
+        _accept(session, cand, key="k-iris")
+        clear_profile_field(
+            session, speaker_id=speaker, field="affiliation", operator="ben"
+        )
+        session.commit()
+        assert reconcile_speaker_profiles(session) == 0
+        session.commit()
+        assert "affiliation" not in profile_for(session, speaker)
+
+
+def test_fresh_accept_overrides_a_clear(session_factory: sessionmaker[Session]) -> None:
+    """A NEW accept after a clear is a later operator act: it overwrites the
+    tombstone (newest act wins), exactly like it overwrites a manual value."""
+    with session_factory() as session:
+        speaker = _speaker(session, "Jude")
+        first = _candidate(session, speaker, "bio", "First bio.")
+        _accept(session, first, key="k-jude-1")
+        clear_profile_field(session, speaker_id=speaker, field="bio", operator="ben")
+        session.commit()
+        second = _candidate(session, speaker, "bio", "Second bio.")
+        _accept(session, second, key="k-jude-2")
+        session.commit()
+        row = profile_for(session, speaker)["bio"]
+        assert row.value == "Second bio."
+        assert row.provenance == "enrichment"

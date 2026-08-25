@@ -410,3 +410,22 @@ def test_tier_evidence_batch_load_and_unavailable(
         assert recorded.available and recorded.similarity == 0.82
         assert recorded.roster_size == 3
         assert not absent.available and absent.label == "S9"
+
+
+def test_zero_duration_interval_counts_nothing(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A degenerate (zero-length) interval attributes nothing: it must not
+    inflate the segment count or shift the seconds total (#159 review)."""
+    with session_factory() as session:
+        media = make_media(session, created_at=BASE)
+        run = make_run(session, media, created_at=BASE)
+        zed = add_speaker(session, "Zed")
+        add_turn(session, run, 0, "S0")
+        add_segment(session, run, 0, "S0")
+        add_segment(session, run, 1, "S0", duration=0.0)
+        assign(session, run, "S0", zed)
+        session.commit()
+        agg = aggregate_speakers(session).by_speaker[zed]
+        assert agg.segments == 1
+        assert agg.seconds == 8.0

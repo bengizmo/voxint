@@ -65,8 +65,10 @@ def test_below_accept_is_weak() -> None:
 def test_null_margin_passes_only_for_one_speaker_roster() -> None:
     # One-speaker roster: margin is undefined (infinite) — passes.
     assert grade(_evidence(margin=None, roster_size=1), GATES) is MatchTier.STRONG
-    # NULL margin with a multi-speaker roster is malformed — never passes.
-    assert grade(_evidence(margin=None, roster_size=3), GATES) is MatchTier.WEAK
+    # NULL margin with a multi-speaker roster is malformed data — it grades
+    # unavailable (None), never a confident-sounding "weak" (#159 review;
+    # the dedicated test below pins the fold counts).
+    assert grade(_evidence(margin=None, roster_size=3), GATES) is None
 
 
 def test_missing_diagnostics_are_unavailable_never_weak() -> None:
@@ -103,3 +105,26 @@ def test_fold_without_evidence_is_none() -> None:
     summary = tier_for([], GATES)
     assert summary.tier is None
     assert not summary.has_voice_evidence
+
+
+def test_null_margin_on_multi_speaker_roster_is_unavailable() -> None:
+    """A NULL margin means infinity ONLY on a one-speaker roster; with any
+    other roster size the numbers are malformed and the appearance must grade
+    unavailable, never a confident-sounding weak (#159 review)."""
+    gates = MatchingGates()
+    malformed = TierEvidence(
+        run_id=uuid.uuid4(),
+        label="S0",
+        available=True,
+        similarity=0.9,
+        margin=None,
+        vote_agreement=0.9,
+        eligible_turns=5,
+        eligible_seconds=20.0,
+        roster_size=2,
+    )
+    assert grade(malformed, gates) is None
+    summary = tier_for([malformed], gates)
+    assert summary.tier is None
+    assert summary.unavailable == 1
+    assert summary.weak == 0

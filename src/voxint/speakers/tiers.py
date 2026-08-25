@@ -131,6 +131,11 @@ def grade(evidence: TierEvidence, gates: MatchingGates) -> MatchTier | None:
         return None
     if evidence.similarity is None or evidence.vote_agreement is None:
         return None
+    if evidence.margin is None and evidence.roster_size != 1:
+        # A NULL margin is only meaningful as "one-speaker roster = infinite";
+        # any other NULL numeric is malformed data — unavailable, never a
+        # confident-sounding "weak" (#159 review).
+        return None
     grounded = (
         evidence.similarity >= gates.grounded_min_cosine
         and _margin_passes(evidence, gates.grounded_min_margin)

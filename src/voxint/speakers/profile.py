@@ -56,7 +56,10 @@ def profile_for(session: Session, speaker_id: uuid.UUID) -> dict[str, SpeakerPro
     Looks across every id that canonicalizes into this speaker (the input may
     itself be a tombstone). On the rare per-field conflict between an alias row
     and a canonical row, the canonical row wins; between two alias rows, the
-    newest ``updated_at`` (then id, deterministic) wins.
+    newest ``updated_at`` (then id, deterministic) wins. A clear tombstone
+    (NULL value) participates in winner selection — a later clear beats a
+    stale alias value — but a field whose winner is a tombstone is dropped
+    from the result, so callers see "not set".
     """
     aliases = alias_ids(session, speaker_id)
     canonical = canonicalize(speaker_id, merge_map(session))
@@ -69,14 +72,14 @@ def profile_for(session: Session, speaker_id: uuid.UUID) -> dict[str, SpeakerPro
         .scalars()
         .all()
     )
-    out: dict[str, SpeakerProfile] = {}
+    winners: dict[str, SpeakerProfile] = {}
     for row in rows:
-        held = out.get(row.field)
+        held = winners.get(row.field)
         # First (newest) row wins, unless a later canonical row displaces a
         # non-canonical holder.
         if held is None or (held.speaker_id != canonical and row.speaker_id == canonical):
-            out[row.field] = row
-    return out
+            winners[row.field] = row
+    return {field: row for field, row in winners.items() if row.value is not None}
 
 
 def set_profile_field(
@@ -127,16 +130,20 @@ def set_profile_field(
 def clear_profile_field(
     session: Session, *, speaker_id: uuid.UUID, field: str, operator: str
 ) -> bool:
-    """Remove one profile field entirely (a deliberate manual act).
+    """Clear one profile field (a deliberate manual act), durably.
 
-    Returns whether a row existed. The clearing act itself leaves no profile
-    row to carry provenance — accepted-claim history stays in the decision
-    trail, which is the durable record. Alias rows for the field are removed
-    too, so a cleared field cannot resurrect through a stranded tombstone row.
+    Returns whether a set value existed. The canonical row becomes a CLEAR
+    tombstone (NULL value, manual provenance) rather than being deleted —
+    without that marker, "cleared" and "never materialized" would be
+    indistinguishable, and a replayed accept or a reconcile pass could
+    resurrect the cleared value (found in the #159 pre-landing review).
+    Alias rows for the field are removed, so a cleared field cannot
+    resurrect through a stranded merge-tombstone row either;
+    accepted-claim history stays in the decision trail.
     """
     _validate_field(field)
     _validate_operator(operator)
-    lock_canonical_speaker(session, speaker_id)
+    canonical = lock_canonical_speaker(session, speaker_id)
     aliases = alias_ids(session, speaker_id)
     rows = (
         session.execute(
@@ -147,10 +154,30 @@ def clear_profile_field(
         .scalars()
         .all()
     )
+    had_value = any(row.value is not None for row in rows)
+    canonical_row = next((row for row in rows if row.speaker_id == canonical), None)
     for row in rows:
-        session.delete(row)
+        if row is not canonical_row:
+            session.delete(row)
+    if canonical_row is None:
+        session.add(
+            SpeakerProfile(
+                speaker_id=canonical,
+                field=field,
+                value=None,
+                provenance=ProfileProvenance.MANUAL.value,
+                accepted_candidate_id=None,
+                operator=operator,
+            )
+        )
+    else:
+        canonical_row.value = None
+        canonical_row.provenance = ProfileProvenance.MANUAL.value
+        canonical_row.accepted_candidate_id = None
+        canonical_row.operator = operator
+        canonical_row.updated_at = func.now()
     session.flush()
-    return bool(rows)
+    return had_value
 
 
 def reconcile_speaker_profiles(session: Session) -> int:

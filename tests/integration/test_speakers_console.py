@@ -621,3 +621,61 @@ def test_reminders_absent_when_no_work_waits(
         session.commit()
     page = client.get("/speakers")
     assert "Suggested next steps" not in page.text
+
+
+def test_archived_speaker_refuses_research_mutations(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Archived = read-only at the mutation boundary too (#159 review): a
+    stale form must not start research or decide drafts for an archived
+    speaker, whatever the page promised before archival."""
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Shelved", minutes_rank=1, human=True
+        )
+        cand = _seed_candidate(session, speaker_id, "bio", "A draft.")
+        session.commit()
+    page = client.get(f"/speakers/{speaker_id}")
+    decision_token = _decision_token(page.text)
+    with session_factory() as session:
+        session.get(Speaker, speaker_id).deleted_at = BASE
+        session.commit()
+    refused = client.post(
+        f"/speakers/{speaker_id}/research/candidates/{cand}/decision",
+        data={
+            "csrf_token": decision_token,
+            "nonce": uuid.uuid4().hex,
+            "verdict": "accept",
+        },
+    )
+    assert refused.status_code == 409
+    # No decision was recorded and nothing materialized.
+    from voxint.db.models import ProfileReviewDecision, SpeakerProfile
+
+    with session_factory() as session:
+        assert session.query(ProfileReviewDecision).count() == 0
+        assert session.query(SpeakerProfile).count() == 0
+
+
+def test_flag_off_legacy_research_stays_single_id(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Alias-aware draft gathering is a Console 2.0 behavior: with the flag
+    off, the legacy roster renders exactly the drafts it always did (a merged
+    source's drafts do NOT appear), while the flag-on profile page shows them."""
+    from voxint.speakers.roster import merge_speakers as do_merge
+
+    with session_factory() as session:
+        source = _seed_speaker_with_activity(session, "Src", minutes_rank=1, human=True)
+        target = _seed_speaker_with_activity(session, "Tgt", minutes_rank=1, human=True)
+        _seed_candidate(session, source, "bio", "Draft recorded under the source.")
+        do_merge(session, source, target)
+        session.commit()
+    legacy = _make_client(session_factory, tmp_path, speakers_enabled=False)
+    page = legacy.get("/speakers")
+    assert page.status_code == 200
+    assert "Draft recorded under the source." not in page.text
+    modern = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    profile = modern.get(f"/speakers/{target}")
+    assert "Draft recorded under the source." in profile.text

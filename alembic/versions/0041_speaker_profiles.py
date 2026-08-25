@@ -122,7 +122,10 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("speaker_id", sa.Uuid(), nullable=False),
         sa.Column("field", sa.Text(), nullable=False),
-        sa.Column("value", sa.Text(), nullable=False),
+        # NULL value = a manual CLEAR tombstone (#159 review): the durable
+        # marker that the operator removed the field, so a replayed accept or
+        # a reconcile pass can never resurrect a cleared value.
+        sa.Column("value", sa.Text(), nullable=True),
         sa.Column("provenance", sa.Text(), nullable=False),
         sa.Column("accepted_candidate_id", sa.Uuid(), nullable=True),
         sa.Column("operator", sa.Text(), nullable=False),
@@ -147,8 +150,12 @@ def upgrade() -> None:
             name="speaker_profiles_field_check",
         ),
         sa.CheckConstraint(
-            "length(trim(value)) > 0 AND char_length(value) <= 4000",
+            "value IS NULL OR (length(trim(value)) > 0 AND char_length(value) <= 4000)",
             name="speaker_profiles_value_check",
+        ),
+        sa.CheckConstraint(
+            "value IS NOT NULL OR provenance = 'manual'",
+            name="speaker_profiles_cleared_shape_check",
         ),
         sa.CheckConstraint(
             "provenance IN ('manual', 'enrichment')",

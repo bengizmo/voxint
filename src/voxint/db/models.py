@@ -1621,6 +1621,13 @@ class SpeakerProfile(Base):
     recoverable from the decision trail). The value cap mirrors
     ``enrichment_candidates.value``; the operator cap mirrors the review
     writer's ``MAX_OPERATOR_CHARS``.
+
+    A NULL ``value`` is a manual CLEAR tombstone: the durable marker that the
+    operator removed the field as a later act. Without it, "cleared" and
+    "never materialized" are indistinguishable, and a replayed accept or a
+    reconcile pass would resurrect the cleared value. Tombstones are always
+    ``manual`` provenance with no candidate reference (CHECK-enforced), and
+    reads (``profile_for``) hide them from display.
     """
 
     __tablename__ = "speaker_profiles"
@@ -1631,8 +1638,13 @@ class SpeakerProfile(Base):
             name="speaker_profiles_field_check",
         ),
         CheckConstraint(
-            "length(trim(value)) > 0 AND char_length(value) <= 4000",
+            "value IS NULL OR (length(trim(value)) > 0 AND char_length(value) <= 4000)",
             name="speaker_profiles_value_check",
+        ),
+        # A clear tombstone (NULL value) is always a manual act.
+        CheckConstraint(
+            "value IS NOT NULL OR provenance = 'manual'",
+            name="speaker_profiles_cleared_shape_check",
         ),
         CheckConstraint(
             f"provenance IN ({_enum_values(ProfileProvenance)})",
@@ -1652,7 +1664,7 @@ class SpeakerProfile(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     speaker_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("speakers.id"), index=True)
     field: Mapped[str] = mapped_column(Text)
-    value: Mapped[str] = mapped_column(Text)
+    value: Mapped[str | None] = mapped_column(Text)  # NULL = clear tombstone
     provenance: Mapped[str] = mapped_column(Text)
     accepted_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("enrichment_candidates.id"), index=True
