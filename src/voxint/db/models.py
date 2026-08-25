@@ -1586,6 +1586,82 @@ class ProfileReviewDecision(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ProfileProvenance(enum.StrEnum):
+    """How a speaker-profile field got its current value (issue #159)."""
+
+    MANUAL = "manual"  # an operator typed it
+    ENRICHMENT = "enrichment"  # an accepted enrichment candidate materialized it
+
+
+# The claim fields a profile row may hold. NAME is deliberately excluded
+# (identity lives on ``speakers.display_name`` via rename), as is ``notes``
+# (``speakers.notes`` stays the single home for free-text notes).
+PROFILE_FIELDS: tuple[ClaimField, ...] = (
+    ClaimField.BIO,
+    ClaimField.AFFILIATION,
+    ClaimField.LINK,
+)
+
+
+class SpeakerProfile(Base):
+    """The CURRENT value of one speaker-profile field, with provenance (#159).
+
+    Row-per-(speaker, field), current-state-only: history stays where it
+    already immutably lives — the enrichment candidate/evidence tables and the
+    append-only ``profile_review_decisions`` trail — so overwriting a field
+    never loses the draft-claim record. ``provenance`` says whether an operator
+    typed the value or an accepted enrichment candidate materialized it; the
+    CHECK ties ``accepted_candidate_id`` to exactly the enrichment case (a
+    manual edit nulls it). Rows are written only through
+    ``enrichment/review.py`` (materialize-on-accept) and
+    ``speakers/profile.py`` (manual edit / reconcile), both under a canonical
+    ``speakers`` row lock; ``speaker_id`` always stores the CANONICAL identity
+    at write time, and ``roster.merge_speakers`` repoints rows when identities
+    merge (target wins per-field conflicts — the source value stays
+    recoverable from the decision trail). The value cap mirrors
+    ``enrichment_candidates.value``; the operator cap mirrors the review
+    writer's ``MAX_OPERATOR_CHARS``.
+    """
+
+    __tablename__ = "speaker_profiles"
+    __table_args__ = (
+        UniqueConstraint("speaker_id", "field", name="speaker_profiles_speaker_field_key"),
+        CheckConstraint(
+            "field IN ('bio', 'affiliation', 'link')",
+            name="speaker_profiles_field_check",
+        ),
+        CheckConstraint(
+            "length(trim(value)) > 0 AND char_length(value) <= 4000",
+            name="speaker_profiles_value_check",
+        ),
+        CheckConstraint(
+            f"provenance IN ({_enum_values(ProfileProvenance)})",
+            name="speaker_profiles_provenance_check",
+        ),
+        # Enrichment provenance ⇔ a candidate reference; a manual edit clears it.
+        CheckConstraint(
+            "(provenance = 'enrichment') = (accepted_candidate_id IS NOT NULL)",
+            name="speaker_profiles_provenance_candidate_check",
+        ),
+        CheckConstraint(
+            "length(trim(operator)) > 0 AND char_length(operator) <= 200",
+            name="speaker_profiles_operator_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    speaker_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("speakers.id"), index=True)
+    field: Mapped[str] = mapped_column(Text)
+    value: Mapped[str] = mapped_column(Text)
+    provenance: Mapped[str] = mapped_column(Text)
+    accepted_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("enrichment_candidates.id"), index=True
+    )
+    operator: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class AppSettings(Base):
     """Singleton (``id = 1``) store for the preferences the first-run wizard writes.
 
