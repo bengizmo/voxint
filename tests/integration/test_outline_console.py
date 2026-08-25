@@ -199,21 +199,26 @@ def test_review_fallback_lists_grounded_entities_inert(
     assert "<button" not in outline_section
 
 
-def test_readonly_transcript_ships_outline_props(
+def test_readonly_transcript_fallback_inside_island(
     session_factory: sessionmaker[Session],
 ) -> None:
-    # The read-only run transcript reuses the SAME shared island props, so a
-    # present outline rides to the transcript-player island exactly as it does to
-    # the review-stepper — the client renders the OutlinePanel over it (issue #87
-    # follow-up). _outline() already reads /runs/{id}/transcript's props.
+    # Structural anti-duplicate invariant: the inert outline fallback must sit
+    # INSIDE the transcript-player island div (after its opening tag, before the
+    # transcript lines), so the island root REPLACES it wholesale on mount and
+    # can never leave two outline panels. A macro call placed outside the div
+    # would still pass the content/gated tests while double-rendering once JS
+    # loads. (That the outline rides in the shared props is already covered by
+    # test_outline_present_resolves_target, whose _outline() reads this route.)
     client = _build_client(session_factory)
     with session_factory() as session:
         run_id = seed_run(session)
         _seed_mentions(session, run_id)
-    outline = _outline(client, run_id)
-    assert outline["available"] is True
-    assert len(outline["mentions"]) == 1
-    assert outline["mentions"][0]["surface"] == "Acme Corp"
+    body = client.get(f"/runs/{run_id}/transcript").text
+    island_at = body.find('data-island="transcript-player"')
+    outline_at = body.find('aria-label="Outline"')
+    first_line_at = body.find('class="preview tp-line')
+    assert island_at != -1 and outline_at != -1 and first_line_at != -1
+    assert island_at < outline_at < first_line_at
 
 
 def test_readonly_transcript_fallback_lists_grounded_entities_inert(
@@ -233,6 +238,29 @@ def test_readonly_transcript_fallback_lists_grounded_entities_inert(
     outline_section = body.split('aria-label="Outline"', 1)[1].split("</section>", 1)[0]
     assert "outline-jump" not in outline_section
     assert "<button" not in outline_section
+
+
+def test_readonly_transcript_outline_only_on_corrected_variant(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # The outline is built from the corrected/effective transcript, so it may
+    # disagree with the raw/enhanced text WITHOUT assetStale firing. Show it only
+    # on the corrected variant (the default and the review surface's only view);
+    # drop it on raw/enhanced so the panel hides rather than quoting another
+    # rendition without disclosure.
+    client = _build_client(session_factory)
+    with session_factory() as session:
+        run_id = seed_run(session)
+        _seed_mentions(session, run_id)
+    # Default (corrected) shows the panel.
+    default_body = client.get(f"/runs/{run_id}/transcript").text
+    assert 'aria-label="Outline"' in default_body
+    assert _island_props(default_body)["outline"] is not None
+    # Raw and enhanced hide it entirely (props null, no fallback section).
+    for variant in ("raw", "enhanced"):
+        body = client.get(f"/runs/{run_id}/transcript", params={"text": variant}).text
+        assert _island_props(body)["outline"] is None
+        assert 'aria-label="Outline"' not in body
 
 
 def test_readonly_transcript_outline_hidden_when_gated_off(

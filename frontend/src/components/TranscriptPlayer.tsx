@@ -252,8 +252,9 @@ export interface TranscriptPlayerProps {
 // exposes. Its two drivers command playback of one segment through this — the
 // same code path as clicking a line — so highlight and follow-scroll come free:
 // the review verify-and-advance loop (ReviewStepper), and, since issue #87's
-// read-only-transcript outline, ReadOnlyTranscript's OutlinePanel jump. A plain
-// transcript open with no outline still renders the player with no ref.
+// read-only-transcript outline, ReadOnlyTranscript's OutlinePanel jump. Both
+// wrappers attach the ref unconditionally; a transcript with no outline simply
+// never invokes it.
 export interface TranscriptPlayerHandle {
   playSegment: (index: number) => void;
 }
