@@ -551,9 +551,7 @@ export function useAnnotations({
             "This highlight is stale. Refresh or re-anchor it, then extract the clip.",
           );
         } else if (e instanceof ApiError && e.status === 422) {
-          setCopyStatus(
-            "This highlight has no precise word timing, so it can’t be clipped.",
-          );
+          setCopyStatus("This highlight’s timed span can’t be clipped.");
         } else if (e instanceof ApiError && e.status === 409) {
           setCopyStatus(
             "The processed audio for this run isn’t available, so a clip can’t be extracted.",
@@ -971,20 +969,22 @@ function HighlightsPanel({
                 >
                   Copy
                 </button>
-                {a.timingPrecision === "word" && a.startSeconds != null && (
-                  <button
-                    type="button"
-                    onClick={() => onExtractClip(a.id)}
-                    disabled={a.stale || clippingId === a.id}
-                    title={
-                      a.stale
-                        ? "This highlight is stale. Refresh or re-anchor it first."
-                        : "Extract this highlight as an audio clip"
-                    }
-                  >
-                    {clippingId === a.id ? "Extracting…" : "Extract clip"}
-                  </button>
-                )}
+                {a.timingPrecision === "word" &&
+                  a.startSeconds != null &&
+                  a.endSeconds != null && (
+                    <button
+                      type="button"
+                      onClick={() => onExtractClip(a.id)}
+                      disabled={a.stale || clippingId != null}
+                      title={
+                        a.stale
+                          ? "This highlight is stale. Refresh or re-anchor it first."
+                          : "Extract this highlight as an audio clip"
+                      }
+                    >
+                      {clippingId === a.id ? "Extracting…" : "Extract clip"}
+                    </button>
+                  )}
                 {writable && (
                   <button
                     type="button"
