@@ -531,6 +531,77 @@ def test_set_project_vocabulary_rejects_overlong_term(
         assert session.get(Project, pid).vocabulary is None  # nothing written
 
 
+def test_set_project_vocabulary_rejects_unknown_mode(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # An unknown mode must NOT fall through to "set" (which could replace inherited
+    # config with an empty list). Refuse with 422 and write nothing.
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "inheritt", "vocabulary": "Alpha", "csrf_token": _vocab_token(client)},
+    )
+    assert resp.status_code == 422
+    with session_factory() as session:
+        assert session.get(Project, pid).vocabulary is None
+
+
+def test_set_project_vocabulary_rejected_keeps_set_radio_checked(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A rejected "set" re-renders with the "set" radio checked, not reset to the
+    # stored "inherit" state, so the operator's attempted mode is not lost.
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/vocabulary",
+        data={"mode": "set", "vocabulary": "x" * 121, "csrf_token": _vocab_token(client)},
+    )
+    assert resp.status_code == 422
+    assert re.search(r'value="set"[^>]*\schecked', resp.text)
+    assert not re.search(r'value="inherit"[^>]*\schecked', resp.text)
+
+
+def test_set_project_corrections_rejects_unknown_mode(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/corrections",
+        data={"mode": "bogus", "rules": "[]", "csrf_token": _corr_token(client)},
+        headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 422
+    assert resp.json()["ok"] is False
+    with session_factory() as session:
+        assert session.get(Project, pid).corrections is None
+
+
+def test_project_detail_supersede_copy_is_per_field(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    # A project overriding ONLY vocabulary must not claim it supersedes the folder
+    # pack's corrections too (ADR 0002 per-field resolution). The folder-table note
+    # names just the overridden field.
+    with session_factory() as session:
+        project = _make_project(session)
+        project.vocabulary = ["Alpha"]  # corrections still inherit
+        folder = MediaFolder(
+            path="interviews", domain_pack="interview", project_id=project.id
+        )
+        session.add(folder)
+        pid = project.id
+        session.commit()
+    html = client.get(f"/projects/{pid}").text
+    assert "vocabulary superseded by this project" in html
+    assert "vocabulary and corrections superseded" not in html
+
+
 def test_project_vocabulary_requires_csrf(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:

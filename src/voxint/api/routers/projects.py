@@ -1,11 +1,12 @@
 """The projects area (Console 2.0 P2b, #153): the project list and detail pages.
 
-A project groups media folders and carries project-scoped configuration (the
-vocabulary/corrections editors land in a later phase). These pages let an
-operator create a project, see its folders and the speakers its runs resolve to,
-and assign an unassigned folder to it. Reads live in
-:mod:`voxint.api.projects_query`; the two mutating routes (create, assign) follow
-the console's per-action CSRF idiom.
+A project groups media folders and carries project-scoped configuration
+(per-field vocabulary and corrections overrides, edited on the detail page).
+These pages let an operator create a project, see its folders and the speakers
+its runs resolve to, assign an unassigned folder to it, and set or clear its
+vocabulary/corrections. Reads live in :mod:`voxint.api.projects_query`; the
+mutating routes (create, assign, vocabulary, corrections) each follow the
+console's per-action CSRF idiom.
 
 The routes are always registered so the console route inventory is stable across
 the dark-ship flip; :func:`require_projects_enabled` 404s them until
@@ -128,6 +129,7 @@ def _detail_context(
     assigned_id: uuid.UUID | None = None,
     vocabulary_error: str | None = None,
     vocabulary_submitted: str | None = None,
+    vocabulary_mode: str | None = None,
     corrections_error: str | None = None,
 ) -> dict[str, Any]:
     # The just-assigned folder, echoed as a confirmation banner that names the
@@ -168,6 +170,10 @@ def _detail_context(
         "corrections_props": corrections_props,
         "vocabulary_text": vocabulary_text,
         "vocabulary_error": vocabulary_error,
+        # The mode to reflect in the radios: the submitted mode on a rejected save
+        # (so an attempted "set" does not render with "inherit" checked), else None
+        # to fall back to the project's stored state.
+        "vocabulary_mode": vocabulary_mode,
         "corrections_error": corrections_error,
         "error": error,
         "assigned": assigned,
@@ -259,6 +265,22 @@ def set_project_vocabulary(
     project = session.get(Project, project_id)
     if project is None:
         raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    if mode not in ("set", "inherit"):
+        # The declared contract is set|inherit; anything else is a malformed
+        # request (a stale form or a typo). Refuse rather than fall through to
+        # "set", which could silently replace inherited config with an empty list.
+        detail = project_detail(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "projects/project_detail.html",
+            _detail_context(
+                request,
+                session,
+                detail,
+                vocabulary_error="That submission was not valid (unknown mode).",
+            ),
+            status_code=422,
+        )
     if mode == "inherit":
         project.vocabulary = None
         session.commit()
@@ -276,6 +298,7 @@ def set_project_vocabulary(
                 detail,
                 vocabulary_error=str(exc),
                 vocabulary_submitted=vocabulary,
+                vocabulary_mode="set",
             ),
             status_code=422,
         )
@@ -324,6 +347,10 @@ def set_project_corrections(
             status_code=422,
         )
 
+    if mode not in ("set", "inherit"):
+        # set|inherit only; refuse anything else rather than fall through to a
+        # "set" that could replace inherited corrections with an empty list.
+        return _reject("That submission was not valid (unknown mode).", None)
     if mode == "inherit":
         project.corrections = None
         session.commit()

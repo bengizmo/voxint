@@ -82,8 +82,12 @@ class ProjectDetail:
     # none (wins). The editors on the detail page write these directly.
     vocabulary: list[str] | None
     corrections: list[dict[str, object]] | None
-    # True when either override is set (not None): the project replaces its
-    # folders' packs for those fields, and the assign note reads accordingly.
+    # Per-field: the project overrides this field (not None) and so replaces the
+    # folder pack / global baseline for it. Resolution is per field (ADR 0002), so
+    # the supersede copy must name the fields actually overridden, not blanket both.
+    has_own_vocabulary: bool
+    has_own_corrections: bool
+    # True when either override is set: the project has some config of its own.
     has_own_config: bool
     folders: list[ProjectFolder]
     speakers: list[ProjectSpeaker]
@@ -211,6 +215,8 @@ def project_detail(
         description=project.description,
         vocabulary=vocabulary,
         corrections=corrections,
+        has_own_vocabulary=vocabulary is not None,
+        has_own_corrections=corrections is not None,
         has_own_config=(vocabulary is not None or corrections is not None),
         folders=_member_folders(session, project_id),
         speakers=_derived_speakers(session, project_id),

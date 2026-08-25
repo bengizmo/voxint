@@ -253,6 +253,14 @@ def _run_domain_pack_snapshot(
     a malformed project correction — never a silent fallback.
     """
     resolved = settings or get_settings()
+    # The global (app_settings) and relational (folder+project) layers are read in
+    # separate statements under READ COMMITTED, so the frozen snapshot is "config
+    # as of these reads": a concurrent edit that touches both layers between them is
+    # not atomically isolated and could freeze a hybrid that was never simultaneously
+    # effective. Accepted for a single-operator deployment (one operator, no
+    # competing config writers); tighten to one joined read or a locking boundary
+    # only if that assumption ever changes. _folder_and_project keeps folder+project
+    # mutually consistent via its joinedload.
     row = get_app_settings(session)
 
     folder: MediaFolder | None = None
@@ -372,8 +380,9 @@ def submit_media_item(
     DB-only: the caller owns the commit and, once it commits, lazily publishes
     ``voxint.run_pipeline`` (commit-before-publish). ``source_path`` is UNIQUE,
     so a repeated local path reuses its MediaItem while every submission still
-    mints a distinct run. The run's domain pack is frozen from the per-folder
-    mapping (issue #11); ``domain_pack_name`` overrides it explicitly.
+    mints a distinct run. The run's config snapshot is frozen by per-field
+    resolution off the media row's folder membership (issues #11, #153);
+    ``domain_pack_name`` overrides the pack explicitly.
 
     ``sidecar`` (issue #104) applies the file's parsed YAML sidecar at THIS
     freeze point: speakers union into the pack snapshot's ``name_seeds``, notes

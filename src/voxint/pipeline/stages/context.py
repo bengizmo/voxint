@@ -265,7 +265,12 @@ def apply_run_preferences(
     # config_resolution_version == 1) keeps the exact live-union path so those
     # runs stay byte-identical. Only version 2 is a freeze; an unrecognized future
     # version deliberately falls through to the live-union path (never silently
-    # reinterpreted as a freeze it may not be).
+    # reinterpreted as a freeze it may not be). Fail-closing on an unknown version
+    # was considered and rejected: this runs outside the execute_run failure lane,
+    # so a raise here would strand the run for the recovery sweep to re-publish
+    # forever, and voxint is single-operator (no mixed-version worker fleet to
+    # protect against a rolling upgrade). Live-union is the safe, non-poisoning
+    # fallback.
     if config_resolution_version == 2:
         vocabulary = _dedup_order_preserving(pack.vocabulary)
     else:

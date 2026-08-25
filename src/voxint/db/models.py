@@ -495,9 +495,10 @@ class PipelineRun(Base):
     # deliberately outside the CAS revision and orthogonal to status — like
     # operator_notes, last-write-wins, not pipeline state.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Frozen domain-pack snapshot for this run (issue #11): the resolved manifest
-    # (name/vocabulary/name_seeds/prompt_fragments) as JSON, stamped write-once at
-    # submit from the per-folder mapping (or the default pack). The pipeline worker
+    # Frozen domain-pack snapshot for this run (issues #11, #153): the resolved
+    # manifest (name/vocabulary/name_seeds/prompt_fragments) as JSON, stamped
+    # write-once at submit by per-field resolution off the media row's folder and
+    # project (or the default pack + global baseline). The pipeline worker
     # and the enrichment producers both read THIS, not the mutable global env, so a
     # run — and its late enrichment — always sees the exact pack it was transcribed
     # with even if the manifest on disk later changes. NULL = a legacy run created
@@ -1605,9 +1606,10 @@ class AppSettings(Base):
     )
     # Operator-authored correction rules (issue #84): a list of rule mappings
     # {id, match, replace, case_sensitive, whole_word}, each already validated
-    # through the #80 gate at author time. Unioned onto the selected pack's
-    # corrections at submit-time freeze (see
-    # ingest.service._run_domain_pack_snapshot) and stored in
+    # through the #80 gate at author time. This is the global glossary layer:
+    # since #153 it is unioned onto the resolved pack ONLY in the global-baseline
+    # branch of the submit-time freeze (an explicit/folder/project layer replaces
+    # it per field; see ingest.service._run_domain_pack_snapshot) and stored in
     # pipeline_runs.domain_pack — NOT applied live like vocabulary — so #82
     # compose and #83 provenance read them off the frozen snapshot unchanged.
     # Named "corrections" to mirror the pack field; distinct from the manual

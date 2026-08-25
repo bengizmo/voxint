@@ -194,11 +194,26 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
         # mapping here — DomainPack.from_mapping drops unknown keys, so the decoded
         # pack cannot carry it. A NULL snapshot or a pre-#153 row with no key reads
         # as version 1 (the live-union vocabulary path); a #153 freeze carries 2.
-        config_resolution_version = (
-            int(pack_snapshot.get("config_resolution_version", 1))
+        # Malformed metadata (a hand-edited or corrupt snapshot with a null or
+        # non-numeric value) must NOT raise here: this runs OUTSIDE the execute_run
+        # failure lane, so an exception would leave the run un-failed for the
+        # recovery sweep to re-publish forever. Fall back to the live-union path (1),
+        # the same corrupt-snapshot tolerance domain_pack_from_snapshot already takes.
+        raw_version = (
+            pack_snapshot.get("config_resolution_version", 1)
             if isinstance(pack_snapshot, dict)
             else 1
         )
+        try:
+            config_resolution_version = int(raw_version)
+        except (TypeError, ValueError, OverflowError):
+            logger.warning(
+                "run %s has a malformed config_resolution_version %r; "
+                "falling back to live-union config resolution",
+                run_id,
+                raw_version,
+            )
+            config_resolution_version = 1
         max_speakers_hint = (
             run_row.diarization_max_speakers if run_row is not None else None
         )

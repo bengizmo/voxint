@@ -5,6 +5,10 @@
 <h1>{{ detail.name }}</h1>
 {% if detail.description %}<p class="muted">{{ detail.description }}</p>{% endif %}
 
+{# The fields this project actually overrides, named so the supersede copy never
+   claims blanket replacement when only one field is set (ADR 0002 per-field). #}
+{% set own_fields %}{% if detail.has_own_vocabulary and detail.has_own_corrections %}vocabulary and corrections{% elif detail.has_own_vocabulary %}vocabulary{% elif detail.has_own_corrections %}corrections{% endif %}{% endset %}
+
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 {% if assigned %}
@@ -15,7 +19,7 @@
   Assigned <code>{{ assigned.path }}</code> to this project.
   {% if assigned.domain_pack %}
     {% if detail.has_own_config %}
-    This project's own vocabulary and corrections now take precedence over the folder's “{{ assigned.domain_pack }}” pack for its recordings.
+    This project now applies its own {{ own_fields }} instead of the folder's “{{ assigned.domain_pack }}” pack for its recordings; the pack still supplies everything else.
     {% else %}
     The folder's “{{ assigned.domain_pack }}” pack keeps applying until this project sets its own vocabulary or corrections.
     {% endif %}
@@ -35,7 +39,7 @@
           <td><code>{{ folder.path }}</code></td>
           <td>
             {% if folder.domain_pack %}{{ folder.domain_pack }}
-              {% if detail.has_own_config %}<br><span class="muted">superseded by this project's config</span>{% endif %}
+              {% if detail.has_own_config %}<br><span class="muted">{{ own_fields }} superseded by this project</span>{% endif %}
             {% else %}<span class="muted">default</span>{% endif %}
           </td>
           <td>{{ folder.media_count }}</td>
@@ -79,9 +83,9 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_vocab }}">
     <fieldset>
       <legend>Source</legend>
-      <label><input type="radio" name="mode" value="inherit"{% if detail.vocabulary is none %} checked{% endif %}>
+      <label><input type="radio" name="mode" value="inherit"{% if (vocabulary_mode is none and detail.vocabulary is none) or vocabulary_mode == 'inherit' %} checked{% endif %}>
         Inherit from the folder pack or global settings</label>
-      <label><input type="radio" name="mode" value="set"{% if detail.vocabulary is not none %} checked{% endif %}>
+      <label><input type="radio" name="mode" value="set"{% if (vocabulary_mode is none and detail.vocabulary is not none) or vocabulary_mode == 'set' %} checked{% endif %}>
         Set for this project (an empty list means explicitly none)</label>
     </fieldset>
     <label>Terms, one per line
