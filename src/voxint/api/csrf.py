@@ -91,6 +91,9 @@ CSRF_ROSTER_EMBEDDING_DELETE = "roster-embedding-delete"
 CSRF_RESEARCH_START = "research-start"
 CSRF_RESEARCH_CANCEL = "research-cancel"
 CSRF_PROFILE_DECISION = "profile-decision"
+# Manual speaker-profile field edits on the Console 2.0 profile page (#159) —
+# a distinct act from ruling on a research draft, so a distinct token.
+CSRF_SPEAKER_PROFILE_EDIT = "speaker-profile-edit"
 # Run-level asset generation (issue #41): starting jobs (LLM spend) and
 # cancelling one are independent mutations with different blast radii.
 CSRF_ASSETS_GENERATE = "assets-generate"

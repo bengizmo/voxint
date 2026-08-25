@@ -21,6 +21,32 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Jobs entry, which stays on the `/runs` placeholder until the flag is on. No
   redirect, tutorial remap, or version bump ships here: the `/runs` retirement is
   a separate coordinated slice, so `/runs` and its detail page are unchanged.
+- **Console 2.0 P4: speakers overview and profile pages** (#159, epic #149).
+  Behind a new `CONSOLE_SPEAKERS_ENABLED` flag (off by default), `/speakers`
+  becomes an overview of everyone Voxint has heard: per-speaker files, spoken
+  time, first and last file added, a Verified badge (at least one human
+  assignment that still wins after later rulings), and a strong/moderate/weak
+  voice-match chip graded against the same gates the matcher enforces, with the
+  numbers behind a "why this match?" reveal. Card and table views, sortable,
+  with the existing rename/merge/archive/restore actions, plus an action
+  reminders strip (pending speaker-name suggestions linking each recording's
+  review workbench; frequently heard voices not yet confirmed). Each name links
+  a new `/speakers/{id}` profile page: stats header, a per-field profile
+  (bio, affiliation, link) with provenance chips and manual edit/clear, the
+  web-research block (accepting a claim updates the profile panel in place),
+  and the recordings the speaker appears in. A merged-away speaker's URL
+  redirects to the speaker that absorbed it; archived speakers read-only. All
+  numbers come from effective resolution: one canonical (newest completed) run
+  per recording, human rulings winning over automatic matches, so reprocessing
+  a file never inflates anyone's minutes. With the flag off, `/speakers` keeps
+  the current roster page unchanged and the profile routes 404.
+- **Speaker profiles are now stored rows** (migration 0041, applies flag-off).
+  Accepting a bio, affiliation, or link research claim now also materializes
+  the value into a new `speaker_profiles` table (one current value per field,
+  with provenance and the accepted claim's id); existing accepted decisions are
+  backfilled. Draft-claim history is untouched, a replayed accept can never
+  overwrite a later manual edit, and merging speakers carries profile rows to
+  the surviving speaker (its own values win a per-field conflict).
 - **Synthdetect M1 S3: ASVspoof 2021 DF importer core + v2 imported-benchmark
   manifest** (#144). Groundwork for the DF reproduction gates. The corpus manifest
   schema (`tools/synthdetect_corpus.py`) gains a `schema_version: 2`
@@ -42,7 +68,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   a fail-closed parser for the official `trial_metadata.txt` and the frozen,
   seeded (`voxint-synthdetect-144`), stratified (label by codec condition, `eval`
   split only) hash-rank selection of the 10 % subset, emitting a canonically
-  ordered trial list bound by a cohort hash. The shape was chosen after an
+  ordered trial list bound by a cohort hash. The same tool now also carries the
+  audio-dependent emission verb: `emit` verifies the operator's official archives
+  by pinned sha, safely extracts an untouched native FLAC tree from those verified
+  bytes (rejecting absolute, traversing, linked, or duplicate members), transcodes
+  each selected trial's exact native FLAC to the canonical
+  `pcm-s16le-mono-16000-v1` view with ffmpeg (no resample: a non-conforming source
+  is rejected before and after), and writes a v2 `imported_benchmark` manifest
+  whose per-clip sha is the PCM payload only, alongside a per-trial receipt that
+  binds each pinned-archive FLAC to the exact canonical PCM the manifest scores.
+  Nothing is published until the whole corpus re-reads and revalidates, so a
+  partial or misbound corpus is never left behind; an audio-free `select` verb
+  emits just the trial list and selection receipt. The shape was chosen after an
   independent two-model design review; see the S3 pre-registration refinement note
   in `docs/gpu-contracts.md`.
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer

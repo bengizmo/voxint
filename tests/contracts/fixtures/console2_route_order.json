@@ -552,6 +552,18 @@
   ]
  ],
  [
+  "/speakers/{speaker_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/speakers/{speaker_id}/profile",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/jobs",
   [
    "GET"

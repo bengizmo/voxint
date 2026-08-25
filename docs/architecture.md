@@ -193,9 +193,10 @@ ever writes the decision ledger:
   The one active predicate (`roster.active_speaker_clause`) governs matching
   centroids, the workbench assign dropdown, and the decide route. Merged and
   archived speakers stop attracting proposals and decisions.
-- **Merge B→A** repoints B's `speaker_embeddings` and `speaker_assignments` to A
-  and keeps B as a tombstone (`merged_into_id = A`), so historical ledger FKs
-  stay valid. Readers canonicalize through the merge map at read time: an old
+- **Merge B→A** repoints B's `speaker_embeddings`, `speaker_assignments`, and
+  `speaker_profiles` rows to A (A's own profile values win a per-field
+  conflict) and keeps B as a tombstone (`merged_into_id = A`), so historical
+  ledger FKs stay valid. Readers canonicalize through the merge map at read time: an old
   `assign(B)` decision *renders* as A while the ledger row keeps B forever.
   Writes collapse chains to depth 1; readers still follow chains defensively and
   fail loudly on a cycle.
@@ -203,6 +204,22 @@ ever writes the decision ledger:
   assignments: stale machine grounding must not outlive the operator's verdict.
   Embeddings and human decisions are preserved; restore does not resurrect the
   purged proposals (matching re-proposes on future runs).
+
+A speaker's current profile (bio, affiliation, link) lives in
+`speaker_profiles` (issue #159): one row per field, carrying provenance
+(`manual` or `enrichment` with the accepted candidate's id). The single write
+funnel is `enrichment.review.record_profile_decision`, which materializes an
+accepted claim under the canonical speaker's row lock; manual edits and merge
+repointing (`speakers/profile.py`, `speakers/roster.py`) take the same lock,
+so an accept, an edit, and a merge can never interleave on one speaker. A
+replayed accept fills an absent field or refreshes its own value only; it
+never reverses a later manual edit. Draft-claim history stays in the immutable
+enrichment tables. The Console 2.0 speakers overview and `/speakers/{id}`
+profile pages (behind `CONSOLE_SPEAKERS_ENABLED`) read this table plus
+per-speaker aggregates folded from effective resolution
+(`speakers/aggregate.py`: one canonical newest completed run per recording,
+human rulings over automatic matches), with voice-match tiers graded against
+the live matching gates (`speakers/tiers.py`).
 - **Removing an embedding** hard-deletes the derived centroid (the minting
   decision and the raw `diarization_turns` vectors survive) and deletes all of
   that speaker's cosine assignments, because assignments carry no centroid

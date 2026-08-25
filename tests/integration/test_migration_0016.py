@@ -124,5 +124,6 @@ def test_single_alembic_head() -> None:
     # settings columns + translation_jobs/run_translations, issue #133; 0039 =
     # audio_clip artifact kind + audio_artifacts.idempotency_key clip cache key,
     # issue #88; 0040 = projects + media_folders + media location split, issue
-    # #153).
-    assert list(heads) == ["0040"]
+    # #153; 0041 = speaker_profiles current per-field profile with provenance,
+    # issue #159).
+    assert list(heads) == ["0041"]

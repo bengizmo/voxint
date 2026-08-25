@@ -233,6 +233,21 @@ def require_projects_enabled(request: Request) -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
+def require_speakers_enabled(request: Request) -> None:
+    """Area gate for the speaker profile pages (Console 2.0 P4, #159).
+
+    ``/speakers`` itself is a LIVE page (its handler branches skins on
+    ``console_speakers_enabled``), so this gate guards only the routes that did
+    not exist before Console 2.0 — the profile page and its edit POST. Same
+    shape as :func:`require_media_enabled`: always-registered routes, a plain
+    404 while the flag is off, wired per-route (not router-level, which would
+    take the legacy roster down with it).
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.console_speakers_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
 def run_source_title(run: PipelineRun) -> str:
     """A non-blank, operator-recognizable source label for a run (issue #86):
     the run's sidecar title (issue #104, operator intent), else the

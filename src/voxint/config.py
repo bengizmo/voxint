@@ -529,6 +529,13 @@ class Settings(BaseSettings):
     # a later coordinated slice, blocked on the Media area repointing off /runs.
     console_jobs_enabled: bool = False
 
+    # The speakers area rebuild (Console 2.0 P4, #159). /speakers is ALREADY a
+    # live page, so this flag branches CONTENT, not access: off = the legacy
+    # roster renders byte-identically; on = the new overview replaces it and
+    # the /speakers/{id} profile pages open (those new routes 404 while off,
+    # via require_speakers_enabled, keeping the route inventory stable).
+    console_speakers_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above
