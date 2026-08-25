@@ -142,6 +142,12 @@ class ArtifactKind(enum.StrEnum):
     # sweep targets preprocessed_audio only) so a static waveform can still
     # render after the WAV is reclaimed.
     WAVEFORM_PEAKS = "waveform_peaks"
+    # Operator-extracted attributed audio clip (issue #88): a sample-accurate
+    # cut of one word_range annotation's span from normalized.wav, cached under
+    # artifacts/{run_id}/clips/{digest}.wav. A reclaimable cache aged by the
+    # clip row's own created_at; an existing clip serves independently of
+    # normalized.wav, and a cache miss regenerates only while the source is live.
+    AUDIO_CLIP = "audio_clip"
 
 
 class SourceKind(enum.StrEnum):
@@ -501,6 +507,33 @@ class AudioArtifact(Base):
             unique=True,
             postgresql_where=text("kind = 'waveform_peaks'"),
         ),
+        # Audio clips (issue #88) carry a content-addressed idempotency_key;
+        # every other kind leaves it NULL. Paired with the CHECK below, the
+        # column is present exactly for clips.
+        CheckConstraint(
+            "(idempotency_key IS NOT NULL) = (kind = 'audio_clip')",
+            name="audio_artifacts_clip_key_shape_check",
+        ),
+        # One LIVE clip row per (run, content-addressed key): a cache hit adopts
+        # it, concurrent generators race under an advisory lock + INSERT … ON
+        # CONFLICT. Reclaimed tombstones are excluded, so a post-reclamation
+        # regeneration inserts a fresh row rather than reviving the stamped one.
+        # Keep in lockstep with migration 0039.
+        Index(
+            "uq_audio_artifacts_clip_key",
+            "pipeline_run_id",
+            "idempotency_key",
+            unique=True,
+            postgresql_where=text("kind = 'audio_clip' AND reclaimed_at IS NULL"),
+        ),
+        # Sweep predicate: unreclaimed clip rows for a given run, aged by the
+        # clip's OWN created_at (issue #88) so a freshly regenerated clip on an
+        # old run is not immediately re-eligible.
+        Index(
+            "ix_audio_artifacts_clip_reclaimable",
+            "pipeline_run_id",
+            postgresql_where=text("kind = 'audio_clip' AND reclaimed_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -514,6 +547,11 @@ class AudioArtifact(Base):
     # was already absent). The row itself is never deleted.
     reclaimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     reclaimed_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    # Content-addressed cache key for audio clips (issue #88); NULL for every
+    # other kind (enforced by audio_artifacts_clip_key_shape_check). Derived
+    # from the normalized-artifact id + annotation id + integer sample bounds,
+    # so identical extractions dedupe and a re-anchor makes a new clip.
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
 
 
 class AudioChunk(Base):
