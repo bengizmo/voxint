@@ -158,6 +158,14 @@
     true
   ],
   [
+    "/review/{run_id}/annotations/{annotation_id}/clips",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/annotations/{annotation_id}/export.md",
     [
       "GET"
@@ -377,6 +385,20 @@
     "/runs/{run_id}/cancel",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [
+      "GET"
     ],
     "onboarding",
     true

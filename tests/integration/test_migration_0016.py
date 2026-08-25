@@ -121,5 +121,7 @@ def test_single_alembic_head() -> None:
     # + embedding_jobs semantic-search spine, issue #121; 0036 = app_settings
     # semantic-index feature flags, issue #121; 0037 = pipeline_runs detected
     # language + detection score, issue #124; 0038 = transcript translation
-    # settings columns + translation_jobs/run_translations, issue #133).
-    assert list(heads) == ["0038"]
+    # settings columns + translation_jobs/run_translations, issue #133; 0039 =
+    # audio_clip artifact kind + audio_artifacts.idempotency_key clip cache key,
+    # issue #88).
+    assert list(heads) == ["0039"]
