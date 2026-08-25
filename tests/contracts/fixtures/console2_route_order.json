@@ -114,6 +114,18 @@
   ]
  ],
  [
+  "/media/archive",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/unarchive",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

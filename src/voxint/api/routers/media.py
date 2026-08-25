@@ -28,12 +28,14 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from voxint.api.csrf import (
+    CSRF_MEDIA_ARCHIVE,
     CSRF_MEDIA_ASSIGN,
     CSRF_MEDIA_FETCH,
     CSRF_MEDIA_FOLDERS,
     CSRF_MEDIA_RERUN,
     CSRF_MEDIA_RERUN_CONFIRM,
     CSRF_MEDIA_SUBMIT,
+    CSRF_MEDIA_UNARCHIVE,
     mint_csrf_token,
 )
 from voxint.api.media_query import (
@@ -62,14 +64,18 @@ from voxint.domain_packs.corrections import operator_correction_message
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
 from voxint.ingest import (
     EffectiveConfigPreview,
+    RunNotArchivableError,
+    RunNotFoundError,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
     UrlValidationError,
+    archive_run,
     preview_effective_config,
     submit_media_item,
     submit_upload,
     submit_url,
+    unarchive_run,
 )
 from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
 from voxint.media.registration import register_folder, unregister_folder_by_id
@@ -207,8 +213,29 @@ def _resolve_picked_folder(
     return folder_id
 
 
+def _nonneg(raw: str | None) -> int | None:
+    """Parse a non-negative int PRG count, or ``None`` for absent/malformed/negative.
+
+    Every success banner rides back as a query param a crafted URL could forge, so
+    a value that is not a plain ``>= 0`` integer is dropped rather than rendered.
+    """
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
 def _success_notice(
-    *, assigned: str | None, folder: str | None, reverted: str | None
+    *,
+    assigned: str | None,
+    folder: str | None,
+    reverted: str | None,
+    archive_done: str | None = None,
+    unarchive_done: str | None = None,
+    skipped: str | None = None,
 ) -> dict[str, str] | None:
     """Build the post-redirect success banner from the PRG query params.
 
@@ -217,29 +244,35 @@ def _success_notice(
     shapes this router emits are honored, and a malformed/negative count is dropped
     rather than rendered.
     """
-    if assigned is not None:
-        try:
-            count = int(assigned)
-        except ValueError:
-            return None
-        if count < 0:
-            return None
+    assigned_n = _nonneg(assigned)
+    if assigned_n is not None:
         return {
             "kind": "success",
-            "text": f"Updated the settings folder for {_files(count)}.",
+            "text": f"Updated the settings folder for {_files(assigned_n)}.",
         }
     if folder == "added":
         return {"kind": "success", "text": "Folder registered."}
     if folder == "removed":
         text = "Folder unregistered."
-        count = 0
-        if reverted is not None:
-            try:
-                count = int(reverted)
-            except ValueError:
-                count = 0
+        count = _nonneg(reverted) or 0
         if count > 0:
             text += f" {_files(count)} reverted to global settings."
+        return {"kind": "success", "text": text}
+    archived_n = _nonneg(archive_done)
+    if archived_n is not None:
+        text = f"Archived the latest run for {_files(archived_n)}."
+        skip = _nonneg(skipped) or 0
+        if skip > 0:
+            # Skip, not abort: a selected file with no terminal run to archive is
+            # reported, never silently dropped (the same posture as bulk re-run).
+            text += f" {_files(skip)} had no run to archive and were skipped."
+        return {"kind": "success", "text": text}
+    restored_n = _nonneg(unarchive_done)
+    if restored_n is not None:
+        text = f"Restored the latest archived run for {_files(restored_n)}."
+        skip = _nonneg(skipped) or 0
+        if skip > 0:
+            text += f" {_files(skip)} had no archived run and were skipped."
         return {"kind": "success", "text": text}
     return None
 
@@ -251,6 +284,7 @@ def _library_context(
     *,
     sort: str | None,
     view: str | None,
+    archived: bool = False,
     submitted: str | None = None,
     notice: dict[str, str] | None = None,
     selected_ids: frozenset[str] = frozenset(),
@@ -262,13 +296,21 @@ def _library_context(
     One builder so an error branch cannot ship a page missing a CSRF token or the
     folder options (a broken form or a 500). ``sort``/``view`` are coerced through
     the same allowlists the GET uses, so a crafted hidden field cannot skew the
-    re-render. ``selected_ids``/``attempted_folder_id`` let a rejected bulk action
-    re-check the operator's boxes and target instead of silently dropping them.
+    re-render. ``archived`` picks the active vs archived view (the latter shows only
+    items whose latest run is archived, the target set for bulk unarchive).
+    ``selected_ids``/``attempted_folder_id`` let a rejected bulk action re-check the
+    operator's boxes and target instead of silently dropping them.
     """
     selected_sort = _safe_sort(sort)
     selected_view = _safe_view(view)
-    rows = media_library(session, sort=selected_sort)
+    rows = media_library(session, sort=selected_sort, archived=archived)
     secret = request.app.state.csrf_secret
+    # The archive-view toggle target: the same sort/layout in the opposite view.
+    # Active -> add ?archived=1; archived -> drop it (mirrors the /runs toggle).
+    toggle_params = {"sort": selected_sort, "view": selected_view}
+    if not archived:
+        toggle_params["archived"] = "1"
+    archived_toggle_url = f"/media?{urlencode(toggle_params)}"
     return {
         "request": request,
         "active_nav": "media",
@@ -278,6 +320,10 @@ def _library_context(
         "sorts": SORT_LABELS,
         "view": selected_view,
         "views": _VIEWS,
+        # The archived view shows only items with an archived latest run (the bulk
+        # unarchive target set); the active view hides archived runs.
+        "archived": archived,
+        "archived_toggle_url": archived_toggle_url,
         # The listing is capped; say so honestly when it is full rather than
         # implying the library ends here.
         "truncated": len(rows) >= MEDIA_LIBRARY_LIMIT,
@@ -292,6 +338,8 @@ def _library_context(
         "csrf_media_assign": mint_csrf_token(secret, CSRF_MEDIA_ASSIGN),
         "csrf_media_folders": mint_csrf_token(secret, CSRF_MEDIA_FOLDERS),
         "csrf_media_rerun": mint_csrf_token(secret, CSRF_MEDIA_RERUN),
+        "csrf_media_archive": mint_csrf_token(secret, CSRF_MEDIA_ARCHIVE),
+        "csrf_media_unarchive": mint_csrf_token(secret, CSRF_MEDIA_UNARCHIVE),
         # The settings-folder picker; renders whether or not projects are enabled.
         "folder_options": folder_options(session),
         # Gate the URL-fetch form: off => rendered disabled and POST /media/fetch
@@ -317,19 +365,34 @@ def media_library_page(
     session: SessionDep,
     sort: str | None = None,
     view: str | None = None,
+    archived: str | None = None,
     submitted: str | None = None,
     assigned: str | None = None,
     folder: str | None = None,
     reverted: str | None = None,
+    archive_done: str | None = None,
+    unarchive_done: str | None = None,
+    skipped: str | None = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
-    notice = _success_notice(assigned=assigned, folder=folder, reverted=reverted)
+    # ?archived=1 flips to the archived-only view (mirrors /runs); anything else
+    # (absent / "0" / blank) is the default active listing that hides archived runs.
+    show_archived = archived == "1"
+    notice = _success_notice(
+        assigned=assigned,
+        folder=folder,
+        reverted=reverted,
+        archive_done=archive_done,
+        unarchive_done=unarchive_done,
+        skipped=skipped,
+    )
     context = _library_context(
         request,
         session,
         settings,
         sort=sort,
         view=view,
+        archived=show_archived,
         submitted=submitted,
         notice=notice,
     )
@@ -624,6 +687,43 @@ def _latest_run_ids(
     return {row.media_item_id: row.run_id for row in session.execute(stmt)}
 
 
+def _latest_run_in_view(
+    session: SessionDep, media_ids: list[uuid.UUID], *, archived: bool
+) -> dict[uuid.UUID, uuid.UUID]:
+    """Each media item's latest run WITHIN one archive view, keyed by media id.
+
+    ``archived`` False resolves the latest NON-archived run (the active view's
+    archive target); True resolves the latest ARCHIVED run (the archived view's
+    unarchive target). This is the exact run the library shows for the item in that
+    view — the same window :func:`media_library` uses — so a bulk archive/unarchive
+    acts on precisely what the operator sees. An item with no run in that view is
+    simply absent (a skip for the caller). Unlike :func:`_latest_run_ids` (which
+    spans both archive states for the re-run double-submit baseline), this is
+    view-scoped.
+    """
+    run_view = (
+        PipelineRun.archived_at.is_not(None)
+        if archived
+        else PipelineRun.archived_at.is_(None)
+    )
+    ranked = (
+        select(
+            PipelineRun.media_item_id.label("media_item_id"),
+            PipelineRun.id.label("run_id"),
+            func.row_number()
+            .over(
+                partition_by=PipelineRun.media_item_id,
+                order_by=(PipelineRun.created_at.desc(), PipelineRun.id.desc()),
+            )
+            .label("rn"),
+        )
+        .where(PipelineRun.media_item_id.in_(media_ids), run_view)
+        .subquery()
+    )
+    stmt = select(ranked.c.media_item_id, ranked.c.run_id).where(ranked.c.rn == 1)
+    return {row.media_item_id: row.run_id for row in session.execute(stmt)}
+
+
 def _reread_sidecar(source_path: str, settings: Settings) -> Sidecar | None:
     """Re-read a media file's on-disk YAML sidecar for a fresh run, or ``None``.
 
@@ -904,3 +1004,145 @@ def media_rerun_confirm(
         "view": _safe_view(view),
     }
     return templates.TemplateResponse(request, "media/rerun_result.html", context)
+
+
+def _bulk_set_archived(
+    request: Request,
+    session: SessionDep,
+    settings: Settings,
+    *,
+    media_id: list[str] | None,
+    sort: str,
+    view: str,
+    archiving: bool,
+) -> Response:
+    """Bulk archive (``archiving=True``) or unarchive the selection's latest run.
+
+    Archive acts on each file's latest NON-archived run (the active view, where the
+    button lives); unarchive on each file's latest ARCHIVED run (the archived view).
+    Prevalidates the whole selection with the shared helpers (malformed/empty/
+    oversized/deleted-since-render all reject with zero writes). Then, mirroring bulk
+    re-run's skip-not-abort posture, a per-item deliberate refusal is a SKIP, never
+    an abort: a file with no run in the view, or (archiving) whose latest run is live
+    and so not archivable, is counted skipped and reported honestly in the banner;
+    only an unexpected pre-commit failure rolls back to zero. Archive is reversible
+    per-run and idempotent, so no row lock or baseline is needed (unlike re-run,
+    which mints). On success it PRG-redirects to the acted-on view with counts.
+    """
+    raw_ids = media_id or []
+    # Unarchive works over the archived view; archive over the active view. The
+    # error re-render must show the same view the operator acted from.
+    view_archived = not archiving
+
+    def _reject(status_code: int, text: str) -> Response:
+        session.rollback()
+        context = _library_context(
+            request,
+            session,
+            settings,
+            sort=sort,
+            view=view,
+            archived=view_archived,
+            notice={"kind": "error", "text": text},
+            selected_ids=frozenset(raw_ids),
+        )
+        return templates.TemplateResponse(
+            request, "media/media.html", context, status_code=status_code
+        )
+
+    try:
+        parsed = _parse_media_selection(raw_ids)
+        # The rows themselves are not needed (we act on runs, resolved by media id),
+        # but the count-match guard rejects a selection whose file vanished.
+        _load_selection(session, parsed)
+    except _SelectionError as exc:
+        return _reject(exc.status_code, exc.text)
+
+    latest = _latest_run_in_view(session, parsed, archived=view_archived)
+    done = 0
+    skipped = 0
+    for media_uuid in parsed:
+        run_id = latest.get(media_uuid)
+        if run_id is None:
+            # No run in this view to act on — reported, never silently dropped.
+            skipped += 1
+            continue
+        try:
+            if archiving:
+                archive_run(session, run_id)
+            else:
+                unarchive_run(session, run_id)
+        except RunNotArchivableError:
+            # A live latest run (only archive hits this): cancel it first. Skip.
+            skipped += 1
+            continue
+        except RunNotFoundError:
+            # The run was deleted between resolve and act (a rare concurrent admin
+            # delete): honestly skip it rather than 500 the whole action.
+            skipped += 1
+            continue
+        done += 1
+
+    try:
+        session.commit()
+    except IntegrityError:
+        return _reject(
+            409,
+            "Something changed while updating. Nothing was changed; reload and try "
+            "again.",
+        )
+
+    params: dict[str, Any] = {"sort": _safe_sort(sort), "view": _safe_view(view)}
+    if archiving:
+        params["archive_done"] = done
+    else:
+        # Stay in the archived view so the operator sees the restored items leave it.
+        params["archived"] = "1"
+        params["unarchive_done"] = done
+    if skipped:
+        params["skipped"] = skipped
+    return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
+
+
+@router.post("/media/archive")
+def media_archive(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    # Optional/defaulted so a missing value never 422s before _require_csrf runs.
+    media_id: Annotated[list[str] | None, Form()] = None,
+    sort: Annotated[str, Form()] = DEFAULT_SORT,
+    view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Bulk-archive the latest terminal run of each selected file (issue #5 archive,
+    reversible). Hides those runs from the active library and the review queue while
+    keeping every row intact; a file whose latest run is live or absent is skipped,
+    not failed. Re-run's per-run archive routes stay for single runs (ADR 0002)."""
+    _require_csrf(request, CSRF_MEDIA_ARCHIVE, csrf_token)
+    settings: Settings = request.app.state.settings
+    return _bulk_set_archived(
+        request, session, settings, media_id=media_id, sort=sort, view=view,
+        archiving=True,
+    )
+
+
+@router.post("/media/unarchive")
+def media_unarchive(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    media_id: Annotated[list[str] | None, Form()] = None,
+    sort: Annotated[str, Form()] = DEFAULT_SORT,
+    view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Bulk-restore the latest archived run of each selected file — it reappears in
+    the active library and the review queue. Reached from the archived view, where
+    every shown file has an archived run; a file with none is skipped. Idempotent."""
+    _require_csrf(request, CSRF_MEDIA_UNARCHIVE, csrf_token)
+    settings: Settings = request.app.state.settings
+    return _bulk_set_archived(
+        request, session, settings, media_id=media_id, sort=sort, view=view,
+        archiving=False,
+    )

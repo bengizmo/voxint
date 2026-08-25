@@ -80,6 +80,14 @@
     true
   ],
   [
+    "/media/archive",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/assign",
     [
       "POST"
@@ -121,6 +129,14 @@
   ],
   [
     "/media/submit",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/unarchive",
     [
       "POST"
     ],

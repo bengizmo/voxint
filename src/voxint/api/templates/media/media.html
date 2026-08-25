@@ -40,8 +40,16 @@
   [hidden] { display: none !important; }
 </style>
 
-<h1>Media</h1>
-<p class="muted">Every recording Voxint knows about, and where each one stands.</p>
+<h1>Media{% if archived %} <span class="muted">· archived</span>{% endif %}</h1>
+<p class="muted">
+  {% if archived %}
+  Archived runs are hidden from the active library and the review queue.
+  <a href="{{ archived_toggle_url }}">← Back to active media</a>
+  {% else %}
+  Every recording Voxint knows about, and where each one stands.
+  <a href="{{ archived_toggle_url }}">View archived runs</a>
+  {% endif %}
+</p>
 
 {# Success/error banner for the bulk-assign and folder-panel flows. Success rides
    in on a PRG redirect; an error re-renders this page with the operator's
@@ -50,6 +58,9 @@
 <p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
 {% endif %}
 
+{# Adding media and organizing folders belong to the active library; the archived
+   view is a focused surface for restoring runs, so both are hidden there. #}
+{% if not archived %}
 <section class="add-media" aria-labelledby="add-media-h">
   <h2 id="add-media-h">Add media</h2>
   {% if submitted %}
@@ -82,6 +93,7 @@
     {% endif %}
   </form>
 </section>
+{% endif %}
 
 {% if rows %}
 {# One toolbar row (#152 library kit): the sort control on the left, the
@@ -111,7 +123,7 @@
    one target ride with the submission — per-action CSRF with no JS and no nested
    forms. The folder <select> is only read by /media/assign; /media/rerun ignores
    it. #}
-<form method="post" action="/media/assign" id="bulk-form">
+<form method="post" action="{% if archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
 
@@ -181,9 +193,16 @@
 </ul>
 {% endif %}
 
-  {# The bulk action bar: pick a settings folder (or the clear option) and apply
-     it to every checked file. "Use settings from…" never moves the bytes. #}
+  {# The bulk action bar. Each button carries its OWN action-bound CSRF token as
+     its name/value and (where the target differs from the form action) its own
+     formaction; an unclicked submit button sends nothing, so exactly one token and
+     one target ride with the submission. Archive lives in the active view (over the
+     latest non-archived run); the archived view offers only unarchive. #}
   <div class="bulk-bar">
+    {% if archived %}
+    <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}">Restore latest archived run</button>
+    {% else %}
+    {# "Use settings from…" never moves the bytes; "Archive latest run" is per-run. #}
     <label for="assign-folder">Assign settings folder
       <select id="assign-folder" name="media_folder_id">
         <option value=""{% if not attempted_folder_id %} selected{% endif %}>No folder — use global settings</option>
@@ -194,6 +213,8 @@
     </label>
     <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Use these settings for the selected files</button>
     <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}">Re-run transcription…</button>
+    <button type="submit" formaction="/media/archive" name="csrf_token" value="{{ csrf_media_archive }}">Archive latest run</button>
+    {% endif %}
     <span class="muted selected-count" data-selected-count hidden></span>
   </div>
 </form>
@@ -202,13 +223,19 @@
 <p class="muted">Showing the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
+{% if archived %}
+<p class="muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
+{% else %}
 <p class="muted">No media yet. Add a recording above, or register a folder below.</p>
+{% endif %}
 {% endif %}
 
 {# Folder panel: register folders so their files can share vocabulary and
    corrections, or unregister one. Registering never moves files (ADR 0002
    addendum); unregistering reverts its files to global settings. This section is
-   a sibling of the bulk-assign form, never nested inside it. #}
+   a sibling of the bulk-assign form, never nested inside it, and belongs to the
+   active library (hidden in the archived view). #}
+{% if not archived %}
 <section class="folder-panel" aria-labelledby="folders-h">
   <h2 id="folders-h">Folders</h2>
   <p class="muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>
@@ -242,6 +269,7 @@
     <button type="submit">Register folder</button>
   </form>
 </section>
+{% endif %}
 
 {# Progressive enhancement: without JS the file input, checkboxes, and folder
    <select> all work on their own; JS adds the drop zone, select-all, and a live

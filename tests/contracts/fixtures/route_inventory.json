@@ -60,6 +60,12 @@
     ]
   ],
   [
+    "/media/archive",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/assign",
     [
       "POST"
@@ -91,6 +97,12 @@
   ],
   [
     "/media/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/unarchive",
     [
       "POST"
     ]

@@ -158,6 +158,12 @@ CSRF_MEDIA_FOLDERS = "media-folders"
 # dispatch, and neither is interchangeable with assign or the ingest tokens.
 CSRF_MEDIA_RERUN = "media-rerun"
 CSRF_MEDIA_RERUN_CONFIRM = "media-rerun-confirm"
+# Media library bulk archive/unarchive (issue #154, Console 2.0 P2b). Archiving a
+# selection's latest run (reversible, hides it from the active library) and
+# restoring it are independent mutations under their own per-action tokens, and
+# neither is interchangeable with assign, re-run, or the ingest tokens above.
+CSRF_MEDIA_ARCHIVE = "media-archive"
+CSRF_MEDIA_UNARCHIVE = "media-unarchive"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:
