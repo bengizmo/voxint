@@ -110,6 +110,12 @@ CSRF_RUN_MEDIA_DELETE = "run-media-delete"
 # context, so they are CSRF-gated like run notes and never share a token with a
 # run-scoped mutation.
 CSRF_ANNOTATION_TAGS = "annotation-tags"
+# Attributed audio-clip extraction (issue #88): POST a highlight -> a cached WAV
+# clip. Its own action — clip generation is claim-less like the tag writes and
+# the pull-quote export, so it never shares a token with a run-scoped mutation.
+# Replay is harmless (extraction is idempotent + content-addressed), but the
+# token still refuses a forged cross-site POST before any file is written.
+CSRF_CLIP_EXTRACT = "clip-extract"
 # Plugin mutating routes (issue #138). One shared action for every builtin
 # plugin's POST surface: the capped PluginRouteDeps bundle exposes a single
 # uniform ``verify_csrf(request)`` (token carried in the ``X-CSRF-Token`` header)

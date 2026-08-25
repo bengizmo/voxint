@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     review_claim_ttl_seconds: int = Field(default=1800, ge=60)
     # Hard bound on the ffprobe gate in the media-serving request path.
     media_probe_timeout_seconds: PositiveSeconds = 30.0
+    # Longest attributed audio clip an operator can extract from an annotation
+    # (issue #88). A safety bound on the sample-exact frame copy, not a feature
+    # flag: extraction is available whenever a word_range annotation has precise
+    # timing and the normalized audio is servable. Five minutes covers a long
+    # quote without inviting whole-recording extraction.
+    clip_max_duration_seconds: PositiveSeconds = 300.0
     # Transcript preview length per label in the workbench.
     review_preview_segments: int = Field(default=8, ge=1)
     # Triage threshold for the review console's low-confidence highlight (#53):

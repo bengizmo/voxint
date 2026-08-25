@@ -26,8 +26,8 @@ operator must reconcile them first (``voxint media folders preflight``). The
 ``app_settings.media_folders`` / ``folder_domain_packs`` columns are LEFT INTACT
 as a one-release rollback/audit input; a later migration drops them.
 
-Revision ID: 0039
-Revises: 0038
+Revision ID: 0040
+Revises: 0039
 Create Date: 2026-08-24 19:20:00.000000
 """
 from __future__ import annotations
@@ -39,8 +39,8 @@ from pathlib import PurePosixPath
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0039"
-down_revision: str | None = "0038"
+revision: str = "0040"
+down_revision: str | None = "0039"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -342,6 +342,12 @@
   ]
  ],
  [
+  "/review/{run_id}/annotations/{annotation_id}/clips",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/review/{run_id}/annotations/export/live.md",
   [
    "POST"
@@ -587,6 +593,16 @@
  ],
  [
   "/media/{run_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/runs/{run_id}/clips/{clip_id}",
+  []
+ ],
+ [
+  "/runs/{run_id}/clips/{clip_id}",
   [
    "GET"
   ]

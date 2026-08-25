@@ -66,6 +66,8 @@ export interface ReviewStepperProps {
   annotationTags?: AnnotationTagShape[];
   annotationLimits?: AnnotationLimits;
   tagCsrf?: string | null;
+  // Per-action CSRF token for extracting a highlight as an audio clip (issue #88).
+  clipCsrf?: string | null;
   // Navigable outline (issue #87): grounded entity-mention jump targets plus inert
   // summary/topics context, from the shared transcript island props. Defaulted, so
   // a props payload without it simply renders no panel.
@@ -143,6 +145,7 @@ export function ReviewStepper({
   annotationTags: initialAnnotationTags = [],
   annotationLimits = FALLBACK_ANNOTATION_LIMITS,
   tagCsrf = null,
+  clipCsrf = null,
   outline,
   translate = null,
 }: ReviewStepperProps) {
@@ -754,6 +757,7 @@ export function ReviewStepper({
     initialTags: initialAnnotationTags,
     limits: annotationLimits,
     tagCsrf,
+    clipCsrf,
     onJump: goTo,
     onClaimLost: onAnnotationClaimLost,
   });

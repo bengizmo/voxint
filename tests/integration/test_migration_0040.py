@@ -1,4 +1,4 @@
-"""Migration 0039 (projects + media_folders + media location split), issue #153.
+"""Migration 0040 (projects + media_folders + media location split), issue #153.
 
 Real alembic up/down against the shared test database (head restored in
 teardown): the ``projects`` / ``media_folders`` tables and the two new
@@ -132,7 +132,7 @@ def test_schema_present_and_constraints_hold(
 
 
 def test_backfill_from_legacy_settings(engine: Engine, alembic_cfg: Config) -> None:
-    command.downgrade(alembic_cfg, "0038")
+    command.downgrade(alembic_cfg, "0039")
     with engine.connect() as conn:
         _seed_app_settings(
             conn, folders=["audio", "podcasts"], packs={"audio": "p1"}
@@ -142,7 +142,7 @@ def test_backfill_from_legacy_settings(engine: Engine, alembic_cfg: Config) -> N
         upload = _seed_media(conn, f"incoming/{uuid.uuid4()}/source")
         conn.commit()
 
-    command.upgrade(alembic_cfg, "0039")
+    command.upgrade(alembic_cfg, "0040")
 
     with engine.connect() as conn:
         folders = dict(
@@ -174,7 +174,7 @@ def test_backfill_from_legacy_settings(engine: Engine, alembic_cfg: Config) -> N
 def test_backfill_aborts_on_nested_pack_shadow(
     engine: Engine, alembic_cfg: Config
 ) -> None:
-    command.downgrade(alembic_cfg, "0038")
+    command.downgrade(alembic_cfg, "0039")
     with engine.connect() as conn:
         # 'audio' carries the pack; the nested 'audio/pods' does not. A file under
         # 'audio/pods' resolves to 'p1' today but to the deeper (packless) folder
@@ -186,13 +186,13 @@ def test_backfill_aborts_on_nested_pack_shadow(
         conn.commit()
 
     with pytest.raises(Exception, match="effective domain pack"):
-        command.upgrade(alembic_cfg, "0039")
+        command.upgrade(alembic_cfg, "0040")
 
 
 def test_downgrade_drops_and_upgrade_restores(
     engine: Engine, alembic_cfg: Config
 ) -> None:
-    command.downgrade(alembic_cfg, "0038")
+    command.downgrade(alembic_cfg, "0039")
     inspector = inspect(engine)
     for table in _TABLES:
         assert not inspector.has_table(table)
@@ -202,7 +202,7 @@ def test_downgrade_drops_and_upgrade_restores(
     app_cols = {c["name"] for c in inspector.get_columns("app_settings")}
     assert {"media_folders", "folder_domain_packs"} <= app_cols
 
-    command.upgrade(alembic_cfg, "0039")
+    command.upgrade(alembic_cfg, "0040")
     inspector = inspect(engine)
     for table in _TABLES:
         assert inspector.has_table(table)

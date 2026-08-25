@@ -160,6 +160,12 @@
     ]
   ],
   [
+    "/review/{run_id}/annotations/{annotation_id}/clips",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/review/{run_id}/annotations/{annotation_id}/export.md",
     [
       "GET"
@@ -325,6 +331,16 @@
     "/runs/{run_id}/cancel",
     [
       "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    []
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [
+      "GET"
     ]
   ],
   [
