@@ -1620,6 +1620,23 @@ official archives and keys by pinned sha, preserve the native tree, emit the
 subset receipt plus a canonical manifest) is the whole corpus surface. The full
 synthesize and degrade matrix is later sessions.
 
+**Refinement (2026-08-25): the canonical manifest is a v2 imported-benchmark
+variant of the corpus schema.** The canonical Gate-2 manifest cannot be a v1
+synthesis manifest: v1 requires every spoof clip to carry synthesis generator
+provenance (name, version, voice, seed, text source), which an imported eval
+does not have. Rather than fabricate those fields or branch the frozen runner,
+the manifest schema (`tools/synthdetect_corpus.py`) gains a `schema_version: 2`
+`imported_benchmark` variant. A v2 clip carries an `imported_provenance` block
+built from the official trial metadata (official trial id, source dataset, codec
+condition, official split, and for spoof clips the attack system and vocoder
+family); `generator` is always null; an officially-absent field is JSON null,
+never a placeholder string. Only `load_manifest` learns the variant; the scoring
+path (`clip_id`/`rel_path`/`sha256`/`duration_s`/`label`/`stratum`/`split`) and
+`cmd_run` are unchanged, so both Gate-2 runners still bind to the exact manifest
+file bytes. v1 validation is untouched. This shape was chosen after an
+independent two-model design review; it is deliberately one benchmark variant,
+not a general benchmark ontology (a second benchmark earns its own review).
+
 #### Verdict: w2v2-aasist-df eval runtime QUALIFIED (RTX 3060, SM 8.6, 2026-08-25)
 
 The DF anchor `w2v2-aasist-df` earned its own dated GPU determinism plus smoke

@@ -20,6 +20,30 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Jobs entry, which stays on the `/runs` placeholder until the flag is on. No
   redirect, tutorial remap, or version bump ships here: the `/runs` retirement is
   a separate coordinated slice, so `/runs` and its detail page are unchanged.
+- **Synthdetect M1 S3: ASVspoof 2021 DF importer core + v2 imported-benchmark
+  manifest** (#144). Groundwork for the DF reproduction gates. The corpus manifest
+  schema (`tools/synthdetect_corpus.py`) gains a `schema_version: 2`
+  `imported_benchmark` variant so an acquired evaluation benchmark can be scored
+  by the frozen runner without fabricating synthesis provenance: a v2 clip carries
+  an `imported_provenance` block (official trial id, source dataset, codec
+  condition, official split, vocoder family, and for spoof clips the attack
+  system), `generator` is always null, and an officially-absent field is null
+  rather than a placeholder (sentinel strings are rejected on the identity fields;
+  the vocoder family is recorded as-is because the official metadata uses the
+  literal `unknown` as a real family). A v2 clip's
+  provenance is bound to its scoring identity: the official trial id must equal
+  the clip id, the clip is eval-only, and the stratum must match the official
+  label and codec. Only `load_manifest` learns the variant; the scoring fields
+  and `cmd_run` are unchanged, and v1 acceptance is unchanged for every valid v1
+  manifest (both v1 and v2 now also reject unexpected top-level keys, consistent
+  with the module's existing per-clip unexpected-key rule). A new
+  `tools/synthdetect_df_import.py` holds the audio-free importer core:
+  a fail-closed parser for the official `trial_metadata.txt` and the frozen,
+  seeded (`voxint-synthdetect-144`), stratified (label by codec condition, `eval`
+  split only) hash-rank selection of the 10 % subset, emitting a canonically
+  ordered trial list bound by a cohort hash. The shape was chosen after an
+  independent two-model design review; see the S3 pre-registration refinement note
+  in `docs/gpu-contracts.md`.
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer
   arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the
   exact span of the run's normalized 16 kHz audio the highlight covers, cut with
