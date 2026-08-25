@@ -1354,8 +1354,12 @@ sweep reclaims that intermediate for **old terminal runs**: it unlinks the WAV
 and stamps the `audio_artifacts` row (`reclaimed_at`, `reclaimed_bytes`) as an
 audit record; the row itself is never deleted.
 
-**What is reclaimed:** only the normalized-audio intermediate of runs that are
-`completed` or `cancelled` and untouched for `MEDIA_RETENTION_SECONDS`.
+**What is reclaimed:** the normalized-audio intermediate of runs that are
+`completed` or `cancelled` and untouched for `MEDIA_RETENTION_SECONDS`, plus any
+extracted audio clips (issue #88) aged past the same horizon. A clip is aged by
+its **own** `created_at`, not the run's, so a clip freshly extracted on an old
+terminal run is not immediately reclaimed; its row survives reclamation and the
+clip serve route then answers `410 Gone`.
 
 **What is always kept:** the **source media** (so a reclaimed run stays
 re-processable; re-submit it to regenerate the intermediate and downstream

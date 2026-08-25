@@ -146,8 +146,9 @@ the hash over current effective texts; a mismatch marks the annotation stale.
 derived from word timings. `text_range` and `segment_range` store null; the
 read path derives coarse segment-interval bounds for display and seek and
 labels every API and export shape with `timing_precision`: `"word"` or
-`"segment"`. Downstream consumers (the future clip extraction in #88) must
-treat `"segment"` bounds as jump targets, never as clip-accurate edges.
+`"segment"`. Downstream consumers treat `"segment"` bounds as jump targets, never
+as clip-accurate edges: audio-clip extraction (#88, below) refuses a highlight
+that is not `word`-timed for exactly this reason.
 
 ## Staleness, refresh, re-anchor
 
@@ -231,6 +232,11 @@ markdown. Its optional `note`/`tags` decorate the returned trailer only.
 
 Repeated `?tag=` filters are a union (OR), identically in the panel and in
 exports.
+
+Audio-clip extraction (#88) adds two more routes, covered in full in the Audio
+clips section below: `POST /review/{run_id}/annotations/{annotation_id}/clips`
+(CSRF-gated, no claim) generates or adopts the clip, and `GET|HEAD
+/runs/{run_id}/clips/{clip_id}` serves it.
 
 ## Console surface (Landing 1)
 
@@ -324,3 +330,62 @@ operator refreshes or re-anchors it first.
 Annotation exports use their own one-entry media-type table (`ANNOTATION_MEDIA_TYPES`,
 `text/markdown`); the transcript `TranscriptFormat`/`MEDIA_TYPES` tables are not
 extended.
+
+## Audio clips (#88)
+
+A `word`-timed highlight can be extracted as a standalone WAV clip: the exact
+span of processed audio the highlight covers, cut from the run's normalized 16 kHz
+mono intermediate. It is **extraction, not editing**. The clip is a faithful
+copy of those samples; nothing is re-encoded, trimmed for silence, or altered.
+
+**Preconditions (the route enforces all three).** The highlight must be live
+(a foreign, forged, or soft-deleted id is a 404, fail closed), non-stale (a
+drifted highlight is a 409 `X-Voxint-Conflict: stale`, refresh or re-anchor it
+first), and `word`-timed (a `segment_range`/`text_range` highlight has no
+clip-accurate edges and is a 422). These mirror the pull-quote gates, resolved
+against the same corrected render.
+
+**Sample bounds.** The pure core (`src/voxint/media/clips.py`) maps the
+highlight's `start_seconds`/`end_seconds` to integer sample bounds with `Decimal`
+arithmetic: floor the start, ceil the end, half-open `[start, end)`, clamped to
+the source frame count read from the WAV header. Rounding outward by design, so
+a clip never drops an edge sample of the selected words. A safety bound
+(`clip_max_duration_seconds`, default 300) refuses an implausibly long span; it
+is a guard, not a tunable feature flag.
+
+**Content-addressed, idempotent cache.** A clip's identity is the sha256 of
+`clip:v1:{normalized_artifact_id}:{annotation_id}:{start_sample}:{end_sample}`,
+so identical requests adopt the one canonical row and a re-anchor (new sample
+bounds) makes a new clip. Generation serializes per clip under a
+transaction-scoped advisory lock keyed on that digest, and a partial-unique index
+over **live** (non-reclaimed) clip rows lets a regeneration insert a fresh row
+rather than revive a tombstone. The stored `meta` snapshot records the requested
+seconds, the resolved sample bounds, the source artifact id, and the annotation's
+`source_text_hash` at extraction time: an immutable attribution record, unaffected
+by any later edit to the highlight or the transcript.
+
+**Reclaimable cache.** A clip is a derived convenience, not a durable asset. It
+serves from its own file independently of the normalized audio, so a clip stays
+downloadable after the source WAV is reclaimed; but a cache miss can only be
+**regenerated while that source is still live** (a reclaimed source is a 409, the
+run must be re-processed first). The media GC sweep (issue #15) reclaims clip
+files too, aged by the clip's **own** `created_at` so a clip freshly extracted on
+an old terminal run survives the next sweep. A reclaimed clip's row survives; the
+serve route answers `410 Gone`.
+
+**Routes.**
+
+| Method | Route | Auth | Success | Errors |
+|---|---|---|---|---|
+| `POST` | `/review/{run_id}/annotations/{annotation_id}/clips` | operator + CSRF (`clip-extract`), no claim | `201` `{clipId, downloadUrl, filename}` | `403` bad CSRF, `404` unknown run/annotation, `409` stale or source reclaimed, `422` not `word`-timed |
+| `GET` `HEAD` | `/runs/{run_id}/clips/{clip_id}` | operator | `200`/`206` `audio/wav` | `404` unknown/unservable, `410` reclaimed |
+
+The POST is CSRF-gated but claim-less, like the tag writes and the pull-quote
+export: generation is idempotent, so a same-span replay is harmless. The serve
+route supports byte ranges (so a browser can scrub the clip) and always sets
+`Content-Disposition: attachment` with a server-derived ASCII filename
+(`voxint-{run8}-clip-{clip8}.wav`), never any client or quote text. The console's
+Highlights panel offers an **Extract clip** action beside Copy, shown only for
+`word`-timed highlights; it posts the route and then navigates a temporary
+same-origin anchor to `downloadUrl`, letting `Content-Disposition` drive the save
+rather than buffering bytes in the page.
