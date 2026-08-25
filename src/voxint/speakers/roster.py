@@ -36,6 +36,7 @@ from voxint.db.models import (
     Speaker,
     SpeakerAssignment,
     SpeakerEmbedding,
+    SpeakerProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -371,6 +372,23 @@ def merge_speakers(
         .where(SpeakerAssignment.speaker_id == source_id)
         .values(speaker_id=target_id)
     )).rowcount
+    # Profile rows follow the identity (issue #159): repoint each source field
+    # to the target unless the target already holds that field — target wins a
+    # conflict (the losing source value stays recoverable from the immutable
+    # enrichment tables + decision trail), and the (speaker, field) UNIQUE
+    # stays satisfied. Same transaction, same speaker locks as the merge.
+    target_fields = set(
+        session.execute(
+            select(SpeakerProfile.field).where(SpeakerProfile.speaker_id == target_id)
+        ).scalars()
+    )
+    for profile_row in session.execute(
+        select(SpeakerProfile).where(SpeakerProfile.speaker_id == source_id)
+    ).scalars():
+        if profile_row.field in target_fields:
+            session.delete(profile_row)
+        else:
+            profile_row.speaker_id = target_id
     now = datetime.now(tz=UTC)
     # Collapse existing aliases of the source so chains stay depth 1.
     aliases_collapsed = cast(CursorResult[Any], session.execute(

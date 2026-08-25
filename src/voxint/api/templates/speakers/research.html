@@ -1,9 +1,14 @@
 {# One speaker's web-research block (issue #40): latest job + start/cancel +
    reviewable profile drafts. Included per roster card AND served standalone by
    GET /speakers/{id}/research — the div re-polls itself only while a job is
-   active, so a terminal render stops the polling. #}
+   active, so a terminal render stops the polling. When the profile page (#159)
+   embeds this block it passes research_qs="?page=profile" so every research URL
+   round-trips the page context (the decision response then refreshes the
+   profile panel out-of-band); everywhere else the value is empty and the
+   rendered markup is unchanged. #}
+{% set rqs = research_qs|default("") %}
 <div id="research-{{ research.speaker.id }}"
-     {% if research.job_active %}hx-get="/speakers/{{ research.speaker.id }}/research"
+     {% if research.job_active %}hx-get="/speakers/{{ research.speaker.id }}/research{{ rqs }}"
      hx-trigger="every 3s" hx-swap="outerHTML"{% endif %}>
 <details class="research" {% if research.job or research.proposed %}open{% endif %}>
   <summary>Web research
@@ -27,8 +32,8 @@
   </p>
   {% if research.job_active %}
   <form class="inline" method="post"
-        action="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel"
-        hx-post="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel"
+        action="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel{{ rqs }}"
+        hx-post="/speakers/{{ research.speaker.id }}/research/{{ research.job.id }}/cancel{{ rqs }}"
         hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
     <input type="hidden" name="csrf_token" value="{{ csrf_research_cancel }}">
     <button type="submit">Cancel</button>
@@ -45,8 +50,8 @@
   </p>
   {% elif not research.job_active %}
   <form class="inline" method="post"
-        action="/speakers/{{ research.speaker.id }}/research/start"
-        hx-post="/speakers/{{ research.speaker.id }}/research/start"
+        action="/speakers/{{ research.speaker.id }}/research/start{{ rqs }}"
+        hx-post="/speakers/{{ research.speaker.id }}/research/start{{ rqs }}"
         hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
     <input type="hidden" name="csrf_token" value="{{ csrf_research_start }}">
     <input type="text" name="operator_note" maxlength="1000"
@@ -87,8 +92,8 @@
     {% if e.snippet %}<blockquote class="muted">{{ e.snippet }}</blockquote>{% endif %}
     {% endif %}{% endfor %}
     <form class="inline" method="post"
-          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
-          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision{{ rqs }}"
+          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision{{ rqs }}"
           hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
       <input type="hidden" name="csrf_token" value="{{ csrf_profile_decision }}">
       <input type="hidden" name="nonce" value="{{ nonce() }}">
@@ -96,8 +101,8 @@
       <button type="submit">Accept</button>
     </form>
     <form class="inline" method="post"
-          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
-          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision"
+          action="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision{{ rqs }}"
+          hx-post="/speakers/{{ research.speaker.id }}/research/candidates/{{ view.candidate.id }}/decision{{ rqs }}"
           hx-target="#research-{{ research.speaker.id }}" hx-swap="outerHTML">
       <input type="hidden" name="csrf_token" value="{{ csrf_profile_decision }}">
       <input type="hidden" name="nonce" value="{{ nonce() }}">
