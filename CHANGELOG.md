@@ -6,6 +6,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Attributed audio-clip extraction** (#88, completes the operator-output-layer
+  arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the
+  exact span of the run's normalized 16 kHz audio the highlight covers, cut with
+  the stdlib `wave` frame-copy (no re-encode, no editing). The Highlights panel
+  gains an **Extract clip** action beside Copy, shown only for `word`-timed
+  highlights; it downloads the clip via `Content-Disposition` without buffering
+  bytes in the page. Two routes back it: `POST
+  /review/{run_id}/annotations/{annotation_id}/clips` (CSRF-gated, no claim)
+  generates or adopts the clip, and `GET|HEAD /runs/{run_id}/clips/{clip_id}`
+  serves it with byte-range support and an attachment disposition. Clips are a
+  content-addressed, idempotent, reclaimable cache: identical requests adopt one
+  canonical row (advisory-locked on the content digest), a re-anchor makes a new
+  clip, the stored snapshot is an immutable attribution record, and the clip
+  serves independently of the source audio while a cache miss regenerates only
+  while that source is live. The media GC sweep (issue #15) reclaims clip files
+  too, aged by the clip's own `created_at`. Preconditions are enforced
+  server-side: a foreign or soft-deleted highlight is 404, a stale one 409, and a
+  non-`word`-timed one 422. Migration `0039` adds the `audio_clip` artifact kind,
+  a content-addressed `idempotency_key`, and the live-only partial-unique index.
+  See `docs/annotations.md`.
 - **Synthdetect M1 S3: DF anchor GPU-qualified** (#144). The DF reproduction
   checkpoint `w2v2-aasist-df` (`Best_LA_model_for_DF.pth`) advances from
   `pinned_unqualified` to `qualified` on its own dated maintainer GPU verdict (one

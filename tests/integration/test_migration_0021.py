@@ -66,6 +66,28 @@ def _insert_artifact(engine: Engine, run_id: uuid.UUID, kind: str) -> None:
         conn.commit()
 
 
+def _insert_clip(engine: Engine, run_id: uuid.UUID) -> None:
+    # audio_clip rows carry a content-addressed idempotency_key; the
+    # audio_artifacts_clip_key_shape_check (issue #88) ties key presence to this
+    # kind, so the bare _insert_artifact (key NULL) would violate it. Only usable
+    # at head, where the idempotency_key column exists.
+    with engine.connect() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO audio_artifacts"
+                " (id, pipeline_run_id, kind, path, idempotency_key)"
+                " VALUES (:id, :r, 'audio_clip', :p, :key)"
+            ),
+            {
+                "id": uuid.uuid4(),
+                "r": run_id,
+                "p": f"artifacts/{run_id}/x",
+                "key": f"clip-{run_id}",
+            },
+        )
+        conn.commit()
+
+
 def test_upgrade_accepts_waveform_peaks_and_rejects_unknown(
     engine: Engine, alembic_cfg: Config
 ) -> None:
@@ -132,5 +154,9 @@ def test_model_enum_matches_live_check(engine: Engine, alembic_cfg: Config) -> N
         assert f"'{kind.value}'" in definition, (kind, definition)
     run_id = _seed_run(engine)
     for kind in ArtifactKind:
-        if kind is not ArtifactKind.WAVEFORM_PEAKS:
-            _insert_artifact(engine, run_id, kind.value)
+        if kind is ArtifactKind.WAVEFORM_PEAKS:
+            continue
+        if kind is ArtifactKind.AUDIO_CLIP:
+            _insert_clip(engine, run_id)  # needs the key-shaped insert
+            continue
+        _insert_artifact(engine, run_id, kind.value)
