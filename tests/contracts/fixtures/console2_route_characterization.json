@@ -104,6 +104,22 @@
     true
   ],
   [
+    "/media/rerun",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/rerun/confirm",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/submit",
     [
       "POST"

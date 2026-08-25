@@ -151,6 +151,13 @@ CSRF_MEDIA_FETCH = "media-fetch"
 # its own action, and neither is interchangeable with the ingest tokens above.
 CSRF_MEDIA_ASSIGN = "media-assign"
 CSRF_MEDIA_FOLDERS = "media-folders"
+# Media library bulk re-run (issue #154, Console 2.0 P2b). The two-step re-run has
+# its own action tokens: the advisory preview (``media-rerun``, no mutation) and
+# the atomic confirm that mints the runs (``media-rerun-confirm``). Splitting them
+# means a token minted for the preview can never be replayed to drive the actual
+# dispatch, and neither is interchangeable with assign or the ingest tokens.
+CSRF_MEDIA_RERUN = "media-rerun"
+CSRF_MEDIA_RERUN_CONFIRM = "media-rerun-confirm"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

@@ -105,8 +105,13 @@
    The upload/fetch forms above and the folder panel below are siblings, never
    descendants, so no <form> is nested inside another. Without JS the checkboxes
    plus the in-form folder <select> and submit button are the whole feature. #}
+{# One form holds the checkboxes and every bulk action. Each action button carries
+   its OWN action-bound CSRF token as its name/value and (for re-run) its own
+   formaction: an unclicked submit button sends nothing, so exactly one token and
+   one target ride with the submission — per-action CSRF with no JS and no nested
+   forms. The folder <select> is only read by /media/assign; /media/rerun ignores
+   it. #}
 <form method="post" action="/media/assign" id="bulk-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_media_assign }}">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
 
@@ -187,7 +192,8 @@
         {% endfor %}
       </select>
     </label>
-    <button type="submit">Use these settings for the selected files</button>
+    <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Use these settings for the selected files</button>
+    <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}">Re-run transcription…</button>
     <span class="muted selected-count" data-selected-count hidden></span>
   </div>
 </form>

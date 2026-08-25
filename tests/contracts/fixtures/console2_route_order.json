@@ -102,6 +102,18 @@
   ]
  ],
  [
+  "/media/rerun",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/rerun/confirm",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

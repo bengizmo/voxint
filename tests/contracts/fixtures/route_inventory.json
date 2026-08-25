@@ -78,6 +78,18 @@
     ]
   ],
   [
+    "/media/rerun",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/rerun/confirm",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/submit",
     [
       "POST"
