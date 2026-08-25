@@ -94,6 +94,38 @@
     true
   ],
   [
+    "/projects",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/folders",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/resources",
     [
       "GET"

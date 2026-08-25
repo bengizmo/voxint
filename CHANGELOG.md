@@ -36,6 +36,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   always registered so the console route inventory is stable, but returns 404
   until the flag is on. Reachable by URL for now; the sidebar's Media link is
   repointed in a later phase.
+- **Console 2.0 P2b: the projects pages** (#153, epic #149). New `/projects` and
+  `/projects/{id}` pages let an operator create a project, assign registered
+  folders to it, and see its folders and the speakers its finished recordings
+  resolve to. A project's speakers are derived, not stored: they come from the
+  shared adjudication resolver, so a human ruling wins over a grounded automatic
+  match exactly as it does in the review workbench. Assigning a folder that
+  carries a domain pack states the precedence plainly, so a project's own
+  vocabulary later taking over is never a surprise. The area ships dark behind
+  the existing `CONSOLE_PROJECTS_ENABLED` flag (off by default), which also
+  governs whether the sidebar shows the Projects link; the routes are always
+  registered so the console route inventory is stable but return 404 until the
+  flag is on.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as

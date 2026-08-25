@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Voxint — {{ detail.name }}{% endblock %}
+{% block body %}
+<p class="muted"><a href="/projects">Projects</a></p>
+<h1>{{ detail.name }}</h1>
+{% if detail.description %}<p class="muted">{{ detail.description }}</p>{% endif %}
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+{% if assigned %}
+{# The assign flow confirms the move and names the pack precedence so it is
+   never a surprise: a folder pack keeps applying until this project sets its
+   own vocabulary or corrections, which then replace it (ADR 0002). #}
+<p class="notice">
+  Assigned <code>{{ assigned.path }}</code> to this project.
+  {% if assigned.domain_pack %}
+    {% if detail.has_own_config %}
+    This project's own vocabulary and corrections now take precedence over the folder's “{{ assigned.domain_pack }}” pack for its recordings.
+    {% else %}
+    The folder's “{{ assigned.domain_pack }}” pack keeps applying until this project sets its own vocabulary or corrections.
+    {% endif %}
+  {% endif %}
+</p>
+{% endif %}
+
+<section class="card">
+  <h2>Folders</h2>
+  {% if detail.folders %}
+  <div class="lib-table" role="region" aria-label="Folders" tabindex="0">
+    <table>
+      <thead><tr><th scope="col">Folder</th><th scope="col">Pack</th><th scope="col">Media</th></tr></thead>
+      <tbody>
+        {% for folder in detail.folders %}
+        <tr>
+          <td><code>{{ folder.path }}</code></td>
+          <td>
+            {% if folder.domain_pack %}{{ folder.domain_pack }}
+              {% if detail.has_own_config %}<br><span class="muted">superseded by this project's config</span>{% endif %}
+            {% else %}<span class="muted">default</span>{% endif %}
+          </td>
+          <td>{{ folder.media_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">No folders yet. Assign one below.</p>
+  {% endif %}
+
+  <h3>Assign a folder</h3>
+  {% if detail.assignable %}
+  <form method="post" action="/projects/{{ detail.id }}/folders" class="upload">
+    <input type="hidden" name="csrf_token" value="{{ csrf_assign }}">
+    <label>Folder
+      <select name="folder_id" required>
+        <option value="" disabled selected>Choose a folder</option>
+        {% for folder in detail.assignable %}
+        <option value="{{ folder.id }}">{{ folder.path }}{% if folder.domain_pack %} ({{ folder.domain_pack }} pack){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div class="action-row">
+      <button type="submit" class="primary">Assign folder</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="muted">Every registered folder is already assigned to a project. Register more in <a href="/settings">Settings</a>.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Speakers</h2>
+  <p class="muted">Everyone Voxint has resolved across this project's finished recordings.</p>
+  {% if detail.speakers %}
+  <ul class="lib-cards" aria-label="Speakers">
+    {% for speaker in detail.speakers %}
+    <li>
+      <div class="media-title">{% if speaker.name %}<a href="/speakers">{{ speaker.name }}</a>{% else %}<span class="muted">Unnamed speaker</span>{% endif %}</div>
+      <p class="muted">in {{ speaker.run_count }} recording{{ "" if speaker.run_count == 1 else "s" }}</p>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No speakers yet. They appear here once this project's recordings finish and are reviewed.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -78,6 +78,30 @@
   ]
  ],
  [
+  "/projects",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects/{project_id}/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/runs",
   [
    "GET"

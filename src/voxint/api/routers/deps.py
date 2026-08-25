@@ -218,6 +218,21 @@ def require_media_enabled(request: Request) -> None:
         raise HTTPException(status_code=404, detail="not found")
 
 
+def require_projects_enabled(request: Request) -> None:
+    """Area gate for projects (Console 2.0 P2b, #153).
+
+    Same shape as :func:`require_media_enabled`: the ``/projects`` routes are
+    always registered so the route inventory is stable, and access 404s until
+    ``console_projects_enabled`` is on (the flag P1 already added, which also
+    governs whether the sidebar shows the Projects link). Registering the routes
+    is what flips ``app.state.projects_routed`` on, so the nav link appears only
+    once the pages actually exist AND the flag is set.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.console_projects_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
 def run_source_title(run: PipelineRun) -> str:
     """A non-blank, operator-recognizable source label for a run (issue #86):
     the run's sidecar title (issue #104, operator intent), else the
