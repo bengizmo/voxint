@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Voxint — projects{% endblock %}
+{% block body %}
+<h1>Projects</h1>
+<p class="muted">Group folders into a project to see its speakers together and give it its own vocabulary later.</p>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2>New project</h2>
+  <form method="post" action="/projects" class="upload">
+    <input type="hidden" name="csrf_token" value="{{ csrf_create }}">
+    <label>Name
+      <input type="text" name="name" maxlength="200" required value="{{ name_value }}">
+    </label>
+    <label>Description (optional)
+      <input type="text" name="description" maxlength="2000">
+    </label>
+    <div class="action-row">
+      <button type="submit" class="primary">Create project</button>
+    </div>
+  </form>
+</section>
+
+{% if projects %}
+<ul class="lib-cards" aria-label="Projects">
+  {% for project in projects %}
+  <li>
+    <div class="media-title"><a href="/projects/{{ project.id }}">{{ project.name }}</a></div>
+    {% if project.description %}<p class="muted">{{ project.description }}</p>{% endif %}
+    <p class="muted">
+      {{ project.folder_count }} folder{{ "" if project.folder_count == 1 else "s" }}
+      · added <span title="{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(project.created_at, now=now) }}</span>
+    </p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="muted">No projects yet. Create one above, then assign folders to it.</p>
+{% endif %}
+{% endblock %}

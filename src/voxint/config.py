@@ -514,6 +514,12 @@ class Settings(BaseSettings):
     # the "New project" quick action render only when this is true.
     console_projects_enabled: bool = False
 
+    # The media library area (Console 2.0 P2a, #153). The /media routes are
+    # always registered so the route inventory is stable, but the area gate
+    # (require_media_enabled) returns 404 until this is on. The page is reachable
+    # only by URL for now; the sidebar's Media link is repointed in a later phase.
+    console_media_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above

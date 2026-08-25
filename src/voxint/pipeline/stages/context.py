@@ -11,7 +11,6 @@ import dataclasses
 import logging
 import socket
 import uuid
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -28,7 +27,7 @@ from voxint.clients.embed import HttpEmbedderClient
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings, llm_budget_fits_stage_lease
 from voxint.db.models import AppSettings, ArtifactKind, AudioArtifact, Stage
-from voxint.domain_packs.base import DomainPack, load_default
+from voxint.domain_packs.base import DomainPack, dedup_order_preserving, load_default
 from voxint.domain_packs.registry import default_domain_pack
 from voxint.media.netcheck import Resolver
 from voxint.media.ytdlp import Downloader, build_ytdlp_downloader
@@ -177,14 +176,10 @@ class RunPreferences:
     llm_model: str
 
 
-def _dedup_order_preserving(items: Iterable[str]) -> tuple[str, ...]:
-    """First occurrence wins; blank/whitespace-only entries dropped."""
-    seen: dict[str, None] = {}
-    for item in items:
-        stripped = item.strip()
-        if stripped and stripped not in seen:
-            seen[stripped] = None
-    return tuple(seen)
+# The canonicalization moved to voxint.domain_packs.base so the submit-time freeze
+# (issue #153) shares one definition with this live path; a byte-identical v2
+# snapshot depends on both sides running the same function.
+_dedup_order_preserving = dedup_order_preserving
 
 
 def resolve_run_preferences(
@@ -230,6 +225,7 @@ def apply_run_preferences(
     *,
     llm_api_key: str,
     bundled: bool = False,
+    config_resolution_version: int = 1,
 ) -> StageContext:
     """Layer ``prefs`` and the run's ``pack`` onto the cached ``base`` for one run.
 
@@ -261,7 +257,24 @@ def apply_run_preferences(
     enhance_match drops the pass's name_hints. Resolved by the caller through
     :func:`voxint.app_settings.llm_bundled_active`.
     """
-    vocabulary = _dedup_order_preserving((*pack.vocabulary, *prefs.vocabulary))
+    # Effective vocabulary. A version-2 snapshot (issue #153) already FROZE the
+    # per-field-resolved effective vocabulary at submit — project/folder/global
+    # replacement is baked into pack.vocabulary — so the worker must NOT re-union
+    # the live operator glossary or it would leak a later settings edit into a
+    # deterministically-frozen run. A missing/absent version (every pre-#153 row,
+    # config_resolution_version == 1) keeps the exact live-union path so those
+    # runs stay byte-identical. Only version 2 is a freeze; an unrecognized future
+    # version deliberately falls through to the live-union path (never silently
+    # reinterpreted as a freeze it may not be). Fail-closing on an unknown version
+    # was considered and rejected: this runs outside the execute_run failure lane,
+    # so a raise here would strand the run for the recovery sweep to re-publish
+    # forever, and voxint is single-operator (no mixed-version worker fleet to
+    # protect against a rolling upgrade). Live-union is the safe, non-poisoning
+    # fallback.
+    if config_resolution_version == 2:
+        vocabulary = _dedup_order_preserving(pack.vocabulary)
+    else:
+        vocabulary = _dedup_order_preserving((*pack.vocabulary, *prefs.vocabulary))
     enhancement_context = _augment_enhancement_context(
         pack.prompt_fragments.get("enhancement_context", ""), vocabulary
     )

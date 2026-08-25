@@ -190,6 +190,30 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
         # expired attribute) rather than the loaded value.
         run_row = session.get(PipelineRun, run_id)
         pack_snapshot = run_row.domain_pack if run_row is not None else None
+        # The snapshot's config-resolution version (issue #153). Read off the RAW
+        # mapping here — DomainPack.from_mapping drops unknown keys, so the decoded
+        # pack cannot carry it. A NULL snapshot or a pre-#153 row with no key reads
+        # as version 1 (the live-union vocabulary path); a #153 freeze carries 2.
+        # Malformed metadata (a hand-edited or corrupt snapshot with a null or
+        # non-numeric value) must NOT raise here: this runs OUTSIDE the execute_run
+        # failure lane, so an exception would leave the run un-failed for the
+        # recovery sweep to re-publish forever. Fall back to the live-union path (1),
+        # the same corrupt-snapshot tolerance domain_pack_from_snapshot already takes.
+        raw_version = (
+            pack_snapshot.get("config_resolution_version", 1)
+            if isinstance(pack_snapshot, dict)
+            else 1
+        )
+        try:
+            config_resolution_version = int(raw_version)
+        except (TypeError, ValueError, OverflowError):
+            logger.warning(
+                "run %s has a malformed config_resolution_version %r; "
+                "falling back to live-union config resolution",
+                run_id,
+                raw_version,
+            )
+            config_resolution_version = 1
         max_speakers_hint = (
             run_row.diarization_max_speakers if run_row is not None else None
         )
@@ -198,7 +222,13 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
         )
     pack = domain_pack_from_snapshot(pack_snapshot, settings)
     ctx = apply_run_preferences(
-        base_ctx, settings, prefs, pack, llm_api_key=llm_api_key, bundled=bundled
+        base_ctx,
+        settings,
+        prefs,
+        pack,
+        llm_api_key=llm_api_key,
+        bundled=bundled,
+        config_resolution_version=config_resolution_version,
     )
     # Per-run diarization speaker-count hint (issue #128), frozen on the run at
     # submit. A stored max overrides the install-wide ceiling already on ctx; a

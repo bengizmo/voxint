@@ -120,7 +120,7 @@ longer idles while a previous run's LLM enhancement is in flight. See
 
 | Table | Role |
 |---|---|
-| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen) |
+| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017; this map and `media_folders` are rollback-only since #153, superseded by the `media_folders` relation, and drop one release later), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen) |
 | `media_items` | media identity, one row per source file. `source_path` (UNIQUE) is already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs; a nullable, non-unique `source_url` records URL provenance (revision 0005) |
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity: nothing here feeds attribution, and a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry), the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS), and the **write-once** `domain_pack` JSONB snapshot resolved at submit (revision 0017: the exact pack the run was transcribed with, read by the worker and enrichment; `NULL` on pre-0017 runs) |
@@ -513,20 +513,38 @@ Selection is **per run**, resolved once at submit and **frozen onto the run**
 as a JSON snapshot (`pipeline_runs.domain_pack`, revision 0017): the pipeline
 worker and the offline name producer both read that snapshot, never the live
 env, so late enrichment can never diverge from what transcription used and a
-manifest edited on disk afterward never changes a past run's result. The pack
-is chosen **per watched folder** via a `{media_folder → pack_name}` map on
-`app_settings` (`folder_domain_packs`); an unmapped folder, an upload, or a
-URL takes the default pack (`DOMAIN_PACK_PATH`, else the bundled `generic`).
-Several named packs may live under `DOMAIN_PACKS_DIR` (one child folder per
-pack, resolved by manifest `name`); `voxint.domain_packs.registry` is the
-shared resolver, and a `NULL` snapshot (a run predating revision 0017) falls
-back to the current default at execution time. The map is edited in the UI
-(#63) through the folder browser on the setup wizard's media step and under
-**Settings → Media folders**: a per-folder `<select>` (its options come from
-`available_domain_packs`) writes `folder_domain_packs`, and the write path
-holds the invariant that every key is a currently-registered `media_folders`
-entry (removing a folder prunes its mapping; the mutation serialises on the
-singleton row so overlapping edits cannot orphan a mapping).
+manifest edited on disk afterward never changes a past run's result. An
+unmapped folder, an upload, or a URL takes the default pack (`DOMAIN_PACK_PATH`,
+else the bundled `generic`). Several named packs may live under
+`DOMAIN_PACKS_DIR` (one child folder per pack, resolved by manifest `name`);
+`voxint.domain_packs.registry` is the shared resolver, and a `NULL` snapshot (a
+run predating revision 0017) falls back to the current default at execution
+time.
+
+Console 2.0 P2a (#153) makes membership and configuration relational. The
+per-folder pack now lives on `media_folders.domain_pack`, and a run resolves its
+owning folder from the persisted `media_items.media_folder_id`, not a
+re-inferred path prefix, so reused or relocated media keep the folder they were
+created with. Vocabulary and corrections resolve **per field**, each taking its
+first present layer in the order explicit CLI/sidecar pack, then the project
+(`projects.vocabulary` / `projects.corrections`), then the folder pack, then the
+global baseline (the default pack unioned with `app_settings`). A project field
+is nullable: `NULL` inherits the layer below, an empty list is explicitly none
+and wins. Pack identity (name, prompt fragments, name seeds) always comes from
+the resolved pack; a project replaces only its two fields. An explicit or
+folder-pack layer no longer inherits the global glossary and corrections, the
+one deliberate behavior change; a run with no project and no folder pack still
+resolves to the default pack unioned with `app_settings`, byte-identical to
+before. Because vocabulary used to be unioned live at run start, a P2a snapshot
+carries a `config_resolution_version: 2` key and the worker branches on it:
+version 2 uses the frozen effective vocabulary as-is, an absent key (every run
+predating #153) keeps the exact live-union path, so no `pipeline_runs` row is
+rewritten and requeuing an old run reproduces its original result. The full
+resolution spec is the P2a addendum to ADR 0002. The pre-P2a
+`app_settings.media_folders` and `app_settings.folder_domain_packs` columns are
+now rollback-only and drop one release later; the `media_folders` relation is
+authoritative, edited through the folder browser on the setup wizard's media
+step and under **Settings → Media folders**.
 
 ## Review console (P5)
 

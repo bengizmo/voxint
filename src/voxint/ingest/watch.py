@@ -7,7 +7,7 @@ unit-testing without a broker or a database: the per-file settle classification
 and the sweep-summary shape persisted for the Settings status line.
 
 The feature auto-submits new media dropped into the operator's registered folders
-(``app_settings.media_folders``) and SKIPS files already known — a ``MediaItem``
+(the ``media_folders`` relation, ``watch=true``) and SKIPS files already known — a ``MediaItem``
 already claims the ``source_path``. "Already known" is exactly that: it includes a
 file whose prior run failed (the operator requeues those from the run detail), so
 user-facing copy says "already known", never "already transcribed".
@@ -47,6 +47,7 @@ from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
 from voxint.ingest.service import submit_media_item_if_new
 from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
+from voxint.media.registration import watched_folder_paths
 
 logger = logging.getLogger(__name__)
 
@@ -128,8 +129,8 @@ def sweep_watch_folders(
     Off unless the EFFECTIVE gate (env default overridden by the runtime
     ``app_settings.watch_folder_enabled`` column) is on — re-checked here, not just
     at beat registration, so an always-present schedule entry no-ops (one DB read,
-    no walk) when disabled. Otherwise: walk ``app_settings.media_folders`` via the
-    wizard's bounded, containment-safe :func:`scan_media_folders` (which already
+    no walk) when disabled. Otherwise: walk the ``watch=true`` ``media_folders``
+    rows via the wizard's bounded, containment-safe :func:`scan_media_folders` (which already
     skips files a ``MediaItem`` claims), settle-filter each net-new candidate so a
     file still being copied in is not ingested mid-write, submit the rest with the
     race-safe :func:`submit_media_item_if_new`, COMMIT the whole batch once, then
@@ -143,7 +144,7 @@ def sweep_watch_folders(
         row = app_settings.get_app_settings(session)
         if not app_settings.resolve_effective_watch_folder_enabled(row, settings):
             return WatchSweepSummary()
-        folders = list(row.media_folders) if row and row.media_folders else []
+        folders = watched_folder_paths(session)
         # The net-new file cap is applied to SUBMISSIONS below, not to the scan:
         # capped at the scan, a few permanently held files (a malformed sidecar
         # is held every sweep until fixed) at the front of the walk order would

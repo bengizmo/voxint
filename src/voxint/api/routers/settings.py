@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import Engine, select
+from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -38,7 +38,6 @@ from voxint.api.routers.deps import (
 )
 from voxint.api.service_identity import collect_service_identity
 from voxint.api.setup_wizard import (
-    MAX_MEDIA_FOLDERS,
     STEP_ORDER,
     ScanResult,
     SetupValidationError,
@@ -48,14 +47,12 @@ from voxint.api.setup_wizard import (
     normalize_llm_api_key,
     normalize_llm_base_url,
     normalize_llm_model,
-    normalize_media_folders,
     normalize_vocabulary,
     normalize_web_search_api_key,
     parse_step,
     scan_media_folders,
     validate_llm_enable,
 )
-from voxint.app_settings import SINGLETON_ID as APP_SETTINGS_SINGLETON_ID
 from voxint.app_settings import (
     EffectiveFlags,
     clear_tutorial_completion,
@@ -102,6 +99,14 @@ from voxint.embeddings.onnx_embedder import minilm_artifacts_available
 from voxint.enrichment.translation_jobs import translation_gates_open
 from voxint.enrichment.triage import validate_authority_domains
 from voxint.ingest import submit_media_item_if_new
+from voxint.media.registration import (
+    PACK_DEFAULT_SENTINEL,
+    folder_pack_map,
+    register_folder,
+    registered_folder_paths,
+    set_folder_pack,
+    unregister_folder,
+)
 from voxint.plugins import PluginRegistry
 from voxint.tutorial.seed import seed_tutorial_run
 
@@ -182,7 +187,7 @@ def _setup_context(
     """
     settings: Settings = request.app.state.settings
     row = get_app_settings(session)
-    media_folders = list(row.media_folders) if row and row.media_folders else []
+    media_folders = registered_folder_paths(session)
     vocabulary = list(row.vocabulary) if row and row.vocabulary else []
     _base_value, _base_default, _model_value, _model_default = llm_endpoint_form_fields(
         row, settings
@@ -335,132 +340,12 @@ def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> st
 
 
 # ---- Media folders + per-folder domain packs (issue #63) --------------------
-# The pack <select>'s "Default" (= no mapping) option submits this explicit,
-# non-empty sentinel — NOT "". FastAPI collapses both an absent field and an empty
-# "" form value to None for an Optional[str] param, so "" cannot distinguish "the
-# operator chose Default (clear the mapping)" from "the field was absent because the
-# control was disabled (leave the mapping untouched)". A non-empty sentinel makes
-# that distinction unambiguous: None ⇒ no-op, sentinel ⇒ clear, a real name ⇒ set.
-_PACK_DEFAULT_SENTINEL = "__default__"
-
-# The folder browser and the Settings "Media folders" section share these
-# helpers. Every mutation serializes on the singleton app_settings row so
-# overlapping htmx requests (double-clicks, multiple tabs) cannot lose an update
-# or leave a folder_domain_packs mapping whose key is not a registered folder —
-# the feature's core invariant: set(folder_domain_packs) ⊆ set(media_folders).
-# ARRAY/JSON columns are not Mutable-tracked, so every write reassigns a fresh
-# object to flag the column dirty.
-
-
-def _locked_app_settings(session: Session, settings: Settings) -> AppSettings:
-    """The singleton app_settings row, created if absent and locked FOR UPDATE.
-
-    ``get_or_create`` handles the first-insert race; the follow-up
-    ``SELECT … FOR UPDATE`` then locks and rereads so two overlapping folder
-    mutations serialize (the second blocks until the first commits, then sees its
-    result). On PostgreSQL this is a real row lock; on SQLite SQLAlchemy renders no
-    locking clause (single-writer anyway), so the tests that assert serialization
-    run against the production database.
-
-    ``populate_existing=True`` is load-bearing: ``get_or_create`` has already loaded
-    the singleton into this Session's identity map, so a plain ``FOR UPDATE`` reread
-    would take the lock but return the *cached* instance with its pre-lock attribute
-    values — silently defeating the reread and re-opening the lost-update window the
-    lock exists to close. The option forces the locked row's freshly-read columns to
-    overwrite the identity-mapped instance, so ``row.media_folders`` reflects the
-    post-lock committed state on every path (not only when the lock happened to
-    block on a concurrent writer).
-    """
-    get_or_create(session, llm_enabled_default=settings.llm_enabled)
-    return session.execute(
-        select(AppSettings)
-        .where(AppSettings.id == APP_SETTINGS_SINGLETON_ID)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).scalar_one()
-
-
-def _add_media_folder(session: Session, settings: Settings, raw_path: str) -> str | None:
-    """Register one folder under MEDIA_ROOT. Returns an error message, else ``None``.
-
-    Only the SUBMITTED path is validated (via ``normalize_media_folders`` — resolve
-    + containment + reserved-tree + existing-dir), so a stale/removed *existing*
-    folder can never block a new add. The canonical result is merged into the
-    locked row's ``media_folders`` (dedup, ``MAX_MEDIA_FOLDERS`` cap). Re-adding a
-    folder already registered is an idempotent no-op.
-    """
-    row = _locked_app_settings(session, settings)
-    try:
-        normalized = normalize_media_folders([raw_path], settings.media_root)
-    except SetupValidationError as exc:
-        return str(exc)
-    if not normalized:
-        return "Choose a folder to add."
-    folder = normalized[0]
-    existing = list(row.media_folders or [])
-    if folder in existing:
-        return None  # idempotent
-    if len(existing) + 1 > MAX_MEDIA_FOLDERS:
-        return f"You can register at most {MAX_MEDIA_FOLDERS} folders."
-    row.media_folders = [*existing, folder]
-    return None
-
-
-def _remove_media_folder(session: Session, settings: Settings, folder: str) -> str | None:
-    """Unregister a folder and prune its domain-pack mapping. Idempotent.
-
-    Operates only on stored identities (never touches the filesystem): a ``folder``
-    not currently registered is a no-op. Removal also drops
-    ``folder_domain_packs[folder]`` so no orphan mapping survives.
-    """
-    row = _locked_app_settings(session, settings)
-    existing = list(row.media_folders or [])
-    if folder not in existing:
-        return None  # already gone — idempotent
-    row.media_folders = [f for f in existing if f != folder]
-    mapping = dict(row.folder_domain_packs or {})
-    if mapping.pop(folder, None) is not None:
-        row.folder_domain_packs = mapping
-    return None
-
-
-def _set_folder_pack(
-    session: Session, settings: Settings, folder: str, pack: str | None
-) -> str | None:
-    """Assign (or clear) a registered folder's domain pack. Last write wins.
-
-    ``pack is None`` means the ``pack`` field was *absent* from the submission — a
-    no-op, never a clear. This matters when the registry is down: the panel disables
-    the ``<select>`` (and the Set button), and a disabled control submits nothing, so
-    an accidental submit must not be read as "select Default" and wipe the stored
-    mapping. ``pack == _PACK_DEFAULT_SENTINEL`` is the explicit "Default" choice and
-    removes the mapping. Any other non-empty pack must resolve in
-    ``available_domain_packs`` (an unknown name or a registry-wide ``DomainPackError``
-    writes nothing and surfaces the message). The folder must already be registered —
-    enforcing the mapping-key ⊆ media_folders invariant on write.
-    """
-    if pack is None:
-        return None  # field absent (e.g. disabled select) — never touch the mapping
-    row = _locked_app_settings(session, settings)
-    if folder not in (row.media_folders or []):
-        return "That folder is not registered."
-    mapping = dict(row.folder_domain_packs or {})
-    if pack == _PACK_DEFAULT_SENTINEL:
-        if mapping.pop(folder, None) is not None:
-            row.folder_domain_packs = mapping
-        return None
-    try:
-        available = available_domain_packs(settings)
-    except DomainPackError:
-        return (
-            "Domain packs can't be listed right now — check your DOMAIN_PACKS_DIR / "
-            "DOMAIN_PACK_PATH configuration."
-        )
-    if pack not in available:
-        return f"Unknown domain pack: {pack}."
-    mapping[folder] = pack
-    row.folder_domain_packs = mapping
-    return None
+# The folder browser and the Settings "Media folders" section register folders
+# through the shared media_folders write service (issue #153): it serializes every
+# mutation on a Postgres advisory lock, refuses overlapping (nested) registrations,
+# and enforces the folder cap. The legacy app_settings.media_folders /
+# folder_domain_packs columns are no longer written — they remain as a one-release
+# rollback/audit input the P2c drop migration removes.
 
 
 def _apply_folder_mutation(
@@ -471,17 +356,17 @@ def _apply_folder_mutation(
     folder: str,
     pack: str | None,
 ) -> str | None:
-    """Dispatch a folder-panel mutation to the right persist helper.
+    """Dispatch a folder-panel mutation to the shared registration service.
 
     ``action`` is the consolidated route's verb (one POST per mount instead of
     three) — an unknown value is a client error (422), never a silent no-op.
     """
     if action == "add":
-        return _add_media_folder(session, settings, folder)
+        return register_folder(session, settings, folder)
     if action == "remove":
-        return _remove_media_folder(session, settings, folder)
+        return unregister_folder(session, settings, folder)
     if action == "pack":
-        return _set_folder_pack(session, settings, folder, pack)
+        return set_folder_pack(session, settings, folder, pack)
     raise HTTPException(status_code=422, detail=f"unknown folder action {action!r}")
 
 
@@ -519,9 +404,8 @@ def _folder_panel_context(
     available is flagged so the select can show it as "(unavailable)" instead of a
     false "Default".
     """
-    row = get_app_settings(session)
-    registered = list(row.media_folders) if row and row.media_folders else []
-    mapping = dict(row.folder_domain_packs) if row and row.folder_domain_packs else {}
+    registered = registered_folder_paths(session)
+    mapping = folder_pack_map(session)
     listing = list_media_subdirs(settings.media_root, path, set(registered))
     packs_available = True
     pack_names: list[str] = []
@@ -572,7 +456,7 @@ def _folder_panel_context(
         "folder_packs_available": packs_available,
         # The "Default" <option> submits this explicit sentinel (see the constant) so
         # a disabled/absent select is never misread as "clear the mapping".
-        "folder_pack_default_value": _PACK_DEFAULT_SENTINEL,
+        "folder_pack_default_value": PACK_DEFAULT_SENTINEL,
         "folder_error": None,
     }
 
@@ -1342,8 +1226,7 @@ def setup_scan(
 ) -> Response:
     _require_csrf(request, CSRF_SETUP, csrf_token)
     settings: Settings = request.app.state.settings
-    row = get_app_settings(session)  # read-only: previewing never creates the row
-    folders = list(row.media_folders) if row and row.media_folders else []
+    folders = registered_folder_paths(session)
     result = scan_media_folders(session, settings.media_root, folders, settings)
     return _scan_response(request, session, result)
 
@@ -1356,8 +1239,7 @@ def setup_scan_confirm(
 ) -> Response:
     _require_csrf(request, CSRF_SETUP, csrf_token)
     settings: Settings = request.app.state.settings
-    row = get_app_settings(session)
-    folders = list(row.media_folders) if row and row.media_folders else []
+    folders = registered_folder_paths(session)
     # Re-scan fresh rather than trusting any client-supplied path list: the
     # preview is advisory and the filesystem may have changed since it rendered.
     result = scan_media_folders(session, settings.media_root, folders, settings)

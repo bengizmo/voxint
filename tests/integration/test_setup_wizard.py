@@ -23,6 +23,7 @@ from voxint.api.setup_wizard import scan_media_folders
 from voxint.app_settings import get_app_settings
 from voxint.config import Settings
 from voxint.db.models import AppSettings, MediaItem, PipelineRun, RunStatus
+from voxint.media.registration import registered_folder_paths
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "setup-wizard-test-csrf-key"  # known secret so tests can mint tokens
@@ -152,8 +153,8 @@ def test_add_folder_persists(
     assert resp.status_code == 303
     assert resp.headers["location"].startswith("/setup?")
     assert "step=media" in resp.headers["location"]
-    row = _row(session_factory)
-    assert row is not None and row.media_folders == ["podcasts"]
+    with session_factory() as session:
+        assert registered_folder_paths(session) == ["podcasts"]
 
 
 def test_add_folder_without_csrf_is_403(
@@ -186,16 +187,18 @@ def test_add_folder_bad_path_rerenders_without_writing(
 def test_add_folder_does_not_disable_env_enabled_llm(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # The FIRST row write (here, registering a folder) must seed llm_enabled from
-    # env, not the model default False — otherwise an env-enabled LLM would be
-    # silently switched off the moment the wizard touches the DB.
+    # Since #153 registering a folder writes only the media_folders relation and no
+    # longer creates the app_settings row, so the wizard touching folders cannot
+    # switch an env-enabled LLM off: the row is seeded from env (settings.llm_enabled)
+    # whenever a genuine app_settings write first creates it.
     (media_root / "m").mkdir()
     client = make_client(
         session_factory, media_root, llm_enabled=True, llm_api_key="sk-test"
     )
     _register_folder(client, "m")
-    row = _row(session_factory)
-    assert row is not None and row.llm_enabled is True
+    with session_factory() as session:
+        assert registered_folder_paths(session) == ["m"]  # the folder registered
+    assert _row(session_factory) is None  # app_settings untouched by a folder add
 
 
 # -------------------------------------------------------------- vocabulary step

@@ -4,12 +4,15 @@ Covers the shared folder-panel routes on the Settings mount (``/settings/folders
 ``/settings/folders/browse``) against real Postgres: the directory browser
 (containment-safe, never disclosing outside MEDIA_ROOT), registering/unregistering
 folders, the per-folder domain-pack picker (set / clear-to-default / reject unknown
-/ reject unregistered), the load-bearing invariant that every
-``folder_domain_packs`` key is a registered ``media_folders`` entry, honest
-rendering when a stored pack or the whole registry is unavailable, CSRF scope,
-onboarding gating, input bounds, that concurrent mutations serialise on the
-singleton row (no lost update), and that a UI-set mapping actually reaches the
-ingest read path that freezes a run's pack.
+/ reject unregistered), the overlap refusal that keeps folder membership
+unambiguous (issue #153), honest rendering when a stored pack or the whole registry
+is unavailable, CSRF scope, onboarding gating, input bounds, that concurrent
+mutations serialise on the registration advisory lock (no lost update), and that a
+UI-set mapping actually reaches the ingest read path that freezes a run's pack.
+
+Since #153 the panel writes first-class ``media_folders`` rows, not the legacy
+``app_settings.media_folders`` / ``folder_domain_packs`` columns; these tests read
+back through the same relation the writes target.
 """
 
 import threading
@@ -18,22 +21,23 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
-from voxint.api.routers.settings import (
-    _PACK_DEFAULT_SENTINEL,
-    _add_media_folder,
-    _folder_panel_context,
-)
-from voxint.app_settings import get_app_settings, get_or_create
+from voxint.api.routers.settings import _folder_panel_context
 from voxint.config import Settings
-from voxint.db.models import AppSettings
+from voxint.db.models import MediaFolder
 from voxint.db.session import session_scope
 from voxint.ingest.service import submit_media_item
+from voxint.media.registration import (
+    PACK_DEFAULT_SENTINEL,
+    folder_pack_map,
+    register_folder,
+    registered_folder_paths,
+)
 
 CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "settings-folders-test-csrf-key"
@@ -71,14 +75,31 @@ def _form(**fields: str) -> dict[str, str]:
     return {"csrf_token": mint_csrf_token(_CSRF_KEY, CSRF_SETTINGS), **fields}
 
 
-def _row(session_factory: sessionmaker[Session]) -> AppSettings | None:
-    with session_factory() as session:
-        return get_app_settings(session)
-
-
 def _folders(session_factory: sessionmaker[Session]) -> list[str]:
-    row = _row(session_factory)
-    return list(row.media_folders) if row and row.media_folders else []
+    with session_factory() as session:
+        return registered_folder_paths(session)
+
+
+def _packs(session_factory: sessionmaker[Session]) -> dict[str, str]:
+    with session_factory() as session:
+        return folder_pack_map(session)
+
+
+def _seed_folder(
+    session_factory: sessionmaker[Session],
+    path: str,
+    *,
+    pack: str | None = None,
+    watch: bool = True,
+) -> None:
+    """Insert a media_folders row directly, bypassing the route validators.
+
+    Some honest-degradation tests need a stored pack the current registry cannot
+    resolve — a state the route's own validator refuses to create.
+    """
+    with session_factory() as session:
+        session.add(MediaFolder(path=path, domain_pack=pack, watch=watch))
+        session.commit()
 
 
 def _add(client: TestClient, folder: str, *, path: str = ".") -> None:
@@ -162,8 +183,7 @@ def test_add_persists_and_is_idempotent(
     client, _ = make_client(session_factory, media_root)
     _add(client, "podcasts")
     _add(client, "podcasts")  # idempotent no-op
-    row = _row(session_factory)
-    assert row is not None and row.media_folders == ["podcasts"]
+    assert _folders(session_factory) == ["podcasts"]
 
 
 def test_add_rejects_escape_and_writes_nothing(
@@ -178,6 +198,35 @@ def test_add_rejects_escape_and_writes_nothing(
     assert _folders(session_factory) == []  # the failed add wrote nothing
 
 
+def test_add_refuses_overlapping_registration(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A file under a nested pair would belong to two folders; membership (ADR 0002)
+    # would be ambiguous. Registering a child of an existing folder is refused, and
+    # nothing is written — register only the parent or only the child.
+    (media_root / "audio" / "podcasts").mkdir(parents=True)
+    client, _ = make_client(session_factory, media_root)
+    _add(client, "audio")
+    resp = client.post(
+        "/settings/folders",
+        data=_form(action="add", folder="audio/podcasts", path="audio"),
+        headers=_HTMX,
+    )
+    assert resp.status_code == 200
+    assert "overlaps an already-registered folder" in resp.text
+    assert _folders(session_factory) == ["audio"]  # the child was not added
+    # The reverse direction (registering a parent of an existing folder) is refused too.
+    (media_root / "clips").mkdir()
+    (media_root / "clips" / "raw").mkdir()
+    _add(client, "clips/raw")
+    resp = client.post(
+        "/settings/folders", data=_form(action="add", folder="clips", path="."), headers=_HTMX
+    )
+    assert resp.status_code == 200
+    assert "overlaps an already-registered folder" in resp.text
+    assert set(_folders(session_factory)) == {"audio", "clips/raw"}
+
+
 def test_remove_drops_folder_and_its_pack_mapping(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
@@ -189,14 +238,12 @@ def test_remove_drops_folder_and_its_pack_mapping(
         data=_form(action="pack", folder="podcasts", pack="generic", path="."),
         headers=_HTMX,
     )
-    assert (_row(session_factory) or AppSettings()).folder_domain_packs == {"podcasts": "generic"}
+    assert _packs(session_factory) == {"podcasts": "generic"}
     client.post(
         "/settings/folders", data=_form(action="remove", folder="podcasts", path="."), headers=_HTMX
     )
-    row = _row(session_factory)
-    assert row is not None
-    assert row.media_folders == []
-    assert row.folder_domain_packs == {}  # no orphan mapping survives
+    assert _folders(session_factory) == []
+    assert _packs(session_factory) == {}  # no orphan mapping survives
 
 
 def test_remove_unregistered_is_noop(
@@ -223,14 +270,14 @@ def test_pack_set_then_default_clears(
         data=_form(action="pack", folder="pods", pack="generic", path="."),
         headers=_HTMX,
     )
-    assert (_row(session_factory) or AppSettings()).folder_domain_packs == {"pods": "generic"}
-    # The "Default" option submits an explicit sentinel (not "") — it clears the map.
+    assert _packs(session_factory) == {"pods": "generic"}
+    # The "Default" option submits an explicit sentinel (not "") — it clears the pack.
     client.post(
         "/settings/folders",
-        data=_form(action="pack", folder="pods", pack=_PACK_DEFAULT_SENTINEL, path="."),
+        data=_form(action="pack", folder="pods", pack=PACK_DEFAULT_SENTINEL, path="."),
         headers=_HTMX,
     )
-    assert (_row(session_factory) or AppSettings()).folder_domain_packs == {}
+    assert _packs(session_factory) == {}
 
 
 def test_pack_rejects_unknown_name(
@@ -246,10 +293,10 @@ def test_pack_rejects_unknown_name(
     )
     assert resp.status_code == 200
     assert "Unknown domain pack" in resp.text
-    assert (_row(session_factory) or AppSettings()).folder_domain_packs == {}
+    assert _packs(session_factory) == {}
 
 
-def test_pack_rejects_unregistered_folder_preserving_invariant(
+def test_pack_rejects_unregistered_folder(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
     client, _ = make_client(session_factory, media_root)
@@ -260,16 +307,12 @@ def test_pack_rejects_unregistered_folder_preserving_invariant(
     )
     assert resp.status_code == 200
     assert "not registered" in resp.text
-    # The mapping-key ⊆ media_folders invariant holds: nothing was written.
-    row = _row(session_factory)
-    assert row is None or row.folder_domain_packs == {}
+    assert _packs(session_factory) == {}  # nothing was written
 
 
 def test_pack_then_remove_leaves_no_orphan(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Whichever order pack-set and remove commit in (they serialise on the row
-    # lock), the keys ⊆ folders invariant survives.
     (media_root / "pods").mkdir()
     client, _ = make_client(session_factory, media_root)
     _add(client, "pods")
@@ -281,9 +324,9 @@ def test_pack_then_remove_leaves_no_orphan(
     client.post(
         "/settings/folders", data=_form(action="remove", folder="pods", path="."), headers=_HTMX
     )
-    row = _row(session_factory)
-    assert row is not None
-    assert set(row.folder_domain_packs).issubset(set(row.media_folders))
+    # Deleting the folder row drops its pack with it — a pack can only exist on a
+    # registered folder (it is a column on the row, not a separate mapping).
+    assert set(_packs(session_factory)).issubset(set(_folders(session_factory)))
 
 
 # ------------------------------------------------------- honest pack degradation
@@ -294,12 +337,8 @@ def test_stale_pack_renders_as_unavailable(
 ) -> None:
     (media_root / "pods").mkdir()
     client, _ = make_client(session_factory, media_root)
-    # Seed a mapping to a pack the (default) registry does not offer.
-    with session_factory() as session:
-        row = get_or_create(session, llm_enabled_default=False)
-        row.media_folders = ["pods"]
-        row.folder_domain_packs = {"pods": "ghostpack"}
-        session.commit()
+    # Seed a folder mapped to a pack the (default) registry does not offer.
+    _seed_folder(session_factory, "pods", pack="ghostpack")
     body = client.get("/settings").text
     assert "ghostpack (unavailable)" in body  # honest, not a false "Default"
 
@@ -315,11 +354,7 @@ def test_registry_failure_disables_pack_selection(
     client, _ = make_client(session_factory, media_root, domain_packs_dir=not_a_dir)
     # Seed a folder + pack directly (the route's validator can't run with a broken
     # registry) so the render must handle a stored pack under total registry failure.
-    with session_factory() as session:
-        row = get_or_create(session, llm_enabled_default=False)
-        row.media_folders = ["pods"]
-        row.folder_domain_packs = {"pods": "somepack"}
-        session.commit()
+    _seed_folder(session_factory, "pods", pack="somepack")
     body = client.get("/settings").text
     assert "Domain packs can't be listed" in body
     assert "disabled" in body  # the select is disabled
@@ -333,16 +368,12 @@ def test_registry_down_pack_submit_preserves_mapping(
     # With the registry down the panel disables the <select> AND the Set button, and
     # a disabled select submits no `pack` field. A submit that still reaches the route
     # (belt-and-braces / no-JS) must be a no-op, NEVER read as "select Default" and
-    # silently wipe the stored mapping — the honest-degradation contract.
+    # silently wipe the stored pack — the honest-degradation contract.
     not_a_dir = tmp_path / "not-a-dir"
     not_a_dir.write_text("x")
     (media_root / "pods").mkdir()
     client, _ = make_client(session_factory, media_root, domain_packs_dir=not_a_dir)
-    with session_factory() as session:
-        row = get_or_create(session, llm_enabled_default=False)
-        row.media_folders = ["pods"]
-        row.folder_domain_packs = {"pods": "somepack"}
-        session.commit()
+    _seed_folder(session_factory, "pods", pack="somepack")
     # action=pack with NO pack field (exactly what a disabled select submits).
     resp = client.post(
         "/settings/folders",
@@ -350,9 +381,7 @@ def test_registry_down_pack_submit_preserves_mapping(
         headers=_HTMX,
     )
     assert resp.status_code == 200
-    row = _row(session_factory)
-    assert row is not None
-    assert row.folder_domain_packs == {"pods": "somepack"}  # mapping preserved
+    assert _packs(session_factory) == {"pods": "somepack"}  # pack preserved
     # The disabled control renders on the button too, not only the select.
     assert "<button type=\"submit\" disabled>Set</button>" in resp.text
 
@@ -377,9 +406,7 @@ def test_nonhtmx_pack_error_rerenders_page_with_message_and_path(
     assert "Unknown domain pack: ghostpack." in resp.text
     assert 'id="folders"' in resp.text  # the whole settings page rendered
     assert ">sub/<" in resp.text  # panel is at path=interviews (its child), not root
-    # Nothing was written: the rejected pack never landed.
-    row = _row(session_factory)
-    assert row is not None and (row.folder_domain_packs or {}) == {}
+    assert _packs(session_factory) == {}  # the rejected pack never landed
 
 
 # --------------------------------------------------------- CSRF / gating / bounds
@@ -451,30 +478,30 @@ def test_non_hx_mutation_redirects(
 def test_concurrent_adds_preserve_both_folders(
     session_factory: sessionmaker[Session], media_root: Path
 ) -> None:
-    # Without the FOR UPDATE row lock, two overlapping adds each read the same
-    # base list and one clobbers the other. Prove they serialise: while A holds
-    # the row mid-add, B blocks, and once A commits B rereads and appends — both
-    # folders survive.
+    # Without the registration advisory lock, two overlapping adds could each read
+    # the same base list and one clobber the other (or slip a nesting pair past the
+    # overlap check). Prove they serialise: while A holds the lock mid-add, B blocks,
+    # and once A commits B is admitted and appends — both folders survive.
     for name in ("seed", "a", "b"):
         (media_root / name).mkdir()
     settings = Settings(_env_file=None, media_root=media_root)  # type: ignore[call-arg]
     with session_scope(session_factory) as pre:
-        assert _add_media_folder(pre, settings, "seed") is None  # pre-create the row
+        assert register_folder(pre, settings, "seed") is None  # pre-create a row
 
     error: dict[str, BaseException] = {}
 
     def _add_b() -> None:
         try:
             with session_scope(session_factory) as sb:
-                assert _add_media_folder(sb, settings, "b") is None
+                assert register_folder(sb, settings, "b") is None
         except BaseException as exc:  # surface to the assertion
             error["b"] = exc
 
     with session_scope(session_factory) as sa:
-        assert _add_media_folder(sa, settings, "a") is None  # A locks the row
+        assert register_folder(sa, settings, "a") is None  # A takes the advisory lock
         thread = threading.Thread(target=_add_b)
         thread.start()
-        for _ in range(500):  # wait until B is genuinely blocked on the row lock
+        for _ in range(500):  # wait until B is genuinely blocked on the lock
             with session_factory() as w:
                 blocked = w.execute(
                     text("SELECT count(*) FROM pg_locks WHERE NOT granted")
@@ -484,14 +511,12 @@ def test_concurrent_adds_preserve_both_folders(
             time.sleep(0.01)
         else:
             thread.join(timeout=5)
-            pytest.fail("second add never blocked on the row lock")
+            pytest.fail("second add never blocked on the registration lock")
         # Exiting the `with` commits A and releases the lock; B is then admitted.
 
     thread.join(timeout=10)
     assert not error, f"concurrent add raised: {error.get('b')!r}"
-    row = _row(session_factory)
-    assert row is not None
-    assert set(row.media_folders) == {"seed", "a", "b"}  # no lost update
+    assert set(_folders(session_factory)) == {"seed", "a", "b"}  # no lost update
 
 
 # ---------------------------------------------------------- reaches ingest read
@@ -517,6 +542,25 @@ def test_mapping_reaches_ingest_read_path(
         assert run.domain_pack is not None
         pack_name = run.domain_pack["name"]
     assert pack_name == "interview"  # the mapped pack, not the default
+
+
+def test_submit_assigns_folder_membership(
+    session_factory: sessionmaker[Session], media_root: Path
+) -> None:
+    # A run submitted under a registered folder records its folder membership
+    # (issue #153): the MediaItem's media_folder_id points at the deepest containing
+    # folder, and a file outside every registration stays NULL.
+    (media_root / "interviews").mkdir()
+    client, settings = make_client(session_factory, media_root)
+    _add(client, "interviews")
+    with session_scope(session_factory) as session:
+        folder_id = session.execute(
+            select(MediaFolder.id).where(MediaFolder.path == "interviews")
+        ).scalar_one()
+        inside = submit_media_item(session, "interviews/clip.wav", settings=settings)
+        outside = submit_media_item(session, "loose/elsewhere.wav", settings=settings)
+        assert inside.media_item.media_folder_id == folder_id
+        assert outside.media_item.media_folder_id is None
 
 
 def test_registered_missing_folder_is_flagged(

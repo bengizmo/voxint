@@ -72,6 +72,48 @@
   ]
  ],
  [
+  "/media",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects/{project_id}/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}/vocabulary",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}/corrections",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/runs",
   [
    "GET"

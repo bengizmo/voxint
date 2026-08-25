@@ -18,7 +18,7 @@ from voxint.app_settings import resolve_effective_llm_api_key
 from voxint.clients.llm import HttpLLMClient
 from voxint.config import Settings
 from voxint.db.models import AppSettings
-from voxint.domain_packs.base import DomainPack
+from voxint.domain_packs.base import DomainPack, dedup_order_preserving
 from voxint.pipeline.stages.context import (
     StageContext,
     apply_run_preferences,
@@ -122,6 +122,103 @@ def test_apply_unions_pack_and_user_vocab_order_preserving() -> None:
     )
     ctx = apply_run_preferences(base, make_settings(), prefs, base.domain_pack, llm_api_key="")
     assert ctx.vocabulary == ("Pack", "Shared", "User")
+
+
+def test_apply_v1_snapshot_live_unions_glossary_default() -> None:
+    """A pre-#153 (unversioned/v1) run keeps the live-union path byte-identical:
+    a glossary edited AFTER submit still reaches the run. This is the invariant the
+    version-2 freeze must not disturb (config_resolution_version defaults to 1)."""
+    base = make_base_ctx(vocabulary=("Pack",))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base, make_settings(), prefs, base.domain_pack, llm_api_key=""
+    )
+    assert ctx.vocabulary == ("Pack", "Edited-Later")
+
+
+def test_apply_v2_snapshot_uses_frozen_vocab_without_live_union() -> None:
+    """A version-2 snapshot (issue #153) froze the effective vocabulary at submit,
+    so the worker must NOT re-union the live glossary — a later settings edit can
+    never leak into a deterministically-frozen run."""
+    base = make_base_ctx(vocabulary=("Frozen-A", "Frozen-B"))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["Edited-Later"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base,
+        make_settings(),
+        prefs,
+        base.domain_pack,
+        llm_api_key="",
+        config_resolution_version=2,
+    )
+    assert ctx.vocabulary == ("Frozen-A", "Frozen-B")
+    # The frozen vocab is what renders into the enhancement context, too.
+    assert "Edited-Later" not in ctx.enhancement_context
+
+
+def test_apply_unrecognized_version_falls_through_to_live_union() -> None:
+    """An unknown future version is treated as the live-union path, never silently
+    reinterpreted as a freeze it may not be (only version 2 is a freeze)."""
+    base = make_base_ctx(vocabulary=("Pack",))
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=["User"]), make_settings()
+    )
+    ctx = apply_run_preferences(
+        base,
+        make_settings(),
+        prefs,
+        base.domain_pack,
+        llm_api_key="",
+        config_resolution_version=99,
+    )
+    assert ctx.vocabulary == ("Pack", "User")
+
+
+def test_v2_freeze_is_byte_identical_to_v1_live_union_global_baseline() -> None:
+    """Numerics contract (issue #153): the version-2 frozen effective vocabulary is
+    byte-identical to what the v1 live-union path computes for the global-baseline
+    (default pack + operator glossary) case, so migrating a stock install to the
+    freeze changes no run's ASR prompt. Pins the algebraic identity
+    D(pack + app) == D(pack + D(app)) == D(frozen) on deliberately messy input
+    (duplicate + whitespace variants a naive union would diverge on). The two sides
+    stay equal only because the submit-time freeze and this live path both run the
+    one shared dedup_order_preserving."""
+    pack_vocab = ("Alpha", " Alpha ", "Beta")
+    # The raw operator glossary as stored, BEFORE resolve_run_preferences dedups it.
+    raw_app_vocab = [" Beta ", "Gamma", "", "Gamma ", "  "]
+
+    # What the submit-time freeze bakes into the snapshot for the global baseline
+    # (ingest.service._run_domain_pack_snapshot global-baseline branch).
+    frozen_effective = list(dedup_order_preserving((*pack_vocab, *raw_app_vocab)))
+    assert frozen_effective == ["Alpha", "Beta", "Gamma"]
+
+    # The v1 live path a pre-#153 (unversioned) run runs in the worker: prefs is
+    # dedup(app) because resolve_run_preferences pre-dedups the glossary, and apply
+    # unions it onto the raw pack vocabulary.
+    base = make_base_ctx(vocabulary=pack_vocab)
+    prefs = resolve_run_preferences(
+        AppSettings(id=1, vocabulary=raw_app_vocab), make_settings()
+    )
+    v1 = apply_run_preferences(
+        base, make_settings(), prefs, base.domain_pack, llm_api_key=""
+    )
+
+    # The v2 path: the freeze already resolved the effective list, so the decoded
+    # pack carries frozen_effective and apply must NOT re-union the live glossary.
+    frozen_base = make_base_ctx(vocabulary=tuple(frozen_effective))
+    v2 = apply_run_preferences(
+        frozen_base,
+        make_settings(),
+        prefs,
+        frozen_base.domain_pack,
+        llm_api_key="",
+        config_resolution_version=2,
+    )
+
+    assert tuple(frozen_effective) == v1.vocabulary == v2.vocabulary
 
 
 def test_apply_renders_vocab_into_enhancement_context() -> None:

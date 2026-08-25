@@ -31,22 +31,25 @@ from typing import Any, BinaryIO
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from voxint.app_settings import get_app_settings
 from voxint.config import Settings, get_settings
 from voxint.db.models import (
     AudioArtifact,
     AudioChunk,
+    MediaFolder,
     MediaItem,
     PipelineRun,
+    Project,
     RunStatus,
 )
-from voxint.domain_packs.base import union_pack_name_seeds
-from voxint.domain_packs.corrections import union_pack_corrections
-from voxint.domain_packs.registry import resolve_run_domain_pack
+from voxint.domain_packs.base import dedup_order_preserving, union_pack_name_seeds
+from voxint.domain_packs.corrections import parse_corrections, union_pack_corrections
+from voxint.domain_packs.registry import default_domain_pack, resolve_domain_pack_by_name
 from voxint.ingest.sidecar import Sidecar
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
+from voxint.media.registration import resolve_media_folder_id
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
     RunSnapshot,
@@ -191,47 +194,134 @@ class UrlValidationError(IngestError):
     """
 
 
+def _folder_and_project(
+    session: Session, media_folder_id: uuid.UUID
+) -> tuple[MediaFolder | None, Project | None]:
+    """The run's owning folder and its project, loaded together (issue #153).
+
+    One relational read (eager-joined project) so a concurrent folder/project
+    edit under READ COMMITTED cannot assemble a hybrid config from separate
+    point-reads. Returns ``(folder, project)``; ``project`` is ``None`` when the
+    folder joins none, and ``(None, None)`` if the folder row is gone.
+    """
+    folder = session.execute(
+        select(MediaFolder)
+        .options(joinedload(MediaFolder.project))
+        .where(MediaFolder.id == media_folder_id)
+    ).scalar_one_or_none()
+    if folder is None:
+        return None, None
+    return folder, folder.project
+
+
 def _run_domain_pack_snapshot(
     session: Session,
-    source_path: str | None,
+    media_folder_id: uuid.UUID | None,
     *,
     settings: Settings | None,
     domain_pack_name: str | None,
     extra_name_seeds: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    """Freeze the domain-pack snapshot for a NEW run (issue #11).
+    """Freeze the config-resolution snapshot for a NEW run (issues #11, #153).
 
-    Reads the per-folder mapping off the ``app_settings`` singleton and resolves
-    it (or an explicit name, or the default pack) against the configured packs.
-    ``source_path`` is ``None`` for uploads/URLs, which never sit under a watched
-    folder and so take the default unless an explicit name is supplied. Raises
-    :class:`~voxint.domain_packs.base.DomainPackError` on an unresolvable name —
-    never a silent fallback.
+    Resolves the effective ``vocabulary`` and ``corrections`` by PER-FIELD
+    REPLACEMENT (ADR 0002): each field independently takes its first present
+    layer in the order explicit per-run pack override (a CLI/sidecar name) →
+    project field → folder pack field → global baseline (the default pack unioned
+    with the operator's ``app_settings`` glossary/corrections). Membership walks
+    the relation, not the path: ``media_folder_id`` is the run's owning folder,
+    read from the persisted ``MediaItem.media_folder_id`` so reused or moved media
+    resolve against their stored folder, never a re-inferred path prefix. It is
+    ``None`` for uploads/URLs, which sit under no folder and so take the global
+    baseline unless an explicit name is supplied.
 
-    ``extra_name_seeds`` (issue #104) are sidecar-supplied speaker names, unioned
-    onto the resolved pack's ``name_seeds`` after the corrections union — inside
-    THIS freeze point, so every downstream reader of ``pipeline_runs.domain_pack``
-    sees them with no changes.
+    A project's ``vocabulary``/``corrections`` are nullable: NULL inherits the
+    layer below, an empty list is "explicitly none" and wins. The pack IDENTITY
+    (name, description, prompt fragments, name seeds) always comes from the
+    resolved pack (explicit → folder → default); a project replaces ONLY its two
+    fields. An explicit or folder-pack layer replaces the global baseline, so —
+    unlike the pre-#153 behavior — it stops inheriting the global glossary and
+    corrections.
+
+    The whole snapshot is stamped ``config_resolution_version: 2`` so the worker
+    uses the frozen vocabulary as-is instead of re-unioning the live glossary;
+    every pre-#153 (unversioned) run keeps its live-union path, byte-identical.
+
+    ``extra_name_seeds`` (issue #104) are sidecar speaker names, unioned onto the
+    resolved pack's ``name_seeds`` inside this freeze. Raises
+    :class:`~voxint.domain_packs.base.DomainPackError` on an unresolvable name or
+    a malformed project correction — never a silent fallback.
     """
     resolved = settings or get_settings()
+    # The global (app_settings) and relational (folder+project) layers are read in
+    # separate statements under READ COMMITTED, so the frozen snapshot is "config
+    # as of these reads": a concurrent edit that touches both layers between them is
+    # not atomically isolated and could freeze a hybrid that was never simultaneously
+    # effective. Accepted for a single-operator deployment (one operator, no
+    # competing config writers); tighten to one joined read or a locking boundary
+    # only if that assumption ever changes. _folder_and_project keeps folder+project
+    # mutually consistent via its joinedload.
     row = get_app_settings(session)
-    folder_map = dict(row.folder_domain_packs) if row is not None else {}
-    pack_snapshot = resolve_run_domain_pack(
-        source_path,
-        settings=resolved,
-        folder_domain_packs=folder_map,
-        explicit_name=domain_pack_name,
-    )
-    # Union the operator's console-authored corrections (#84) onto the resolved
-    # pack BEFORE the snapshot is frozen, so #82 compose and #83 provenance read
-    # them off pipeline_runs.domain_pack unchanged. A collision (operator/pack
-    # duplicate id or a non-idempotent union) raises DomainPackError here — the
-    # same visible, never-silently-fall-back posture as an unresolvable pack name.
-    if row is not None and row.corrections:
-        pack_snapshot = union_pack_corrections(pack_snapshot, row.corrections)
+
+    folder: MediaFolder | None = None
+    project: Project | None = None
+    if media_folder_id is not None:
+        folder, project = _folder_and_project(session, media_folder_id)
+
+    # Pack identity: an explicit name wins; else the owning folder's pack; else
+    # the default. resolve_domain_pack_by_name raises on an unknown name (loud,
+    # never a silent default) — the same posture as the pre-#153 path.
+    is_explicit = domain_pack_name is not None
+    if domain_pack_name is not None:
+        base_pack = resolve_domain_pack_by_name(domain_pack_name, resolved)
+        folder_pack_present = False
+    elif folder is not None and folder.domain_pack is not None:
+        base_pack = resolve_domain_pack_by_name(folder.domain_pack, resolved)
+        folder_pack_present = True
+    else:
+        base_pack = default_domain_pack(resolved)
+        folder_pack_present = False
+    snapshot = base_pack.to_mapping()
+
+    # Vocabulary, first present layer in the order explicit > project > folder >
+    # global. dedup_order_preserving canonicalizes every branch so the frozen
+    # list IS the effective list (the global-baseline union then equals what the
+    # v1 worker computed live for a default-pack run: D(pack + D(app)) ==
+    # D(pack + app)). An explicit or folder-pack layer keeps just the resolved
+    # pack's words — it no longer inherits the global glossary.
+    if is_explicit:
+        vocab = dedup_order_preserving(snapshot["vocabulary"])
+    elif project is not None and project.vocabulary is not None:
+        vocab = dedup_order_preserving(project.vocabulary)
+    elif folder_pack_present:
+        vocab = dedup_order_preserving(snapshot["vocabulary"])
+    else:
+        glossary = row.vocabulary if row is not None and row.vocabulary else ()
+        vocab = dedup_order_preserving((*snapshot["vocabulary"], *glossary))
+    snapshot["vocabulary"] = list(vocab)
+
+    # Corrections, same precedence. An explicit or folder-pack layer keeps the
+    # resolved pack's own rules (no app_settings union); a project REPLACES with
+    # its own list, validated INTERNALLY (never unioned against the now-masked
+    # pack, whose collisions are irrelevant); the global baseline unions the
+    # operator's console corrections exactly as the pre-#153 freeze did.
+    if is_explicit:
+        pass
+    elif project is not None and project.corrections is not None:
+        snapshot["corrections"] = [
+            rule.to_mapping() for rule in parse_corrections(project.corrections)
+        ]
+    elif folder_pack_present:
+        pass
+    elif row is not None and row.corrections:
+        snapshot = union_pack_corrections(snapshot, row.corrections)
+
     if extra_name_seeds:
-        pack_snapshot = union_pack_name_seeds(pack_snapshot, extra_name_seeds)
-    return pack_snapshot
+        snapshot = union_pack_name_seeds(snapshot, extra_name_seeds)
+    # Stamp LAST, after every helper that rebuilds the mapping via dict(...), so
+    # the version key can never be dropped by a copy inside union_pack_*.
+    snapshot["config_resolution_version"] = 2
+    return snapshot
 
 
 def _effective_pack_name(
@@ -290,8 +380,9 @@ def submit_media_item(
     DB-only: the caller owns the commit and, once it commits, lazily publishes
     ``voxint.run_pipeline`` (commit-before-publish). ``source_path`` is UNIQUE,
     so a repeated local path reuses its MediaItem while every submission still
-    mints a distinct run. The run's domain pack is frozen from the per-folder
-    mapping (issue #11); ``domain_pack_name`` overrides it explicitly.
+    mints a distinct run. The run's config snapshot is frozen by per-field
+    resolution off the media row's folder membership (issues #11, #153);
+    ``domain_pack_name`` overrides the pack explicitly.
 
     ``sidecar`` (issue #104) applies the file's parsed YAML sidecar at THIS
     freeze point: speakers union into the pack snapshot's ``name_seeds``, notes
@@ -300,14 +391,17 @@ def submit_media_item(
     caller passed one. Frozen at submit — editing the sidecar file afterwards
     changes nothing (the #84 posture).
     """
+    # Create-or-adopt the media row FIRST so the snapshot resolves config against
+    # its persisted folder membership (issue #153, ADR 0002), not the raw path — a
+    # reused or moved MediaItem keeps the folder it was created with.
+    media = _get_or_create_media(session, source_path)
     domain_pack = _run_domain_pack_snapshot(
         session,
-        source_path,
+        media.media_folder_id,
         settings=settings,
         domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
         extra_name_seeds=sidecar.speakers if sidecar is not None else (),
     )
-    media = _get_or_create_media(session, source_path)
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
     )
@@ -352,14 +446,14 @@ def submit_media_item_if_new(
     frozen at THIS submit — a sidecar edited (or first appearing) after the
     media file is already known does nothing, by design.
     """
-    domain_pack = _run_domain_pack_snapshot(
-        session,
-        source_path,
-        settings=settings,
-        domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
-        extra_name_seeds=sidecar.speakers if sidecar is not None else (),
+    # Insert the media row FIRST (in the SAVEPOINT), then freeze config against its
+    # folder membership (issue #153). A losing race rolls the insert back and skips
+    # (None) before any snapshot work; the winner's snapshot resolves off its
+    # persisted media_folder_id, not the raw path.
+    media = MediaItem(
+        source_path=source_path,
+        media_folder_id=resolve_media_folder_id(session, source_path),
     )
-    media = MediaItem(source_path=source_path)
     try:
         with session.begin_nested():
             session.add(media)
@@ -376,6 +470,13 @@ def submit_media_item_if_new(
         if existing is None:
             raise
         return None
+    domain_pack = _run_domain_pack_snapshot(
+        session,
+        media.media_folder_id,
+        settings=settings,
+        domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
+        extra_name_seeds=sidecar.speakers if sidecar is not None else (),
+    )
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
     )
@@ -401,13 +502,21 @@ def _get_or_create_media(session: Session, source_path: str) -> MediaItem:
     own run against, honouring "each submission mints a distinct run". (The API's
     uploads/URLs use uuid-namespaced paths that never collide; this guards the
     CLI's reuse-by-path and any future shared caller.)
+
+    A newly-created row is assigned its folder membership (issue #153,
+    ``media_folder_id``) from the deepest registered folder that contains
+    ``source_path`` — ``None`` when it sits under none. Assignment happens once, at
+    creation; a reused row keeps the membership it was created with.
     """
     existing = session.execute(
         select(MediaItem).where(MediaItem.source_path == source_path)
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-    media = MediaItem(source_path=source_path)
+    media = MediaItem(
+        source_path=source_path,
+        media_folder_id=resolve_media_folder_id(session, source_path),
+    )
     try:
         # add() inside the savepoint so a rolled-back attempt is expunged and
         # cannot be re-INSERTed at the caller's later flush/commit.
@@ -825,8 +934,9 @@ def submit_upload(
     :class:`UploadTooLargeError` (over the cap), or :class:`UploadConflictError`
     (replayed id, different bytes).
     """
-    # Uploads never sit under a watched folder (uuid-namespaced path), so the pack
-    # is the default unless an explicit name is supplied (source_path=None).
+    # Uploads never sit under a registered folder (uuid-namespaced path), so there
+    # is no folder/project layer (media_folder_id=None): the global baseline
+    # applies unless an explicit pack name is supplied.
     domain_pack = _run_domain_pack_snapshot(
         session, None, settings=settings, domain_pack_name=domain_pack_name
     )
@@ -937,8 +1047,9 @@ def submit_url(
     :class:`UploadValidationError` (bad submission id) — both HTTP 422 — or
     :class:`UploadConflictError` (replayed id, different url) — HTTP 409.
     """
-    # URLs never sit under a watched folder (uuid-namespaced path), so the pack is
-    # the default unless an explicit name is supplied (source_path=None).
+    # URLs never sit under a registered folder (uuid-namespaced path), so there is
+    # no folder/project layer (media_folder_id=None): the global baseline applies
+    # unless an explicit pack name is supplied.
     domain_pack = _run_domain_pack_snapshot(
         session, None, settings=settings, domain_pack_name=domain_pack_name
     )

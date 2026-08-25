@@ -123,6 +123,18 @@ CSRF_CLIP_EXTRACT = "clip-extract"
 # reaches into the app's per-surface CSRF constants. Same-operator, same-origin
 # replay across a plugin's own forms is harmless (mirrors CSRF_SETTINGS).
 CSRF_PLUGIN = "plugin"
+# Projects (issue #153, Console 2.0 P2b). Per-action tokens: creating a project
+# and assigning a folder to one are independent mutations with different blast
+# radii (a create token must not be replayable to move a folder), so each form
+# mints and verifies under its own action.
+CSRF_PROJECT_CREATE = "project-create"
+CSRF_PROJECT_ASSIGN = "project-assign"
+# Project-scoped config editors (issue #153, P2a precedence freeze). The
+# vocabulary and corrections overrides are independent mutations under their own
+# per-action tokens; each also carries an "inherit" reset (write NULL) under the
+# same action as its save.
+CSRF_PROJECT_VOCAB = "project-vocabulary"
+CSRF_PROJECT_CORRECTIONS = "project-corrections"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

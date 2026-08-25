@@ -205,6 +205,112 @@ def _enum_values(e: type[enum.StrEnum]) -> str:
     return ", ".join(f"'{m.value}'" for m in e)
 
 
+class Project(Base):
+    """A named grouping of media folders with project-scoped config (issue #153).
+
+    Console 2.0 (epic #149) organizes media into projects: a project owns zero or
+    more :class:`MediaFolder` rows and carries its own ``vocabulary`` and
+    ``corrections`` that override the folder pack and the global settings for new
+    runs (ADR 0002, per-field replacement). Membership is a foreign key, never a
+    path prefix.
+
+    ``vocabulary`` and ``corrections`` are **nullable to distinguish inherit from
+    explicit-empty**: NULL means "inherit the layer below" (folder pack, then
+    global), an empty list means "explicitly none" and wins over the lower layers.
+    ``corrections`` rows carry the same ``{id, match, replace, ...}`` shape as
+    ``app_settings.corrections`` and pass the same #80 validators at author time.
+    """
+
+    __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint("length(btrim(name)) > 0", name="projects_name_nonempty_check"),
+        CheckConstraint(
+            "corrections IS NULL OR jsonb_typeof(corrections) = 'array'",
+            name="projects_corrections_array_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, unique=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    # NULL = inherit the folder/global layer; [] = explicitly empty (wins).
+    vocabulary: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    # none_as_null so a Python None is stored as SQL NULL (inherit), never a JSONB
+    # `null` scalar — the latter reads back as None too but fails the array CHECK,
+    # so writing the inherit sentinel would 500 without it.
+    corrections: Mapped[list[dict[str, Any]] | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    folders: Mapped[list["MediaFolder"]] = relationship(back_populates="project")
+
+
+class MediaFolder(Base):
+    """A registered media folder, the relational successor to the app_settings list.
+
+    Pre-#153 the watched folders lived in ``app_settings.media_folders`` (a Text
+    array) with per-folder packs in ``app_settings.folder_domain_packs``. P2a moves
+    each registration to a first-class row so media membership is a foreign key
+    (ADR 0002) and a folder can join a :class:`Project`. ``path`` is MEDIA_ROOT-
+    relative POSIX (matching the old list), unique, and non-empty; overlapping
+    (nested) registrations are refused at write time by the shared registration
+    service, not by a DB constraint.
+
+    ``domain_pack`` is the per-folder pack name (was ``folder_domain_packs[path]``);
+    NULL means the folder inherits the default pack. ``watch`` mirrors the pre-#153
+    behavior where every registered folder is swept when the installation-wide
+    ``app_settings`` watch gate is on; the per-row flag lets a folder opt out later
+    without a schema change. The app_settings columns are retained for one release
+    (dropped in a later migration) as a rollback/audit input.
+    """
+
+    __tablename__ = "media_folders"
+    __table_args__ = (
+        CheckConstraint("length(path) > 0", name="media_folders_path_nonempty_check"),
+        Index("ix_media_folders_project_id", "project_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    path: Mapped[str] = mapped_column(Text, unique=True)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL")
+    )
+    domain_pack: Mapped[str | None] = mapped_column(Text)
+    watch: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped["Project | None"] = relationship(back_populates="folders")
+    media_items: Mapped[list["MediaItem"]] = relationship(back_populates="media_folder")
+
+
+def _seed_current_path(context: Any) -> str | None:
+    """Default ``current_path`` to ``source_path`` for ORM-created media rows.
+
+    ADR 0001 splits identity (``source_path``, immutable) from live location
+    (``current_path``, mutable). At ingest the two are equal, so every ORM insert
+    seeds ``current_path := source_path`` without the four call sites having to
+    pass it. The column stays nullable in P2a (raw-SQL test inserts omit it and no
+    reader treats it as a byte path until the P2c move slice, which enforces NOT
+    NULL); the migration backfills existing rows.
+    """
+    params = context.get_current_parameters()
+    value = params.get("source_path")
+    return str(value) if value is not None else None
+
+
 class MediaItem(Base):
     __tablename__ = "media_items"
     __table_args__ = (
@@ -215,10 +321,21 @@ class MediaItem(Base):
         CheckConstraint(
             "size_bytes IS NULL OR size_bytes >= 0", name="media_items_size_nonneg_check"
         ),
+        Index("ix_media_items_media_folder_id", "media_folder_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     source_path: Mapped[str] = mapped_column(Text, unique=True)
+    # Live filesystem location (ADR 0001), split from the immutable source_path
+    # identity. Equal to source_path at ingest (seeded by _seed_current_path);
+    # only a P2c move rewrites it. Nullable in P2a, NOT NULL from P2c.
+    current_path: Mapped[str | None] = mapped_column(Text, default=_seed_current_path)
+    # Folder membership (ADR 0002): the folder this media belongs to, set at
+    # ingest by the write-cutover slice and updated by a move. NULL for
+    # uploads/URLs/tutorial/unmatched media that sit outside a registered folder.
+    media_folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("media_folders.id", ondelete="SET NULL")
+    )
     # Provenance for URL-ingested media (nullable, non-unique): the origin URL a
     # run was fetched from. NULL means local/uploaded media that already sits at
     # source_path, so the ACQUIRE stage no-ops. Set only by the URL submission
@@ -233,6 +350,9 @@ class MediaItem(Base):
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
         back_populates="media_item"
+    )
+    media_folder: Mapped["MediaFolder | None"] = relationship(
+        back_populates="media_items"
     )
 
 
@@ -381,9 +501,10 @@ class PipelineRun(Base):
     # deliberately outside the CAS revision and orthogonal to status — like
     # operator_notes, last-write-wins, not pipeline state.
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Frozen domain-pack snapshot for this run (issue #11): the resolved manifest
-    # (name/vocabulary/name_seeds/prompt_fragments) as JSON, stamped write-once at
-    # submit from the per-folder mapping (or the default pack). The pipeline worker
+    # Frozen domain-pack snapshot for this run (issues #11, #153): the resolved
+    # manifest (name/vocabulary/name_seeds/prompt_fragments) as JSON, stamped
+    # write-once at submit by per-field resolution off the media row's folder and
+    # project (or the default pack + global baseline). The pipeline worker
     # and the enrichment producers both read THIS, not the mutable global env, so a
     # run — and its late enrichment — always sees the exact pack it was transcribed
     # with even if the manifest on disk later changes. NULL = a legacy run created
@@ -1501,16 +1622,20 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Folders the wizard registered under MEDIA_ROOT (paths relative to it).
+    # Rollback-only since #153 (P2a): the ``media_folders`` RELATION is now
+    # authoritative for registered folders and ingest reads it there. Retained one
+    # release for rollback, drops next. Was: folders the wizard registered under
+    # MEDIA_ROOT (paths relative to it).
     media_folders: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     # User vocabulary (names/jargon/acronyms): augments the selected domain pack,
     # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
-    # Per-folder domain-pack assignment (issue #11): {media_folder -> pack_name},
-    # mapping a watched folder (as stored in media_folders, relative to MEDIA_ROOT)
-    # to a pack resolvable by name. Consulted at submit to freeze each run's pack
-    # snapshot; an unmapped folder falls back to the default pack. Default {} means
-    # every folder uses the default — the pre-#11 behavior.
+    # Rollback-only since #153 (P2a): NO LONGER consulted at submit. The per-folder
+    # pack now lives on ``media_folders.domain_pack`` (the relation) and ingest
+    # resolves it there. Retained one release for rollback, drops next.
+    # Was (issue #11): {media_folder -> pack_name} mapping a watched folder to a
+    # pack name, consulted at submit to freeze each run's pack; an unmapped folder
+    # fell back to the default pack, and default {} meant every folder used it.
     folder_domain_packs: Mapped[dict[str, str]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=False,
@@ -1519,9 +1644,10 @@ class AppSettings(Base):
     )
     # Operator-authored correction rules (issue #84): a list of rule mappings
     # {id, match, replace, case_sensitive, whole_word}, each already validated
-    # through the #80 gate at author time. Unioned onto the selected pack's
-    # corrections at submit-time freeze (see
-    # ingest.service._run_domain_pack_snapshot) and stored in
+    # through the #80 gate at author time. This is the global glossary layer:
+    # since #153 it is unioned onto the resolved pack ONLY in the global-baseline
+    # branch of the submit-time freeze (an explicit/folder/project layer replaces
+    # it per field; see ingest.service._run_domain_pack_snapshot) and stored in
     # pipeline_runs.domain_pack — NOT applied live like vocabulary — so #82
     # compose and #83 provenance read them off the frozen snapshot unchanged.
     # Named "corrections" to mirror the pack field; distinct from the manual

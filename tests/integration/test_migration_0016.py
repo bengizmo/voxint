@@ -123,5 +123,6 @@ def test_single_alembic_head() -> None:
     # language + detection score, issue #124; 0038 = transcript translation
     # settings columns + translation_jobs/run_translations, issue #133; 0039 =
     # audio_clip artifact kind + audio_artifacts.idempotency_key clip cache key,
-    # issue #88).
-    assert list(heads) == ["0039"]
+    # issue #88; 0040 = projects + media_folders + media location split, issue
+    # #153).
+    assert list(heads) == ["0040"]
