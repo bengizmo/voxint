@@ -264,9 +264,27 @@ def _overview_context(
     settings: Settings = request.app.state.settings
     secret = request.app.state.csrf_secret
     overview = speakers_overview(session, gates_from_settings(settings), sort=sort)
+    reminder_run_ids = {r.run_id for r in overview.name_suggestions}
+    reminder_runs = (
+        {
+            run.id: run
+            for run in session.execute(
+                select(PipelineRun)
+                .where(PipelineRun.id.in_(reminder_run_ids))
+                .options(
+                    selectinload(PipelineRun.media_item).selectinload(
+                        MediaItem.source_metadata
+                    )
+                )
+            ).scalars()
+        }
+        if reminder_run_ids
+        else {}
+    )
     return {
         "request": request,
         "overview": overview,
+        "reminder_runs": reminder_runs,
         "voiceprints": {
             row.entry.speaker.id: voiceprint_bars(row.entry.embeddings)
             for row in overview.rows

@@ -6,6 +6,40 @@
 {% set qs = "sort=" ~ sort ~ "&view=" ~ view %}
 {% if roster_error %}<p class="error" role="alert">{{ roster_error }}</p>{% endif %}
 
+{# Action reminders (#159): the review work waiting on this roster. Capped
+   lists with honest "and N more" totals; the duplicates card is deferred to a
+   follow-up issue. #}
+{% if overview.name_suggestions or overview.unverified_active %}
+<section class="card" aria-label="Suggested next steps">
+  {% if overview.name_suggestions %}
+  <p>
+    <strong>{{ overview.name_suggestion_total }} speaker-name suggestion{{ "s" if overview.name_suggestion_total != 1 }}</strong>
+    waiting for review:
+    {% for reminder in overview.name_suggestions %}
+    <a href="/review/{{ reminder.run_id }}">{% if reminder_runs.get(reminder.run_id) %}{{ run_source_title(reminder_runs[reminder.run_id]) }}{% else %}a recording{% endif %}</a>
+    ({{ reminder.count }}){{ ", " if not loop.last }}
+    {% endfor %}
+    {%- if overview.name_suggestion_total > overview.name_suggestions|sum(attribute="count") %}
+    and more on other recordings
+    {%- endif %}
+  </p>
+  {% endif %}
+  {% if overview.unverified_active %}
+  <p>
+    <strong>{{ overview.unverified_active_total }} frequently heard voice{{ "s" if overview.unverified_active_total != 1 }}</strong>
+    you haven't confirmed yet:
+    {% for row in overview.unverified_active %}
+    <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
+    ({{ format_duration(row.aggregate.seconds) }}){{ ", " if not loop.last }}
+    {% endfor %}
+    {%- if overview.unverified_active_total > overview.unverified_active|length %}
+    and {{ overview.unverified_active_total - overview.unverified_active|length }} more
+    {%- endif %}
+  </p>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if overview.rows %}
 <p class="muted">
   {{ overview.rows|length }} speaker{{ "s" if overview.rows|length != 1 }}

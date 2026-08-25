@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
@@ -541,3 +542,82 @@ def test_overview_names_link_to_profiles(
         session.commit()
     page = client.get("/speakers")
     assert f'href="/speakers/{speaker_id}"' in page.text
+
+
+# ---- Overview reminders (#159): pending names + unverified high-activity ---
+
+
+def _seed_name_candidate(
+    session: Session, run_id: uuid.UUID, label: str, value: str
+) -> uuid.UUID:
+    """One proposed speaker-name draft on a run's diarization label."""
+    from voxint.db.models import EnrichmentCandidate, EnrichmentProducerRun
+
+    now = datetime.now(UTC)
+    producer = EnrichmentProducerRun(
+        producer="test-producer",
+        producer_version="1",
+        target_kind="run_label",
+        pipeline_run_id=run_id,
+        diarization_label=label,
+        covered_fields=["name"],
+        generation=1,
+        outcome="found",
+        idempotency_key=f"prod-{uuid.uuid4()}",
+        started_at=now,
+        completed_at=now,
+    )
+    session.add(producer)
+    session.flush()
+    cand = EnrichmentCandidate(
+        producer_run_id=producer.id,
+        target_kind="run_label",
+        pipeline_run_id=run_id,
+        diarization_label=label,
+        field="name",
+        value=value,
+    )
+    session.add(cand)
+    session.flush()
+    return cand.id
+
+
+def test_reminders_pending_names_and_unverified_high_activity(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        # 40 segments x 8s = 320s > the 5-minute floor, no human ruling.
+        loud_id = _seed_speaker_with_activity(
+            session, "Loud stranger", minutes_rank=40, human=False
+        )
+        # Below the floor: never a reminder.
+        _seed_speaker_with_activity(session, "Quiet voice", minutes_rank=1, human=False)
+        # Verified: never a reminder however active.
+        _seed_speaker_with_activity(session, "Known voice", minutes_rank=40, human=True)
+        run_id = session.execute(
+            select(PipelineRun.id).limit(1)
+        ).scalar_one()
+        _seed_name_candidate(session, run_id, "S0", "Dr. Example")
+        _seed_name_candidate(session, run_id, "S1", "Someone Else")
+        session.commit()
+    page = client.get("/speakers")
+    assert page.status_code == 200
+    assert "2 speaker-name suggestions" in page.text
+    assert f'href="/review/{run_id}"' in page.text
+    assert "1 frequently heard voice" in page.text
+    assert f'href="/speakers/{loud_id}"' in page.text
+    assert "Quiet voice</a> (" not in page.text  # below floor: roster only
+    strip = page.text.split("Suggested next steps")[1].split("</section>")[0]
+    assert "Known voice" not in strip  # verified: never a reminder
+
+
+def test_reminders_absent_when_no_work_waits(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        _seed_speaker_with_activity(session, "Alice", minutes_rank=1, human=True)
+        session.commit()
+    page = client.get("/speakers")
+    assert "Suggested next steps" not in page.text
