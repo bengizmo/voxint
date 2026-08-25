@@ -5,6 +5,7 @@ The broker is never imported here — callers commit, then lazily publish
 """
 
 from voxint.ingest.service import (
+    EffectiveConfigPreview,
     IngestError,
     MediaDeletePlan,
     MediaUnlinkResult,
@@ -21,6 +22,7 @@ from voxint.ingest.service import (
     archive_run,
     cancel_run,
     delete_run_derived_media,
+    preview_effective_config,
     requeue_failed_run,
     submit_media_item,
     submit_media_item_if_new,
@@ -33,6 +35,7 @@ from voxint.ingest.service import (
 from voxint.pipeline.transitions import RunSnapshot
 
 __all__ = [
+    "EffectiveConfigPreview",
     "IngestError",
     "MediaDeletePlan",
     "MediaUnlinkResult",
@@ -50,6 +53,7 @@ __all__ = [
     "archive_run",
     "cancel_run",
     "delete_run_derived_media",
+    "preview_effective_config",
     "requeue_failed_run",
     "submit_media_item",
     "submit_media_item_if_new",

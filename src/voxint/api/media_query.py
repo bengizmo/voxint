@@ -26,6 +26,7 @@ from voxint.db.models import (
     MediaItem,
     MediaSourceMetadata,
     PipelineRun,
+    Project,
 )
 
 
@@ -36,15 +37,22 @@ class MediaLibraryRow:
     ``source_title`` follows the run-listing display precedence's metadata leg
     (the acquisition-metadata title, ``None`` for uploads/pre-#36 media); the
     template falls back to a cleaned filename via ``friendly_media_label``.
-    ``folder_path`` is the registered folder the file belongs to, or ``None``
-    for uploads/URLs/unmatched media. The ``latest_run_*`` fields are ``None``
-    when the file has no non-archived run yet.
+    ``folder_path``/``project_name`` are the file's settings folder and that
+    folder's project, or ``None`` for uploads/URLs/unmatched media; ``folder_path``
+    is the folder whose settings apply, which may differ from where the bytes sit
+    (ADR 0002 addendum). ``media_folder_id``/``project_id`` back the bulk-assign and
+    grouping controls. The ``latest_run_*`` fields are ``None`` when the file has no
+    run in the current view (no non-archived run by default; no archived run in the
+    ``archived`` view, where such files are omitted entirely).
     """
 
     id: uuid.UUID
     source_path: str
     source_title: str | None
+    media_folder_id: uuid.UUID | None
     folder_path: str | None
+    project_id: uuid.UUID | None
+    project_name: str | None
     duration_seconds: float | None
     size_bytes: int | None
     added_at: datetime
@@ -96,17 +104,34 @@ def sort_is_known(sort: str | None) -> TypeGuard[str]:
 
 
 def media_library(
-    session: Session, *, sort: str = DEFAULT_SORT, limit: int = MEDIA_LIBRARY_LIMIT
+    session: Session,
+    *,
+    sort: str = DEFAULT_SORT,
+    limit: int = MEDIA_LIBRARY_LIMIT,
+    archived: bool = False,
 ) -> list[MediaLibraryRow]:
     """The media library rows, newest-first by default.
 
     ``sort`` is coerced to :data:`DEFAULT_SORT` when not in the allowlist. At most
     ``limit`` rows are returned; the caller surfaces truncation.
+
+    ``archived`` picks the view. Default (``False``): every media item, its latest
+    NON-archived run, matching the run listing and the Home feed — a file whose only
+    runs were archived reads as "not processed yet". Archived view (``True``): ONLY
+    items whose most-recent ARCHIVED run exists (inner join), showing that run — the
+    discoverable set for bulk unarchive, since the default view hides archived runs
+    and so gives unarchive no target (Console 2.0 P2b).
     """
     order_by = _SORTS.get(sort, _SORTS[DEFAULT_SORT])
 
-    # Latest non-archived run per media item, picked with a window rather than a
+    # Latest run per media item within the chosen view (non-archived by default,
+    # archived-only in the archived view), picked with a window rather than a
     # correlated per-row subquery so the whole page is one round trip.
+    run_view = (
+        PipelineRun.archived_at.is_not(None)
+        if archived
+        else PipelineRun.archived_at.is_(None)
+    )
     ranked = (
         sa_select(
             PipelineRun.media_item_id.label("media_item_id"),
@@ -120,34 +145,40 @@ def media_library(
             )
             .label("rn"),
         )
-        .where(PipelineRun.archived_at.is_(None))
+        .where(run_view)
         .subquery()
     )
     latest = sa_select(ranked).where(ranked.c.rn == 1).subquery()
 
-    stmt = (
-        sa_select(
-            MediaItem.id,
-            MediaItem.source_path,
-            MediaItem.duration_seconds,
-            MediaItem.size_bytes,
-            MediaItem.created_at,
-            MediaSourceMetadata.title.label("source_title"),
-            MediaFolder.path.label("folder_path"),
-            latest.c.run_id,
-            latest.c.status,
-            latest.c.run_created_at,
-        )
-        # Outer: most media has no metadata snapshot (uploads, pre-#36 runs),
-        # sits outside a registered folder, or has never been run.
-        .outerjoin(
-            MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
-        )
-        .outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
-        .outerjoin(latest, latest.c.media_item_id == MediaItem.id)
-        .order_by(*order_by)
-        .limit(limit)
+    stmt = sa_select(
+        MediaItem.id,
+        MediaItem.source_path,
+        MediaItem.media_folder_id,
+        MediaItem.duration_seconds,
+        MediaItem.size_bytes,
+        MediaItem.created_at,
+        MediaSourceMetadata.title.label("source_title"),
+        MediaFolder.path.label("folder_path"),
+        Project.id.label("project_id"),
+        Project.name.label("project_name"),
+        latest.c.run_id,
+        latest.c.status,
+        latest.c.run_created_at,
     )
+    # Outer: most media has no metadata snapshot (uploads, pre-#36 runs), sits under
+    # no settings folder, or belongs to a folder with no project.
+    stmt = stmt.outerjoin(
+        MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
+    ).outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id).outerjoin(
+        Project, Project.id == MediaFolder.project_id
+    )
+    if archived:
+        # Archived view: only items that actually have an archived run — an INNER
+        # join drops never-run and only-live media, which have nothing to unarchive.
+        stmt = stmt.join(latest, latest.c.media_item_id == MediaItem.id)
+    else:
+        stmt = stmt.outerjoin(latest, latest.c.media_item_id == MediaItem.id)
+    stmt = stmt.order_by(*order_by).limit(limit)
 
     rows: list[MediaLibraryRow] = []
     for row in session.execute(stmt):
@@ -156,7 +187,10 @@ def media_library(
                 id=row.id,
                 source_path=row.source_path,
                 source_title=row.source_title,
+                media_folder_id=row.media_folder_id,
                 folder_path=row.folder_path,
+                project_id=row.project_id,
+                project_name=row.project_name,
                 duration_seconds=row.duration_seconds,
                 size_bytes=row.size_bytes,
                 # TIMESTAMPTZ comes back in the session timezone; normalize so
