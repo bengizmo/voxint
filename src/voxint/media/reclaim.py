@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
 from voxint.db.models import (
@@ -178,26 +178,50 @@ def _select_eligible(
 ) -> list[AudioArtifact]:
     """Claim up to ``batch_limit`` reclaimable artifacts, oldest run first.
 
-    Eligible = an unreclaimed ``preprocessed_audio`` row under the ``artifacts/``
-    subtree (never a source path — prepare writes ``artifacts/{run_id}/…``)
-    whose run is terminal (``completed``/``cancelled`` — FAILED is deliberately
-    excluded: a requeued FAILED run resumes at its failed stage and still needs
-    the intermediate) and untouched since ``cutoff``, that is neither the
-    tutorial run nor aliased by any ``media_items.source_path``. The
-    ``artifacts/`` prefix plus the ``..``-rejecting confinement in
+    Eligible = an unreclaimed row under the ``artifacts/`` subtree (never a
+    source path — prepare writes ``artifacts/{run_id}/…``) whose run is terminal
+    (``completed``/``cancelled`` — FAILED is deliberately excluded: a requeued
+    FAILED run resumes at its failed stage and still needs the intermediate),
+    that is neither the tutorial run nor aliased by any
+    ``media_items.source_path``, of one of two kinds aged by different clocks:
+
+    - ``preprocessed_audio`` — the normalized-audio intermediate, aged by
+      ``PipelineRun.updated_at`` (untouched since ``cutoff``).
+    - ``audio_clip`` — an extracted attributed clip (issue #88), aged by the
+      clip's OWN ``AudioArtifact.created_at`` so a clip regenerated today for an
+      old run is not immediately re-eligible. Clips are a reclaimable cache: an
+      existing clip file serves independently of the normalized audio, and a
+      later cache miss regenerates only while that source is still present.
+
+    The ``artifacts/`` prefix plus the ``..``-rejecting confinement in
     :func:`_confined_parent_and_name` make it structurally impossible to reclaim
     a retained source file even via a malformed row.
     """
     source_alias = exists().where(MediaItem.source_path == AudioArtifact.path)
+    age_eligible = or_(
+        and_(
+            AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
+            PipelineRun.updated_at < cutoff,
+        ),
+        and_(
+            AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
+            AudioArtifact.created_at < cutoff,
+        ),
+    )
     stmt = (
         select(AudioArtifact)
         .join(PipelineRun, PipelineRun.id == AudioArtifact.pipeline_run_id)
         .where(
-            AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,
+            AudioArtifact.kind.in_(
+                (
+                    ArtifactKind.PREPROCESSED_AUDIO.value,
+                    ArtifactKind.AUDIO_CLIP.value,
+                )
+            ),
             AudioArtifact.path.like("artifacts/%"),
             AudioArtifact.reclaimed_at.is_(None),
             PipelineRun.status.in_(_TERMINAL_STATUSES),
-            PipelineRun.updated_at < cutoff,
+            age_eligible,
             ~source_alias,
         )
         .order_by(PipelineRun.updated_at.asc(), AudioArtifact.id.asc())
