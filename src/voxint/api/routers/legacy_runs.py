@@ -34,6 +34,7 @@ from voxint.adjudication.transcript import (
     paragraphize_transcript,
     parse_transcript_text,
 )
+from voxint.api.clip_service import ClipServiceError, resolve_servable_clip
 from voxint.api.csrf import (
     CSRF_ASSETS_CANCEL,
     CSRF_ASSETS_GENERATE,
@@ -1607,6 +1608,54 @@ def media(
         return Response(status_code=status, headers=headers)
     return StreamingResponse(
         _stream_file(fh, start, length), status_code=status, headers=headers
+    )
+
+@tail_router.get("/runs/{run_id}/clips/{clip_id}")
+@tail_router.head("/runs/{run_id}/clips/{clip_id}")
+def run_clip(
+    run_id: uuid.UUID,
+    clip_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> Response:
+    """Serve one attributed audio clip (issue #88) as a downloadable WAV.
+
+    Byte-range capable like /media so a browser can scrub the clip, but ALWAYS
+    ``Content-Disposition: attachment`` — a clip is an artifact the operator
+    saves, not the run's inline player source. A clip serves from its own file,
+    so it is unaffected by the normalized audio being reclaimed. UUID opacity is
+    not authorization (the route runs behind OperatorDep): a reclaimed clip is
+    410, a missing row/file or a gate refusal is 404.
+    """
+    settings: Settings = request.app.state.settings
+    _run_or_404(session, run_id)
+    gate = _get_media_gate(request)
+    try:
+        clip = resolve_servable_clip(session, run_id, clip_id, settings, gate)
+    except ClipServiceError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
+    try:
+        byte_range = parse_range(request.headers.get("range"), clip.size)
+    except RangeNotSatisfiableError:
+        clip.handle.close()
+        return Response(status_code=416, headers={"Content-Range": f"bytes */{clip.size}"})
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": "audio/wav",
+        "Content-Disposition": f'attachment; filename="{clip.filename}"',
+    }
+    if byte_range is None:
+        status, start, length = 200, 0, clip.size
+    else:
+        status, start, length = 206, byte_range.start, byte_range.length
+        headers["Content-Range"] = f"bytes {byte_range.start}-{byte_range.end}/{clip.size}"
+    headers["Content-Length"] = str(length)
+    if request.method == "HEAD":
+        clip.handle.close()
+        return Response(status_code=status, headers=headers)
+    return StreamingResponse(
+        _stream_file(clip.handle, start, length), status_code=status, headers=headers
     )
 
 @tail_router.get("/media/{run_id}/peaks")
