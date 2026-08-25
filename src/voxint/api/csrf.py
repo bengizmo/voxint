@@ -144,6 +144,13 @@ CSRF_PROJECT_CORRECTIONS = "project-corrections"
 # valid on the other.
 CSRF_MEDIA_SUBMIT = "media-submit"
 CSRF_MEDIA_FETCH = "media-fetch"
+# Media library organization (issue #154, Console 2.0 P2b). Per-action tokens:
+# bulk-assigning a settings folder over a selection and registering/unregistering
+# a folder are independent mutations with different blast radii (an assign token
+# must not be replayable to unregister a folder), so each mints and verifies under
+# its own action, and neither is interchangeable with the ingest tokens above.
+CSRF_MEDIA_ASSIGN = "media-assign"
+CSRF_MEDIA_FOLDERS = "media-folders"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

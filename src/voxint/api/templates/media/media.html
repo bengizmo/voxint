@@ -16,16 +16,39 @@
 </label>
 {% endmacro %}
 
-{# Page-scoped: the media page is flag-gated (404 when off), so this rule never
-   reaches a flag-off page and keeps every shared page byte-identical. #}
+{# Page-scoped: the media page is flag-gated (404 when off), so these rules never
+   reach a flag-off page and keep every shared page byte-identical. #}
 <style>
   .dropzone { border: 1px dashed var(--line); border-radius: var(--r-md);
               padding: .8rem 1rem; background: var(--surface-2); cursor: pointer; }
   .dropzone.is-drag { border-color: var(--accent); background: var(--surface); }
+  .notice.success { border-color: var(--accent); background: var(--accent-soft); }
+  .notice.error { border-color: var(--danger); background: var(--danger-soft); }
+  .lib-select-cell { width: 2.2rem; text-align: center; }
+  .card-select { display: flex; gap: .4rem; align-items: baseline; }
+  .bulk-bar { position: sticky; bottom: 0; z-index: 1; display: flex; gap: .8rem;
+              align-items: end; flex-wrap: wrap; margin-top: .6rem;
+              padding: .7rem .9rem; background: var(--surface-2);
+              border: 1px solid var(--line); border-radius: var(--r-md); }
+  .bulk-bar .selected-count { align-self: center; }
+  .folder-panel { margin-top: 1.4rem; }
+  .lib-folders { list-style: none; padding: 0; display: grid; gap: .4rem; }
+  .lib-folders li { display: flex; gap: .8rem; align-items: baseline;
+                    justify-content: space-between; }
+  .register-folder { display: flex; gap: .8rem; align-items: end;
+                     flex-wrap: wrap; margin-top: .8rem; }
+  [hidden] { display: none !important; }
 </style>
 
 <h1>Media</h1>
 <p class="muted">Every recording Voxint knows about, and where each one stands.</p>
+
+{# Success/error banner for the bulk-assign and folder-panel flows. Success rides
+   in on a PRG redirect; an error re-renders this page with the operator's
+   selection preserved. #}
+{% if notice %}
+<p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
+{% endif %}
 
 <section class="add-media" aria-labelledby="add-media-h">
   <h2 id="add-media-h">Add media</h2>
@@ -71,18 +94,28 @@
     <a href="/media?sort={{ value }}&view={{ view }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
     {% endfor %}
   </nav>
-  <nav class="view-toggle" aria-label="View" style="margin-left:auto;">
-    {% for value in views %}
-    <a href="/media?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
-    {% endfor %}
-  </nav>
+  {# Select-all is a JS convenience; it is hidden until the script below reveals
+     and wires it, so no-JS operators never see a dead control. #}
+  <label data-select-all hidden style="margin-left:auto;">
+    <input type="checkbox" data-select-all-box> Select all shown
+  </label>
 </div>
+
+{# The multi-select bulk-assign form wraps only the listing and its action bar.
+   The upload/fetch forms above and the folder panel below are siblings, never
+   descendants, so no <form> is nested inside another. Without JS the checkboxes
+   plus the in-form folder <select> and submit button are the whole feature. #}
+<form method="post" action="/media/assign" id="bulk-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_media_assign }}">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="view" value="{{ view }}">
 
 {% if view == "table" %}
 <div class="lib-table" role="region" aria-label="Media" tabindex="0">
   <table>
     <thead>
       <tr>
+        <th scope="col" class="lib-select-cell"><span class="visually-hidden">Select</span></th>
         <th scope="col">Name</th><th scope="col">Folder</th>
         <th scope="col">Length</th><th scope="col">Size</th>
         <th scope="col">Latest run</th><th scope="col">Added</th>
@@ -91,6 +124,11 @@
     <tbody>
       {% for row in rows %}
       <tr>
+        <td class="lib-select-cell">
+          <input type="checkbox" name="media_id" value="{{ row.id }}"
+                 aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+                 {% if (row.id|string) in selected_ids %}checked{% endif %}>
+        </td>
         <td>
           <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
           <br><code class="muted">{{ row.source_path }}</code>
@@ -116,7 +154,12 @@
 <ul class="lib-cards" aria-label="Media">
   {% for row in rows %}
   <li>
-    <div class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</div>
+    <label class="card-select">
+      <input type="checkbox" name="media_id" value="{{ row.id }}"
+             aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+             {% if (row.id|string) in selected_ids %}checked{% endif %}>
+      <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
+    </label>
     <code class="muted">{{ row.source_path }}</code>
     <p class="muted">
       {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
@@ -133,15 +176,70 @@
 </ul>
 {% endif %}
 
+  {# The bulk action bar: pick a settings folder (or the clear option) and apply
+     it to every checked file. "Use settings from…" never moves the bytes. #}
+  <div class="bulk-bar">
+    <label for="assign-folder">Assign settings folder
+      <select id="assign-folder" name="media_folder_id">
+        <option value=""{% if not attempted_folder_id %} selected{% endif %}>No folder — use global settings</option>
+        {% for opt in folder_options %}
+        <option value="{{ opt.id }}"{% if (opt.id|string) == attempted_folder_id %} selected{% endif %}>{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Use these settings for the selected files</button>
+    <span class="muted selected-count" data-selected-count hidden></span>
+  </div>
+</form>
+
 {% if truncated %}
 <p class="muted">Showing the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
-<p class="muted">No media yet. Add a recording above, or register a folder in <a href="/settings">Settings</a>.</p>
+<p class="muted">No media yet. Add a recording above, or register a folder below.</p>
 {% endif %}
 
-{# Progressive enhancement: without JS the file input works on its own; with JS a
-   drop onto the labelled zone fills it. No behaviour depends on this running. #}
+{# Folder panel: register folders so their files can share vocabulary and
+   corrections, or unregister one. Registering never moves files (ADR 0002
+   addendum); unregistering reverts its files to global settings. This section is
+   a sibling of the bulk-assign form, never nested inside it. #}
+<section class="folder-panel" aria-labelledby="folders-h">
+  <h2 id="folders-h">Folders</h2>
+  <p class="muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>
+  {% if folder_options %}
+  <ul class="lib-folders">
+    {% for opt in folder_options %}
+    <li>
+      <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="muted">— {{ opt.project_name }}</span>{% endif %}</span>
+      <form method="post" action="/media/folders">
+        <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="folder_id" value="{{ opt.id }}">
+        <input type="hidden" name="sort" value="{{ sort }}">
+        <input type="hidden" name="view" value="{{ view }}">
+        <button type="submit" class="danger">Unregister</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No folders registered yet.</p>
+  {% endif %}
+  <form method="post" action="/media/folders" class="register-folder">
+    <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+    <input type="hidden" name="action" value="add">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="view" value="{{ view }}">
+    <label for="register-folder-path">Folder path (under the media root)
+      <input id="register-folder-path" type="text" name="folder" placeholder="interviews/2026" required>
+    </label>
+    <button type="submit">Register folder</button>
+  </form>
+</section>
+
+{# Progressive enhancement: without JS the file input, checkboxes, and folder
+   <select> all work on their own; JS adds the drop zone, select-all, and a live
+   selection count. No behaviour depends on this running. #}
 <script>
 (function () {
   for (const zone of document.querySelectorAll('[data-dropzone]')) {
@@ -155,6 +253,32 @@
       if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; }
     });
   }
+
+  const form = document.getElementById('bulk-form');
+  if (!form) return;
+  const boxes = Array.from(form.querySelectorAll('input[name=media_id]'));
+  const count = form.querySelector('[data-selected-count]');
+  const selectAllWrap = document.querySelector('[data-select-all]');
+  const selectAll = document.querySelector('[data-select-all-box]');
+
+  function refresh() {
+    const n = boxes.filter(function (b) { return b.checked; }).length;
+    if (count) {
+      count.hidden = n === 0;
+      count.textContent = n === 1 ? '1 file selected' : n + ' files selected';
+    }
+    if (selectAll) { selectAll.checked = n > 0 && n === boxes.length; }
+  }
+
+  for (const b of boxes) { b.addEventListener('change', refresh); }
+  if (selectAllWrap && selectAll && boxes.length) {
+    selectAllWrap.hidden = false;
+    selectAll.addEventListener('change', function () {
+      for (const b of boxes) { b.checked = selectAll.checked; }
+      refresh();
+    });
+  }
+  refresh();
 })();
 </script>
 {% endblock %}

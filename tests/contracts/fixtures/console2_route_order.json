@@ -90,6 +90,18 @@
   ]
  ],
  [
+  "/media/assign",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

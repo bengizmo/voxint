@@ -60,7 +60,19 @@
     ]
   ],
   [
+    "/media/assign",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/fetch",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/folders",
     [
       "POST"
     ]

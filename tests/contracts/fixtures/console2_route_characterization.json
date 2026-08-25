@@ -80,7 +80,23 @@
     true
   ],
   [
+    "/media/assign",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/fetch",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/folders",
     [
       "POST"
     ],
