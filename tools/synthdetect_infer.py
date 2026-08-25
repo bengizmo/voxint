@@ -1012,9 +1012,15 @@ def _strip_state_dict_key_prefix(state: Any, prefix: str | None) -> str | None:
     natively-saved (unwrapped) checkpoint's state dict -- the same shape the
     default already loads. Pure dict manipulation (no torch import) so it is
     unit-testable without a GPU; torch 2.1's own ``consume_prefix_in_state_dict``
-    strips only the keys, not ``_metadata``. The caller keeps ``strict=True`` on
-    the following load, so a wrong checkpoint still fails on the key mismatch.
-    Returns the prefix actually removed, for the journal's load-provenance record.
+    strips only the keys, not ``_metadata``, and ``load_state_dict(strict=True)``
+    validates tensor keys but NOT ``_metadata`` -- so this helper also fails closed
+    on any ``_metadata`` key that does not fit the DataParallel layout, rather than
+    carrying a stray entry into the load. Keys and metadata are rebuilt in two
+    phases (snapshot then reassign), never mutated in place, so the result cannot
+    depend on dict insertion order (a model may legally have a child named
+    ``module``). The caller keeps ``strict=True`` on the following load, so a wrong
+    checkpoint still fails on the key mismatch. Returns the prefix actually removed,
+    for the journal's load-provenance record.
     """
     if prefix is None:
         return None
@@ -1025,22 +1031,45 @@ def _strip_state_dict_key_prefix(state: Any, prefix: str | None) -> str | None:
             "uniformly carries it (a mis-declared prefix would mask a wrong checkpoint)"
         )
     n = len(prefix)
-    for k in keys:
-        state[k[n:]] = state.pop(k)
-    # Normalise ``_metadata`` the same way. A DataParallel state dict nests the
-    # real model one level down, so its metadata carries a wrapper root ("") plus
-    # the model's own root under the bare prefix ("module") and every submodule
-    # under "module.<path>". Map the model root onto the true root (dropping the
-    # wrapper's own entry) and unwrap each submodule, leaving exactly the metadata
-    # a natively-saved checkpoint would have.
+    # Rebuild in two phases (snapshot -> clear -> reassign) rather than popping in
+    # place: an in-place ``state[k[n:]] = state.pop(k)`` is insertion-order
+    # dependent -- for a checkpoint whose model legally has a child literally named
+    # ``module`` it could rewrite ``module.module.x`` onto the not-yet-processed
+    # ``module.x`` and silently drop a tensor. A snapshot rebuild cannot.
+    stripped = {k[n:]: state[k] for k in keys}
+    state.clear()
+    state.update(stripped)
+    # Normalise ``_metadata`` the same way, failing closed on anything outside the
+    # DataParallel layout. A DataParallel state dict nests the real model one level
+    # down, so its metadata carries a wrapper root ("") plus the model's own root
+    # under the bare prefix ("module") and every submodule under "module.<path>".
+    # Drop the wrapper root, map the model root onto the true root, and unwrap each
+    # submodule, leaving exactly the metadata a natively-saved checkpoint would
+    # have; a key that is non-string or fits none of those shapes is a mis-shaped
+    # checkpoint and raises (strict=True would not catch it -- it ignores metadata).
     meta = getattr(state, "_metadata", None)
     if meta is not None:
         bare = prefix[:-1] if prefix.endswith(".") else prefix  # "module." -> "module"
-        for mk in list(meta.keys()):
+        rebuilt: dict[Any, Any] = {}
+        for mk, mv in meta.items():
+            if not isinstance(mk, str):
+                raise InferError(
+                    f"checkpoint _metadata key {mk!r} is not a string; refusing to "
+                    f"strip state_dict_key_prefix {prefix!r} (a mis-shaped checkpoint)"
+                )
+            if mk == "":
+                continue  # the DataParallel wrapper's own root, dropped
             if mk == bare:
-                meta[""] = meta.pop(mk)
+                rebuilt[""] = mv  # the real model's root becomes the true root
             elif mk.startswith(prefix):
-                meta[mk[n:]] = meta.pop(mk)
+                rebuilt[mk[n:]] = mv
+            else:
+                raise InferError(
+                    f"checkpoint _metadata key {mk!r} is inconsistent with the declared "
+                    f"state_dict_key_prefix {prefix!r} (a mis-shaped checkpoint)"
+                )
+        meta.clear()
+        meta.update(rebuilt)
     return prefix
 
 

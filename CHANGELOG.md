@@ -18,7 +18,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   model, so all its keys carry a `module.` prefix. `WeightFile` gains a declared
   `state_dict_key_prefix` (data, not inferred; a closed vocabulary of `None` or
   `"module."`) that the runner strips from the keys and the state-dict `_metadata`
-  before a strict load, which on a single GPU is numerically identical to
+  before a strict load (rebuilt in two phases so the result never depends on dict
+  order, and failing closed on any `_metadata` entry that does not fit the
+  DataParallel layout), which on a single GPU is numerically identical to
   upstream's evaluation. The applied strip is recorded in the journal header
   (`checkpoint_loading`) and flows into the execution identity; the shipped default
   loads verbatim so its already-qualified path is untouched. The sources schema
