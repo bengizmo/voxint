@@ -1708,6 +1708,49 @@ configuration, not a benchmark-reproduction claim. The 2.85 % ASVspoof 2021 DF E
 reproduction is the S3 compare step (against the unmodified upstream runner on the
 seeded subset) and S4 (the full DF cohort).
 
+#### Verdict: Gate-2 paired equivalence RATIFIED (RTX 3060, SM 8.6, 2026-08-25)
+
+Our frozen eval container reproduces the unmodified upstream SSL_Anti-spoofing DF
+eval path on the 53,392-clip canonical subset. Both runners scored the same
+canonical view; the reference is the verbatim upstream `model.py` +
+`data_utils_SSL.py` (`pad` + `Dataset_ASVspoof2021_eval`) at commit
+`4acaa61dcef5f7610f43aa4d0b29c4559b970cd2`, run in an image derived `FROM` the
+frozen eval image (only `librosa==0.9.1` added; torch/torchaudio/fairseq/numpy
+held identical). The decision threshold was frozen from the reference before the
+paired comparison was inspected. Evidence:
+`docs/reports/synthdetect-gate2-2026-08-25.md`.
+
+- **Decision layer: EER-identical.** Subset EER 2.2193 % on both sides (official
+  `compute_eer` math), Spearman rank correlation 0.99858, decision agreement
+  99.985 % at the frozen threshold (3.5079, our polarity). All 8 disagreements sit
+  within 0.0024 of the threshold, the near-threshold case the pre-registration
+  covers by the raw-logit drift level.
+- **Reference reproducible.** Three cold `batch_size=14` reference runs are
+  bit-identical (self-variance 0).
+- **Per-clip logit drift (our fp32 vs upstream Ampere-default TF32):** mean
+  7.8e-4, median 2.0e-4, p99 8.7e-3, p99.9 0.043, max 0.152, over exact coverage
+  (53,392 both sides, zero side-only, zero skips).
+- **Tail root cause: cuDNN convolution TF32.** Preprocessing is bit-identical
+  (reader and `pad`/`repeat_pad_to` both 0.0). `configure_determinism` disables
+  TF32 (full fp32); the upstream reference leaves the Ampere default, so its
+  convolution-heavy XLS-R + AASIST forward runs in TF32. With TF32 disabled across
+  the whole subset, our fp32 container and the fp32 reference agree to max 0.0058,
+  mean 1.6e-6, zero clips over the 1e-2 floor, 9,641 clips bit-identical: the two
+  implementations are the same function and the tail is a deliberate precision
+  choice that preserves the EER and ranking. The 0.0058 residual is the
+  batch-shape FP effect
+  (our effective forward batch is 1 in upstream windowing; the reference forwards
+  14), which under TF32 is ~10x larger (~0.07).
+- **Ratified tolerances:** decision layer EER-identical (8 near-threshold flips);
+  per-clip logit max 0.0058 (mean 1.6e-6, zero over the pre-declared 1e-2 floor)
+  at matched fp32 precision, which PASSES; per-clip logit <= 0.152 at default
+  precision (our fp32 vs Ampere-default TF32), EER-preserving. No shipped-runner
+  change is warranted: disabling TF32 is the deliberate, full-fp32 choice for a
+  numerics-contract runner.
+
+Gate-2 ratifies paired equivalence on the subset. The 2.85 % published EER
+(Gate-1 PASS on the full official cohort) defers to S4.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
