@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -109,6 +110,60 @@ def _tar_with_members(path: Path, members: list[tuple[tarfile.TarInfo, bytes | N
 # --------------------------------------------------------------------------- #
 # verify_archive_sha
 # --------------------------------------------------------------------------- #
+def test_parse_rejects_unsafe_trial_id() -> None:
+    """A trial id that is not a safe token is rejected before it becomes a path."""
+    with pytest.raises(di.DfImportError, match="not a safe token"):
+        di.parse_trial_metadata(_row(trial_id="DF_E_1/../escape"))
+
+
+# --------------------------------------------------------------------------- #
+# _ffprobe_source — monkeypatched ffprobe JSON (no real audio needed)
+# --------------------------------------------------------------------------- #
+def _fake_ffprobe(
+    monkeypatch: pytest.MonkeyPatch, *, returncode: int = 0, stdout: str = ""
+) -> None:
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr="probe error")
+
+    monkeypatch.setattr(di.subprocess, "run", fake_run)
+
+
+def _stream(**over: object) -> str:
+    s = {"codec_name": "flac", "sample_rate": "16000", "channels": 1, "sample_fmt": "s16",
+         "bits_per_raw_sample": "16"}
+    s.update(over)
+    return json.dumps({"streams": [s]})
+
+
+def test_ffprobe_rejects_missing_bit_depth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An 8/12-bit FLAC decodes to s16; absent bits_per_raw_sample must fail closed."""
+    s = json.loads(_stream())
+    del s["streams"][0]["bits_per_raw_sample"]
+    _fake_ffprobe(monkeypatch, stdout=json.dumps(s))
+    with pytest.raises(di.DfImportError, match="bits_per_raw_sample must be 16"):
+        di._ffprobe_source(tmp_path / "x.flac")
+
+
+def test_ffprobe_rejects_zero_streams(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_ffprobe(monkeypatch, stdout=json.dumps({"streams": []}))
+    with pytest.raises(di.DfImportError, match="exactly 1 audio stream"):
+        di._ffprobe_source(tmp_path / "x.flac")
+
+
+def test_ffprobe_rejects_probe_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_ffprobe(monkeypatch, returncode=1, stdout="")
+    with pytest.raises(di.DfImportError, match="ffprobe failed"):
+        di._ffprobe_source(tmp_path / "x.flac")
+
+
+def test_ffprobe_rejects_unparseable_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_ffprobe(monkeypatch, stdout="not json")
+    with pytest.raises(di.DfImportError, match="unparseable"):
+        di._ffprobe_source(tmp_path / "x.flac")
+
+
 def test_verify_archive_sha_matches(tmp_path: Path) -> None:
     p = tmp_path / "DF-keys-full.tar.gz"
     sha = _keys_tar(p, [_row(trial_id="DF_E_1")])
@@ -134,9 +189,17 @@ def test_verify_archive_sha_rejects_unpinned_name(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 def test_read_keys_metadata_returns_member_bytes(tmp_path: Path) -> None:
     p = tmp_path / "DF-keys-full.tar.gz"
-    _keys_tar(p, [_row(trial_id="DF_E_1"), _row(trial_id="DF_E_2")])
-    data = di._read_keys_metadata(p)
+    sha = _keys_tar(p, [_row(trial_id="DF_E_1"), _row(trial_id="DF_E_2")])
+    data, got_sha = di._read_keys_metadata(p, {"DF-keys-full.tar.gz": sha})
+    assert got_sha == sha
     assert b"DF_E_1" in data and b"DF_E_2" in data
+
+
+def test_read_keys_metadata_verifies_sha_from_same_open(tmp_path: Path) -> None:
+    p = tmp_path / "DF-keys-full.tar.gz"
+    _keys_tar(p, [_row(trial_id="DF_E_1")])
+    with pytest.raises(di.DfImportError, match="does not match the pinned"):
+        di._read_keys_metadata(p, {"DF-keys-full.tar.gz": "0" * 64})
 
 
 def test_read_keys_metadata_rejects_missing_member(tmp_path: Path) -> None:
@@ -144,9 +207,9 @@ def test_read_keys_metadata_rejects_missing_member(tmp_path: Path) -> None:
     payload = b"nope\n"
     info = tarfile.TarInfo("keys/DF/CM/other.txt")
     info.size = len(payload)
-    _tar_with_members(p, [(info, payload)])
+    sha = _tar_with_members(p, [(info, payload)])
     with pytest.raises(di.DfImportError, match="missing member"):
-        di._read_keys_metadata(p)
+        di._read_keys_metadata(p, {"DF-keys-full.tar.gz": sha})
 
 
 # --------------------------------------------------------------------------- #
@@ -159,11 +222,12 @@ def test_safe_extract_merges_split_parts(tmp_path: Path) -> None:
         _make_flac(flacs / f"{tid}.flac", freq=300 + i * 20)
     a0 = tmp_path / "part00.tar.gz"
     a1 = tmp_path / "part01.tar.gz"
-    _audio_tar(a0, flacs, ["DF_E_1", "DF_E_2"])
-    _audio_tar(a1, flacs, ["DF_E_3"])
+    s0 = _audio_tar(a0, flacs, ["DF_E_1", "DF_E_2"])
+    s1 = _audio_tar(a1, flacs, ["DF_E_3"])
     dest = tmp_path / "native"
     dest.mkdir()
-    di._safe_extract([a0, a1], dest)
+    shas = di._safe_extract([a0, a1], dest, {a0.name: s0, a1.name: s1})
+    assert shas == {a0.name: s0, a1.name: s1}
     flac_dir = dest / di.NATIVE_TREE_ROOT / di.NATIVE_FLAC_SUBDIR
     assert {p.name for p in flac_dir.glob("*.flac")} == {
         "DF_E_1.flac", "DF_E_2.flac", "DF_E_3.flac",
@@ -176,25 +240,37 @@ def _regfile(name: str, payload: bytes) -> tuple[tarfile.TarInfo, bytes]:
     return info, payload
 
 
+def _one_archive(path: Path, members: list[tuple[tarfile.TarInfo, bytes | None]]) -> dict[str, str]:
+    """Build a one-off archive and return the {name: sha} provenance for it."""
+    return {path.name: _tar_with_members(path, members)}
+
+
+def test_safe_extract_rejects_unpinned_archive(tmp_path: Path) -> None:
+    p = tmp_path / "part00.tar.gz"
+    _tar_with_members(p, [_regfile(f"{di.NATIVE_TREE_ROOT}/x", b"x")])
+    with pytest.raises(di.DfImportError, match="no pinned sha256"):
+        di._safe_extract([p], tmp_path / "native", {})
+
+
 def test_safe_extract_rejects_absolute_path(tmp_path: Path) -> None:
     p = tmp_path / "evil.tar.gz"
-    _tar_with_members(p, [_regfile("/etc/passwd", b"x")])
+    prov = _one_archive(p, [_regfile("/etc/passwd", b"x")])
     with pytest.raises(di.DfImportError, match="absolute path"):
-        di._safe_extract([p], tmp_path / "native")
+        di._safe_extract([p], tmp_path / "native", prov)
 
 
 def test_safe_extract_rejects_traversal(tmp_path: Path) -> None:
     p = tmp_path / "evil.tar.gz"
-    _tar_with_members(p, [_regfile("ASVspoof2021_DF_eval/../escape", b"x")])
+    prov = _one_archive(p, [_regfile("ASVspoof2021_DF_eval/../escape", b"x")])
     with pytest.raises(di.DfImportError, match="traverses"):
-        di._safe_extract([p], tmp_path / "native")
+        di._safe_extract([p], tmp_path / "native", prov)
 
 
 def test_safe_extract_rejects_member_outside_root(tmp_path: Path) -> None:
     p = tmp_path / "evil.tar.gz"
-    _tar_with_members(p, [_regfile("some_other_tree/x.flac", b"x")])
+    prov = _one_archive(p, [_regfile("some_other_tree/x.flac", b"x")])
     with pytest.raises(di.DfImportError, match="outside"):
-        di._safe_extract([p], tmp_path / "native")
+        di._safe_extract([p], tmp_path / "native", prov)
 
 
 def test_safe_extract_rejects_symlink(tmp_path: Path) -> None:
@@ -202,19 +278,50 @@ def test_safe_extract_rejects_symlink(tmp_path: Path) -> None:
     link = tarfile.TarInfo(f"{di.NATIVE_TREE_ROOT}/link")
     link.type = tarfile.SYMTYPE
     link.linkname = "/etc/passwd"
-    _tar_with_members(p, [(link, None)])
+    prov = _one_archive(p, [(link, None)])
     with pytest.raises(di.DfImportError, match="is a link"):
-        di._safe_extract([p], tmp_path / "native")
+        di._safe_extract([p], tmp_path / "native", prov)
+
+
+def test_safe_extract_rejects_hardlink(tmp_path: Path) -> None:
+    p = tmp_path / "evil.tar.gz"
+    link = tarfile.TarInfo(f"{di.NATIVE_TREE_ROOT}/hard")
+    link.type = tarfile.LNKTYPE
+    link.linkname = f"{di.NATIVE_TREE_ROOT}/flac/DF_E_1.flac"
+    prov = _one_archive(p, [(link, None)])
+    with pytest.raises(di.DfImportError, match="is a link"):
+        di._safe_extract([p], tmp_path / "native", prov)
+
+
+def test_safe_extract_rejects_device(tmp_path: Path) -> None:
+    p = tmp_path / "evil.tar.gz"
+    dev = tarfile.TarInfo(f"{di.NATIVE_TREE_ROOT}/dev")
+    dev.type = tarfile.CHRTYPE
+    dev.devmajor, dev.devminor = 1, 3
+    prov = _one_archive(p, [(dev, None)])
+    with pytest.raises(di.DfImportError, match="special device"):
+        di._safe_extract([p], tmp_path / "native", prov)
 
 
 def test_safe_extract_rejects_duplicate_flac_across_parts(tmp_path: Path) -> None:
     name = f"{di.NATIVE_TREE_ROOT}/{di.NATIVE_FLAC_SUBDIR}/DF_E_1.flac"
     a0 = tmp_path / "part00.tar.gz"
     a1 = tmp_path / "part01.tar.gz"
-    _tar_with_members(a0, [_regfile(name, b"one")])
-    _tar_with_members(a1, [_regfile(name, b"two")])
+    s0 = _tar_with_members(a0, [_regfile(name, b"one")])
+    s1 = _tar_with_members(a1, [_regfile(name, b"two")])
     with pytest.raises(di.DfImportError, match="duplicate member"):
-        di._safe_extract([a0, a1], tmp_path / "native")
+        di._safe_extract([a0, a1], tmp_path / "native", {a0.name: s0, a1.name: s1})
+
+
+def test_safe_extract_rejects_normalized_duplicate(tmp_path: Path) -> None:
+    """A ``/./`` spelling must not slip a second payload past the duplicate check."""
+    base = f"{di.NATIVE_TREE_ROOT}/{di.NATIVE_FLAC_SUBDIR}"
+    a0 = tmp_path / "part00.tar.gz"
+    a1 = tmp_path / "part01.tar.gz"
+    s0 = _tar_with_members(a0, [_regfile(f"{base}/DF_E_1.flac", b"one")])
+    s1 = _tar_with_members(a1, [_regfile(f"{base}/./DF_E_1.flac", b"two")])
+    with pytest.raises(di.DfImportError, match="duplicate member"):
+        di._safe_extract([a0, a1], tmp_path / "native", {a0.name: s0, a1.name: s1})
 
 
 # --------------------------------------------------------------------------- #
@@ -425,16 +532,42 @@ def test_emit_subset_receipt_records_provenance(tmp_path: Path) -> None:
     assert "ffmpeg_version" in receipt and receipt["ffmpeg_version"].startswith("ffmpeg")
 
 
-def test_emit_subset_refuses_nonempty_out_dir(tmp_path: Path) -> None:
+def test_emit_subset_refuses_existing_out_dir(tmp_path: Path) -> None:
     keys = tmp_path / "DF-keys-full.tar.gz"
     keys_sha = _keys_tar(keys, [_row(trial_id="DF_E_1")])
     out_dir = tmp_path / "corpus"
     out_dir.mkdir()
     (out_dir / "stale.txt").write_text("x")
-    with pytest.raises(di.DfImportError, match="non-empty destination"):
+    with pytest.raises(di.DfImportError, match="existing path"):
         di.emit_subset(
             keys_archive=keys, audio_archives=[],
             native_root=tmp_path / "native", out_dir=out_dir,
+            expected_sha256={keys.name: keys_sha},
+        )
+
+
+def test_emit_subset_refuses_existing_empty_out_dir(tmp_path: Path) -> None:
+    """Even an EMPTY pre-existing destination is refused (atomic-publish guard)."""
+    keys = tmp_path / "DF-keys-full.tar.gz"
+    keys_sha = _keys_tar(keys, [_row(trial_id="DF_E_1")])
+    out_dir = tmp_path / "corpus"
+    out_dir.mkdir()  # empty
+    with pytest.raises(di.DfImportError, match="existing path"):
+        di.emit_subset(
+            keys_archive=keys, audio_archives=[],
+            native_root=tmp_path / "native", out_dir=out_dir,
+            expected_sha256={keys.name: keys_sha},
+        )
+
+
+def test_emit_subset_refuses_same_native_and_out_dir(tmp_path: Path) -> None:
+    keys = tmp_path / "DF-keys-full.tar.gz"
+    keys_sha = _keys_tar(keys, [_row(trial_id="DF_E_1")])
+    same = tmp_path / "shared"
+    with pytest.raises(di.DfImportError, match="different paths"):
+        di.emit_subset(
+            keys_archive=keys, audio_archives=[],
+            native_root=same, out_dir=same,
             expected_sha256={keys.name: keys_sha},
         )
 
@@ -457,6 +590,33 @@ def test_emit_subset_leaves_nothing_on_failure(tmp_path: Path) -> None:
             native_root=native_root, out_dir=out_dir, expected_sha256=prov,
         )
     assert not out_dir.exists()
+    assert not native_root.exists()
+    assert not di._staging_for(out_dir).exists()
+    assert not di._staging_for(native_root).exists()
+
+
+@pytest.mark.skipif(not _HAVE_FFMPEG, reason="ffmpeg/ffprobe not installed")
+def test_emit_subset_rolls_back_when_second_publish_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the corpus publishes but the native publish fails, neither root survives."""
+    keys, audios, prov, _ = _emit_fixture(tmp_path)
+    out_dir = tmp_path / "corpus"
+    native_root = tmp_path / "native"
+    real_replace = os.replace
+
+    def flaky_replace(src: object, dst: object, *a: object, **k: object) -> None:
+        if Path(dst) == native_root:  # the second of the two publishing renames
+            raise OSError("simulated failure publishing the native tree")
+        real_replace(src, dst)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(os, "replace", flaky_replace)
+    with pytest.raises(OSError, match="simulated failure"):
+        di.emit_subset(
+            keys_archive=keys, audio_archives=audios,
+            native_root=native_root, out_dir=out_dir, expected_sha256=prov,
+        )
+    assert not out_dir.exists()  # rolled back after the native publish failed
     assert not native_root.exists()
     assert not di._staging_for(out_dir).exists()
     assert not di._staging_for(native_root).exists()
