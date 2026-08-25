@@ -9,6 +9,7 @@ time validator enforces, so a bad pin fails a test rather than silently shipping
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,13 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 
 import synthdetect_sources as src  # noqa: E402
+
+
+def _registry_with(model_id: str, model: src.ModelEntry) -> dict[str, src.ModelEntry]:
+    """A copy of the real registry with one model swapped, for validator tests."""
+    swapped = dict(src.MODELS)
+    swapped[model_id] = model
+    return swapped
 
 
 def test_registry_imports_clean() -> None:
@@ -47,7 +55,7 @@ def test_unlicensed_model_refuses_to_run() -> None:
 
 
 def test_licensed_models_are_runnable() -> None:
-    for model_id in ("w2v2-aasist", "antideepfake-xlsr-2b", "audioseal"):
+    for model_id in ("w2v2-aasist", "w2v2-aasist-df", "antideepfake-xlsr-2b", "audioseal"):
         model = src.get_model(model_id)
         assert src.runnable(model) is True
         src.assert_runnable(model)  # does not raise
@@ -168,3 +176,85 @@ def test_windowing_pooling_is_logit_mean() -> None:
     for model in src.MODELS.values():
         assert model.windowing.pooling == "logit-mean"
         assert model.windowing.sample_rate_hz == 16000
+
+
+def test_sources_version_pinned() -> None:
+    # A registry SHAPE change (a new field/model) must move the version so a
+    # reshuffle or pin refresh is a visible, deliberate event in artifacts.
+    assert src.SOURCES_VERSION == "synthdetect-sources-v2"
+
+
+def test_pinned_weight_shas_and_commits_have_real_shape() -> None:
+    # A frozen pin is a full sha, not merely non-None: the import rail rejects a
+    # truncated or placeholder digest. Assert the real data satisfies it.
+    for model_id in _PINNED_MODEL_IDS:
+        model = src.get_model(model_id)
+        assert model.commit is not None and src._COMMIT_RE.match(model.commit)
+        for weight in model.weights:
+            assert weight.sha256 is not None and src._SHA256_RE.match(weight.sha256)
+            assert weight.size_bytes is not None and weight.size_bytes > 0
+
+
+def test_weights_pinned_requires_commit() -> None:
+    # A model with real shas but a CANDIDATE commit is not serve-ready.
+    default = src.get_model("w2v2-aasist")
+    assert default.weights_pinned() is True
+    no_commit = replace(default, commit=None)
+    assert no_commit.weights_pinned() is False
+
+
+def test_validator_rejects_truncated_weight_sha() -> None:
+    default = src.get_model("w2v2-aasist")
+    bad_weight = replace(default.weights[0], sha256="deadbeef")
+    bad = replace(default, weights=(bad_weight, *default.weights[1:]))
+    with pytest.raises(src.SourcesError, match="64-char hex"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad))
+
+
+def test_validator_rejects_pinned_weight_without_size() -> None:
+    default = src.get_model("w2v2-aasist")
+    bad_weight = replace(default.weights[0], size_bytes=0)
+    bad = replace(default, weights=(bad_weight, *default.weights[1:]))
+    with pytest.raises(src.SourcesError, match="positive size_bytes"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad))
+
+
+def test_validator_rejects_malformed_commit() -> None:
+    default = src.get_model("w2v2-aasist")
+    bad = replace(default, commit="not-a-sha")
+    with pytest.raises(src.SourcesError, match="40-char hex"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad))
+
+
+def test_validator_rejects_unknown_metric_and_tolerance_status() -> None:
+    default = src.get_model("w2v2-aasist")
+    bad_metric = replace(default, reproduction_targets=(
+        replace(default.reproduction_targets[0], metric="bogus"),
+    ))
+    with pytest.raises(src.SourcesError, match="unknown metric"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad_metric))
+    bad_tol = replace(default, reproduction_targets=(
+        replace(default.reproduction_targets[0], tolerance_status="maybe"),
+    ))
+    with pytest.raises(src.SourcesError, match="unknown tolerance_status"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad_tol))
+
+
+def test_validator_rejects_default_with_stop_gate() -> None:
+    # The default's only target is diagnostic; make it a stop-gate and the rail
+    # must fire (a default must never gate on a checkpoint it is not).
+    default = src.get_model("w2v2-aasist")
+    bad = replace(default, reproduction_targets=(
+        replace(default.reproduction_targets[0], gate_role="stop_gate"),
+    ))
+    with pytest.raises(src.SourcesError, match="must not carry a stop_gate"):
+        src._validate_registry(_registry_with("w2v2-aasist", bad))
+
+
+def test_validator_rejects_a_second_runnable_df_stop_gate() -> None:
+    # Nes2Net declares a DF stop-gate but is unlicensed (excluded). License it and
+    # a second runnable DF anchor exists -> the rail forces a deliberate fix.
+    nes2net = src.get_model("nes2net")
+    licensed = replace(nes2net, license_class="shippable")
+    with pytest.raises(src.SourcesError, match="more than one runnable model"):
+        src._validate_registry(_registry_with("nes2net", licensed))

@@ -19,7 +19,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `docs/gpu-contracts.md` pins the checkpoint decision, the native-versus-canonical
   corpus split, the seeded subset selection rule, the Gate-2 tolerance procedure,
   and the fact that S3 delivers Gate-1 readiness plus ratified Gate-2 tolerances
-  while the full-cohort Gate-1 PASS is deferred to S4.
+  while the full-cohort Gate-1 PASS is deferred to S4. The registry's import-time
+  integrity rails are extended to match the doctrine they enforce: weight shas
+  and model commits are format-checked (not merely non-null), `gate_role` is
+  required with no silent default, the shipped default may carry no stop-gate,
+  and at most one runnable model may claim the DF anchor. The sources schema
+  version moves to `synthdetect-sources-v2` for the new `gate_role` field.
 - **Navigable outline on the read-only transcript** (#87 follow-up). The
   `/runs/{id}/transcript` page now shows the same navigable outline the review
   workbench does: grounded people, organizations, and products become
