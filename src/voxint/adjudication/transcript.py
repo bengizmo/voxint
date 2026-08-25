@@ -11,19 +11,10 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from voxint.adjudication.resolver import (
-    LabelState,
-    Resolution,
-    SegmentOverride,
-    label_states,
-    review_states,
-    segment_states,
-    word_range_states,
-)
-from voxint.adjudication.splits import boundaries_for_run, derive_children
+from voxint.adjudication.attribution import walk_attributions
+from voxint.adjudication.resolver import LabelState, Resolution, SegmentOverride
 from voxint.db.models import TranscriptSegment
 
 
@@ -236,95 +227,71 @@ def attributed_transcript(
     inherits (or was never overridden) tracks later label rulings live, never a
     frozen copy. Both the HTML transcript page and the text export share this
     one function, so they can never disagree.
+
+    The precedence walk itself (batch loads, split expansion, word-range >
+    whole-segment > label) lives in :func:`walk_attributions`, shared with the
+    identity-grade :func:`~voxint.adjudication.attribution.attributed_intervals`
+    (issue #159) — this function only owns the display formatting.
     """
-    states = {s.label: s for s in label_states(session, run_id)}
-    overrides = segment_states(session, run_id)
-    # Per-word-range overrides (issue #59 slice 3): a reassigned split child wins
-    # over its parent's whole-segment/label speaker, for its exact range only.
-    range_overrides = word_range_states(session, run_id)
-    review = review_states(session, run_id)
-    # Every split boundary of the run, grouped by parent id, in one query — so the
-    # child expansion below adds no per-segment round-trip (issue #59).
-    boundaries = boundaries_for_run(session, run_id)
-    segments = session.execute(
-        select(TranscriptSegment)
-        .where(TranscriptSegment.pipeline_run_id == run_id)
-        .order_by(TranscriptSegment.segment_index)
-    ).scalars()
     lines: list[TranscriptLine] = []
-    for seg in segments:
-        rs = review.get(seg.id)
+    for emission in walk_attributions(session, run_id):
+        seg = emission.seg
+        rs = emission.review
         corrected_text = rs.corrected_text if rs is not None else None
-        body = _resolve_body(seg, corrected_text, text)
-        override = overrides.get(seg.id)
-        if override is not None:
-            speaker = segment_speaker(override, seg)
+        # Most-specific scope wins for the rendered name: an active whole-segment
+        # override beats the label's resolution (issue #54 Phase B); a word-range
+        # override (below) beats both for its exact child range.
+        if emission.seg_override is not None:
+            speaker = segment_speaker(emission.seg_override, seg)
         else:
-            speaker = display_name(states.get(seg.diarization_label or ""), seg)
+            speaker = display_name(emission.label_state, seg)
         verified = rs is not None and rs.verified_at is not None
         # Reflects whether a correction EXISTS, independent of which variant is
         # rendered — so a ?text=raw view still badges "this segment was corrected"
         # while showing the raw evidence.
         corrected = corrected_text is not None
-        cuts = boundaries.get(seg.id)
-        # A split parent (>= 2 derived children) expands into per-child lines that
-        # inherit the parent's resolved speaker and review state; every other
-        # segment stays a single line. ``derive_children`` returns None for an
-        # unsplittable parent — fail closed by rendering it whole (never invent
-        # child offsets), which cannot happen for a boundary the writer accepted
-        # (segments are immutable, so splittability is stable once checked).
-        children = derive_children(seg, cuts) if cuts else None
-        if children is not None and len(children) > 1:
-            for child_i, child in enumerate(children):
-                # Most-specific scope wins: a word-range override for this exact
-                # child range beats the parent's whole-segment/label speaker; with
-                # no such override the child inherits the parent's ``speaker``.
-                child_override = range_overrides.get(
-                    (seg.id, child.word_start, child.word_end)
+        if emission.child is not None:
+            child = emission.child
+            child_override = emission.range_override
+            child_speaker = (
+                segment_speaker(child_override, seg) if child_override is not None else speaker
+            )
+            lines.append(
+                TranscriptLine(
+                    start_seconds=child.start_seconds,
+                    end_seconds=child.end_seconds,
+                    speaker=child_speaker,
+                    text=child.text,
+                    diarization_label=seg.diarization_label,
+                    confidence=seg.confidence,
+                    # Verify/correct/split all target the immutable parent;
+                    # segment_id stays the parent id so a child's write lands
+                    # on the parent, and review state is parent-scoped.
+                    segment_id=seg.id,
+                    verified=verified,
+                    corrected=corrected,
+                    source_segment_id=seg.id,
+                    # One queue entry per parent: only the first child counts.
+                    review_target=emission.child_index == 0,
+                    # The child's exact word range — what the per-child
+                    # reassign picker posts to scope a ruling to this child.
+                    word_start=child.word_start,
+                    word_end=child.word_end,
+                    # The child's OWN range override id (None ⇒ inheriting) —
+                    # what the picker's <select> binds to, so it reflects true
+                    # child-scope, not the resolved (possibly inherited) speaker.
+                    word_range_speaker_id=(
+                        child_override.speaker_id if child_override is not None else None
+                    ),
                 )
-                child_speaker = (
-                    segment_speaker(child_override, seg)
-                    if child_override is not None
-                    else speaker
-                )
-                lines.append(
-                    TranscriptLine(
-                        start_seconds=child.start_seconds,
-                        end_seconds=child.end_seconds,
-                        speaker=child_speaker,
-                        text=child.text,
-                        diarization_label=seg.diarization_label,
-                        confidence=seg.confidence,
-                        # Verify/correct/split all target the immutable parent;
-                        # segment_id stays the parent id so a child's write lands
-                        # on the parent, and review state is parent-scoped.
-                        segment_id=seg.id,
-                        verified=verified,
-                        corrected=corrected,
-                        source_segment_id=seg.id,
-                        # One queue entry per parent: only the first child counts.
-                        review_target=child_i == 0,
-                        # The child's exact word range — what the per-child
-                        # reassign picker posts to scope a ruling to this child.
-                        word_start=child.word_start,
-                        word_end=child.word_end,
-                        # The child's OWN range override id (None ⇒ inheriting) —
-                        # what the picker's <select> binds to, so it reflects true
-                        # child-scope, not the resolved (possibly inherited) speaker.
-                        word_range_speaker_id=(
-                            child_override.speaker_id
-                            if child_override is not None
-                            else None
-                        ),
-                    )
-                )
+            )
         else:
             lines.append(
                 TranscriptLine(
                     start_seconds=seg.start_seconds,
                     end_seconds=seg.end_seconds,
                     speaker=speaker,
-                    text=body,
+                    text=_resolve_body(seg, corrected_text, text),
                     diarization_label=seg.diarization_label,
                     confidence=seg.confidence,
                     segment_id=seg.id,
