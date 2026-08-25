@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
@@ -34,6 +35,13 @@ from voxint.api.routers.deps import (
     _require_csrf,
     require_onboarded,
     templates,
+)
+from voxint.api.speakers_query import (
+    SORT_LABELS,
+    VIEWS,
+    normalize_sort,
+    normalize_view,
+    speakers_overview,
 )
 from voxint.api.triage_view import _triage_for
 from voxint.app_settings import (
@@ -63,6 +71,7 @@ from voxint.enrichment.research_jobs import (
 from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
 from voxint.enrichment.review import StaleCandidateError, record_profile_decision
 from voxint.enrichment.triage import TriageScore, parse_authority_domains
+from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import (
     RosterError,
     RosterNotFoundError,
@@ -209,20 +218,80 @@ def _roster_context(request: Request, session: Session, error: str | None = None
     }
 
 
+def _speakers_flag_on(request: Request) -> bool:
+    settings: Settings = request.app.state.settings
+    return bool(settings.console_speakers_enabled)
+
+
+def _overview_context(
+    request: Request, session: Session, error: str | None = None
+) -> dict[str, Any]:
+    """Template context for the Console 2.0 overview page and its fragment.
+
+    Sort/view come from the query string (POST forms carry them in their
+    action URLs so a mutation re-render preserves both); unknown values
+    degrade to the defaults, never a 422.
+    """
+    sort = normalize_sort(request.query_params.get("sort"))
+    view = normalize_view(request.query_params.get("view"))
+    settings: Settings = request.app.state.settings
+    secret = request.app.state.csrf_secret
+    overview = speakers_overview(session, gates_from_settings(settings), sort=sort)
+    return {
+        "request": request,
+        "overview": overview,
+        "voiceprints": {
+            row.entry.speaker.id: voiceprint_bars(row.entry.embeddings)
+            for row in overview.rows
+        },
+        "sort": sort,
+        "sorts": SORT_LABELS,
+        "view": view,
+        "views": VIEWS,
+        "roster_error": error,
+        "active_nav": "speakers",
+        "now": datetime.now(UTC),
+        "csrf_rename": mint_csrf_token(secret, CSRF_ROSTER_RENAME),
+        "csrf_merge": mint_csrf_token(secret, CSRF_ROSTER_MERGE),
+        "csrf_archive": mint_csrf_token(secret, CSRF_ROSTER_ARCHIVE),
+        "csrf_restore": mint_csrf_token(secret, CSRF_ROSTER_RESTORE),
+    }
+
+
 def _roster_response(request: Request, session: Session, error: str | None = None) -> Response:
     """Post-mutation response, mirroring ``_labels_response``: htmx gets the
     refreshed roster fragment (operator errors rendered inline), a plain form
     POST gets a 303 back to the page — or the full page when it carries an
-    error to show. CSRF/auth failures never come here; they stay real 403s."""
+    error to show. CSRF/auth failures never come here; they stay real 403s.
+
+    Flag-aware (#159): with ``console_speakers_enabled`` on, every branch
+    renders the new overview skin (fragment / page / redirect), preserving the
+    normalized ``?sort``/``?view`` the mutating form carried; off, the legacy
+    roster renders exactly as it always has.
+    """
+    if not _speakers_flag_on(request):
+        if request.headers.get("HX-Request"):
+            return templates.TemplateResponse(
+                request, "speakers/roster.html", _roster_context(request, session, error)
+            )
+        if error is not None:
+            return templates.TemplateResponse(
+                request, "speakers/speakers.html", _roster_context(request, session, error)
+            )
+        return RedirectResponse("/speakers", status_code=303)
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
-            request, "speakers/roster.html", _roster_context(request, session, error)
+            request,
+            "speakers/overview_roster.html",
+            _overview_context(request, session, error),
         )
     if error is not None:
         return templates.TemplateResponse(
-            request, "speakers/speakers.html", _roster_context(request, session, error)
+            request, "speakers/overview.html", _overview_context(request, session, error)
         )
-    return RedirectResponse("/speakers", status_code=303)
+    sort = normalize_sort(request.query_params.get("sort"))
+    view = normalize_view(request.query_params.get("view"))
+    return RedirectResponse(f"/speakers?sort={sort}&view={view}", status_code=303)
 
 
 # ---- Speaker roster curation (issue #7) ------------------------------------
@@ -235,6 +304,13 @@ def _roster_response(request: Request, session: Session, error: str | None = Non
 
 @router.get("/speakers")
 def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
+    # Content branch, not an access gate (#159): /speakers shipped long before
+    # Console 2.0, so the flag swaps WHICH page renders — off keeps the legacy
+    # roster byte-identical, on renders the new overview.
+    if _speakers_flag_on(request):
+        return templates.TemplateResponse(
+            request, "speakers/overview.html", _overview_context(request, session)
+        )
     return templates.TemplateResponse(
         request, "speakers/speakers.html", _roster_context(request, session)
     )
