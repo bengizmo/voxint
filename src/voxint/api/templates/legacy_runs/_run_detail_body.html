@@ -1,0 +1,303 @@
+{# Shared run-detail body (issue #160). Rendered identically by
+   legacy_runs/run_detail.html (/runs/{id}) and jobs/job_detail.html
+   (/jobs/{id}) so the two surfaces never drift. Every form posts to the
+   existing /runs/{id}/... action endpoints — the Jobs page reuses the legacy
+   mutation surface rather than minting /jobs/{id}/... aliases. #}
+<p><a href="/runs">← runs</a></p>
+<h1>Run <code>{{ run.id.hex[:8] }}</code></h1>
+{% if sidecar_title %}
+{# The sidecar title (issue #104) is operator intent, shown as the run's
+   display name; the raw path below stays visible as ground truth. #}
+<p class="media-title">{{ sidecar_title }}</p>
+{% endif %}
+<p class="muted"><code>{{ run.media_item.source_path }}</code></p>
+{% if provenance %}
+{# URL runs only: the acquisition source, shown as a bare host — never the raw
+   source_url, whose query could carry a signed token. #}
+<p class="muted">Source: <code>{{ provenance }}</code></p>
+{% endif %}
+
+{# Gate on the live status too: a bookmarked/refreshed ?enqueue=deferred URL
+   must not keep asserting "is queued" after the sweep already republished it. #}
+{% if enqueue_deferred and run.status == "queued" %}
+<p class="notice">The initial enqueue was deferred because the task broker was
+unavailable. This run is queued and will start automatically once the broker
+recovers — no action needed.</p>
+{% endif %}
+
+{% if media_delete_result %}
+<p class="notice">Deleted {{ media_delete_result.files }} derived audio
+file{{ "" if media_delete_result.files == 1 else "s" }}{% if media_delete_result.missing %}
+({{ media_delete_result.missing }} already gone){% endif %}{% if media_delete_result.failed %},
+{{ media_delete_result.failed }} could not be removed and will be swept later{% endif %}.
+The original source recording was kept.</p>
+{% endif %}
+
+{% if run_archived %}
+<p class="notice">This run is <strong>archived</strong> — hidden from the runs
+list and the review queue. All its data is intact; un-archive to restore it.</p>
+{% endif %}
+
+<dl class="def-grid">
+  <dt>Status</dt><dd><span class="pill {{ run.status }}">{{ run.status }}</span>
+    {% if run_archived %}<span class="pill skipped">archived</span>{% endif %}</dd>
+  <dt>Current stage</dt><dd>{{ run.current_stage or "—" }}</dd>
+  <dt>Revision</dt><dd>{{ run.revision }}</dd>
+  <dt>Created</dt><dd>{{ run.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
+  <dt>Updated</dt><dd>{{ run.updated_at.strftime("%Y-%m-%d %H:%M:%S") }}</dd>
+</dl>
+{% if run.error %}<p class="error">{{ run.error }}</p>{% endif %}
+
+{% if run.status == "failed" %}
+<form method="post" action="/runs/{{ run.id }}/requeue" class="requeue">
+  {# Carry the revision we rendered so a stale tab's requeue 409s (exact-revision CAS). #}
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_requeue }}">
+  <button type="submit">Requeue</button>
+  <span class="muted">Retries the failed stage (<code>{{ run.current_stage or "—" }}</code>).</span>
+</form>
+{% if run.current_stage in ("transcribe", "diarize_embed") %}
+{# Static guidance only — no live probe on this page (a health check here would
+   add model-service latency to every failed-run view and flap with service
+   health; the setup wizard's SERVICES step owns live reachability). #}
+<p class="muted">This stage needs the model services (ASR / diarizer / embedder).
+If they aren't running, start a compute tier —
+<code>docker compose -f compose.yaml -f compose.gpu.yaml up -d</code> (NVIDIA GPU) or
+<code>docker compose -f compose.yaml -f compose.cpu.yaml up -d</code> (no GPU) —
+wait for them to come up, then requeue. The shipped models run offline; an
+<code>HF_TOKEN</code> is only needed if you overrode diarization to a gated
+pipeline.</p>
+{% endif %}
+{% endif %}
+
+{% if run.status in ("queued", "running", "awaiting_adjudication") %}
+<form method="post" action="/runs/{{ run.id }}/cancel" class="cancel action-row">
+  {# Carry the rendered revision so a stale tab's cancel 409s (exact-revision CAS). #}
+  <input type="hidden" name="revision" value="{{ run.revision }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_cancel }}">
+  <button type="submit">Cancel run</button>
+  <span class="muted">
+    {% if run.status == "running" %}
+      Stops the run. The stage now running (<code>{{ run.current_stage or "—" }}</code>)
+      finishes first — cancel is cooperative, not an immediate kill — then no further
+      stages start. Media and any partial results are left in place (delete is separate).
+    {% else %}
+      Stops the run; no further stages will run. Media is left in place (delete is separate).
+    {% endif %}
+  </span>
+</form>
+{% endif %}
+
+<p>
+  {% if audio_available %}<a href="/media/{{ run.id }}">Audio</a>{% endif %}
+  {% if transcript_available %}<a href="/runs/{{ run.id }}/transcript">Transcript</a>{% endif %}
+  {% if run.status == "completed" %}<a href="/review/{{ run.id }}" class="btn-primary">Review</a>{% endif %}
+  <a href="/runs/{{ run.id }}/export.json">Complete run archive (JSON)</a>
+  {% if transcript_available %}<span class="muted">(transcript &amp; subtitle exports are on the
+    <a href="/runs/{{ run.id }}/transcript">Transcript</a> page)</span>{% endif %}
+  {% if media_reclaimed_at %}
+    <span class="muted">Media reclaimed on {{ media_reclaimed_at.strftime("%Y-%m-%d") }}
+      (transcript and decisions kept; re-run from source to restore audio).</span>
+  {% elif not audio_available and not transcript_available %}
+    <span class="muted">No audio or transcript yet.</span>
+  {% endif %}
+</p>
+
+{% if run_terminal %}
+{# Archive / un-archive + derived-media deletion (issue #5). Only terminal runs
+   (completed / failed / cancelled) — a live run must be cancelled first. #}
+<section class="card">
+<h2>Manage</h2>
+{% if run_archived %}
+<form method="post" action="/runs/{{ run.id }}/unarchive" class="unarchive action-row">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_unarchive }}">
+  <button type="submit">Un-archive run</button>
+  <span class="muted">Restores this run to the runs list and review queue.</span>
+</form>
+{% else %}
+<form method="post" action="/runs/{{ run.id }}/archive" class="archive action-row">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_archive }}">
+  <button type="submit">Archive run</button>
+  <span class="muted">Hides this run from the runs list and review queue. Keeps
+    all its data; reversible.</span>
+</form>
+{% endif %}
+<form method="post" action="/runs/{{ run.id }}/media/delete" class="media-delete action-row"
+      onsubmit="return confirm('Delete the derived audio files for this run? This frees disk and cannot be undone. The original source recording is kept.')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_run_media_delete }}">
+  <button type="submit" class="danger">Delete derived audio files</button>
+  <span class="muted">Frees disk by removing this run's preprocessed and chunked
+    audio. <strong>Irreversible</strong>; the original source recording is kept.</span>
+</form>
+</section>
+{% endif %}
+
+{% if source_metadata %}
+{# Scraped acquisition context (issue #36) — write-once, shown apart from the
+   operator's own notes so human and scraped input are never conflated. The
+   URLs here are sanitized allowlist values (absolute http(s), no userinfo),
+   unlike the raw source_url, which never reaches a template. #}
+<section class="card">
+<h2>Source metadata</h2>
+<dl class="def-grid">
+  {% if source_metadata.title %}<dt>Title</dt><dd>{{ source_metadata.title }}</dd>{% endif %}
+  {% if source_metadata.uploader or source_metadata.channel %}
+  <dt>Uploader</dt>
+  <dd>
+    {{ source_metadata.uploader or source_metadata.channel }}
+    {% if source_metadata.channel and source_metadata.uploader and source_metadata.channel != source_metadata.uploader %}
+      · {{ source_metadata.channel }}
+    {% endif %}
+    {% if source_metadata.channel_url %}
+      · <a href="{{ source_metadata.channel_url }}" rel="noopener noreferrer">channel</a>
+    {% endif %}
+  </dd>
+  {% endif %}
+  {% if source_metadata.upload_date %}<dt>Uploaded</dt><dd>{{ source_metadata.upload_date.isoformat() }}</dd>{% endif %}
+  {% if source_metadata.duration_seconds %}
+  <dt>Claimed duration</dt>
+  <dd>{{ "%d:%02d" | format(source_metadata.duration_seconds // 60, source_metadata.duration_seconds % 60) }}
+      <span class="muted">(source-reported, not measured)</span></dd>
+  {% endif %}
+  {% if source_metadata.tags %}<dt>Tags</dt><dd>{{ source_metadata.tags | join(", ") }}</dd>{% endif %}
+  {% if source_metadata.canonical_url %}
+  <dt>Page</dt><dd><a href="{{ source_metadata.canonical_url }}" rel="noopener noreferrer">{{ source_metadata.canonical_url }}</a></dd>
+  {% endif %}
+  {% if source_metadata.extractor %}
+  <dt>Extractor</dt>
+  <dd><code>{{ source_metadata.extractor }}</code>{% if source_metadata.extractor_version %} <span class="muted">(yt-dlp {{ source_metadata.extractor_version }})</span>{% endif %}</dd>
+  {% endif %}
+</dl>
+{% if source_metadata.description %}
+<details>
+  <summary>Description</summary>
+  <p class="muted">{{ source_metadata.description }}</p>
+</details>
+{% endif %}
+</section>
+{% endif %}
+
+<section class="card">
+<h2>Operator notes</h2>
+<form method="post" action="/runs/{{ run.id }}/notes" class="notes">
+  <input type="hidden" name="csrf_token" value="{{ csrf_notes }}">
+  <textarea name="notes" rows="4" maxlength="10000"
+            placeholder="Your notes for this run (who is speaking, context, follow-ups…)">{{ run.operator_notes or "" }}</textarea>
+  <button type="submit">Save notes</button>
+</form>
+</section>
+
+{% include "legacy_runs/run_assets.html" %}
+
+{% include "legacy_runs/run_translation.html" %}
+
+<section class="card">
+<h2>Pipeline models</h2>
+<p class="muted">The model each stage saw just before it ran. This is observed
+immediately before the attempt, not read back from the output, so it records
+which model answered rather than proving the exact build.</p>
+{% for stage in model_provenance %}
+<div class="model-stage">
+  <h3>{{ stage.label }}{% if stage.recorded and stage.attempt and stage.attempt > 1 %}
+    <span class="muted">(from attempt {{ stage.attempt }})</span>{% endif %}</h3>
+  {% if not stage.recorded %}
+  <p class="muted">Not recorded. This run finished before model provenance was
+  added, no attempt of this stage completed, or the latest completed attempt
+  did not record it.</p>
+  {% else %}
+  <dl>
+    {% for role in stage.roles %}
+    <dt>{{ role.label }}</dt>
+    {% if role.reachable %}
+    <dd>
+      {% if role.model %}<code>{{ role.model }}</code>{% else %}<span class="muted">no model name reported</span>{% endif %}
+      {% if role.engine %} <span class="muted">engine <code>{{ role.engine }}</code></span>{% endif %}
+      {% if role.revision %}<br><span class="muted">revision <code>{{ role.revision }}</code></span>{% endif %}
+      {% if role.decode_config_hash %}<br><span class="muted">decode config <code>{{ role.decode_config_hash[:12] }}</code></span>{% endif %}
+    </dd>
+    {% else %}
+    <dd><span class="muted">Not observed{% if role.detail %} ({{ role.detail }} when the stage ran){% endif %}.</span></dd>
+    {% endif %}
+    {% endfor %}
+  </dl>
+  {% endif %}
+</div>
+{% endfor %}
+</section>
+
+{# Glossary provenance (issue #123): the exact vocabulary hint whisper decoded this
+   run with, the operator's glossary unioned with the pack's words. Read-only; NULL
+   means the run had no vocabulary or predates this record. #}
+<section class="card">
+<h2>Glossary applied</h2>
+<p class="muted">The vocabulary hint transcription saw for this run, the terms from
+your glossary and the run's domain pack. It records what the model was told to expect,
+not that every term was spelled this way.</p>
+{% if run.initial_prompt %}
+<p><code>{{ run.initial_prompt }}</code></p>
+{% else %}
+<p class="muted">Not recorded. This run has not been transcribed yet, had no
+vocabulary, or it finished before Voxint began recording the applied glossary.</p>
+{% endif %}
+</section>
+
+{# Detected language (issue #124): what whisper decided when it transcribed this
+   run. The score is whisper's own detection probability, shown with honest
+   framing: it is not a calibrated confidence and says nothing about a recording
+   that switches languages mid-way. #}
+<section class="card">
+<h2>Detected language</h2>
+{% if run.detected_language %}
+<p><strong>{{ language_label(run.detected_language) }}</strong></p>
+{% if run.detected_language_probability is not none %}
+<p class="muted">Whisper language-detection score:
+{{ "%.2f" | format(run.detected_language_probability) }}.
+This is the model's own score for its language guess, not a measure of
+transcript accuracy. It reflects the whole recording as one language; a
+recording that mixes languages still gets a single detected language. Short or
+mostly silent recordings can produce low or arbitrary detections.</p>
+{% else %}
+<p class="muted">No detection score was recorded for this run.</p>
+{% endif %}
+{% else %}
+<p class="muted">Not recorded. This run has not been transcribed yet, or it
+finished before Voxint began recording the detected language.</p>
+{% endif %}
+</section>
+
+<section class="card">
+<h2>Stage ledger</h2>
+{% if not stage_runs %}
+<p class="muted">No stage attempts recorded yet.</p>
+{% else %}
+<div class="table-wrap" role="region" aria-label="Stage ledger" tabindex="0">
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Stage</th><th scope="col">Attempt</th><th scope="col">Status</th><th scope="col">Worker</th>
+      <th scope="col">Started</th><th scope="col">Finished</th><th scope="col">Lease expires</th><th scope="col">Error</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in stage_runs %}
+    <tr>
+      <td>{{ s.stage }}</td>
+      <td>{{ s.attempt }}</td>
+      <td><span class="pill {{ s.status }}">{{ s.status }}</span></td>
+      <td>{{ s.worker_id or "—" }}</td>
+      <td>{{ s.started_at.strftime("%Y-%m-%d %H:%M:%S") if s.started_at else "—" }}</td>
+      <td>{{ s.finished_at.strftime("%Y-%m-%d %H:%M:%S") if s.finished_at else "—" }}</td>
+      <td>{{ s.lease_expires_at.strftime("%Y-%m-%d %H:%M:%S") if s.lease_expires_at else "—" }}</td>
+      <td>{% if s.error %}<span class="error">{{ s.error }}</span>{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+</section>
+{#- Plugin run-detail panels (issue #138): each active plugin's fragments, in
+    (slot, order) order. Empty registry ⇒ no iterations ⇒ zero bytes. -#}
+{%- for panel in plugin_run_detail_panels %}
+{% include panel.template %}
+{%- endfor %}

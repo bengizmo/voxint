@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 Jobs area, dark-shipped** (#160, epic #149 Track C). Two new
+  console pages: `/jobs` shows a per-stage pipeline-activity strip
+  (queued/active), the per-service hardware-health strip, a compact recent-runs
+  table, and a normalized list of the auxiliary job families (asset, translation,
+  embedding, research); `/jobs/{run_id}` absorbs the `/runs/{id}` run-detail page,
+  rendering the same sections from a shared body partial so the two never drift.
+  The strip's queued totals break the queued run count `voxint stats` reports
+  down by stage (they sum to it exactly), so the page and the CLI cannot silently
+  disagree. `/jobs/{id}` reuses
+  the existing `/runs/{id}/...` action endpoints rather than minting aliases. Both
+  pages are registered unconditionally and reachable directly; the new
+  environment flag `console_jobs_enabled` (default off) gates only the sidebar's
+  Jobs entry, which stays on the `/runs` placeholder until the flag is on. No
+  redirect, tutorial remap, or version bump ships here: the `/runs` retirement is
+  a separate coordinated slice, so `/runs` and its detail page are unchanged.
 - **Console 2.0 P4: speakers overview and profile pages** (#159, epic #149).
   Behind a new `CONSOLE_SPEAKERS_ENABLED` flag (off by default), `/speakers`
   becomes an overview of everyone Voxint has heard: per-speaker files, spoken
@@ -66,7 +81,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   partial or misbound corpus is never left behind; an audio-free `select` verb
   emits just the trial list and selection receipt. The shape was chosen after an
   independent two-model design review; see the S3 pre-registration refinement note
-  in `docs/gpu-contracts.md`.
+  in `docs/gpu-contracts.md`. The four official ASVspoof 2021 DF eval archives
+  are now pinned by sha256 (each cross-checked against the md5 Zenodo publishes),
+  and the emission verb has an acceptance run on the real archives: it extracted
+  the full 611,829-clip native tree, transcoded the 53,392-clip subset, and
+  reproduced the pre-registered cohort hash, with each sampled clip's manifest
+  PCM sha equal to its receipt canonical sha and its receipt native FLAC sha
+  equal to the recomputed FLAC sha (see
+  `docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`).
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer
   arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the
   exact span of the run's normalized 16 kHz audio the highlight covers, cut with

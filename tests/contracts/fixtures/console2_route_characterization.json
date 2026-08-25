@@ -56,6 +56,22 @@
     false
   ],
   [
+    "/jobs",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/jobs/{run_id}",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media",
     [
       "GET"

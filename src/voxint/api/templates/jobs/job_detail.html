@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Voxint — job {{ run.id.hex[:8] }}{% endblock %}
+{% block body %}
+{# Console 2.0 Jobs area (#160). The run-detail sections are the shared partial
+   the legacy /runs/{id} page also renders, so the two never drift; the forms in
+   it post to the existing /runs/{id}/... action endpoints (dark-ship reuses the
+   legacy mutation surface). Only active_nav differs (set to "jobs" in the
+   handler context), which lights the sidebar's Jobs entry. #}
+{% include "legacy_runs/_run_detail_body.html" %}
+{% endblock %}
