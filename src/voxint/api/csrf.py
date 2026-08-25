@@ -110,6 +110,12 @@ CSRF_RUN_MEDIA_DELETE = "run-media-delete"
 # context, so they are CSRF-gated like run notes and never share a token with a
 # run-scoped mutation.
 CSRF_ANNOTATION_TAGS = "annotation-tags"
+# Attributed audio-clip extraction (issue #88): POST a highlight -> a cached WAV
+# clip. Its own action — clip generation is claim-less like the tag writes and
+# the pull-quote export, so it never shares a token with a run-scoped mutation.
+# Replay is harmless (extraction is idempotent + content-addressed), but the
+# token still refuses a forged cross-site POST before any file is written.
+CSRF_CLIP_EXTRACT = "clip-extract"
 # Plugin mutating routes (issue #138). One shared action for every builtin
 # plugin's POST surface: the capped PluginRouteDeps bundle exposes a single
 # uniform ``verify_csrf(request)`` (token carried in the ``X-CSRF-Token`` header)
@@ -117,6 +123,18 @@ CSRF_ANNOTATION_TAGS = "annotation-tags"
 # reaches into the app's per-surface CSRF constants. Same-operator, same-origin
 # replay across a plugin's own forms is harmless (mirrors CSRF_SETTINGS).
 CSRF_PLUGIN = "plugin"
+# Projects (issue #153, Console 2.0 P2b). Per-action tokens: creating a project
+# and assigning a folder to one are independent mutations with different blast
+# radii (a create token must not be replayable to move a folder), so each form
+# mints and verifies under its own action.
+CSRF_PROJECT_CREATE = "project-create"
+CSRF_PROJECT_ASSIGN = "project-assign"
+# Project-scoped config editors (issue #153, P2a precedence freeze). The
+# vocabulary and corrections overrides are independent mutations under their own
+# per-action tokens; each also carries an "inherit" reset (write NULL) under the
+# same action as its save.
+CSRF_PROJECT_VOCAB = "project-vocabulary"
+CSRF_PROJECT_CORRECTIONS = "project-corrections"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

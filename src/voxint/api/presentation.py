@@ -117,6 +117,27 @@ def format_duration(seconds: float | None) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def format_size(size_bytes: int | None) -> str:
+    """A file size as a coarse ``B`` / ``KB`` / ``MB`` / ``GB``; ``"—"`` unknown.
+
+    Binary units (1024) with the conventional ``KB``/``MB`` labels the way file
+    managers show them; one decimal place above bytes, so a listing reads
+    "412 MB", not "412.37 MB". Unknown (``None``, media that was never probed)
+    and a negative size (the DB check-constraint forbids it, but guard anyway
+    rather than render a nonsense value) both collapse to the em dash.
+    """
+    if size_bytes is None or size_bytes < 0:
+        return "—"
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    value = float(size_bytes)
+    for unit in ("KB", "MB", "GB"):
+        value /= 1024
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}"
+    return f"{value:.1f} GB"  # pragma: no cover - loop always returns at GB
+
+
 def format_age(created_at: datetime, *, now: datetime) -> str:
     """A coarse, human relative age ("3 hours ago") for a timestamp.
 

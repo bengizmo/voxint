@@ -48,6 +48,10 @@ export interface UseAnnotationsArgs {
   initialTags: AnnotationTagShape[];
   limits: AnnotationLimits;
   tagCsrf: string | null;
+  // Per-action CSRF token for extracting a highlight as an audio clip (issue #88);
+  // null on a payload without it (then the clip action simply posts unauthenticated
+  // and the server refuses with a 403, which surfaces as an inline error).
+  clipCsrf: string | null;
   // Move the review cursor to (and play) a line — reused for panel "Jump".
   onJump: (lineIndex: number) => void;
   // A claim-loss 409 during an annotation write bubbles here so ReviewStepper stops
@@ -96,6 +100,7 @@ export function useAnnotations({
   initialTags,
   limits,
   tagCsrf,
+  clipCsrf,
   onJump,
   onClaimLost,
 }: UseAnnotationsArgs): UseAnnotationsResult {
@@ -119,6 +124,10 @@ export function useAnnotations({
   // unavailable (a plain-http LAN context) so the operator can copy it by hand.
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [copyFallback, setCopyFallback] = useState<string | null>(null);
+  // The annotation whose clip is currently being extracted (issue #88), so only
+  // that row's button shows a busy label; null when none is in flight.
+  const [clippingId, setClippingId] = useState<string | null>(null);
+  const clipBusyRef = useRef<boolean>(false);
   // Synchronous re-entry guard (a double word/button click races two writes before
   // `busy` state re-renders), mirroring ReviewStepper's busyRef.
   const busyRef = useRef<boolean>(false);
@@ -507,6 +516,57 @@ export function useAnnotations({
     }
   }, [runId, filterTags]);
 
+  // Extract one highlight as an attributed audio clip (issue #88). POSTs to the
+  // clips route (CSRF-gated, no claim), then navigates a temporary same-origin
+  // anchor to the returned download URL — the server's Content-Disposition drives
+  // the save, so the bytes never touch JS (no Blob buffering). Generation is
+  // idempotent and content-addressed server-side, so a repeat click re-downloads
+  // the one canonical clip. The clientside visibility gate mirrors the server's
+  // preconditions; the server rejection is authoritative and shown inline.
+  const extractClip = useCallback(
+    async (id: string) => {
+      if (clipBusyRef.current) return; // sync re-entry guard against a double click
+      clipBusyRef.current = true;
+      setClippingId(id);
+      setCopyStatus(null);
+      setCopyFallback(null);
+      try {
+        const body = new URLSearchParams();
+        if (clipCsrf) body.set("csrf_token", clipCsrf);
+        const res = await apiFetch(`/review/${runId}/annotations/${id}/clips`, {
+          method: "POST",
+          headers: FORM_HEADERS,
+          body: body.toString(),
+        });
+        const data = (await res.json()) as { downloadUrl: string };
+        const link = document.createElement("a");
+        link.href = data.downloadUrl;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setCopyStatus("Clip ready. Your download should start shortly.");
+      } catch (e) {
+        if (e instanceof ApiError && e.conflictKind === "stale") {
+          setCopyStatus(
+            "This highlight is stale. Refresh or re-anchor it, then extract the clip.",
+          );
+        } else if (e instanceof ApiError && e.status === 422) {
+          setCopyStatus("This highlight’s timed span can’t be clipped.");
+        } else if (e instanceof ApiError && e.status === 409) {
+          setCopyStatus(
+            "The processed audio for this run isn’t available, so a clip can’t be extracted.",
+          );
+        } else {
+          setCopyStatus("Couldn’t extract the clip. Please try again.");
+        }
+      } finally {
+        clipBusyRef.current = false;
+        setClippingId(null);
+      }
+    },
+    [runId, clipCsrf],
+  );
+
   const toolbarOpen = writable && (pending !== null || editingId !== null);
   const toolbar: ReactNode = toolbarOpen ? (
     <AnnotationToolbar
@@ -554,6 +614,8 @@ export function useAnnotations({
       onReanchor={(id) => void reanchor(id)}
       onCopy={(id) => void copyOne(id)}
       onCopyAll={() => void copyAll()}
+      onExtractClip={(id) => void extractClip(id)}
+      clippingId={clippingId}
       copyStatus={copyStatus}
       copyFallback={copyFallback}
     />
@@ -751,6 +813,11 @@ interface HighlightsPanelProps {
   // Copy/export (issue #86 Landing 2): a read, so it renders for any viewer.
   onCopy: (id: string) => void;
   onCopyAll: () => void;
+  // Extract clip (issue #88): a derived-artifact action, so like Copy it renders
+  // for any viewer (CSRF-gated, not claim-gated). Only word-timed highlights show
+  // it. `clippingId` is the row whose extraction is in flight (busy label).
+  onExtractClip: (id: string) => void;
+  clippingId: string | null;
   copyStatus: string | null;
   copyFallback: string | null;
 }
@@ -776,6 +843,8 @@ function HighlightsPanel({
   onReanchor,
   onCopy,
   onCopyAll,
+  onExtractClip,
+  clippingId,
   copyStatus,
   copyFallback,
 }: HighlightsPanelProps): ReactNode {
@@ -900,6 +969,22 @@ function HighlightsPanel({
                 >
                   Copy
                 </button>
+                {a.timingPrecision === "word" &&
+                  a.startSeconds != null &&
+                  a.endSeconds != null && (
+                    <button
+                      type="button"
+                      onClick={() => onExtractClip(a.id)}
+                      disabled={a.stale || clippingId != null}
+                      title={
+                        a.stale
+                          ? "This highlight is stale. Refresh or re-anchor it first."
+                          : "Extract this highlight as an audio clip"
+                      }
+                    >
+                      {clippingId === a.id ? "Extracting…" : "Extract clip"}
+                    </button>
+                  )}
                 {writable && (
                   <button
                     type="button"

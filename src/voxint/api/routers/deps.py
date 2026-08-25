@@ -40,6 +40,7 @@ from voxint.api.languages import language_label
 from voxint.api.presentation import (
     format_age,
     format_duration,
+    format_size,
     friendly_media_label,
     humanize_stage,
     humanize_status,
@@ -201,6 +202,37 @@ def require_onboarded(
     raise HTTPException(status_code=303, headers={"Location": "/setup"})
 
 
+def require_media_enabled(request: Request) -> None:
+    """Area gate for the media library (Console 2.0 P2a, #153).
+
+    The ``/media`` routes are always registered so the route inventory is stable
+    across the dark-ship flip (codex: conditional registration would destabilize
+    the inventory contract). Access is gated here instead: when
+    ``console_media_enabled`` is off — the default until the area's release — the
+    page is indistinguishable from an unbuilt route (404, no hint that a hidden
+    area exists). Wired as a router-level dependency on the media router, after
+    ``require_onboarded`` so an un-onboarded operator is still sent to setup.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.console_media_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
+def require_projects_enabled(request: Request) -> None:
+    """Area gate for projects (Console 2.0 P2b, #153).
+
+    Same shape as :func:`require_media_enabled`: the ``/projects`` routes are
+    always registered so the route inventory is stable, and access 404s until
+    ``console_projects_enabled`` is on (the flag P1 already added, which also
+    governs whether the sidebar shows the Projects link). Registering the routes
+    is what flips ``app.state.projects_routed`` on, so the nav link appears only
+    once the pages actually exist AND the flag is set.
+    """
+    settings: Settings = request.app.state.settings
+    if not settings.console_projects_enabled:
+        raise HTTPException(status_code=404, detail="not found")
+
+
 def run_source_title(run: PipelineRun) -> str:
     """A non-blank, operator-recognizable source label for a run (issue #86):
     the run's sidecar title (issue #104, operator intent), else the
@@ -252,6 +284,7 @@ templates.env.globals["asset_url"] = asset_url
 # templates. `format_age` takes an injected `now` the routes pass in context.
 templates.env.globals["friendly_media_label"] = friendly_media_label
 templates.env.globals["format_duration"] = format_duration
+templates.env.globals["format_size"] = format_size
 templates.env.globals["format_age"] = format_age
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status

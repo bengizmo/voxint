@@ -30,6 +30,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   ordered trial list bound by a cohort hash. The shape was chosen after an
   independent two-model design review; see the S3 pre-registration refinement note
   in `docs/gpu-contracts.md`.
+- **Attributed audio-clip extraction** (#88, completes the operator-output-layer
+  arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the
+  exact span of the run's normalized 16 kHz audio the highlight covers, cut with
+  the stdlib `wave` frame-copy (no re-encode, no editing). The Highlights panel
+  gains an **Extract clip** action beside Copy, shown only for `word`-timed
+  highlights; it downloads the clip via `Content-Disposition` without buffering
+  bytes in the page. Two routes back it: `POST
+  /review/{run_id}/annotations/{annotation_id}/clips` (CSRF-gated, no claim)
+  generates or adopts the clip, and `GET|HEAD /runs/{run_id}/clips/{clip_id}`
+  serves it with byte-range support and an attachment disposition. Clips are a
+  content-addressed, idempotent, reclaimable cache: identical requests adopt one
+  canonical row (advisory-locked on the content digest), a re-anchor makes a new
+  clip, the stored snapshot is an immutable attribution record, and the clip
+  serves independently of the source audio while a cache miss regenerates only
+  while that source is live. The media GC sweep (issue #15) reclaims clip files
+  too, aged by the clip's own `created_at`. Preconditions are enforced
+  server-side: a foreign or soft-deleted highlight is 404, a stale one 409, and a
+  non-`word`-timed one 422. Migration `0039` adds the `audio_clip` artifact kind,
+  a content-addressed `idempotency_key`, and the live-only partial-unique index.
+  See `docs/annotations.md`.
 - **Synthdetect M1 S3: DF anchor GPU-qualified** (#144). The DF reproduction
   checkpoint `w2v2-aasist-df` (`Best_LA_model_for_DF.pth`) advances from
   `pinned_unqualified` to `qualified` on its own dated maintainer GPU verdict (one
@@ -77,6 +97,47 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   degrades to a readable, non-interactive list, which both surfaces now render
   from one shared template so the two fallbacks cannot drift. No new server
   data: the outline already rode in the shared transcript island props.
+- **Console 2.0 groundwork, P2a: the projects and media-folders schema** (#153,
+  epic #149). Additive schema with no operator-visible change on its own: new
+  `projects` and `media_folders` tables and a media location split
+  (`media_items.current_path`, backfilled to `source_path`, and a
+  `media_folder_id` folder membership FK), the relational foundation the console
+  library, projects, and project-scoped configuration build on. The migration
+  carries each registered folder over from the `app_settings` list, seeds folder
+  membership by deepest-ancestor, and refuses to change any run's effective
+  domain pack (an install with nested folder registrations is asked to reconcile
+  them first). The `app_settings.media_folders` / `folder_domain_packs` columns
+  are kept for one release as a rollback input.
+- **Console 2.0 P2a: the media library page** (#153, epic #149). A new `/media`
+  page lists every recording Voxint knows about with its folder, length, size,
+  and the status of its latest run (one aggregate query, not one per file;
+  archived runs are excluded so a file reads as "not processed yet" honestly).
+  It offers a card or table view and sorts by newest, name, longest, or largest,
+  with an unknown sort or view degrading to the default rather than erroring. The
+  area ships dark behind `CONSOLE_MEDIA_ENABLED` (off by default): the route is
+  always registered so the console route inventory is stable, but returns 404
+  until the flag is on. Reachable by URL for now; the sidebar's Media link is
+  repointed in a later phase.
+- **Console 2.0 P2b: the projects pages** (#153, epic #149). New `/projects` and
+  `/projects/{id}` pages let an operator create a project, assign registered
+  folders to it, and see its folders and the speakers its finished recordings
+  resolve to. A project's speakers are derived, not stored: they come from the
+  shared adjudication resolver, so a human ruling wins over a grounded automatic
+  match exactly as it does in the review workbench. Assigning a folder that
+  carries a domain pack states the precedence plainly, so a project's own
+  vocabulary later taking over is never a surprise. The area ships dark behind
+  the existing `CONSOLE_PROJECTS_ENABLED` flag (off by default), which also
+  governs whether the sidebar shows the Projects link; the routes are always
+  registered so the console route inventory is stable but return 404 until the
+  flag is on.
+- **Console 2.0 P2a: project-scoped vocabulary and corrections** (#153, epic
+  #149). The project detail page gains two editors: a vocabulary list and the
+  corrections editor (the same one Settings uses, with the same validation).
+  Once set, a project's vocabulary or corrections apply to every new run under
+  the project's folders in place of the folder pack's and the global settings'.
+  Each editor can inherit (use the folder pack or global settings) or be set for
+  the project, where an empty list means explicitly none. This applies to new
+  runs only; existing runs keep the configuration they were frozen with.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as
@@ -93,6 +154,32 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
 
 ### Changed
+- **Console 2.0 P2a: folder registration writes the media_folders relation**
+  (#153, epic #149). The setup wizard folder step and the Settings folder panel
+  now register folders as first-class `media_folders` rows through one shared,
+  serialized write service instead of the `app_settings` list, and the
+  submit-time domain-pack snapshot, the folder scan, and the watch-folder sweep
+  all read the folder set from that relation (no dual-write). Each run submitted
+  under a registered folder records its folder membership
+  (`media_items.media_folder_id`). One operator-visible change: registering a
+  folder that nests inside (or contains) an already-registered folder is now
+  refused, so every file belongs to exactly one folder; register only the parent
+  or only the child. The `app_settings.media_folders` / `folder_domain_packs`
+  columns are no longer written and remain only as a one-release rollback input.
+- **Console 2.0 P2a: per-field config resolution and the submit-time freeze**
+  (#153, epic #149). A new run's effective vocabulary and corrections now resolve
+  by first present layer, each independently: an explicit per-run pack (a CLI or
+  sidecar name), then the project, then the folder pack, then the global baseline
+  (the default pack plus the operator's glossary and corrections). Both fields
+  are frozen at submit into the run's snapshot, tagged
+  `config_resolution_version: 2`, so a later settings edit cannot change a run
+  already queued. One behavior change worth noting: a run that resolves to an
+  explicit folder pack, or to an explicit CLI or sidecar pack, no longer also
+  inherits the global glossary and corrections; before, both were added to every
+  run. A run with no project and no folder pack still resolves to the default
+  pack plus the global settings exactly as before, so an install that never set a
+  per-folder pack sees no change. Existing runs are untouched; no migration
+  rewrites their snapshots.
 - **The dashboard folded into Home** (#152). `/dashboard` now issues a
   permanent redirect to `/`, and `/` no longer redirects to `/review`. The
   dashboard's task cards and stat figures live on Home; the hardware strip

@@ -56,6 +56,14 @@
     false
   ],
   [
+    "/media",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{run_id}",
     [],
     "onboarding",
@@ -81,6 +89,54 @@
     "/metrics",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/corrections",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/folders",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/vocabulary",
+    [
+      "POST"
     ],
     "onboarding",
     true
@@ -153,6 +209,14 @@
     "/review/{run_id}/annotations/{annotation_id}",
     [
       "PATCH"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/annotations/{annotation_id}/clips",
+    [
+      "POST"
     ],
     "onboarding",
     true
@@ -377,6 +441,20 @@
     "/runs/{run_id}/cancel",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [],
+    "onboarding",
+    true
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [
+      "GET"
     ],
     "onboarding",
     true

@@ -42,6 +42,12 @@
     ]
   ],
   [
+    "/media",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],
@@ -61,6 +67,42 @@
     "/metrics",
     [
       "GET"
+    ]
+  ],
+  [
+    "/projects",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/projects",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/projects/{project_id}/corrections",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/folders",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/vocabulary",
+    [
+      "POST"
     ]
   ],
   [
@@ -115,6 +157,12 @@
     "/review/{run_id}/annotations/{annotation_id}",
     [
       "PATCH"
+    ]
+  ],
+  [
+    "/review/{run_id}/annotations/{annotation_id}/clips",
+    [
+      "POST"
     ]
   ],
   [
@@ -283,6 +331,16 @@
     "/runs/{run_id}/cancel",
     [
       "POST"
+    ]
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    []
+  ],
+  [
+    "/runs/{run_id}/clips/{clip_id}",
+    [
+      "GET"
     ]
   ],
   [

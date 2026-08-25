@@ -7,6 +7,7 @@ import pytest
 from voxint.api.presentation import (
     format_age,
     format_duration,
+    format_size,
     friendly_media_label,
     humanize_stage,
     humanize_status,
@@ -92,6 +93,30 @@ def test_friendly_label_cleans_bidi_and_zero_width_in_title() -> None:
 )
 def test_format_duration(seconds: float | None, expected: str) -> None:
     assert format_duration(seconds) == expected
+
+
+# ---- format_size ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("size_bytes", "expected"),
+    [
+        (None, "—"),
+        (-1, "—"),
+        (0, "0 B"),
+        (512, "512 B"),
+        (1023, "1023 B"),
+        (1024, "1.0 KB"),
+        (1536, "1.5 KB"),
+        (1024 * 1024, "1.0 MB"),
+        (int(412.37 * 1024 * 1024), "412.4 MB"),
+        (1024**3, "1.0 GB"),
+        # Terabyte-scale still reads in GB (no TB unit): honest, if large.
+        (5 * 1024**4, "5120.0 GB"),
+    ],
+)
+def test_format_size(size_bytes: int | None, expected: str) -> None:
+    assert format_size(size_bytes) == expected
 
 
 # ---- format_age -------------------------------------------------------------

@@ -26,6 +26,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.annotations import (
+    TIMING_WORD,
     AnnotationError,
     AnnotationIdempotencyError,
     AnnotationNotFoundError,
@@ -89,9 +90,15 @@ from voxint.adjudication.transcript import (
     effective_text,
     parse_transcript_text,
 )
+from voxint.api.clip_service import (
+    ClipServiceError,
+    clip_download_filename,
+    generate_or_adopt_clip,
+)
 from voxint.api.csrf import (
     CSRF_ANNOTATION_TAGS,
     CSRF_CLAIM,
+    CSRF_CLIP_EXTRACT,
     CSRF_TRANSLATION_GENERATE,
     mint_csrf_token,
 )
@@ -595,6 +602,13 @@ def review_transcript(
     island_props["annotationLimits"] = _annotation_limits()
     island_props["tagCsrf"] = mint_csrf_token(
         request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
+    )
+    # Attributed audio-clip extraction (issue #88): the per-highlight "Extract
+    # clip" action POSTs to /review/{run}/annotations/{id}/clips. Minted only for
+    # the writable review-stepper (like tagCsrf) — the read-only transcript-player
+    # never offers clip extraction.
+    island_props["clipCsrf"] = mint_csrf_token(
+        request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
     )
     # Terminal Translate action (issue #133): once every line is checked, the
     # stepper offers translation beside "Open the transcript to export". Only
@@ -1657,6 +1671,72 @@ def export_annotation_md(
         note=row.note,
     )
     return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
+
+@router.post("/review/{run_id}/annotations/{annotation_id}/clips")
+def extract_annotation_clip(
+    run_id: uuid.UUID,
+    annotation_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> JSONResponse:
+    """Extract (or adopt the cached) attributed audio clip for one highlight
+    (issue #88). CSRF-gated, onboarding-auth, NO claim — extraction is idempotent
+    and content-addressed, so a same-span replay adopts the one canonical clip.
+
+    A foreign, forged, or soft-deleted id is 404 (fail closed). A stale highlight
+    is 409 ``X-Voxint-Conflict: stale`` (refresh or re-anchor it first). A
+    highlight with no precise word timing is 422 (nothing to cut). A clip that
+    cannot be generated carries the service's honest status (409 the processed
+    audio is gone, 422 the span is unclippable). Returns the clip id + its
+    download URL (201)."""
+    _require_csrf(request, CSRF_CLIP_EXTRACT, csrf_token)
+    _run_or_404(session, run_id)
+    try:
+        row = live_annotation_or_404(session, run_id, annotation_id)
+    except AnnotationError as exc:
+        raise _annotation_http_error(exc) from exc
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved = resolve_annotation_spans(lines, covered, [stored_anchor_from_row(row)])[0]
+    if resolved.stale:
+        raise HTTPException(
+            status_code=409,
+            detail="this highlight is stale; refresh or re-anchor it before extracting a clip",
+            headers=_ANNOTATION_STALE_HEADERS,
+        )
+    if (
+        resolved.start_seconds is None
+        or resolved.end_seconds is None
+        or resolved.timing_precision != TIMING_WORD
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="this highlight has no precise word timing to clip",
+        )
+    try:
+        clip_id = generate_or_adopt_clip(
+            session,
+            run_id,
+            annotation_id=row.id,
+            annotation_source_text_hash=row.source_text_hash,
+            start_seconds=resolved.start_seconds,
+            end_seconds=resolved.end_seconds,
+            settings=request.app.state.settings,
+            gate=_get_media_gate(request),
+        )
+        session.commit()
+    except ClipServiceError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=exc.message) from exc
+    return JSONResponse(
+        {
+            "clipId": str(clip_id),
+            "downloadUrl": f"/runs/{run_id}/clips/{clip_id}",
+            "filename": clip_download_filename(run_id, clip_id),
+        },
+        status_code=201,
+    )
 
 @router.post("/review/{run_id}/annotations/export/live.md")
 def export_live_pull_quote(

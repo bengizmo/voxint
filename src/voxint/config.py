@@ -103,6 +103,12 @@ class Settings(BaseSettings):
     review_claim_ttl_seconds: int = Field(default=1800, ge=60)
     # Hard bound on the ffprobe gate in the media-serving request path.
     media_probe_timeout_seconds: PositiveSeconds = 30.0
+    # Longest attributed audio clip an operator can extract from an annotation
+    # (issue #88). A safety bound on the sample-exact frame copy, not a feature
+    # flag: extraction is available whenever a word_range annotation has precise
+    # timing and the normalized audio is servable. Five minutes covers a long
+    # quote without inviting whole-recording extraction.
+    clip_max_duration_seconds: PositiveSeconds = 300.0
     # Transcript preview length per label in the workbench.
     review_preview_segments: int = Field(default=8, ge=1)
     # Triage threshold for the review console's low-confidence highlight (#53):
@@ -507,6 +513,12 @@ class Settings(BaseSettings):
     # runtime toggle. Projects is the first flagged area; its sidebar entry and
     # the "New project" quick action render only when this is true.
     console_projects_enabled: bool = False
+
+    # The media library area (Console 2.0 P2a, #153). The /media routes are
+    # always registered so the route inventory is stable, but the area gate
+    # (require_media_enabled) returns 404 until this is on. The page is reachable
+    # only by URL for now; the sidebar's Media link is repointed in a later phase.
+    console_media_enabled: bool = False
 
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,

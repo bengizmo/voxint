@@ -72,6 +72,48 @@
   ]
  ],
  [
+  "/media",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/projects/{project_id}/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}/vocabulary",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/projects/{project_id}/corrections",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/runs",
   [
    "GET"
@@ -297,6 +339,12 @@
   "/review/{run_id}/annotations/{annotation_id}/export.md",
   [
    "GET"
+  ]
+ ],
+ [
+  "/review/{run_id}/annotations/{annotation_id}/clips",
+  [
+   "POST"
   ]
  ],
  [
@@ -545,6 +593,16 @@
  ],
  [
   "/media/{run_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/runs/{run_id}/clips/{clip_id}",
+  []
+ ],
+ [
+  "/runs/{run_id}/clips/{clip_id}",
   [
    "GET"
   ]
