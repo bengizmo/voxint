@@ -45,6 +45,7 @@ from voxint.api.routers.deps import (
     templates,
 )
 from voxint.api.routers.home import router as home_router
+from voxint.api.routers.jobs import router as jobs_router
 from voxint.api.routers.legacy_review import router as review_router
 from voxint.api.routers.legacy_review import transcript_router as review_transcript_router
 from voxint.api.routers.legacy_runs import (
@@ -452,6 +453,13 @@ def _register_routes(app: FastAPI) -> None:
     # routers/speakers.py; included here to keep registration order.
     console.include_router(speakers_router)
 
+    # ---- Jobs area (Console 2.0 P5, #160): /jobs + /jobs/{run_id}. Slotted
+    # after speakers and before the legacy runs tail so the new pages register
+    # ahead of the /runs child endpoints they will eventually absorb, keeping the
+    # legacy surface grouped last. Dark-shipped: registered unconditionally (no
+    # area gate), discovery gated by console_jobs_enabled in the sidebar.
+    console.include_router(jobs_router)
+
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
     console.include_router(runs_tail_router)
@@ -530,6 +538,13 @@ def _register_routes(app: FastAPI) -> None:
     # fixed after startup); the shell context processor reads it per request.
     app.state.projects_routed = any(
         route.path == "/projects" for route in _iter_api_routes(app.routes)
+    )
+    # Jobs (#160) dark-ships routed-but-undiscovered: /jobs always registers, so
+    # this stamp is always true. The shell reads flag AND stamp (mirroring
+    # projects), so flipping CONSOLE_JOBS_ENABLED alone surfaces the sidebar Jobs
+    # link — the dark-ship activation switch, not a route-existence guard.
+    app.state.jobs_routed = any(
+        route.path == "/jobs" for route in _iter_api_routes(app.routes)
     )
 
 

@@ -285,6 +285,14 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 settings.console_projects_enabled
                 and getattr(request.app.state, "projects_routed", False)
             ),
+            # Jobs (#160) dark-ships its pages routed-but-undiscovered: the /jobs
+            # routes always exist, so ``jobs_routed`` is always true; this key
+            # reduces to the flag and controls only whether the sidebar's Jobs
+            # entry points at /jobs (on) or the /runs placeholder (off).
+            "jobs_enabled": (
+                settings.console_jobs_enabled
+                and getattr(request.app.state, "jobs_routed", False)
+            ),
         }
     }
 

@@ -6,6 +6,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 Jobs area, dark-shipped** (#160, epic #149 Track C). Two new
+  console pages: `/jobs` shows a per-stage pipeline-activity strip
+  (queued/active), the per-service hardware-health strip, a compact recent-runs
+  table, and a normalized list of the auxiliary job families (asset, translation,
+  embedding, research); `/jobs/{run_id}` absorbs the `/runs/{id}` run-detail page,
+  rendering the same sections from a shared body partial so the two never drift.
+  The strip's queued totals break the queued run count `voxint stats` reports
+  down by stage (they sum to it exactly), so the page and the CLI cannot silently
+  disagree. `/jobs/{id}` reuses
+  the existing `/runs/{id}/...` action endpoints rather than minting aliases. Both
+  pages are registered unconditionally and reachable directly; the new
+  environment flag `console_jobs_enabled` (default off) gates only the sidebar's
+  Jobs entry, which stays on the `/runs` placeholder until the flag is on. No
+  redirect, tutorial remap, or version bump ships here: the `/runs` retirement is
+  a separate coordinated slice, so `/runs` and its detail page are unchanged.
 - **Console 2.0 P4: speakers overview and profile pages** (#159, epic #149).
   Behind a new `CONSOLE_SPEAKERS_ENABLED` flag (off by default), `/speakers`
   becomes an overview of everyone Voxint has heard: per-speaker files, spoken
