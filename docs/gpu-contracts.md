@@ -1524,19 +1524,99 @@ Every tolerance is PROVISIONAL until ratified from measured rerun variance in S3
 before the full anchor is run. The `license_class` is printed beside every model
 so a non-commercial or unlicensed result is never mistaken for a shippable one.
 
-| Model | License class | Anchor | Published | Tolerance |
-|---|---|---|---|---|
-| `w2v2-aasist` (upstream runner) | shippable (MIT) | ASVspoof 2021 DF eval, official keys | 2.85 % EER | provisional ±0.3 pp |
-| our runner vs upstream runner | shippable (MIT) | paired per-clip, same clips | (equivalence) | measured then ratcheted: max-abs logit + rank-corr + decision agreement |
-| `antideepfake-xlsr-2b` | noncommercial (CC-BY-NC-SA-4.0 weights) | In-the-Wild | 1.23 % EER | provisional ±0.5 pp |
-| `audioseal` (harness-only; not shipped in v1) | shippable (MIT) | marked + unmarked clips | ~99 % TPR clean | TPR ≥ 99 % clean AND an unmarked-audio FPR gate |
-| `nes2net` | unlicensed (no license file) | ASVspoof 2021 DF | 1.49 % EER | BLOCKED: refuses to run until the author grants a license |
+The `role` column separates a hard reproduction gate (a ratified miss is a STOP)
+from a diagnostic (measured and reported, never a stop-gate). The 2.85 % ASVspoof
+2021 DF anchor is NOT a property of the production default: it belongs to the
+DF-tuned `w2v2-aasist-df` checkpoint (S3 decision, 2026-08-25; see the S3
+pre-registration below). The default `w2v2-aasist` carries only a diagnostic
+In-the-Wild generalization number, because no checkpoint-exact citable ITW anchor
+exists for its ASVspoof2019-LA checkpoint.
+
+| Model | License class | Anchor | Published | Role | Tolerance |
+|---|---|---|---|---|---|
+| `w2v2-aasist-df` (upstream runner; `Best_LA_model_for_DF.pth`) | shippable (MIT) | ASVspoof 2021 DF eval, official keys | 2.85 % EER | stop-gate | provisional ±0.3 pp (PASS is the S4 full cohort) |
+| our runner vs upstream runner (same DF checkpoint) | shippable (MIT) | paired per-clip, same clips | (equivalence) | stop-gate | measured then ratcheted: max-abs logit + rank-corr + decision agreement |
+| `w2v2-aasist` (production default; `LA_model.pth`) | shippable (MIT) | In-the-Wild | 10.5 % EER | diagnostic | tracked, not a stop-gate |
+| `antideepfake-xlsr-2b` | noncommercial (CC-BY-NC-SA-4.0 weights) | In-the-Wild | 1.23 % EER | stop-gate | provisional ±0.5 pp |
+| `audioseal` (harness-only; not shipped in v1) | shippable (MIT) | marked + unmarked clips | ~99 % TPR clean | stop-gate | TPR ≥ 99 % clean AND an unmarked-audio FPR gate |
+| `nes2net` | unlicensed (no license file) | ASVspoof 2021 DF | 1.49 % EER | (blocked) | refuses to run until the author grants a license |
 
 **Sequencing.** Shake out the harness on the pre-registered seeded 10 % subset
-first, then run the full (~611k-trial) anchor once, overnight, on a 3090-class
-node. The subset NEVER inherits the full-set EER tolerance: after the anchor its
-role is paired per-clip regression against frozen reference scores (a score diff,
-not an EER).
+first, then run the full (~611k-trial) anchor once, overnight, on a maintainer
+3090-class node. The subset NEVER inherits the full-set EER tolerance: it is a
+preflight plus a Gate-2 paired cohort only, and after the anchor its role is
+paired per-clip regression against frozen reference scores (a score diff, not an
+EER). A seeded 10 % subset therefore cannot reproduce the corpus-level 2.85 %
+number, so the Gate-1 PASS is claimed only on the full official cohort.
+
+### S3 reproduction pre-registration (2026-08-25)
+
+This is the frozen S3 protocol, recorded before any S3 GPU reproduction run. It
+resolves the DF-versus-LA checkpoint question and pins the exact procedure for
+the two gates. It was reviewed by two independent models before being committed.
+
+**What S3 delivers, and what it defers.** A seeded 10 % subset on a single
+maintainer RTX 3060 cannot reproduce a corpus-level EER: 2.85 % is a statistic
+over the full official DF trial list, and the official DF scorer expects
+full-metadata coverage. S3 therefore delivers **Gate-1 readiness** (the unmodified
+upstream stack plus the official scorer runs end to end on the subset, producing a
+valid score file with sensible bona-fide-versus-spoof separation, and the harness
+sklearn EER is cross-checked once against the official scorer) and **ratified
+Gate-2 tolerances** (paired per-clip parity, measured then ratcheted). The Gate-1
+PASS against 2.85 % is claimed only on the **full official cohort**, which runs
+once, overnight, on a maintainer 3090-class node (that is S4). A subset EER is a
+diagnostic, never a Gate-1 pass, and the harness is never tuned to make the subset
+land near 2.85 %.
+
+**The reproduction checkpoint.** Gate-1 reproduces the DF-tuned
+`w2v2-aasist-df` checkpoint (`Best_LA_model_for_DF.pth`), not the production
+default `w2v2-aasist` (`LA_model.pth`): the published 2.85 % DF number is achieved
+by the DF-tuned checkpoint. Both gates load `w2v2-aasist-df` on both sides. The
+checkpoint is registered PINNED_UNQUALIFIED (sha256
+`1cf904f1d84c867c278cd42161df5367939d61cc28bfefd239bc995af59c2804`, receipt:
+`docs/reports/synthdetect-weight-receipt-df-2026-08-25.md`); its promotion to
+QUALIFIED needs its own dated GPU determinism plus smoke verdict, exactly as
+`w2v2-aasist` earned in S2b. That ceremony is not inherited: sharing the vendored
+model definition and the XLS-R base does not qualify a different classifier
+checkpoint, and a fairseq checkpoint can carry optimizer or `cfg` state that loads
+differently, so the strict state-dict load is proven cold before the checkpoint is
+trusted.
+
+**Two corpus views, never conflated.** The published 2.85 % was produced by the
+upstream stack's own data loading, so Gate-1 runs the unmodified upstream runner
+on an **untouched native tree** of the official DF audio (upstream's decode, its
+crop rule). Gate-2 runs both runners on our **canonical view**
+(`pcm-s16le-mono-16000-v1`, manifest sha256 over the PCM payload bytes only, no
+resampling in the runner). The two paths collapse into one only after a byte-level
+check confirms the native files decode to identical canonical PCM bytes; until
+then they are kept separate and the distinction is stated in the report.
+
+**Subset selection.** The seeded 10 % subset is drawn by a frozen hash-rank rule
+over the official DF **trial IDs** (seed `voxint-synthdetect-144`), stratified by
+bona-fide-versus-spoof and by codec or source condition where the official
+metadata supplies it, and marked `eval` only. The speaker-disjoint split assigner
+in `synthdetect_corpus.py` is a training-split tool and is NOT applied to an
+official eval set. The selection emits a trial list, a selection receipt, and a
+cohort hash so the subset is reproducible and auditable.
+
+**Gate-2 tolerances.** `tools/synthdetect_eval.py compare` pairs the two journals
+per clip and reports max-absolute logit drift, Spearman rank correlation, and
+decision agreement. The decision threshold is frozen from the upstream reference
+scores **before** the paired comparison is inspected; the tool's default 0.0 is
+never used implicitly. Tolerances are measured first from observed rerun variance,
+then ratcheted to the tightest bound the evidence supports, and recorded in a
+dated verdict block. Near-threshold clips are reported separately, because a
+decision flip there is expected across driver, cuDNN, and torch revisions and is
+covered by the raw-logit drift level instead.
+
+**S3 corpus scope.** S3 acquires only what the two gates need: the DF subset
+(native plus canonical views) and, if time allows, the In-the-Wild corpus as
+generalization and Gate-2 material (a diagnostic, not a Gate-1 anchor). No TTS
+synthesis, no degradation chains, and no general acquisition framework land in S3;
+a narrow, committed, benchmark-specific importer (verify operator-supplied
+official archives and keys by pinned sha, preserve the native tree, emit the
+subset receipt plus a canonical manifest) is the whole corpus surface. The full
+synthesize and degrade matrix is later sessions.
 
 ### Calibration and holdout discipline
 

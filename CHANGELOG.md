@@ -6,6 +6,25 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S3 reproduction pre-registration** (#144). The audio-deepfake
+  eval harness gains its S3 protocol, frozen before any reproduction run and
+  reviewed by two independent models. The registry now pins a second detector,
+  `w2v2-aasist-df` (the DF-tuned `Best_LA_model_for_DF.pth`, PINNED_UNQUALIFIED,
+  sha frozen from real bytes with a dated receipt): the published 2.85 % ASVspoof
+  2021 DF EER is achieved with that checkpoint, so it, not the production default
+  `w2v2-aasist`, carries the hard DF stop-gate. Reproduction targets grow a
+  `gate_role` (`stop_gate` versus `diagnostic`), and the default's In-the-Wild
+  number is reclassified as a diagnostic (no checkpoint-exact citable ITW anchor
+  for its ASVspoof2019-LA checkpoint). The pre-registration in
+  `docs/gpu-contracts.md` pins the checkpoint decision, the native-versus-canonical
+  corpus split, the seeded subset selection rule, the Gate-2 tolerance procedure,
+  and the fact that S3 delivers Gate-1 readiness plus ratified Gate-2 tolerances
+  while the full-cohort Gate-1 PASS is deferred to S4. The registry's import-time
+  integrity rails are extended to match the doctrine they enforce: weight shas
+  and model commits are format-checked (not merely non-null), `gate_role` is
+  required with no silent default, the shipped default may carry no stop-gate,
+  and at most one runnable model may claim the DF anchor. The sources schema
+  version moves to `synthdetect-sources-v2` for the new `gate_role` field.
 - **Navigable outline on the read-only transcript** (#87 follow-up). The
   `/runs/{id}/transcript` page now shows the same navigable outline the review
   workbench does: grounded people, organizations, and products become
