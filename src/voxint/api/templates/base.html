@@ -813,7 +813,7 @@
         <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Media</a>
         {% if shell.projects_enabled %}<a href="/projects"{% if active_nav == "projects" %} aria-current="page"{% endif %}>Projects</a>{% endif %}
         <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
-        <a href="/runs">Jobs</a>
+        {% if shell.jobs_enabled %}<a href="/jobs"{% if active_nav == "jobs" %} aria-current="page"{% endif %}>Jobs</a>{% else %}<a href="/runs">Jobs</a>{% endif %}
         <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
       </nav>
       {# Interim destinations (no dead ends): Review stays reachable until the

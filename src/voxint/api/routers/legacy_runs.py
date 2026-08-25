@@ -824,10 +824,25 @@ def fetch_media_url(
     session.commit()
     return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
 
-@core_router.get("/runs/{run_id}", name="run_detail")
-def run_detail(
-    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def build_run_detail_context(
+    run_id: uuid.UUID,
+    request: Request,
+    session: Session,
+    *,
+    active_nav: str = "runs",
+    tutorial: bool = True,
+) -> dict[str, Any]:
+    """The full run-detail render context, shared by ``/runs/{id}`` and the
+    Console 2.0 ``/jobs/{id}`` page (#160).
+
+    Promoted out of the ``run_detail`` handler so the Jobs area can render the
+    identical run-detail sections without duplicating the mutation surface: the
+    same forms post to the same ``/runs/{id}/...`` action endpoints (Track C
+    owns the eventual legacy_runs retirement, so this extraction is in-remit).
+    ``active_nav`` selects the highlighted sidebar entry; ``tutorial`` gates the
+    guided-tour banner (off on ``/jobs/{id}``, which is dark-shipped and not in
+    the tutorial's route map — see the deferred activation slice).
+    """
     run = _run_or_404(session, run_id)
     # The attempt ledger, chronological — matches `voxint status`.
     stage_runs = list(
@@ -857,10 +872,7 @@ def run_detail(
     transcript_available = bool(
         session.scalar(select(exists().where(TranscriptSegment.pipeline_run_id == run_id)))
     )
-    return templates.TemplateResponse(
-        request,
-        "legacy_runs/run_detail.html",
-        {
+    return {
             "request": request,
             "run": run,
             "stage_runs": stage_runs,
@@ -933,15 +945,33 @@ def run_detail(
             "csrf_translation_cancel": mint_csrf_token(
                 request.app.state.csrf_secret, CSRF_TRANSLATION_CANCEL
             ),
-            "tutorial": _tutorial_banner(
-                request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
+            # The guided-tour banner is suppressed on /jobs/{id}: that page is
+            # dark-shipped and not in the tutorial's route map, so advancing the
+            # tour from it would be incoherent until the activation slice remaps
+            # PAGE_ROUTE_NAME[RUN_DETAIL].
+            "tutorial": (
+                _tutorial_banner(
+                    request, session, page=TutorialPage.RUN_DETAIL, run_id=run_id
+                )
+                if tutorial
+                else None
             ),
-            "active_nav": "runs",
+            "active_nav": active_nav,
             # Plugin run-detail panels (issue #138): each active plugin's
             # fragments, ordered by (slot, order), rendered by the panel loop
             # in run_detail.html. Empty registry => () => nothing rendered.
             "plugin_run_detail_panels": request.app.state.plugins.run_detail_panels(),
-        },
+    }
+
+
+@core_router.get("/runs/{run_id}", name="run_detail")
+def run_detail(
+    run_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    return templates.TemplateResponse(
+        request,
+        "legacy_runs/run_detail.html",
+        build_run_detail_context(run_id, request, session),
     )
 
 @core_router.get("/runs/{run_id}/transcript")

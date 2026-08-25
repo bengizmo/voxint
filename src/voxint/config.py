@@ -520,6 +520,15 @@ class Settings(BaseSettings):
     # only by URL for now; the sidebar's Media link is repointed in a later phase.
     console_media_enabled: bool = False
 
+    # The Jobs area (Console 2.0 P5, #160). Unlike Media/Projects, the /jobs and
+    # /jobs/{run_id} pages carry NO area gate: they are registered AND reachable
+    # directly under the default (dark-ship — the flag is rollout control, not
+    # authorization). This flag gates only *discovery*: the sidebar's Jobs entry
+    # points at /jobs when it is on, and at /runs (today's shared placeholder)
+    # when off. The /runs retirement (redirects, tutorial remap, version bump) is
+    # a later coordinated slice, blocked on the Media area repointing off /runs.
+    console_jobs_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above

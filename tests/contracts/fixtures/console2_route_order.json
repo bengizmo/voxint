@@ -552,6 +552,18 @@
   ]
  ],
  [
+  "/jobs",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/jobs/{run_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
   "/runs/{run_id}/assets",
   [
    "GET"

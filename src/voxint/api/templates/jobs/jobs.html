@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %}Voxint — jobs{% endblock %}
+{% block body %}
+{# Console 2.0 Jobs area (#160). A live glance at the pipeline: per-stage
+   activity, hardware health, recent runs, and the auxiliary job families. The
+   stage strip and the headline counts both read the same source as
+   `voxint stats`, so the page and the CLI always agree. #}
+<h1>Jobs</h1>
+
+<section class="card">
+<h2>Pipeline activity</h2>
+<dl class="def-grid">
+  <dt>Queued</dt><dd>{{ status_counts.get("queued", 0) }}</dd>
+  <dt>Running</dt><dd>{{ status_counts.get("running", 0) }}</dd>
+  <dt>Awaiting review</dt><dd>{{ status_counts.get("awaiting_adjudication", 0) }}</dd>
+  <dt>Completed</dt><dd>{{ status_counts.get("completed", 0) }}</dd>
+  <dt>Failed</dt><dd>{{ status_counts.get("failed", 0) }}</dd>
+</dl>
+<div class="table-wrap" role="region" aria-label="Pipeline stages" tabindex="0">
+<table>
+  <thead>
+    <tr><th scope="col">Stage</th><th scope="col">Queued</th><th scope="col">Active</th></tr>
+  </thead>
+  <tbody>
+    {% for stage in stage_activity %}
+    <tr>
+      <td>{{ humanize_stage(stage.stage) }}</td>
+      <td>{{ stage.queued }}</td>
+      <td>{{ stage.active }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted">Queued counts runs waiting to enter each stage; active counts
+runs a worker is processing there now. The totals match the queued and running
+figures above.</p>
+</section>
+
+<section class="card">
+<h2>Hardware</h2>
+{% include "legacy_runs/resource_strip.html" %}
+<p class="muted"><a href="/resources">Full hardware view</a></p>
+</section>
+
+<section class="card">
+<h2>Recent runs</h2>
+{% if not runs %}
+<p class="muted">No runs yet. Add a recording from the <a href="/runs">Media</a> page.</p>
+{% else %}
+<div class="table-wrap" role="region" aria-label="Recent runs" tabindex="0">
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Run</th><th scope="col">Status</th><th scope="col">Unresolved</th>
+      <th scope="col">Labels</th><th scope="col">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for item in runs %}
+    <tr>
+      <td><a href="/jobs/{{ item.run_id }}">{{ friendly_media_label(item.title, item.source_path) }}</a></td>
+      <td><span class="pill {{ item.status }}">{{ item.status }}</span></td>
+      <td>{{ item.unresolved_count }}</td>
+      <td>{{ item.label_count }}</td>
+      <td>{{ format_age(item.created_at, now=now) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<p class="muted"><a href="/runs">Browse all runs</a></p>
+{% endif %}
+</section>
+
+<section class="card">
+<h2>Other jobs</h2>
+<p class="muted">The most recent asset, translation, embedding, and research
+jobs. These run alongside the pipeline and never block it.</p>
+{% if not aux_jobs %}
+<p class="muted">No auxiliary jobs yet.</p>
+{% else %}
+<div class="table-wrap" role="region" aria-label="Auxiliary jobs" tabindex="0">
+<table>
+  <thead>
+    <tr>
+      <th scope="col">Kind</th><th scope="col">Detail</th><th scope="col">Status</th>
+      <th scope="col">Target</th><th scope="col">Created</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in aux_jobs %}
+    <tr>
+      <td>{{ job.family }}</td>
+      <td>{{ job.detail or "—" }}</td>
+      <td><span class="pill {{ job.status }}">{{ job.status }}</span></td>
+      <td>
+        {% if job.pipeline_run_id %}<a href="/jobs/{{ job.pipeline_run_id }}">run {{ job.pipeline_run_id.hex[:8] }}</a>
+        {% elif job.speaker_id %}speaker {{ job.speaker_id.hex[:8] }}
+        {% else %}—{% endif %}
+      </td>
+      <td>{{ format_age(job.created_at, now=now) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+</section>
+{% endblock %}
