@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "fragments/export_menu.html" import export_menu %}
+{% from "fragments/outline_fallback.html" import outline_fallback %}
 {% block title %}Voxint — transcript {{ run.id.hex[:8] }}{% endblock %}
 {% block body %}
 <p><a href="/runs/{{ run.id }}">← run</a></p>
@@ -82,6 +83,11 @@
    misconfigured — the same "degrades to plain HTML" guarantee the rest of the
    console has. Islands are leaf nodes htmx does not swap. #}
 <div data-island="transcript-player" data-props='{{ island_props|tojson }}'>
+  {# Navigable outline (issue #87): the same INERT JS-off / pre-hydration list
+     the review workbench shows, from the shared macro. The transcript-player
+     island root replaces this markup (OutlinePanel + player) on its first
+     render; without JS it stays a readable, non-interactive list. #}
+  {{ outline_fallback(island_props.outline) }}
   {% for ln in lines %}
   {% set idx = palette.get(ln.diarization_label) %}
   {% set uncertain = ln.confidence is not none and ln.confidence < low_confidence_threshold %}

@@ -1018,6 +1018,15 @@ def run_transcript(
     island_props = _transcript_island_props(
         session, run_id, lines, palette, capability, settings
     )
+    # Navigable outline (issue #87) pairs with the reviewed/corrected transcript,
+    # like the interleaved translation view below: its quotes and summary/topics
+    # are built from the corrected rendition (build_outline reads the effective
+    # source), so on the raw/enhanced variants they could disagree with the
+    # visible text WITHOUT assetStale firing — a silent honesty violation. Show it
+    # only on the corrected variant (the review surface is always corrected); drop
+    # it otherwise so both the island panel and the JS-off fallback hide.
+    if variant is not TranscriptText.CORRECTED:
+        island_props["outline"] = None
     # Interleaved translation view (issue #133): a fresh generation the
     # operator selected renders each translated line beneath its original —
     # in the island props AND the JS-off fallback, from the same texts.

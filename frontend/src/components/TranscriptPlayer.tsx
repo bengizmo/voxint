@@ -248,11 +248,13 @@ export interface TranscriptPlayerProps {
   jumpToSeconds?: number | null;
 }
 
-// Imperative handle (issue #53): the ONLY review affordance the pure player
-// exposes. The verify-and-advance loop (ReviewStepper) commands playback of one
-// segment through this — the same code path as clicking a line — so highlight
-// and follow-scroll come free and the read-only page stays byte-identical
-// (it renders the player with no ref).
+// Imperative handle (issue #53): the ONLY navigation affordance the pure player
+// exposes. Its two drivers command playback of one segment through this — the
+// same code path as clicking a line — so highlight and follow-scroll come free:
+// the review verify-and-advance loop (ReviewStepper), and, since issue #87's
+// read-only-transcript outline, ReadOnlyTranscript's OutlinePanel jump. Both
+// wrappers attach the ref unconditionally; a transcript with no outline simply
+// never invokes it.
 export interface TranscriptPlayerHandle {
   playSegment: (index: number) => void;
 }
@@ -531,9 +533,9 @@ export const TranscriptPlayer = forwardRef<
     scrollActiveIntoView();
   };
 
-  // Expose only "play this segment" to the review loop. Bounds-guarded and
-  // capability-gated (via `play`), so a bad index or disabled seek is a no-op,
-  // never a throw.
+  // Expose only "play this segment" to a driver (the review loop, or the
+  // read-only outline jump). Bounds-guarded and capability-gated (via `play`),
+  // so a bad index or disabled seek is a no-op, never a throw.
   useImperativeHandle(
     ref,
     () => ({
