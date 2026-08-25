@@ -56,6 +56,14 @@
     false
   ],
   [
+    "/media",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{run_id}",
     [],
     "onboarding",

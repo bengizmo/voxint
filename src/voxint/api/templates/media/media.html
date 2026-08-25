@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Voxint — media{% endblock %}
+{% block body %}
+<h1>Media</h1>
+<p class="muted">Every recording Voxint knows about, and where each one stands.</p>
+
+{% if rows %}
+{# One toolbar row (#152 library kit): the sort control on the left, the
+   card/table view toggle on the right. Each control's links carry the OTHER
+   control's current value so switching sort keeps the view and vice versa. An
+   unknown ?sort=/?view= already degraded to the default in the route. #}
+<div class="lib-toolbar">
+  <nav class="view-toggle" aria-label="Sort by">
+    {% for value, label in sorts %}
+    <a href="/media?sort={{ value }}&view={{ view }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <nav class="view-toggle" aria-label="View" style="margin-left:auto;">
+    {% for value in views %}
+    <a href="/media?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+    {% endfor %}
+  </nav>
+</div>
+
+{% if view == "table" %}
+<div class="lib-table" role="region" aria-label="Media" tabindex="0">
+  <table>
+    <thead>
+      <tr>
+        <th scope="col">Name</th><th scope="col">Folder</th>
+        <th scope="col">Length</th><th scope="col">Size</th>
+        <th scope="col">Latest run</th><th scope="col">Added</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
+          <br><code class="muted">{{ row.source_path }}</code>
+        </td>
+        <td>{% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ format_duration(row.duration_seconds) }}</td>
+        <td>{{ format_size(row.size_bytes) }}</td>
+        <td>
+          {% if row.latest_run_id %}
+          {# Humanized LABEL only; the pill's CSS class stays the raw enum so it
+             keeps its status colour (the run-listing display invariant). #}
+          <a href="/runs/{{ row.latest_run_id }}"><span class="pill {{ row.latest_run_status }}">{{ humanize_status(row.latest_run_status) }}</span></a>
+          <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
+          {% else %}<span class="muted">Not processed yet</span>{% endif %}
+        </td>
+        <td><span title="{{ row.added_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.added_at, now=now) }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<ul class="lib-cards" aria-label="Media">
+  {% for row in rows %}
+  <li>
+    <div class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</div>
+    <code class="muted">{{ row.source_path }}</code>
+    <p class="muted">
+      {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
+      · {{ format_duration(row.duration_seconds) }} · {{ format_size(row.size_bytes) }}
+    </p>
+    <p>
+      {% if row.latest_run_id %}
+      <a href="/runs/{{ row.latest_run_id }}"><span class="pill {{ row.latest_run_status }}">{{ humanize_status(row.latest_run_status) }}</span></a>
+      <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
+      {% else %}<span class="muted">Not processed yet</span>{% endif %}
+    </p>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+{% if truncated %}
+<p class="muted">Showing the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
+{% endif %}
+{% else %}
+<p class="muted">No media yet. Register a folder in <a href="/settings">Settings</a> or add a recording from <a href="/runs#add-media">Media</a> to get started.</p>
+{% endif %}
+{% endblock %}

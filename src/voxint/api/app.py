@@ -59,6 +59,7 @@ from voxint.api.routers.legacy_runs import (
 from voxint.api.routers.legacy_runs import (
     tail_router as runs_tail_router,
 )
+from voxint.api.routers.media import router as media_router
 from voxint.api.routers.settings import _settings_context, setup_router
 from voxint.api.routers.settings import router as settings_router
 from voxint.api.routers.speakers import router as speakers_router
@@ -376,6 +377,11 @@ def _register_routes(app: FastAPI) -> None:
     # first among the console families so the root route sits early in the
     # match/inventory order, where the old index redirect lived.
     console.include_router(home_router)
+
+    # ---- Media library (Console 2.0 P2a, #153): the /media file listing.
+    # Always registered so the route inventory is stable across the dark-ship
+    # flip; the router's require_media_enabled gate 404s until the flag is on.
+    console.include_router(media_router)
 
     # ---- Run submission/browsing/transcript: moved to
     # routers/legacy_runs.py; included here to keep registration order.

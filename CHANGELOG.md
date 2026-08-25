@@ -26,6 +26,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   domain pack (an install with nested folder registrations is asked to reconcile
   them first). The `app_settings.media_folders` / `folder_domain_packs` columns
   are kept for one release as a rollback input.
+- **Console 2.0 P2a: the media library page** (#153, epic #149). A new `/media`
+  page lists every recording Voxint knows about with its folder, length, size,
+  and the status of its latest run (one aggregate query, not one per file;
+  archived runs are excluded so a file reads as "not processed yet" honestly).
+  It offers a card or table view and sorts by newest, name, longest, or largest,
+  with an unknown sort or view degrading to the default rather than erroring. The
+  area ships dark behind `CONSOLE_MEDIA_ENABLED` (off by default): the route is
+  always registered so the console route inventory is stable, but returns 404
+  until the flag is on. Reachable by URL for now; the sidebar's Media link is
+  repointed in a later phase.
 - **Console 2.0 P1: app shell and Home** (#152, epic #149). The console gains
   its new frame: a collapsible left sidebar (Home, Media, Projects behind a
   dark-ship flag, Speakers, Jobs, Settings, with Review and Hardware kept as
