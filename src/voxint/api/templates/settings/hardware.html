@@ -11,19 +11,27 @@
 <h1>Hardware</h1>
 <p><a href="/settings">← Settings</a></p>
 
-{% if hardware.restart_pending %}
+{% if hardware.restart_check_failed %}
+<section class="notice" role="status">
+  <p><strong>Could not check for pending changes.</strong> Voxint could not re-read
+     the current environment, so it cannot tell whether a change is waiting for a
+     restart. The values below are what the running app booted with.</p>
+</section>
+{% elif hardware.restart_pending %}
 <section class="notice" role="status">
   <p><strong>Restart pending.</strong> The running app has not picked up a recent
-     change to one or more settings below. Restart Voxint to apply it. For Docker
-     Compose run <code>docker compose up -d</code>; for a native install, restart
-     the Voxint service.</p>
+     change to one or more settings below. Restart Voxint to apply it (for Docker
+     Compose, <code>docker compose up -d</code>; for other installs, restart the
+     Voxint service or launcher).</p>
 </section>
 {% endif %}
 
 <section aria-labelledby="config-heading">
 <h2 id="config-heading">Configuration</h2>
 <p class="muted">These values are read from the environment when Voxint starts. To
-   change one, set the shown key in your <code>.env</code> and restart Voxint.</p>
+   change one, set the shown key in your environment (your <code>.env</code> file,
+   or your install's launcher or service configuration if it sets these) and
+   restart Voxint.</p>
 <div class="table-wrap">
 <table>
   <thead><tr>

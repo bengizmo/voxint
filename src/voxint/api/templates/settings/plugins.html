@@ -15,7 +15,8 @@
 <div class="table-wrap">
 <table>
   <thead><tr>
-    <th scope="col">Plugin</th><th scope="col">State</th><th scope="col">Description</th>
+    <th scope="col">Plugin</th><th scope="col">State</th>
+    <th scope="col">Settings</th><th scope="col">Description</th>
   </tr></thead>
   <tbody>
     {% for p in plugins.active %}
@@ -23,6 +24,7 @@
       <td><a href="/settings/plugins/{{ p.plugin_id }}">{{ p.name }}</a></td>
       <td><span class="pill {{ "ready" if p.enabled else "unverified" }}">
         {{ "on" if p.enabled else "off" }}</span></td>
+      <td>{{ "yes" if p.has_section else "no" }}</td>
       <td>{{ p.description }}{% for w in p.warnings %}<br>
         <span class="muted">{{ w }}</span>{% endfor %}</td>
     </tr>
@@ -30,6 +32,9 @@
   </tbody>
 </table>
 </div>
+{% elif plugins.killed_ids %}
+<p class="muted">No active plugins. Every installed plugin is switched off by the
+   kill switch (listed below).</p>
 {% else %}
 <p class="muted">No plugins are installed. Plugins are optional add-ons that
    contribute their own settings here; when one is installed, it will appear in

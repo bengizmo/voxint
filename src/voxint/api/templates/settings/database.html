@@ -41,10 +41,11 @@
 <h2 id="retention-heading">Retention and cleanup</h2>
 <p class="muted">Media retention reclaims only the large normalized-audio
    intermediate for old finished runs; source media, transcripts, and the
-   adjudication history are always kept. These values are set in your
-   <code>.env</code> (keys <code>MEDIA_RETENTION_ENABLED</code>,
-   <code>MEDIA_RETENTION_SECONDS</code>, <code>GC_SWEEP_SECONDS</code>,
-   <code>GC_BATCH_LIMIT</code>).</p>
+   adjudication history are always kept. These are the values the running app
+   booted with; set them in your <code>.env</code> (keys
+   <code>MEDIA_RETENTION_ENABLED</code>, <code>MEDIA_RETENTION_SECONDS</code>,
+   <code>GC_SWEEP_SECONDS</code>, <code>GC_BATCH_LIMIT</code>) and restart Voxint
+   to change them.</p>
 <div class="table-wrap">
 <table>
   <tbody>

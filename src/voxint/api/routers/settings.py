@@ -1850,13 +1850,28 @@ def _sub_page_context(request: Request, **page: Any) -> dict[str, Any]:
     return {"request": request, "active_nav": "settings", **page}
 
 
+def _app_settings_or_none(session: Session) -> AppSettings | None:
+    """Read the singleton settings row, or ``None`` if the DB is unreadable.
+
+    The plugin pages render from the in-memory registry and only touch the row to
+    resolve a plugin's enablement gate (which already accepts ``None``), so a DB
+    hiccup degrades to ``None`` rather than 500ing the page."""
+    try:
+        return get_app_settings(session)
+    except SQLAlchemyError:
+        session.rollback()
+        return None
+
+
 @router.get("/settings/status", name="settings_status")
 def settings_status_page(
     request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
-    # Doctor readiness (self-contains every dependency failure) + the hardware
-    # snapshot strip (guarded to an empty snapshot on any probe failure), so this
-    # renders a 200 even with Postgres/Redis/model services down.
+    # The doctor checks self-contain every dependency failure and the hardware
+    # snapshot strip degrades to empty on a probe failure, so a Redis or
+    # model-service outage renders honestly rather than 500ing. (A full Postgres
+    # outage is handled app-wide by the onboarding gate, which routes to the setup
+    # wizard's diagnostics before this handler runs.)
     settings: Settings = request.app.state.settings
     snapshot = collect_resource_status_or_empty(settings)
     context = _sub_page_context(
@@ -1870,9 +1885,7 @@ def settings_status_page(
 
 
 @router.get("/settings/hardware", name="settings_hardware")
-def settings_hardware_page(
-    request: Request, operator: OperatorDep, session: SessionDep
-) -> Response:
+def settings_hardware_page(request: Request, operator: OperatorDep) -> Response:
     settings: Settings = request.app.state.settings
     view = settings_view.build_hardware_view(
         settings, tuple(collect_service_identity(settings))
@@ -1899,7 +1912,7 @@ def settings_plugins_page(
 ) -> Response:
     settings: Settings = request.app.state.settings
     registry: PluginRegistry = request.app.state.plugins
-    row = get_app_settings(session)
+    row = _app_settings_or_none(session)
     view = settings_view.build_plugins_view(registry, row, settings)
     context = _sub_page_context(request, plugins=view)
     return templates.TemplateResponse(request, "settings/plugins.html", context)
@@ -1911,11 +1924,15 @@ def settings_plugin_detail_page(
 ) -> Response:
     settings: Settings = request.app.state.settings
     registry: PluginRegistry = request.app.state.plugins
-    row = get_app_settings(session)
+    row = _app_settings_or_none(session)
     view = settings_view.build_plugin_detail(registry, plugin_id, row, settings)
     if view is None:
         raise HTTPException(status_code=404, detail="Unknown plugin")
-    context = _sub_page_context(request, plugin=view)
+    # A plugin's contributed section owns a CSRF-guarded form and reads the same
+    # per-section context it gets on the hub, so the detail page renders it under
+    # the full _settings_context (csrf_settings + section state), not a thin one.
+    context = _settings_context(request, session)
+    context["plugin"] = view
     return templates.TemplateResponse(request, "settings/plugin_detail.html", context)
 
 @router.post("/settings/llm")

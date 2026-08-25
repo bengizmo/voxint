@@ -18,9 +18,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   guidance), and `/settings/plugins` plus `/settings/plugins/{id}` (the plugin
   registry with an honest empty state today and per-plugin pages that render a
   plugin's own settings section). The sub-pages are registered unconditionally
-  and reachable by URL regardless of the flag, fail soft when a dependency is
-  down, and never edit the environment or restart a service. No `/resources`
-  redirect or version bump ships here: that activation is a later slice.
+  and reachable by URL regardless of the flag, render honestly when the model
+  services or Redis are unavailable, and never edit the environment or restart a
+  service. No `/resources` redirect or version bump ships here: that activation
+  is a later slice.
 - **Console 2.0 Jobs area, dark-shipped** (#160, epic #149 Track C). Two new
   console pages: `/jobs` shows a per-stage pipeline-activity strip
   (queued/active), the per-service hardware-health strip, a compact recent-runs

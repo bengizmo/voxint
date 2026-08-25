@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from voxint.config import Settings
 
@@ -99,22 +99,43 @@ class HardwareView:
     fields: tuple[HardwareField, ...]
     services: tuple[ServiceIdentityView, ...]
     restart_pending: bool
+    # True when the current environment could not be re-read to check for pending
+    # changes, so the page says "could not check" rather than implying nothing is
+    # pending (a broken .env is exactly when the operator most needs the truth).
+    restart_check_failed: bool = False
+
+
+# Query-parameter names that carry a secret, redacted before a URL is displayed.
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {"api_key", "apikey", "token", "key", "auth", "sig", "signature", "password", "secret"}
+)
 
 
 def _redact_url(value: str) -> str:
-    """Strip any ``user:pass@`` credentials from a URL for display.
+    """Strip credentials from a URL for display, failing closed.
 
-    Service URLs normally carry none, but a settings page must never echo a
-    secret embedded in one. A non-URL string is returned unchanged.
+    Removes any ``user:pass@`` userinfo and redacts known-secret query parameters
+    (a service URL rarely carries either, but a settings page must never echo a
+    secret embedded in one). A value that cannot be parsed as a URL is hidden
+    rather than echoed verbatim, so a malformed string can never leak an embedded
+    credential; a plain non-URL value (no scheme or host) is returned unchanged.
     """
     try:
         parts = urlsplit(value)
     except ValueError:
+        return "<hidden>"
+    if not (parts.scheme or parts.netloc):
         return value
-    if not parts.netloc or "@" not in parts.netloc:
-        return value
-    host = parts.netloc.rsplit("@", 1)[1]
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, parts.fragment))
+    netloc = parts.netloc.rsplit("@", 1)[-1]  # drop any userinfo
+    query = parts.query
+    if query:
+        query = urlencode(
+            [
+                (k, "<redacted>" if k.lower() in _SENSITIVE_QUERY_KEYS else v)
+                for k, v in parse_qsl(query, keep_blank_values=True)
+            ]
+        )
+    return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
 
 
 def build_hardware_view(
@@ -132,15 +153,21 @@ def build_hardware_view(
     genuinely changed after boot without the process restarting — which happens
     in a native long-running deployment whose ``.env`` was edited in place, and
     *cannot* happen under Docker Compose (env is fixed for a container's life, so
-    changing it recreates the container). So the badge fires exactly when a
-    restart is really outstanding and never lies in the compose case. A failure to
-    re-read the environment simply yields no pending badge (fail-soft).
+    changing it recreates the container). Note an install whose launcher injects
+    these values (e.g. the native launchd install) manages them outside ``.env``,
+    so the badge correctly never fires for a key the launcher pins — the page copy
+    points at "your environment" rather than ``.env`` alone for that reason. If
+    the environment cannot be re-read at all (a broken edit fails validation), the
+    view reports ``restart_check_failed`` so the page says so honestly instead of
+    claiming nothing is pending.
     """
+    check_failed = False
     if environ_settings is None:
         try:
             environ_settings = Settings()
         except Exception:
             environ_settings = settings
+            check_failed = True
 
     fields: list[HardwareField] = []
     for attr, env_key, label, is_url in _HARDWARE_FIELDS:
@@ -157,6 +184,7 @@ def build_hardware_view(
         fields=tuple(fields),
         services=services,
         restart_pending=any(f.restart_pending for f in fields),
+        restart_check_failed=check_failed,
     )
 
 

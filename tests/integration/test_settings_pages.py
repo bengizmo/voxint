@@ -138,12 +138,36 @@ def test_status_page_reports_health_and_unknown_install(
     assert "unknown" in body  # install kind
 
 
-def test_hardware_page_shows_env_keys(session_factory: sessionmaker[Session]) -> None:
+def test_hardware_page_shows_env_keys(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Pin the environment re-read to a clean default Settings so the test does not
+    # pick up a repo-root .env and see a spurious "restart pending".
+    monkeypatch.setattr(
+        "voxint.api.settings_view.Settings",
+        lambda: Settings(_env_file=None),  # type: ignore[call-arg]
+    )
     client = _client(session_factory)
     body = client.get("/settings/hardware").text
     assert "ASR_URL" in body and "COMPUTE_TIER" in body
     # No environment change after boot, so nothing is pending.
     assert "restart pending" not in body
+    assert "Could not check for pending changes" not in body
+
+
+def test_restart_check_failed_is_honest_when_env_unreadable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If the environment cannot be re-read, the view says so rather than claiming
+    # nothing is pending (a false negative would hide a real change).
+    def _boom() -> Settings:
+        raise ValueError("bad .env")
+
+    monkeypatch.setattr("voxint.api.settings_view.Settings", _boom)
+    boot = Settings(_env_file=None)  # type: ignore[call-arg]
+    view = build_hardware_view(boot, (), environ_settings=None)
+    assert view.restart_check_failed is True
+    assert view.restart_pending is False
 
 
 def test_database_page_shows_size_or_honest_failure(
@@ -235,8 +259,12 @@ def test_plugin_detail_renders_active_plugin_section(
 ) -> None:
     tdir = tmp_path / "fakeplug_templates"
     tdir.mkdir()
+    # The sentinel renders only when the section receives the full settings
+    # context (csrf_settings), proving the detail page gives a plugin section the
+    # same context it gets inline on the hub (so a real CSRF-guarded form works).
     (tdir / "section.html").write_text(
-        '<section id="fakeplug"><h2>FAKE-SECTION-MARKER</h2></section>'
+        '<section id="fakeplug"><h2>FAKE-SECTION-MARKER</h2>'
+        "{% if csrf_settings %}<p>CSRF-CONTEXT-OK</p>{% endif %}</section>"
     )
     monkeypatch.setattr("voxint.plugins.BUILTIN", (RenderPlugin,))
     monkeypatch.setattr(
@@ -249,9 +277,10 @@ def test_plugin_detail_renders_active_plugin_section(
     listing = client.get("/settings/plugins").text
     assert "Fake Plugin" in listing
     assert "/settings/plugins/fakeplug" in listing
-    # Detail page renders the plugin's own contributed section.
+    # Detail page renders the plugin's own contributed section under full context.
     detail = client.get("/settings/plugins/fakeplug").text
     assert "FAKE-SECTION-MARKER" in detail
+    assert "CSRF-CONTEXT-OK" in detail
 
 
 def test_service_identity_view_renders_on_hardware(
