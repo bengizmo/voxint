@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.api.setup_wizard import ScanResult
 from voxint.config import Settings
-from voxint.db.models import AppSettings, MediaItem, PipelineRun, RunStatus
+from voxint.db.models import AppSettings, MediaFolder, MediaItem, PipelineRun, RunStatus
 from voxint.ingest.watch import WatchSweepSummary, _store_summary, sweep_watch_folders
 
 FOLDER = "clips"
@@ -49,6 +49,10 @@ def _seed_settings_row(
                 watch_folder_enabled=enabled,
             )
         )
+        # Since #153 the sweep walks the media_folders relation (watch=true), not the
+        # legacy app_settings column; register a row per folder.
+        for folder in folders:
+            s.add(MediaFolder(path=folder, watch=True))
         s.commit()
 
 

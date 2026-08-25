@@ -42,6 +42,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
 
 ### Changed
+- **Console 2.0 P2a: folder registration writes the media_folders relation**
+  (#153, epic #149). The setup wizard folder step and the Settings folder panel
+  now register folders as first-class `media_folders` rows through one shared,
+  serialized write service instead of the `app_settings` list, and the
+  submit-time domain-pack snapshot, the folder scan, and the watch-folder sweep
+  all read the folder set from that relation (no dual-write). Each run submitted
+  under a registered folder records its folder membership
+  (`media_items.media_folder_id`). One operator-visible change: registering a
+  folder that nests inside (or contains) an already-registered folder is now
+  refused, so every file belongs to exactly one folder; register only the parent
+  or only the child. The `app_settings.media_folders` / `folder_domain_packs`
+  columns are no longer written and remain only as a one-release rollback input.
 - **The dashboard folded into Home** (#152). `/dashboard` now issues a
   permanent redirect to `/`, and `/` no longer redirects to `/review`. The
   dashboard's task cards and stat figures live on Home; the hardware strip

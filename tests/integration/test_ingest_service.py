@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from voxint.app_settings import get_or_create
 from voxint.config import Settings
-from voxint.db.models import STAGE_ORDER, MediaItem, PipelineRun, RunStatus, Stage
+from voxint.db.models import (
+    STAGE_ORDER,
+    MediaFolder,
+    MediaItem,
+    PipelineRun,
+    RunStatus,
+    Stage,
+)
 from voxint.domain_packs.base import DomainPackError
 from voxint.ingest import (
     MissingStageError,
@@ -141,9 +148,10 @@ def test_submit_stamps_from_folder_mapping(
 ) -> None:
     _write_pack(tmp_path, "interview", name_seeds=["Jane Doe"])
     settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
+    # Since #153 the per-folder pack lives on the media_folders relation, which is
+    # where the submit-time snapshot now reads it from.
     with session_factory() as session:
-        row = get_or_create(session, llm_enabled_default=False)
-        row.folder_domain_packs = {"interviews": "interview"}
+        session.add(MediaFolder(path="interviews", domain_pack="interview"))
         session.commit()
     with session_factory() as session:
         mapped = submit_media_item(

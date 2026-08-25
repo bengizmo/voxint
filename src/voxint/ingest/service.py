@@ -47,6 +47,7 @@ from voxint.domain_packs.corrections import union_pack_corrections
 from voxint.domain_packs.registry import resolve_run_domain_pack
 from voxint.ingest.sidecar import Sidecar
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
+from voxint.media.registration import folder_pack_map, resolve_media_folder_id
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
     RunSnapshot,
@@ -201,10 +202,13 @@ def _run_domain_pack_snapshot(
 ) -> dict[str, Any]:
     """Freeze the domain-pack snapshot for a NEW run (issue #11).
 
-    Reads the per-folder mapping off the ``app_settings`` singleton and resolves
-    it (or an explicit name, or the default pack) against the configured packs.
-    ``source_path`` is ``None`` for uploads/URLs, which never sit under a watched
-    folder and so take the default unless an explicit name is supplied. Raises
+    Reads the per-folder pack mapping off the ``media_folders`` relation (issue
+    #153; the successor to ``app_settings.folder_domain_packs``) and resolves it
+    (or an explicit name, or the default pack) against the configured packs — the
+    resolution is byte-identical to the pre-relation path, just sourced from the
+    table the folder writes now target. ``source_path`` is ``None`` for
+    uploads/URLs, which never sit under a watched folder and so take the default
+    unless an explicit name is supplied. Raises
     :class:`~voxint.domain_packs.base.DomainPackError` on an unresolvable name —
     never a silent fallback.
 
@@ -215,7 +219,7 @@ def _run_domain_pack_snapshot(
     """
     resolved = settings or get_settings()
     row = get_app_settings(session)
-    folder_map = dict(row.folder_domain_packs) if row is not None else {}
+    folder_map = folder_pack_map(session)
     pack_snapshot = resolve_run_domain_pack(
         source_path,
         settings=resolved,
@@ -359,7 +363,10 @@ def submit_media_item_if_new(
         domain_pack_name=_effective_pack_name(domain_pack_name, sidecar),
         extra_name_seeds=sidecar.speakers if sidecar is not None else (),
     )
-    media = MediaItem(source_path=source_path)
+    media = MediaItem(
+        source_path=source_path,
+        media_folder_id=resolve_media_folder_id(session, source_path),
+    )
     try:
         with session.begin_nested():
             session.add(media)
@@ -401,13 +408,21 @@ def _get_or_create_media(session: Session, source_path: str) -> MediaItem:
     own run against, honouring "each submission mints a distinct run". (The API's
     uploads/URLs use uuid-namespaced paths that never collide; this guards the
     CLI's reuse-by-path and any future shared caller.)
+
+    A newly-created row is assigned its folder membership (issue #153,
+    ``media_folder_id``) from the deepest registered folder that contains
+    ``source_path`` — ``None`` when it sits under none. Assignment happens once, at
+    creation; a reused row keeps the membership it was created with.
     """
     existing = session.execute(
         select(MediaItem).where(MediaItem.source_path == source_path)
     ).scalar_one_or_none()
     if existing is not None:
         return existing
-    media = MediaItem(source_path=source_path)
+    media = MediaItem(
+        source_path=source_path,
+        media_folder_id=resolve_media_folder_id(session, source_path),
+    )
     try:
         # add() inside the savepoint so a rolled-back attempt is expunged and
         # cannot be re-INSERTed at the caller's later flush/commit.
