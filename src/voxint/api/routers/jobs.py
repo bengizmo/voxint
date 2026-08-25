@@ -25,9 +25,8 @@ from fastapi.responses import Response
 
 from voxint.api.jobs_query import recent_aux_jobs, stage_activity
 from voxint.api.resource_status import (
-    ResourceSnapshot,
     build_resource_strip,
-    collect_resource_status,
+    collect_resource_status_or_empty,
 )
 from voxint.api.routers.deps import (
     OperatorDep,
@@ -48,19 +47,6 @@ _RECENT_RUNS: Final[int] = 10
 _RECENT_AUX_JOBS: Final[int] = 20
 
 
-def _resource_snapshot(request: Request) -> ResourceSnapshot:
-    """The cached hardware snapshot for a render, guarded to never raise.
-
-    Mirrors the guarded read the dashboard/metrics pages use: telemetry is
-    advisory, so a probe failure degrades to an empty snapshot rather than
-    breaking the Jobs page.
-    """
-    try:
-        return collect_resource_status(request.app.state.settings)
-    except Exception:
-        return ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0)
-
-
 @router.get("/jobs", name="jobs")
 def jobs(request: Request, operator: OperatorDep, session: SessionDep) -> Response:
     page = list_runs(
@@ -79,7 +65,9 @@ def jobs(request: Request, operator: OperatorDep, session: SessionDep) -> Respon
         # silently disagree with the CLI.
         "stage_activity": stage_activity(session),
         "status_counts": run_status_counts(session),
-        "resource_strip": build_resource_strip(_resource_snapshot(request)),
+        "resource_strip": build_resource_strip(
+            collect_resource_status_or_empty(request.app.state.settings)
+        ),
         "runs": page.items,
         "aux_jobs": recent_aux_jobs(session, limit=_RECENT_AUX_JOBS),
     }

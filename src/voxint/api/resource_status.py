@@ -270,6 +270,20 @@ def collect_resource_status(
         return snap
 
 
+def collect_resource_status_or_empty(settings: Settings) -> ResourceSnapshot:
+    """:func:`collect_resource_status` guarded to never raise.
+
+    Telemetry is advisory: a probe failure must degrade to an empty snapshot
+    rather than break whatever page is rendering the strip. Shared by every
+    read-path caller (the dashboard/metrics/resource pages and the Jobs page) so
+    the never-raise contract lives in exactly one place.
+    """
+    try:
+        return collect_resource_status(settings)
+    except Exception:
+        return ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0)
+
+
 def _reset_cache_for_tests() -> None:
     """Drop the module cache so a test starts from a clean slate."""
     global _cache

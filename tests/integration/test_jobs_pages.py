@@ -139,6 +139,35 @@ def test_job_detail_unknown_run_is_404(client_flag_off: TestClient) -> None:
     assert client_flag_off.get(f"/jobs/{uuid.uuid4()}").status_code == 404
 
 
+def test_job_detail_suppresses_the_tutorial_banner(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """The one intentional behavioral delta of the extraction: /runs/{id} shows
+    the guided-tour banner in tutorial mode, /jobs/{id} suppresses it (the page
+    is dark-shipped and not in the tutorial's route map)."""
+    from voxint.tutorial.seed import seed_tutorial_run
+
+    settings = Settings(
+        voxint_user=CREDS[0], voxint_password=CREDS[1], media_root=tmp_path
+    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client.auth = CREDS
+    seed_onboarded(session_factory)
+    with session_factory() as session:
+        run_id = seed_tutorial_run(
+            session, media_root=settings.media_root, settings=settings
+        )
+        session.commit()
+
+    banner = 'aria-label="Guided tutorial"'
+    on_runs = client.get(f"/runs/{run_id}?tutorial=run")
+    assert on_runs.status_code == 200
+    assert banner in on_runs.text
+    on_jobs = client.get(f"/jobs/{run_id}?tutorial=run")
+    assert on_jobs.status_code == 200
+    assert banner not in on_jobs.text
+
+
 def test_sidebar_jobs_entry_points_at_runs_when_flag_off(
     client_flag_off: TestClient,
 ) -> None:

@@ -12,8 +12,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   table, and a normalized list of the auxiliary job families (asset, translation,
   embedding, research); `/jobs/{run_id}` absorbs the `/runs/{id}` run-detail page,
   rendering the same sections from a shared body partial so the two never drift.
-  The stage strip's totals reconcile with the run status counts `voxint stats`
-  reports, so the page and the CLI cannot silently disagree. `/jobs/{id}` reuses
+  The strip's queued totals break the queued run count `voxint stats` reports
+  down by stage (they sum to it exactly), so the page and the CLI cannot silently
+  disagree. `/jobs/{id}` reuses
   the existing `/runs/{id}/...` action endpoints rather than minting aliases. Both
   pages are registered unconditionally and reachable directly; the new
   environment flag `console_jobs_enabled` (default off) gates only the sidebar's

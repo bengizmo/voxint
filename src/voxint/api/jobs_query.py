@@ -13,11 +13,18 @@ Two truth rules keep the strip honest (codex-ratified, #160):
   ``stats_query.run_status_counts`` reports — the strip cannot silently disagree
   with ``voxint stats``.
 * **Active per stage** counts DISTINCT live runs that have a *running* stage
-  attempt, grouped by that attempt's stage. Counting distinct run ids means a
-  run with several running attempt rows (a stale lease plus a fresh claim) is
-  one active run, not several. Attempts belonging to archived or terminal runs
-  are excluded, so a crashed ``running`` row left behind by a finished run never
-  inflates the strip.
+  attempt **at the run's current stage**, grouped by that stage. Anchoring on
+  ``current_stage`` (a run's single authoritative position) makes active a true
+  per-run partition: a run with several running attempt rows at its current
+  stage (a stale lease plus a fresh claim) folds to one, and a stale ``running``
+  row left at a *previous* stage the run has already moved past cannot make the
+  same run appear active at two stages at once. Attempts belonging to archived
+  or terminal runs are excluded, so a crashed ``running`` row left behind by a
+  finished run never inflates the strip. Because a run contributes to at most
+  one stage, the active total never exceeds the running run count; it is below
+  it while a running run sits between stages with no worker on it yet, so the
+  page describes active as "a worker in that stage now", not as a figure that
+  reconciles with Running.
 
 The auxiliary families are heterogeneous: research jobs are speaker-scoped with
 a nullable run link, the other three are run-scoped. They are normalized into
@@ -117,6 +124,10 @@ def stage_activity(session: Session) -> list[StageActivity]:
             StageRun.status == StageStatus.RUNNING.value,
             PipelineRun.archived_at.is_(None),
             PipelineRun.status.in_(_LIVE_RUN_STATUSES),
+            # Anchor on the run's current stage so a stale running row left at a
+            # stage the run has already moved past cannot count it active there:
+            # a live run contributes to at most one stage (a true partition).
+            StageRun.stage == PipelineRun.current_stage,
         )
         .group_by(StageRun.stage)
     ).all()
@@ -146,7 +157,9 @@ def recent_aux_jobs(
     jobs: list[AuxJob] = []
 
     for asset in session.execute(
-        select(RunAssetJob).order_by(RunAssetJob.created_at.desc()).limit(bound)
+        select(RunAssetJob)
+        .order_by(RunAssetJob.created_at.desc(), RunAssetJob.id.desc())
+        .limit(bound)
     ).scalars():
         jobs.append(
             AuxJob(
@@ -162,7 +175,9 @@ def recent_aux_jobs(
         )
 
     for translation in session.execute(
-        select(TranslationJob).order_by(TranslationJob.created_at.desc()).limit(bound)
+        select(TranslationJob)
+        .order_by(TranslationJob.created_at.desc(), TranslationJob.id.desc())
+        .limit(bound)
     ).scalars():
         jobs.append(
             AuxJob(
@@ -178,7 +193,9 @@ def recent_aux_jobs(
         )
 
     for embedding in session.execute(
-        select(EmbeddingJob).order_by(EmbeddingJob.created_at.desc()).limit(bound)
+        select(EmbeddingJob)
+        .order_by(EmbeddingJob.created_at.desc(), EmbeddingJob.id.desc())
+        .limit(bound)
     ).scalars():
         jobs.append(
             AuxJob(
@@ -194,7 +211,9 @@ def recent_aux_jobs(
         )
 
     for research in session.execute(
-        select(ResearchJob).order_by(ResearchJob.created_at.desc()).limit(bound)
+        select(ResearchJob)
+        .order_by(ResearchJob.created_at.desc(), ResearchJob.id.desc())
+        .limit(bound)
     ).scalars():
         # Research is speaker-scoped: the run link is provenance only and may be
         # NULL, so it is never assumed present.
@@ -211,5 +230,7 @@ def recent_aux_jobs(
             )
         )
 
-    jobs.sort(key=lambda job: job.created_at, reverse=True)
+    # Sort by (created_at, id) so jobs sharing a commit timestamp order
+    # deterministically, matching the per-family SQL tie-break above.
+    jobs.sort(key=lambda job: (job.created_at, job.id), reverse=True)
     return jobs[:limit]

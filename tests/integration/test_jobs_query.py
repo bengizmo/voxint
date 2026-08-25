@@ -159,6 +159,41 @@ def test_stage_activity_excludes_stale_running_on_dead_runs(
     assert activity[Stage.TRANSCRIBE.value].active == 0
 
 
+def test_stage_activity_active_anchors_on_current_stage(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """A stale running attempt left at a stage the run has already moved past
+    must not make the run appear active at two stages: active is anchored on the
+    run's current_stage, so one live run contributes to exactly one stage."""
+    with session_factory() as session:
+        # Run is now at DIARIZE_EMBED, but a stale running TRANSCRIBE attempt
+        # from before the handoff is still on the ledger.
+        _make_run(
+            session,
+            status=RunStatus.RUNNING,
+            current_stage=Stage.DIARIZE_EMBED.value,
+            stages=[
+                {
+                    "stage": Stage.TRANSCRIBE.value,
+                    "status": StageStatus.RUNNING.value,
+                    "attempt": 1,
+                },
+                {
+                    "stage": Stage.DIARIZE_EMBED.value,
+                    "status": StageStatus.RUNNING.value,
+                    "attempt": 1,
+                },
+            ],
+        )
+        with session_factory() as read:
+            activity = {a.stage: a for a in stage_activity(read)}
+
+    assert activity[Stage.DIARIZE_EMBED.value].active == 1
+    # The stale prior-stage attempt does NOT count the run active at transcribe.
+    assert activity[Stage.TRANSCRIBE.value].active == 0
+    assert sum(a.active for a in activity.values()) == 1
+
+
 # ---- recent_aux_jobs --------------------------------------------------------
 
 
@@ -284,3 +319,27 @@ def test_recent_aux_jobs_per_family_bound(
     assert len(jobs) == 2
     assert {j.family for j in jobs} == {"asset", "translation"}
     assert next(j for j in jobs if j.family == "asset").detail == "entity_mentions"
+
+
+def test_recent_aux_jobs_ties_break_by_id_deterministically(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """Jobs sharing a commit timestamp order by id desc, so the merge and the
+    per-family cutoff are deterministic rather than arbitrary."""
+    with session_factory() as session:
+        run_id = _make_run(session, status=RunStatus.COMPLETED)
+        same = datetime(2026, 8, 25, 12, 0, 0, tzinfo=UTC)
+        for kind in ("summary", "topics", "entity_mentions"):
+            job = RunAssetJob(
+                pipeline_run_id=run_id, asset_kind=kind, status="failed", config={}
+            )
+            job.created_at = same
+            session.add(job)
+        session.commit()
+        with session_factory() as read:
+            first = [j.id for j in recent_aux_jobs(read)]
+            second = [j.id for j in recent_aux_jobs(read)]
+
+    assert first == second
+    # Descending id order for the tied rows.
+    assert first == sorted(first, reverse=True)
