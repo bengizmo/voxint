@@ -101,9 +101,16 @@
    control's current value so switching sort keeps the view and vice versa. An
    unknown ?sort=/?view= already degraded to the default in the route. #}
 <div class="lib-toolbar">
+  {# Both controls carry the OTHER control's current value AND the archived flag,
+     so switching sort or layout keeps you in the same view. #}
   <nav class="view-toggle" aria-label="Sort by">
     {% for value, label in sorts %}
-    <a href="/media?sort={{ value }}&view={{ view }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+    <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  <nav class="view-toggle" aria-label="Show as">
+    {% for value in views %}
+    <a href="/media?sort={{ sort }}&view={{ value }}{% if archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
     {% endfor %}
   </nav>
   {# Select-all is a JS convenience; it is hidden until the script below reveals
@@ -145,6 +152,9 @@
           <input type="checkbox" name="media_id" value="{{ row.id }}"
                  aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
                  {% if (row.id|string) in selected_ids %}checked{% endif %}>
+          {# Render-time latest-run baseline: archive/unarchive target this exact run
+             so a double-submit is idempotent (a replay drifts and skips). #}
+          <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
         </td>
         <td>
           <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
@@ -177,6 +187,8 @@
              {% if (row.id|string) in selected_ids %}checked{% endif %}>
       <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
     </label>
+    {# Render-time latest-run baseline (see the table view): idempotent archive. #}
+    <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
     <code class="muted">{{ row.source_path }}</code>
     <p class="muted">
       {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
@@ -220,7 +232,7 @@
 </form>
 
 {% if truncated %}
-<p class="muted">Showing the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
+<p class="muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
 {% if archived %}

@@ -196,7 +196,14 @@ def unregister_folder_by_id(
     filesystem; the reverted media keep their frozen run snapshots.
     """
     _lock(session)
-    row = session.get(MediaFolder, folder_id)
+    # Row-lock the folder (not just the advisory lock, which media_assign does not
+    # take) BEFORE counting: an assign's FK reference takes FOR KEY SHARE on this
+    # parent row, so a concurrent assign now either commits before the count (and is
+    # counted) or blocks and then fails once the row is deleted — it can never slip
+    # in between the count and the delete and be silently nulled out of the total.
+    row = session.execute(
+        select(MediaFolder).where(MediaFolder.id == folder_id).with_for_update()
+    ).scalar_one_or_none()
     if row is None:
         return False, 0  # already gone - idempotent
     reverted = session.execute(

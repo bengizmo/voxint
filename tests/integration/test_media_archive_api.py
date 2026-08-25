@@ -117,6 +117,22 @@ def _run(session_factory: sessionmaker[Session], run_id: uuid.UUID) -> PipelineR
         return run
 
 
+def _baselines(
+    session_factory: sessionmaker[Session],
+    media_ids: list[uuid.UUID],
+    *,
+    archived: bool,
+) -> list[str]:
+    """The render-time ``media_id:run_id`` baselines the /media page emits for these
+    files in the given view (latest run in view, or ``:none``) — the hidden
+    ``run_baseline`` fields the archive/unarchive routes now require."""
+    from voxint.api.routers.media import _latest_run_in_view
+
+    with session_factory() as session:
+        latest = _latest_run_in_view(session, media_ids, archived=archived)
+    return [f"{mid}:{latest.get(mid) or 'none'}" for mid in media_ids]
+
+
 # ---- archive: happy + latest-non-archived ------------------------------------
 
 
@@ -131,7 +147,11 @@ def test_archive_stamps_latest_terminal_run(
 
     resp = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=False),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -154,7 +174,11 @@ def test_archive_acts_on_latest_non_archived_run(
 
     resp = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=False),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -179,7 +203,11 @@ def test_archive_skips_file_with_no_run(
 
     resp = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=False),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -201,12 +229,18 @@ def test_archive_skips_live_latest_run(
 
     resp = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=False),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
     assert "archive_done=0" in resp.headers["location"]
-    assert "skipped=1" in resp.headers["location"]
+    # A live run is counted apart from a plain skip so the banner can say "cancel
+    # it first" rather than "no run to archive".
+    assert "live_skipped=1" in resp.headers["location"]
     assert _run(session_factory, run_id).archived_at is None
 
 
@@ -222,12 +256,77 @@ def test_archive_mixed_selection_reports_both_counts(
 
     resp = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(ok_id), str(empty_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(ok_id), str(empty_id)],
+            run_baseline=_baselines(
+                session_factory, [ok_id, empty_id], archived=False
+            ),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
     assert "archive_done=1" in resp.headers["location"]
     assert "skipped=1" in resp.headers["location"]
+
+
+# ---- idempotent replay + required baseline (issue #154 review) ---------------
+
+
+def test_archive_double_submit_archives_only_the_previewed_run(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A replay of the SAME archive POST must not slide onto the next-older run.
+
+    Two non-archived runs: the render-time baseline pins the newer one. The first
+    submit archives it; the replay carries the now-stale baseline (the latest in
+    view has moved), so it drifts and skips — the older run stays untouched.
+    """
+    with session_factory() as session:
+        m = _add_media(session, source_path="incoming/a.wav")
+        old = _add_run(session, m.id, status=RunStatus.COMPLETED, order=0)
+        new = _add_run(session, m.id, status=RunStatus.COMPLETED, order=5)
+        m_id, old_id, new_id = m.id, old.id, new.id
+        session.commit()
+
+    body = _data(
+        CSRF_MEDIA_ARCHIVE,
+        media_id=[str(m_id)],
+        run_baseline=_baselines(session_factory, [m_id], archived=False),
+    )
+    first = client.post("/media/archive", data=body, follow_redirects=False)
+    assert first.status_code == 303
+    assert "archive_done=1" in first.headers["location"]
+
+    # Replay the identical body — baseline now stale (new is archived): skip.
+    second = client.post("/media/archive", data=body, follow_redirects=False)
+    assert second.status_code == 303
+    assert "archive_done=0" in second.headers["location"]
+    assert "skipped=1" in second.headers["location"]
+
+    # Only the previewed (newer) run was archived; the older run is left alone.
+    assert _run(session_factory, new_id).archived_at is not None
+    assert _run(session_factory, old_id).archived_at is None
+
+
+def test_archive_selection_without_baseline_is_rejected(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """A checked file with no carried run_baseline is a stale/forged form: reject
+    the whole request with zero writes (the confirm route's discipline)."""
+    with session_factory() as session:
+        m = _add_media(session, source_path="incoming/a.wav")
+        run = _add_run(session, m.id, status=RunStatus.COMPLETED)
+        m_id, run_id = m.id, run.id
+        session.commit()
+
+    resp = client.post(
+        "/media/archive",
+        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),  # no run_baseline
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert _run(session_factory, run_id).archived_at is None
 
 
 # ---- unarchive: happy --------------------------------------------------------
@@ -244,7 +343,11 @@ def test_unarchive_clears_latest_archived_run(
 
     resp = client.post(
         "/media/unarchive",
-        data=_data(CSRF_MEDIA_UNARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_UNARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=True),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -265,7 +368,11 @@ def test_unarchive_skips_file_with_no_archived_run(
 
     resp = client.post(
         "/media/unarchive",
-        data=_data(CSRF_MEDIA_UNARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_UNARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=True),
+        ),
         follow_redirects=False,
     )
     assert resp.status_code == 303
@@ -320,7 +427,11 @@ def test_archive_then_unarchive_round_trip_preserves_media(
 
     archive = client.post(
         "/media/archive",
-        data=_data(CSRF_MEDIA_ARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_ARCHIVE,
+            media_id=[str(m_id)],
+            run_baseline=_baselines(session_factory, [m_id], archived=False),
+        ),
         follow_redirects=False,
     )
     assert archive.status_code == 303
@@ -328,7 +439,12 @@ def test_archive_then_unarchive_round_trip_preserves_media(
 
     unarchive = client.post(
         "/media/unarchive",
-        data=_data(CSRF_MEDIA_UNARCHIVE, media_id=[str(m_id)]),
+        data=_data(
+            CSRF_MEDIA_UNARCHIVE,
+            media_id=[str(m_id)],
+            # The run is archived now, so its baseline is taken in the archived view.
+            run_baseline=_baselines(session_factory, [m_id], archived=True),
+        ),
         follow_redirects=False,
     )
     assert unarchive.status_code == 303

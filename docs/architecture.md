@@ -577,8 +577,11 @@ config a fresh run would freeze through the read-only `preview_effective_config`
 seam and captures a per-file latest-run baseline, and the confirm step row-locks
 the selection, re-verifies each baseline, and mints one fresh run per surviving
 file in a single transaction, so a double-confirm creates at most one run per
-file. The archived view (`/media?archived=1`) lists files whose latest run is
-archived so bulk unarchive has a target. All routes are always registered (the
+file. Archive and restore carry each selected row's render-time latest-run id as a
+baseline and act on that exact run, skipping on drift, so a double-submit is
+idempotent rather than sliding onto the next-older run. The archived view
+(`/media?archived=1`) lists files whose latest run is archived so bulk unarchive
+has a target. All routes are always registered (the
 route inventory is stable across the flag flip) and 404 until the flag is on;
 flipping it also points the sidebar Media link and the Home "Add media" action at
 `/media` instead of the legacy `/runs` upload. No schema migration ships in P2b.

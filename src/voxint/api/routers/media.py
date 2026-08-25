@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated, Any, Final
 from urllib.parse import urlencode
 
@@ -26,6 +25,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
 from voxint.api.csrf import (
     CSRF_MEDIA_ARCHIVE,
@@ -236,6 +236,7 @@ def _success_notice(
     archive_done: str | None = None,
     unarchive_done: str | None = None,
     skipped: str | None = None,
+    live_skipped: str | None = None,
 ) -> dict[str, str] | None:
     """Build the post-redirect success banner from the PRG query params.
 
@@ -263,16 +264,30 @@ def _success_notice(
         text = f"Archived the latest run for {_files(archived_n)}."
         skip = _nonneg(skipped) or 0
         if skip > 0:
-            # Skip, not abort: a selected file with no terminal run to archive is
-            # reported, never silently dropped (the same posture as bulk re-run).
-            text += f" {_files(skip)} had no run to archive and were skipped."
+            # Skip, not abort: a file whose shown run had already been archived or
+            # had changed since the page loaded is reported, never silently dropped.
+            text += (
+                f" {_files(skip)} skipped (already archived or changed since you "
+                "loaded the page)."
+            )
+        live = _nonneg(live_skipped) or 0
+        if live > 0:
+            # A live latest run cannot be archived — say the action needed, rather
+            # than folding it into the generic skip count (honest UX).
+            text += (
+                f" {_files(live)} skipped because a run is still in progress; "
+                "cancel it first."
+            )
         return {"kind": "success", "text": text}
     restored_n = _nonneg(unarchive_done)
     if restored_n is not None:
         text = f"Restored the latest archived run for {_files(restored_n)}."
         skip = _nonneg(skipped) or 0
         if skip > 0:
-            text += f" {_files(skip)} had no archived run and were skipped."
+            text += (
+                f" {_files(skip)} skipped (already restored or changed since you "
+                "loaded the page)."
+            )
         return {"kind": "success", "text": text}
     return None
 
@@ -373,6 +388,7 @@ def media_library_page(
     archive_done: str | None = None,
     unarchive_done: str | None = None,
     skipped: str | None = None,
+    live_skipped: str | None = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
     # ?archived=1 flips to the archived-only view (mirrors /runs); anything else
@@ -385,6 +401,7 @@ def media_library_page(
         archive_done=archive_done,
         unarchive_done=unarchive_done,
         skipped=skipped,
+        live_skipped=live_skipped,
     )
     context = _library_context(
         request,
@@ -434,6 +451,14 @@ def media_submit_upload(
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
         ) from exc
+    except IntegrityError as exc:
+        # The picked settings folder was unregistered between the pre-check and the
+        # insert (a concurrent tab): fail cleanly rather than a raw 500.
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="The selected settings folder was removed. Reload and try again.",
+        ) from exc
     run_id = run.id
     # Commit-before-publish: the durable QUEUED run must exist before the enqueue,
     # so a broker outage is non-fatal (the recovery sweep republishes).
@@ -473,6 +498,14 @@ def media_fetch_url(
     except DomainPackError as exc:
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
+        ) from exc
+    except IntegrityError as exc:
+        # The picked settings folder was unregistered between the pre-check and the
+        # insert (a concurrent tab): fail cleanly rather than a raw 500.
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="The selected settings folder was removed. Reload and try again.",
         ) from exc
     run_id = run.id
     session.commit()
@@ -736,7 +769,13 @@ def _reread_sidecar(source_path: str, settings: Settings) -> Sidecar | None:
     minting a run against a half-read or broken sidecar. Never moves or rewrites
     bytes — only the paired ``.yaml`` is read (ADR 0002; AC-3).
     """
-    media_path = settings.media_root / Path(source_path)
+    # Defence-in-depth: source_path is a system-generated relative identity, but a
+    # corrupted/absolute value would let `/` discard media_root and read outside it.
+    # Resolve and confine; a path that escapes is treated as no sidecar (skip).
+    root = settings.media_root.resolve()
+    media_path = (root / source_path).resolve()
+    if not media_path.is_relative_to(root):
+        return None
     sidecar_path = find_sidecar(media_path)
     if sidecar_path is None:
         return None
@@ -1012,6 +1051,7 @@ def _bulk_set_archived(
     settings: Settings,
     *,
     media_id: list[str] | None,
+    run_baseline: list[str] | None,
     sort: str,
     view: str,
     archiving: bool,
@@ -1021,13 +1061,17 @@ def _bulk_set_archived(
     Archive acts on each file's latest NON-archived run (the active view, where the
     button lives); unarchive on each file's latest ARCHIVED run (the archived view).
     Prevalidates the whole selection with the shared helpers (malformed/empty/
-    oversized/deleted-since-render all reject with zero writes). Then, mirroring bulk
-    re-run's skip-not-abort posture, a per-item deliberate refusal is a SKIP, never
-    an abort: a file with no run in the view, or (archiving) whose latest run is live
-    and so not archivable, is counted skipped and reported honestly in the banner;
-    only an unexpected pre-commit failure rolls back to zero. Archive is reversible
-    per-run and idempotent, so no row lock or baseline is needed (unlike re-run,
-    which mints). On success it PRG-redirects to the acted-on view with counts.
+    oversized/deleted-since-render all reject with zero writes). Each selected row
+    carries its render-time latest-run id as a ``media_id:run_id`` baseline (the same
+    wire idiom as bulk re-run's confirm), so the action targets exactly the run the
+    operator saw. A replay finds that run already archived — the latest-in-view has
+    moved on — so the compare drifts and the item is SKIPPED, making a double-submit
+    idempotent (archiving is otherwise per-run idempotent but the *target* would
+    otherwise slide to the next-older run). Skip-not-abort mirrors re-run: a file
+    with no run in the view, a drifted/already-acted baseline, or (archiving) a live
+    latest run that is not archivable is a counted skip reported honestly in the
+    banner; only an unexpected pre-commit failure rolls back to zero. On success it
+    PRG-redirects to the acted-on view with counts.
     """
     raw_ids = media_id or []
     # Unarchive works over the archived view; archive over the active view. The
@@ -1058,13 +1102,34 @@ def _bulk_set_archived(
     except _SelectionError as exc:
         return _reject(exc.status_code, exc.text)
 
-    latest = _latest_run_in_view(session, parsed, archived=view_archived)
+    # Each selected file must carry its render-time latest-run baseline (the page
+    # emits one hidden pair per row); a checked id without one is a stale/forged
+    # form and rejects the whole request, matching the confirm route's discipline.
+    baseline_by_id: dict[uuid.UUID, str] = {}
+    for entry in run_baseline or []:
+        media_str, sep, baseline = entry.partition(":")
+        if not sep:
+            continue
+        try:
+            mu = uuid.UUID(media_str)
+        except ValueError:
+            continue
+        baseline_by_id.setdefault(mu, baseline)
+    if any(mu not in baseline_by_id for mu in parsed):
+        return _reject(
+            400, "That selection was not valid. Reload the page and try again."
+        )
+
+    current = _latest_run_in_view(session, parsed, archived=view_archived)
     done = 0
     skipped = 0
+    live_skipped = 0
     for media_uuid in parsed:
-        run_id = latest.get(media_uuid)
-        if run_id is None:
-            # No run in this view to act on — reported, never silently dropped.
+        run_id = current.get(media_uuid)
+        # Skip on drift: the run the operator saw is no longer the latest in this
+        # view (already archived on a replay, restored, or a newer run appeared), or
+        # the file has no run in the view. This targets exactly the previewed run.
+        if run_id is None or _baseline_str(run_id) != baseline_by_id[media_uuid]:
             skipped += 1
             continue
         try:
@@ -1073,8 +1138,9 @@ def _bulk_set_archived(
             else:
                 unarchive_run(session, run_id)
         except RunNotArchivableError:
-            # A live latest run (only archive hits this): cancel it first. Skip.
-            skipped += 1
+            # A live latest run (only archive hits this): cancel it first. Counted
+            # apart from a plain skip so the banner can say what action is needed.
+            live_skipped += 1
             continue
         except RunNotFoundError:
             # The run was deleted between resolve and act (a rare concurrent admin
@@ -1085,7 +1151,10 @@ def _bulk_set_archived(
 
     try:
         session.commit()
-    except IntegrityError:
+    except (IntegrityError, StaleDataError):
+        # A concurrent delete tripped a constraint (IntegrityError) or the run row
+        # vanished between resolve and flush (StaleDataError's 0-row UPDATE): nothing
+        # is committed (atomic), so report a clean 409 rather than a raw 500.
         return _reject(
             409,
             "Something changed while updating. Nothing was changed; reload and try "
@@ -1101,6 +1170,8 @@ def _bulk_set_archived(
         params["unarchive_done"] = done
     if skipped:
         params["skipped"] = skipped
+    if live_skipped:
+        params["live_skipped"] = live_skipped
     return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
 
 
@@ -1111,6 +1182,8 @@ def media_archive(
     session: SessionDep,
     # Optional/defaulted so a missing value never 422s before _require_csrf runs.
     media_id: Annotated[list[str] | None, Form()] = None,
+    # Per-row "media_id:run_id" render-time baselines (idempotent replay).
+    run_baseline: Annotated[list[str] | None, Form()] = None,
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
@@ -1122,8 +1195,8 @@ def media_archive(
     _require_csrf(request, CSRF_MEDIA_ARCHIVE, csrf_token)
     settings: Settings = request.app.state.settings
     return _bulk_set_archived(
-        request, session, settings, media_id=media_id, sort=sort, view=view,
-        archiving=True,
+        request, session, settings, media_id=media_id, run_baseline=run_baseline,
+        sort=sort, view=view, archiving=True,
     )
 
 
@@ -1133,6 +1206,8 @@ def media_unarchive(
     operator: OperatorDep,
     session: SessionDep,
     media_id: Annotated[list[str] | None, Form()] = None,
+    # Per-row "media_id:run_id" render-time baselines (idempotent replay).
+    run_baseline: Annotated[list[str] | None, Form()] = None,
     sort: Annotated[str, Form()] = DEFAULT_SORT,
     view: Annotated[str, Form()] = _DEFAULT_VIEW,
     csrf_token: Annotated[str | None, Form()] = None,
@@ -1143,6 +1218,6 @@ def media_unarchive(
     _require_csrf(request, CSRF_MEDIA_UNARCHIVE, csrf_token)
     settings: Settings = request.app.state.settings
     return _bulk_set_archived(
-        request, session, settings, media_id=media_id, sort=sort, view=view,
-        archiving=False,
+        request, session, settings, media_id=media_id, run_baseline=run_baseline,
+        sort=sort, view=view, archiving=False,
     )
