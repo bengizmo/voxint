@@ -44,8 +44,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   are now pinned by sha256 (each cross-checked against the md5 Zenodo publishes),
   and the emission verb has an acceptance run on the real archives: it extracted
   the full 611,829-clip native tree, transcoded the 53,392-clip subset, and
-  reproduced the pre-registered cohort hash, with the manifest, receipt, and
-  native FLAC shas all agreeing on sampled clips (see
+  reproduced the pre-registered cohort hash, with each sampled clip's manifest
+  PCM sha equal to its receipt canonical sha and its receipt native FLAC sha
+  equal to the recomputed FLAC sha (see
   `docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`).
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer
   arc). A `word`-timed highlight can be extracted as a standalone WAV clip: the

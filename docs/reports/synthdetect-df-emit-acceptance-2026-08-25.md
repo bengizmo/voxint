@@ -19,8 +19,8 @@ Gate-1 view) and a canonical `pcm-s16le-mono-16000-v1` corpus with a
 run the verb had only ever seen the synthetic tar fixtures in
 `tests/unit/test_synthdetect_df_emit.py`. This run drove it end to end on the
 real 34.5 GB of public audio and confirmed that the frozen selection, the
-extraction guards, the ffprobe gate, the ffmpeg transcode, and the atomic
-publish all hold on the genuine data.
+extraction guards, the ffprobe gate, the ffmpeg transcode, the whole-corpus
+re-audit, and the staged publish all hold on the genuine data.
 
 ## Inputs
 
@@ -43,8 +43,11 @@ whose bytes do not match.
 
 ## Result
 
-`emit` exited 0 and reported `ok: true`. Both roots published atomically (no
-staging directory survived).
+`emit` exited 0 and reported `ok: true`. Both staged roots were published by
+per-root atomic renames after the whole-corpus re-audit passed, and no staging
+directory survived. The two renames are each atomic but are not one pairwise
+transaction, so the whole-corpus audit before them, not the rename pair, is what
+guarantees a published corpus is complete.
 
 | Property | Value |
 |---|---|

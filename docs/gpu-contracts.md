@@ -1667,11 +1667,14 @@ per-clip language is not published for this multi-source eval, `language: und`.
 exercised only on synthetic tar fixtures, so it was run end to end on the four
 official public archives before the DF corpus is trusted. It extracted the full
 611,829-clip native FLAC tree, transcoded the 53,392-clip subset, and published
-both roots atomically; the emitted `cohort_hash` equals the pre-registered
-`13c4607c…`, and for sampled clips the manifest PCM-payload sha, the receipt's
-canonical sha, and the recomputed native FLAC sha all agree. The four part
-sha256 digests are now pinned (each cross-checked against the md5 Zenodo
-publishes). Evidence: `docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`.
+both staged roots by per-root atomic renames after the whole-corpus re-audit; the
+emitted `cohort_hash` equals the pre-registered `13c4607c…`, and for sampled
+clips the manifest PCM-payload sha equals the receipt's canonical PCM sha, while
+the receipt's native FLAC sha equals the recomputed sha of the FLAC on disk
+(these are two separate equalities, since the FLAC bytes and the decoded PCM
+bytes are different payloads). The four part sha256 digests are now pinned (each
+cross-checked against the md5 Zenodo publishes). Evidence:
+`docs/reports/synthdetect-df-emit-acceptance-2026-08-25.md`.
 
 #### Verdict: w2v2-aasist-df eval runtime QUALIFIED (RTX 3060, SM 8.6, 2026-08-25)
 
