@@ -563,6 +563,26 @@ now rollback-only and drop one release later; the `media_folders` relation is
 authoritative, edited through the folder browser on the setup wizard's media
 step and under **Settings → Media folders**.
 
+Console 2.0 P2b (#154) makes `/media` operable behind the same
+`CONSOLE_MEDIA_ENABLED` flag. Upload and URL fetch move onto the page (each may
+choose a settings folder that sets which vocabulary and corrections apply without
+moving the file, per the ADR 0002 addendum), a folder panel registers or
+unregisters folders, and a multi-select drives non-destructive bulk actions:
+assign a settings folder, re-run transcription, and archive or restore the latest
+run. Every bulk route prevalidates the whole selection before any write and then
+either applies atomically or reports each item's outcome; a deliberate refusal
+(a stale baseline, an unreadable sidecar, no run to archive) is a reported skip,
+not an aborted batch. Re-run is a two-step advisory flow: a preview resolves the
+config a fresh run would freeze through the read-only `preview_effective_config`
+seam and captures a per-file latest-run baseline, and the confirm step row-locks
+the selection, re-verifies each baseline, and mints one fresh run per surviving
+file in a single transaction, so a double-confirm creates at most one run per
+file. The archived view (`/media?archived=1`) lists files whose latest run is
+archived so bulk unarchive has a target. All routes are always registered (the
+route inventory is stable across the flag flip) and 404 until the flag is on;
+flipping it also points the sidebar Media link and the Home "Add media" action at
+`/media` instead of the legacy `/runs` upload. No schema migration ships in P2b.
+
 ## Review console (P5)
 
 Adjudication is **post-hoc**: runs complete normally and the console works a
