@@ -1572,15 +1572,17 @@ land near 2.85 %.
 `w2v2-aasist-df` checkpoint (`Best_LA_model_for_DF.pth`), not the production
 default `w2v2-aasist` (`LA_model.pth`): the published 2.85 % DF number is achieved
 by the DF-tuned checkpoint. Both gates load `w2v2-aasist-df` on both sides. The
-checkpoint is registered PINNED_UNQUALIFIED (sha256
+checkpoint is registered QUALIFIED as of 2026-08-25 (sha256
 `1cf904f1d84c867c278cd42161df5367939d61cc28bfefd239bc995af59c2804`, receipt:
-`docs/reports/synthdetect-weight-receipt-df-2026-08-25.md`); its promotion to
-QUALIFIED needs its own dated GPU determinism plus smoke verdict, exactly as
-`w2v2-aasist` earned in S2b. That ceremony is not inherited: sharing the vendored
-model definition and the XLS-R base does not qualify a different classifier
-checkpoint, and a fairseq checkpoint can carry optimizer or `cfg` state that loads
-differently, so the strict state-dict load is proven cold before the checkpoint is
-trusted.
+`docs/reports/synthdetect-weight-receipt-df-2026-08-25.md`; GPU verdict below). Its
+promotion to QUALIFIED earned its own dated GPU determinism plus smoke verdict,
+exactly as `w2v2-aasist` did in S2b. That ceremony was not inherited: sharing the
+vendored model definition and the XLS-R base does not qualify a different classifier
+checkpoint. Proving the load cold was warranted: the DF checkpoint is a bare state
+dict whose 674 keys are each `module.`-prefixed (saved from an `nn.DataParallel`
+model), where the default's are unprefixed. The registry declares that prefix as
+data on the `WeightFile` and the runner strips it (keys and `_metadata`) before the
+strict load, which on a single GPU is numerically identical to upstream's eval.
 
 **Two corpus views, never conflated.** The published 2.85 % was produced by the
 upstream stack's own data loading, so Gate-1 runs the unmodified upstream runner
@@ -1617,6 +1619,38 @@ a narrow, committed, benchmark-specific importer (verify operator-supplied
 official archives and keys by pinned sha, preserve the native tree, emit the
 subset receipt plus a canonical manifest) is the whole corpus surface. The full
 synthesize and degrade matrix is later sessions.
+
+#### Verdict: w2v2-aasist-df eval runtime QUALIFIED (RTX 3060, SM 8.6, 2026-08-25)
+
+The DF anchor `w2v2-aasist-df` earned its own dated GPU determinism plus smoke
+verdict, advancing it from `pinned_unqualified` to `qualified`. Evidence:
+`docs/reports/synthdetect-gpu-smoke-df-2026-08-25.md`.
+
+- **Runtime:** the S2b-frozen eval image (id
+  `sha256:d631e02156245c6a2245c32376d260fa8c8624608f590b7fc82de0107f4e6595`,
+  `torch 2.1.0+cu118`, fairseq `a540213`), pinned base digest, on one RTX 3060.
+- **Load proven cold.** The DF checkpoint is a bare state dict with all 674 keys
+  `module.`-prefixed (an `nn.DataParallel` save). The registry declares
+  `WeightFile.state_dict_key_prefix="module."` as data, `SOURCES_VERSION` bumped to
+  `synthdetect-sources-v3`; the runner strips the prefix from the keys and the
+  `_metadata` map (fail-closed unless every key uniformly carries it) then loads
+  `strict=True`. The applied strip is recorded in the journal header under
+  `checkpoint_loading.state_dict_key_prefix_removed` and flows into
+  `execution_identity_sha256`. The shipped default loads verbatim (prefix `None`),
+  so its already-qualified header and identity are byte-for-byte unchanged.
+- **Smoke:** functional run scores three canonical-PCM clips, one window each,
+  finite; `model_eval` and `inference_mode` measured true; polarity
+  `higher-is-more-synthetic`; resume adds no duplicate; fail-closed on a wrong clip
+  sha, a tampered weight sha, and a header-identity change on resume.
+- **Determinism spike:** four cold container starts, identical
+  `execution_identity_sha256`
+  (`93ff606bcd3b370fe5b7a073758cb24f37cfae8808fbd5e3a5760d488fbdb3ca`), max abs diff
+  of per-clip scores `0.0`, bit-identical repr, no NaN/Inf.
+
+This is a determinism and smoke claim for the frozen runtime, GPU class, and batch
+configuration, not a benchmark-reproduction claim. The 2.85 % ASVspoof 2021 DF EER
+reproduction is the S3 compare step (against the unmodified upstream runner on the
+seeded subset) and S4 (the full DF cohort).
 
 ### Calibration and holdout discipline
 

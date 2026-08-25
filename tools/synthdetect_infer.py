@@ -60,6 +60,7 @@ sys.path.insert(0, str(REPO / "tools"))
 from synthdetect_corpus import ClipEntry, Manifest, load_manifest  # noqa: E402
 from synthdetect_sources import (  # noqa: E402
     ModelEntry,
+    WeightFile,
     WindowingPolicy,
     assert_runnable,
     get_model,
@@ -360,6 +361,7 @@ def build_header(
     created_at: str,
     run_id: str,
     host: str,
+    state_dict_key_prefix_removed: str | None = None,
 ) -> dict[str, Any]:
     """Assemble the journal header (identity + provenance) the scorer reads.
 
@@ -411,6 +413,15 @@ def build_header(
         "run_id": run_id,
         "host": host,
     }
+    # Load provenance, present ONLY when a key-prefix strip was actually applied.
+    # The shipped default loads verbatim (None) and its header -- hence its proven
+    # execution_identity -- stays byte-for-byte unchanged; a checkpoint that needed
+    # a DataParallel unwrap (the DF anchor) records what ran, which then also flows
+    # into the identity so a resume can never mix differing load semantics.
+    if state_dict_key_prefix_removed is not None:
+        header["checkpoint_loading"] = {
+            "state_dict_key_prefix_removed": state_dict_key_prefix_removed
+        }
     header["execution_identity_sha256"] = execution_identity_sha256(header)
     return header
 
@@ -949,13 +960,17 @@ class LoadedEngine:
     ``weights`` is the verified {filename: {sha256, size_bytes}} map that went into
     the model; ``model_eval`` is the MEASURED assertion that every module is in
     eval mode after device placement (not a hard-coded hope); ``fairseq_version``
-    is the installed runtime version. All three flow into the journal header.
+    is the installed runtime version; ``state_dict_key_prefix_removed`` is the
+    prefix the loader ACTUALLY stripped from the checkpoint (None when the bytes
+    were loaded verbatim), recorded so provenance describes what ran, not merely
+    what the registry declared. All flow into the journal header.
     """
 
     engine: Engine
     weights: dict[str, Any]
     fairseq_version: str | None
     model_eval: bool
+    state_dict_key_prefix_removed: str | None = None
 
 
 # The verbatim, sha-pinned upstream model definition (SSL_Anti-spoofing model.py).
@@ -971,6 +986,62 @@ _VENDORED_MODEL_PATH = (
 # adapter resolves it by constructing the model with the weights dir as CWD, so
 # the vendored file stays byte-identical to upstream.
 _XLSR_UPSTREAM_FILENAME = "xlsr2_300m.pt"
+
+
+def _weight_by_role(model: ModelEntry, role: str) -> WeightFile:
+    """Return the single WeightFile playing ``role`` (fail closed if absent/ambiguous)."""
+    matches = [w for w in model.weights if w.role == role]
+    if len(matches) != 1:
+        raise InferError(
+            f"registry for {model.model_id} has {len(matches)} weights for role {role!r} "
+            "(expected exactly one)"
+        )
+    return matches[0]
+
+
+def _strip_state_dict_key_prefix(state: Any, prefix: str | None) -> str | None:
+    """Strip a declared DataParallel-style key prefix from a state dict, fail-closed.
+
+    ``prefix`` is the value the registry declared on the checkpoint's WeightFile
+    (only ``None`` or ``"module."`` are allowed by the registry rail). ``None``
+    loads the bytes verbatim (returns None, no mutation) -- the shipped default's
+    already-qualified path is untouched. Otherwise EVERY key must uniformly carry
+    the prefix (a non-empty dict where any key lacks it is a mis-declared
+    checkpoint and raises), then the prefix is stripped from both the tensor keys
+    and the ``_metadata`` map so the result is STRUCTURALLY identical to a
+    natively-saved (unwrapped) checkpoint's state dict -- the same shape the
+    default already loads. Pure dict manipulation (no torch import) so it is
+    unit-testable without a GPU; torch 2.1's own ``consume_prefix_in_state_dict``
+    strips only the keys, not ``_metadata``. The caller keeps ``strict=True`` on
+    the following load, so a wrong checkpoint still fails on the key mismatch.
+    Returns the prefix actually removed, for the journal's load-provenance record.
+    """
+    if prefix is None:
+        return None
+    keys = list(state.keys())
+    if not keys or not all(isinstance(k, str) and k.startswith(prefix) for k in keys):
+        raise InferError(
+            f"checkpoint declares state_dict_key_prefix {prefix!r} but not every key "
+            "uniformly carries it (a mis-declared prefix would mask a wrong checkpoint)"
+        )
+    n = len(prefix)
+    for k in keys:
+        state[k[n:]] = state.pop(k)
+    # Normalise ``_metadata`` the same way. A DataParallel state dict nests the
+    # real model one level down, so its metadata carries a wrapper root ("") plus
+    # the model's own root under the bare prefix ("module") and every submodule
+    # under "module.<path>". Map the model root onto the true root (dropping the
+    # wrapper's own entry) and unwrap each submodule, leaving exactly the metadata
+    # a natively-saved checkpoint would have.
+    meta = getattr(state, "_metadata", None)
+    if meta is not None:
+        bare = prefix[:-1] if prefix.endswith(".") else prefix  # "module." -> "module"
+        for mk in list(meta.keys()):
+            if mk == bare:
+                meta[""] = meta.pop(mk)
+            elif mk.startswith(prefix):
+                meta[mk[n:]] = meta.pop(mk)
+    return prefix
 
 
 @contextlib.contextmanager
@@ -1118,6 +1189,14 @@ def _load_real_engine(model: ModelEntry, weights_dir: Path, device_index: int) -
     # dict, and its bytes are already sha-verified above, so this loads no
     # untrusted code. strict=True rejects any missing or unexpected key.
     state = torch.load(str(aasist_path), map_location=device, weights_only=False)
+    # A checkpoint saved from an nn.DataParallel-wrapped model carries a "module."
+    # prefix on every key; the registry declares that as data on the WeightFile
+    # (never inferred here). Strip it before the strict load; None leaves the load
+    # verbatim (the shipped default's proven path is untouched). The strip fails
+    # closed unless every key uniformly carries the declared prefix, and the load
+    # stays strict=True, so a mis-declared prefix can never mask a wrong checkpoint.
+    aasist_weight = _weight_by_role(model, "aasist_checkpoint")
+    applied_prefix = _strip_state_dict_key_prefix(state, aasist_weight.state_dict_key_prefix)
     net.load_state_dict(state, strict=True)
     net.eval()
 
@@ -1133,7 +1212,8 @@ def _load_real_engine(model: ModelEntry, weights_dir: Path, device_index: int) -
     fairseq_version = getattr(fairseq, "__version__", None)
     engine = _FairseqAASISTEngine(net, device)
     return LoadedEngine(
-        engine=engine, weights=verified, fairseq_version=fairseq_version, model_eval=model_eval
+        engine=engine, weights=verified, fairseq_version=fairseq_version, model_eval=model_eval,
+        state_dict_key_prefix_removed=applied_prefix,
     )
 
 
@@ -1167,6 +1247,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         runtime=runtime, flags=flags, weights=loaded.weights,
         runner_git=runner_git_provenance(), created_at=_utcnow(), run_id=args.run_id or _utcnow(),
         host=os.uname().nodename,
+        state_dict_key_prefix_removed=loaded.state_dict_key_prefix_removed,
     )
 
     out = Path(args.out)

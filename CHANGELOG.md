@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S3: DF anchor GPU-qualified** (#144). The DF reproduction
+  checkpoint `w2v2-aasist-df` (`Best_LA_model_for_DF.pth`) advances from
+  `pinned_unqualified` to `qualified` on its own dated maintainer GPU verdict (one
+  RTX 3060): strict checkpoint load, all-modules-eval, correct polarity and window
+  counts, fail-closed on a wrong clip sha / a tampered weight / a header-identity
+  change on resume, and a bit-exact determinism spike across four cold container
+  starts (`docs/reports/synthdetect-gpu-smoke-df-2026-08-25.md`, plus a dated
+  verdict in `docs/gpu-contracts.md`). The load was proven cold and found to
+  differ from the default: the DF checkpoint was saved from an `nn.DataParallel`
+  model, so all its keys carry a `module.` prefix. `WeightFile` gains a declared
+  `state_dict_key_prefix` (data, not inferred; a closed vocabulary of `None` or
+  `"module."`) that the runner strips from the keys and the state-dict `_metadata`
+  before a strict load, which on a single GPU is numerically identical to
+  upstream's evaluation. The applied strip is recorded in the journal header
+  (`checkpoint_loading`) and flows into the execution identity; the shipped default
+  loads verbatim so its already-qualified path is untouched. The sources schema
+  version moves to `synthdetect-sources-v3`.
 - **Synthdetect M1 S3 reproduction pre-registration** (#144). The audio-deepfake
   eval harness gains its S3 protocol, frozen before any reproduction run and
   reviewed by two independent models. The registry now pins a second detector,

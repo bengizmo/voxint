@@ -305,6 +305,61 @@ def test_execution_identity_ignores_volatile_but_tracks_substance() -> None:
     assert d["execution_identity_sha256"] != a["execution_identity_sha256"]
 
 
+def test_build_header_records_applied_prefix_only_when_stripped() -> None:
+    # The default loads verbatim: no checkpoint_loading key, so its already-
+    # qualified execution identity is byte-for-byte unchanged. A stripped
+    # checkpoint records what ran, and that flows into the identity.
+    plain = _header()
+    assert "checkpoint_loading" not in plain
+    stripped = _header(state_dict_key_prefix_removed="module.")
+    assert stripped["checkpoint_loading"] == {"state_dict_key_prefix_removed": "module."}
+    assert stripped["execution_identity_sha256"] != plain["execution_identity_sha256"]
+    # None is the same as omitting it (default-preserving).
+    assert _header(state_dict_key_prefix_removed=None)["execution_identity_sha256"] == \
+        plain["execution_identity_sha256"]
+
+
+def test_strip_state_dict_key_prefix_none_is_verbatim() -> None:
+    state = {"module.a": 1, "b": 2}
+    before = dict(state)
+    assert si._strip_state_dict_key_prefix(state, None) is None
+    assert state == before  # untouched
+
+
+def test_strip_state_dict_key_prefix_unwraps_keys_and_metadata() -> None:
+    import collections
+
+    state = collections.OrderedDict({"module.x": 10, "module.y.z": 20})
+    # DataParallel metadata: wrapper root "", model root "module", nested submodule.
+    state._metadata = collections.OrderedDict(
+        {"": {"dp": True}, "module": {"version": 1}, "module.y": {"version": 2}}
+    )
+    applied = si._strip_state_dict_key_prefix(state, "module.")
+    assert applied == "module."
+    assert dict(state) == {"x": 10, "y.z": 20}
+    # metadata is structurally what a natively-saved checkpoint would carry:
+    # the model root at "", nested under its unwrapped path, wrapper root dropped.
+    assert dict(state._metadata) == {"": {"version": 1}, "y": {"version": 2}}
+
+
+def test_strip_state_dict_key_prefix_fails_closed_on_nonuniform_prefix() -> None:
+    # A checkpoint that declares "module." but has any un-prefixed key is
+    # mis-declared: refuse rather than silently load a wrong checkpoint.
+    with pytest.raises(si.InferError, match="uniformly carries it"):
+        si._strip_state_dict_key_prefix({"module.a": 1, "b": 2}, "module.")
+    with pytest.raises(si.InferError, match="uniformly carries it"):
+        si._strip_state_dict_key_prefix({}, "module.")
+
+
+def test_weight_by_role_is_exact() -> None:
+    df = get_model("w2v2-aasist-df")
+    w = si._weight_by_role(df, "aasist_checkpoint")
+    assert w.filename == "Best_LA_model_for_DF.pth"
+    assert w.state_dict_key_prefix == "module."
+    with pytest.raises(si.InferError, match="expected exactly one"):
+        si._weight_by_role(df, "no_such_role")
+
+
 def test_selection_sha256_is_order_sensitive() -> None:
     assert si.selection_sha256(["a", "b"]) != si.selection_sha256(["b", "a"])
 
