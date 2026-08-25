@@ -1637,6 +1637,32 @@ file bytes. v1 validation is untouched. This shape was chosen after an
 independent two-model design review; it is deliberately one benchmark variant,
 not a general benchmark ontology (a second benchmark earns its own review).
 
+**Emission (2026-08-25): the importer materialises both views from verified
+archives.** `tools/synthdetect_df_import.py` gains the audio-dependent half as an
+`emit` verb (an audio-free `select` verb emits just the trial list and receipt).
+`emit` verifies the operator's official keys and audio archives against pinned
+sha256 digests, then extracts the native FLAC tree itself from those verified
+bytes rather than trusting a tree it is handed: a pinned archive proves the
+archive bytes, not that an existing extraction came from them. Extraction is
+fail-closed (absolute, traversing, linked, device, and duplicate FLAC members are
+rejected; the split parts merge into one tree). Each selected trial's exact native
+FLAC (resolved by trial id, never a basename search) is probed for the canonical
+properties (one FLAC stream, 16 kHz, mono, 16-bit) and transcoded with ffmpeg to
+the `pcm-s16le-mono-16000-v1` view without `-ar`/`-ac`, so a non-conforming source
+is caught rather than silently resampled, and the output is re-verified by the
+runner's own `read_canonical_pcm`. The manifest's per-clip sha is the PCM payload
+only and `duration_s` is derived from the decoded frame count. A per-trial receipt
+(`clip_receipt.jsonl`) binds each row's native FLAC sha256 to the canonical PCM
+sha256 the manifest scores, giving the paired Gate-2 comparison a cryptographic
+path from a pinned archive byte to a scored canonical sample and closing the one
+failure a schema-valid manifest cannot catch: a trial id pointed at another
+trial's audio, which both runners could then agree on. The native tree and the
+corpus are staged and the whole corpus re-reads and revalidates before either is
+published atomically, so a partial or unverified corpus is never left behind. The
+official DF archives carry the Open Database License (DbCL-1.0 contents over an
+ODbL-1.0 database); imported clips record `license_spdx: ODbL-1.0` and, as the
+per-clip language is not published for this multi-source eval, `language: und`.
+
 #### Verdict: w2v2-aasist-df eval runtime QUALIFIED (RTX 3060, SM 8.6, 2026-08-25)
 
 The DF anchor `w2v2-aasist-df` earned its own dated GPU determinism plus smoke

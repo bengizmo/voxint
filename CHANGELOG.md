@@ -53,7 +53,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   a fail-closed parser for the official `trial_metadata.txt` and the frozen,
   seeded (`voxint-synthdetect-144`), stratified (label by codec condition, `eval`
   split only) hash-rank selection of the 10 % subset, emitting a canonically
-  ordered trial list bound by a cohort hash. The shape was chosen after an
+  ordered trial list bound by a cohort hash. The same tool now also carries the
+  audio-dependent emission verb: `emit` verifies the operator's official archives
+  by pinned sha, safely extracts an untouched native FLAC tree from those verified
+  bytes (rejecting absolute, traversing, linked, or duplicate members), transcodes
+  each selected trial's exact native FLAC to the canonical
+  `pcm-s16le-mono-16000-v1` view with ffmpeg (no resample: a non-conforming source
+  is rejected before and after), and writes a v2 `imported_benchmark` manifest
+  whose per-clip sha is the PCM payload only, alongside a per-trial receipt that
+  binds each pinned-archive FLAC to the exact canonical PCM the manifest scores.
+  Nothing is published until the whole corpus re-reads and revalidates, so a
+  partial or misbound corpus is never left behind; an audio-free `select` verb
+  emits just the trial list and selection receipt. The shape was chosen after an
   independent two-model design review; see the S3 pre-registration refinement note
   in `docs/gpu-contracts.md`.
 - **Attributed audio-clip extraction** (#88, completes the operator-output-layer
