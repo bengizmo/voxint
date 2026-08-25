@@ -78,6 +78,18 @@
   ]
  ],
  [
+  "/media/submit",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/fetch",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

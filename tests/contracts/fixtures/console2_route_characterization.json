@@ -64,6 +64,22 @@
     true
   ],
   [
+    "/media/fetch",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/submit",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{run_id}",
     [],
     "onboarding",

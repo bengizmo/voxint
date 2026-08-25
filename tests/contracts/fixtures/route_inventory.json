@@ -48,6 +48,18 @@
     ]
   ],
   [
+    "/media/fetch",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],

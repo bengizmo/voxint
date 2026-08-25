@@ -138,6 +138,12 @@ CSRF_PROJECT_ASSIGN = "project-assign"
 # same action as its save.
 CSRF_PROJECT_VOCAB = "project-vocabulary"
 CSRF_PROJECT_CORRECTIONS = "project-corrections"
+# Media library ingest (issue #154, Console 2.0 P2b). Upload and URL fetch move
+# onto /media with their own action tokens, distinct from the legacy /submit and
+# /fetch forms' CSRF_SUBMIT/CSRF_FETCH so a token minted on one surface is not
+# valid on the other.
+CSRF_MEDIA_SUBMIT = "media-submit"
+CSRF_MEDIA_FETCH = "media-fetch"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

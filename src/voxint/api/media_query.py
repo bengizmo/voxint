@@ -61,6 +61,37 @@ class MediaLibraryRow:
     latest_run_at: datetime | None
 
 
+@dataclass(frozen=True)
+class FolderOption:
+    """One registered folder for the upload/assign settings-folder picker.
+
+    ``project_name`` labels the folder by the project it joins (``None`` for a
+    folder in no project). The picker sets a settings SCOPE, not a project
+    membership, so it renders whether or not the projects area is enabled.
+    """
+
+    id: uuid.UUID
+    path: str
+    project_name: str | None
+
+
+def folder_options(session: Session) -> list[FolderOption]:
+    """Registered folders for the picker, path-sorted, each labelled by project."""
+    stmt = (
+        sa_select(
+            MediaFolder.id,
+            MediaFolder.path,
+            Project.name.label("project_name"),
+        )
+        .outerjoin(Project, Project.id == MediaFolder.project_id)
+        .order_by(func.lower(MediaFolder.path))
+    )
+    return [
+        FolderOption(id=row.id, path=row.path, project_name=row.project_name)
+        for row in session.execute(stmt)
+    ]
+
+
 # Allowlisted sort keys -> the ORDER BY columns. A ?sort= outside this map
 # degrades to the default rather than 422-ing (the Home ?window= convention),
 # so a bookmarked or hand-typed value never breaks the page. Every ordering
