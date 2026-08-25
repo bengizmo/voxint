@@ -22,6 +22,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   services or Redis are unavailable, and never edit the environment or restart a
   service. No `/resources` redirect or version bump ships here: that activation
   is a later slice.
+- **synthdetect Gate-2: DF reproduction paired equivalence RATIFIED** (#144, M1
+  S3). The frozen `w2v2-aasist-df` eval container was measured against an
+  independent, unmodified-upstream reference (verbatim upstream `model.py` +
+  `data_utils_SSL.py` at the pinned commit, in an image derived from the frozen
+  eval image with only `librosa` added) on the 53,392-clip canonical DF subset.
+  The decision threshold was frozen from the reference before agreement was
+  inspected. Result: subset EER identical (2.2193 % both), Spearman 0.99858,
+  decision agreement 99.985 % (every disagreement within 0.0024 of the
+  threshold), exact coverage. The per-clip logit tail (max 0.152) is attributed
+  entirely to cuDNN convolution TF32 (upstream leaves the Ampere default on; our
+  runner disables it for full fp32); with TF32 matched the reference reproduces
+  our container's scores exactly, so the two are the same function and the tail
+  preserves the EER and ranking. No shipped-runner change is warranted. Verdict in
+  `docs/gpu-contracts.md`; evidence in
+  `docs/reports/synthdetect-gate2-2026-08-25.md`. The 2.85 % full-corpus EER
+  (Gate-1) defers to S4.
 - **Console 2.0 Jobs area, dark-shipped** (#160, epic #149 Track C). Two new
   console pages: `/jobs` shows a per-stage pipeline-activity strip
   (queued/active), the per-service hardware-health strip, a compact recent-runs
