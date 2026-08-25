@@ -94,7 +94,7 @@
       {% for row in overview.rows %}
       <tr>
         <td>
-          {{ row.entry.speaker.display_name }}
+          <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
           {{ verified_badge(row) }}
         </td>
         <td>{{ row.aggregate.files }}</td>
@@ -121,7 +121,7 @@
         {%- endfor -%}
       </svg>
       {% endif %}
-      {{ row.entry.speaker.display_name }}
+      <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
       {{ verified_badge(row) }}
     </div>
     <p class="muted">

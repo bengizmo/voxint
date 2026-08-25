@@ -13,10 +13,10 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from voxint.api.csrf import (
     CSRF_PROFILE_DECISION,
@@ -27,6 +27,7 @@ from voxint.api.csrf import (
     CSRF_ROSTER_MERGE,
     CSRF_ROSTER_RENAME,
     CSRF_ROSTER_RESTORE,
+    CSRF_SPEAKER_PROFILE_EDIT,
     mint_csrf_token,
 )
 from voxint.api.routers.deps import (
@@ -34,6 +35,7 @@ from voxint.api.routers.deps import (
     SessionDep,
     _require_csrf,
     require_onboarded,
+    require_speakers_enabled,
     templates,
 )
 from voxint.api.speakers_query import (
@@ -52,6 +54,8 @@ from voxint.config import Settings
 from voxint.db.models import (
     ClaimField,
     EnrichmentCandidate,
+    MediaItem,
+    PipelineRun,
     ProfileDecision,
     ResearchJob,
     ResearchJobStatus,
@@ -71,18 +75,29 @@ from voxint.enrichment.research_jobs import (
 from voxint.enrichment.review import ConflictingReplayError as EnrichmentReplayError
 from voxint.enrichment.review import StaleCandidateError, record_profile_decision
 from voxint.enrichment.triage import TriageScore, parse_authority_domains
+from voxint.speakers.aggregate import aggregate_for_speaker, enrollment_count
 from voxint.speakers.matching import gates_from_settings
+from voxint.speakers.profile import (
+    ProfileFieldError,
+    clear_profile_field,
+    profile_for,
+    set_profile_field,
+)
 from voxint.speakers.roster import (
     RosterError,
     RosterNotFoundError,
+    alias_ids,
     archive_speaker,
+    canonicalize,
     delete_embedding,
+    merge_map,
     merge_speakers,
     rename_speaker,
     restore_speaker,
     roster_overview,
     voiceprint_bars,
 )
+from voxint.speakers.tiers import evidence_for, tier_for
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +142,12 @@ def _research_state(
         .order_by(ResearchJob.created_at.desc(), ResearchJob.id.desc())
         .limit(1)
     ).scalar_one_or_none()
+    # Alias-aware (#159): drafts recorded under an id later merged into this
+    # speaker stay reviewable — the accept path canonicalizes on write anyway.
     views = [
         view
-        for view in candidates_for_speaker(session, speaker.id)
+        for sid in sorted(alias_ids(session, speaker.id), key=str)
+        for view in candidates_for_speaker(session, sid)
         if view.candidate.field in _PROFILE_FIELDS
     ]
     row = get_app_settings(session)
@@ -176,6 +194,14 @@ def _research_csrf(request: Request) -> dict[str, Any]:
     }
 
 
+def _research_qs(request: Request) -> str:
+    """The page-context query string research URLs round-trip (#159): the
+    profile page's research forms carry ``?page=profile`` so their responses
+    keep rendering profile-aware URLs (and the decision response knows to
+    refresh the profile panel). Everywhere else: empty, markup unchanged."""
+    return "?page=profile" if request.query_params.get("page") == "profile" else ""
+
+
 def _research_response(
     request: Request, session: Session, speaker: Speaker, error: str | None = None
 ) -> Response:
@@ -187,6 +213,7 @@ def _research_response(
         {
             "request": request,
             "research": _research_state(session, request.app.state.settings, speaker, error),
+            "research_qs": _research_qs(request),
             **_research_csrf(request),
         },
     )
@@ -523,10 +550,12 @@ def decide_profile_candidate(
         raise HTTPException(status_code=422, detail=f"unknown verdict {verdict!r}") from exc
     candidate = session.get(EnrichmentCandidate, candidate_id)
     # This surface serves speaker-scoped profile fields only; NAME stays on
-    # the workbench's suggestion flow.
+    # the workbench's suggestion flow. Alias-aware (#159): a draft recorded
+    # under an id since merged into this speaker is still this speaker's.
     if (
         candidate is None
-        or candidate.speaker_id != speaker_id
+        or candidate.speaker_id is None
+        or candidate.speaker_id not in alias_ids(session, speaker_id)
         or candidate.field not in _PROFILE_FIELDS
     ):
         raise HTTPException(status_code=404, detail="no such candidate for this speaker")
@@ -545,5 +574,162 @@ def decide_profile_candidate(
         ) from exc
     except EnrichmentReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if _research_qs(request):
+        # Profile-page context (#159): an accept may have materialized a
+        # profile field, so the htmx response carries the refreshed profile
+        # panel out-of-band alongside the research fragment; without JS the
+        # 303 re-renders the whole page.
+        if not request.headers.get("HX-Request"):
+            return RedirectResponse(f"/speakers/{speaker.id}", status_code=303)
+        research_html = templates.env.get_template("speakers/research.html").render(
+            research=_research_state(session, request.app.state.settings, speaker),
+            research_qs=_research_qs(request),
+            **_research_csrf(request),
+        )
+        panel_html = templates.env.get_template("speakers/profile_panel.html").render(
+            _profile_panel_context(request, session, speaker), profile_oob=True
+        )
+        return HTMLResponse(research_html + panel_html)
     return _research_response(request, session, speaker)
 
+
+
+# ---- Speaker profile page (Console 2.0 P4, issue #159) ---------------------
+# New routes, so they ride the area gate (404 while console_speakers_enabled
+# is off) — unlike GET /speakers, which is live and branches skins instead.
+
+
+def _profile_panel_context(
+    request: Request, session: Session, speaker: Speaker, error: str | None = None
+) -> dict[str, Any]:
+    """Context for the profile-panel fragment (page include, htmx re-render,
+    and the research-decision out-of-band refresh)."""
+    secret = request.app.state.csrf_secret
+    return {
+        "speaker": speaker,
+        "profile": profile_for(session, speaker.id),
+        "profile_fields": _PROFILE_FIELDS,
+        "archived": speaker.deleted_at is not None,
+        "profile_error": error,
+        "csrf_profile_edit": mint_csrf_token(secret, CSRF_SPEAKER_PROFILE_EDIT),
+    }
+
+
+def _profile_context(
+    request: Request, session: Session, speaker: Speaker, error: str | None = None
+) -> dict[str, Any]:
+    """The full profile page's context: stats, tier evidence, profile panel,
+    research block, and the associated-recordings table."""
+    settings: Settings = request.app.state.settings
+    aggregate = aggregate_for_speaker(session, speaker.id)
+    gates = gates_from_settings(settings)
+    evidence = evidence_for(session, aggregate.grounded_keys)
+    run_ids = {a.run_id for a in aggregate.appearances}
+    runs_by_id = {
+        run.id: run
+        for run in session.execute(
+            select(PipelineRun)
+            .where(PipelineRun.id.in_(run_ids))
+            .options(
+                selectinload(PipelineRun.media_item).selectinload(
+                    MediaItem.source_metadata
+                )
+            )
+        ).scalars()
+    } if run_ids else {}
+    return {
+        "request": request,
+        "aggregate": aggregate,
+        "tier": tier_for(evidence, gates),
+        "gates": gates,
+        "enrollments": enrollment_count(session, speaker.id),
+        "runs_by_id": runs_by_id,
+        "research": _research_state(session, settings, speaker),
+        "research_qs": "?page=profile",
+        "active_nav": "speakers",
+        "now": datetime.now(UTC),
+        **_profile_panel_context(request, session, speaker, error),
+        **_research_csrf(request),
+    }
+
+
+@router.get("/speakers/{speaker_id}", dependencies=[Depends(require_speakers_enabled)])
+def speaker_profile_page(
+    speaker_id: uuid.UUID, request: Request, operator: OperatorDep, session: SessionDep
+) -> Response:
+    speaker = _speaker_or_404(session, speaker_id)
+    if speaker.merged_into_id is not None:
+        # A merged-away id is a tombstone, not a page: follow the merge chain
+        # so old bookmarks land on the speaker that absorbed it.
+        canonical = canonicalize(speaker.id, merge_map(session))
+        return RedirectResponse(f"/speakers/{canonical}", status_code=303)
+    return templates.TemplateResponse(
+        request, "speakers/profile.html", _profile_context(request, session, speaker)
+    )
+
+
+@router.post(
+    "/speakers/{speaker_id}/profile", dependencies=[Depends(require_speakers_enabled)]
+)
+def speaker_profile_edit(
+    speaker_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    field: Annotated[str, Form()],
+    value: Annotated[str | None, Form()] = None,
+    action: Annotated[str, Form()] = "save",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Manually set or clear one profile field (#159).
+
+    ``action=clear`` removes the field; anything else saves ``value``. Writes
+    go through ``speakers/profile.py`` (canonical-speaker lock inside), so a
+    concurrent accept, merge, or second edit serializes cleanly. Operator
+    mistakes (bad field, empty value) re-render the panel inline; archived
+    speakers are read-only and refuse with a 409."""
+    _require_csrf(request, CSRF_SPEAKER_PROFILE_EDIT, csrf_token)
+    speaker = _speaker_or_404(session, speaker_id)
+    if speaker.merged_into_id is not None:
+        speaker = _speaker_or_404(session, canonicalize(speaker.id, merge_map(session)))
+    if speaker.deleted_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="speaker is archived; restore it before editing the profile",
+        )
+    try:
+        if action == "clear":
+            clear_profile_field(
+                session, speaker_id=speaker.id, field=field, operator=operator
+            )
+        else:
+            set_profile_field(
+                session,
+                speaker_id=speaker.id,
+                field=field,
+                value=value or "",
+                operator=operator,
+            )
+    except ProfileFieldError as exc:
+        session.rollback()
+        return _profile_edit_response(request, session, speaker, error=str(exc))
+    return _profile_edit_response(request, session, speaker)
+
+
+def _profile_edit_response(
+    request: Request, session: Session, speaker: Speaker, error: str | None = None
+) -> Response:
+    """Post-edit response: htmx swaps the refreshed panel (errors inline), a
+    plain form POST gets a 303 back to the page — or the full page when it
+    carries an error to show. Mirrors ``_roster_response``."""
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request,
+            "speakers/profile_panel.html",
+            _profile_panel_context(request, session, speaker, error),
+        )
+    if error is not None:
+        return templates.TemplateResponse(
+            request, "speakers/profile.html", _profile_context(request, session, speaker, error)
+        )
+    return RedirectResponse(f"/speakers/{speaker.id}", status_code=303)

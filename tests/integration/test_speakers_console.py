@@ -282,3 +282,262 @@ def test_empty_state_and_restore_section(
     page = client.get("/speakers")
     assert "Former speakers (1)" in page.text
     assert "Restore" in page.text
+
+
+# ---- Profile page (#159): dark routes, stats, edits, OOB refresh -----------
+
+
+def _seed_candidate(
+    session: Session, speaker_id: uuid.UUID, field: str, value: str
+) -> uuid.UUID:
+    """One proposed research draft for the speaker (test_speaker_profile idiom)."""
+    from voxint.db.models import EnrichmentCandidate, EnrichmentProducerRun
+
+    now = datetime.now(UTC)
+    run = EnrichmentProducerRun(
+        producer="test-producer",
+        producer_version="1",
+        target_kind="speaker",
+        speaker_id=speaker_id,
+        covered_fields=[field],
+        generation=1,
+        outcome="found",
+        idempotency_key=f"prod-{uuid.uuid4()}",
+        started_at=now,
+        completed_at=now,
+    )
+    session.add(run)
+    session.flush()
+    cand = EnrichmentCandidate(
+        producer_run_id=run.id,
+        target_kind="speaker",
+        speaker_id=speaker_id,
+        field=field,
+        value=value,
+    )
+    session.add(cand)
+    session.flush()
+    return cand.id
+
+
+def _profile_edit_token(page_text: str) -> str:
+    """The CSRF token inside a profile-panel edit form (it is the hidden input
+    immediately followed by the ``field`` input)."""
+    import re
+
+    match = re.search(
+        r'name="csrf_token" value="([^"]+)">\s*<input type="hidden" name="field"',
+        page_text,
+    )
+    assert match, "no profile edit form on the page"
+    return match.group(1)
+
+
+def _decision_token(page_text: str) -> str:
+    """The CSRF token inside a research decision form (followed by the nonce)."""
+    import re
+
+    match = re.search(
+        r'name="csrf_token" value="([^"]+)">\s*<input type="hidden" name="nonce"',
+        page_text,
+    )
+    assert match, "no decision form on the page"
+    return match.group(1)
+
+
+def test_profile_routes_dark_when_flag_off(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=False)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=1, human=True
+        )
+        session.commit()
+    assert client.get(f"/speakers/{speaker_id}").status_code == 404
+    assert (
+        client.post(
+            f"/speakers/{speaker_id}/profile", data={"field": "bio", "value": "x"}
+        ).status_code
+        == 404
+    )
+
+
+def test_profile_page_renders_stats_research_and_recordings(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=2, human=True
+        )
+        session.commit()
+    page = client.get(f"/speakers/{speaker_id}")
+    assert page.status_code == 200
+    assert "Alice" in page.text
+    assert "Verified" in page.text
+    # Stats header: 1 file, 2 segments, first/last "file added" labeling.
+    assert "First file added" in page.text
+    assert "2 segments" in page.text
+    # Profile panel with edit forms, research block, recordings table.
+    assert 'id="profile-panel"' in page.text
+    assert "not set" in page.text
+    assert f'id="research-{speaker_id}"' in page.text
+    assert "/runs/" in page.text  # recordings drill through to the run page
+    assert "confirmed" in page.text  # the human-assign chip on the appearance
+
+
+def test_profile_tombstone_redirects_and_archived_reads_only(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    from voxint.speakers.roster import merge_speakers as do_merge
+
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        source = _seed_speaker_with_activity(session, "Dupe", minutes_rank=1, human=True)
+        target = _seed_speaker_with_activity(session, "Keep", minutes_rank=1, human=True)
+        do_merge(session, source, target)
+        archived = _seed_speaker_with_activity(
+            session, "Old voice", minutes_rank=1, human=True
+        )
+        session.commit()
+    moved = client.get(f"/speakers/{source}", follow_redirects=False)
+    assert moved.status_code == 303
+    assert moved.headers["location"] == f"/speakers/{target}"
+    with session_factory() as session:
+        session.get(Speaker, archived).deleted_at = BASE
+        session.commit()
+    page = client.get(f"/speakers/{archived}")
+    assert page.status_code == 200
+    assert "archived" in page.text
+    assert 'name="field"' not in page.text  # no edit forms
+    assert f'id="research-{archived}"' not in page.text  # research off
+    refused = client.post(
+        f"/speakers/{archived}/profile",
+        data={"field": "bio", "value": "x", "csrf_token": "bogus"},
+    )
+    assert refused.status_code == 403  # CSRF refuses before the archived check
+
+
+def test_profile_manual_edit_set_clear_and_refusals(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=1, human=True
+        )
+        session.commit()
+    token = _profile_edit_token(client.get(f"/speakers/{speaker_id}").text)
+    # Plain POST: 303 back to the page; the value persists with manual provenance.
+    plain = client.post(
+        f"/speakers/{speaker_id}/profile",
+        data={"field": "bio", "value": "Ornithologist.", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert plain.status_code == 303
+    assert plain.headers["location"] == f"/speakers/{speaker_id}"
+    page = client.get(f"/speakers/{speaker_id}")
+    assert "Ornithologist." in page.text
+    assert "entered by hand" in page.text
+    # htmx POST: the refreshed panel fragment only.
+    fragment = client.post(
+        f"/speakers/{speaker_id}/profile",
+        data={"field": "affiliation", "value": "Birds Inc", "csrf_token": token},
+        headers={"HX-Request": "true"},
+    )
+    assert fragment.status_code == 200
+    assert 'id="profile-panel"' in fragment.text
+    assert "Birds Inc" in fragment.text
+    assert "<h1>" not in fragment.text
+    # Clear removes the field.
+    cleared = client.post(
+        f"/speakers/{speaker_id}/profile",
+        data={"field": "bio", "action": "clear", "csrf_token": token},
+        headers={"HX-Request": "true"},
+    )
+    assert "Ornithologist." not in cleared.text
+    # Missing CSRF: uniform 403 before any write.
+    assert (
+        client.post(
+            f"/speakers/{speaker_id}/profile", data={"field": "bio", "value": "x"}
+        ).status_code
+        == 403
+    )
+    # Unknown field: operator error rendered inline, nothing stored.
+    bad = client.post(
+        f"/speakers/{speaker_id}/profile",
+        data={"field": "name", "value": "x", "csrf_token": token},
+        headers={"HX-Request": "true"},
+    )
+    assert bad.status_code == 200
+    assert 'class="error"' in bad.text
+
+
+def test_profile_decision_refreshes_panel_out_of_band(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=1, human=True
+        )
+        cand = _seed_candidate(session, speaker_id, "bio", "Wrote the book on birds.")
+        reject_me = _seed_candidate(session, speaker_id, "affiliation", "Birds Inc")
+        session.commit()
+    page = client.get(f"/speakers/{speaker_id}")
+    assert "Wrote the book on birds." in page.text  # proposed draft visible
+    assert "?page=profile" in page.text  # research URLs carry the page context
+    token = _decision_token(page.text)
+    # htmx accept from the profile page: research fragment PLUS the profile
+    # panel out-of-band, already showing the materialized value.
+    resp = client.post(
+        f"/speakers/{speaker_id}/research/candidates/{cand}/decision?page=profile",
+        data={"csrf_token": token, "nonce": uuid.uuid4().hex, "verdict": "accept"},
+        headers={"HX-Request": "true"},
+    )
+    assert resp.status_code == 200
+    assert f'id="research-{speaker_id}"' in resp.text
+    assert 'hx-swap-oob="true"' in resp.text
+    assert 'id="profile-panel"' in resp.text
+    assert "accepted claim" in resp.text
+    assert "Wrote the book on birds." in resp.text
+    # No-JS decision from the profile page: a full-page 303, never a bare fragment.
+    nojs = client.post(
+        f"/speakers/{speaker_id}/research/candidates/{reject_me}/decision?page=profile",
+        data={"csrf_token": token, "nonce": uuid.uuid4().hex, "verdict": "reject"},
+        follow_redirects=False,
+    )
+    assert nojs.status_code == 303
+    assert nojs.headers["location"] == f"/speakers/{speaker_id}"
+    # Off the profile page the decision response stays the plain fragment.
+    third = _seed_candidate_committed(session_factory, speaker_id)
+    fragment = client.post(
+        f"/speakers/{speaker_id}/research/candidates/{third}/decision",
+        data={"csrf_token": token, "nonce": uuid.uuid4().hex, "verdict": "reject"},
+        headers={"HX-Request": "true"},
+    )
+    assert fragment.status_code == 200
+    assert 'hx-swap-oob="true"' not in fragment.text
+
+
+def _seed_candidate_committed(
+    session_factory: sessionmaker[Session], speaker_id: uuid.UUID
+) -> uuid.UUID:
+    with session_factory() as session:
+        cand = _seed_candidate(session, speaker_id, "link", "https://example.org/x")
+        session.commit()
+    return cand
+
+
+def test_overview_names_link_to_profiles(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Alice", minutes_rank=1, human=True
+        )
+        session.commit()
+    page = client.get("/speakers")
+    assert f'href="/speakers/{speaker_id}"' in page.text
