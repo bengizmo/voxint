@@ -1583,16 +1583,20 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Folders the wizard registered under MEDIA_ROOT (paths relative to it).
+    # Rollback-only since #153 (P2a): the ``media_folders`` RELATION is now
+    # authoritative for registered folders and ingest reads it there. Retained one
+    # release for rollback, drops next. Was: folders the wizard registered under
+    # MEDIA_ROOT (paths relative to it).
     media_folders: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
     # User vocabulary (names/jargon/acronyms): augments the selected domain pack,
     # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
-    # Per-folder domain-pack assignment (issue #11): {media_folder -> pack_name},
-    # mapping a watched folder (as stored in media_folders, relative to MEDIA_ROOT)
-    # to a pack resolvable by name. Consulted at submit to freeze each run's pack
-    # snapshot; an unmapped folder falls back to the default pack. Default {} means
-    # every folder uses the default — the pre-#11 behavior.
+    # Rollback-only since #153 (P2a): NO LONGER consulted at submit. The per-folder
+    # pack now lives on ``media_folders.domain_pack`` (the relation) and ingest
+    # resolves it there. Retained one release for rollback, drops next.
+    # Was (issue #11): {media_folder -> pack_name} mapping a watched folder to a
+    # pack name, consulted at submit to freeze each run's pack; an unmapped folder
+    # fell back to the default pack, and default {} meant every folder used it.
     folder_domain_packs: Mapped[dict[str, str]] = mapped_column(
         JSON().with_variant(JSONB(), "postgresql"),
         nullable=False,
