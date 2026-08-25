@@ -6,6 +6,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S3: ASVspoof 2021 DF importer core + v2 imported-benchmark
+  manifest** (#144). Groundwork for the DF reproduction gates. The corpus manifest
+  schema (`tools/synthdetect_corpus.py`) gains a `schema_version: 2`
+  `imported_benchmark` variant so an acquired evaluation benchmark can be scored
+  by the frozen runner without fabricating synthesis provenance: a v2 clip carries
+  an `imported_provenance` block (official trial id, source dataset, codec
+  condition, official split, and for spoof clips the attack system and vocoder
+  family), `generator` is always null, and an officially-absent field is null
+  rather than a placeholder (sentinel strings are rejected). Only `load_manifest`
+  learns the variant; the scoring fields and `cmd_run` are unchanged, and v1
+  validation is byte-for-byte identical (v1 now also rejects unexpected top-level
+  keys). A new `tools/synthdetect_df_import.py` holds the audio-free importer core:
+  a fail-closed parser for the official `trial_metadata.txt` and the frozen,
+  seeded (`voxint-synthdetect-144`), stratified (label by codec condition, `eval`
+  split only) hash-rank selection of the 10 % subset, emitting a canonically
+  ordered trial list bound by a cohort hash. The shape was chosen after an
+  independent two-model design review; see the S3 pre-registration refinement note
+  in `docs/gpu-contracts.md`.
 - **Synthdetect M1 S3: DF anchor GPU-qualified** (#144). The DF reproduction
   checkpoint `w2v2-aasist-df` (`Best_LA_model_for_DF.pth`) advances from
   `pinned_unqualified` to `qualified` on its own dated maintainer GPU verdict (one
