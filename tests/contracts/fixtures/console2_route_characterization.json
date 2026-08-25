@@ -724,6 +724,14 @@
     true
   ],
   [
+    "/speakers/{speaker_id}",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/speakers/{speaker_id}/archive",
     [
       "POST"
@@ -741,6 +749,14 @@
   ],
   [
     "/speakers/{speaker_id}/merge",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/speakers/{speaker_id}/profile",
     [
       "POST"
     ],

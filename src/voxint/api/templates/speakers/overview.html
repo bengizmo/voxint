@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Voxint — speakers{% endblock %}
+{% block body %}
+<h1>Speakers</h1>
+<p class="muted">Everyone Voxint has heard, with how much of your library each voice covers.</p>
+
+<div id="roster">{% include "speakers/overview_roster.html" %}</div>
+{% endblock %}

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Voxint — {{ speaker.display_name }}{% endblock %}
+{% block body %}
+<p><a href="/speakers">&larr; All speakers</a></p>
+<h1>
+  {{ speaker.display_name }}
+  {% if aggregate.verified %}<span class="pill completed">Verified</span>{% endif %}
+  {% if tier.tier %}<span class="pill">{{ tier.tier }} voice match</span>{% endif %}
+</h1>
+
+{% if archived %}
+<p class="error" role="alert">This speaker is archived: the profile is read-only
+and web research is off. Restore the speaker from the
+<a href="/speakers">speakers page</a> to edit again.</p>
+{% endif %}
+
+<section class="card">
+  <dl class="def-grid">
+    <dt>Files</dt>
+    <dd>{{ aggregate.files }}</dd>
+    <dt>Spoken time</dt>
+    <dd>{{ format_duration(aggregate.seconds) }} across {{ aggregate.segments }} segment{{ "s" if aggregate.segments != 1 }}</dd>
+    <dt>Enrolled voiceprints</dt>
+    <dd>{{ enrollments }}</dd>
+    <dt>First file added</dt>
+    <dd>{% if aggregate.first_seen %}{{ aggregate.first_seen.strftime('%Y-%m-%d') }}{% else %}<span class="muted">never heard in a processed recording</span>{% endif %}</dd>
+    <dt>Latest file added</dt>
+    <dd>{% if aggregate.last_seen %}{{ aggregate.last_seen.strftime('%Y-%m-%d') }}{% else %}<span class="muted">—</span>{% endif %}</dd>
+    <dt>Voice match</dt>
+    <dd>
+      {% if tier.tier %}{{ tier.tier }} (strongest voice evidence)
+      {% elif tier.has_voice_evidence %}match details unavailable
+      {% else %}<span class="muted">no voice evidence{% if aggregate.verified %} — identified by you{% endif %}</span>{% endif %}
+      {% if tier.has_voice_evidence %}
+      <details>
+        <summary>Why this match?</summary>
+        <p class="muted">
+          {{ tier.strong }} strong, {{ tier.moderate }} moderate, {{ tier.weak }} weak{% if tier.unavailable %},
+          {{ tier.unavailable }} without recorded numbers{% endif %} —
+          graded against the current gates (strong needs cosine ≥ {{ "%.2f"|format(gates.grounded_min_cosine) }},
+          margin ≥ {{ "%.2f"|format(gates.grounded_min_margin) }},
+          vote agreement ≥ {{ "%.2f"|format(gates.grounded_min_vote_agreement) }};
+          moderate needs cosine ≥ {{ "%.2f"|format(gates.min_cosine) }},
+          margin ≥ {{ "%.2f"|format(gates.min_margin) }},
+          vote agreement ≥ {{ "%.2f"|format(gates.min_vote_agreement) }}).
+        </p>
+        <ul>
+          {% for e in tier.evidence %}
+          <li class="muted">
+            {% if e.available %}
+            cosine {{ "%.2f"|format(e.similarity) }},
+            margin {% if e.margin is not none %}{{ "%.2f"|format(e.margin) }}{% else %}n/a (only voice on the roster){% endif %},
+            vote agreement {{ "%.2f"|format(e.vote_agreement) }},
+            {{ e.eligible_turns }} turn{{ "s" if e.eligible_turns != 1 }} / {{ "%.0f"|format(e.eligible_seconds) }}s
+            {% else %}
+            matched before Voxint recorded match numbers — no diagnostics for this appearance
+            {% endif %}
+            {% if runs_by_id.get(e.run_id) %}— in <a href="/runs/{{ e.run_id }}">{{ run_source_title(runs_by_id[e.run_id]) }}</a>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+    </dd>
+  </dl>
+</section>
+
+{% include "speakers/profile_panel.html" %}
+
+{% if not archived %}
+{% include "speakers/research.html" %}
+{% endif %}
+
+<section class="card">
+  <h2>Recordings</h2>
+  {% if aggregate.appearances %}
+  <div class="lib-table" role="region" aria-label="Recordings featuring {{ speaker.display_name }}" tabindex="0">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Recording</th><th scope="col">Spoken time</th>
+          <th scope="col">Segments</th><th scope="col">File added</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in aggregate.appearances %}
+        <tr>
+          <td>{% if runs_by_id.get(a.run_id) %}<a href="/runs/{{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>{% else %}<span class="muted">recording removed</span>{% endif %}
+            {% if a.human_assigned %}<span class="pill completed" title="You confirmed this speaker in this recording">confirmed</span>{% endif %}</td>
+          <td>{{ format_duration(a.seconds) }}</td>
+          <td>{{ a.segments }}</td>
+          <td><span title="{{ a.media_created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(a.media_created_at, now=now) }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="muted">Not heard in any processed recording yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
