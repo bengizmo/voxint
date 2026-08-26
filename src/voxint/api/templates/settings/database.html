@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Voxint — database{% endblock %}
+{% block body %}
+{# Console 2.0 P6 database sub-page (issue #161): size, per-table row estimates,
+   and the retention/GC settings. Counts are estimates from pg_stat_user_tables,
+   not live COUNT(*), and every query is fail-soft: a down or unmigrated database
+   renders an honest "could not read" state instead of an error. #}
+<div class="settings">
+<h1>Database</h1>
+<p><a href="/settings">← Settings</a></p>
+
+<section aria-labelledby="size-heading">
+<h2 id="size-heading">Size</h2>
+{% if database.available %}
+<p>Total database size: <strong>{{ (database.size_bytes / 1048576) | round(1) }} MiB</strong>
+   <span class="muted">({{ database.size_bytes }} bytes)</span></p>
+{% if database.tables %}
+<h3>Largest tables</h3>
+<p class="muted">Estimated live rows, largest first. Estimates come from Postgres
+   statistics and can lag recent writes.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th scope="col">Table</th><th scope="col">Estimated rows</th></tr></thead>
+  <tbody>
+    {% for t in database.tables %}
+    <tr><td><code>{{ t.name }}</code></td><td>{{ t.estimated_rows }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No table statistics reported yet.</p>
+{% endif %}
+{% else %}
+<p class="notice" role="status">Could not read the database size right now. The
+   database may be down or not yet migrated.</p>
+{% endif %}
+</section>
+
+<section aria-labelledby="retention-heading">
+<h2 id="retention-heading">Retention and cleanup</h2>
+<p class="muted">Media retention reclaims only the large normalized-audio
+   intermediate for old finished runs; source media, transcripts, and the
+   adjudication history are always kept. These are the values the running app
+   booted with; set them in your <code>.env</code> (keys
+   <code>MEDIA_RETENTION_ENABLED</code>, <code>MEDIA_RETENTION_SECONDS</code>,
+   <code>GC_SWEEP_SECONDS</code>, <code>GC_BATCH_LIMIT</code>) and restart Voxint
+   to change them.</p>
+<div class="table-wrap">
+<table>
+  <tbody>
+    {% for r in database.retention %}
+    <tr><th scope="row">{{ r.label }}</th><td>{{ r.value }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+</section>
+
+<section aria-labelledby="backup-heading">
+<h2 id="backup-heading">Backups</h2>
+<p class="muted">Voxint does not take backups for you. To back up your data, stop
+   Voxint (or ensure the database is quiet) and copy your Postgres data with the
+   standard tools, for example <code>pg_dump</code>. Keep the copy somewhere off
+   this machine.</p>
+</section>
+</div>
+{% endblock %}

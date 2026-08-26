@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Voxint — {{ plugin.name }}{% endblock %}
+{% block body %}
+{# Console 2.0 P6 per-plugin page (issue #161): a plugin's identity, gate state,
+   and its contributed settings section rendered from the plugin-namespaced
+   template. Reached only for an active plugin; an unknown or kill-switched id is a
+   404 (the handler returns it). #}
+<div class="settings">
+<h1>{{ plugin.name }}</h1>
+<p><a href="/settings/plugins">← Plugins</a></p>
+
+<section aria-labelledby="about-heading">
+<h2 id="about-heading">About</h2>
+<dl>
+  <dt>Id</dt><dd><code>{{ plugin.plugin_id }}</code></dd>
+  <dt>State</dt>
+  <dd><span class="pill {{ "ready" if plugin.enabled else "unverified" }}">
+    {{ "on" if plugin.enabled else "off" }}</span></dd>
+  <dt>Description</dt><dd>{{ plugin.description }}</dd>
+</dl>
+{% for w in plugin.warnings %}
+<p class="notice" role="status">{{ w }}</p>
+{% endfor %}
+</section>
+
+{% if plugin.section %}
+{# The plugin owns this section's controls and its own CSRF-guarded form; it is
+   the same template the settings hub renders inline. #}
+{% include plugin.section.template %}
+{% else %}
+<section>
+<p class="muted">This plugin does not contribute any settings.</p>
+</section>
+{% endif %}
+</div>
+{% endblock %}

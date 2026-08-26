@@ -462,6 +462,36 @@
   ]
  ],
  [
+  "/settings/status",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/hardware",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/database",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/plugins",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/plugins/{plugin_id}",
+  [
+   "GET"
+  ]
+ ],
+ [
   "/settings/llm",
   [
    "POST"

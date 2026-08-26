@@ -536,6 +536,17 @@ class Settings(BaseSettings):
     # via require_speakers_enabled, keeping the route inventory stable).
     console_speakers_enabled: bool = False
 
+    # The settings hub + sub-pages (Console 2.0 P6, #161). Like /speakers, this
+    # flag branches CONTENT, not access: /settings is ALREADY a live page, so off
+    # renders the current single long page byte-identically, while on renders the
+    # regrouped hub that links out to the read-only sub-pages (status, hardware,
+    # database, plugins). The sub-page routes themselves are always registered and
+    # directly reachable (dark-ship — the flag is discovery/rollout control, not
+    # authorization), so the route inventory is stable. The /resources absorption
+    # (redirect + version bump) is a later coordinated slice (P6b), so the sidebar
+    # "Hardware" entry still points at /resources while this is off or on here.
+    console_settings_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above

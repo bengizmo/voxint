@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Voxint — settings{% endblock %}
+{% block body %}
+{# Console 2.0 P6 hub (issue #161), rendered in place of settings.html when
+   console_settings_enabled is on. It keeps every mutable section (and its anchor
+   id) inline so external deep-links like /settings#llm still resolve, groups them
+   under plain-language headings, and links out to the read-only sub-pages. The
+   read-only "Pipeline models" panel moved to /settings/hardware, so it is the one
+   section from the flat page not included here (nothing deep-links to it). #}
+<div class="settings">
+<h1>Settings</h1>
+
+{% if tutorial_done %}
+<section class="tutorial-banner" role="note" aria-label="Tutorial complete">
+  <h2>You finished the tutorial 🎉</h2>
+  <p>You have completed one full run end to end: submit, attribute the voices,
+     check the words, then export. When you are ready, submit your own audio or
+     video and do the same with real speakers.</p>
+  <div class="tutorial-actions">
+    <a href="/runs">Submit your own media →</a>
+  </div>
+</section>
+{% endif %}
+
+<nav class="settings-subpages" aria-label="Settings pages">
+  <a href="/settings/status">Status and health</a>
+  <a href="/settings/hardware">Hardware</a>
+  <a href="/settings/database">Database</a>
+  <a href="/settings/plugins">Plugins</a>
+</nav>
+
+<section id="setup" aria-labelledby="setup-heading">
+<h2 id="setup-heading">First-run setup</h2>
+<p class="muted">Onboarding is complete. You can walk through the setup wizard again
+   at any time — it never resets your existing preferences unless you change them.</p>
+<p><a href="/setup">Re-run the setup wizard →</a></p>
+</section>
+
+<h2 class="settings-group">Everyday settings</h2>
+{% include "settings/_appearance.html" %}
+{% include "settings/_features.html" %}
+{% include "settings/_llm.html" %}
+{% include "settings/_translation.html" %}
+{% include "settings/_glossary.html" %}
+{% include "settings/_corrections.html" %}
+{% include "settings/_folders.html" %}
+
+<h2 class="settings-group">Advanced</h2>
+{% include "settings/_semantic.html" %}
+{% include "settings/_sources.html" %}
+{% include "settings/_tutorial.html" %}
+{#- Plugin settings sections (issue #138): rendered after the core sections, in
+    (order, section_id) order. Empty registry ⇒ no iterations ⇒ zero bytes. Each
+    active plugin also has its own page under /settings/plugins/{id}. -#}
+{%- for section in plugin_settings_sections %}
+{% include section.template %}
+{%- endfor %}
+</div>
+{% endblock %}
