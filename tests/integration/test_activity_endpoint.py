@@ -180,3 +180,23 @@ def test_shell_chrome_absent_when_jobs_discovery_off(
 
 def test_activity_flag_defaults_off() -> None:
     assert Settings(_env_file=None).console_activity_enabled is False
+
+def test_speaker_identified_event_round_trips(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
+    with session_factory() as session:
+        record_activity_event(
+            session,
+            kind=ActivityKind.SPEAKER_IDENTIFIED,
+            occurrence_key=f"decision:{uuid.uuid4()}:identified",
+            pipeline_run_id=rid,
+            title="Alice Anderson",
+            href=f"/jobs/{rid}",
+        )
+        session.commit()
+    event = client.get("/activity/events?since=0").json()["events"][0]
+    assert event["kind"] == "speaker_identified"
+    assert event["title"] == "Alice Anderson"
+    assert event["href"] == f"/jobs/{rid}"
