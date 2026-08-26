@@ -185,7 +185,15 @@ def _bind_worker_database(engine: Engine) -> None:
 @pytest.fixture()
 def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
     yield sessionmaker(engine, expire_on_commit=False)
-    with engine.connect() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            conn.execute(text(f'TRUNCATE TABLE "{table.name}" CASCADE'))
-        conn.commit()
+    # One combined TRUNCATE, not a statement per table. Listing every ORM table
+    # in a single command lets Postgres take the ACCESS EXCLUSIVE locks and wipe
+    # them in one pass, instead of paying per-statement parse/plan/lock overhead
+    # ~40 times per test (the measured teardown cost that dominates the suite).
+    # Semantics are identical: CASCADE still reaches any non-ORM table with an FK
+    # into this set, and order is irrelevant inside one TRUNCATE. Sequences are
+    # left as-is (no RESTART IDENTITY), matching the previous per-table wipe.
+    tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
+    if tables:
+        with engine.connect() as conn:
+            conn.execute(text(f"TRUNCATE TABLE {tables} CASCADE"))
+            conn.commit()
