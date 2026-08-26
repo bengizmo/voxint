@@ -284,6 +284,11 @@ model assets) voids it for the gate it feeds.
    (the #67 bundled-LLM overlay carries the `voxint-llm` tag), plus the
    `.env.example` comment, so the default stack always runs the release this
    checkout documents.
+   The same atomic pin bump is sometimes done mid-cycle by an ordinary change
+   rather than a release commit, when a slice's own trigger is a minor bump (a
+   Console 2.0 area flag flipping to live, for example). Such a change performs the
+   identical pin bump but leaves its entry under CHANGELOG `[Unreleased]`; the
+   dated version stanza is still stamped only when the tag is cut, here.
    Grep the old version rather than trusting a hand-list
    (`grep -rn "VOXINT_IMAGE_TAG:-<old>" compose*.yaml`); the pin-parity contract
    test globs `compose*.yaml`, so a missed flavor fails `pytest`. Run the gates

@@ -542,10 +542,14 @@ class Settings(BaseSettings):
     # regrouped hub that links out to the read-only sub-pages (status, hardware,
     # database, plugins). The sub-page routes themselves are always registered and
     # directly reachable (dark-ship — the flag is discovery/rollout control, not
-    # authorization), so the route inventory is stable. The /resources absorption
-    # (redirect + version bump) is a later coordinated slice (P6b), so the sidebar
-    # "Hardware" entry still points at /resources while this is off or on here.
-    console_settings_enabled: bool = False
+    # authorization), so the route inventory is stable.
+    #
+    # Activated at P6b (#161): the default is on, the old /resources hardware view
+    # is folded into /settings/status (a permanent 303 redirect), and the sidebar
+    # "Hardware" entry points there. The flag still gates only /settings CONTENT,
+    # so setting it False restores the flat page but does NOT undo the redirect or
+    # the nav cutover: a full P6b rollback is a deploy revert, not a flag toggle.
+    console_settings_enabled: bool = True
 
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,

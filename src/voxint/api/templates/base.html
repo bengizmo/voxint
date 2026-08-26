@@ -819,11 +819,13 @@
         <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
       </nav>
       {# Interim destinations (no dead ends): Review stays reachable until the
-         editor replaces it in a later phase; Hardware is the /resources
-         telemetry view, demoted from the primary set. #}
+         editor replaces it in a later phase; Hardware is the hardware telemetry
+         view, now the /settings/status sub-page (Console 2.0 P6b, #161; the old
+         /resources redirects there). The status page carries the Settings
+         current-page marker, so this shortcut is unmarked. #}
       <nav class="side side-secondary" aria-label="More">
         <a href="/review"{% if active_nav == "review" %} aria-current="page"{% endif %}>Review</a>
-        <a href="/resources"{% if active_nav == "resources" %} aria-current="page"{% endif %}>Hardware</a>
+        <a href="/settings/status">Hardware</a>
       </nav>
     </aside>
     {% endblock %}

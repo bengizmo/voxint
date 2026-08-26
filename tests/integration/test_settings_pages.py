@@ -65,12 +65,16 @@ _PRESERVED_POSTS = ("/settings/llm", "/settings/features", "/settings/glossary")
 
 
 def test_flag_off_renders_flat_page(session_factory: sessionmaker[Session]) -> None:
-    client = _client(session_factory)  # flag defaults off
+    # The flag defaults ON since activation (P6b, #161); pass it off explicitly to
+    # pin the legacy flat page that flag-off must still render byte-compatibly.
+    client = _client(session_factory, console_settings_enabled=False)
     body = client.get("/settings").text
     for marker in (*_PRESERVED_ANCHORS, *_PRESERVED_POSTS):
         assert marker in body
-    # The hub-only sub-page nav is absent on the flat page.
-    assert "/settings/status" not in body
+    # The hub-only sub-page nav and groupings are absent on the flat page. (The
+    # sidebar "Hardware" shortcut points at /settings/status on every page now, so
+    # a hub-card-only link like /settings/database is the distinguishing marker.)
+    assert "/settings/database" not in body
     assert "Everyday settings" not in body
 
 
@@ -91,6 +95,26 @@ def test_flag_on_hub_keeps_anchors_and_links_subpages(
     ):
         assert link in body
     assert "Everyday settings" in body
+
+
+def test_default_activates_the_hub_and_nav_cutover(
+    session_factory: sessionmaker[Session],
+) -> None:
+    # P6b (#161) flipped the default on; pin it so an accidental flip-back is
+    # caught, and pin the /resources -> /settings/status nav cutover at the exact
+    # edge this slice moved (otherwise a regression to the old link would still
+    # "work" through the redirect, just with a wasted 303).
+    default_settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        csrf_secret="settings-page-test-csrf-key",
+    )
+    assert default_settings.console_settings_enabled is True
+    body = _client(session_factory).get("/settings").text  # no flag override
+    assert "Everyday settings" in body  # the hub, not the flat page
+    assert 'href="/settings/status">Hardware' in body  # nav points at the sub-page
+    assert 'href="/resources"' not in body  # the old link is gone from the shell
 
 
 def test_flag_on_post_error_rerenders_hub(

@@ -367,13 +367,13 @@ down.](../images/setup-wizard.png)
 ### Checking your hardware
 
 If runs feel slow or keep failing, the **Hardware** link in the sidebar opens
-the Resources page: a compact status strip up top, then the full readout of
+the status page: a compact status strip up top, then the full readout of
 what your graphics card is doing. Both are quiet on purpose: a card running
 flat out
 during a transcription is healthy, not a warning, so most of the time the strip
 just tells you each service is working.
 
-![The Voxint Resources page, listing each model service (transcription,
+![The Voxint status page, listing each model service (transcription,
 diarization, speaker embedding), whether it is reachable, and the device it runs
 on, above a note that GPU readings appear here when a graphics card is in
 use.](../images/resources.png)

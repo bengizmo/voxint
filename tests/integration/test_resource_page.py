@@ -2,10 +2,16 @@
 
 The pure curation/rendering is covered in ``tests/unit/test_resource_status.py``;
 these pin the wiring the unit tests cannot see: that the hardware strip, the
-``/resources`` page it opens (full + htmx fragment), and ``/metrics`` all render
-one cached ``ResourceSnapshot``, that a probe failure degrades honestly instead
-of 500-ing, and that a mixed-version deploy (a GPU-reporting service beside an
-old service without a ``resources`` block) renders without crashing.
+``/settings/status`` page it now lives on (full + htmx fragment), and ``/metrics``
+all render one cached ``ResourceSnapshot``, that a probe failure degrades honestly
+instead of 500-ing, and that a mixed-version deploy (a GPU-reporting service
+beside an old service without a ``resources`` block) renders without crashing.
+
+The hardware view folded from ``/resources`` into ``/settings/status`` at Console
+2.0 P6b (#161); ``/resources`` now issues a permanent 303 there, and the status
+page answers an ``HX-Request`` poll with just the hardware fragment (the plain
+303 is pinned by the REDIRECT_MAP contract in
+``tests/contracts/test_console2_characterization.py``).
 
 The route probes the model services live (behind a cache); with none running in
 the test env that would just degrade to empty, so each test instead patches
@@ -106,10 +112,12 @@ def test_resources_page_renders_gpu_card_and_nav(
         collected_age_seconds=1.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    resp = client.get("/resources")
+    resp = client.get("/settings/status")
     assert resp.status_code == 200
     body = resp.text
-    assert 'href="/resources" aria-current="page"' in body  # nav marks the page
+    # The status page carries the Settings current-page marker (the hardware view
+    # is now a Settings sub-page); the "Hardware" shortcut points here unmarked.
+    assert 'href="/settings" aria-current="page"' in body
     assert "GPU aaaaaaaa" in body
     assert "42%" in body  # instantaneous utilization
     assert "GiB" in body  # VRAM figure rendered
@@ -123,11 +131,31 @@ def test_resources_htmx_fragment_omits_chrome(
         monkeypatch,
         ResourceSnapshot(gpus=(_gpu(),), services=(), collected_age_seconds=0.0),
     )
-    resp = client.get("/resources", headers={"HX-Request": "true"})
+    resp = client.get("/settings/status", headers={"HX-Request": "true"})
     assert resp.status_code == 200
     body = resp.text
     assert "<nav" not in body and "<h1" not in body  # no page chrome on the poll
     assert "GPU aaaaaaaa" in body  # but the live detail is present
+
+
+def test_stale_resources_poll_survives_the_redirect(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A Resources tab left open across the P6b deploy keeps polling
+    # hx-get="/resources" (#161). The 303 to /settings/status carries the
+    # HX-Request header through, and the status page must answer that poll with
+    # just the hardware fragment, so the already-open page keeps refreshing in
+    # place instead of swapping a whole page shell into its poll container.
+    _patch_snapshot(
+        monkeypatch,
+        ResourceSnapshot(gpus=(_gpu(),), services=(), collected_age_seconds=0.0),
+    )
+    resp = client.get("/resources", headers={"HX-Request": "true"})
+    assert resp.status_code == 200  # followed the 303 to the status fragment
+    assert str(resp.url).endswith("/settings/status")
+    body = resp.text
+    assert "<nav" not in body and "<h1" not in body  # bare fragment, no chrome
+    assert "GPU aaaaaaaa" in body
 
 
 def test_resource_strip_shows_thermal_warning_with_remedy(
@@ -139,7 +167,7 @@ def test_resource_strip_shows_thermal_warning_with_remedy(
         collected_age_seconds=0.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    body = client.get("/resources").text
+    body = client.get("/settings/status").text
     assert "slowing itself down to stay cool" in body
     assert "fans and air vents" in body  # the one-step remedy
 
@@ -151,7 +179,7 @@ def test_resource_strip_unavailable_when_empty(
         monkeypatch,
         ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0),
     )
-    body = client.get("/resources").text
+    body = client.get("/settings/status").text
     assert "Hardware status unavailable" in body
 
 
@@ -164,7 +192,7 @@ def test_probe_failure_degrades_to_unavailable(
         raise RuntimeError("nvml exploded")
 
     monkeypatch.setattr("voxint.api.resource_status.collect_resource_status", _boom)
-    resp = client.get("/resources")
+    resp = client.get("/settings/status")
     assert resp.status_code == 200
     assert "Hardware status unavailable" in resp.text
 
@@ -193,7 +221,7 @@ def test_metrics_and_resources_agree_on_one_snapshot(
     )
     _patch_snapshot(monkeypatch, snap)
     metrics = client.get("/metrics").text
-    page = client.get("/resources").text
+    page = client.get("/settings/status").text
     assert f'voxint_gpu_utilization_percent{{gpu="{UUID_A}"}} 63' in metrics
     assert "63%" in page  # same reading, both surfaces
 
@@ -212,7 +240,7 @@ def test_mixed_version_old_service_without_resources(
         collected_age_seconds=0.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    resp = client.get("/resources")
+    resp = client.get("/settings/status")
     assert resp.status_code == 200
     body = resp.text
     assert "GPU aaaaaaaa" in body  # aggregated card still shown
@@ -237,7 +265,7 @@ def test_resource_strip_names_partial_telemetry_loss(
         collected_age_seconds=0.0,
     )
     _patch_snapshot(monkeypatch, snap)
-    body = client.get("/resources").text
+    body = client.get("/settings/status").text
     assert "Telemetry unavailable for: speaker embedding" in body
 
 
@@ -263,7 +291,7 @@ def test_resources_page_renders_unknown_readings(
         monkeypatch,
         ResourceSnapshot(gpus=(gpu,), services=(), collected_age_seconds=0.0),
     )
-    resp = client.get("/resources")
+    resp = client.get("/settings/status")
     assert resp.status_code == 200
     assert "unknown" in resp.text  # null readings degrade to "unknown", no crash
 
@@ -281,6 +309,6 @@ def test_resources_page_cpu_only_says_no_gpu(
             collected_age_seconds=0.0,
         ),
     )
-    body = client.get("/resources").text
+    body = client.get("/settings/status").text
     assert "No GPU telemetry reported" in body
     assert "transcription" in body  # admission queue still shown

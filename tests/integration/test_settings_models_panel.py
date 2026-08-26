@@ -2,8 +2,11 @@
 
 The live-identity collection and its classification are unit-tested in
 ``tests/unit/test_service_identity.py``; this drives the read-only panel through
-the real ``GET /settings`` route and template against seeded database rows, with
-the probe stubbed to fixed views so the render is hermetic (no live services).
+the real ``GET /settings/hardware`` route and template against seeded database
+rows, with the probe stubbed to fixed views so the render is hermetic (no live
+services). The panel moved off the flat ``/settings`` page onto the hardware
+sub-page when the settings hub activated (Console 2.0 P6b, #161); it reuses the
+same ``settings/_models.html`` partial, so the rendered copy is unchanged.
 Pins that each classified state renders its honest copy: a validated default, an
 unvalidated override warning, the two fail-closed states (weights mismatch and
 unverified), a fixed non-configurable model, and an unavailable service, plus the
@@ -102,7 +105,7 @@ def test_pipeline_models_panel_renders_each_state(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: _views())
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
 
     # The panel and its heading are present.
     assert 'id="pipeline-models"' in body
@@ -147,7 +150,7 @@ def test_pipeline_models_panel_marks_fixed_embedder(
     )
     views[2] = reachable_embedder
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "nvidia/speakerverification_en_titanet_large" in body
     assert "This model is fixed" in body
 
@@ -160,7 +163,7 @@ def test_pipeline_models_panel_renders_weights_mismatch(
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.MISMATCH)
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "do not match the validated" in body
     assert "This is the validated model" in body  # asr is still validated
     assert "re-pull or rebuild" in body
@@ -188,7 +191,7 @@ def test_pipeline_models_panel_renders_asr_mismatch_with_revision_guidance(
         env_keys=("WHISPER_MODEL", "WHISPER_REVISION", "WHISPER_ALLOW_DOWNLOAD"),
     )
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "different version of the weights" in body
     assert "Remove <code>WHISPER_REVISION</code>" in body
     assert "re-pull or rebuild" not in body  # the diarizer-only guidance
@@ -202,7 +205,7 @@ def test_pipeline_models_panel_renders_unverified(
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.UNVERIFIED)
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "cannot verify the loaded model files" in body
 
 
@@ -215,7 +218,7 @@ def test_pipeline_models_panel_renders_config_mismatch(
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.MISMATCH, identity_axis="config")
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "clustering configuration does not match" in body
     assert "PYANNOTE_CLUSTERING_THRESHOLD" in body
     assert "re-pull or rebuild" not in body  # the weights-only remedy
@@ -229,5 +232,38 @@ def test_pipeline_models_panel_renders_config_unverified(
     views = _views()
     views[1] = _diarizer_view(ModelVerdict.UNVERIFIED, identity_axis="config")
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
-    body = client.get("/settings").text
+    body = client.get("/settings/hardware").text
     assert "cannot verify its clustering configuration" in body
+
+
+def test_flat_page_still_renders_the_panel_when_flag_off(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The panel's home moved to /settings/hardware when the hub activated, but the
+    # flag-off flat page keeps rendering it inline. Pin that fallback (#161 P6b).
+    settings = Settings(
+        voxint_user=CREDS[0], voxint_password=CREDS[1], console_settings_enabled=False
+    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client.auth = CREDS
+    seed_onboarded(session_factory)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: _views())
+    body = client.get("/settings").text
+    assert 'id="pipeline-models"' in body
+    assert "large-v2" in body
+
+
+def test_activated_hub_does_not_probe_model_services(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hub (default on) moved the panel to /settings/hardware, so rendering
+    # /settings must NOT probe the three model services (#161 P6b review): a probe
+    # here would be wasted work on every hub render and POST re-render. Fail loudly
+    # if the shared context resumes probing behind the hub.
+    def _boom(_settings: Settings) -> list[ServiceIdentityView]:
+        raise AssertionError("hub render must not probe model-service identity")
+
+    monkeypatch.setattr(settings_module, "collect_service_identity", _boom)
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert 'id="pipeline-models"' not in resp.text

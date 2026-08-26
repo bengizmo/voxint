@@ -57,7 +57,6 @@ from voxint.api.playback import MediaResolutionError, playback_capability, resol
 from voxint.api.presentation import title_from_snapshot
 from voxint.api.resource_status import (
     ResourceSnapshot,
-    build_resource_strip,
     collect_resource_status_or_empty,
     render_resource_prometheus,
 )
@@ -1404,37 +1403,27 @@ def metrics(request: Request, operator: OperatorDep, session: SessionDep) -> Res
 
 # ---- Operator dashboard (issue #13) ----------------------------------------
 # The dashboard folded into Home (Console 2.0 P1, #152): the task cards and
-# stat figures live at / now, and the hardware strip stays on /resources. The
-# route remains as a permanent authenticated redirect so bookmarks and muscle
-# memory keep working (REDIRECT_MAP row in the characterization contract).
+# stat figures live at / now, and the fuller hardware view is at /settings/status
+# (Console 2.0 P6b, #161). The route remains as a permanent authenticated redirect
+# so bookmarks and muscle memory keep working (REDIRECT_MAP row in the
+# characterization contract).
 
 @dashboards_router.get("/dashboard")
 def dashboard(operator: OperatorDep) -> RedirectResponse:
     return RedirectResponse("/", status_code=303)
 
 # ---- Hardware resource page (hardware-aware W3) -----------------------------
-# The fuller live view behind the dashboard strip: the aggregated GPU card
-# (utilization/VRAM/temperature labeled INSTANTANEOUS, peak temp + throttle
-# events labeled cumulative-since-restart), per-service admission, and the
-# curated warnings. Reads the same cached snapshot as /metrics and the strip,
-# so the three cannot disagree. An htmx poll swaps just the fragment, like
-# /dashboard. Protected like every non-/healthz page.
+# The fuller live view (aggregated GPU card, per-service admission, curated
+# warnings, and its 15s htmx self-poll) folded into /settings/status at Console
+# 2.0 P6b (#161): the settings status sub-page renders the same snapshot fragment
+# and answers HX-Request with the bare fragment, so the auto-refresh survives.
+# The route remains as a permanent authenticated redirect so bookmarks, muscle
+# memory, and an already-open Resources tab's in-flight poll keep working
+# (REDIRECT_MAP row in the characterization contract).
 
 @dashboards_router.get("/resources")
-def resources(request: Request, operator: OperatorDep) -> Response:
-    snapshot = _resource_snapshot(request)
-    context = {
-        "request": request,
-        "snapshot": snapshot,
-        "resource_strip": build_resource_strip(snapshot),
-        "active_nav": "resources",
-    }
-    template = (
-        "legacy_runs/resource_status.html"
-        if request.headers.get("HX-Request")
-        else "legacy_runs/resources.html"
-    )
-    return templates.TemplateResponse(request, template, context)
+def resources(operator: OperatorDep) -> RedirectResponse:
+    return RedirectResponse("/settings/status", status_code=303)
 
 
 @tail_router.get("/runs/{run_id}/assets")

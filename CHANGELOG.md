@@ -280,6 +280,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
 
 ### Changed
+- **Console 2.0 P6b: Settings activated; the hardware page folds into it** (#161,
+  epic #149 Track D). The settings hub and its read-only sub-pages
+  (status, hardware, database, plugins) are now the default `/settings`, so the
+  console opens on the grouped hub rather than the single long page
+  (`CONSOLE_SETTINGS_ENABLED` still gates the content and defaults on; set it off
+  to fall back to the flat page). The old `/resources` hardware view is now
+  `/settings/status`: `/resources` issues a permanent redirect there, the sidebar
+  "Hardware" shortcut and the Jobs "Full hardware view" link point at it, and the
+  status page keeps the 15-second live hardware refresh (it answers the poll with
+  just the hardware snapshot, without re-running the component-health checks).
+  Bookmarks and an already-open Resources tab keep working through the redirect.
 - **Test loop and PR CI parallelized.** The DB-backed integration suite now runs
   under `pytest-xdist` with one disposable database per worker
   (`tests/integration/conftest.py`), keyed on the xdist run id and worker so
@@ -291,17 +302,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   runs the unit/contract suites parallel and the integration suite at `-n 8`. No
   change to the parity gate, the contract goldens, or the secrets scan. See
   `docs/testing.md`.
-
-### Fixed
-- **Integration tests could touch the live database when run in isolation.** The
-  `enrich` CLI tests invoked the app's own DB path without depending on the
-  `engine`/`session_factory` fixtures, so in isolation `DATABASE_URL` was unset
-  and the CLI fell back to the default live DSN and queried real data. They only
-  passed in the full serial suite by inheriting an earlier test's fixture side
-  effect. An autouse fixture now pins every integration test to its disposable
-  per-worker database, closing both the data hazard and the flake the new
-  parallel runner surfaced.
-
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,
@@ -436,6 +436,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `qualified` state to name existing GPU evidence, so neither the numerics-defining
   bytes nor the qualification claim can drift silently. Reproducing the published
   ASVspoof 2021 DF error rate remains a later milestone.
+
+### Fixed
+- **Integration tests could touch the live database when run in isolation.** The
+  `enrich` CLI tests invoked the app's own DB path without depending on the
+  `engine`/`session_factory` fixtures, so in isolation `DATABASE_URL` was unset
+  and the CLI fell back to the default live DSN and queried real data. They only
+  passed in the full serial suite by inheriting an earlier test's fixture side
+  effect. An autouse fixture now pins every integration test to its disposable
+  per-worker database, closing both the data hazard and the flake the new
+  parallel runner surfaced.
 
 ## [0.24.0] - 2026-08-23
 

@@ -269,8 +269,11 @@ class RedirectRule(NamedTuple):
 
 # P1 (#152): ``/`` became the real Home page (it left this map), and the
 # retired ``/dashboard`` redirects there.
+# P6b (#161): the hardware view ``/resources`` folded into ``/settings/status``
+# (Settings activation), so ``/resources`` redirects there.
 REDIRECT_MAP: tuple[RedirectRule, ...] = (
     RedirectRule(source="/dashboard", target="/", status=303, auth=True),
+    RedirectRule(source="/resources", target="/settings/status", status=303, auth=True),
 )
 
 
