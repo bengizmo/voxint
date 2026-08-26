@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 P7: run-completion activity indicator and toasts, dark-shipped**
+  (#162, epic #149). Behind a new `CONSOLE_ACTIVITY_ENABLED` flag (off by
+  default), a completed pipeline run writes one row to a new `activity_events`
+  outbox in the same transaction as the completion, and the console polls
+  `/activity/events` to raise a toast ("Transcription finished: file. Review
+  speakers.") and show a live-jobs count on the Jobs entry. The badge reads the
+  same query the Jobs page renders, so the two always agree; the outbox is kept
+  to its newest 500 rows by an opt-in retention sweep. Nothing is reachable until
+  the flag is on (the endpoint answers 404, the shell renders no chrome), and
+  activation additionally requires Jobs discovery so the badge and links stay
+  honest. Speaker-identification events are a planned follow-up. No redirect or
+  version bump ships here; that activation is a later slice.
 - **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
   audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
   before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
@@ -347,6 +359,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   runs the unit/contract suites parallel and the integration suite at `-n 8`. No
   change to the parity gate, the contract goldens, or the secrets scan. See
   `docs/testing.md`.
+- **Pure driver tests moved to the unit lane; new coverage for the read-time
+  attribution helpers.** The 27 database-free tests in
+  `tests/integration/test_export_match_evidence_driver.py` (manifest parsing,
+  serialization, atomic writes, git helpers, and the CLI paths that fail closed
+  before any database access) moved to a same-named unit module, each assertion
+  unchanged; the six tests that seed real runs stay in the integration lane. The
+  CLI error-path tests now also assert the database is never reached on those
+  paths. Added direct unit coverage for the pure read-time attribution helpers
+  (`winning_attribution`, `display_name`, `segment_speaker`,
+  `parse_transcript_text`), previously exercised only through database-backed
+  walks. First slice of an incremental effort to keep the integration lane focused
+  on what needs Postgres; the relocation rubric is documented in `docs/testing.md`.
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,

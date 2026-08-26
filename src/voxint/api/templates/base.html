@@ -815,7 +815,7 @@
         <a href="{% if shell.media_enabled %}/media{% else %}/runs{% endif %}"{% if active_nav == "media" or (not shell.media_enabled and active_nav == "runs") %} aria-current="page"{% endif %}>Media</a>
         {% if shell.projects_enabled %}<a href="/projects"{% if active_nav == "projects" %} aria-current="page"{% endif %}>Projects</a>{% endif %}
         <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
-        {% if shell.jobs_enabled %}<a href="/jobs"{% if active_nav == "jobs" %} aria-current="page"{% endif %}>Jobs</a>{% else %}<a href="/runs">Jobs</a>{% endif %}
+        {% if shell.jobs_enabled %}<a href="/jobs"{% if active_nav == "jobs" %} aria-current="page"{% endif %}>Jobs{% if shell.activity_enabled %} <span class="nav-badge" data-activity-badge hidden></span>{% endif %}</a>{% else %}<a href="/runs">Jobs</a>{% endif %}
         <a href="/settings"{% if active_nav == "settings" %} aria-current="page"{% endif %}>Settings</a>
       </nav>
       {# Interim destinations (no dead ends): Review stays reachable until the
@@ -852,6 +852,198 @@
       </div>
     </div>
   </div>
+  {# Activity indicator + toasts (Console 2.0 P7, #162). The whole feature lives
+     in this one flag-gated block, so a dark-shipped install (the default) ships
+     zero extra bytes. shell.activity_enabled already implies Jobs discovery is
+     on, so the badge target (/jobs) and toast links are honest. The poller is a
+     plain progressive-enhancement IIFE (the theme/sidebar convention), NOT an
+     island: a JSON poll + a toast queue needs no React. #}
+  {% if shell.activity_enabled %}
+  <div class="toast-region" data-toast-region aria-live="polite" aria-atomic="false"></div>
+  <style>
+    .nav-badge {
+      display: inline-block; min-width: 1.4em; padding: 0 0.35em;
+      border-radius: var(--r-full); background: var(--accent);
+      color: var(--accent-contrast, #fff); font-size: var(--t-sm, 0.75rem);
+      line-height: 1.4em; text-align: center; font-variant-numeric: tabular-nums;
+    }
+    .toast-region {
+      position: fixed; right: var(--space-4); bottom: var(--space-4);
+      display: flex; flex-direction: column; gap: var(--space-2);
+      z-index: 1100; max-width: min(24rem, calc(100vw - 2rem));
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto; background: var(--paper); color: var(--ink);
+      border: 1px solid var(--line); border-radius: var(--r-lg);
+      padding: var(--space-3); box-shadow: var(--shadow-2);
+      display: flex; align-items: center; gap: var(--space-3);
+      animation: toast-in 0.18s ease-out;
+    }
+    .toast a { white-space: nowrap; }
+    @keyframes toast-in {
+      from { opacity: 0; transform: translateY(0.4rem); }
+      to { opacity: 1; transform: none; }
+    }
+    .toast-static { animation: none; }
+    @media (prefers-reduced-motion: reduce) { .toast { animation: none; } }
+  </style>
+  <script>
+  (function () {
+    var region = document.querySelector("[data-toast-region]");
+    var CURSOR_KEY = "voxint-activity-cursor";
+    var ENDPOINT = "/activity/events";
+    var POLL_MS = 15000;
+    var MAX_TOASTS = 3;        /* beyond this per drain, coalesce into one */
+    var DRAIN_CAP = 200;       /* hard stop so a stale-low cursor can't loop */
+    var TOAST_MS = 8000;
+    var reduceMotion = false;
+    try { reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
+
+    function readCursor() {
+      try {
+        var v = localStorage.getItem(CURSOR_KEY);
+        if (v === null) { return null; }
+        var n = parseInt(v, 10);
+        /* Reject a corrupt value ("NaN", "-1", "10abc") instead of sending it as
+           ?since= (a negative floods the backlog; NaN 422s forever): clear it so
+           the next poll bootstraps cleanly. */
+        if (!isFinite(n) || n < 0 || String(n) !== v) {
+          try { localStorage.removeItem(CURSOR_KEY); } catch (e) {}
+          return null;
+        }
+        return n;
+      } catch (e) { return null; }
+    }
+    function writeCursor(n) { try { localStorage.setItem(CURSOR_KEY, String(n)); } catch (e) {} }
+
+    function updateBadge(count) {
+      var badge = document.querySelector("[data-activity-badge]");
+      if (!badge) { return; }
+      if (typeof count === "number" && count > 0) {
+        badge.textContent = String(count); badge.hidden = false;
+      } else { badge.textContent = ""; badge.hidden = true; }
+    }
+
+    /* Only a relative single-slash path is a safe toast link (never a
+       protocol-relative //host or an absolute URL from a frozen snapshot). */
+    function safeHref(href) {
+      if (typeof href !== "string" || href.charAt(0) !== "/" || href.charAt(1) === "/") { return null; }
+      return href;
+    }
+    function toastEl() {
+      var el = document.createElement("div");
+      el.className = "toast" + (reduceMotion ? " toast-static" : "");
+      el.setAttribute("role", "status");
+      return el;
+    }
+    function show(el) {
+      if (!region) { return; }
+      region.appendChild(el);
+      window.setTimeout(function () { if (el.parentNode) { el.parentNode.removeChild(el); } }, TOAST_MS);
+    }
+    function renderToast(title, href) {
+      var el = toastEl();
+      var msg = document.createElement("span");
+      /* textContent, never innerHTML: the title is a frozen media label. */
+      msg.textContent = "Transcription finished: " + title + ". Review speakers.";
+      el.appendChild(msg);
+      var safe = safeHref(href);
+      if (safe) {
+        var link = document.createElement("a");
+        link.href = safe; link.textContent = "View";
+        el.appendChild(link);
+      }
+      show(el);
+    }
+    function renderCoalesced(count) {
+      var el = toastEl();
+      var msg = document.createElement("span");
+      msg.textContent = count + " transcriptions finished. Review speakers.";
+      el.appendChild(msg);
+      var link = document.createElement("a");
+      link.href = "/jobs"; link.textContent = "Open Jobs";
+      el.appendChild(link);
+      show(el);
+    }
+    function flush(events) {
+      if (events.length === 0) { return; }
+      if (events.length > MAX_TOASTS) { renderCoalesced(events.length); return; }
+      for (var i = 0; i < events.length; i++) { renderToast(events[i].title, events[i].href); }
+    }
+
+    function fetchJson(url, cb) {
+      try {
+        fetch(url, { headers: { "Accept": "application/json" }, credentials: "same-origin" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { cb(d); })
+          .catch(function () { cb(null); });
+      } catch (e) { cb(null); }
+    }
+
+    /* Single-flight: a drain can span several fetches and outlast one interval,
+       so re-entrancy would double-toast and race the cursor. One poll runs at a
+       time; the next is scheduled only once the current settles (recursive
+       setTimeout, not setInterval). */
+    var inFlight = false;
+    function scheduleNext() { window.setTimeout(poll, POLL_MS); }
+
+    function poll() {
+      if (inFlight) { return; }
+      inFlight = true;
+      var cursor = readCursor();
+      if (cursor === null) {
+        /* Bootstrap: baseline at the high-water mark, no backlog toasts. */
+        fetchJson(ENDPOINT, function (data) {
+          if (data) { writeCursor(data.next_cursor); updateBadge(data.badge); }
+          inFlight = false;
+          scheduleNext();
+        });
+        return;
+      }
+      var collected = [];
+      /* Persist the cursor only AFTER a successful flush: if the tab dies
+         mid-drain the cursor stays put and the next session re-toasts (a
+         duplicate is honest; a silent miss is not). */
+      function done(finalCursor) {
+        flush(collected);
+        if (typeof finalCursor === "number") { writeCursor(finalCursor); }
+        inFlight = false;
+        scheduleNext();
+      }
+      function step(from) {
+        fetchJson(ENDPOINT + "?since=" + encodeURIComponent(from), function (data) {
+          if (!data) { inFlight = false; scheduleNext(); return; }  // transient: retry, cursor kept
+          updateBadge(data.badge);
+          var hw = typeof data.high_water === "number" ? data.high_water : from;
+          var floor = typeof data.floor === "number" ? data.floor : 0;
+          /* Cursor outside the retained range — above it (a DB reset lowered
+             max(id)) or below the retention floor (events pruned while the tab
+             was closed): resync to high_water, never replay the retained
+             backlog as new. */
+          if (from > hw || (floor > 0 && from < floor - 1)) {
+            collected = [];
+            done(hw);
+            return;
+          }
+          for (var i = 0; i < data.events.length; i++) { collected.push(data.events[i]); }
+          if (data.has_more) {
+            /* A long-closed tab: show one coalesced toast and jump to the head so
+               later polls do not re-toast the untoasted remainder. */
+            if (collected.length >= DRAIN_CAP) { done(hw); return; }
+            step(data.next_cursor);
+            return;
+          }
+          done(data.next_cursor);
+        });
+      }
+      step(cursor);
+    }
+
+    poll();
+  })();
+  </script>
+  {% endif %}
   {# Theme wiring (#94). The <head> resolver owns first paint; this owns the
      rest. Split on purpose (multi-model plan review): applyDom never persists
      and the storage handler never writes back, so cross-tab events cannot

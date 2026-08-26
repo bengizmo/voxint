@@ -186,6 +186,15 @@ def cas_update_run(
             transition_revision=new_revision,
             settings=settings,
         )
+        # Console activity outbox (issue #162): a completion event announced in
+        # THIS transaction, so it commits iff the completion does (and a stale
+        # CAS above raises before we get here). Local import for the same
+        # cycle-freedom reason as notify. Off unless the flag is on; the only
+        # terminal status is COMPLETED.
+        if status is RunStatus.COMPLETED and settings.console_activity_enabled:
+            from voxint.activity import record_run_completed
+
+            record_run_completed(session, held.id)
     return RunSnapshot(
         id=held.id, status=status, current_stage=current_stage, revision=new_revision
     )

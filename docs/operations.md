@@ -1345,6 +1345,7 @@ mutations are gated by their per-run claim token.
 | `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
 | `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |
 | `GET /settings/{hardware,database,plugins}`, `GET /settings/plugins/{id}` | Read-only settings sub-pages: effective hardware config, database size/retention, and the plugin registry |
+| `GET /activity/events?since={id}` | Activity feed poll (JSON): completion events after a cursor plus the live-jobs badge count. Dark-shipped behind `CONSOLE_ACTIVITY_ENABLED` (answers 404 until on); no `since` bootstraps at the high-water mark so a fresh tab does not replay history (#162) |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
 | `POST /settings/corrections` | Replace the operator's console-authored correction rules (#84; whole list validated through the pack #80 gate, own `CSRF_SETTINGS` token; a pack collision returns a plain-language 422) |
 

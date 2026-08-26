@@ -6,6 +6,12 @@
     ]
   ],
   [
+    "/activity/events",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/annotations/tags",
     [
       "GET"

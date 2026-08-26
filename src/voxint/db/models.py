@@ -93,6 +93,17 @@ class NotificationStatus(enum.StrEnum):
     SUPPRESSED = "suppressed"  # a FAILED arrival the run moved past before delivery
 
 
+class ActivityKind(enum.StrEnum):
+    """The kinds of console activity events (issue #162, Console 2.0 P7).
+
+    Only ``RUN_COMPLETED`` exists in this slice; speaker-identification events
+    are a deferred fast-follow that adds its own value here (and widens the CHECK
+    in its own migration) rather than shipping an unconstrained ``kind`` now.
+    """
+
+    RUN_COMPLETED = "run_completed"
+
+
 class Stage(enum.StrEnum):
     # ACQUIRE is the universal first stage: a no-op success for local/uploaded
     # media (source_url IS NULL), a yt-dlp download for URL runs. Enum order
@@ -2508,6 +2519,61 @@ class NotificationDelivery(Base):
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Bounded + redacted transport error (never the URL, secret, or payload).
     last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActivityEvent(Base):
+    """Append-only console activity outbox (issue #162, Console 2.0 P7).
+
+    One row per operator-facing event, inserted in the SAME transaction as the
+    change it announces (a run reaching COMPLETED — written from
+    ``cas_update_run``), so an event is emitted iff the change committed. Unlike
+    ``notification_deliveries`` this outbox has no delivery lifecycle: the browser
+    polls it directly. A denormalized ``title``/``href`` snapshot is frozen at
+    emission so the poll never re-scans the heterogeneous source tables.
+
+    The ``id`` is a monotonic ``BIGINT`` identity: it is the browser's poll
+    cursor (fetch rows with ``id`` greater than the last seen). Retention is a
+    bounded newest-N prune (``voxint.activity_prune``), so old rows fall off and a
+    frozen ``href`` is never repointed. ``occurrence_key`` makes emission
+    idempotent under a retried transition (``run:{id}:completed``).
+    """
+
+    __tablename__ = "activity_events"
+    __table_args__ = (
+        CheckConstraint(
+            f"kind IN ({_enum_values(ActivityKind)})",
+            name="activity_events_kind_check",
+        ),
+        CheckConstraint(
+            "char_length(title) <= 500", name="activity_events_title_len_check"
+        ),
+        CheckConstraint(
+            "char_length(href) <= 500", name="activity_events_href_len_check"
+        ),
+        CheckConstraint(
+            "char_length(occurrence_key) <= 200",
+            name="activity_events_occurrence_key_len_check",
+        ),
+        UniqueConstraint("occurrence_key", name="uq_activity_events_occurrence_key"),
+    )
+
+    # Monotonic identity: the client cursor. BigInteger + autoincrement is a
+    # BIGSERIAL/identity in Postgres.
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(Text)
+    # NOT NULL for the only kind this slice carries (run_completed always names a
+    # run). The speaker-event follow-up makes this nullable and adds a
+    # kind-specific shape CHECK + typed speaker provenance columns.
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    # Frozen presentation snapshot (the media label / a same-origin relative
+    # link), resolved in the emitting transaction so the poll is a pure read.
+    title: Mapped[str] = mapped_column(Text)
+    href: Mapped[str] = mapped_column(Text)
+    # Idempotency key for the announced occurrence (ON CONFLICT DO NOTHING).
+    occurrence_key: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

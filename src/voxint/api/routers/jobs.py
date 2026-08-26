@@ -23,7 +23,7 @@ from typing import Final
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import Response
 
-from voxint.api.jobs_query import recent_aux_jobs, stage_activity
+from voxint.api.jobs_query import jobs_badge_count, recent_aux_jobs, stage_activity
 from voxint.api.resource_status import (
     build_resource_strip,
     collect_resource_status_or_empty,
@@ -70,6 +70,9 @@ def jobs(request: Request, operator: OperatorDep, session: SessionDep) -> Respon
         ),
         "runs": page.items,
         "aux_jobs": recent_aux_jobs(session, limit=_RECENT_AUX_JOBS),
+        # The live-jobs count shared with the shell activity badge (#162): the
+        # same query drives both, so the badge equals this page by construction.
+        "jobs_badge_count": jobs_badge_count(session),
     }
     return templates.TemplateResponse(request, "jobs/jobs.html", context)
 

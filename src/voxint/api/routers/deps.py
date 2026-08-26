@@ -302,6 +302,18 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 settings.console_media_enabled
                 and getattr(request.app.state, "media_routed", False)
             ),
+            # Activity (#162) dark-ships behind console_activity_enabled AND its
+            # route stamp, and additionally depends on Jobs discovery: the badge
+            # lives on the sidebar Jobs entry and the toast links target /jobs, so
+            # surfacing activity while jobs discovery is off would point that entry
+            # at /runs while the badge/links go to /jobs. ANDing jobs_enabled keeps
+            # the nav honest — activation implies Jobs is already discovered.
+            "activity_enabled": (
+                settings.console_activity_enabled
+                and getattr(request.app.state, "activity_routed", False)
+                and settings.console_jobs_enabled
+                and getattr(request.app.state, "jobs_routed", False)
+            ),
         }
     }
 
