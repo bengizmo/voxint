@@ -1,8 +1,9 @@
 # ADR 0001: Media identity versus location
 
-> **Status:** Accepted (Console 2.0 P0a, issue #150). Schema-free groundwork; the
-> `current_path` / `media_folder_id` columns this ADR anticipates land in a later
-> phase with their first consumer.
+> **Status:** Accepted (Console 2.0 P0a, issue #150). The `current_path` and
+> `media_folder_id` columns landed in P2a (migration 0040). P2c (issue #155,
+> ADR 0007) makes `current_path` load-bearing: the byte-opener switch,
+> the reclaim alias guard, and the sidecar read all move to `current_path`.
 
 ## Context
 
@@ -62,6 +63,7 @@ new opener (`media/integrity.py`, the sha256 backfill), listed below.
 | DISPLAY | 41 | Rendered to a human, logged, or returned as a JSON field. Stays on `source_path`. |
 | SCHEMA/DEF | 14 | Column, ORM mapping, or DTO field declaration. Structural. |
 | BYTE-OPENER | 7 | Derives a filesystem path to touch bytes (pre-P0a). Two are executable; five are comments annotating them. P0a adds a third executable opener in `media/integrity.py`. |
+| LOCATION-SEMANTIC | 2 | Not a byte open, but keyed on the physical location and must follow a move. Added in the P2c audit refresh: the reclaim alias guard and the sidecar read. |
 
 The load-bearing finding: **three executable statements** derive a byte path
 from the column, two of them post-ingest reads (PREPARE and the P0a backfill).
@@ -70,11 +72,21 @@ anchor. Re-derive with `rg -n 'source_path' src/voxint` and reclassify.
 
 ### Byte-opener list (executable statements)
 
-| Symbol (location as of P0a) | Nature | Migration action |
+| Symbol (location as of P2c) | Nature | Migration action |
 |---|---|---|
-| `prepare.run` (`pipeline/stages/prepare.py:30`) | `source = media_root / media.source_path`, then `source.is_file()`, `normalize_to_wav(source, ...)` ffmpeg input, `source.stat()` | **Switch to `current_path`.** The canonical post-ingest read: PREPARE reopens the acquired file to normalize it to WAV. Unambiguous. |
+| `prepare.run` (`pipeline/stages/prepare.py:30`) | `source = media_root / media.source_path`, then `source.is_file()`, `normalize_to_wav(source, ...)` ffmpeg input, `source.stat()` | **Switch to `current_path` (P2c).** The canonical post-ingest read: PREPARE reopens the acquired file to normalize it to WAV. |
 | `acquire.run` (`pipeline/stages/acquire.py:72`, URL media) | `dest = (media_root / media.source_path).resolve()`, then `dest.is_file()` / `dest.stat()` / `_sha256(dest)` / `os.link(produced, dest)` | **Acquisition write, see ambiguous case A.** This materializes the bytes and their hash at the `source_path` location; it is the ingest, not a post-ingest read. |
-| `backfill_sha256` (`media/integrity.py:118`, via `openable_source`) | `openable_source(media_root, media.source_path)` then `sha256_file(path)` | **Switch to `current_path`.** A post-ingest maintenance read that hashes the media content. After a move, the live bytes are at `current_path`, so the backfill must open there (content is move-preserved, so a pre-move digest still matches). Reads `source_path` today only because `current_path` does not exist yet. |
+| `backfill_sha256` (`media/integrity.py:124`, via `openable_source`) | `openable_source(media_root, media.source_path)` then `sha256_file(path)` | **Switch to `current_path` (P2c).** A post-ingest maintenance read that hashes the media content. After a move, the live bytes are at `current_path`, so the backfill must open there. |
+
+### Location-semantic references (added in P2c audit refresh)
+
+These are not byte openers, but they key on the physical location and must
+follow a move to stay correct. Both switch to `current_path` in P2c.
+
+| Symbol (location as of P2c) | Nature | Migration action |
+|---|---|---|
+| `_reclaimable_artifacts` (`media/reclaim.py:200`) | `MediaItem.source_path == AudioArtifact.path` exclusion guard: prevents GC from deleting an artifact file that is also a media source. After a move, the live source is at `current_path`, not `source_path`, so the guard must compare against `current_path` to avoid deleting a relocated live source. | **Switch to `current_path` (P2c).** The guard is belt-and-suspenders today (`source_path` is `incoming/{uuid}/source` and the query is gated to `artifacts/%`), but the split makes it load-bearing. |
+| `_reread_sidecar` (`api/routers/media.py:760`) | Resolves `media_root / source_path` to find the paired YAML sidecar for a rerun. After a move, the sidecar sits beside `current_path`, not `source_path` (operator decision O4, ADR 0007). | **Switch to `current_path` (P2c).** The sidecar moves with the file as a bundled secondary (ADR 0007 section 6). |
 
 No other code opens, stats, hashes, serves, or deletes bytes via `source_path`.
 Verified negatives worth recording, because they look like byte-openers and are
@@ -84,7 +96,8 @@ not:
   derived `AudioArtifact` preprocessed-WAV path, never `source_path`.
 - Media delete plans from `AudioArtifact` rows, not `source_path`.
 - `media/reclaim.py` deletes `AudioArtifact.path` bytes; its `source_path` use is
-  an exclusion guard (a WHERE clause), not an open.
+  an exclusion guard (a WHERE clause), not an open. Promoted to a location-semantic
+  reference in the P2c audit refresh (see above).
 - The watch sweep stats `media_root / rel` from the freshly scanned relative
   path, never `media.source_path`.
 - The upload path writes bytes through a local `dest`/`rel` variable
@@ -103,13 +116,16 @@ place that legitimately writes the acquisition location, and it should also seed
 target as `current_path` from the outset, leaves `source_path` as a pure recorded
 label no code opens. The migration ADR picks one; both are internally consistent.
 
-**B. `reclaim.py:191` is a physical-location safety guard keyed on the path
+**B. `reclaim.py:200` is a physical-location safety guard keyed on the path
 string** (`MediaItem.source_path == AudioArtifact.path`). It excludes any file
 physically located at a `source_path` from reclamation. It is not a byte open,
-but it is location-semantic, so when the split lands it should be reconsidered
-against `current_path` (the live location) to avoid deleting a relocated file. In
-practice source paths are `incoming/{uuid}/source` and the query is already gated
-to `artifacts/%`, so it is belt-and-suspenders today.
+but it is location-semantic: when a file moves, the live source is at
+`current_path`, not `source_path`, so the guard must compare against
+`current_path` to avoid deleting a relocated live source. In practice source
+paths are `incoming/{uuid}/source` and the query is already gated to
+`artifacts/%`, so it is belt-and-suspenders today, but the split makes it
+load-bearing. **Switches to `current_path` in P2c** (see the location-semantic
+table above).
 
 **C. `runs_query.py:492` (`source_path.ilike(...)`) is the operator search
 filter.** It queries the stored path text, not the filesystem, so it is not a
@@ -123,13 +139,16 @@ live location, or both.
   `id` and `source_path`.
 - The migration surface is small and known: two post-ingest reads (PREPARE in
   `prepare.py` and the `backfill_sha256` maintenance read in `media/integrity.py`)
-  switch to `current_path`, plus the deliberate decision at the acquisition write
-  (case A). The other roughly 120 reads are proven not to open bytes.
+  plus two location-semantic references (the reclaim alias guard in `reclaim.py`
+  and the sidecar read in `media.py`) switch to `current_path` in P2c. The
+  acquisition write (case A) stays on `source_path`. The other roughly 120
+  reads are proven not to open bytes.
 - `sha256` becomes populated corpus-wide via the backfill, enabling later
   integrity and content-dedup features without ever becoming identity.
-- The audit is a point-in-time snapshot. Any new `source_path` reader added
-  before the split must be classified against this list; the byte-opener set is
-  the contract the migration depends on.
+- The audit is a point-in-time snapshot (P0a, refreshed P2c). Any new
+  `source_path` reader must be classified against this list; the byte-opener
+  and location-semantic sets are the contract the `current_path` switch depends
+  on. P2c adds a location-audit contract test pinning the switch set.
 
 ## Appendix: full reference classification
 
@@ -175,7 +194,7 @@ be re-derived without re-running the audit.
 | Line | Category | Note |
 |---|---|---|
 | reclaim.py:186 | IDENTITY | doc |
-| reclaim.py:191 | IDENTITY | EXEC: exclusion guard (WHERE equality), ambiguous case B |
+| reclaim.py:200 | LOCATION-SEMANTIC | EXEC: exclusion guard (WHERE equality), ambiguous case B. Switches to `current_path` in P2c. |
 | ytdlp.py:5 | IDENTITY/WRITE | doc: downloads into a caller temp dir, never touches the column |
 
 ### `adjudication/resolver.py`
@@ -237,7 +256,7 @@ be re-derived without re-running the audit.
 
 | Symbol | Category | Note |
 |---|---|---|
-| `backfill_sha256` / `openable_source` (line 118) | BYTE-OPENER | EXEC: post-ingest maintenance read; switches to `current_path` at the split |
+| `backfill_sha256` / `openable_source` (line 124) | BYTE-OPENER | EXEC: post-ingest maintenance read; switches to `current_path` in P2c |
 | module docstring, `sha256_file` doc | IDENTITY | notes that the hash is integrity, never identity |
 
 ### `config.py`, `db/models.py`
