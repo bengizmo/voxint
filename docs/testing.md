@@ -21,18 +21,27 @@ test).
 
 ## Running the suite
 
-Unit and contract tests need nothing external:
+Unit and contract tests need nothing external, and parallelize cleanly:
 
 ```bash
-uv run --extra dev pytest tests/unit tests/contracts -q
+uv run --extra dev pytest tests/unit tests/contracts -n auto
 ```
 
 Integration tests need a Postgres with the `vector` extension. They read
 **`VOXINT_TEST_DATABASE_URL`** and are **skipped entirely when it is unset** (so a
 bare `pytest` run still passes without a database, and CI supplies the service).
-The `engine` fixture drops and recreates the `public` schema then runs
-`alembic upgrade head`; each test truncates all tables afterward, so the suite is
-safe to point at a throwaway database, **never the live `voxint` database**:
+
+The `engine` fixture is xdist-aware. Run serially (no `-n`) and it keeps the
+historical single-database behaviour: drop and recreate the `public` schema on
+`VOXINT_TEST_DATABASE_URL`, then `alembic upgrade head`. Run under `-n` and each
+xdist worker instead gets **its own** disposable database
+(`voxint_test_<runid>_<worker>`), created fresh, migrated to head, and dropped at
+teardown; each test truncates its tables afterward. Folding the per-run id into
+the name means two concurrent `pytest` invocations no longer collide on the same
+database (the old "one invocation at a time or they deadlock on `DROP SCHEMA`"
+foot-gun is gone). A fail-closed guard refuses any base name without a `test`/
+`e2e` marker, so the suite can only ever touch a throwaway database, **never the
+live `voxint` database**:
 
 ```bash
 # One-time: a disposable database beside your dev one.
@@ -42,8 +51,14 @@ docker compose exec -T postgres psql -U voxint -d voxint_dev_test \
   -c "CREATE EXTENSION IF NOT EXISTS vector"
 
 export VOXINT_TEST_DATABASE_URL="postgresql+psycopg://voxint:voxint@127.0.0.1:5432/voxint_dev_test"
-uv run --extra dev pytest tests -q -p no:warnings
+# -n 8 is the default worker count CI uses; the per-worker databases make this
+# ~6x faster than the serial run on a multi-core box.
+uv run --extra dev pytest tests/integration -n 8
 ```
+
+The per-worker databases need a role that can `CREATE`/`DROP DATABASE` (the CI
+`voxint` role and a local superuser both qualify); the maintenance connection
+targets the server's `postgres` database.
 
 Static gates (run these before landing anything non-trivial):
 
