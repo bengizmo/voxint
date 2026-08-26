@@ -17,6 +17,8 @@ The two ``cas_update_run`` errors (:class:`StaleRevisionError`,
 :class:`InvalidTransitionError`) propagate unchanged.
 """
 
+from __future__ import annotations
+
 import contextlib
 import hashlib
 import logging
@@ -49,6 +51,7 @@ from voxint.domain_packs.corrections import parse_corrections, union_pack_correc
 from voxint.domain_packs.registry import default_domain_pack, resolve_domain_pack_by_name
 from voxint.ingest.sidecar import Sidecar
 from voxint.media.netcheck import UrlPolicyError, parse_http_url
+from voxint.media.operations import has_active_operation, lock_media_row
 from voxint.media.registration import resolve_media_folder_id
 from voxint.pipeline.engine import submit
 from voxint.pipeline.transitions import (
@@ -73,6 +76,14 @@ _MAX_FILENAME_BYTES = 200
 
 class IngestError(Exception):
     """Base for submission/requeue failures a caller maps to a UI/exit code."""
+
+
+class OperationInProgressError(IngestError):
+    """A media item has an active byte operation."""
+
+
+class ItemTrashedError(IngestError):
+    """A media item is trashed or purged."""
 
 
 class RunNotFoundError(IngestError):
@@ -507,6 +518,7 @@ def submit_media_item(
     # its persisted folder membership (issue #153, ADR 0002), not the raw path — a
     # reused or moved MediaItem keeps the folder it was created with.
     media = _get_or_create_media(session, source_path)
+    _guard_run_admission(session, media)
     domain_pack = _run_domain_pack_snapshot(
         session,
         media.media_folder_id,
@@ -582,6 +594,7 @@ def submit_media_item_if_new(
         if existing is None:
             raise
         return None
+    _guard_run_admission(session, media)
     domain_pack = _run_domain_pack_snapshot(
         session,
         media.media_folder_id,
@@ -601,6 +614,17 @@ def submit_media_item_if_new(
         diarization_max_speakers=max_hint,
         diarization_num_speakers=num_hint,
     )
+
+
+def _guard_run_admission(session: Session, media: MediaItem) -> None:
+    """Refuse runs that conflict with the media item's lifecycle state."""
+    lock_media_row(session, media.id)
+    if media.trashed_at is not None:
+        raise ItemTrashedError(f"media item {media.id} is trashed")
+    if media.purged_at is not None:
+        raise ItemTrashedError(f"media item {media.id} is purged")
+    if has_active_operation(session, media.id):
+        raise OperationInProgressError(f"media item {media.id} has an active operation")
 
 
 def _get_or_create_media(session: Session, source_path: str) -> MediaItem:

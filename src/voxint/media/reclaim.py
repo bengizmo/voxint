@@ -24,6 +24,8 @@ Pure and Celery-free so it is testable without a broker. Correctness notes:
   fails closed (logged, left unreclaimed) rather than being unlinked.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import stat as stat_module

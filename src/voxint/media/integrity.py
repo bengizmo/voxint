@@ -8,12 +8,12 @@ content-deduplicating in maintainer tooling. It is never identity. Identity
 stays ``media_items.id``, anchored to the immutable acquisition ``source_path``;
 see ``docs/adr/0001-media-identity-vs-location.md``.
 
-The backfill resolves bytes exactly the way the pipeline does
-(``media_root / source_path`` with an escape guard, regular files only) so it
-hashes the same bytes a run would. It is idempotent: only rows whose ``sha256``
-is NULL are read, each hashed row is committed on its own, and a row whose bytes
-are absent stays NULL and is reported rather than failing the sweep, so it is
-retried on a later run if the file returns.
+The backfill resolves bytes at the mutable ``current_path`` (falling back to
+``source_path`` for legacy rows), with an escape guard and regular-files-only
+check, so it hashes the same bytes a run would. It is idempotent: only rows
+whose ``sha256`` is NULL are read, each hashed row is committed on its own, and
+a row whose bytes are absent stays NULL and is reported rather than failing the
+sweep, so it is retried on a later run if the file returns.
 
 Pure and broker-free: it takes a session and a media root, so it is testable
 without Celery or a live install.
@@ -50,8 +50,8 @@ def sha256_file(path: Path, *, chunk_bytes: int = _HASH_CHUNK_BYTES) -> str:
     return digest.hexdigest()
 
 
-def openable_source(media_root: Path, source_path: str) -> Path | None:
-    """Resolve ``media_root / source_path`` to a readable regular file, or None.
+def openable_path(media_root: Path, path: str) -> Path | None:
+    """Resolve a media-root-relative path to a readable regular file, or None.
 
     Mirrors the acquisition/prepare byte-opener guard: the resolved path must
     stay within ``media_root`` (no symlink or ``..`` escape) and be a regular
@@ -65,7 +65,7 @@ def openable_source(media_root: Path, source_path: str) -> Path | None:
     drop point.
     """
     root = media_root.resolve()
-    candidate = media_root / source_path
+    candidate = media_root / path
     try:
         resolved = candidate.resolve()
         resolved.relative_to(root)
@@ -85,10 +85,10 @@ def openable_current(media_root: Path, media: MediaItem) -> Path | None:
     Uses ``current_path`` (the mutable live location, ADR 0001 / ADR 0007)
     with a fallback to ``source_path`` for rows that predate the P2a backfill
     or have a NULL ``current_path``. The resolved path must stay within
-    ``media_root`` and be a regular file, same as ``openable_source``.
+    ``media_root`` and be a regular file, same as ``openable_path``.
     """
     path = media.current_path if media.current_path is not None else media.source_path
-    return openable_source(media_root, path)
+    return openable_path(media_root, path)
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ class BackfillResult:
     """Outcome of one backfill sweep.
 
     ``hashed`` counts rows newly given a digest; ``skipped_missing`` is the
-    ``source_path`` of each NULL row whose bytes could not be read under the
+    live path of each NULL row whose bytes could not be read under the
     media root, whether absent, unreadable, or vanished mid-hash (retried on a
     later run if the file returns).
     """
@@ -135,12 +135,12 @@ def backfill_sha256(
     for media in rows:
         path = openable_current(media_root, media)
         if path is None:
-            missing.append(media.source_path)
+            missing.append(media.current_path or media.source_path)
             continue
         try:
             digest = sha256_file(path)
         except OSError:
-            missing.append(media.source_path)
+            missing.append(media.current_path or media.source_path)
             continue
         media.sha256 = digest
         session.commit()
