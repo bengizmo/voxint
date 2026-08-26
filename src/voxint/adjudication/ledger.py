@@ -56,6 +56,25 @@ def _payload_matches(
     )
 
 
+def decision_exists(session: Session, idempotency_key: str) -> bool:
+    """Whether a ledger row already carries ``idempotency_key`` (an indexed read).
+
+    The emit seams (issue #162 activity) call this BEFORE :func:`record_decision`
+    to tell a fresh ruling from an idempotent replay: an activity event announces
+    only a newly committed identification, never a replay that merely returns an
+    existing row (which would toast a stale or since-superseded attribution). Safe
+    under the route's run claim lock, which serializes same-nonce retries.
+    """
+    return (
+        session.execute(
+            select(AdjudicationDecision.id).where(
+                AdjudicationDecision.idempotency_key == idempotency_key
+            )
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
 def record_decision(
     session: Session,
     *,

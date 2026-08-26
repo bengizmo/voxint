@@ -60,7 +60,12 @@ from voxint.adjudication.annotations import (
 )
 from voxint.adjudication.corrections_view import run_reconciliation
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
-from voxint.adjudication.ledger import ConflictingReplayError, WordRangeError, record_decision
+from voxint.adjudication.ledger import (
+    ConflictingReplayError,
+    WordRangeError,
+    decision_exists,
+    record_decision,
+)
 from voxint.adjudication.merge import MergeConflictError, MergeError, apply_merge, preview_merge
 from voxint.adjudication.resolver import (
     QUEUE_SORTS,
@@ -825,6 +830,9 @@ def decide(
     # The label's effective speaker BEFORE this ruling: an assign that re-asserts
     # it identifies nothing new and must not toast (issue #162 activity).
     prior_speaker_id = next((s.speaker_id for s in states if s.label == label), None)
+    # A replay returns the existing row without changing effective attribution, so
+    # it must not toast (a stale/superseded identification); only a fresh ruling.
+    is_replay = decision_exists(session, nonce)
     try:
         row = record_decision(
             session,
@@ -840,6 +848,7 @@ def decide(
     settings: Settings = request.app.state.settings
     if (
         settings.console_activity_enabled
+        and not is_replay
         and decision is Decision.ASSIGN
         and speaker is not None  # ASSIGN <=> speaker_id set (checked above)
         and speaker_id != prior_speaker_id  # effective attribution actually changed
@@ -982,7 +991,8 @@ def merge_apply(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # One event per merge (server-side coalescing): a merge is one operator
     # consolidation, keyed on a stable per-merge decision id (issue #162 activity).
-    if settings.console_activity_enabled and result.decision_ids:
+    # A replayed merge (double-click / retry) never re-announces.
+    if settings.console_activity_enabled and not result.is_replay and result.decision_ids:
         record_speaker_merge(
             session,
             run_id=run_id,
@@ -1085,6 +1095,8 @@ def relabel_segment(
                     " roster identity — refresh and pick another"
                 ),
             )
+    # Only a fresh ruling announces; a replay returns the existing row unchanged.
+    is_replay = decision_exists(session, nonce)
     try:
         row = record_decision(
             session,
@@ -1107,6 +1119,7 @@ def relabel_segment(
     # (INHERIT is a reset, never announced — issue #162 activity).
     if (
         settings.console_activity_enabled
+        and not is_replay
         and decision is Decision.ASSIGN
         and speaker is not None
     ):
@@ -1331,6 +1344,8 @@ def enroll(
     except ClaimMismatchError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     settings: Settings = request.app.state.settings
+    # Only a fresh enrollment announces, never a replay of one.
+    is_replay = decision_exists(session, nonce)
     try:
         enrollment = enroll_new_speaker(
             session,
@@ -1345,7 +1360,7 @@ def enroll(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ConflictingReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if settings.console_activity_enabled:
+    if settings.console_activity_enabled and not is_replay:
         # Resolve the authoritative roster name from the speaker row, never the
         # submitted display_name: a replay reuses an existing (maybe renamed)
         # speaker and enroll deliberately ignores the posted name then.

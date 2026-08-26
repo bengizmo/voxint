@@ -177,12 +177,13 @@ def events_since(session: Session, *, after_id: int, limit: int) -> list[Activit
     fills, and re-polls to drain the rest without skipping any row.
 
     Delivery is best-effort by design: ``id`` is a sequence, assigned at insert,
-    not at commit, so two run completions that commit out of insert order can let
-    a poll landing between the two commits advance past the earlier id and miss
-    its toast. That is an accepted limitation for a cosmetic notification on a
+    not at commit, so two events (of either kind — completions and speaker
+    identifications share this outbox and cursor) that commit out of insert order
+    can let a poll landing between the two commits advance past the earlier id and
+    miss its toast. That is an accepted limitation for a cosmetic notification on a
     single-operator tool: the Jobs badge (a live count, not cursor-based) and the
-    Jobs page remain authoritative, and serializing the pipeline's terminal
-    completion transaction for a popup is not a trade this tool makes.
+    Jobs page remain authoritative, and serializing a terminal ruling or completion
+    transaction for a popup is not a trade this tool makes.
     """
     rows = session.execute(
         select(ActivityEvent)

@@ -84,8 +84,9 @@ def _decide(
     *,
     action: str,
     speaker_id: uuid.UUID | None = None,
+    nonce: str | None = None,
 ):  # type: ignore[no-untyped-def]
-    data = {"token": token, "nonce": uuid.uuid4().hex, "action": action}
+    data = {"token": token, "nonce": nonce or uuid.uuid4().hex, "action": action}
     if speaker_id is not None:
         data["speaker_id"] = str(speaker_id)
     return client.post(f"/review/{run_id}/labels/{label}/decision", data=data, headers=HX)
@@ -296,3 +297,59 @@ def test_identification_leaves_jobs_badge_unchanged(
     _decide(client, run_id, "S1", token, action="assign", speaker_id=spk)
     with session_factory() as session:
         assert jobs_badge_count(session) == before  # toasts only; badge is live jobs
+
+
+# --- replay-freshness (3-engine review fix) --------------------------------
+
+
+def test_label_replay_does_not_re_emit(
+    client: TestClient, session_factory: sessionmaker[Session], media_root
+) -> None:
+    """A replayed label decision (same nonce) must NOT toast again."""
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    spk = _add_speaker(session_factory, "Alice")
+    token = claim_token(client, run_id)
+    nonce = uuid.uuid4().hex
+    _decide(client, run_id, "S1", token, action="assign", speaker_id=spk, nonce=nonce)
+    _decide(client, run_id, "S1", token, action="assign", speaker_id=spk, nonce=nonce)
+    assert len(_speaker_events(session_factory, run_id)) == 1
+
+
+def test_segment_replay_does_not_re_emit(
+    client: TestClient, session_factory: sessionmaker[Session], media_root
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    spk = _add_speaker(session_factory, "Carol")
+    seg = _segment_ids(session_factory, run_id)[0]
+    token = claim_token(client, run_id)
+    nonce = uuid.uuid4().hex
+    for _ in range(2):
+        client.post(
+            f"/review/{run_id}/segments/{seg}/relabel",
+            data={
+                "token": token,
+                "nonce": nonce,
+                "action": "assign",
+                "speaker_id": str(spk),
+            },
+            headers=HX,
+        )
+    assert len(_speaker_events(session_factory, run_id)) == 1
+
+
+def test_enroll_replay_does_not_re_emit(
+    client: TestClient, session_factory: sessionmaker[Session], media_root
+) -> None:
+    with session_factory() as session:
+        run_id = seed_run(session, media_root)
+    token = claim_token(client, run_id)
+    nonce = uuid.uuid4().hex
+    for _ in range(2):
+        client.post(
+            f"/review/{run_id}/labels/S1/enroll",
+            data={"token": token, "nonce": nonce, "display_name": "Norma Newvoice"},
+            headers=HX,
+        )
+    assert len(_speaker_events(session_factory, run_id)) == 1
