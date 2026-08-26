@@ -78,6 +78,54 @@
   ]
  ],
  [
+  "/media/submit",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/fetch",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/assign",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/rerun",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/rerun/confirm",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/archive",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/unarchive",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"
@@ -409,6 +457,36 @@
  ],
  [
   "/settings",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/status",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/hardware",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/database",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/plugins",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/plugins/{plugin_id}",
   [
    "GET"
   ]

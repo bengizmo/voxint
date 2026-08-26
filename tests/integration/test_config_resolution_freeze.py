@@ -18,6 +18,7 @@ freezing the effective config rather than reasoning about it.
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import pytest
@@ -27,7 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.app_settings import get_or_create
 from voxint.config import Settings
 from voxint.db.models import MediaFolder, PipelineRun, Project
-from voxint.ingest import submit_media_item
+from voxint.ingest import preview_effective_config, submit_media_item
 from voxint.ingest.sidecar import parse_sidecar
 
 # One distinctive value per layer, per field. If any resolution leaked a masked
@@ -304,3 +305,99 @@ def test_freeze_no_folder_resolves_to_global_baseline(
     assert snapshot["config_resolution_version"] == 2
     assert snapshot["vocabulary"] == GLOBAL_VOCAB
     assert _corr_ids(snapshot) == GLOBAL_CORR_IDS
+
+
+# --- The read-only re-run preview (Console 2.0 P2b) ---------------------------
+#
+# preview_effective_config runs the SAME resolution walk the freeze does, so a
+# preview matches exactly what a re-run against the same DB state would freeze —
+# the numerics/honesty invariant behind "show the effective config before dispatch".
+
+
+def _seed_project_folder(
+    session_factory: sessionmaker[Session],
+    *,
+    suffix: str,
+    project_vocab: list[str] | None,
+    project_corr: list[dict[str, object]] | None,
+    folder_pack: str | None,
+) -> tuple[str, str]:
+    """Seed one project + folder; return ``(folder_path, media_folder_id)``."""
+    folder_path = f"proj{suffix}"
+    with session_factory() as session:
+        project = Project(
+            name=f"Project {suffix}",
+            vocabulary=project_vocab,
+            corrections=project_corr,
+        )
+        session.add(project)
+        session.flush()
+        folder = MediaFolder(
+            path=folder_path, project_id=project.id, domain_pack=folder_pack
+        )
+        session.add(folder)
+        session.commit()
+        return folder_path, str(folder.id)
+
+
+def test_preview_matches_dispatched_snapshot(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    """The preview's pack + counts equal the snapshot a re-run freezes, and its
+    per-field source labels name the branch the ONE walk actually took: project
+    vocabulary (set) but folder-pack corrections (project corr NULL)."""
+    settings = _make_settings(tmp_path)
+    _seed_global(session_factory)
+    folder_path, folder_id = _seed_project_folder(
+        session_factory,
+        suffix="prev",
+        project_vocab=list(PROJECT_VOCAB),
+        project_corr=None,
+        folder_pack=FOLDER_PACK,
+    )
+
+    with session_factory() as session:
+        preview = preview_effective_config(
+            session, uuid.UUID(folder_id), settings=settings
+        )
+    assert preview.pack_name == FOLDER_PACK
+    assert preview.vocabulary_source == "project"
+    assert preview.corrections_source == "folder"
+    assert preview.folder_path == folder_path
+    assert preview.project_name == "Project prev"
+
+    # Submit a media item under the same folder; the frozen snapshot must match the
+    # preview's shape exactly (same walk, same DB state).
+    with session_factory() as session:
+        run = submit_media_item(session, f"{folder_path}/a.wav", settings=settings)
+        session.commit()
+        run_id = run.id
+    with session_factory() as session:
+        snapshot = session.get(PipelineRun, run_id).domain_pack  # type: ignore[union-attr]
+    assert snapshot is not None
+    assert preview.pack_name == snapshot["name"]
+    assert preview.vocabulary_count == len(snapshot["vocabulary"])
+    assert preview.corrections_count == len(snapshot["corrections"])
+    assert snapshot["vocabulary"] == PROJECT_VOCAB
+    assert _corr_ids(snapshot) == ["fo"]
+
+
+def test_preview_no_folder_is_global_baseline(
+    session_factory: sessionmaker[Session],
+    tmp_path: Path,
+) -> None:
+    """media_folder_id None (an upload/URL with no folder pick) previews the global
+    baseline: both fields sourced "global", no folder/project, counts matching a
+    loose submit."""
+    settings = _make_settings(tmp_path)
+    _seed_global(session_factory)
+    with session_factory() as session:
+        preview = preview_effective_config(session, None, settings=settings)
+    assert preview.pack_name == BASE_PACK
+    assert preview.vocabulary_source == "global"
+    assert preview.corrections_source == "global"
+    assert preview.folder_path is None
+    assert preview.project_name is None
+    assert preview.vocabulary_count == len(GLOBAL_VOCAB)
+    assert preview.corrections_count == len(GLOBAL_CORR_IDS)

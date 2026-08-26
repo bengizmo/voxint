@@ -60,6 +60,54 @@
     ]
   ],
   [
+    "/media/archive",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/assign",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/fetch",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/folders",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/rerun",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/rerun/confirm",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/unarchive",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],
@@ -428,6 +476,12 @@
     ]
   ],
   [
+    "/settings/database",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/settings/features",
     [
       "POST"
@@ -452,15 +506,39 @@
     ]
   ],
   [
+    "/settings/hardware",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/settings/llm",
     [
       "POST"
     ]
   ],
   [
+    "/settings/plugins",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/plugins/{plugin_id}",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/settings/semantic",
     [
       "POST"
+    ]
+  ],
+  [
+    "/settings/status",
+    [
+      "GET"
     ]
   ],
   [

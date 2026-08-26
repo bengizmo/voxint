@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Voxint — re-run{% endblock %}
+{% block body %}
+<style>
+  .rerun-list { list-style: none; padding: 0; display: grid; gap: .6rem; margin: 1rem 0; }
+  .rerun-list li { margin: 0; }
+  .rerun-blocked { border-color: var(--danger); }
+  .rerun-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+</style>
+<h1>Re-run transcription</h1>
+<p class="muted">Voxint will start a fresh run for each file below, using the settings that apply to it now.</p>
+
+{# Honest caveats: the operator should know exactly what a re-run does and does
+   not carry before they confirm. #}
+<div class="card">
+  <p>Each fresh run:</p>
+  <ul>
+    <li>re-resolves the current vocabulary and corrections for the file's settings folder, so the config shown here is re-checked at the moment you confirm;</li>
+    <li>re-reads the file's sidecar from disk if one is present;</li>
+    <li>does <strong>not</strong> carry the previous run's notes or manual speaker-count hints — those stay with the earlier run.</li>
+  </ul>
+  <p class="muted">Your existing runs are left untouched. Files are never moved.</p>
+</div>
+
+{% if runnable == 0 %}
+<p class="notice error" role="status">None of the selected files can be re-run right now. See the reasons below.</p>
+{% endif %}
+
+<form method="post" action="/media/rerun/confirm">
+  <input type="hidden" name="csrf_token" value="{{ csrf_media_rerun_confirm }}">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="view" value="{{ view }}">
+
+  <ul class="rerun-list" aria-label="Files to re-run">
+    {% for p in previews %}
+    <li class="card{% if p.issue %} rerun-blocked{% endif %}">
+      <input type="hidden" name="item" value="{{ p.pair }}">
+      <p><span class="media-title" title="{{ p.source_path }}">{{ p.label }}</span></p>
+      <code class="muted">{{ p.source_path }}</code>
+      {% if p.issue %}
+      <p class="error">{{ p.issue }} It will be skipped.</p>
+      {% else %}
+      <p class="muted">
+        Pack <strong>{{ p.preview.pack_name }}</strong>
+        · {{ p.preview.vocabulary_count }} glossary term{{ '' if p.preview.vocabulary_count == 1 else 's' }} ({{ p.preview.vocabulary_source }})
+        · {{ p.preview.corrections_count }} correction rule{{ '' if p.preview.corrections_count == 1 else 's' }} ({{ p.preview.corrections_source }})
+        {% if p.preview.folder_path %}· folder <code>{{ p.preview.folder_path }}</code>{% endif %}
+        {% if p.preview.project_name %}· project {{ p.preview.project_name }}{% endif %}
+      </p>
+      {% if not p.has_prior_run %}<p class="muted">No earlier run — this will be its first.</p>{% endif %}
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+
+  <div class="rerun-actions">
+    <button type="submit" class="primary">Re-run {{ runnable }} file{{ '' if runnable == 1 else 's' }}</button>
+    <a href="/media?sort={{ sort }}&view={{ view }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

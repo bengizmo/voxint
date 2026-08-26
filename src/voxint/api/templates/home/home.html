@@ -52,9 +52,11 @@
   </li>
 </ul>
 
-{# Quick actions: one primary per screen (Add media); the rest stay quiet. #}
+{# Quick actions: one primary per screen (Add media); the rest stay quiet. The
+   Add-media target follows the flag — the operable /media library (#154) when on,
+   the legacy /runs upload section when off. #}
 <div class="action-row" aria-label="Quick actions">
-  <a class="btn-primary" href="/runs#add-media">Add media</a>
+  <a class="btn-primary" href="{% if shell.media_enabled %}/media{% else %}/runs#add-media{% endif %}">Add media</a>
   {% if shell.projects_enabled %}<a href="/projects">New project</a>{% endif %}
   <a href="/speakers">Review speakers</a>
 </div>

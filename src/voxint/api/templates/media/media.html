@@ -1,8 +1,99 @@
 {% extends "base.html" %}
 {% block title %}Voxint — media{% endblock %}
 {% block body %}
-<h1>Media</h1>
-<p class="muted">Every recording Voxint knows about, and where each one stands.</p>
+{# The settings-folder picker is shared by the upload and URL forms. It sets which
+   folder's vocabulary and corrections apply to the run; it never moves the file
+   (ADR 0002 addendum). It renders whether or not the projects area is enabled. #}
+{% macro folder_picker(select_id) %}
+<label for="{{ select_id }}">Settings folder (optional)
+  <select id="{{ select_id }}" name="media_folder_id">
+    <option value="">No folder — use global settings</option>
+    {% for opt in folder_options %}
+    <option value="{{ opt.id }}">{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
+    {% endfor %}
+  </select>
+  <small class="muted">Applies this folder's vocabulary and corrections. The file is not moved.</small>
+</label>
+{% endmacro %}
+
+{# Page-scoped: the media page is flag-gated (404 when off), so these rules never
+   reach a flag-off page and keep every shared page byte-identical. #}
+<style>
+  .dropzone { border: 1px dashed var(--line); border-radius: var(--r-md);
+              padding: .8rem 1rem; background: var(--surface-2); cursor: pointer; }
+  .dropzone.is-drag { border-color: var(--accent); background: var(--surface); }
+  .notice.success { border-color: var(--accent); background: var(--accent-soft); }
+  .notice.error { border-color: var(--danger); background: var(--danger-soft); }
+  .lib-select-cell { width: 2.2rem; text-align: center; }
+  .card-select { display: flex; gap: .4rem; align-items: baseline; }
+  .bulk-bar { position: sticky; bottom: 0; z-index: 1; display: flex; gap: .8rem;
+              align-items: end; flex-wrap: wrap; margin-top: .6rem;
+              padding: .7rem .9rem; background: var(--surface-2);
+              border: 1px solid var(--line); border-radius: var(--r-md); }
+  .bulk-bar .selected-count { align-self: center; }
+  .folder-panel { margin-top: 1.4rem; }
+  .lib-folders { list-style: none; padding: 0; display: grid; gap: .4rem; }
+  .lib-folders li { display: flex; gap: .8rem; align-items: baseline;
+                    justify-content: space-between; }
+  .register-folder { display: flex; gap: .8rem; align-items: end;
+                     flex-wrap: wrap; margin-top: .8rem; }
+  [hidden] { display: none !important; }
+</style>
+
+<h1>Media{% if archived %} <span class="muted">· archived</span>{% endif %}</h1>
+<p class="muted">
+  {% if archived %}
+  Archived runs are hidden from the active library and the review queue.
+  <a href="{{ archived_toggle_url }}">← Back to active media</a>
+  {% else %}
+  Every recording Voxint knows about, and where each one stands.
+  <a href="{{ archived_toggle_url }}">View archived runs</a>
+  {% endif %}
+</p>
+
+{# Success/error banner for the bulk-assign and folder-panel flows. Success rides
+   in on a PRG redirect; an error re-renders this page with the operator's
+   selection preserved. #}
+{% if notice %}
+<p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
+{% endif %}
+
+{# Adding media and organizing folders belong to the active library; the archived
+   view is a focused surface for restoring runs, so both are hidden there. #}
+{% if not archived %}
+<section class="add-media" aria-labelledby="add-media-h">
+  <h2 id="add-media-h">Add media</h2>
+  {% if submitted %}
+  <p class="notice" role="status">
+    {% if submitted == "deferred" %}Queued for transcription. It will start when the worker is available.
+    {% else %}Queued for transcription.{% endif %}
+  </p>
+  {% endif %}
+
+  <form method="post" action="/media/submit" enctype="multipart/form-data" class="upload">
+    <input type="hidden" name="submission_id" value="{{ submission_id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_media_submit }}">
+    <label class="dropzone" data-dropzone>Drop a file here, or choose one
+      <input type="file" name="file" required>
+    </label>
+    {{ folder_picker("submit-folder") }}
+    <button type="submit" class="primary">Submit for transcription</button>
+  </form>
+
+  <form method="post" action="/media/fetch" class="upload">
+    <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_media_fetch }}">
+    <label>Media URL
+      <input type="url" name="url" placeholder="https://…" required{% if not ytdlp_enabled %} disabled{% endif %}>
+    </label>
+    {{ folder_picker("fetch-folder") }}
+    <button type="submit"{% if not ytdlp_enabled %} disabled{% endif %}>Fetch and transcribe</button>
+    {% if not ytdlp_enabled %}
+    <p class="muted">Fetching from a URL is turned off. Turn it on in <a href="/settings">Settings</a>.</p>
+    {% endif %}
+  </form>
+</section>
+{% endif %}
 
 {% if rows %}
 {# One toolbar row (#152 library kit): the sort control on the left, the
@@ -10,23 +101,45 @@
    control's current value so switching sort keeps the view and vice versa. An
    unknown ?sort=/?view= already degraded to the default in the route. #}
 <div class="lib-toolbar">
+  {# Both controls carry the OTHER control's current value AND the archived flag,
+     so switching sort or layout keeps you in the same view. #}
   <nav class="view-toggle" aria-label="Sort by">
     {% for value, label in sorts %}
-    <a href="/media?sort={{ value }}&view={{ view }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+    <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
     {% endfor %}
   </nav>
-  <nav class="view-toggle" aria-label="View" style="margin-left:auto;">
+  <nav class="view-toggle" aria-label="Show as">
     {% for value in views %}
-    <a href="/media?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+    <a href="/media?sort={{ sort }}&view={{ value }}{% if archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
     {% endfor %}
   </nav>
+  {# Select-all is a JS convenience; it is hidden until the script below reveals
+     and wires it, so no-JS operators never see a dead control. #}
+  <label data-select-all hidden style="margin-left:auto;">
+    <input type="checkbox" data-select-all-box> Select all shown
+  </label>
 </div>
+
+{# The multi-select bulk-assign form wraps only the listing and its action bar.
+   The upload/fetch forms above and the folder panel below are siblings, never
+   descendants, so no <form> is nested inside another. Without JS the checkboxes
+   plus the in-form folder <select> and submit button are the whole feature. #}
+{# One form holds the checkboxes and every bulk action. Each action button carries
+   its OWN action-bound CSRF token as its name/value and (for re-run) its own
+   formaction: an unclicked submit button sends nothing, so exactly one token and
+   one target ride with the submission — per-action CSRF with no JS and no nested
+   forms. The folder <select> is only read by /media/assign; /media/rerun ignores
+   it. #}
+<form method="post" action="{% if archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="view" value="{{ view }}">
 
 {% if view == "table" %}
 <div class="lib-table" role="region" aria-label="Media" tabindex="0">
   <table>
     <thead>
       <tr>
+        <th scope="col" class="lib-select-cell"><span class="visually-hidden">Select</span></th>
         <th scope="col">Name</th><th scope="col">Folder</th>
         <th scope="col">Length</th><th scope="col">Size</th>
         <th scope="col">Latest run</th><th scope="col">Added</th>
@@ -35,6 +148,14 @@
     <tbody>
       {% for row in rows %}
       <tr>
+        <td class="lib-select-cell">
+          <input type="checkbox" name="media_id" value="{{ row.id }}"
+                 aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+                 {% if (row.id|string) in selected_ids %}checked{% endif %}>
+          {# Render-time latest-run baseline: archive/unarchive target this exact run
+             so a double-submit is idempotent (a replay drifts and skips). #}
+          <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
+        </td>
         <td>
           <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
           <br><code class="muted">{{ row.source_path }}</code>
@@ -60,7 +181,14 @@
 <ul class="lib-cards" aria-label="Media">
   {% for row in rows %}
   <li>
-    <div class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</div>
+    <label class="card-select">
+      <input type="checkbox" name="media_id" value="{{ row.id }}"
+             aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+             {% if (row.id|string) in selected_ids %}checked{% endif %}>
+      <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
+    </label>
+    {# Render-time latest-run baseline (see the table view): idempotent archive. #}
+    <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
     <code class="muted">{{ row.source_path }}</code>
     <p class="muted">
       {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
@@ -77,10 +205,126 @@
 </ul>
 {% endif %}
 
+  {# The bulk action bar. Each button carries its OWN action-bound CSRF token as
+     its name/value and (where the target differs from the form action) its own
+     formaction; an unclicked submit button sends nothing, so exactly one token and
+     one target ride with the submission. Archive lives in the active view (over the
+     latest non-archived run); the archived view offers only unarchive. #}
+  <div class="bulk-bar">
+    {% if archived %}
+    <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}">Restore latest archived run</button>
+    {% else %}
+    {# "Use settings from…" never moves the bytes; "Archive latest run" is per-run. #}
+    <label for="assign-folder">Assign settings folder
+      <select id="assign-folder" name="media_folder_id">
+        <option value=""{% if not attempted_folder_id %} selected{% endif %}>No folder — use global settings</option>
+        {% for opt in folder_options %}
+        <option value="{{ opt.id }}"{% if (opt.id|string) == attempted_folder_id %} selected{% endif %}>{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Use these settings for the selected files</button>
+    <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}">Re-run transcription…</button>
+    <button type="submit" formaction="/media/archive" name="csrf_token" value="{{ csrf_media_archive }}">Archive latest run</button>
+    {% endif %}
+    <span class="muted selected-count" data-selected-count hidden></span>
+  </div>
+</form>
+
 {% if truncated %}
-<p class="muted">Showing the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
+<p class="muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
-<p class="muted">No media yet. Register a folder in <a href="/settings">Settings</a> or add a recording from <a href="/runs#add-media">Media</a> to get started.</p>
+{% if archived %}
+<p class="muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
+{% else %}
+<p class="muted">No media yet. Add a recording above, or register a folder below.</p>
 {% endif %}
+{% endif %}
+
+{# Folder panel: register folders so their files can share vocabulary and
+   corrections, or unregister one. Registering never moves files (ADR 0002
+   addendum); unregistering reverts its files to global settings. This section is
+   a sibling of the bulk-assign form, never nested inside it, and belongs to the
+   active library (hidden in the archived view). #}
+{% if not archived %}
+<section class="folder-panel" aria-labelledby="folders-h">
+  <h2 id="folders-h">Folders</h2>
+  <p class="muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>
+  {% if folder_options %}
+  <ul class="lib-folders">
+    {% for opt in folder_options %}
+    <li>
+      <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="muted">— {{ opt.project_name }}</span>{% endif %}</span>
+      <form method="post" action="/media/folders">
+        <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+        <input type="hidden" name="action" value="remove">
+        <input type="hidden" name="folder_id" value="{{ opt.id }}">
+        <input type="hidden" name="sort" value="{{ sort }}">
+        <input type="hidden" name="view" value="{{ view }}">
+        <button type="submit" class="danger">Unregister</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No folders registered yet.</p>
+  {% endif %}
+  <form method="post" action="/media/folders" class="register-folder">
+    <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+    <input type="hidden" name="action" value="add">
+    <input type="hidden" name="sort" value="{{ sort }}">
+    <input type="hidden" name="view" value="{{ view }}">
+    <label for="register-folder-path">Folder path (under the media root)
+      <input id="register-folder-path" type="text" name="folder" placeholder="interviews/2026" required>
+    </label>
+    <button type="submit">Register folder</button>
+  </form>
+</section>
+{% endif %}
+
+{# Progressive enhancement: without JS the file input, checkboxes, and folder
+   <select> all work on their own; JS adds the drop zone, select-all, and a live
+   selection count. No behaviour depends on this running. #}
+<script>
+(function () {
+  for (const zone of document.querySelectorAll('[data-dropzone]')) {
+    const input = zone.querySelector('input[type=file]');
+    if (!input) continue;
+    zone.addEventListener('dragover', function (e) { e.preventDefault(); zone.classList.add('is-drag'); });
+    zone.addEventListener('dragleave', function () { zone.classList.remove('is-drag'); });
+    zone.addEventListener('drop', function (e) {
+      e.preventDefault();
+      zone.classList.remove('is-drag');
+      if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; }
+    });
+  }
+
+  const form = document.getElementById('bulk-form');
+  if (!form) return;
+  const boxes = Array.from(form.querySelectorAll('input[name=media_id]'));
+  const count = form.querySelector('[data-selected-count]');
+  const selectAllWrap = document.querySelector('[data-select-all]');
+  const selectAll = document.querySelector('[data-select-all-box]');
+
+  function refresh() {
+    const n = boxes.filter(function (b) { return b.checked; }).length;
+    if (count) {
+      count.hidden = n === 0;
+      count.textContent = n === 1 ? '1 file selected' : n + ' files selected';
+    }
+    if (selectAll) { selectAll.checked = n > 0 && n === boxes.length; }
+  }
+
+  for (const b of boxes) { b.addEventListener('change', refresh); }
+  if (selectAllWrap && selectAll && boxes.length) {
+    selectAllWrap.hidden = false;
+    selectAll.addEventListener('change', function () {
+      for (const b of boxes) { b.checked = selectAll.checked; }
+      refresh();
+    });
+  }
+  refresh();
+})();
+</script>
 {% endblock %}

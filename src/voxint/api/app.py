@@ -546,6 +546,13 @@ def _register_routes(app: FastAPI) -> None:
     app.state.jobs_routed = any(
         route.path == "/jobs" for route in _iter_api_routes(app.routes)
     )
+    # Media (#154) dark-ships routed-but-undiscovered: /media always registers, so
+    # this stamp is always true. The shell reads flag AND stamp (mirroring jobs), so
+    # flipping CONSOLE_MEDIA_ENABLED alone points the sidebar Media link and the
+    # "Add media" quick action at /media — the dark-ship activation switch.
+    app.state.media_routed = any(
+        route.path == "/media" for route in _iter_api_routes(app.routes)
+    )
 
 
 app = create_app()

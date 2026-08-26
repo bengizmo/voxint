@@ -7,8 +7,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ### Added
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
-  S4). The unmodified upstream SSL_Anti-spoofing DF runner was run over the full
-  official ASVspoof 2021 DF eval cohort (611,829 trials) on the native FLAC tree,
+  S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
+  thin, audited reference driver) were run over the full official ASVspoof 2021 DF
+  eval cohort (611,829 trials) on the native FLAC tree,
   and the pooled EER over the 533,928 phase-`eval` trials was computed with the
   official `eval_metrics_DF.compute_eer` math and cross-checked against an
   independent EER routine. Result: **2.8650 % EER** against the published 2.85 %
@@ -22,6 +23,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   in
   `docs/gpu-contracts.md`; evidence in
   `docs/reports/synthdetect-gate1-s4-2026-08-25.md`.
+- **Console 2.0 P6a: settings sub-pages and plugins UI, dark-shipped** (#161,
+  epic #149 Track D). Behind a new `CONSOLE_SETTINGS_ENABLED` flag (off by
+  default), `/settings` becomes a hub that keeps every existing section inline
+  (its anchors intact, so deep-links keep working) grouped into everyday and
+  advanced categories, and links out to four new read-only sub-pages: `/settings/
+  status` (install kind, live component health, hardware snapshot), `/settings/
+  hardware` (effective configuration with the exact env key and restart to change
+  it, and a restart-pending badge when the environment changed after boot),
+  `/settings/database` (size, per-table row estimates, retention settings, backup
+  guidance), and `/settings/plugins` plus `/settings/plugins/{id}` (the plugin
+  registry with an honest empty state today and per-plugin pages that render a
+  plugin's own settings section). The sub-pages are registered unconditionally
+  and reachable by URL regardless of the flag, render honestly when the model
+  services or Redis are unavailable, and never edit the environment or restart a
+  service. No `/resources` redirect or version bump ships here: that activation
+  is a later slice.
 - **synthdetect Gate-2: DF reproduction paired equivalence RATIFIED** (#144, M1
   S3). The frozen `w2v2-aasist-df` eval container was measured against an
   independent, unmodified-upstream reference (verbatim upstream `model.py` +
@@ -209,6 +226,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   always registered so the console route inventory is stable, but returns 404
   until the flag is on. Reachable by URL for now; the sidebar's Media link is
   repointed in a later phase.
+- **Console 2.0 P2b: the media library becomes operable** (#154, epic #149).
+  With `CONSOLE_MEDIA_ENABLED` on, `/media` gains everything needed to run the
+  library from one page. File upload and URL fetch move onto it (each can pick a
+  settings folder whose vocabulary and corrections apply to the run without moving
+  the file), and a folder panel registers or unregisters folders. A multi-select
+  drives non-destructive bulk actions over the chosen files: assign a settings
+  folder (or clear it), re-run transcription, and archive or restore the latest
+  run. Re-run is a two-step, advisory flow: a preview shows the config each fresh
+  run would freeze and the config is re-resolved when you confirm, so a
+  double-confirm mints at most one new run per file and a file whose config or
+  sidecar cannot be resolved is skipped, not failed. An archived view
+  (`/media?archived=1`) lists files whose latest run is archived so they can be
+  restored. Every bulk action validates the whole selection first and reports a
+  per-item or counted outcome, never a silent partial change; assigning a settings
+  folder never moves the file on disk. The sidebar Media link and the Home "Add
+  media" quick action point at `/media` once the flag is on, and at the legacy
+  `/runs` upload otherwise; the legacy `/runs` page is unchanged. Track A files
+  only, no schema migration; the whole slice stays dark until the flag is on.
 - **Console 2.0 P2b: the projects pages** (#153, epic #149). New `/projects` and
   `/projects/{id}` pages let an operator create a project, assign registered
   folders to it, and see its folders and the speakers its finished recordings
