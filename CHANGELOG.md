@@ -247,6 +247,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
 
 ### Changed
+- **Test loop and PR CI parallelized.** The DB-backed integration suite now runs
+  under `pytest-xdist` with one disposable database per worker
+  (`tests/integration/conftest.py`), keyed on the xdist run id and worker so
+  concurrent invocations no longer deadlock on a shared `DROP SCHEMA`. Measured
+  ~6x faster at `-n 8` (13m24s serial to 2m14s) on a multi-core box, and the
+  serial (no-`-n`) path is byte-identical to before. The PR gate (`ci.yml`) drops
+  coverage instrumentation from the fast required lane (a measured ~33% wall-clock
+  tax) into a separate, parallel, still-required `coverage` job; the fast lane
+  runs the unit/contract suites parallel and the integration suite at `-n 8`. No
+  change to the parity gate, the contract goldens, or the secrets scan. See
+  `docs/testing.md`.
+
+### Fixed
+- **Integration tests could touch the live database when run in isolation.** The
+  `enrich` CLI tests invoked the app's own DB path without depending on the
+  `engine`/`session_factory` fixtures, so in isolation `DATABASE_URL` was unset
+  and the CLI fell back to the default live DSN and queried real data. They only
+  passed in the full serial suite by inheriting an earlier test's fixture side
+  effect. An autouse fixture now pins every integration test to its disposable
+  per-worker database, closing both the data hazard and the flake the new
+  parallel runner surfaced.
+
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,
