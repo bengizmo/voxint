@@ -134,14 +134,16 @@ ships inside the images too). Rules:
     review-console behavior or the delivery, data, or auth contracts a console
     island depends on (island code, the templates and routes islands hydrate
     against, island CSS or build or assets, security headers, auth or session
-    middleware, media delivery, or a backend response an island consumes). Skip
-    it for backend, pipeline, service, docs, CI, or test-only changes that leave
-    island behavior unchanged.
-  This gating is discretionary and never relaxes a mandatory gate. It does not
-  touch the numerics doctrine's measured-equivalence requirement, the
-  contract-test-in-the-same-commit rule, the required CI checks, or the release
-  process's own Gate E; those override the classification, and a gate assertion
-  is never weakened to reach a lower tier. Reclassify against the final landing
+    middleware, media delivery, a backend response an island consumes, or the
+    browser acceptance harness and its fixtures themselves). Skip it for backend,
+    pipeline, service, docs, CI, or test-only changes that leave island behavior
+    unchanged.
+  Assigning a tier is a judgment call, but the tier you assign and its mandatory
+  triggers are then binding, not optional. This gating never relaxes a mandatory
+  gate: it does not touch the numerics doctrine's measured-equivalence
+  requirement, the contract-test-in-the-same-commit rule, the required CI checks,
+  or the release process's own Gate E; those override the classification, and a
+  gate assertion is never weakened to reach a lower tier. Reclassify against the final landing
   diff if it grew. Never dismiss a finding without verifying it; record, in the
   commit message or PR, both classifications, the gates you ran, and each
   applied fix and deliberate skip with its reason. Worked triggers:

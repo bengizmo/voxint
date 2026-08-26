@@ -72,11 +72,10 @@ jobs:
           VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
         run: uv run pytest tests/integration -n 8
 
-  # Required, and runs in PARALLEL with lint-test so coverage never gates fast
-  # feedback. pytest-cov automatically combines the xdist workers' data; the 85%
-  # floor is enforced by [tool.coverage.report] fail_under in pyproject.toml.
-  # NOTE: add this job to the branch-protection required-checks set alongside
-  # `lint-test` and `secrets-scan`.
+  # Required (in the branch-protection set alongside `lint-test` and
+  # `secrets-scan`), and runs in PARALLEL with lint-test so coverage never gates
+  # fast feedback. pytest-cov automatically combines the xdist workers' data; the
+  # 85% floor is enforced by [tool.coverage.report] fail_under in pyproject.toml.
   coverage:
     runs-on: ubuntu-latest
     services:

@@ -90,12 +90,14 @@ judged independently:
   whatever files it edits. Real design choices or a new cross-cutting seam get a
   multi-model review. A clear fix in a familiar pattern gets a single-model
   review. A change with no plausible blast radius gets no formal panel, only the
-  standard gates (`ruff`, `mypy`, `pytest`, `gitleaks`). When two rows both fit,
-  take the deeper one.
+  standard gates that already run on every change (local `ruff`, `mypy`, and
+  `pytest`, plus the required CI checks `lint-test`, `secrets-scan`, and
+  `coverage`). When two rows both fit, take the deeper one.
 - **Browser lane.** Run the [browser E2E lane](#automated-e2e-testse2e) when a
   change alters observable review-console behaviour or a delivery, data, or auth
-  contract a console island depends on. Skip it for backend, pipeline, service,
-  docs, CI, or test-only changes that leave island behaviour unchanged.
+  contract a console island depends on, or when it changes the browser acceptance
+  harness or its fixtures. Skip it for backend, pipeline, service, docs, CI, or
+  test-only changes that leave island behaviour unchanged.
 
 File type is an illustration, not the classifier. A "config tweak" that changes a
 decode parameter is a numerics change; a "test-only" edit that loosens an
@@ -117,8 +119,9 @@ what operators do. Classify by what the change can affect.
 | Edit a release or CI workflow (`release.yml`, required-check wiring) | high (released artifact, gate strength) | full panel | no | Changes the supply chain or the gate set. |
 
 This choice is about the slice in front of you. It does not replace the release
-process's **Gate E**, which requires the browser runtime acceptance lane before
-tagging a release under its own pipeline-aware diff scope (see
+process's **Gate E**, which runs its own browser acceptance lane before tagging a
+release whenever the review console or the island build path changed, under its
+own diff-scoped carry-over rule (see
 [`release-process.md`](release-process.md)). A slice that skipped the lane can
 still oblige a Gate-E run at release time. Record both classifications, the gates
 you ran, and each applied fix or deliberate skip in the commit message or PR, and
