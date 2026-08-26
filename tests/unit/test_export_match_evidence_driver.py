@@ -319,6 +319,26 @@ def test_main_missing_manifest_returns_2(
     assert "cannot read manifest" in capsys.readouterr().err
 
 
+def test_main_invalid_manifest_returns_2(
+    no_db: None, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Valid JSON that fails schema validation is a distinct pre-DB exit from a
+    # JSON syntax error: main() surfaces the ManifestError as exit 2 before the
+    # engine is built.
+    manifest = tmp_path / "m.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "embedding_space": SPACE,
+                "name_accuracy": _na_block([str(uuid.uuid4())]),
+            }
+        )
+    )
+    assert main(["--manifest", str(manifest), "--out-dir", str(tmp_path / "o")]) == 2
+    assert "schema_version" in capsys.readouterr().err
+
+
 def test_main_refuses_dirty_tree(
     no_db: None,
     tmp_path: Path,

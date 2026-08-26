@@ -21,22 +21,27 @@ test).
 
 ### Keeping a test in the right layer
 
-A test belongs in `tests/unit/` when the function it exercises is pure: it takes
-plain data (or lightweight duck-typed fakes) and returns a value, with no
-`Session`, no HTTP route, no filesystem or network dependency. Some tests land in
-`tests/integration/` only because they were written there, not because they need
-Postgres; moving those down to the unit lane keeps the integration suite focused
-on what actually needs a database. When you relocate one, follow this checklist so
-the move is provably behaviour-preserving:
+A test belongs in `tests/unit/` when it needs no database and no running service:
+the code it exercises reaches no `Session`, no HTTP route, and no network, and
+importing its module opens no connection. Pure functions of plain data (or
+lightweight duck-typed fakes) are the common case, but isolated, deterministic
+local I/O is fine too, such as a temporary directory (`tmp_path`) or a subprocess
+boundary helper like reading git metadata, as long as it needs no external
+service. Some tests land in `tests/integration/` only because they were written
+there, not because they need Postgres; moving those down to the unit lane keeps
+the integration suite focused on what actually needs a database. When you relocate
+one, follow this checklist so the move is provably behaviour-preserving:
 
 - **Move, do not rewrite.** Copy each test verbatim; never weaken or restate an
   assertion to fit the unit lane. If a test cannot assert the same behaviour
   without a `Session` or a `TestClient`, it stays put.
-- **Prove the subject is pure.** The function under test takes no `Session`
-  parameter and reaches no database, and importing its module opens no
-  connection. Construct its inputs in memory (a `SimpleNamespace` fake carrying
-  only the attributes the function reads is the house pattern, see
-  `tests/unit/test_effective_text.py`).
+- **Prove it needs no service.** The code under test reaches no database (no
+  `Session`, and importing its module opens no connection) and no network.
+  Construct its inputs in memory (a `SimpleNamespace` fake carrying only the
+  attributes the function reads is the house pattern, see
+  `tests/unit/test_effective_text.py`). Deterministic filesystem or subprocess
+  side effects (a `tmp_path`, shelling to git) are acceptable; a dependency on a
+  database, an HTTP route, or a network service is not.
 - **Guard early-exit paths.** A CLI or handler test that is a unit test only
   because it returns before touching a database should assert that fact: wire the
   engine builder (or DB entry point) to raise, so a regression that reaches it
