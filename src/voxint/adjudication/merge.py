@@ -104,6 +104,11 @@ class MergeResult:
     labels: list[str]
     total_turns: int
     total_segments: int
+    # True when this apply was an idempotent replay (every child ruling already
+    # existed) rather than a fresh consolidation. The activity emit (issue #162)
+    # announces only a fresh merge, never a replay of one. Defaults False for the
+    # roster-wide merge path, which does not feed the activity feed.
+    is_replay: bool = False
 
 
 def _labels_digest(labels: list[str]) -> str:
@@ -335,4 +340,5 @@ def apply_merge(
         labels=clean,
         total_turns=sum(i.turn_count for i in impacts),
         total_segments=sum(i.segment_count for i in impacts),
+        is_replay=is_replay,
     )

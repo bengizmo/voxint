@@ -70,11 +70,12 @@ def test_schema_constraints_hold(engine: Engine, alembic_cfg: Config) -> None:
         rid = _seed_run(session)
         session.flush()
 
-        # An unknown kind is refused by the CHECK.
+        # An unknown kind is refused by the CHECK. (``speaker_identified`` is a
+        # VALID kind at head since 0043; use a genuinely-unknown value here.)
         with pytest.raises((IntegrityError, ProgrammingError)), session.begin_nested():
             session.add(
                 ActivityEvent(
-                    kind="speaker_identified",
+                    kind="bogus_kind",
                     pipeline_run_id=rid,
                     title="x",
                     href="/jobs/x",

@@ -96,12 +96,15 @@ class NotificationStatus(enum.StrEnum):
 class ActivityKind(enum.StrEnum):
     """The kinds of console activity events (issue #162, Console 2.0 P7).
 
-    Only ``RUN_COMPLETED`` exists in this slice; speaker-identification events
-    are a deferred fast-follow that adds its own value here (and widens the CHECK
-    in its own migration) rather than shipping an unconstrained ``kind`` now.
+    ``RUN_COMPLETED`` announces a run reaching COMPLETED (migration 0042);
+    ``SPEAKER_IDENTIFIED`` announces an operator naming a diarization label
+    (assign / enroll / merge — migration 0043 widened the CHECK to admit it).
+    Both are run-scoped, so ``pipeline_run_id`` stays NOT NULL and the frozen
+    ``title``/``href`` snapshot is the whole payload — no per-kind columns.
     """
 
     RUN_COMPLETED = "run_completed"
+    SPEAKER_IDENTIFIED = "speaker_identified"
 
 
 class Stage(enum.StrEnum):
@@ -2562,9 +2565,10 @@ class ActivityEvent(Base):
     # BIGSERIAL/identity in Postgres.
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(Text)
-    # NOT NULL for the only kind this slice carries (run_completed always names a
-    # run). The speaker-event follow-up makes this nullable and adds a
-    # kind-specific shape CHECK + typed speaker provenance columns.
+    # NOT NULL: every kind is run-scoped (run_completed names its run;
+    # speaker_identified names the run whose label was identified), so a frozen
+    # title/href snapshot is the whole payload and no per-kind provenance columns
+    # are carried.
     pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
     )

@@ -21,6 +21,8 @@ from voxint.activity import (
     prune_activity_events,
     record_activity_event,
     record_run_completed,
+    record_speaker_identified,
+    record_speaker_merge,
     retained_floor,
 )
 from voxint.config import Settings
@@ -275,3 +277,99 @@ def test_retained_floor(session_factory: sessionmaker[Session]) -> None:
     with session_factory() as session:
         rows = events_since(session, after_id=0, limit=100)
         assert retained_floor(session) == rows[0].id == min(r.id for r in rows)
+
+
+def test_record_speaker_identified_one_row(session_factory: sessionmaker[Session]) -> None:
+    did = uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        session.commit()
+    with session_factory() as session:
+        rows = _events(session, rid)
+        assert len(rows) == 1
+        assert rows[0].kind == ActivityKind.SPEAKER_IDENTIFIED.value
+        assert rows[0].occurrence_key == f"decision:{did}:identified"
+        assert rows[0].title == "Alice"
+        assert rows[0].href == f"/jobs/{rid}"
+
+
+def test_record_speaker_identified_idempotent_replay(
+    session_factory: sessionmaker[Session],
+) -> None:
+    did = uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        session.commit()
+    with session_factory() as session:
+        assert len(_events(session, rid)) == 1  # same decision id => one row
+
+
+def test_record_speaker_identified_rolls_back_with_caller(
+    session_factory: sessionmaker[Session],
+) -> None:
+    did = uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        session.commit()
+    with session_factory() as session:
+        record_speaker_identified(session, run_id=rid, decision_id=did, speaker_name="Alice")
+        session.rollback()  # the announcing tx aborted => the event must be gone
+    with session_factory() as session:
+        assert _events(session, rid) == []
+
+
+def test_record_speaker_identified_clamps_long_name(
+    session_factory: sessionmaker[Session],
+) -> None:
+    did = uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_speaker_identified(
+            session, run_id=rid, decision_id=did, speaker_name="A" * 900
+        )
+        session.commit()  # a 900-char name must not trip the 500 CHECK
+    with session_factory() as session:
+        assert len(_events(session, rid)[0].title) == 500
+
+
+def test_record_speaker_merge_one_row(session_factory: sessionmaker[Session]) -> None:
+    did = uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_speaker_merge(
+            session,
+            run_id=rid,
+            occurrence_decision_id=did,
+            survivor_name="Alice",
+            label_count=3,
+        )
+        session.commit()
+    with session_factory() as session:
+        rows = _events(session, rid)
+        assert len(rows) == 1
+        assert rows[0].kind == ActivityKind.SPEAKER_IDENTIFIED.value
+        assert rows[0].occurrence_key == f"merge:{did}"
+        assert rows[0].title == "Alice (3 labels)"
+
+
+def test_record_speaker_merge_distinct_ids_distinct_rows(
+    session_factory: sessionmaker[Session],
+) -> None:
+    a, b = uuid.uuid4(), uuid.uuid4()
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_speaker_merge(
+            session, run_id=rid, occurrence_decision_id=a, survivor_name="A", label_count=2
+        )
+        record_speaker_merge(
+            session, run_id=rid, occurrence_decision_id=b, survivor_name="B", label_count=2
+        )
+        record_speaker_merge(  # replay of a => still one for a
+            session, run_id=rid, occurrence_decision_id=a, survivor_name="A", label_count=2
+        )
+        session.commit()
+    with session_factory() as session:
+        assert len(_events(session, rid)) == 2
