@@ -30,6 +30,7 @@ import hashlib
 import json
 import math
 import sys
+import wave
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -708,6 +709,128 @@ def _duration_s_from_samples(sample_count: int) -> float:
     so the manifest ``duration_s`` and the numerics doctrine have a single source.
     """
     return sample_count / CANONICAL_SAMPLE_RATE
+
+
+# --------------------------------------------------------------------------- #
+# Canonical WAV I/O (S5 PR-2a executor primitives, numpy-free).
+#
+# The manifest identity is the sha256 of the canonical PCM ``data``-chunk payload
+# only (never the container). ``synthdetect_infer.read_canonical_pcm`` computes the
+# same digest with numpy for the scoring path; these helpers stay numpy-free so the
+# pure corpus module carries no heavy dependency, and MUST agree with it byte for
+# byte on what "the payload" is (the raw ``data``-chunk bytes). CANONICAL_CHANNELS /
+# CANONICAL_SAMPLE_WIDTH / CANONICALIZATION_ID mirror the infer constants; a contract
+# test pins that they stay equal so the two readers can never drift apart.
+# --------------------------------------------------------------------------- #
+CANONICAL_CHANNELS = 1
+CANONICAL_SAMPLE_WIDTH = 2  # signed 16-bit little-endian
+CANONICALIZATION_ID = "pcm-s16le-mono-16000-v1"
+_BLOCK_ALIGN = CANONICAL_CHANNELS * CANONICAL_SAMPLE_WIDTH
+
+
+def _riff_data_chunk_size(path: Path) -> int:
+    """Return the declared byte size of the WAV ``data`` chunk (fail closed).
+
+    The stdlib ``wave`` reader silently floors an odd-sized ``data`` chunk to whole
+    frames, so an orphan trailing byte (a truncated or non-canonical payload) would
+    slip past a frame-count check. Reading the RIFF chunk size directly lets the
+    caller reject a payload whose declared size is not a whole number of frames.
+    Mirrors ``synthdetect_infer._riff_data_chunk_size`` (raising ``CorpusError``).
+    """
+    with path.open("rb") as fh:
+        riff = fh.read(12)
+        if len(riff) < 12 or riff[:4] != b"RIFF" or riff[8:12] != b"WAVE":
+            raise CorpusError(f"{path}: not a RIFF/WAVE file")
+        while True:
+            hdr = fh.read(8)
+            if len(hdr) < 8:
+                raise CorpusError(f"{path}: no data chunk found")
+            chunk_id = hdr[:4]
+            size = int.from_bytes(hdr[4:8], "little")
+            if chunk_id == b"data":
+                return size
+            fh.seek(size + (size & 1), 1)  # skip payload plus its RIFF pad byte
+
+
+def read_canonical_wav_payload(path: Path) -> bytes:
+    """Read a canonical-PCM WAV and return its raw ``data``-chunk payload bytes.
+
+    Fails closed on any non-canonical property (compressed, not mono, not 16 kHz,
+    not signed 16-bit) and on a data chunk that is not a whole number of frames or is
+    truncated. The returned bytes are exactly what ``sha256`` is taken over, so a
+    clip sliced from this payload and re-read here yields the manifest identity. This
+    is the numpy-free sibling of ``synthdetect_infer.read_canonical_pcm``; both hash
+    the same ``data``-chunk bytes.
+    """
+    try:
+        with wave.open(str(path), "rb") as wav:
+            channels = wav.getnchannels()
+            width = wav.getsampwidth()
+            rate = wav.getframerate()
+            comp = wav.getcomptype()
+            n_frames = wav.getnframes()
+            frames = wav.readframes(n_frames)
+    except (wave.Error, OSError, EOFError) as exc:
+        raise CorpusError(f"{path}: not a readable PCM WAV: {exc}") from exc
+    if comp != "NONE":
+        raise CorpusError(
+            f"{path}: compressed WAV ({comp!r}); canonical audio must be uncompressed"
+        )
+    if channels != CANONICAL_CHANNELS:
+        raise CorpusError(f"{path}: {channels} channels; canonical audio must be mono")
+    if rate != CANONICAL_SAMPLE_RATE:
+        raise CorpusError(f"{path}: {rate} Hz; canonical audio must be {CANONICAL_SAMPLE_RATE} Hz")
+    if width != CANONICAL_SAMPLE_WIDTH:
+        raise CorpusError(
+            f"{path}: {width * 8}-bit; canonical audio must be signed 16-bit "
+            f"({CANONICALIZATION_ID})"
+        )
+    declared = _riff_data_chunk_size(path)
+    if declared % _BLOCK_ALIGN != 0:
+        raise CorpusError(
+            f"{path}: data chunk is {declared} bytes, not a whole number of "
+            f"{_BLOCK_ALIGN}-byte frames (orphan byte)"
+        )
+    if len(frames) != declared or len(frames) != n_frames * _BLOCK_ALIGN:
+        raise CorpusError(
+            f"{path}: data payload is truncated ({len(frames)} bytes read, {declared} declared)"
+        )
+    return frames
+
+
+def payload_sha_and_count(payload: bytes) -> tuple[str, int]:
+    """The measured ``(pcm_sha256, sample_count)`` of a canonical payload (fail closed).
+
+    ``sample_count`` is ``len(payload) // 2``; a payload that is not a whole number of
+    16-bit frames is a corrupt clip, not something to round.
+    """
+    if len(payload) % _BLOCK_ALIGN != 0:
+        raise CorpusError(
+            f"payload is {len(payload)} bytes, not a whole number of {_BLOCK_ALIGN}-byte frames"
+        )
+    if not payload:
+        raise CorpusError("payload is empty")
+    return hashlib.sha256(payload).hexdigest(), len(payload) // _BLOCK_ALIGN
+
+
+def write_canonical_wav(path: Path, payload: bytes) -> None:
+    """Write ``payload`` as a deterministic canonical-PCM WAV (mono/16 kHz/s16le).
+
+    The stdlib ``wave`` writer emits a fixed RIFF/``fmt ``/``data`` layout with no
+    metadata, so the file is byte-stable for a given payload and the ``data``-chunk
+    bytes equal ``payload`` exactly (so ``read_canonical_wav_payload`` and
+    ``read_canonical_pcm`` recover the same digest). Fails closed on a non-frame-
+    aligned payload.
+    """
+    if len(payload) % _BLOCK_ALIGN != 0:
+        raise CorpusError(
+            f"payload is {len(payload)} bytes, not a whole number of {_BLOCK_ALIGN}-byte frames"
+        )
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(CANONICAL_CHANNELS)
+        wav.setsampwidth(CANONICAL_SAMPLE_WIDTH)
+        wav.setframerate(CANONICAL_SAMPLE_RATE)
+        wav.writeframes(payload)
 
 
 @dataclass(frozen=True)
