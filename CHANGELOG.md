@@ -18,6 +18,35 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   activation additionally requires Jobs discovery so the badge and links stay
   honest. Speaker-identification events are a planned follow-up. No redirect or
   version bump ships here; that activation is a later slice.
+- **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
+  audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
+  before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
+  parser, a pinned decimal-to-sample rule (`floor(start*16000)`,
+  `ceil(end*16000)`), an overlap-cleaning and same-speaker merge planner that emits
+  two views (per-turn clips for strata and calibration, merged session segments for
+  production-windowing validation), a `MaterializationPlan` schema, and a
+  `finalize_manifest(plan, measured_facts)` that builds the v1 manifest only from
+  the executor's measured PCM sha256 and sample count. It also gains a closed,
+  versioned degradation-recipe vocabulary (`DEGRADATION_RECIPES` in
+  `tools/synthdetect_sources.py`, `SOURCES_VERSION` bumped to
+  `synthdetect-sources-v4`: codec, telephony, and speed families), deterministic
+  ffmpeg argv builders (real encode-decode-canonical-PCM round trips, `-threads 1`,
+  final PCM payload sha as identity), degraded-child derivation with lineage
+  inheritance, and hardened manifest lineage invariants (parent-cycle rejection,
+  child inherits its parent's label/speaker/language/split/license, and a
+  degradation string must name known recipe ids). New `prepare` and `degrade` CLI
+  subcommands emit a plan in dry-run mode only (they extract no audio). Additive
+  noise is deferred to the executor slice (its SNR mix needs a measured parent
+  RMS). A multi-model implementation review hardened the numerics before landing:
+  RTTM times parse and scale in exact decimal (not binary `float`), so the pinned
+  sample rule is byte-exact for ordinary decimals such as `0.1`; the overlap floor
+  applies to coalesced continuous other-speaker regions, so word-level crosstalk
+  cannot survive inside a turn; both length floors are enforced in the sample
+  domain; the ffmpeg argv pins `-threads 1` on the encoder output as well as the
+  input, plus `-filter_threads 1`; `finalize_manifest` rejects measured facts for
+  clips not in the record list; manifest lineage also inherits `source`; and
+  `degrade` skips already-degraded parents so a re-run never plans grandchildren.
+  Pre-registration in `docs/gpu-contracts.md`.
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF
@@ -314,6 +343,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   runs the unit/contract suites parallel and the integration suite at `-n 8`. No
   change to the parity gate, the contract goldens, or the secrets scan. See
   `docs/testing.md`.
+- **Pure driver tests moved to the unit lane; new coverage for the read-time
+  attribution helpers.** The 27 database-free tests in
+  `tests/integration/test_export_match_evidence_driver.py` (manifest parsing,
+  serialization, atomic writes, git helpers, and the CLI paths that fail closed
+  before any database access) moved to a same-named unit module, each assertion
+  unchanged; the six tests that seed real runs stay in the integration lane. The
+  CLI error-path tests now also assert the database is never reached on those
+  paths. Added direct unit coverage for the pure read-time attribution helpers
+  (`winning_attribution`, `display_name`, `segment_speaker`,
+  `parse_transcript_text`), previously exercised only through database-backed
+  walks. First slice of an incremental effort to keep the integration lane focused
+  on what needs Postgres; the relocation rubric is documented in `docs/testing.md`.
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,
