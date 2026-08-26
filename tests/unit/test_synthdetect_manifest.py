@@ -118,7 +118,7 @@ def test_non_finite_duration_rejected() -> None:
 
 
 def test_self_parent_rejected() -> None:
-    bad = _bona_fide("c1", "s1", degradation="opus16", parent_clip_id="c1")
+    bad = _bona_fide("c1", "s1", degradation="opus-voip-cbr16-f20-v1", parent_clip_id="c1")
     with pytest.raises(corpus.CorpusError, match="its own parent"):
         corpus.load_manifest(_manifest([bad]))
 
@@ -178,22 +178,22 @@ def test_duplicate_clip_id_rejected() -> None:
 
 
 def test_dangling_parent_rejected() -> None:
-    child = _bona_fide("c2", "s1", degradation="opus16", parent_clip_id="missing")
+    child = _bona_fide("c2", "s1", degradation="opus-voip-cbr16-f20-v1", parent_clip_id="missing")
     with pytest.raises(corpus.CorpusError, match="not in the manifest"):
         corpus.load_manifest(_manifest([child]))
 
 
 def test_degraded_clip_needs_parent() -> None:
-    bad = _bona_fide("c1", "s1", degradation="opus16")
+    bad = _bona_fide("c1", "s1", degradation="opus-voip-cbr16-f20-v1")
     with pytest.raises(corpus.CorpusError, match="must name its parent_clip_id"):
         corpus.load_manifest(_manifest([bad]))
 
 
 def test_valid_degradation_chain_links() -> None:
     parent = _bona_fide("c1", "s1")
-    child = _bona_fide("c2", "s1", degradation="opus16", parent_clip_id="c1")
+    child = _bona_fide("c2", "s1", degradation="opus-voip-cbr16-f20-v1", parent_clip_id="c1")
     m = corpus.load_manifest(_manifest([parent, child]))
-    assert m.clips[1].degradation == "opus16"
+    assert m.clips[1].degradation == "opus-voip-cbr16-f20-v1"
     assert m.clips[1].parent_clip_id == "c1"
 
 
