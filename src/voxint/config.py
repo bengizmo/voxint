@@ -551,6 +551,20 @@ class Settings(BaseSettings):
     # the nav cutover: a full P6b rollback is a deploy revert, not a flag toggle.
     console_settings_enabled: bool = True
 
+    # The activity indicator + toasts (Console 2.0 P7, #162). Dark-ship: the
+    # activity_events outbox is written (in the run-completion transaction) and
+    # the /activity/events poll endpoint answers only when this is on, and the
+    # shell mounts the toast region + Jobs badge only then. Off by default; the
+    # flag is rollout control, and this slice ships with it off (no version bump).
+    #
+    # Depends on Jobs discovery: the badge lives on the sidebar Jobs entry and
+    # the toast links point at /jobs, so surfacing activity while
+    # console_jobs_enabled is off would point that entry at the /runs placeholder
+    # while the badge targets /jobs. shell.activity_enabled therefore ANDs this
+    # flag with shell.jobs_enabled (see _shell_template_context), so activation
+    # implies Jobs is already discovered.
+    console_activity_enabled: bool = False
+
     # Transcript semantic-search embedding spine (#121). The additive embedding
     # producer reads finished transcript text and writes local vectors — no LLM,
     # no egress, no external cost — so unlike the LLM-coupled capabilities above

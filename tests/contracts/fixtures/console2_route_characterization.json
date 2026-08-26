@@ -8,6 +8,14 @@
     true
   ],
   [
+    "/activity/events",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/annotations/tags",
     [
       "GET"

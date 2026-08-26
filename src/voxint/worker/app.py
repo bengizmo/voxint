@@ -27,6 +27,7 @@ validate_boot(_registry, settings=settings)
 # and risk a circular import — worker.tasks imports this module).
 _CORE_TASK_NAMES: frozenset[str] = frozenset(
     {
+        "voxint.activity_prune",
         "voxint.finish_pipeline",
         "voxint.gc_sweep",
         "voxint.generate_run_asset",
@@ -52,6 +53,10 @@ _plugin_task_modules = [
 ]
 
 POST_QUEUE = "post"
+
+# Fixed cadence for the activity-outbox retention prune (issue #162): hourly is
+# ample for a 500-row cap, and this earns no env knob (anti-bloat).
+_ACTIVITY_PRUNE_SECONDS = 3600
 
 
 def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
@@ -88,6 +93,14 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
             "task": "voxint.notify_sweep",
             "schedule": settings.notify_sweep_seconds,
         }
+    if settings.console_activity_enabled:
+        # Retention for the activity outbox (issue #162). Hourly is ample for a
+        # 500-row cap that grows one row per completed run; the task re-checks the
+        # gate, so a stale entry never acts. Fixed cadence (no tuning knob).
+        schedule["activity-prune"] = {
+            "task": "voxint.activity_prune",
+            "schedule": _ACTIVITY_PRUNE_SECONDS,
+        }
     return schedule
 
 
@@ -122,6 +135,7 @@ app.conf.task_routes = {
     "voxint.gc_sweep": {"queue": POST_QUEUE},
     "voxint.notify_sweep": {"queue": POST_QUEUE},
     "voxint.watch_sweep": {"queue": POST_QUEUE},
+    "voxint.activity_prune": {"queue": POST_QUEUE},
     # Active plugins' post-queue routes (registry validates a plugin only routes a
     # task it declares). Empty ⇒ no extra keys, an equal dict.
     **_registry.task_routes(),

@@ -508,6 +508,28 @@ def notify_sweep() -> dict[str, int]:
     return result
 
 
+@app.task(name="voxint.activity_prune")  # type: ignore[misc, untyped-decorator, unused-ignore]
+def activity_prune() -> dict[str, int]:
+    """Prune the console activity outbox to its newest-N rows (issue #162).
+
+    Bounded retention for ``activity_events`` (the browser polls a recent-activity
+    feed, not an audit log). OFF unless ``console_activity_enabled`` — the gate is
+    re-checked here (not just at beat registration) so a stale schedule entry can
+    never act. Gap-safe newest-N (see ``prune_activity_events``).
+    """
+    from voxint.activity import prune_activity_events
+
+    settings = get_settings()
+    if not settings.console_activity_enabled:
+        return {"pruned": 0}
+    factory, _ = _runtime()
+    with factory() as session:
+        pruned = prune_activity_events(session)
+        session.commit()
+    logger.info("activity_prune pruned=%d", pruned)
+    return {"pruned": pruned}
+
+
 def _publish_watch_run(run_id: uuid.UUID) -> bool:
     """Publish a committed watch-sweep run, returning ``False`` (never raising) on a
     broker outage so the durable QUEUED row is simply left for ``recovery_sweep``.
