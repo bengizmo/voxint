@@ -2050,13 +2050,13 @@ def _degrade_one_clip(
 
     final_host = staging / current_input.removeprefix("/work/")
     raw_output = final_host.read_bytes()
+    if not raw_output:
+        raise CorpusError(f"clip {child_record.clip_id!r}: raw output is empty")
     if len(raw_output) % _BLOCK_ALIGN != 0:
         raise CorpusError(
             f"clip {child_record.clip_id!r}: raw output is {len(raw_output)} bytes, "
             f"not a whole number of {_BLOCK_ALIGN}-byte frames"
         )
-    if not raw_output:
-        raise CorpusError(f"clip {child_record.clip_id!r}: raw output is empty")
 
     child_count = len(raw_output) // _BLOCK_ALIGN
     if child_count < parent_count * _DEGRADE_LENGTH_MIN:
