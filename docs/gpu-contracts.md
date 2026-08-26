@@ -1925,6 +1925,16 @@ which need the spoof side that arrives in S6. The verdict states this limit
 explicitly, and per-window scores are journaled as a first-class output, not a
 fallback bolted on later.
 
+**PR-2a prepare-executor acceptance verdict (2026-08-26): PASS.** The ffmpeg-free
+prepare executor materialized real bona fide corpora from both organic domains (AMI
+`ES2011a`, 189 clips; VoxConverse `abjxc`, 4 clips) with byte-exact determinism
+across two independent runs, every clip equal to an independently computed source
+slice, all turn/segment overlaps byte-identical, and every materialized clip
+re-audited through the scoring reader `synthdetect_infer.read_canonical_pcm` against
+the finalized manifest. This confirms the numpy-free corpus writer and the numpy
+scoring reader agree on clip identity for real audio. Detail:
+`docs/reports/synthdetect-s5-pr2a-prepare-2026-08-26.md`.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
