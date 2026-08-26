@@ -234,3 +234,36 @@ def test_pipeline_models_panel_renders_config_unverified(
     monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: views)
     body = client.get("/settings/hardware").text
     assert "cannot verify its clustering configuration" in body
+
+
+def test_flat_page_still_renders_the_panel_when_flag_off(
+    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The panel's home moved to /settings/hardware when the hub activated, but the
+    # flag-off flat page keeps rendering it inline. Pin that fallback (#161 P6b).
+    settings = Settings(
+        voxint_user=CREDS[0], voxint_password=CREDS[1], console_settings_enabled=False
+    )
+    client = TestClient(create_app(settings=settings, session_factory=session_factory))
+    client.auth = CREDS
+    seed_onboarded(session_factory)
+    monkeypatch.setattr(settings_module, "collect_service_identity", lambda _settings: _views())
+    body = client.get("/settings").text
+    assert 'id="pipeline-models"' in body
+    assert "large-v2" in body
+
+
+def test_activated_hub_does_not_probe_model_services(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The hub (default on) moved the panel to /settings/hardware, so rendering
+    # /settings must NOT probe the three model services (#161 P6b review): a probe
+    # here would be wasted work on every hub render and POST re-render. Fail loudly
+    # if the shared context resumes probing behind the hub.
+    def _boom(_settings: Settings) -> list[ServiceIdentityView]:
+        raise AssertionError("hub render must not probe model-service identity")
+
+    monkeypatch.setattr(settings_module, "collect_service_identity", _boom)
+    resp = client.get("/settings")
+    assert resp.status_code == 200
+    assert 'id="pipeline-models"' not in resp.text

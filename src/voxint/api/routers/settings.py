@@ -1808,8 +1808,13 @@ def _settings_context(
     # read-only identity of the three model services, probed concurrently on
     # each render (no cache: an operator who just changed .env reloads to
     # confirm). Best-effort; an unreachable service renders "unavailable",
-    # never breaking the page.
-    context["pipeline_models"] = collect_service_identity(settings)
+    # never breaking the page. Only the flag-off flat page renders this panel;
+    # the activated hub moved it to /settings/hardware (P6b, #161), so skip the
+    # probe when the hub is active rather than probing three services on every
+    # hub render and POST re-render for a result the hub never shows.
+    context["pipeline_models"] = (
+        () if settings.console_settings_enabled else collect_service_identity(settings)
+    )
     # Plugin settings sections (issue #138): each active plugin's section,
     # ordered by (order, section_id), rendered after the hand-built core
     # sections by the section loop in settings.html. Empty registry => () =>
@@ -1879,8 +1884,10 @@ def settings_status_page(
     # fragment, and build ONLY the snapshot context: the doctor checks probe
     # Postgres/Redis/the model services, and re-running them every 15s would be a
     # steady background load for no gain (the poll only refreshes the hardware
-    # strip). So branch before _doctor_checks, exactly as /resources used to.
-    if request.headers.get("HX-Request"):
+    # strip). So branch before _doctor_checks, exactly as /resources used to. A
+    # boosted navigation (HX-Boosted) wants the whole document, so exclude it —
+    # nothing uses hx-boost today, but this keeps the fragment scoped to the poll.
+    if request.headers.get("HX-Request") and not request.headers.get("HX-Boosted"):
         return templates.TemplateResponse(
             request,
             "legacy_runs/resource_status.html",
