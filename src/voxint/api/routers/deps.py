@@ -293,6 +293,15 @@ def _shell_template_context(request: Request) -> dict[str, Any]:
                 settings.console_jobs_enabled
                 and getattr(request.app.state, "jobs_routed", False)
             ),
+            # Media (#154) dark-ships routed-but-undiscovered like Jobs: /media
+            # always registers, so this stamp is always true. The shell reads flag
+            # AND stamp, so flipping CONSOLE_MEDIA_ENABLED alone points the sidebar
+            # Media link and the "Add media" quick action at the operable /media
+            # library instead of the legacy /runs placeholder.
+            "media_enabled": (
+                settings.console_media_enabled
+                and getattr(request.app.state, "media_routed", False)
+            ),
         }
     }
 

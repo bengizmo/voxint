@@ -78,6 +78,54 @@
   ]
  ],
  [
+  "/media/submit",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/fetch",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/assign",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/folders",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/rerun",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/rerun/confirm",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/archive",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/unarchive",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

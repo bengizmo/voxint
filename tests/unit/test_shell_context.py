@@ -16,12 +16,15 @@ def _request_with(
     *,
     projects_routed: bool | None = None,
     jobs_routed: bool | None = None,
+    media_routed: bool | None = None,
 ) -> Request:
     state = SimpleNamespace(settings=settings)
     if projects_routed is not None:
         state.projects_routed = projects_routed
     if jobs_routed is not None:
         state.jobs_routed = jobs_routed
+    if media_routed is not None:
+        state.media_routed = media_routed
     app = SimpleNamespace(state=state)
     return cast(Request, SimpleNamespace(app=app))
 
@@ -31,6 +34,7 @@ def test_console_area_flags_default_off() -> None:
     settings = Settings(database_url="postgresql+psycopg://x/x")
     assert settings.console_projects_enabled is False
     assert settings.console_jobs_enabled is False
+    assert settings.console_media_enabled is False
 
 
 def test_shell_context_requires_flag_and_route() -> None:
@@ -39,19 +43,41 @@ def test_shell_context_requires_flag_and_route() -> None:
     on = Settings(database_url="postgresql+psycopg://x/x", console_projects_enabled=True)
     off = Settings(database_url="postgresql+psycopg://x/x")
     assert _shell_template_context(
-        _request_with(on, projects_routed=True, jobs_routed=True)
-    ) == {"shell": {"projects_enabled": True, "jobs_enabled": False}}
+        _request_with(on, projects_routed=True, jobs_routed=True, media_routed=True)
+    ) == {
+        "shell": {
+            "projects_enabled": True,
+            "jobs_enabled": False,
+            "media_enabled": False,
+        }
+    }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
     assert _shell_template_context(
-        _request_with(on, projects_routed=False, jobs_routed=True)
-    ) == {"shell": {"projects_enabled": False, "jobs_enabled": False}}
+        _request_with(on, projects_routed=False, jobs_routed=True, media_routed=True)
+    ) == {
+        "shell": {
+            "projects_enabled": False,
+            "jobs_enabled": False,
+            "media_enabled": False,
+        }
+    }
     # A stale app with no stamp at all fails closed too.
     assert _shell_template_context(_request_with(on)) == {
-        "shell": {"projects_enabled": False, "jobs_enabled": False}
+        "shell": {
+            "projects_enabled": False,
+            "jobs_enabled": False,
+            "media_enabled": False,
+        }
     }
     assert _shell_template_context(
-        _request_with(off, projects_routed=True, jobs_routed=True)
-    ) == {"shell": {"projects_enabled": False, "jobs_enabled": False}}
+        _request_with(off, projects_routed=True, jobs_routed=True, media_routed=True)
+    ) == {
+        "shell": {
+            "projects_enabled": False,
+            "jobs_enabled": False,
+            "media_enabled": False,
+        }
+    }
 
 
 def test_shell_context_jobs_discovery_flag() -> None:
@@ -76,6 +102,32 @@ def test_shell_context_jobs_discovery_flag() -> None:
     # Defensive: a stale app missing the stamp fails closed even with the flag on.
     assert (
         _shell_template_context(_request_with(on))["shell"]["jobs_enabled"] is False
+    )
+
+
+def test_shell_context_media_discovery_flag() -> None:
+    """Media (#154) dark-ships routed-but-undiscovered: the /media route always
+    exists (media_routed True), so the sidebar Media entry and the "Add media"
+    quick action follow the flag alone."""
+    on = Settings(database_url="postgresql+psycopg://x/x", console_media_enabled=True)
+    off = Settings(database_url="postgresql+psycopg://x/x")
+    # Flag on + route present (the always-true reality for Media): discoverable.
+    assert (
+        _shell_template_context(_request_with(on, media_routed=True))["shell"][
+            "media_enabled"
+        ]
+        is True
+    )
+    # Flag off: the sidebar keeps pointing Media at the /runs placeholder.
+    assert (
+        _shell_template_context(_request_with(off, media_routed=True))["shell"][
+            "media_enabled"
+        ]
+        is False
+    )
+    # Defensive: a stale app missing the stamp fails closed even with the flag on.
+    assert (
+        _shell_template_context(_request_with(on))["shell"]["media_enabled"] is False
     )
 
 

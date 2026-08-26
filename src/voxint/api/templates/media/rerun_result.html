@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Voxint — re-run results{% endblock %}
+{% block body %}
+<style>
+  .rerun-list { list-style: none; padding: 0; display: grid; gap: .6rem; margin: 1rem 0; }
+  .rerun-list li { margin: 0; }
+</style>
+<h1>Re-run results</h1>
+
+<p class="notice {{ 'success' if queued else 'error' }}" role="status">
+  {% if queued %}Started {{ queued }} run{{ '' if queued == 1 else 's' }}.{% else %}No runs were started.{% endif %}
+  {% if skipped %} Skipped {{ skipped }} file{{ '' if skipped == 1 else 's' }}.{% endif %}
+</p>
+
+{% if any_deferred %}
+<p class="muted">Some runs are queued but not yet handed to the worker (it was unavailable). The recovery sweep will start them.</p>
+{% endif %}
+
+<ul class="rerun-list" aria-label="Re-run results">
+  {% for r in results %}
+  <li class="card">
+    <p>
+      <span class="media-title">{{ r.label }}</span>
+      {% if r.status == "queued" %}
+      <span class="pill queued">Queued</span>
+      {% else %}
+      <span class="pill">Skipped</span>
+      {% endif %}
+    </p>
+    {% if r.status == "queued" %}
+    <p class="muted"><a href="/runs/{{ r.run_id }}">View run</a>{% if not r.published %} · will start when the worker is available{% endif %}</p>
+    {% else %}
+    <p class="muted">Skipped: {{ r.reason }}.</p>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+
+<p><a href="/media?sort={{ sort }}&view={{ view }}">Back to media</a></p>
+{% endblock %}

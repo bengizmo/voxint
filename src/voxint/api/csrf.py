@@ -138,6 +138,32 @@ CSRF_PROJECT_ASSIGN = "project-assign"
 # same action as its save.
 CSRF_PROJECT_VOCAB = "project-vocabulary"
 CSRF_PROJECT_CORRECTIONS = "project-corrections"
+# Media library ingest (issue #154, Console 2.0 P2b). Upload and URL fetch move
+# onto /media with their own action tokens, distinct from the legacy /submit and
+# /fetch forms' CSRF_SUBMIT/CSRF_FETCH so a token minted on one surface is not
+# valid on the other.
+CSRF_MEDIA_SUBMIT = "media-submit"
+CSRF_MEDIA_FETCH = "media-fetch"
+# Media library organization (issue #154, Console 2.0 P2b). Per-action tokens:
+# bulk-assigning a settings folder over a selection and registering/unregistering
+# a folder are independent mutations with different blast radii (an assign token
+# must not be replayable to unregister a folder), so each mints and verifies under
+# its own action, and neither is interchangeable with the ingest tokens above.
+CSRF_MEDIA_ASSIGN = "media-assign"
+CSRF_MEDIA_FOLDERS = "media-folders"
+# Media library bulk re-run (issue #154, Console 2.0 P2b). The two-step re-run has
+# its own action tokens: the advisory preview (``media-rerun``, no mutation) and
+# the atomic confirm that mints the runs (``media-rerun-confirm``). Splitting them
+# means a token minted for the preview can never be replayed to drive the actual
+# dispatch, and neither is interchangeable with assign or the ingest tokens.
+CSRF_MEDIA_RERUN = "media-rerun"
+CSRF_MEDIA_RERUN_CONFIRM = "media-rerun-confirm"
+# Media library bulk archive/unarchive (issue #154, Console 2.0 P2b). Archiving a
+# selection's latest run (reversible, hides it from the active library) and
+# restoring it are independent mutations under their own per-action tokens, and
+# neither is interchangeable with assign, re-run, or the ingest tokens above.
+CSRF_MEDIA_ARCHIVE = "media-archive"
+CSRF_MEDIA_UNARCHIVE = "media-unarchive"
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

@@ -209,6 +209,24 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   always registered so the console route inventory is stable, but returns 404
   until the flag is on. Reachable by URL for now; the sidebar's Media link is
   repointed in a later phase.
+- **Console 2.0 P2b: the media library becomes operable** (#154, epic #149).
+  With `CONSOLE_MEDIA_ENABLED` on, `/media` gains everything needed to run the
+  library from one page. File upload and URL fetch move onto it (each can pick a
+  settings folder whose vocabulary and corrections apply to the run without moving
+  the file), and a folder panel registers or unregisters folders. A multi-select
+  drives non-destructive bulk actions over the chosen files: assign a settings
+  folder (or clear it), re-run transcription, and archive or restore the latest
+  run. Re-run is a two-step, advisory flow: a preview shows the config each fresh
+  run would freeze and the config is re-resolved when you confirm, so a
+  double-confirm mints at most one new run per file and a file whose config or
+  sidecar cannot be resolved is skipped, not failed. An archived view
+  (`/media?archived=1`) lists files whose latest run is archived so they can be
+  restored. Every bulk action validates the whole selection first and reports a
+  per-item or counted outcome, never a silent partial change; assigning a settings
+  folder never moves the file on disk. The sidebar Media link and the Home "Add
+  media" quick action point at `/media` once the flag is on, and at the legacy
+  `/runs` upload otherwise; the legacy `/runs` page is unchanged. Track A files
+  only, no schema migration; the whole slice stays dark until the flag is on.
 - **Console 2.0 P2b: the projects pages** (#153, epic #149). New `/projects` and
   `/projects/{id}` pages let an operator create a project, assign registered
   folders to it, and see its folders and the speakers its finished recordings

@@ -330,9 +330,15 @@ class MediaItem(Base):
     # identity. Equal to source_path at ingest (seeded by _seed_current_path);
     # only a P2c move rewrites it. Nullable in P2a, NOT NULL from P2c.
     current_path: Mapped[str | None] = mapped_column(Text, default=_seed_current_path)
-    # Folder membership (ADR 0002): the folder this media belongs to, set at
-    # ingest by the write-cutover slice and updated by a move. NULL for
-    # uploads/URLs/tutorial/unmatched media that sit outside a registered folder.
+    # Settings-folder membership (ADR 0002 + P2b addendum): a LOGICAL config scope,
+    # the folder whose vocabulary/corrections apply to this media, which may differ
+    # from where the bytes physically sit. Inferred from the path at row creation
+    # (deepest containing registered folder) OR set explicitly by the operator
+    # (upload/URL picker, bulk assign) without moving the file. An explicit
+    # assignment is authoritative and is never re-derived from the path on a later
+    # reuse/scan/move. NULL for uploads/URLs/tutorial/unmatched media outside every
+    # registered folder; ON DELETE SET NULL reverts membership when a folder is
+    # unregistered.
     media_folder_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("media_folders.id", ondelete="SET NULL")
     )
