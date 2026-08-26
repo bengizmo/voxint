@@ -30,13 +30,18 @@ import hashlib
 import json
 import math
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
-from synthdetect_sources import SELECTION_SEED  # noqa: E402
+from synthdetect_sources import (  # noqa: E402
+    DEGRADATION_RECIPES,
+    SELECTION_SEED,
+    DegradationRecipe,
+)
 
 MANIFEST_SCHEMA_VERSION = 1
 
@@ -408,10 +413,15 @@ def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHE
                 raise CorpusError(f"{where}: a bona_fide clip must not carry a generator")
 
         degradation = raw.get("degradation")
-        if degradation is not None and (
-            not isinstance(degradation, str) or not degradation.strip()
-        ):
-            raise CorpusError(f"{where}: degradation must be null or a non-empty string")
+        if degradation is not None:
+            if not isinstance(degradation, str) or not degradation.strip():
+                raise CorpusError(f"{where}: degradation must be null or a non-empty string")
+            # A degradation string must name a chain of known recipe ids, so a
+            # manifest can never reference a phantom transform (S5 lineage rail).
+            try:
+                parse_chain(degradation)
+            except CorpusError as exc:
+                raise CorpusError(f"{where}: {exc}") from None
         parent_clip_id = raw.get("parent_clip_id")
         if parent_clip_id is not None and not _is_safe_id(parent_clip_id):
             raise CorpusError(f"{where}: parent_clip_id must be null or a safe token")
@@ -504,6 +514,33 @@ def load_manifest(obj: Any) -> Manifest:
             raise CorpusError(
                 f"clip {c.clip_id!r}: parent_clip_id {c.parent_clip_id!r} is not in the manifest"
             )
+    by_id = {c.clip_id: c for c in clips}
+    # Lineage inheritance (S5): a degraded child is the SAME source, speaker, label,
+    # language, split, and license as its parent -- it is an audio-domain transform,
+    # not a new sample. A mismatch means a manifest attached a child to the wrong
+    # parent or mislabelled it, which the per-clip validator cannot see.
+    for c in clips:
+        if c.parent_clip_id is None:
+            continue
+        parent = by_id[c.parent_clip_id]
+        for field in ("label", "speaker_id", "language", "split", "license_spdx", "source"):
+            if getattr(c, field) != getattr(parent, field):
+                raise CorpusError(
+                    f"clip {c.clip_id!r}: {field} {getattr(c, field)!r} does not match its "
+                    f"parent {parent.clip_id!r} ({getattr(parent, field)!r})"
+                )
+    # No parent cycle: a degradation chain must terminate at a root, so lineage is a
+    # forest. self-parent is rejected per-clip; walk the chain to catch longer loops.
+    for c in clips:
+        seen_ids = {c.clip_id}
+        node = c
+        while node.parent_clip_id is not None:
+            if node.parent_clip_id in seen_ids:
+                raise CorpusError(
+                    f"clip {c.clip_id!r}: parent chain forms a cycle at {node.parent_clip_id!r}"
+                )
+            seen_ids.add(node.parent_clip_id)
+            node = by_id[node.parent_clip_id]
     # Speaker-disjointness is guaranteed by assign_splits, but a hand-edited
     # manifest can stamp one speaker's clips into two splits and still validate;
     # scoring would then trust a leaked split. Enforce it as a load-time invariant
@@ -531,6 +568,38 @@ def _rank_key(seed: str, speaker_id: str) -> int:
     """A deterministic 256-bit rank key for a speaker (seed-domain-separated)."""
     digest = hashlib.sha256(f"{seed}\x00{speaker_id}".encode()).hexdigest()
     return int(digest, 16)
+
+
+def _partition_free_speakers(
+    speaker_ids: set[str] | frozenset[str],
+    *,
+    forced_eval: set[str] | frozenset[str],
+    calibration_fraction: float,
+    holdout_fraction: float,
+    seed: str,
+) -> dict[str, str]:
+    """Seeded speaker -> split partition (the shared core of split assignment).
+
+    ``forced_eval`` speakers are pinned to ``eval``; the rest are ranked by
+    :func:`_rank_key` and cut into ``calibration`` (first
+    ``calibration_fraction``), ``holdout`` (last ``holdout_fraction``), and
+    ``eval`` (the middle). Callers own their own fraction validation.
+    """
+    free = sorted(
+        set(speaker_ids) - set(forced_eval), key=lambda sp: (_rank_key(seed, sp), sp)
+    )
+    n = len(free)
+    n_cal = int(n * calibration_fraction)
+    n_hold = min(int(n * holdout_fraction), n - n_cal)
+    out: dict[str, str] = dict.fromkeys(forced_eval, "eval")
+    for rank, sp in enumerate(free):
+        if rank < n_cal:
+            out[sp] = "calibration"
+        elif rank >= n - n_hold:
+            out[sp] = "holdout"
+        else:
+            out[sp] = "eval"
+    return out
 
 
 def assign_splits(
@@ -587,25 +656,13 @@ def assign_splits(
             )
         forced_eval_speakers |= speakers_of_generator[gen_name]
 
-    free_speakers = sorted(
-        speaker_ids - forced_eval_speakers,
-        key=lambda sp: (_rank_key(seed, sp), sp),
+    split_of_speaker = _partition_free_speakers(
+        speaker_ids,
+        forced_eval=forced_eval_speakers,
+        calibration_fraction=calibration_fraction,
+        holdout_fraction=holdout_fraction,
+        seed=seed,
     )
-    n = len(free_speakers)
-    n_cal = int(n * calibration_fraction)
-    n_hold = int(n * holdout_fraction)
-    # Clamp so calibration + holdout never overrun the ranked list (rounding).
-    n_hold = min(n_hold, n - n_cal)
-
-    split_of_speaker: dict[str, str] = dict.fromkeys(forced_eval_speakers, "eval")
-    for rank, sp in enumerate(free_speakers):
-        if rank < n_cal:
-            split_of_speaker[sp] = "calibration"
-        elif rank >= n - n_hold:
-            split_of_speaker[sp] = "holdout"
-        else:
-            split_of_speaker[sp] = "eval"
-
     return {c.clip_id: split_of_speaker[c.speaker_id] for c in clips}
 
 
@@ -615,6 +672,766 @@ def split_summary(assignment: dict[str, str]) -> dict[str, int]:
     for split in assignment.values():
         counts[split] += 1
     return counts
+
+
+# --------------------------------------------------------------------------- #
+# Organic corpus planning (S5, pure): RTTM -> cleaned turns + session segments
+# -> a materialization PLAN. No audio is read here; the plan records what to
+# extract. The real sha256/duration only exist after the executor (PR-2) runs,
+# so this layer NEVER builds a final manifest -- see finalize_manifest.
+# --------------------------------------------------------------------------- #
+CANONICAL_SAMPLE_RATE = 16000
+# The AASIST fixed model input width; a session segment must reach this to score
+# one full production window (docs/gpu-contracts.md, the windowing policy).
+MODEL_WIDTH_SAMPLES = 64600
+
+# Pinned corpus-construction floors. Pre-registered in docs/gpu-contracts.md so a
+# change is a visible, deliberate diff, never drift. Second-domain thresholds are
+# Decimal so gap/overlap comparisons carry no binary-float noise; length floors are
+# enforced in the SAMPLE domain (after floor/ceil) because the contract is written
+# in samples -- a span whose second-length rounds just under the threshold can still
+# be a full 64,600-sample window.
+CLIP_MERGE_GAP_S = Decimal("0.3")  # merge same-speaker turns/words within this gap into one clip
+SESSION_MERGE_GAP_S = Decimal("1.0")  # production windowing merge_gap_s: the segment-view merge
+OVERLAP_FLOOR_S = Decimal("0.1")  # ignore other-speaker overlap regions shorter than this
+TURN_MIN_S = Decimal("1.0")  # a cleaned turn sub-span must reach this
+TURN_MIN_SAMPLES = int(TURN_MIN_S * CANONICAL_SAMPLE_RATE)  # 16000: turn length floor, in samples
+SEGMENT_MIN_SAMPLES = MODEL_WIDTH_SAMPLES  # 64600 = 4.0375s: a segment must reach one full window
+
+PLAN_SCHEMA_VERSION = 1
+
+
+def _duration_s_from_samples(sample_count: int) -> float:
+    """The one canonical clip duration rule: measured sample count / 16000.
+
+    Duration is derived only from the measured PCM sample count (never the plan),
+    so the manifest ``duration_s`` and the numerics doctrine have a single source.
+    """
+    return sample_count / CANONICAL_SAMPLE_RATE
+
+
+@dataclass(frozen=True)
+class OrganicSource:
+    """A known organic (real-speech) corpus source: its domain, language, license.
+
+    Data, not logic: the two staged CC-BY-4.0 diarization corpora. ``language``
+    is the honest per-source default (``und`` where the corpus does not publish a
+    per-clip language). A source not in :data:`ORGANIC_SOURCES` is a caller error.
+    """
+
+    source_id: str
+    domain: str
+    language: str
+    license_spdx: str
+
+
+ORGANIC_SOURCES: dict[str, OrganicSource] = {
+    "ami": OrganicSource("ami", "meetingroom", "en", "CC-BY-4.0"),
+    "voxconverse": OrganicSource("voxconverse", "webvideo", "und", "CC-BY-4.0"),
+}
+
+
+@dataclass(frozen=True)
+class RttmTurn:
+    """One speaker-active interval parsed from an RTTM row (seconds).
+
+    Times are :class:`~decimal.Decimal`, parsed from the RTTM text, so the pinned
+    floor/ceil sample rule (:func:`to_sample_interval`) is applied in exact decimal
+    arithmetic. Binary ``float`` would make ``0.1 * 16000`` evaluate to
+    ``1600.0000000000002`` and ceil to ``1601``, silently breaking the
+    byte-reproducible-from-RTTM-times contract for ordinary decimals.
+    """
+
+    recording: str
+    speaker_label: str
+    start_s: Decimal
+    dur_s: Decimal
+
+    @property
+    def end_s(self) -> Decimal:
+        return self.start_s + self.dur_s
+
+
+@dataclass(frozen=True)
+class SampleInterval:
+    """A half-open source sample interval ``[start_sample, end_sample)`` to slice."""
+
+    start_sample: int
+    end_sample: int
+
+    @property
+    def n_samples(self) -> int:
+        return self.end_sample - self.start_sample
+
+
+@dataclass(frozen=True)
+class IngestRecord:
+    """One planned clip: everything known BEFORE audio exists.
+
+    Carries no content sha or measured duration (those are produced by the
+    executor and supplied to :func:`finalize_manifest`). ``kind`` is ``turn`` (a
+    per-speaker clip for strata/degradation/calibration) or ``segment`` (a merged
+    same-speaker run, the production-windowing validation unit).
+    """
+
+    clip_id: str
+    rel_path: str
+    source: str
+    recording: str
+    speaker_id: str
+    label: str
+    language: str
+    license_spdx: str
+    stratum: str
+    interval: SampleInterval
+    split: str | None
+    acquire: dict[str, Any]
+    kind: str
+
+    def clip_dict(self, pcm_sha256: str, sample_count: int) -> dict[str, Any]:
+        """Build the v1 manifest clip record from this plan entry + measured facts."""
+        return {
+            "clip_id": self.clip_id,
+            "rel_path": self.rel_path,
+            "sha256": pcm_sha256,
+            "duration_s": _duration_s_from_samples(sample_count),
+            "label": self.label,
+            "language": self.language,
+            "license_spdx": self.license_spdx,
+            "stratum": self.stratum,
+            "source": self.source,
+            "speaker_id": self.speaker_id,
+            "split": self.split,
+            "acquire": json.dumps(self.acquire, sort_keys=True),
+        }
+
+
+@dataclass(frozen=True)
+class DegradedRecord:
+    """One planned degraded child clip, derived from an already-materialized parent.
+
+    A degraded child is not sliced from a source recording; it is a deterministic
+    ffmpeg transform of its parent's canonical PCM, so it carries no source
+    interval. It inherits the parent's label, speaker, language, license, and split
+    (the hardened lineage invariant) and records the canonical ``degradation`` chain
+    string plus the ``parent_clip_id``. Its content sha and duration, like a turn
+    clip's, exist only after the executor runs.
+    """
+
+    clip_id: str
+    rel_path: str
+    parent_clip_id: str
+    degradation: str
+    source: str
+    speaker_id: str
+    label: str
+    language: str
+    license_spdx: str
+    stratum: str
+    split: str | None
+
+    def clip_dict(self, pcm_sha256: str, sample_count: int) -> dict[str, Any]:
+        """Build the v1 manifest clip record for a degraded child + measured facts."""
+        return {
+            "clip_id": self.clip_id,
+            "rel_path": self.rel_path,
+            "sha256": pcm_sha256,
+            "duration_s": _duration_s_from_samples(sample_count),
+            "label": self.label,
+            "language": self.language,
+            "license_spdx": self.license_spdx,
+            "stratum": self.stratum,
+            "source": self.source,
+            "speaker_id": self.speaker_id,
+            "split": self.split,
+            "degradation": self.degradation,
+            "parent_clip_id": self.parent_clip_id,
+        }
+
+
+@dataclass(frozen=True)
+class MaterializationPlan:
+    """The audio-free plan: which clips + segments to extract, and their splits."""
+
+    schema_version: int
+    source: str
+    turn_clips: tuple[IngestRecord, ...]
+    segments: tuple[IngestRecord, ...]
+
+
+def parse_rttm(text: str, *, recording: str | None = None) -> tuple[RttmTurn, ...]:
+    """Parse RTTM ``SPEAKER`` rows into turns (fail closed on any malformed row).
+
+    Requires the ``SPEAKER <rec> <chan> <start> <dur> <NA> <NA> <label> ...`` shape
+    (at least the eight fields through the label) with a finite ``start >= 0``,
+    ``dur > 0``, and a real speaker label. If ``recording`` is given, every row's
+    recording id must match. Start/dur are read as exact :class:`~decimal.Decimal`
+    values, not binary ``float``, so the pinned sample rule stays byte-reproducible.
+    """
+    turns: list[RttmTurn] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        fields = stripped.split()
+        if len(fields) < 9 or fields[0] != "SPEAKER":
+            raise CorpusError(f"rttm line {lineno}: not a SPEAKER row: {stripped!r}")
+        rec = fields[1]
+        if recording is not None and rec != recording:
+            raise CorpusError(
+                f"rttm line {lineno}: recording {rec!r} does not match expected {recording!r}"
+            )
+        try:
+            start = Decimal(fields[3])
+            dur = Decimal(fields[4])
+        except InvalidOperation:
+            raise CorpusError(f"rttm line {lineno}: non-numeric start/dur") from None
+        if not start.is_finite() or not dur.is_finite() or start < 0 or dur <= 0:
+            raise CorpusError(
+                f"rttm line {lineno}: need finite start >= 0 and dur > 0, got {start}, {dur}"
+            )
+        label = fields[7]
+        if not label or label == "<NA>":
+            raise CorpusError(f"rttm line {lineno}: missing speaker label")
+        turns.append(RttmTurn(recording=rec, speaker_label=label, start_s=start, dur_s=dur))
+    if not turns:
+        raise CorpusError("rttm has no SPEAKER rows")
+    return tuple(turns)
+
+
+def _as_decimal(value: Decimal | float | int | str) -> Decimal:
+    """Normalize a time to Decimal, going through ``str`` for floats.
+
+    ``Decimal(0.1)`` captures the binary-float value (``0.1000...0055``); routing a
+    float through ``str`` recovers the shortest decimal the caller meant (``0.1``).
+    Internal callers already pass Decimal (from :func:`parse_rttm`); this only
+    protects a direct float caller from the IEEE-754 boundary bug.
+    """
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def to_sample_interval(
+    start_s: Decimal | float | int | str, end_s: Decimal | float | int | str
+) -> SampleInterval:
+    """Convert a second span to a pinned half-open sample interval.
+
+    ``start_sample = floor(start_s * 16000)``, ``end_sample = ceil(end_s * 16000)``
+    -- pinned so the corpus is byte-reproducible from the RTTM times. The arithmetic
+    is exact decimal (not binary float), so ``0.1`` maps to sample ``1600`` rather
+    than ``1601``.
+    """
+    start = _as_decimal(start_s)
+    end = _as_decimal(end_s)
+    if not start.is_finite() or not end.is_finite() or start < 0 or end <= start:
+        raise CorpusError(f"to_sample_interval: need 0 <= start < end, got {start_s}, {end_s}")
+    return SampleInterval(
+        start_sample=math.floor(start * CANONICAL_SAMPLE_RATE),
+        end_sample=math.ceil(end * CANONICAL_SAMPLE_RATE),
+    )
+
+
+def namespaced_speaker(source_id: str, recording: str, label: str) -> str:
+    """A conservative, recording-scoped speaker id: ``{source}-{recording}-{label}``.
+
+    Recording-scoped so a recording-local or mislabeled RTTM label can never cause
+    cross-split leakage (docs/gpu-contracts.md, the S5 pre-registration). Must be a
+    safe token.
+    """
+    speaker_id = f"{source_id}-{recording}-{label}"
+    if not _is_safe_id(speaker_id):
+        raise CorpusError(
+            f"speaker id {speaker_id!r} (from {source_id}/{recording}/{label}) is not a safe token"
+        )
+    return speaker_id
+
+
+def _merge_intervals(
+    intervals: list[tuple[Decimal, Decimal]], gap_s: Decimal
+) -> list[tuple[Decimal, Decimal]]:
+    """Sort and merge intervals whose gap is ``< gap_s`` (overlaps always merge)."""
+    merged: list[tuple[Decimal, Decimal]] = []
+    for start, end in sorted(intervals):
+        if merged and start - merged[-1][1] < gap_s:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _coalesce_intervals(
+    intervals: list[tuple[Decimal, Decimal]],
+) -> list[tuple[Decimal, Decimal]]:
+    """Union overlapping or touching intervals into maximal continuous regions.
+
+    Used to fold the OTHER-speaker rows into continuous other-speech regions before
+    the overlap floor is applied. Word-level RTTMs emit a run of adjacent short rows;
+    testing the floor per atomic row would let a long continuous stretch of other
+    speech (each 80 ms word below the 0.1 s floor) survive inside a nominally
+    single-speaker turn. The floor is meant to ignore a brief boundary graze, not a
+    sustained region assembled from many short rows.
+    """
+    merged: list[tuple[Decimal, Decimal]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _subtract_overlaps(
+    span: tuple[Decimal, Decimal],
+    others: list[tuple[Decimal, Decimal]],
+    *,
+    floor_s: Decimal,
+) -> list[tuple[Decimal, Decimal]]:
+    """Return the sub-spans of ``span`` not covered by any OTHER-speaker interval.
+
+    ``others`` must already be coalesced into continuous regions
+    (:func:`_coalesce_intervals`). A region is only cut when its intersection with
+    ``span`` is at least ``floor_s`` (sub-``floor_s`` grazes are ignored so a
+    boundary touch does not fragment a turn).
+    """
+    span_start, span_end = span
+    active: list[tuple[Decimal, Decimal]] = []
+    for other_start, other_end in others:
+        lo = max(span_start, other_start)
+        hi = min(span_end, other_end)
+        if hi - lo >= floor_s:
+            active.append((lo, hi))
+    result: list[tuple[Decimal, Decimal]] = []
+    cursor = span_start
+    for cut_start, cut_end in sorted(active):
+        if cut_start > cursor:
+            result.append((cursor, cut_start))
+        cursor = max(cursor, cut_end)
+    if cursor < span_end:
+        result.append((cursor, span_end))
+    return result
+
+
+def _clean_spans(
+    turns: tuple[RttmTurn, ...],
+    *,
+    merge_gap_s: Decimal,
+    overlap_floor_s: Decimal,
+) -> dict[str, list[tuple[Decimal, Decimal]]]:
+    """Per speaker: merge same-speaker turns, then drop other-speaker overlap.
+
+    Returns ``label -> cleaned single-speaker spans (seconds)``. A label with no
+    surviving span is omitted. The minimum-length floor is NOT applied here; it is
+    enforced in the sample domain once spans are converted (see
+    :func:`_kept_intervals`), because the contract is written in samples.
+    """
+    by_speaker: dict[str, list[tuple[Decimal, Decimal]]] = {}
+    for turn in turns:
+        by_speaker.setdefault(turn.speaker_label, []).append((turn.start_s, turn.end_s))
+    cleaned: dict[str, list[tuple[Decimal, Decimal]]] = {}
+    for label, intervals in by_speaker.items():
+        merged = _merge_intervals(intervals, merge_gap_s)
+        others = _coalesce_intervals(
+            [
+                iv
+                for other_label, other_ivs in by_speaker.items()
+                if other_label != label
+                for iv in other_ivs
+            ]
+        )
+        spans: list[tuple[Decimal, Decimal]] = []
+        for span in merged:
+            spans.extend(_subtract_overlaps(span, others, floor_s=overlap_floor_s))
+        if spans:
+            cleaned[label] = spans
+    return cleaned
+
+
+# A planned span keyed by (recording, rttm_label, speaker_id) -> the converted
+# sample interval that met the length floor, plus its exact source seconds (kept
+# only as documentary provenance; the sample interval is the authoritative cut).
+_PlannedSpan = tuple[SampleInterval, Decimal, Decimal]
+
+
+def _kept_intervals(
+    cleaned_by_label: dict[str, list[tuple[Decimal, Decimal]]],
+    source: OrganicSource,
+    recording: str,
+    *,
+    min_samples: int,
+) -> dict[tuple[str, str, str], list[_PlannedSpan]]:
+    """Convert cleaned second-spans to sample intervals, keeping those >= min_samples.
+
+    The length floor is applied here, in the SAMPLE domain, so a span whose
+    continuous second-length rounds just under the threshold but whose floor/ceil
+    interval reaches ``min_samples`` is kept (and vice versa). A label with no
+    surviving interval is omitted, so it never enters the split partition.
+    """
+    kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    for label, spans in cleaned_by_label.items():
+        speaker_id = namespaced_speaker(source.source_id, recording, label)
+        surviving: list[_PlannedSpan] = []
+        for start_s, end_s in spans:
+            interval = to_sample_interval(start_s, end_s)
+            if interval.n_samples >= min_samples:
+                surviving.append((interval, start_s, end_s))
+        if surviving:
+            kept[(recording, label, speaker_id)] = surviving
+    return kept
+
+
+def _records_from_intervals(
+    source: OrganicSource,
+    kept_by_speaker: dict[tuple[str, str, str], list[_PlannedSpan]],
+    *,
+    kind: str,
+    split_of_speaker: dict[str, str],
+) -> tuple[IngestRecord, ...]:
+    """Build stable, split-stamped :class:`IngestRecord`s from kept sample intervals."""
+    records: list[IngestRecord] = []
+    for (recording, label, speaker_id), spans in sorted(kept_by_speaker.items()):
+        for interval, start_s, end_s in spans:
+            clip_id = f"{speaker_id}-{kind}-{interval.start_sample}-{interval.end_sample}"
+            records.append(
+                IngestRecord(
+                    clip_id=clip_id,
+                    rel_path=f"{source.source_id}/{kind}/{clip_id}.wav",
+                    source=source.source_id,
+                    recording=recording,
+                    speaker_id=speaker_id,
+                    label="bona_fide",
+                    language=source.language,
+                    license_spdx=source.license_spdx,
+                    stratum=f"bona_fide|organic|{source.domain}",
+                    interval=interval,
+                    split=split_of_speaker[speaker_id],
+                    acquire={
+                        "source_file": f"{recording}.wav",
+                        "recording": recording,
+                        "rttm_label": label,
+                        # The sample offsets are authoritative; seconds are documentary
+                        # provenance only (float, so the plan is JSON-serializable). An
+                        # executor MUST slice on start_sample/end_sample, never seconds.
+                        "start_sample": interval.start_sample,
+                        "end_sample": interval.end_sample,
+                        "start_s": float(start_s),
+                        "end_s": float(end_s),
+                        "kind": kind,
+                    },
+                    kind=kind,
+                )
+            )
+    return tuple(records)
+
+
+def build_plan(
+    source: OrganicSource,
+    recordings: dict[str, tuple[RttmTurn, ...]],
+    *,
+    calibration_fraction: float = 0.5,
+    holdout_fraction: float = 0.2,
+    seed: str = SELECTION_SEED,
+) -> MaterializationPlan:
+    """Plan an organic source: cleaned turn clips + merged session segments.
+
+    Splits are assigned once, across every recording of the source, so a speaker
+    never straddles two splits (speaker-disjoint by construction). Turn clips feed
+    strata/degradation/calibration; session segments (merged same-speaker runs of
+    at least one full window) feed production-windowing validation.
+    """
+    if not recordings:
+        raise CorpusError("build_plan: no recordings")
+    if not math.isfinite(calibration_fraction) or not math.isfinite(holdout_fraction):
+        raise CorpusError("build_plan: fractions must be finite")
+    if calibration_fraction < 0 or holdout_fraction < 0:
+        raise CorpusError("build_plan: fractions must be non-negative")
+    if calibration_fraction + holdout_fraction > 1.0 + 1e-9:
+        raise CorpusError("build_plan: calibration + holdout fractions exceed 1.0")
+    turn_kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    segment_kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    for recording, turns in recordings.items():
+        # The dict key is the authoritative recording id (it drives the speaker
+        # namespace); a row that declares a different recording is a caller error.
+        for turn in turns:
+            if turn.recording != recording:
+                raise CorpusError(
+                    f"build_plan: recording key {recording!r} has a turn for {turn.recording!r}"
+                )
+        clean_turns = _clean_spans(
+            turns, merge_gap_s=CLIP_MERGE_GAP_S, overlap_floor_s=OVERLAP_FLOOR_S
+        )
+        clean_segments = _clean_spans(
+            turns, merge_gap_s=SESSION_MERGE_GAP_S, overlap_floor_s=OVERLAP_FLOOR_S
+        )
+        turn_kept.update(
+            _kept_intervals(clean_turns, source, recording, min_samples=TURN_MIN_SAMPLES)
+        )
+        segment_kept.update(
+            _kept_intervals(clean_segments, source, recording, min_samples=SEGMENT_MIN_SAMPLES)
+        )
+    # Only speakers with at least one surviving clip enter the split partition, so a
+    # speaker whose every span fell below the floor never shifts the fractional cuts.
+    speaker_ids = {sp for (_, _, sp) in turn_kept} | {sp for (_, _, sp) in segment_kept}
+    if not speaker_ids:
+        raise CorpusError("build_plan: no clips survived cleaning (every span below the floor)")
+    split_of_speaker = _partition_free_speakers(
+        speaker_ids,
+        forced_eval=frozenset(),
+        calibration_fraction=calibration_fraction,
+        holdout_fraction=holdout_fraction,
+        seed=seed,
+    )
+    return MaterializationPlan(
+        schema_version=PLAN_SCHEMA_VERSION,
+        source=source.source_id,
+        turn_clips=_records_from_intervals(
+            source, turn_kept, kind="turn", split_of_speaker=split_of_speaker
+        ),
+        segments=_records_from_intervals(
+            source, segment_kept, kind="segment", split_of_speaker=split_of_speaker
+        ),
+    )
+
+
+def _record_to_dict(record: IngestRecord) -> dict[str, Any]:
+    return {
+        "clip_id": record.clip_id,
+        "rel_path": record.rel_path,
+        "source": record.source,
+        "recording": record.recording,
+        "speaker_id": record.speaker_id,
+        "label": record.label,
+        "language": record.language,
+        "license_spdx": record.license_spdx,
+        "stratum": record.stratum,
+        "start_sample": record.interval.start_sample,
+        "end_sample": record.interval.end_sample,
+        "split": record.split,
+        "acquire": record.acquire,
+        "kind": record.kind,
+    }
+
+
+def plan_to_dict(plan: MaterializationPlan) -> dict[str, Any]:
+    """A stable, JSON-serializable view of a plan (for the CLI and golden tests)."""
+    return {
+        "schema_version": plan.schema_version,
+        "source": plan.source,
+        "turn_clips": [_record_to_dict(r) for r in plan.turn_clips],
+        "segments": [_record_to_dict(r) for r in plan.segments],
+    }
+
+
+def finalize_manifest(
+    records: tuple[IngestRecord | DegradedRecord, ...] | list[IngestRecord | DegradedRecord],
+    measured: dict[str, tuple[str, int]],
+) -> Manifest:
+    """Build and validate a v1 manifest from a plan plus the executor's measurements.
+
+    ``records`` are turn/segment :class:`IngestRecord`s and/or :class:`DegradedRecord`
+    children. ``measured`` maps ``clip_id -> (pcm_sha256, sample_count)``, the two
+    facts that exist only after audio is materialized. ``duration_s`` is derived
+    from the sample count (``sample_count / 16000``). Every record must have a
+    measurement; the resulting manifest is validated by :func:`load_manifest`
+    (fail closed, so lineage inheritance and cycles are caught here too).
+    """
+    if not records:
+        raise CorpusError("finalize_manifest: no records")
+    # Fail closed on measured/record drift in BOTH directions: a record with no
+    # measurement (below) and a measurement for a clip not in the record list. A
+    # dropped record would silently vanish from the manifest otherwise.
+    record_ids = {record.clip_id for record in records}
+    orphan_facts = sorted(set(measured) - record_ids)
+    if orphan_facts:
+        raise CorpusError(
+            f"finalize_manifest: measured facts for clips not in the record list: {orphan_facts}"
+        )
+    clips: list[dict[str, Any]] = []
+    for record in records:
+        fact = measured.get(record.clip_id)
+        if fact is None:
+            raise CorpusError(f"finalize_manifest: no measured facts for clip {record.clip_id!r}")
+        if not isinstance(fact, tuple) or len(fact) != 2:
+            raise CorpusError(
+                f"finalize_manifest: measured fact for {record.clip_id!r} must be "
+                "a (pcm_sha256, sample_count) tuple"
+            )
+        pcm_sha256, sample_count = fact
+        if not _is_sha256(pcm_sha256):
+            raise CorpusError(
+                f"finalize_manifest: clip {record.clip_id!r} sha256 must be 64 lowercase hex"
+            )
+        if not isinstance(sample_count, int) or isinstance(sample_count, bool) or sample_count <= 0:
+            raise CorpusError(
+                f"finalize_manifest: clip {record.clip_id!r} sample_count must be a positive int"
+            )
+        clips.append(record.clip_dict(pcm_sha256, sample_count))
+    return load_manifest({"schema_version": MANIFEST_SCHEMA_VERSION, "clips": clips})
+
+
+# --------------------------------------------------------------------------- #
+# Degradation chains (S5, pure): recipe-id chain strings + ffmpeg argv builders
+# + degraded-child derivation. The recipe VOCABULARY is data in
+# synthdetect_sources.py; this is the deterministic command + lineage logic.
+# --------------------------------------------------------------------------- #
+CHAIN_SEPARATOR = "|"
+# The pinned raw-PCM I/O framing every ffmpeg pass uses: canonical-PCM in, and
+# canonical-PCM out (decode/re-canonicalize, never a WAV-header identity). Kept as
+# data so the builder and the pre-registration agree byte-for-byte.
+_RAW_INPUT_FRAMING = ("-f", "s16le", "-ar", "16000", "-ac", "1")
+_CANONICAL_OUTPUT = ("-f", "s16le", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le")
+# Determinism pinning. In ffmpeg's option model `-threads` is per-stream: before
+# `-i` it binds the input decoder, before an output it binds that output's encoder.
+# The encoder is the hash-relevant pass, so `-threads 1` MUST also appear on the
+# output side -- a prefix-only `-threads 1` leaves a multi-threaded encoder
+# unpinned. `-filter_threads 1` (global) pins the filter graph (the atempo speed
+# pass). Together they hold the intermediate bitstream and the final canonical PCM
+# byte-stable across runs on the pinned realization toolchain.
+_FFMPEG_PREFIX = ("ffmpeg", "-nostdin", "-y", "-threads", "1", "-filter_threads", "1")
+_OUTPUT_THREADS = ("-threads", "1")
+
+
+def parse_chain(chain: str) -> tuple[str, ...]:
+    """Split a canonical degradation-chain string into its ordered recipe ids.
+
+    Fail closed: the chain must be non-empty and every segment must be a recipe id
+    known to the registry. Order is significant and preserved.
+    """
+    if not isinstance(chain, str) or not chain.strip():
+        raise CorpusError("degradation chain must be a non-empty string")
+    parts = chain.split(CHAIN_SEPARATOR)
+    if any(not part for part in parts):
+        raise CorpusError(f"degradation chain {chain!r} has an empty segment")
+    for part in parts:
+        if part not in DEGRADATION_RECIPES:
+            raise CorpusError(
+                f"degradation chain {chain!r} names unknown recipe {part!r}; "
+                f"known: {sorted(DEGRADATION_RECIPES)}"
+            )
+    return tuple(parts)
+
+
+def serialize_chain(recipe_ids: tuple[str, ...] | list[str]) -> str:
+    """Serialize ordered recipe ids into the one canonical chain string.
+
+    Every id must be known; the result is the ``|``-joined sequence, so the same
+    ordered recipes always yield the same manifest ``degradation`` identity.
+    """
+    ids = tuple(recipe_ids)
+    if not ids:
+        raise CorpusError("serialize_chain: at least one recipe id is required")
+    for recipe_id in ids:
+        if recipe_id not in DEGRADATION_RECIPES:
+            raise CorpusError(
+                f"serialize_chain: unknown recipe {recipe_id!r}; "
+                f"known: {sorted(DEGRADATION_RECIPES)}"
+            )
+    return CHAIN_SEPARATOR.join(ids)
+
+
+def build_recipe_argv(
+    recipe: DegradationRecipe,
+    *,
+    in_path: str,
+    out_path: str,
+    intermediate_path: str | None = None,
+) -> tuple[tuple[str, ...], ...]:
+    """Build the exact ffmpeg command(s) for one recipe (pure, no execution).
+
+    A lossy recipe returns two commands: an encode pass (canonical PCM ->
+    ``intermediate_format`` bitstream, needing an ``intermediate_path``) and a
+    decode pass (bitstream -> canonical PCM). A non-lossy recipe returns one pass
+    straight to canonical PCM. Every raw input is framed with the pinned
+    ``-f s16le -ar 16000 -ac 1`` and every output re-canonicalizes to ``pcm_s16le``;
+    ``-threads 1`` is emitted on both the input (decoder) and the output (encoder)
+    side, with ``-filter_threads 1`` global, so every pass is deterministic.
+    """
+    for path in (in_path, out_path):
+        if path.startswith("-"):
+            raise CorpusError(
+                f"path {path!r} must not start with '-' (ffmpeg reads it as an option)"
+            )
+    if recipe.lossy:
+        if not intermediate_path:
+            raise CorpusError(
+                f"recipe {recipe.recipe_id!r} is lossy and needs an intermediate_path"
+            )
+        if intermediate_path.startswith("-"):
+            raise CorpusError(
+                f"path {intermediate_path!r} must not start with '-' "
+                "(ffmpeg reads it as an option)"
+            )
+        encode = (
+            *_FFMPEG_PREFIX,
+            *_RAW_INPUT_FRAMING,
+            "-i", in_path,
+            *recipe.encode_args,
+            *_OUTPUT_THREADS,
+            "-f", recipe.intermediate_format,
+            intermediate_path,
+        )
+        decode = (
+            *_FFMPEG_PREFIX,
+            "-i", intermediate_path,
+            *_OUTPUT_THREADS,
+            *_CANONICAL_OUTPUT,
+            out_path,
+        )
+        return (encode, decode)
+    single = (
+        *_FFMPEG_PREFIX,
+        *_RAW_INPUT_FRAMING,
+        "-i", in_path,
+        *recipe.encode_args,
+        *_OUTPUT_THREADS,
+        *_CANONICAL_OUTPUT,
+        out_path,
+    )
+    return (single,)
+
+
+def _chain_slug(chain: str) -> str:
+    """The chain string as a safe clip-id suffix (``|`` -> ``-``)."""
+    return chain.replace(CHAIN_SEPARATOR, "-")
+
+
+def derive_degraded_record(
+    parent: ClipEntry,
+    recipe_ids: tuple[str, ...] | list[str],
+) -> DegradedRecord:
+    """Plan a degraded child of an already-materialized parent clip (pure).
+
+    The child inherits the parent's label, speaker, language, license, and split
+    (lineage inheritance); its stratum extends the parent's with the chain; its
+    clip id and path are derived deterministically from the parent id and the
+    chain. A parent that is itself degraded may be chained further. Only bona fide
+    or spoof parents that carry no generator constraint are handled here (organic
+    bona fide today); a spoof synthesis parent keeps its own provenance and is out
+    of scope for S5.
+    """
+    chain = serialize_chain(recipe_ids)
+    slug = _chain_slug(chain)
+    clip_id = f"{parent.clip_id}-{slug}"
+    if not _is_safe_id(clip_id):
+        raise CorpusError(f"derived clip_id {clip_id!r} is not a safe token")
+    # Keep the child beside the parent under a degraded/ subtree, path-safe.
+    rel_dir = str(Path(parent.rel_path).parent)
+    rel_path = f"{rel_dir}/degraded/{clip_id}.wav" if rel_dir != "." else f"degraded/{clip_id}.wav"
+    return DegradedRecord(
+        clip_id=clip_id,
+        rel_path=rel_path,
+        parent_clip_id=parent.clip_id,
+        degradation=chain,
+        source=parent.source,
+        speaker_id=parent.speaker_id,
+        label=parent.label,
+        language=parent.language,
+        license_spdx=parent.license_spdx,
+        stratum=f"{parent.stratum}|{chain}",
+        split=parent.split,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -650,12 +1467,98 @@ def cmd_validate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_prepare(args: argparse.Namespace) -> int:
+    """Plan an organic source from its RTTMs (dry-run: emit a plan, extract nothing).
+
+    Reads one or more RTTM files, groups their rows by the recording id each row
+    declares, builds the materialization plan, and writes it as JSON. It touches no
+    audio; the executor (a later slice) materializes what the plan describes.
+    """
+    source = ORGANIC_SOURCES.get(args.source)
+    if source is None:
+        sys.stderr.write(f"unknown source {args.source!r}; known: {sorted(ORGANIC_SOURCES)}\n")
+        return 2
+    recordings: dict[str, list[RttmTurn]] = {}
+    try:
+        for rttm_path in args.rttm:
+            for turn in parse_rttm(Path(rttm_path).read_text(encoding="utf-8")):
+                recordings.setdefault(turn.recording, []).append(turn)
+        plan = build_plan(source, {rec: tuple(turns) for rec, turns in recordings.items()})
+    except (OSError, CorpusError) as exc:
+        sys.stderr.write(f"prepare failed: {exc}\n")
+        return 2
+    sys.stdout.write(json.dumps(plan_to_dict(plan), indent=2, sort_keys=True) + "\n")
+    return 0
+
+
+def cmd_degrade(args: argparse.Namespace) -> int:
+    """Plan degraded children of a parent manifest for a recipe chain (dry-run).
+
+    Loads a parent manifest, optionally restricts to one split, derives a degraded
+    child per non-degraded parent clip for the given recipe chain, and writes the
+    child plan as JSON. Already-degraded clips are skipped so a re-run never plans
+    grandchildren (derivative multiplicity would inflate Platt calibration; the S5
+    pre-registration derives one variant per parent). It builds no audio; the argv
+    the executor will run is unit-covered.
+    """
+    try:
+        obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        manifest = load_manifest(obj)
+        chain = serialize_chain(args.recipe)
+        children = [
+            asdict(derive_degraded_record(clip, args.recipe))
+            for clip in manifest.clips
+            if (args.split is None or clip.split == args.split)
+            and clip.parent_clip_id is None
+        ]
+    except (OSError, json.JSONDecodeError, CorpusError) as exc:
+        sys.stderr.write(f"degrade failed: {exc}\n")
+        return 2
+    if not children:
+        sys.stderr.write(
+            f"degrade: no non-degraded parent clips in split {args.split!r}\n"
+        )
+        return 2
+    sys.stdout.write(
+        json.dumps({"chain": chain, "children": children}, indent=2, sort_keys=True) + "\n"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="synthdetect corpus manifest tools (#144)")
     sub = parser.add_subparsers(dest="command", required=True)
     p_validate = sub.add_parser("validate", help="validate a manifest file (schema + integrity)")
     p_validate.add_argument("--manifest", required=True, help="path to the manifest JSON")
     p_validate.set_defaults(func=cmd_validate)
+
+    p_prepare = sub.add_parser(
+        "prepare", help="plan an organic source from its RTTMs (dry-run, no audio)"
+    )
+    p_prepare.add_argument(
+        "--source", required=True, help=f"organic source id ({sorted(ORGANIC_SOURCES)})"
+    )
+    p_prepare.add_argument("--rttm", required=True, nargs="+", help="one or more RTTM files")
+    p_prepare.set_defaults(func=cmd_prepare)
+
+    p_degrade = sub.add_parser(
+        "degrade", help="plan degraded children of a parent manifest (dry-run, no audio)"
+    )
+    p_degrade.add_argument("--manifest", required=True, help="path to the parent manifest JSON")
+    p_degrade.add_argument(
+        "--recipe",
+        required=True,
+        nargs="+",
+        help="ordered degradation recipe id(s) forming a chain",
+    )
+    p_degrade.add_argument(
+        "--split",
+        default=None,
+        choices=SPLITS,
+        help="restrict to parents in this split (default: all; PR-3 uses calibration)",
+    )
+    p_degrade.set_defaults(func=cmd_degrade)
+
     args = parser.parse_args(argv)
     return int(args.func(args))
 

@@ -52,7 +52,11 @@ from typing import Final
 # v2 (2026-08-25, S3): added ReproductionTarget.gate_role + the DF sibling model.
 # v3 (2026-08-25, S3): added WeightFile.state_dict_key_prefix (DF checkpoint's
 #     nn.DataParallel "module." unwrap), declared as data + closed vocabulary.
-SOURCES_VERSION: Final = "synthdetect-sources-v3"
+# v4 (2026-08-26, S5): added the versioned degradation recipe registry (a closed
+#     vocabulary of deterministic ffmpeg transforms; the argv builders live in
+#     synthdetect_corpus.py). Additive-noise is deferred: its SNR mix needs a
+#     measured parent RMS and so is not a pure argv (see the S5 pre-registration).
+SOURCES_VERSION: Final = "synthdetect-sources-v4"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
 # lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
@@ -567,6 +571,148 @@ BENCHMARKS: Final[dict[str, BenchmarkDataset]] = {
 
 
 # --------------------------------------------------------------------------- #
+# Degradation recipes (S5): a closed, versioned vocabulary of deterministic
+# ffmpeg transforms. This module pins WHAT each recipe is (data); the argv
+# builders and chain serialization live in synthdetect_corpus.py (logic). The
+# recipe_id is the corpus identity of the transform, so it is versioned (`-v1`)
+# and its bytes are reproducible only on the pinned realization toolchain
+# (container digest + codec library versions), never as universal ffmpeg
+# reproducibility. Additive-noise is intentionally absent: an SNR mix needs the
+# measured parent RMS, which is audio-dependent and so cannot be a pure argv; it
+# lands with the executor. See docs/gpu-contracts.md, the S5 pre-registration.
+# --------------------------------------------------------------------------- #
+DEGRADATION_FAMILIES: Final = ("codec", "telephony", "speed")
+
+# A recipe id is a lowercase token joined only by '-'; '|' is the chain
+# separator and whitespace/dots are forbidden, so a recipe id is always a safe
+# manifest token and a chain string round-trips unambiguously.
+_RECIPE_ID_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+@dataclass(frozen=True)
+class DegradationRecipe:
+    """One deterministic ffmpeg transform, as reviewable data.
+
+    ``lossy`` recipes are a real round trip (canonical PCM -> pinned encoder ->
+    ``intermediate_format`` bitstream -> pinned decoder -> canonical PCM), so
+    ``intermediate_format`` names the encoded container. A non-lossy recipe (a
+    timeline filter such as ``speed``) is a single pass straight back to canonical
+    PCM and carries no ``intermediate_format``. ``encode_args`` are the ffmpeg
+    output options for the transform pass, emitted verbatim by the builder between
+    the pinned raw-input framing and the intermediate/output path.
+    """
+
+    recipe_id: str
+    family: str
+    implementation: str
+    lossy: bool
+    encode_args: tuple[str, ...]
+    intermediate_format: str
+
+
+DEGRADATION_RECIPES: Final[dict[str, DegradationRecipe]] = {
+    "mp3-cbr48-v1": DegradationRecipe(
+        recipe_id="mp3-cbr48-v1",
+        family="codec",
+        implementation="libmp3lame",
+        lossy=True,
+        encode_args=("-c:a", "libmp3lame", "-b:a", "48k", "-ar", "16000", "-ac", "1"),
+        intermediate_format="mp3",
+    ),
+    "opus-voip-cbr16-f20-v1": DegradationRecipe(
+        recipe_id="opus-voip-cbr16-f20-v1",
+        family="codec",
+        implementation="libopus",
+        lossy=True,
+        encode_args=(
+            "-c:a", "libopus", "-b:a", "16k", "-vbr", "off",
+            "-application", "voip", "-frame_duration", "20", "-ar", "16000", "-ac", "1",
+        ),
+        intermediate_format="opus",
+    ),
+    "aac-lc-cbr48-v1": DegradationRecipe(
+        recipe_id="aac-lc-cbr48-v1",
+        family="codec",
+        implementation="aac",
+        lossy=True,
+        encode_args=(
+            "-c:a", "aac", "-b:a", "48k", "-profile:a", "aac_low", "-ar", "16000", "-ac", "1",
+        ),
+        intermediate_format="adts",
+    ),
+    "g711-mulaw-8k-v1": DegradationRecipe(
+        recipe_id="g711-mulaw-8k-v1",
+        family="telephony",
+        implementation="pcm_mulaw",
+        lossy=True,
+        encode_args=("-c:a", "pcm_mulaw", "-ar", "8000", "-ac", "1"),
+        intermediate_format="wav",
+    ),
+    "amr-nb-122-v1": DegradationRecipe(
+        recipe_id="amr-nb-122-v1",
+        family="telephony",
+        implementation="libopencore_amrnb",
+        lossy=True,
+        encode_args=("-c:a", "libopencore_amrnb", "-b:a", "12.2k", "-ar", "8000", "-ac", "1"),
+        intermediate_format="amr",
+    ),
+    "speed-atempo-0p90-v1": DegradationRecipe(
+        recipe_id="speed-atempo-0p90-v1",
+        family="speed",
+        implementation="atempo",
+        lossy=False,
+        # Single pass to canonical PCM: the -ar/-ac/-c:a framing comes from the
+        # builder's canonical output, so the recipe only names the timeline filter.
+        encode_args=("-filter:a", "atempo=0.90"),
+        intermediate_format="",
+    ),
+}
+
+
+def get_recipe(recipe_id: str) -> DegradationRecipe:
+    """Look up a degradation recipe by id, raising :class:`SourcesError` if unknown."""
+    try:
+        return DEGRADATION_RECIPES[recipe_id]
+    except KeyError:
+        raise SourcesError(
+            f"unknown degradation recipe {recipe_id!r}; known: {sorted(DEGRADATION_RECIPES)}"
+        ) from None
+
+
+def _validate_recipes(recipes: dict[str, DegradationRecipe] = DEGRADATION_RECIPES) -> None:
+    """Assert recipe-registry integrity at import (a bad recipe is a bug).
+
+    Every key matches its ``recipe_id``; the id is a safe token (no ``|``,
+    whitespace, or dot); ``family`` is known; ``implementation`` (the reviewable
+    encoder/decoder claim) and ``encode_args`` are non-empty; a lossy recipe names
+    a non-empty ``intermediate_format`` and a non-lossy one names none.
+    """
+    for key, recipe in recipes.items():
+        if key != recipe.recipe_id:
+            raise SourcesError(f"recipe key {key!r} != recipe_id {recipe.recipe_id!r}")
+        if not _RECIPE_ID_RE.match(recipe.recipe_id):
+            raise SourcesError(
+                f"recipe id {recipe.recipe_id!r} must be a lowercase '-'-joined token"
+            )
+        if recipe.family not in DEGRADATION_FAMILIES:
+            raise SourcesError(
+                f"recipe {key!r} has unknown family {recipe.family!r} "
+                f"(allowed: {DEGRADATION_FAMILIES})"
+            )
+        if not recipe.implementation.strip():
+            raise SourcesError(f"recipe {key!r} has an empty implementation")
+        if not recipe.encode_args:
+            raise SourcesError(f"recipe {key!r} has empty encode_args")
+        if recipe.lossy and not recipe.intermediate_format:
+            raise SourcesError(f"lossy recipe {key!r} must name an intermediate_format")
+        if not recipe.lossy and recipe.intermediate_format:
+            raise SourcesError(
+                f"non-lossy recipe {key!r} must not carry an intermediate_format "
+                f"(got {recipe.intermediate_format!r})"
+            )
+
+
+# --------------------------------------------------------------------------- #
 # Runnability guard + accessors
 # --------------------------------------------------------------------------- #
 def runnable(model: ModelEntry) -> bool:
@@ -718,3 +864,4 @@ def _validate_registry(
 
 
 _validate_registry()
+_validate_recipes()
