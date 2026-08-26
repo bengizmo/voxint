@@ -77,6 +77,56 @@ test runner** (no vitest/jest): island behaviour is covered by the Python
 integration tests plus the manual browser pass below. Don't add one without
 discussing it; it is bloat this single-operator app does not need.
 
+## Choosing review depth and the browser lane
+
+Review effort is matched to a change's blast radius, not to which files it edits.
+`CLAUDE.md` states the policy; this section is the worked reference. Two gates are
+judged independently:
+
+- **Code-review depth.** Judge possible impact first. A change that could touch
+  inference numerics, security, auth or CSRF, concurrency or locking, a DB
+  migration, a public contract or seam, a released artifact, a dependency, or the
+  strength of a test or CI gate is high-risk and gets a full multi-model panel,
+  whatever files it edits. Real design choices or a new cross-cutting seam get a
+  multi-model review. A clear fix in a familiar pattern gets a single-model
+  review. A change with no plausible blast radius gets no formal panel, only the
+  standard gates that already run on every change (local `ruff`, `mypy`, and
+  `pytest`, plus the required CI checks `lint-test`, `secrets-scan`, and
+  `coverage`). When two rows both fit, take the deeper one.
+- **Browser lane.** Run the [browser E2E lane](#automated-e2e-testse2e) when a
+  change alters observable review-console behaviour or a delivery, data, or auth
+  contract a console island depends on, or when it changes the browser acceptance
+  harness or its fixtures. Skip it for backend, pipeline, service, docs, CI, or
+  test-only changes that leave island behaviour unchanged.
+
+File type is an illustration, not the classifier. A "config tweak" that changes a
+decode parameter is a numerics change; a "test-only" edit that loosens an
+assertion weakens a gate; a "docs" edit to install or release copy can change
+what operators do. Classify by what the change can affect.
+
+| Example change | Impact class | Code-review depth | Browser lane | Why |
+|---|---|---|---|---|
+| Typo in a doc or code comment | none | no formal panel | no | No blast radius. |
+| Loosen or delete a test assertion | high (gate strength) | full panel | no | A gate is never weakened to pass; escalates regardless of the file. |
+| Change a whisper or pyannote model pin | high (numerics) | full panel | no | Parity evidence is mandatory and independent of review depth. |
+| Change a config default that feeds inference (decode or batch param) | high (numerics) | full panel | no | A "config" change that moves numerics still needs measured equivalence. |
+| Add a DB migration | high (migration) | full panel | only if an island reads the changed shape | Schema and data-integrity blast radius. |
+| Edit auth or CSRF middleware | high (security) and island-facing | full panel | yes | Security escalates; islands depend on the auth contract. |
+| Restyle a console island (CSS, build, or asset) | low | single-model review | yes | No invariant risk, but observable island behaviour changes. |
+| Backend refactor with strong existing coverage, no numerics | routine | single-model review | no | Familiar pattern, coverage backs it, no island surface. |
+| New cross-cutting backend seam or public API | non-trivial | multi-model review | only if an island consumes it | Design choices and a new contract. |
+| Bump a dependency | high (supply chain) | full panel | yes if it is a frontend, build, or island runtime dependency | Supply-chain escalation; the lane only if island runtime can change. |
+| Edit a release or CI workflow (`release.yml`, required-check wiring) | high (released artifact, gate strength) | full panel | no | Changes the supply chain or the gate set. |
+
+This choice is about the slice in front of you. It does not replace the release
+process's **Gate E**, which runs its own browser acceptance lane before tagging a
+release whenever the review console or the island build path changed, under its
+own diff-scoped carry-over rule (see
+[`release-process.md`](release-process.md)). A slice that skipped the lane can
+still oblige a Gate-E run at release time. Record both classifications, the gates
+you ran, and each applied fix or deliberate skip in the commit message or PR, and
+reclassify against the final landing diff if it grew.
+
 ## Browser verification of the review console
 
 Interactive island behaviour (the #53/#58 verify-and-advance loop, click-to-edit,
