@@ -19,6 +19,46 @@ the behaviour or invariant it guards (a new island → a row in
 `tests/contracts/test_frontend_build.py`; a new contract → a `tests/contracts/`
 test).
 
+### Keeping a test in the right layer
+
+A test belongs in `tests/unit/` when the function it exercises is pure: it takes
+plain data (or lightweight duck-typed fakes) and returns a value, with no
+`Session`, no HTTP route, no filesystem or network dependency. Some tests land in
+`tests/integration/` only because they were written there, not because they need
+Postgres; moving those down to the unit lane keeps the integration suite focused
+on what actually needs a database. When you relocate one, follow this checklist so
+the move is provably behaviour-preserving:
+
+- **Move, do not rewrite.** Copy each test verbatim; never weaken or restate an
+  assertion to fit the unit lane. If a test cannot assert the same behaviour
+  without a `Session` or a `TestClient`, it stays put.
+- **Prove the subject is pure.** The function under test takes no `Session`
+  parameter and reaches no database, and importing its module opens no
+  connection. Construct its inputs in memory (a `SimpleNamespace` fake carrying
+  only the attributes the function reads is the house pattern, see
+  `tests/unit/test_effective_text.py`).
+- **Guard early-exit paths.** A CLI or handler test that is a unit test only
+  because it returns before touching a database should assert that fact: wire the
+  engine builder (or DB entry point) to raise, so a regression that reaches it
+  fails loudly instead of silently connecting.
+- **Prove the set is preserved.** Record the original test names, then confirm the
+  new-unit and remaining-integration name sets are disjoint and their union equals
+  the original. `pytest --collect-only` on both files together also confirms a
+  shared basename resolves to two distinct modules (both `tests/` subdirectories
+  are packages, so this is safe).
+- **Validate in the real lanes.** Run the moved tests in the unit lane with
+  `VOXINT_TEST_DATABASE_URL` and `DATABASE_URL` unset (this is the load-bearing
+  proof they need no database), and run the retained tests against Postgres.
+  `ruff` catches any now-unused import left in the shrunk file; `mypy src` does
+  not cover `tests/`, so do not rely on it there.
+- **Update both docstrings** to describe each file's narrowed scope.
+
+Report performance as a directional result: one relocated module is a small
+fraction of the integration suite, and the value is the smaller, more focused
+lane plus a repeatable pattern, not a single headline speedup. Measure whole-lane
+wall-clock over several runs (medians, fixed worker count) rather than timing one
+module, whose cost is dominated by per-worker database setup.
+
 ## Running the suite
 
 Unit and contract tests need nothing external, and parallelize cleanly:
