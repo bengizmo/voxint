@@ -654,6 +654,12 @@
   ]
  ],
  [
+  "/activity/events",
+  [
+   "GET"
+  ]
+ ],
+ [
   "/runs/{run_id}/assets",
   [
    "GET"

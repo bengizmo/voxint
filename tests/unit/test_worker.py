@@ -10,6 +10,7 @@ from voxint.db.models import GPU_SEGMENT, POST_SEGMENT, RunStatus, Stage
 from voxint.pipeline.engine import StageFailedError
 from voxint.worker.app import POST_QUEUE, app, build_beat_schedule
 from voxint.worker.tasks import (
+    activity_prune,
     backoff_seconds,
     finish_pipeline,
     gc_sweep,
@@ -38,6 +39,7 @@ def test_worker_reliability_settings() -> None:
         "voxint.gc_sweep": {"queue": POST_QUEUE},
         "voxint.notify_sweep": {"queue": POST_QUEUE},
         "voxint.watch_sweep": {"queue": POST_QUEUE},
+        "voxint.activity_prune": {"queue": POST_QUEUE},
     }
 
 
@@ -253,6 +255,14 @@ def test_notify_sweep_beat_entry_is_opt_in() -> None:
     assert "recovery-sweep" in enabled  # the recovery sweep is unconditional
 
 
+def test_activity_prune_beat_entry_is_opt_in() -> None:
+    # OFF by default: no activity-prune entry unless the activity feed is on.
+    assert "activity-prune" not in build_beat_schedule(Settings(_env_file=None))
+    enabled = build_beat_schedule(Settings(_env_file=None, console_activity_enabled=True))
+    assert enabled["activity-prune"]["task"] == "voxint.activity_prune"
+    assert "recovery-sweep" in enabled  # the recovery sweep is unconditional
+
+
 def test_notify_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     # The task re-checks the gate itself: disabled → all-zero summary, no runtime.
     import voxint.worker.tasks as tasks_mod
@@ -271,6 +281,19 @@ def test_notify_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ig
         "dead": 0,
         "purged": 0,
     }
+
+
+def test_activity_prune_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    # The task re-checks the gate: disabled → no runtime, no DB.
+    import voxint.worker.tasks as tasks_mod
+
+    monkeypatch.setattr(tasks_mod, "get_settings", lambda: Settings(_env_file=None))
+
+    def _boom() -> None:  # pragma: no cover - must not be called
+        raise AssertionError("_runtime() must not run when activity is disabled")
+
+    monkeypatch.setattr(tasks_mod, "_runtime", _boom)
+    assert activity_prune() == {"pruned": 0}
 
 
 def wrap(cause: Exception) -> StageFailedError:

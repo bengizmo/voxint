@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 P7: run-completion activity indicator and toasts, dark-shipped**
+  (#162, epic #149). Behind a new `CONSOLE_ACTIVITY_ENABLED` flag (off by
+  default), a completed pipeline run writes one row to a new `activity_events`
+  outbox in the same transaction as the completion, and the console polls
+  `/activity/events` to raise a toast ("Transcription finished: file. Review
+  speakers.") and show a live-jobs count on the Jobs entry. The badge reads the
+  same query the Jobs page renders, so the two always agree; the outbox is kept
+  to its newest 500 rows by an opt-in retention sweep. Nothing is reachable until
+  the flag is on (the endpoint answers 404, the shell renders no chrome), and
+  activation additionally requires Jobs discovery so the badge and links stay
+  honest. Speaker-identification events are a planned follow-up. No redirect or
+  version bump ships here; that activation is a later slice.
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF
