@@ -1820,15 +1820,22 @@ RTTM, then produces two views:
 
 - **Turn clips** for strata, degradation, and calibration: same-speaker turns
   merged across gaps below `CLIP_MERGE_GAP_S = 0.3 s`, other-speaker overlap
-  subtracted (an overlap is only cut when it reaches `OVERLAP_FLOOR_S = 0.1 s`, so
-  a boundary graze does not fragment a turn), then any surviving span shorter than
-  `TURN_MIN_S = 1.0 s` dropped.
+  subtracted, then any surviving span shorter than `TURN_MIN_S = 1.0 s` (16,000
+  samples) dropped. The other-speaker rows are first coalesced into continuous
+  regions (overlapping or touching rows unioned), and a region is cut only when it
+  reaches `OVERLAP_FLOOR_S = 0.1 s`. The floor ignores a brief boundary graze, but
+  a run of adjacent short rows (word-level RTTMs emit many 80 ms words) coalesces
+  into one region and is cut, so continuous crosstalk cannot survive inside a
+  nominally single-speaker turn.
 - **Session segments** for production-windowing validation: same-speaker turns
   merged across gaps below `SESSION_MERGE_GAP_S = 1.0 s` (the production windowing
   `merge_gap_s`), overlap subtracted, then any span shorter than one full model
-  window (`SEGMENT_MIN_S`, 64,600 samples = 4.0375 s) dropped. The merge is an
-  RTTM-level operation, so it must happen before per-turn clipping; scoring
-  isolated turn clips would not validate the stated merge-then-window policy.
+  window (64,600 samples = 4.0375 s) dropped. The merge is an RTTM-level operation,
+  so it must happen before per-turn clipping; scoring isolated turn clips would not
+  validate the stated merge-then-window policy. Both length floors are enforced in
+  the sample domain (after the floor/ceil conversion), because the contract is
+  written in samples: a span whose second-length rounds just under the threshold
+  can still convert to a full 64,600-sample window.
 
 The staged meeting-room audio is a speaker-mixed track, so dropping other-speaker
 overlap is also the leakage guard: without it a nominally single-speaker turn can
@@ -1836,7 +1843,9 @@ carry crosstalk from a speaker assigned to a different split.
 
 **Pinned sample-interval rule.** `start_sample = floor(start_s * 16000)`,
 `end_sample = ceil(end_s * 16000)`, so a clip is byte-reproducible from the RTTM
-times.
+times. The RTTM times are parsed and multiplied in exact decimal, never binary
+`float`: in `float`, `0.1 * 16000` evaluates to `1600.0000000000002` and would
+ceil to `1601`, silently breaking the decimal rule for ordinary RTTM decimals.
 
 **Conservative speaker namespace.** `speaker_id = "{source}-{recording}-{label}"`,
 recording-scoped, so a recording-local or mislabeled RTTM label can never leak a
@@ -1865,8 +1874,12 @@ codec (`mp3-cbr48-v1`, `opus-voip-cbr16-f20-v1`, `aac-lc-cbr48-v1`), telephony
 - Every lossy recipe is a real round trip: canonical PCM into the pinned encoder,
   out to the intermediate bitstream, back through the pinned decoder to canonical
   PCM. Only the final PCM payload sha is the clip identity, never the encoded
-  intermediate. Raw input is always framed `-f s16le -ar 16000 -ac 1` before
-  `-i`, and every pass runs `-threads 1` for deterministic encoding.
+  intermediate. Raw input is always framed `-f s16le -ar 16000 -ac 1` before `-i`.
+  Determinism is pinned by `-threads 1` on both the input (decoder) and the output
+  (encoder) side of every pass plus `-filter_threads 1` global: in ffmpeg's option
+  model `-threads` is per-stream, so a prefix-only `-threads 1` binds the input
+  decoder and leaves a multi-threaded encoder unpinned, which is the hash-relevant
+  pass. `-filter_threads 1` pins the filter graph (the `atempo` speed pass).
 - Byte-for-byte regeneration is promised only on the pinned realization platform
   (container digest plus codec library versions), never as universal ffmpeg
   reproducibility.

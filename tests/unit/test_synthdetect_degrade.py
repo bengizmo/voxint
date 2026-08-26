@@ -75,6 +75,11 @@ def test_validate_recipes_fail_closed(recipe: sources.DegradationRecipe, match: 
         sources._validate_recipes({recipe.recipe_id: recipe})
 
 
+def test_validate_recipes_empty_implementation_rejected() -> None:
+    with pytest.raises(sources.SourcesError, match="empty implementation"):
+        sources._validate_recipes({"x-v1": _recipe(implementation="  ")})
+
+
 def test_noise_family_is_deferred() -> None:
     # Additive-noise is intentionally absent from the pure recipe set (its SNR mix
     # needs a measured parent RMS). Assert no noise recipe leaked in.
@@ -116,6 +121,11 @@ def test_parse_chain_malformed_rejected(bad: str) -> None:
 # --------------------------------------------------------------------------- #
 # ffmpeg argv builders (exact)
 # --------------------------------------------------------------------------- #
+_PREFIX = ("ffmpeg", "-nostdin", "-y", "-threads", "1", "-filter_threads", "1")
+_RAW_IN = ("-f", "s16le", "-ar", "16000", "-ac", "1")
+_CANON_OUT = ("-f", "s16le", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le")
+
+
 def test_build_recipe_argv_lossy_two_passes() -> None:
     recipe = sources.get_recipe("mp3-cbr48-v1")
     cmds = corpus.build_recipe_argv(
@@ -123,14 +133,12 @@ def test_build_recipe_argv_lossy_two_passes() -> None:
     )
     assert cmds == (
         (
-            "ffmpeg", "-nostdin", "-y", "-threads", "1",
-            "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "in.s16le",
+            *_PREFIX, *_RAW_IN, "-i", "in.s16le",
             "-c:a", "libmp3lame", "-b:a", "48k", "-ar", "16000", "-ac", "1",
-            "-f", "mp3", "t.mp3",
+            "-threads", "1", "-f", "mp3", "t.mp3",
         ),
         (
-            "ffmpeg", "-nostdin", "-y", "-threads", "1", "-i", "t.mp3",
-            "-f", "s16le", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "out.wav",
+            *_PREFIX, "-i", "t.mp3", "-threads", "1", *_CANON_OUT, "out.wav",
         ),
     )
 
@@ -140,10 +148,44 @@ def test_build_recipe_argv_speed_single_pass() -> None:
     cmds = corpus.build_recipe_argv(recipe, in_path="in.s16le", out_path="out.wav")
     assert cmds == (
         (
-            "ffmpeg", "-nostdin", "-y", "-threads", "1",
-            "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "in.s16le",
+            *_PREFIX, *_RAW_IN, "-i", "in.s16le",
             "-filter:a", "atempo=0.90",
-            "-f", "s16le", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", "out.wav",
+            "-threads", "1", *_CANON_OUT, "out.wav",
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "recipe_id,encode_args,intermediate_format",
+    [
+        ("opus-voip-cbr16-f20-v1",
+         ("-c:a", "libopus", "-b:a", "16k", "-vbr", "off", "-application", "voip",
+          "-frame_duration", "20", "-ar", "16000", "-ac", "1"), "opus"),
+        ("aac-lc-cbr48-v1",
+         ("-c:a", "aac", "-b:a", "48k", "-profile:a", "aac_low", "-ar", "16000", "-ac", "1"),
+         "adts"),
+        ("g711-mulaw-8k-v1", ("-c:a", "pcm_mulaw", "-ar", "8000", "-ac", "1"), "wav"),
+        ("amr-nb-122-v1",
+         ("-c:a", "libopencore_amrnb", "-b:a", "12.2k", "-ar", "8000", "-ac", "1"), "amr"),
+    ],
+)
+def test_build_recipe_argv_lossy_goldens(
+    recipe_id: str, encode_args: tuple[str, ...], intermediate_format: str
+) -> None:
+    # Full argv is golden for every lossy recipe so PR-2 cannot drift the encode
+    # options, the -threads determinism pin, or the raw framing without a red test.
+    recipe = sources.get_recipe(recipe_id)
+    mid = f"mid.{intermediate_format}"
+    cmds = corpus.build_recipe_argv(
+        recipe, in_path="in.s16le", out_path="out.wav", intermediate_path=mid
+    )
+    assert cmds == (
+        (
+            *_PREFIX, *_RAW_IN, "-i", "in.s16le", *encode_args,
+            "-threads", "1", "-f", intermediate_format, mid,
+        ),
+        (
+            *_PREFIX, "-i", mid, "-threads", "1", *_CANON_OUT, "out.wav",
         ),
     )
 
@@ -152,6 +194,28 @@ def test_build_recipe_argv_lossy_needs_intermediate() -> None:
     recipe = sources.get_recipe("mp3-cbr48-v1")
     with pytest.raises(corpus.CorpusError, match="needs an intermediate_path"):
         corpus.build_recipe_argv(recipe, in_path="in.s16le", out_path="out.wav")
+
+
+@pytest.mark.parametrize("bad", ["-in.s16le", "-out.wav"])
+def test_build_recipe_argv_rejects_option_like_path(bad: str) -> None:
+    # A path starting with '-' would be parsed by ffmpeg as an option, not a file.
+    recipe = sources.get_recipe("speed-atempo-0p90-v1")
+    in_path = bad if bad.startswith("-in") else "in.s16le"
+    out_path = bad if bad.startswith("-out") else "out.wav"
+    with pytest.raises(corpus.CorpusError, match="must not start with"):
+        corpus.build_recipe_argv(recipe, in_path=in_path, out_path=out_path)
+
+
+def test_build_recipe_argv_output_threads_pin_encoder() -> None:
+    # -threads 1 must appear on the OUTPUT side (after -i) on every pass, not only in
+    # the prefix, so the encoder itself is pinned to one thread.
+    for recipe in sources.DEGRADATION_RECIPES.values():
+        cmds = corpus.build_recipe_argv(
+            recipe, in_path="in.s16le", out_path="out.wav", intermediate_path="mid.x"
+        )
+        for cmd in cmds:
+            after_i = cmd.index("-threads", cmd.index("-i"))
+            assert cmd[after_i : after_i + 2] == ("-threads", "1")
 
 
 def test_build_recipe_argv_raw_input_framing_every_recipe() -> None:
@@ -278,3 +342,21 @@ def test_lineage_cycle_rejected() -> None:
     b = _raw("c2", degradation="mp3-cbr48-v1", parent_clip_id="c1")
     with pytest.raises(corpus.CorpusError, match="cycle"):
         corpus.load_manifest({"schema_version": 1, "clips": [a, b]})
+
+
+def test_lineage_three_node_cycle_rejected() -> None:
+    # A longer loop a->b->c->a must also be caught, not just two-node cycles.
+    a = _raw("c1", degradation="mp3-cbr48-v1", parent_clip_id="c3")
+    b = _raw("c2", degradation="mp3-cbr48-v1", parent_clip_id="c1")
+    c = _raw("c3", degradation="mp3-cbr48-v1", parent_clip_id="c2")
+    with pytest.raises(corpus.CorpusError, match="cycle"):
+        corpus.load_manifest({"schema_version": 1, "clips": [a, b, c]})
+
+
+def test_lineage_source_mismatch_rejected() -> None:
+    # A degraded child is an audio transform of its parent, so it cannot change
+    # source (which would re-attribute the clip's domain and strata).
+    parent = _raw("p1")
+    child = _raw("c1", degradation="mp3-cbr48-v1", parent_clip_id="p1", source="voxconverse")
+    with pytest.raises(corpus.CorpusError, match="does not match its parent"):
+        corpus.load_manifest({"schema_version": 1, "clips": [parent, child]})

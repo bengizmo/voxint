@@ -31,6 +31,7 @@ import json
 import math
 import sys
 from dataclasses import asdict, dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -514,7 +515,7 @@ def load_manifest(obj: Any) -> Manifest:
                 f"clip {c.clip_id!r}: parent_clip_id {c.parent_clip_id!r} is not in the manifest"
             )
     by_id = {c.clip_id: c for c in clips}
-    # Lineage inheritance (S5): a degraded child is the SAME speaker, label,
+    # Lineage inheritance (S5): a degraded child is the SAME source, speaker, label,
     # language, split, and license as its parent -- it is an audio-domain transform,
     # not a new sample. A mismatch means a manifest attached a child to the wrong
     # parent or mislabelled it, which the per-clip validator cannot see.
@@ -522,7 +523,7 @@ def load_manifest(obj: Any) -> Manifest:
         if c.parent_clip_id is None:
             continue
         parent = by_id[c.parent_clip_id]
-        for field in ("label", "speaker_id", "language", "split", "license_spdx"):
+        for field in ("label", "speaker_id", "language", "split", "license_spdx", "source"):
             if getattr(c, field) != getattr(parent, field):
                 raise CorpusError(
                     f"clip {c.clip_id!r}: {field} {getattr(c, field)!r} does not match its "
@@ -680,20 +681,33 @@ def split_summary(assignment: dict[str, str]) -> dict[str, int]:
 # so this layer NEVER builds a final manifest -- see finalize_manifest.
 # --------------------------------------------------------------------------- #
 CANONICAL_SAMPLE_RATE = 16000
-BYTES_PER_SAMPLE = 2  # pcm-s16le-mono-16000-v1: signed 16-bit little-endian
 # The AASIST fixed model input width; a session segment must reach this to score
 # one full production window (docs/gpu-contracts.md, the windowing policy).
 MODEL_WIDTH_SAMPLES = 64600
 
-# Pinned corpus-construction floors (seconds). Pre-registered in
-# docs/gpu-contracts.md so a change is a visible, deliberate diff, never drift.
-CLIP_MERGE_GAP_S = 0.3  # merge same-speaker turns/words within this gap into one turn clip
-SESSION_MERGE_GAP_S = 1.0  # production windowing merge_gap_s: merge turns for the segment view
-OVERLAP_FLOOR_S = 0.1  # ignore other-speaker overlaps shorter than this when cleaning a turn
-TURN_MIN_S = 1.0  # drop a cleaned turn sub-span shorter than this
-SEGMENT_MIN_S = MODEL_WIDTH_SAMPLES / CANONICAL_SAMPLE_RATE  # 4.0375s: one full window
+# Pinned corpus-construction floors. Pre-registered in docs/gpu-contracts.md so a
+# change is a visible, deliberate diff, never drift. Second-domain thresholds are
+# Decimal so gap/overlap comparisons carry no binary-float noise; length floors are
+# enforced in the SAMPLE domain (after floor/ceil) because the contract is written
+# in samples -- a span whose second-length rounds just under the threshold can still
+# be a full 64,600-sample window.
+CLIP_MERGE_GAP_S = Decimal("0.3")  # merge same-speaker turns/words within this gap into one clip
+SESSION_MERGE_GAP_S = Decimal("1.0")  # production windowing merge_gap_s: the segment-view merge
+OVERLAP_FLOOR_S = Decimal("0.1")  # ignore other-speaker overlap regions shorter than this
+TURN_MIN_S = Decimal("1.0")  # a cleaned turn sub-span must reach this
+TURN_MIN_SAMPLES = int(TURN_MIN_S * CANONICAL_SAMPLE_RATE)  # 16000: turn length floor, in samples
+SEGMENT_MIN_SAMPLES = MODEL_WIDTH_SAMPLES  # 64600 = 4.0375s: a segment must reach one full window
 
 PLAN_SCHEMA_VERSION = 1
+
+
+def _duration_s_from_samples(sample_count: int) -> float:
+    """The one canonical clip duration rule: measured sample count / 16000.
+
+    Duration is derived only from the measured PCM sample count (never the plan),
+    so the manifest ``duration_s`` and the numerics doctrine have a single source.
+    """
+    return sample_count / CANONICAL_SAMPLE_RATE
 
 
 @dataclass(frozen=True)
@@ -719,15 +733,22 @@ ORGANIC_SOURCES: dict[str, OrganicSource] = {
 
 @dataclass(frozen=True)
 class RttmTurn:
-    """One speaker-active interval parsed from an RTTM row (seconds)."""
+    """One speaker-active interval parsed from an RTTM row (seconds).
+
+    Times are :class:`~decimal.Decimal`, parsed from the RTTM text, so the pinned
+    floor/ceil sample rule (:func:`to_sample_interval`) is applied in exact decimal
+    arithmetic. Binary ``float`` would make ``0.1 * 16000`` evaluate to
+    ``1600.0000000000002`` and ceil to ``1601``, silently breaking the
+    byte-reproducible-from-RTTM-times contract for ordinary decimals.
+    """
 
     recording: str
     speaker_label: str
-    start_s: float
-    dur_s: float
+    start_s: Decimal
+    dur_s: Decimal
 
     @property
-    def end_s(self) -> float:
+    def end_s(self) -> Decimal:
         return self.start_s + self.dur_s
 
 
@@ -773,7 +794,7 @@ class IngestRecord:
             "clip_id": self.clip_id,
             "rel_path": self.rel_path,
             "sha256": pcm_sha256,
-            "duration_s": sample_count / CANONICAL_SAMPLE_RATE,
+            "duration_s": _duration_s_from_samples(sample_count),
             "label": self.label,
             "language": self.language,
             "license_spdx": self.license_spdx,
@@ -815,7 +836,7 @@ class DegradedRecord:
             "clip_id": self.clip_id,
             "rel_path": self.rel_path,
             "sha256": pcm_sha256,
-            "duration_s": sample_count / CANONICAL_SAMPLE_RATE,
+            "duration_s": _duration_s_from_samples(sample_count),
             "label": self.label,
             "language": self.language,
             "license_spdx": self.license_spdx,
@@ -841,9 +862,11 @@ class MaterializationPlan:
 def parse_rttm(text: str, *, recording: str | None = None) -> tuple[RttmTurn, ...]:
     """Parse RTTM ``SPEAKER`` rows into turns (fail closed on any malformed row).
 
-    Requires the RTTM 10-field ``SPEAKER <rec> <chan> <start> <dur> <NA> <NA>
-    <label> ...`` shape with a finite ``start >= 0``, ``dur > 0``, and a real
-    speaker label. If ``recording`` is given, every row's recording id must match.
+    Requires the ``SPEAKER <rec> <chan> <start> <dur> <NA> <NA> <label> ...`` shape
+    (at least the eight fields through the label) with a finite ``start >= 0``,
+    ``dur > 0``, and a real speaker label. If ``recording`` is given, every row's
+    recording id must match. Start/dur are read as exact :class:`~decimal.Decimal`
+    values, not binary ``float``, so the pinned sample rule stays byte-reproducible.
     """
     turns: list[RttmTurn] = []
     for lineno, line in enumerate(text.splitlines(), 1):
@@ -859,11 +882,11 @@ def parse_rttm(text: str, *, recording: str | None = None) -> tuple[RttmTurn, ..
                 f"rttm line {lineno}: recording {rec!r} does not match expected {recording!r}"
             )
         try:
-            start = float(fields[3])
-            dur = float(fields[4])
-        except ValueError:
+            start = Decimal(fields[3])
+            dur = Decimal(fields[4])
+        except InvalidOperation:
             raise CorpusError(f"rttm line {lineno}: non-numeric start/dur") from None
-        if not math.isfinite(start) or not math.isfinite(dur) or start < 0 or dur <= 0:
+        if not start.is_finite() or not dur.is_finite() or start < 0 or dur <= 0:
             raise CorpusError(
                 f"rttm line {lineno}: need finite start >= 0 and dur > 0, got {start}, {dur}"
             )
@@ -876,22 +899,36 @@ def parse_rttm(text: str, *, recording: str | None = None) -> tuple[RttmTurn, ..
     return tuple(turns)
 
 
-def to_sample_interval(start_s: float, end_s: float) -> SampleInterval:
+def _as_decimal(value: Decimal | float | int | str) -> Decimal:
+    """Normalize a time to Decimal, going through ``str`` for floats.
+
+    ``Decimal(0.1)`` captures the binary-float value (``0.1000...0055``); routing a
+    float through ``str`` recovers the shortest decimal the caller meant (``0.1``).
+    Internal callers already pass Decimal (from :func:`parse_rttm`); this only
+    protects a direct float caller from the IEEE-754 boundary bug.
+    """
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value))
+
+
+def to_sample_interval(
+    start_s: Decimal | float | int | str, end_s: Decimal | float | int | str
+) -> SampleInterval:
     """Convert a second span to a pinned half-open sample interval.
 
     ``start_sample = floor(start_s * 16000)``, ``end_sample = ceil(end_s * 16000)``
-    -- pinned so the corpus is byte-reproducible from the RTTM times.
+    -- pinned so the corpus is byte-reproducible from the RTTM times. The arithmetic
+    is exact decimal (not binary float), so ``0.1`` maps to sample ``1600`` rather
+    than ``1601``.
     """
-    if (
-        not math.isfinite(start_s)
-        or not math.isfinite(end_s)
-        or start_s < 0
-        or end_s <= start_s
-    ):
+    start = _as_decimal(start_s)
+    end = _as_decimal(end_s)
+    if not start.is_finite() or not end.is_finite() or start < 0 or end <= start:
         raise CorpusError(f"to_sample_interval: need 0 <= start < end, got {start_s}, {end_s}")
     return SampleInterval(
-        start_sample=math.floor(start_s * CANONICAL_SAMPLE_RATE),
-        end_sample=math.ceil(end_s * CANONICAL_SAMPLE_RATE),
+        start_sample=math.floor(start * CANONICAL_SAMPLE_RATE),
+        end_sample=math.ceil(end * CANONICAL_SAMPLE_RATE),
     )
 
 
@@ -911,10 +948,10 @@ def namespaced_speaker(source_id: str, recording: str, label: str) -> str:
 
 
 def _merge_intervals(
-    intervals: list[tuple[float, float]], gap_s: float
-) -> list[tuple[float, float]]:
+    intervals: list[tuple[Decimal, Decimal]], gap_s: Decimal
+) -> list[tuple[Decimal, Decimal]]:
     """Sort and merge intervals whose gap is ``< gap_s`` (overlaps always merge)."""
-    merged: list[tuple[float, float]] = []
+    merged: list[tuple[Decimal, Decimal]] = []
     for start, end in sorted(intervals):
         if merged and start - merged[-1][1] < gap_s:
             prev_start, prev_end = merged[-1]
@@ -924,26 +961,49 @@ def _merge_intervals(
     return merged
 
 
+def _coalesce_intervals(
+    intervals: list[tuple[Decimal, Decimal]],
+) -> list[tuple[Decimal, Decimal]]:
+    """Union overlapping or touching intervals into maximal continuous regions.
+
+    Used to fold the OTHER-speaker rows into continuous other-speech regions before
+    the overlap floor is applied. Word-level RTTMs emit a run of adjacent short rows;
+    testing the floor per atomic row would let a long continuous stretch of other
+    speech (each 80 ms word below the 0.1 s floor) survive inside a nominally
+    single-speaker turn. The floor is meant to ignore a brief boundary graze, not a
+    sustained region assembled from many short rows.
+    """
+    merged: list[tuple[Decimal, Decimal]] = []
+    for start, end in sorted(intervals):
+        if merged and start <= merged[-1][1]:
+            prev_start, prev_end = merged[-1]
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
 def _subtract_overlaps(
-    span: tuple[float, float],
-    others: list[tuple[float, float]],
+    span: tuple[Decimal, Decimal],
+    others: list[tuple[Decimal, Decimal]],
     *,
-    floor_s: float,
-) -> list[tuple[float, float]]:
+    floor_s: Decimal,
+) -> list[tuple[Decimal, Decimal]]:
     """Return the sub-spans of ``span`` not covered by any OTHER-speaker interval.
 
-    An other-speaker interval is only treated as overlapping when its intersection
-    with ``span`` is at least ``floor_s`` (sub-``floor_s`` grazes are ignored so a
+    ``others`` must already be coalesced into continuous regions
+    (:func:`_coalesce_intervals`). A region is only cut when its intersection with
+    ``span`` is at least ``floor_s`` (sub-``floor_s`` grazes are ignored so a
     boundary touch does not fragment a turn).
     """
     span_start, span_end = span
-    active: list[tuple[float, float]] = []
+    active: list[tuple[Decimal, Decimal]] = []
     for other_start, other_end in others:
         lo = max(span_start, other_start)
         hi = min(span_end, other_end)
         if hi - lo >= floor_s:
             active.append((lo, hi))
-    result: list[tuple[float, float]] = []
+    result: list[tuple[Decimal, Decimal]] = []
     cursor = span_start
     for cut_start, cut_end in sorted(active):
         if cut_start > cursor:
@@ -957,49 +1017,82 @@ def _subtract_overlaps(
 def _clean_spans(
     turns: tuple[RttmTurn, ...],
     *,
-    merge_gap_s: float,
-    min_s: float,
-    overlap_floor_s: float,
-) -> dict[str, list[tuple[float, float]]]:
-    """Per speaker: merge same-speaker turns, drop other-speaker overlap, floor.
+    merge_gap_s: Decimal,
+    overlap_floor_s: Decimal,
+) -> dict[str, list[tuple[Decimal, Decimal]]]:
+    """Per speaker: merge same-speaker turns, then drop other-speaker overlap.
 
     Returns ``label -> cleaned single-speaker spans (seconds)``. A label with no
-    surviving span is omitted.
+    surviving span is omitted. The minimum-length floor is NOT applied here; it is
+    enforced in the sample domain once spans are converted (see
+    :func:`_kept_intervals`), because the contract is written in samples.
     """
-    by_speaker: dict[str, list[tuple[float, float]]] = {}
+    by_speaker: dict[str, list[tuple[Decimal, Decimal]]] = {}
     for turn in turns:
         by_speaker.setdefault(turn.speaker_label, []).append((turn.start_s, turn.end_s))
-    cleaned: dict[str, list[tuple[float, float]]] = {}
+    cleaned: dict[str, list[tuple[Decimal, Decimal]]] = {}
     for label, intervals in by_speaker.items():
         merged = _merge_intervals(intervals, merge_gap_s)
-        others = [
-            iv
-            for other_label, other_ivs in by_speaker.items()
-            if other_label != label
-            for iv in other_ivs
-        ]
-        spans: list[tuple[float, float]] = []
+        others = _coalesce_intervals(
+            [
+                iv
+                for other_label, other_ivs in by_speaker.items()
+                if other_label != label
+                for iv in other_ivs
+            ]
+        )
+        spans: list[tuple[Decimal, Decimal]] = []
         for span in merged:
-            for sub in _subtract_overlaps(span, others, floor_s=overlap_floor_s):
-                if sub[1] - sub[0] >= min_s:
-                    spans.append(sub)
+            spans.extend(_subtract_overlaps(span, others, floor_s=overlap_floor_s))
         if spans:
             cleaned[label] = spans
     return cleaned
 
 
-def _records_from_spans(
+# A planned span keyed by (recording, rttm_label, speaker_id) -> the converted
+# sample interval that met the length floor, plus its exact source seconds (kept
+# only as documentary provenance; the sample interval is the authoritative cut).
+_PlannedSpan = tuple[SampleInterval, Decimal, Decimal]
+
+
+def _kept_intervals(
+    cleaned_by_label: dict[str, list[tuple[Decimal, Decimal]]],
     source: OrganicSource,
-    spans_by_speaker: dict[tuple[str, str, str], list[tuple[float, float]]],
+    recording: str,
+    *,
+    min_samples: int,
+) -> dict[tuple[str, str, str], list[_PlannedSpan]]:
+    """Convert cleaned second-spans to sample intervals, keeping those >= min_samples.
+
+    The length floor is applied here, in the SAMPLE domain, so a span whose
+    continuous second-length rounds just under the threshold but whose floor/ceil
+    interval reaches ``min_samples`` is kept (and vice versa). A label with no
+    surviving interval is omitted, so it never enters the split partition.
+    """
+    kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    for label, spans in cleaned_by_label.items():
+        speaker_id = namespaced_speaker(source.source_id, recording, label)
+        surviving: list[_PlannedSpan] = []
+        for start_s, end_s in spans:
+            interval = to_sample_interval(start_s, end_s)
+            if interval.n_samples >= min_samples:
+                surviving.append((interval, start_s, end_s))
+        if surviving:
+            kept[(recording, label, speaker_id)] = surviving
+    return kept
+
+
+def _records_from_intervals(
+    source: OrganicSource,
+    kept_by_speaker: dict[tuple[str, str, str], list[_PlannedSpan]],
     *,
     kind: str,
     split_of_speaker: dict[str, str],
 ) -> tuple[IngestRecord, ...]:
-    """Build stable, split-stamped :class:`IngestRecord`s from cleaned spans."""
+    """Build stable, split-stamped :class:`IngestRecord`s from kept sample intervals."""
     records: list[IngestRecord] = []
-    for (recording, label, speaker_id), spans in sorted(spans_by_speaker.items()):
-        for start_s, end_s in spans:
-            interval = to_sample_interval(start_s, end_s)
+    for (recording, label, speaker_id), spans in sorted(kept_by_speaker.items()):
+        for interval, start_s, end_s in spans:
             clip_id = f"{speaker_id}-{kind}-{interval.start_sample}-{interval.end_sample}"
             records.append(
                 IngestRecord(
@@ -1018,10 +1111,13 @@ def _records_from_spans(
                         "source_file": f"{recording}.wav",
                         "recording": recording,
                         "rttm_label": label,
+                        # The sample offsets are authoritative; seconds are documentary
+                        # provenance only (float, so the plan is JSON-serializable). An
+                        # executor MUST slice on start_sample/end_sample, never seconds.
                         "start_sample": interval.start_sample,
                         "end_sample": interval.end_sample,
-                        "start_s": round(start_s, 6),
-                        "end_s": round(end_s, 6),
+                        "start_s": float(start_s),
+                        "end_s": float(end_s),
                         "kind": kind,
                     },
                     kind=kind,
@@ -1047,33 +1143,39 @@ def build_plan(
     """
     if not recordings:
         raise CorpusError("build_plan: no recordings")
-    turn_spans: dict[tuple[str, str, str], list[tuple[float, float]]] = {}
-    segment_spans: dict[tuple[str, str, str], list[tuple[float, float]]] = {}
-    speaker_ids: set[str] = set()
-    for recording, turns in recordings.items():
-        clean_turns = _clean_spans(
-            turns, merge_gap_s=CLIP_MERGE_GAP_S, min_s=TURN_MIN_S, overlap_floor_s=OVERLAP_FLOOR_S
-        )
-        clean_segments = _clean_spans(
-            turns,
-            merge_gap_s=SESSION_MERGE_GAP_S,
-            min_s=SEGMENT_MIN_S,
-            overlap_floor_s=OVERLAP_FLOOR_S,
-        )
-        for label, spans in clean_turns.items():
-            speaker_id = namespaced_speaker(source.source_id, recording, label)
-            speaker_ids.add(speaker_id)
-            turn_spans[(recording, label, speaker_id)] = spans
-        for label, spans in clean_segments.items():
-            speaker_id = namespaced_speaker(source.source_id, recording, label)
-            speaker_ids.add(speaker_id)
-            segment_spans[(recording, label, speaker_id)] = spans
     if not math.isfinite(calibration_fraction) or not math.isfinite(holdout_fraction):
         raise CorpusError("build_plan: fractions must be finite")
     if calibration_fraction < 0 or holdout_fraction < 0:
         raise CorpusError("build_plan: fractions must be non-negative")
     if calibration_fraction + holdout_fraction > 1.0 + 1e-9:
         raise CorpusError("build_plan: calibration + holdout fractions exceed 1.0")
+    turn_kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    segment_kept: dict[tuple[str, str, str], list[_PlannedSpan]] = {}
+    for recording, turns in recordings.items():
+        # The dict key is the authoritative recording id (it drives the speaker
+        # namespace); a row that declares a different recording is a caller error.
+        for turn in turns:
+            if turn.recording != recording:
+                raise CorpusError(
+                    f"build_plan: recording key {recording!r} has a turn for {turn.recording!r}"
+                )
+        clean_turns = _clean_spans(
+            turns, merge_gap_s=CLIP_MERGE_GAP_S, overlap_floor_s=OVERLAP_FLOOR_S
+        )
+        clean_segments = _clean_spans(
+            turns, merge_gap_s=SESSION_MERGE_GAP_S, overlap_floor_s=OVERLAP_FLOOR_S
+        )
+        turn_kept.update(
+            _kept_intervals(clean_turns, source, recording, min_samples=TURN_MIN_SAMPLES)
+        )
+        segment_kept.update(
+            _kept_intervals(clean_segments, source, recording, min_samples=SEGMENT_MIN_SAMPLES)
+        )
+    # Only speakers with at least one surviving clip enter the split partition, so a
+    # speaker whose every span fell below the floor never shifts the fractional cuts.
+    speaker_ids = {sp for (_, _, sp) in turn_kept} | {sp for (_, _, sp) in segment_kept}
+    if not speaker_ids:
+        raise CorpusError("build_plan: no clips survived cleaning (every span below the floor)")
     split_of_speaker = _partition_free_speakers(
         speaker_ids,
         forced_eval=frozenset(),
@@ -1084,11 +1186,11 @@ def build_plan(
     return MaterializationPlan(
         schema_version=PLAN_SCHEMA_VERSION,
         source=source.source_id,
-        turn_clips=_records_from_spans(
-            source, turn_spans, kind="turn", split_of_speaker=split_of_speaker
+        turn_clips=_records_from_intervals(
+            source, turn_kept, kind="turn", split_of_speaker=split_of_speaker
         ),
-        segments=_records_from_spans(
-            source, segment_spans, kind="segment", split_of_speaker=split_of_speaker
+        segments=_records_from_intervals(
+            source, segment_kept, kind="segment", split_of_speaker=split_of_speaker
         ),
     )
 
@@ -1137,11 +1239,25 @@ def finalize_manifest(
     """
     if not records:
         raise CorpusError("finalize_manifest: no records")
+    # Fail closed on measured/record drift in BOTH directions: a record with no
+    # measurement (below) and a measurement for a clip not in the record list. A
+    # dropped record would silently vanish from the manifest otherwise.
+    record_ids = {record.clip_id for record in records}
+    orphan_facts = sorted(set(measured) - record_ids)
+    if orphan_facts:
+        raise CorpusError(
+            f"finalize_manifest: measured facts for clips not in the record list: {orphan_facts}"
+        )
     clips: list[dict[str, Any]] = []
     for record in records:
         fact = measured.get(record.clip_id)
         if fact is None:
             raise CorpusError(f"finalize_manifest: no measured facts for clip {record.clip_id!r}")
+        if not isinstance(fact, tuple) or len(fact) != 2:
+            raise CorpusError(
+                f"finalize_manifest: measured fact for {record.clip_id!r} must be "
+                "a (pcm_sha256, sample_count) tuple"
+            )
         pcm_sha256, sample_count = fact
         if not _is_sha256(pcm_sha256):
             raise CorpusError(
@@ -1166,7 +1282,15 @@ CHAIN_SEPARATOR = "|"
 # data so the builder and the pre-registration agree byte-for-byte.
 _RAW_INPUT_FRAMING = ("-f", "s16le", "-ar", "16000", "-ac", "1")
 _CANONICAL_OUTPUT = ("-f", "s16le", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le")
-_FFMPEG_PREFIX = ("ffmpeg", "-nostdin", "-y", "-threads", "1")
+# Determinism pinning. In ffmpeg's option model `-threads` is per-stream: before
+# `-i` it binds the input decoder, before an output it binds that output's encoder.
+# The encoder is the hash-relevant pass, so `-threads 1` MUST also appear on the
+# output side -- a prefix-only `-threads 1` leaves a multi-threaded encoder
+# unpinned. `-filter_threads 1` (global) pins the filter graph (the atempo speed
+# pass). Together they hold the intermediate bitstream and the final canonical PCM
+# byte-stable across runs on the pinned realization toolchain.
+_FFMPEG_PREFIX = ("ffmpeg", "-nostdin", "-y", "-threads", "1", "-filter_threads", "1")
+_OUTPUT_THREADS = ("-threads", "1")
 
 
 def parse_chain(chain: str) -> tuple[str, ...]:
@@ -1220,25 +1344,38 @@ def build_recipe_argv(
     ``intermediate_format`` bitstream, needing an ``intermediate_path``) and a
     decode pass (bitstream -> canonical PCM). A non-lossy recipe returns one pass
     straight to canonical PCM. Every raw input is framed with the pinned
-    ``-f s16le -ar 16000 -ac 1`` and every output re-canonicalizes to
-    ``pcm_s16le``; ``-threads 1`` keeps encoding deterministic.
+    ``-f s16le -ar 16000 -ac 1`` and every output re-canonicalizes to ``pcm_s16le``;
+    ``-threads 1`` is emitted on both the input (decoder) and the output (encoder)
+    side, with ``-filter_threads 1`` global, so every pass is deterministic.
     """
+    for path in (in_path, out_path):
+        if path.startswith("-"):
+            raise CorpusError(
+                f"path {path!r} must not start with '-' (ffmpeg reads it as an option)"
+            )
     if recipe.lossy:
         if not intermediate_path:
             raise CorpusError(
                 f"recipe {recipe.recipe_id!r} is lossy and needs an intermediate_path"
+            )
+        if intermediate_path.startswith("-"):
+            raise CorpusError(
+                f"path {intermediate_path!r} must not start with '-' "
+                "(ffmpeg reads it as an option)"
             )
         encode = (
             *_FFMPEG_PREFIX,
             *_RAW_INPUT_FRAMING,
             "-i", in_path,
             *recipe.encode_args,
+            *_OUTPUT_THREADS,
             "-f", recipe.intermediate_format,
             intermediate_path,
         )
         decode = (
             *_FFMPEG_PREFIX,
             "-i", intermediate_path,
+            *_OUTPUT_THREADS,
             *_CANONICAL_OUTPUT,
             out_path,
         )
@@ -1248,6 +1385,7 @@ def build_recipe_argv(
         *_RAW_INPUT_FRAMING,
         "-i", in_path,
         *recipe.encode_args,
+        *_OUTPUT_THREADS,
         *_CANONICAL_OUTPUT,
         out_path,
     )
@@ -1357,8 +1495,11 @@ def cmd_degrade(args: argparse.Namespace) -> int:
     """Plan degraded children of a parent manifest for a recipe chain (dry-run).
 
     Loads a parent manifest, optionally restricts to one split, derives a degraded
-    child per parent clip for the given recipe chain, and writes the child plan as
-    JSON. It builds no audio; the argv the executor will run is unit-covered.
+    child per non-degraded parent clip for the given recipe chain, and writes the
+    child plan as JSON. Already-degraded clips are skipped so a re-run never plans
+    grandchildren (derivative multiplicity would inflate Platt calibration; the S5
+    pre-registration derives one variant per parent). It builds no audio; the argv
+    the executor will run is unit-covered.
     """
     try:
         obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
@@ -1367,13 +1508,16 @@ def cmd_degrade(args: argparse.Namespace) -> int:
         children = [
             asdict(derive_degraded_record(clip, args.recipe))
             for clip in manifest.clips
-            if args.split is None or clip.split == args.split
+            if (args.split is None or clip.split == args.split)
+            and clip.parent_clip_id is None
         ]
     except (OSError, json.JSONDecodeError, CorpusError) as exc:
         sys.stderr.write(f"degrade failed: {exc}\n")
         return 2
     if not children:
-        sys.stderr.write(f"degrade: no parent clips in split {args.split!r}\n")
+        sys.stderr.write(
+            f"degrade: no non-degraded parent clips in split {args.split!r}\n"
+        )
         return 2
     sys.stdout.write(
         json.dumps({"chain": chain, "children": children}, indent=2, sort_keys=True) + "\n"

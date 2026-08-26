@@ -25,7 +25,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   degradation string must name known recipe ids). New `prepare` and `degrade` CLI
   subcommands emit a plan in dry-run mode only (they extract no audio). Additive
   noise is deferred to the executor slice (its SNR mix needs a measured parent
-  RMS). Pre-registration in `docs/gpu-contracts.md`.
+  RMS). A multi-model implementation review hardened the numerics before landing:
+  RTTM times parse and scale in exact decimal (not binary `float`), so the pinned
+  sample rule is byte-exact for ordinary decimals such as `0.1`; the overlap floor
+  applies to coalesced continuous other-speaker regions, so word-level crosstalk
+  cannot survive inside a turn; both length floors are enforced in the sample
+  domain; the ffmpeg argv pins `-threads 1` on the encoder output as well as the
+  input, plus `-filter_threads 1`; `finalize_manifest` rejects measured facts for
+  clips not in the record list; manifest lineage also inherits `source`; and
+  `degrade` skips already-degraded parents so a re-run never plans grandchildren.
+  Pre-registration in `docs/gpu-contracts.md`.
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF

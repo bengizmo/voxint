@@ -683,9 +683,9 @@ def _validate_recipes(recipes: dict[str, DegradationRecipe] = DEGRADATION_RECIPE
     """Assert recipe-registry integrity at import (a bad recipe is a bug).
 
     Every key matches its ``recipe_id``; the id is a safe token (no ``|``,
-    whitespace, or dot); ``family`` is known; ``encode_args`` is non-empty; a
-    lossy recipe names a non-empty ``intermediate_format`` and a non-lossy one
-    names none.
+    whitespace, or dot); ``family`` is known; ``implementation`` (the reviewable
+    encoder/decoder claim) and ``encode_args`` are non-empty; a lossy recipe names
+    a non-empty ``intermediate_format`` and a non-lossy one names none.
     """
     for key, recipe in recipes.items():
         if key != recipe.recipe_id:
@@ -699,6 +699,8 @@ def _validate_recipes(recipes: dict[str, DegradationRecipe] = DEGRADATION_RECIPE
                 f"recipe {key!r} has unknown family {recipe.family!r} "
                 f"(allowed: {DEGRADATION_FAMILIES})"
             )
+        if not recipe.implementation.strip():
+            raise SourcesError(f"recipe {key!r} has an empty implementation")
         if not recipe.encode_args:
             raise SourcesError(f"recipe {key!r} has empty encode_args")
         if recipe.lossy and not recipe.intermediate_format:

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -96,6 +97,38 @@ def test_to_sample_interval_rejects(start: float, end: float) -> None:
         corpus.to_sample_interval(start, end)
 
 
+@pytest.mark.parametrize(
+    "end_s,expected_end",
+    [
+        # These decimals x 16000 are exact integers, so ceil must NOT round up. In
+        # binary float, 0.1*16000 == 1600.0000000000002 -> ceil 1601 (the bug).
+        ("0.1", 1600),
+        ("0.2", 3200),
+        ("0.3", 4800),
+        ("0.6", 9600),
+        ("0.7", 11200),
+    ],
+)
+def test_to_sample_interval_decimal_boundary_exact(end_s: str, expected_end: int) -> None:
+    # Exact decimal arithmetic: an ordinary RTTM decimal maps to the exact sample.
+    iv = corpus.to_sample_interval(Decimal("0.0"), Decimal(end_s))
+    assert iv.end_sample == expected_end
+
+
+def test_to_sample_interval_touching_turns_share_no_sample() -> None:
+    # Two different-speaker turns that touch at 0.1 s must partition the samples,
+    # never share sample 1600 (the float ceil-overcount would put 1600 in both).
+    first = corpus.to_sample_interval(Decimal("0.0"), Decimal("0.1"))
+    second = corpus.to_sample_interval(Decimal("0.1"), Decimal("0.2"))
+    assert first.end_sample == second.start_sample == 1600
+    assert first.n_samples == second.n_samples == 1600
+
+
+def test_to_sample_interval_float_caller_recovers_intent() -> None:
+    # A float caller (0.1) is routed through str, so it still lands on sample 1600.
+    assert corpus.to_sample_interval(0.0, 0.1).end_sample == 1600
+
+
 # --------------------------------------------------------------------------- #
 # namespaced_speaker
 # --------------------------------------------------------------------------- #
@@ -111,46 +144,89 @@ def test_namespaced_speaker_rejects_unsafe() -> None:
 # --------------------------------------------------------------------------- #
 # interval helpers
 # --------------------------------------------------------------------------- #
+def _iv(*pairs: tuple[str, str]) -> list[tuple[Decimal, Decimal]]:
+    return [(Decimal(a), Decimal(b)) for a, b in pairs]
+
+
 def test_merge_intervals_gap_and_overlap() -> None:
-    merged = corpus._merge_intervals([(0.0, 0.5), (0.6, 1.0), (5.0, 6.0), (5.5, 5.7)], 0.3)
-    assert merged == [(0.0, 1.0), (5.0, 6.0)]
+    merged = corpus._merge_intervals(
+        _iv(("0.0", "0.5"), ("0.6", "1.0"), ("5.0", "6.0"), ("5.5", "5.7")), Decimal("0.3")
+    )
+    assert merged == _iv(("0.0", "1.0"), ("5.0", "6.0"))
 
 
 def test_merge_intervals_gap_boundary_not_merged() -> None:
     # gap exactly == gap_s is NOT < gap_s, so it stays split.
-    assert corpus._merge_intervals([(0.0, 1.0), (1.3, 2.0)], 0.3) == [(0.0, 1.0), (1.3, 2.0)]
+    assert corpus._merge_intervals(
+        _iv(("0.0", "1.0"), ("1.3", "2.0")), Decimal("0.3")
+    ) == _iv(("0.0", "1.0"), ("1.3", "2.0"))
+
+
+def test_coalesce_intervals_unions_touching_and_overlapping() -> None:
+    # Touching (1.0==1.0) and overlapping (2.5<3.0) both union into one region.
+    merged = corpus._coalesce_intervals(_iv(("0.0", "1.0"), ("1.0", "2.0"), ("2.5", "3.0")))
+    assert merged == _iv(("0.0", "2.0"), ("2.5", "3.0"))
 
 
 def test_subtract_overlaps_removes_other_speaker() -> None:
-    subs = corpus._subtract_overlaps((0.0, 10.0), [(4.0, 6.0)], floor_s=0.1)
-    assert subs == [(0.0, 4.0), (6.0, 10.0)]
+    subs = corpus._subtract_overlaps(
+        (Decimal("0.0"), Decimal("10.0")), _iv(("4.0", "6.0")), floor_s=Decimal("0.1")
+    )
+    assert subs == _iv(("0.0", "4.0"), ("6.0", "10.0"))
 
 
 def test_subtract_overlaps_ignores_sub_floor_graze() -> None:
     # a 50 ms touch is below the 100 ms floor -> not subtracted.
-    assert corpus._subtract_overlaps((0.0, 10.0), [(4.0, 4.05)], floor_s=0.1) == [(0.0, 10.0)]
+    assert corpus._subtract_overlaps(
+        (Decimal("0.0"), Decimal("10.0")), _iv(("4.0", "4.05")), floor_s=Decimal("0.1")
+    ) == _iv(("0.0", "10.0"))
 
 
 # --------------------------------------------------------------------------- #
 # _clean_spans
 # --------------------------------------------------------------------------- #
-def test_clean_spans_merges_words_and_floors() -> None:
+def test_clean_spans_merges_same_speaker_gap() -> None:
     turns = corpus.parse_rttm(
         _rttm(("m1", 0.0, 0.5, "A"), ("m1", 0.6, 0.5, "A"), ("m1", 5.0, 0.2, "A"))
     )
-    cleaned = corpus._clean_spans(turns, merge_gap_s=0.3, min_s=1.0, overlap_floor_s=0.1)
-    # [0,0.5]+[0.6,1.1] merge to [0,1.1] (kept); [5,5.2] is 0.2s (< 1.0, dropped).
-    assert cleaned == {"A": [(0.0, 1.1)]}
+    # _clean_spans merges but no longer floors (the length floor is sample-domain,
+    # applied downstream): [0,0.5]+[0.6,1.1] merge to [0,1.1]; [5,5.2] stays.
+    cleaned = corpus._clean_spans(turns, merge_gap_s=Decimal("0.3"), overlap_floor_s=Decimal("0.1"))
+    assert cleaned == {"A": [(Decimal("0.0"), Decimal("1.1")), (Decimal("5.0"), Decimal("5.2"))]}
 
 
-def test_clean_spans_drops_overlap_then_floors() -> None:
+def test_clean_spans_drops_other_speaker_overlap() -> None:
     turns = corpus.parse_rttm(
         _rttm(("m1", 5.0, 6.0, "A"), ("m1", 5.5, 0.3, "B"))
     )
-    cleaned = corpus._clean_spans(turns, merge_gap_s=0.3, min_s=1.0, overlap_floor_s=0.1)
-    # A [5,11] minus B [5.5,5.8]: [5,5.5] (0.5s dropped) + [5.8,11] (kept). B too short.
+    cleaned = corpus._clean_spans(turns, merge_gap_s=Decimal("0.3"), overlap_floor_s=Decimal("0.1"))
+    # A [5,11] minus B [5.5,5.8]: [5,5.5] + [5.8,11]. B [5.5,5.8] fully inside A -> gone.
     assert list(cleaned) == ["A"]
-    assert cleaned["A"] == [(5.8, 11.0)]
+    assert cleaned["A"] == [(Decimal("5.0"), Decimal("5.5")), (Decimal("5.8"), Decimal("11.0"))]
+
+
+def test_clean_spans_coalesces_word_level_other_speaker() -> None:
+    # A holds [0,5]; B says six contiguous 80 ms words covering [1.0,1.48]. Each word
+    # alone is 0.08s (< the 0.1s floor), but coalesced they are a 0.48s continuous
+    # region that MUST be cut -- the split-leakage guard for word-level RTTMs.
+    rows = [("m1", 0.0, 5.0, "A")]
+    t = 1.0
+    for _ in range(6):
+        rows.append(("m1", round(t, 2), 0.08, "B"))
+        t += 0.08
+    turns = corpus.parse_rttm(_rttm(*rows))
+    cleaned = corpus._clean_spans(turns, merge_gap_s=Decimal("0.3"), overlap_floor_s=Decimal("0.1"))
+    # A is split around the coalesced [1.0,1.48] B region; no A span contains it.
+    assert cleaned["A"] == [(Decimal("0.0"), Decimal("1.0")), (Decimal("1.48"), Decimal("5.0"))]
+    for start, end in cleaned["A"]:
+        assert not (start < Decimal("1.48") and end > Decimal("1.0"))
+
+
+def test_clean_spans_keeps_single_sub_floor_graze() -> None:
+    # A single 50 ms other-speaker touch stays below the floor and does not fragment.
+    turns = corpus.parse_rttm(_rttm(("m1", 0.0, 5.0, "A"), ("m1", 2.0, 0.05, "B")))
+    cleaned = corpus._clean_spans(turns, merge_gap_s=Decimal("0.3"), overlap_floor_s=Decimal("0.1"))
+    assert cleaned["A"] == [(Decimal("0.0"), Decimal("5.0"))]
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +273,29 @@ def test_build_plan_segments_meet_full_window() -> None:
     plan = _sample_plan()
     for seg in plan.segments:
         assert seg.interval.n_samples >= corpus.MODEL_WIDTH_SAMPLES
+
+
+def test_build_plan_segment_kept_at_exact_model_width() -> None:
+    # A single-speaker turn of exactly one model window (64,600 samples = 4.0375 s)
+    # must survive as a segment; the length floor is enforced in samples, not the
+    # float seconds quotient (which would drop a genuinely-64,600-sample span).
+    turns = corpus.parse_rttm(_rttm(("m1", 0.0, 4.0375, "A")))
+    plan = corpus.build_plan(corpus.ORGANIC_SOURCES["ami"], {"m1": turns})
+    assert len(plan.segments) == 1
+    assert plan.segments[0].interval.n_samples == corpus.MODEL_WIDTH_SAMPLES
+
+
+def test_build_plan_all_short_rejected() -> None:
+    # Every span below the floor -> no clips survive -> fail closed (not an empty plan).
+    turns = corpus.parse_rttm(_rttm(("m1", 0.0, 0.5, "A")))
+    with pytest.raises(corpus.CorpusError, match="no clips survived"):
+        corpus.build_plan(corpus.ORGANIC_SOURCES["ami"], {"m1": turns})
+
+
+def test_build_plan_recording_key_mismatch_rejected() -> None:
+    turns = corpus.parse_rttm(_rttm(("real", 0.0, 3.0, "A")))
+    with pytest.raises(corpus.CorpusError, match="has a turn for"):
+        corpus.build_plan(corpus.ORGANIC_SOURCES["ami"], {"wrongkey": turns})
 
 
 def test_build_plan_speaker_disjoint_across_recordings() -> None:
@@ -256,15 +355,39 @@ def _measured(records: tuple[corpus.IngestRecord, ...]) -> dict[str, tuple[str, 
 
 def test_finalize_manifest_happy() -> None:
     plan = _sample_plan()
-    manifest = corpus.finalize_manifest(plan.turn_clips, _measured(plan.turn_clips))
+    measured = _measured(plan.turn_clips)
+    manifest = corpus.finalize_manifest(plan.turn_clips, measured)
     assert manifest.schema_version == corpus.MANIFEST_SCHEMA_VERSION
     assert manifest.corpus_kind == corpus.CORPUS_KIND_SYNTHESIS
     assert len(manifest.clips) == len(plan.turn_clips)
     clip = manifest.clips[0]
     assert clip.label == "bona_fide"
     assert clip.generator is None
-    # duration is derived from the measured sample count.
-    assert clip.duration_s == pytest.approx(clip.duration_s)
+    # Identity comes ONLY from the measured facts: the sha is the measured sha and
+    # the duration is the measured sample count / 16000, never the planned interval.
+    measured_sha, measured_samples = measured[clip.clip_id]
+    assert clip.sha256 == measured_sha
+    assert clip.duration_s == pytest.approx(measured_samples / corpus.CANONICAL_SAMPLE_RATE)
+
+
+def test_finalize_manifest_duration_tracks_measured_not_plan() -> None:
+    # A measured sample count that differs from the planned interval must drive the
+    # duration; the plan's interval length must NOT leak in.
+    plan = _sample_plan()
+    record = plan.turn_clips[0]
+    doctored = record.interval.n_samples + 8000  # 0.5 s longer than the plan
+    manifest = corpus.finalize_manifest(
+        [record], {record.clip_id: (hashlib.sha256(b"x").hexdigest(), doctored)}
+    )
+    assert manifest.clips[0].duration_s == pytest.approx(doctored / corpus.CANONICAL_SAMPLE_RATE)
+
+
+def test_finalize_manifest_orphan_fact_rejected() -> None:
+    plan = _sample_plan()
+    measured = _measured(plan.turn_clips)
+    measured["ghost-clip"] = ("c" * 64, 16000)  # a measurement for no record
+    with pytest.raises(corpus.CorpusError, match="not in the record list"):
+        corpus.finalize_manifest(plan.turn_clips, measured)
 
 
 def test_finalize_manifest_missing_fact_rejected() -> None:
@@ -389,6 +512,37 @@ def test_cli_degrade(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     assert out["children"][0]["parent_clip_id"] == "ami-m1-A-turn-0-80000"
 
 
+def test_cli_degrade_skips_already_degraded_parents(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import json
+
+    root = {
+        "clip_id": "ami-m1-A-turn-0-80000",
+        "rel_path": "ami/turn/ami-m1-A-turn-0-80000.wav",
+        "sha256": "a" * 64, "duration_s": 5.0, "label": "bona_fide", "language": "en",
+        "license_spdx": "CC-BY-4.0", "stratum": "bona_fide|organic|meetingroom",
+        "source": "ami", "speaker_id": "ami-m1-A", "split": "calibration",
+        "generator": None, "degradation": None, "parent_clip_id": None, "acquire": None,
+    }
+    child = {
+        **root,
+        "clip_id": "ami-m1-A-turn-0-80000-mp3-cbr48-v1",
+        "rel_path": "ami/turn/degraded/ami-m1-A-turn-0-80000-mp3-cbr48-v1.wav",
+        "sha256": "b" * 64,
+        "stratum": "bona_fide|organic|meetingroom|mp3-cbr48-v1",
+        "degradation": "mp3-cbr48-v1", "parent_clip_id": "ami-m1-A-turn-0-80000",
+    }
+    manifest = tmp_path / "parent.json"
+    manifest.write_text(json.dumps({"schema_version": 1, "clips": [root, child]}), encoding="utf-8")
+    rc = corpus.main(["degrade", "--manifest", str(manifest), "--recipe", "mp3-cbr48-v1"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    # Only the root parent is degraded; the existing child never becomes a grandchild.
+    assert len(out["children"]) == 1
+    assert out["children"][0]["parent_clip_id"] == "ami-m1-A-turn-0-80000"
+
+
 def test_cli_degrade_split_filter_empty(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -406,4 +560,4 @@ def test_cli_degrade_split_filter_empty(
         ]
     )
     assert rc == 2
-    assert "no parent clips" in capsys.readouterr().err
+    assert "no non-degraded parent clips" in capsys.readouterr().err
