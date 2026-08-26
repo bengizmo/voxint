@@ -40,7 +40,7 @@ from voxint.api.setup_wizard import (
     normalize_media_folders,
 )
 from voxint.config import Settings
-from voxint.db.models import MediaFolder
+from voxint.db.models import MediaFolder, MediaItem
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.registry import available_domain_packs
 from voxint.media.folders import deepest_ancestor, overlapping_registration
@@ -174,6 +174,46 @@ def unregister_folder(session: Session, settings: Settings, path: str) -> str | 
     session.delete(row)
     session.flush()
     return None
+
+
+def unregister_folder_by_id(
+    session: Session, folder_id: uuid.UUID
+) -> tuple[bool, int]:
+    """Unregister a folder BY ID, reporting how many media it reverts to global.
+
+    Keyed on the primary key rather than a path string: the /media folder panel
+    renders each registered folder from :func:`voxint.api.media_query.folder_options`
+    (which carries the row id), so removal names the exact row and never depends on
+    reconstructing the stored ``path`` (:func:`unregister_folder` matches ``path``
+    exactly and would silently no-op on any mismatch). Returns ``(removed,
+    reverted_count)``: ``removed`` is False for an id that is already gone
+    (idempotent), and ``reverted_count`` is how many :class:`~voxint.db.models.MediaItem`
+    rows pointed at the folder and are therefore nulled by the ``ON DELETE SET NULL``
+    FK. The count is taken under the same advisory lock and in the same transaction
+    as the delete, immediately before it, so the reported number is what this
+    transaction removes, not a value read at an earlier, racy moment (the panel
+    shows it honestly: "N files reverted to global settings"). Never touches the
+    filesystem; the reverted media keep their frozen run snapshots.
+    """
+    _lock(session)
+    # Row-lock the folder (not just the advisory lock, which media_assign does not
+    # take) BEFORE counting: an assign's FK reference takes FOR KEY SHARE on this
+    # parent row, so a concurrent assign now either commits before the count (and is
+    # counted) or blocks and then fails once the row is deleted — it can never slip
+    # in between the count and the delete and be silently nulled out of the total.
+    row = session.execute(
+        select(MediaFolder).where(MediaFolder.id == folder_id).with_for_update()
+    ).scalar_one_or_none()
+    if row is None:
+        return False, 0  # already gone - idempotent
+    reverted = session.execute(
+        select(func.count())
+        .select_from(MediaItem)
+        .where(MediaItem.media_folder_id == row.id)
+    ).scalar_one()
+    session.delete(row)
+    session.flush()
+    return True, reverted
 
 
 def set_folder_pack(

@@ -804,13 +804,15 @@
     {% block sidebar %}
     <aside class="sidebar" id="app-sidebar">
       <a class="brand" href="/">Voxint</a>
-      {# Console 2.0 IA (#152). Media and Jobs both point at /runs until their
-         own areas ship (issue decision: nothing may 404); only Media ever
-         carries aria-current so the two never both read as "you are here".
-         Projects renders only behind its dark-ship flag. #}
+      {# Console 2.0 IA (#152). Jobs points at /runs until its area ships; Media
+         points at the operable /media once CONSOLE_MEDIA_ENABLED is on (#154),
+         otherwise at the /runs placeholder (issue decision: nothing may 404).
+         When flag-off, /runs is the Media placeholder and carries Media's
+         aria-current; flag-on, /media does. Projects renders only behind its
+         own flag. #}
       <nav class="side" aria-label="Primary">
         <a href="/"{% if active_nav == "home" %} aria-current="page"{% endif %}>Home</a>
-        <a href="/runs"{% if active_nav == "runs" %} aria-current="page"{% endif %}>Media</a>
+        <a href="{% if shell.media_enabled %}/media{% else %}/runs{% endif %}"{% if active_nav == "media" or (not shell.media_enabled and active_nav == "runs") %} aria-current="page"{% endif %}>Media</a>
         {% if shell.projects_enabled %}<a href="/projects"{% if active_nav == "projects" %} aria-current="page"{% endif %}>Projects</a>{% endif %}
         <a href="/speakers"{% if active_nav == "speakers" %} aria-current="page"{% endif %}>Speakers</a>
         {% if shell.jobs_enabled %}<a href="/jobs"{% if active_nav == "jobs" %} aria-current="page"{% endif %}>Jobs</a>{% else %}<a href="/runs">Jobs</a>{% endif %}

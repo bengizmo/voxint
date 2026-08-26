@@ -60,6 +60,54 @@
     ]
   ],
   [
+    "/media/archive",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/assign",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/fetch",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/folders",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/rerun",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/rerun/confirm",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/unarchive",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],

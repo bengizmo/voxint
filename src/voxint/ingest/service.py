@@ -214,15 +214,53 @@ def _folder_and_project(
     return folder, folder.project
 
 
-def _run_domain_pack_snapshot(
+@dataclass(frozen=True)
+class EffectiveConfigProvenance:
+    """Which layer supplied each resolved field, for an honest config preview.
+
+    ``vocabulary_source`` / ``corrections_source`` are one of ``"explicit"``,
+    ``"project"``, ``"folder"``, or ``"global"`` — the precedence branch the ONE
+    resolution walk (:func:`_resolve_run_config`) actually took, never re-derived.
+    ``folder_path`` / ``project_name`` are the owning folder and its project, or
+    ``None`` when the run resolves under no folder (uploads/URLs, global baseline).
+    """
+
+    pack_name: str
+    vocabulary_source: str
+    corrections_source: str
+    folder_path: str | None
+    project_name: str | None
+
+
+@dataclass(frozen=True)
+class EffectiveConfigPreview:
+    """The config a fresh run WOULD freeze right now — advisory, read-only.
+
+    Built by :func:`preview_effective_config` from the same walk the dispatch
+    uses, so a given DB state previews exactly what it would freeze. Counts, not
+    the raw lists: the operator sees the shape of what will apply (pack + how many
+    glossary terms / correction rules, and which layer each came from) without a
+    wall of words. Carries no ``config_resolution_version`` — it is never persisted.
+    """
+
+    pack_name: str
+    vocabulary_count: int
+    corrections_count: int
+    vocabulary_source: str
+    corrections_source: str
+    folder_path: str | None
+    project_name: str | None
+
+
+def _resolve_run_config(
     session: Session,
     media_folder_id: uuid.UUID | None,
     *,
     settings: Settings | None,
     domain_pack_name: str | None,
     extra_name_seeds: tuple[str, ...] = (),
-) -> dict[str, Any]:
-    """Freeze the config-resolution snapshot for a NEW run (issues #11, #153).
+) -> tuple[dict[str, Any], EffectiveConfigProvenance]:
+    """The ONE config-resolution walk for a run — snapshot plus its provenance.
 
     Resolves the effective ``vocabulary`` and ``corrections`` by PER-FIELD
     REPLACEMENT (ADR 0002): each field independently takes its first present
@@ -230,10 +268,11 @@ def _run_domain_pack_snapshot(
     project field → folder pack field → global baseline (the default pack unioned
     with the operator's ``app_settings`` glossary/corrections). Membership walks
     the relation, not the path: ``media_folder_id`` is the run's owning folder,
-    read from the persisted ``MediaItem.media_folder_id`` so reused or moved media
-    resolve against their stored folder, never a re-inferred path prefix. It is
-    ``None`` for uploads/URLs, which sit under no folder and so take the global
-    baseline unless an explicit name is supplied.
+    read from the persisted ``MediaItem.media_folder_id`` so reused, moved, or
+    operator-assigned media resolve against their stored folder, never a
+    re-inferred path prefix (ADR 0002 addendum). It is ``None`` for an upload/URL
+    submitted without a folder pick, which then takes the global baseline unless
+    an explicit name is supplied.
 
     A project's ``vocabulary``/``corrections`` are nullable: NULL inherits the
     layer below, an empty list is "explicitly none" and wins. The pack IDENTITY
@@ -243,9 +282,11 @@ def _run_domain_pack_snapshot(
     unlike the pre-#153 behavior — it stops inheriting the global glossary and
     corrections.
 
-    The whole snapshot is stamped ``config_resolution_version: 2`` so the worker
-    uses the frozen vocabulary as-is instead of re-unioning the live glossary;
-    every pre-#153 (unversioned) run keeps its live-union path, byte-identical.
+    The snapshot is stamped ``config_resolution_version: 2`` so the worker uses
+    the frozen vocabulary as-is instead of re-unioning the live glossary; every
+    pre-#153 (unversioned) run keeps its live-union path, byte-identical. The
+    returned :class:`EffectiveConfigProvenance` records which branch each field
+    took so the re-run preview can show it without a second, drift-prone walk.
 
     ``extra_name_seeds`` (issue #104) are sidecar speaker names, unioned onto the
     resolved pack's ``name_seeds`` inside this freeze. Raises
@@ -291,13 +332,17 @@ def _run_domain_pack_snapshot(
     # pack's words — it no longer inherits the global glossary.
     if is_explicit:
         vocab = dedup_order_preserving(snapshot["vocabulary"])
+        vocabulary_source = "explicit"
     elif project is not None and project.vocabulary is not None:
         vocab = dedup_order_preserving(project.vocabulary)
+        vocabulary_source = "project"
     elif folder_pack_present:
         vocab = dedup_order_preserving(snapshot["vocabulary"])
+        vocabulary_source = "folder"
     else:
         glossary = row.vocabulary if row is not None and row.vocabulary else ()
         vocab = dedup_order_preserving((*snapshot["vocabulary"], *glossary))
+        vocabulary_source = "global"
     snapshot["vocabulary"] = list(vocab)
 
     # Corrections, same precedence. An explicit or folder-pack layer keeps the
@@ -306,22 +351,89 @@ def _run_domain_pack_snapshot(
     # pack, whose collisions are irrelevant); the global baseline unions the
     # operator's console corrections exactly as the pre-#153 freeze did.
     if is_explicit:
-        pass
+        corrections_source = "explicit"
     elif project is not None and project.corrections is not None:
         snapshot["corrections"] = [
             rule.to_mapping() for rule in parse_corrections(project.corrections)
         ]
+        corrections_source = "project"
     elif folder_pack_present:
-        pass
-    elif row is not None and row.corrections:
-        snapshot = union_pack_corrections(snapshot, row.corrections)
+        corrections_source = "folder"
+    else:
+        if row is not None and row.corrections:
+            snapshot = union_pack_corrections(snapshot, row.corrections)
+        corrections_source = "global"
 
     if extra_name_seeds:
         snapshot = union_pack_name_seeds(snapshot, extra_name_seeds)
     # Stamp LAST, after every helper that rebuilds the mapping via dict(...), so
     # the version key can never be dropped by a copy inside union_pack_*.
     snapshot["config_resolution_version"] = 2
+    provenance = EffectiveConfigProvenance(
+        pack_name=snapshot["name"],
+        vocabulary_source=vocabulary_source,
+        corrections_source=corrections_source,
+        folder_path=folder.path if folder is not None else None,
+        project_name=project.name if project is not None else None,
+    )
+    return snapshot, provenance
+
+
+def _run_domain_pack_snapshot(
+    session: Session,
+    media_folder_id: uuid.UUID | None,
+    *,
+    settings: Settings | None,
+    domain_pack_name: str | None,
+    extra_name_seeds: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Freeze the config-resolution snapshot for a NEW run (issues #11, #153).
+
+    Thin wrapper over :func:`_resolve_run_config` for the freeze path, which needs
+    only the snapshot dict. The provenance leg feeds the read-only re-run preview.
+    """
+    snapshot, _ = _resolve_run_config(
+        session,
+        media_folder_id,
+        settings=settings,
+        domain_pack_name=domain_pack_name,
+        extra_name_seeds=extra_name_seeds,
+    )
     return snapshot
+
+
+def preview_effective_config(
+    session: Session,
+    media_folder_id: uuid.UUID | None,
+    *,
+    settings: Settings | None = None,
+    domain_pack_name: str | None = None,
+) -> EffectiveConfigPreview:
+    """The config a fresh run would freeze right now — read-only and advisory.
+
+    Runs the SAME resolution walk the dispatch uses (:func:`_resolve_run_config`),
+    so for a given DB state the preview matches exactly what a re-run would freeze.
+    It commits nothing and has no side effects, so it is safe to call outside the
+    submit transaction. It is ADVISORY, not a promise: preview and confirm are
+    separate READ COMMITTED reads, so a config edit between them means the minted
+    run reflects confirm-time config, not this preview (the re-run confirm
+    re-resolves; the caller says so on the confirm screen).
+    """
+    snapshot, provenance = _resolve_run_config(
+        session,
+        media_folder_id,
+        settings=settings,
+        domain_pack_name=domain_pack_name,
+    )
+    return EffectiveConfigPreview(
+        pack_name=provenance.pack_name,
+        vocabulary_count=len(snapshot["vocabulary"]),
+        corrections_count=len(snapshot["corrections"]),
+        vocabulary_source=provenance.vocabulary_source,
+        corrections_source=provenance.corrections_source,
+        folder_path=provenance.folder_path,
+        project_name=provenance.project_name,
+    )
 
 
 def _effective_pack_name(
@@ -919,6 +1031,7 @@ def submit_upload(
     max_bytes: int,
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
+    media_folder_id: uuid.UUID | None = None,
 ) -> PipelineRun:
     """Finalize a browser upload into an immutable MediaItem and queue a run.
 
@@ -929,16 +1042,24 @@ def submit_upload(
     size-capped and hashed, then atomically ``os.replace``\\d into place; the
     MediaItem records the first ``sha256``/``size_bytes`` the schema ever stores.
 
+    ``media_folder_id`` (Console 2.0 P2b, ADR 0002 addendum) is an OPTIONAL
+    settings-folder pick: the uploaded bytes still land under ``incoming/`` — never
+    moved into the folder — but the folder's (and its project's) vocabulary and
+    corrections apply, and the run freezes against it. ``None`` (the default) keeps
+    the pre-P2b global baseline, byte-identical. The caller validates the id
+    exists before calling; the first submission's pick wins on an idempotent replay
+    (``_replay_run`` never re-homes an existing row).
+
     Broker-free: the caller commits, then lazily publishes ``voxint.run_pipeline``
     (commit-before-publish). Raises :class:`UploadValidationError` (bad name/id),
     :class:`UploadTooLargeError` (over the cap), or :class:`UploadConflictError`
     (replayed id, different bytes).
     """
-    # Uploads never sit under a registered folder (uuid-namespaced path), so there
-    # is no folder/project layer (media_folder_id=None): the global baseline
-    # applies unless an explicit pack name is supplied.
     domain_pack = _run_domain_pack_snapshot(
-        session, None, settings=settings, domain_pack_name=domain_pack_name
+        session,
+        media_folder_id,
+        settings=settings,
+        domain_pack_name=domain_pack_name,
     )
     safe_name = sanitize_upload_filename(filename)
     sub = _submission_dir(submission_id)
@@ -970,7 +1091,12 @@ def submit_upload(
         # mirrors _get_or_create_media.)
         try:
             with session.begin_nested():
-                media = MediaItem(source_path=rel, size_bytes=size, sha256=sha256)
+                media = MediaItem(
+                    source_path=rel,
+                    size_bytes=size,
+                    sha256=sha256,
+                    media_folder_id=media_folder_id,
+                )
                 session.add(media)
                 session.flush()
         except IntegrityError:
@@ -1026,6 +1152,7 @@ def submit_url(
     submission_id: str,
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
+    media_folder_id: uuid.UUID | None = None,
 ) -> PipelineRun:
     """Register a URL for acquisition as an immutable MediaItem and queue a run.
 
@@ -1037,6 +1164,13 @@ def submit_url(
     upload, the bytes do not exist yet, so ``source_path`` is an *intended*
     location until ACQUIRE materializes it.
 
+    ``media_folder_id`` (Console 2.0 P2b, ADR 0002 addendum) is an OPTIONAL
+    settings-folder pick, exactly as in :func:`submit_upload`: the acquired bytes
+    still land under ``incoming/`` — never inside the folder — but the folder's and
+    its project's vocabulary/corrections apply and the run freezes against it.
+    ``None`` (the default) keeps the pre-P2b global baseline, byte-identical; the
+    first submission's pick wins on an idempotent replay.
+
     The server-issued ``submission_id`` makes a form re-POST idempotent: the same
     id + same url returns the run created the first time; the same id + a
     DIFFERENT url is a conflict (see :func:`_replay_url_run`). **This module never
@@ -1047,11 +1181,11 @@ def submit_url(
     :class:`UploadValidationError` (bad submission id) — both HTTP 422 — or
     :class:`UploadConflictError` (replayed id, different url) — HTTP 409.
     """
-    # URLs never sit under a registered folder (uuid-namespaced path), so there is
-    # no folder/project layer (media_folder_id=None): the global baseline applies
-    # unless an explicit pack name is supplied.
     domain_pack = _run_domain_pack_snapshot(
-        session, None, settings=settings, domain_pack_name=domain_pack_name
+        session,
+        media_folder_id,
+        settings=settings,
+        domain_pack_name=domain_pack_name,
     )
     validated_url = validate_ingest_url(url)
     sub = _submission_dir(submission_id)
@@ -1063,7 +1197,11 @@ def submit_url(
     # the caller's transaction — mirrors _get_or_create_media / submit_upload.)
     try:
         with session.begin_nested():
-            media = MediaItem(source_path=rel, source_url=validated_url)
+            media = MediaItem(
+                source_path=rel,
+                source_url=validated_url,
+                media_folder_id=media_folder_id,
+            )
             session.add(media)
             session.flush()
     except IntegrityError:
