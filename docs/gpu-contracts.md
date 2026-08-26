@@ -1795,6 +1795,117 @@ the full canonical transcode). The ±0.3 pp tolerance is labelled provisional in
 the pre-registration, but the margin (+0.015 pp) and the reference's zero EER
 rerun variance make that distinction immaterial to this PASS.
 
+### S5 organic corpus and degradation pre-registration (2026-08-26)
+
+This is the frozen S5 protocol, recorded before any corpus is materialized or any
+GPU windowing run happens. S5 builds the bona fide (real-speech) domain side of
+the corpus and validates the production windowing path; the synthetic (spoof)
+side is S6 and calibration is S7. S5 lands eval-first: the pure, audio-free logic
+(`tools/synthdetect_corpus.py`, `tools/synthdetect_sources.py`) freezes and is
+unit-tested before any audio exists. Audio is never committed; the corpus root is
+always a CLI argument.
+
+**The plan, never a manifest, is the pure output.** A valid manifest cannot exist
+before audio is materialized, because the manifest `sha256` is the canonical PCM
+payload digest and `duration_s` is derived from the decoded sample count. The pure
+layer therefore emits a `MaterializationPlan` (which clips and segments to extract,
+with their splits) and a `finalize_manifest(plan_records, measured_facts)` function
+that builds and validates the v1 manifest only after the executor supplies the
+per-clip PCM sha256 and sample count. The executor itself is S5 PR-2 (a
+maintainer-hardware, digest-pinned ffmpeg step).
+
+**Bona fide source.** Two CC-BY-4.0 diarization corpora, a meeting-room set and a
+web-video set, each with RTTMs giving per-speaker turns. `prepare` parses the
+RTTM, then produces two views:
+
+- **Turn clips** for strata, degradation, and calibration: same-speaker turns
+  merged across gaps below `CLIP_MERGE_GAP_S = 0.3 s`, other-speaker overlap
+  subtracted (an overlap is only cut when it reaches `OVERLAP_FLOOR_S = 0.1 s`, so
+  a boundary graze does not fragment a turn), then any surviving span shorter than
+  `TURN_MIN_S = 1.0 s` dropped.
+- **Session segments** for production-windowing validation: same-speaker turns
+  merged across gaps below `SESSION_MERGE_GAP_S = 1.0 s` (the production windowing
+  `merge_gap_s`), overlap subtracted, then any span shorter than one full model
+  window (`SEGMENT_MIN_S`, 64,600 samples = 4.0375 s) dropped. The merge is an
+  RTTM-level operation, so it must happen before per-turn clipping; scoring
+  isolated turn clips would not validate the stated merge-then-window policy.
+
+The staged meeting-room audio is a speaker-mixed track, so dropping other-speaker
+overlap is also the leakage guard: without it a nominally single-speaker turn can
+carry crosstalk from a speaker assigned to a different split.
+
+**Pinned sample-interval rule.** `start_sample = floor(start_s * 16000)`,
+`end_sample = ceil(end_s * 16000)`, so a clip is byte-reproducible from the RTTM
+times.
+
+**Conservative speaker namespace.** `speaker_id = "{source}-{recording}-{label}"`,
+recording-scoped, so a recording-local or mislabeled RTTM label can never leak a
+speaker across the calibration/eval/holdout boundary. This can split one real
+person across recordings, which is acceptable for a bona-fide false-positive
+corpus (S5 makes no generalization claim); a stronger speaker-disjoint identity is
+an open S6/S7 question.
+
+**Strata and manifest kind.** A bona fide clip's stratum is
+`bona_fide|organic|{domain}` (`meetingroom` or `webvideo`); a degraded child's
+stratum extends the parent's with the chain. Organic bona fide clips are a v1
+`synthesis`-kind manifest (clips we materialize, each carrying per-clip provenance
+in `acquire`; a bona fide clip carries no generator), not the v2 imported-benchmark
+kind that the ASVspoof reproduction corpus uses.
+
+**Degradation recipes are a closed, versioned vocabulary.** `DEGRADATION_RECIPES`
+in `synthdetect_sources.py` pins each transform as data (recipe id, family, ffmpeg
+implementation, encode args, intermediate container); the argv builders and chain
+serialization are logic in `synthdetect_corpus.py`. The initial frozen set covers
+codec (`mp3-cbr48-v1`, `opus-voip-cbr16-f20-v1`, `aac-lc-cbr48-v1`), telephony
+(`g711-mulaw-8k-v1`, `amr-nb-122-v1`), and speed (`speed-atempo-0p90-v1`). Rules:
+
+- No free-form ffmpeg. A degradation string is a `|`-joined chain of known recipe
+  ids; order is significant (`speed|codec` differs from `codec|speed`) and is the
+  manifest `degradation` identity.
+- Every lossy recipe is a real round trip: canonical PCM into the pinned encoder,
+  out to the intermediate bitstream, back through the pinned decoder to canonical
+  PCM. Only the final PCM payload sha is the clip identity, never the encoded
+  intermediate. Raw input is always framed `-f s16le -ar 16000 -ac 1` before
+  `-i`, and every pass runs `-threads 1` for deterministic encoding.
+- Byte-for-byte regeneration is promised only on the pinned realization platform
+  (container digest plus codec library versions), never as universal ffmpeg
+  reproducibility.
+- Additive noise is deferred to the executor slice: an SNR mix needs the measured
+  parent RMS, which is audio-dependent and so cannot be a pure argv. `amr-nb-122-v1`
+  is registered but depends on `libopencore_amrnb` in the pinned build; if that
+  encoder is absent it is dropped from the frozen set with a note.
+
+**Degraded children (S5 PR-3).** Children are derived only from calibration-split
+parents, so degraded bona fide material lands in the calibration split without
+contaminating eval or holdout. A child inherits its parent's label, speaker,
+language, split, and license (a load-time lineage invariant, alongside a
+parent-cycle check); `finalize_manifest` runs every child through the same manifest
+validation. To keep Platt honest, calibration uses one pre-registered variant per
+parent (or parent-group weighting): N degraded children of one utterance are not N
+independent observations.
+
+**Production windowing fixes (pre-registered, implemented in S5 PR-4).** The
+production windowing path (`plan_windows(mode="production")` in
+`synthdetect_infer.py`) has two issues that must be fixed and versioned before it
+is scored against the upstream crop:
+
+- **Tiny-tail window.** A clip a few samples past a window boundary currently emits
+  a final one-sample span, repeat-padded to 64,600 and logit-mean-pooled with equal
+  weight to a full window. The fix drops a trailing partial window when a full
+  window exists and the tail is below a pre-registered floor.
+- **64,000 vs 64,600.** `production_window_s = 4.0` is 64,000 samples, but the model
+  width is 64,600, so every full production window is repeat-padded by 600 samples
+  unlike the upstream crop. The production window is set to exactly the model width
+  (4.0375 s) so a full production window equals the upstream crop content; this is a
+  `WindowingPolicy` data change and is a new inference-space windowing identity.
+
+**Windowing-validation scope.** With a bona fide-only corpus, the S5 windowing
+verdict validates false-positive stability (does production windowing raise the
+bona fide false-positive rate against the upstream crop), not separability or EER,
+which need the spoof side that arrives in S6. The verdict states this limit
+explicitly, and per-window scores are journaled as a first-class output, not a
+fallback bolted on later.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
