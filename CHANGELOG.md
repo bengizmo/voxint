@@ -6,6 +6,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
+  S4). The unmodified upstream SSL_Anti-spoofing DF runner was run over the full
+  official ASVspoof 2021 DF eval cohort (611,829 trials) on the native FLAC tree,
+  and the pooled EER over the 533,928 phase-`eval` trials was computed with the
+  official `eval_metrics_DF.compute_eer` math and cross-checked against an
+  independent EER routine. Result: **2.8650 % EER** against the published 2.85 %
+  and the pre-registered ±0.3 pp tolerance, a +0.015 pp miss that PASSES with wide
+  margin. The DF anchor `w2v2-aasist-df` checkpoint (sha256 `1cf904f1…`) and the
+  official keys (sha256 `426f93e1…`) are pinned; every trial was scored (the
+  official length check) and the protocol forms an exact bijection with the native
+  tree. With Gate-2's ratified per-clip subset equivalence this is strong evidence
+  that the shipped fp32 container reproduces the benchmark too, though the
+  container's own full-cohort EER is not measured here (a deferred pass). Verdict
+  in
+  `docs/gpu-contracts.md`; evidence in
+  `docs/reports/synthdetect-gate1-s4-2026-08-25.md`.
 - **synthdetect Gate-2: DF reproduction paired equivalence RATIFIED** (#144, M1
   S3). The frozen `w2v2-aasist-df` eval container was measured against an
   independent, unmodified-upstream reference (verbatim upstream `model.py` +
