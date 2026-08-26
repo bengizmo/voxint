@@ -636,13 +636,14 @@ percentage is not an honest predictor of an out-of-memory failure. When no
 service reports telemetry the strip says "hardware status unavailable" rather
 than claiming all-clear.
 
-The **Resources** page (`GET /resources`, authenticated, 15s htmx refresh) is the
-fuller live view behind the strip: the aggregated per-GPU card with utilization,
-VRAM, and temperature labeled as instantaneous (now) readings, peak temperature
-and throttle-event counts labeled as cumulative-since-restart, and each service's
-admission depth and rejected-since-restart count. Warnings are warn-only in v1;
-the NVIDIA driver already protects the hardware, so Voxint advises rather than
-pausing work.
+The **Status** page (`GET /settings/status`, authenticated, 15s htmx refresh) is
+the fuller live view behind the strip: the aggregated per-GPU card with
+utilization, VRAM, and temperature labeled as instantaneous (now) readings, peak
+temperature and throttle-event counts labeled as cumulative-since-restart, and
+each service's admission depth and rejected-since-restart count. It is reachable
+from the sidebar "Hardware" shortcut; the older `GET /resources` address still
+works and redirects here. Warnings are warn-only in v1; the NVIDIA driver already
+protects the hardware, so Voxint advises rather than pausing work.
 
 ### Exporting transcripts
 
@@ -1325,7 +1326,7 @@ mutations are gated by their per-run claim token.
 | `GET /metrics` | Prometheus text exposition (aggregate DB gauges plus `voxint_gpu_*` / `voxint_service_admission_*` hardware gauges; authenticated, scrape with `basic_auth`) |
 | `GET /` | Home: needs-attention cards (continue review, unidentified voices, failed runs), quick actions, windowed activity counts (`?window=hour|day|week|all`), recent activity |
 | `GET /dashboard` | Permanent 303 redirect to `/` (the dashboard folded into Home) |
-| `GET /resources` | Hardware resource page: the compact strip plus the fuller live GPU + admission view; 15s htmx auto-refresh |
+| `GET /resources` | Permanent 303 redirect to `/settings/status` (the hardware view folded into Settings) |
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
@@ -1341,7 +1342,9 @@ mutations are gated by their per-run claim token.
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
-| `GET /settings` | Post-onboarding settings: re-run the wizard, edit features / media folders / corrections / LLM / sources, start/replay/complete the tutorial |
+| `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
+| `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |
+| `GET /settings/{hardware,database,plugins}`, `GET /settings/plugins/{id}` | Read-only settings sub-pages: effective hardware config, database size/retention, and the plugin registry |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
 | `POST /settings/corrections` | Replace the operator's console-authored correction rules (#84; whole list validated through the pack #80 gate, own `CSRF_SETTINGS` token; a pack collision returns a plain-language 422) |
 

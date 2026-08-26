@@ -263,6 +263,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
 
 ### Changed
+- **Console 2.0 P6b: Settings activated; the hardware page folds into it** (#161,
+  epic #149 Track D). The settings hub and its read-only sub-pages
+  (status, hardware, database, plugins) are now the default `/settings`, so the
+  console opens on the grouped hub rather than the single long page
+  (`CONSOLE_SETTINGS_ENABLED` still gates the content and defaults on; set it off
+  to fall back to the flat page). The old `/resources` hardware view is now
+  `/settings/status`: `/resources` issues a permanent redirect there, the sidebar
+  "Hardware" shortcut and the Jobs "Full hardware view" link point at it, and the
+  status page keeps the 15-second live hardware refresh (it answers the poll with
+  just the hardware snapshot, without re-running the component-health checks).
+  Bookmarks and an already-open Resources tab keep working through the redirect.
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,

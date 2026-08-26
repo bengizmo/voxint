@@ -1874,6 +1874,22 @@ def settings_status_page(
     # wizard's diagnostics before this handler runs.)
     settings: Settings = request.app.state.settings
     snapshot = collect_resource_status_or_empty(settings)
+    # The hardware snapshot self-polls this route every 15s (P6b #161, absorbing
+    # the retired /resources view). Answer that HX poll with just the snapshot
+    # fragment, and build ONLY the snapshot context: the doctor checks probe
+    # Postgres/Redis/the model services, and re-running them every 15s would be a
+    # steady background load for no gain (the poll only refreshes the hardware
+    # strip). So branch before _doctor_checks, exactly as /resources used to.
+    if request.headers.get("HX-Request"):
+        return templates.TemplateResponse(
+            request,
+            "legacy_runs/resource_status.html",
+            {
+                "request": request,
+                "snapshot": snapshot,
+                "resource_strip": build_resource_strip(snapshot),
+            },
+        )
     context = _sub_page_context(
         request,
         install_kind=settings_view.install_kind(),

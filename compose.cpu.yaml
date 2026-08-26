@@ -27,7 +27,7 @@ services:
       EMBEDDER_URL: http://titanet:8021
 
   whisper:
-    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.25.0}-cpu
+    image: ghcr.io/bengizmo/voxint-whisper:${VOXINT_IMAGE_TAG:-0.26.0}-cpu
     pull_policy: missing
     # Model services self-heal after a transient crash (e.g. a load-induced
     # segfault) instead of staying down until a human intervenes (issue #23).
@@ -60,7 +60,7 @@ services:
       - "127.0.0.1:8022:8022"
 
   pyannote:
-    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.25.0}-cpu
+    image: ghcr.io/bengizmo/voxint-pyannote:${VOXINT_IMAGE_TAG:-0.26.0}-cpu
     pull_policy: missing
     restart: unless-stopped
     environment:
@@ -87,7 +87,7 @@ services:
       - "127.0.0.1:8024:8024"
 
   titanet:
-    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.25.0}-cpu
+    image: ghcr.io/bengizmo/voxint-titanet:${VOXINT_IMAGE_TAG:-0.26.0}-cpu
     pull_policy: missing
     restart: unless-stopped
     environment:

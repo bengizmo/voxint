@@ -65,12 +65,16 @@ _PRESERVED_POSTS = ("/settings/llm", "/settings/features", "/settings/glossary")
 
 
 def test_flag_off_renders_flat_page(session_factory: sessionmaker[Session]) -> None:
-    client = _client(session_factory)  # flag defaults off
+    # The flag defaults ON since activation (P6b, #161); pass it off explicitly to
+    # pin the legacy flat page that flag-off must still render byte-compatibly.
+    client = _client(session_factory, console_settings_enabled=False)
     body = client.get("/settings").text
     for marker in (*_PRESERVED_ANCHORS, *_PRESERVED_POSTS):
         assert marker in body
-    # The hub-only sub-page nav is absent on the flat page.
-    assert "/settings/status" not in body
+    # The hub-only sub-page nav and groupings are absent on the flat page. (The
+    # sidebar "Hardware" shortcut points at /settings/status on every page now, so
+    # a hub-card-only link like /settings/database is the distinguishing marker.)
+    assert "/settings/database" not in body
     assert "Everyday settings" not in body
 
 
