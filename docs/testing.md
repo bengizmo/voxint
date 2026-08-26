@@ -8,7 +8,7 @@ doctrine: see [`gpu-contracts.md`](gpu-contracts.md) and the parity notes below.
 
 | Layer | Path | What it covers | Needs |
 |---|---|---|---|
-| Unit | `tests/unit/` | Pure logic: config parsing, CLI, API helpers, formatters, scoring, redaction, review-auth, validation. No database. | nothing |
+| Unit | `tests/unit/` | Pure logic and isolated deterministic local I/O (config parsing, CLI, API helpers, formatters, scoring, redaction, review-auth, validation; temp dirs and git metadata are fine). No database, no service. | nothing |
 | Contracts | `tests/contracts/` | Invariants that would rot silently: version-pin parity across pyproject/compose/`.env.example`, Dockerfile sha ARGs ↔ provenance, restart policies, routes/schemas, the **frontend build/island wiring** (`test_frontend_build.py`). | nothing |
 | Integration | `tests/integration/` | Real Postgres + the alembic chain. Every API/console behaviour is exercised here (submission, adjudication, verify-and-advance, run-assets, Home, migrations). | a pgvector database |
 | Parity | `tests/parity/` | Model-output equivalence gates (mel / vector / decision) against committed CUDA references. Real audio fixtures live under `tests/parity/fixtures/`. | strict mode: `VOXINT_PARITY_REQUIRED=1` |
