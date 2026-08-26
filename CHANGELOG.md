@@ -6,6 +6,26 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
+  audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
+  before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
+  parser, a pinned decimal-to-sample rule (`floor(start*16000)`,
+  `ceil(end*16000)`), an overlap-cleaning and same-speaker merge planner that emits
+  two views (per-turn clips for strata and calibration, merged session segments for
+  production-windowing validation), a `MaterializationPlan` schema, and a
+  `finalize_manifest(plan, measured_facts)` that builds the v1 manifest only from
+  the executor's measured PCM sha256 and sample count. It also gains a closed,
+  versioned degradation-recipe vocabulary (`DEGRADATION_RECIPES` in
+  `tools/synthdetect_sources.py`, `SOURCES_VERSION` bumped to
+  `synthdetect-sources-v4`: codec, telephony, and speed families), deterministic
+  ffmpeg argv builders (real encode-decode-canonical-PCM round trips, `-threads 1`,
+  final PCM payload sha as identity), degraded-child derivation with lineage
+  inheritance, and hardened manifest lineage invariants (parent-cycle rejection,
+  child inherits its parent's label/speaker/language/split/license, and a
+  degradation string must name known recipe ids). New `prepare` and `degrade` CLI
+  subcommands emit a plan in dry-run mode only (they extract no audio). Additive
+  noise is deferred to the executor slice (its SNR mix needs a measured parent
+  RMS). Pre-registration in `docs/gpu-contracts.md`.
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF
