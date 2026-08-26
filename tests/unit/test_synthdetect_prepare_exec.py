@@ -254,10 +254,50 @@ def test_rttm_supplied_twice_fails_closed(tmp_path: Path) -> None:
 
 
 def test_unpinned_recording_fails_closed(tmp_path: Path) -> None:
-    payload = _coord_payload(1000)
     with pytest.raises(corpus.CorpusError, match="not pinned"):
         corpus._read_verified_recording(tmp_path, "ghost", {})
-    assert payload  # keep the fixture honest
+
+
+def test_surplus_recording_pin_fails_closed(tmp_path: Path) -> None:
+    """A pinned recording the RTTMs never declare must fail closed (coverage both ways)."""
+    src = _build_source(tmp_path)
+    acq = json.loads(src.acq_path.read_text())
+    acq["recordings"]["ghost"] = {"rel_path": "ghost.wav", "sha256": "a" * 64, "size": 10}
+    src.acq_path.write_text(json.dumps(acq))
+    with pytest.raises(corpus.CorpusError, match="pin coverage mismatch"):
+        _run(src, tmp_path / "corpus")
+
+
+def test_duplicate_recording_rel_path_fails_closed() -> None:
+    with pytest.raises(corpus.CorpusError, match="share rel_path"):
+        corpus.load_acquisition_manifest(
+            {
+                "source": "ami",
+                "recordings": {
+                    "a": {"rel_path": "same.wav", "sha256": "a" * 64, "size": 1},
+                    "b": {"rel_path": "same.wav", "sha256": "b" * 64, "size": 1},
+                },
+                "rttms": [{"rel_path": "r.rttm", "sha256": "c" * 64, "size": 1}],
+            }
+        )
+
+
+def test_recording_substituted_after_hash_is_caught(tmp_path: Path) -> None:
+    """Open-once: the bytes hashed for the pin are the bytes decoded (no reopen race).
+
+    A same-size canonical WAV whose bytes differ from the pin must be rejected, since
+    the pin sha is recomputed from the exact bytes that are decoded.
+    """
+    src = _build_source(tmp_path)
+    # Flip one sample and rewrite the staged recording: same byte length, different
+    # content, so its whole-file sha no longer matches the pin. Materialization must
+    # abort rather than slice these unpinned bytes.
+    rec_path = src.audio_dir / "rec1.wav"
+    payload = bytearray(corpus.read_canonical_wav_payload(rec_path))
+    payload[0] ^= 0xFF
+    corpus.write_canonical_wav(rec_path, bytes(payload))
+    with pytest.raises(corpus.CorpusError, match="does not match pinned"):
+        _run(src, tmp_path / "corpus")
 
 
 def test_interval_out_of_range_is_plan_drift(tmp_path: Path) -> None:
