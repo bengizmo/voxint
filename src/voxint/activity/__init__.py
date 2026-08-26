@@ -66,8 +66,11 @@ def record_activity_event(
             kind=kind.value,
             occurrence_key=occurrence_key,
             pipeline_run_id=pipeline_run_id,
+            # Both snapshot columns are CHECK-bounded at 500; clamp both so an
+            # unusually long value can never turn a run completion into a failed
+            # (rolled-back) transaction.
             title=title[:_TITLE_MAX],
-            href=href,
+            href=href[:_TITLE_MAX],
         )
         .on_conflict_do_nothing(constraint="uq_activity_events_occurrence_key")
     )
@@ -112,6 +115,14 @@ def events_since(session: Session, *, after_id: int, limit: int) -> list[Activit
     Ascending so the client renders toasts in occurrence order and advances its
     cursor to the last id it saw; the caller signals ``has_more`` when the page
     fills, and re-polls to drain the rest without skipping any row.
+
+    Delivery is best-effort by design: ``id`` is a sequence, assigned at insert,
+    not at commit, so two run completions that commit out of insert order can let
+    a poll landing between the two commits advance past the earlier id and miss
+    its toast. That is an accepted limitation for a cosmetic notification on a
+    single-operator tool: the Jobs badge (a live count, not cursor-based) and the
+    Jobs page remain authoritative, and serializing the pipeline's terminal
+    completion transaction for a popup is not a trade this tool makes.
     """
     rows = session.execute(
         select(ActivityEvent)
@@ -131,6 +142,17 @@ def high_water(session: Session) -> int:
     return int(session.execute(select(func.coalesce(func.max(ActivityEvent.id), 0))).scalar_one())
 
 
+def retained_floor(session: Session) -> int:
+    """The smallest retained activity ``id`` (0 when the table is empty).
+
+    Lets the poll endpoint report the retention floor so a client whose stored
+    cursor sits below it (events pruned while its tab was closed) can tell it has
+    missed events and resync to the high-water mark rather than replay the
+    retained backlog as if those completions were new.
+    """
+    return int(session.execute(select(func.coalesce(func.min(ActivityEvent.id), 0))).scalar_one())
+
+
 def prune_activity_events(session: Session, *, keep: int = ACTIVITY_RETENTION_MAX) -> int:
     """Delete all but the newest ``keep`` rows; return the number removed.
 
@@ -139,6 +161,8 @@ def prune_activity_events(session: Session, *, keep: int = ACTIVITY_RETENTION_MA
     arithmetic form delete too much. A no-op below ``keep`` rows and on an empty
     table (the subquery yields NULL, so the ``<`` predicate is never true).
     """
+    if keep < 1:  # OFFSET keep-1 would be negative; there is no legitimate keep<1
+        return 0
     threshold = (
         select(ActivityEvent.id)
         .order_by(ActivityEvent.id.desc())

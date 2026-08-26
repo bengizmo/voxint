@@ -114,6 +114,26 @@ def test_since_returns_new_events_ascending(
     assert body["events"][0]["href"] == f"/jobs/{rid}"
 
 
+def test_response_reports_retention_floor(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    rid = _seed_run(session_factory, status=RunStatus.COMPLETED)
+    _seed_events(session_factory, rid, 3)
+    body = client.get("/activity/events?since=0").json()
+    # floor lets the client detect a cursor below the retained range (pruned).
+    assert body["floor"] == body["events"][0]["id"]
+    assert client.get("/activity/events").json()["floor"] == body["floor"]
+
+
+def test_negative_since_is_rejected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    # A malformed negative cursor is a 422, not a backlog-replaying bootstrap.
+    client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
+    assert client.get("/activity/events?since=-1").status_code == 422
+
+
 def test_badge_matches_jobs_page(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
     client = _client(session_factory, tmp_path, activity_enabled=True, jobs_enabled=True)
     _seed_run(session_factory, status=RunStatus.QUEUED)

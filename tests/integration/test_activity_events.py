@@ -21,6 +21,7 @@ from voxint.activity import (
     prune_activity_events,
     record_activity_event,
     record_run_completed,
+    retained_floor,
 )
 from voxint.config import Settings
 from voxint.db.models import ActivityEvent, ActivityKind, PipelineRun, RunStatus, Stage
@@ -230,3 +231,47 @@ def test_prune_below_cap_is_noop(session_factory: sessionmaker[Session]) -> None
 def test_prune_empty_is_noop(session_factory: sessionmaker[Session]) -> None:
     with session_factory() as session:
         assert prune_activity_events(session, keep=3) == 0
+
+
+def test_prune_keep_below_one_is_noop(session_factory: sessionmaker[Session]) -> None:
+    # keep<1 would compile to OFFSET -1 (a Postgres error); guarded to a no-op.
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        record_activity_event(
+            session,
+            kind=ActivityKind.RUN_COMPLETED,
+            occurrence_key="k-0",
+            pipeline_run_id=rid,
+            title="t",
+            href=f"/jobs/{rid}",
+        )
+        session.commit()
+    with session_factory() as session:
+        assert prune_activity_events(session, keep=0) == 0
+        assert len(events_since(session, after_id=0, limit=100)) == 1
+
+
+def test_retained_floor(session_factory: sessionmaker[Session]) -> None:
+    with session_factory() as session:
+        assert retained_floor(session) == 0  # empty
+    with session_factory() as session:
+        rid = _seed_completed_run(session)
+        for i in range(3):
+            record_activity_event(
+                session,
+                kind=ActivityKind.RUN_COMPLETED,
+                occurrence_key=f"k-{i}",
+                pipeline_run_id=rid,
+                title=f"t{i}",
+                href=f"/jobs/{rid}",
+            )
+        session.commit()
+    with session_factory() as session:
+        rows = events_since(session, after_id=0, limit=100)
+        assert retained_floor(session) == rows[0].id  # the smallest id
+        # After a prune the floor rises to the oldest surviving row.
+        prune_activity_events(session, keep=2)
+        session.commit()
+    with session_factory() as session:
+        rows = events_since(session, after_id=0, limit=100)
+        assert retained_floor(session) == rows[0].id == min(r.id for r in rows)

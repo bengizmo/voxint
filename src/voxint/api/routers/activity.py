@@ -18,10 +18,10 @@ install answers 404 like an unrouted page. GET only, so there is no CSRF surface
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
-from voxint.activity import ACTIVITY_POLL_LIMIT, events_since, high_water
+from voxint.activity import ACTIVITY_POLL_LIMIT, events_since, high_water, retained_floor
 from voxint.api.jobs_query import jobs_badge_count
 from voxint.api.routers.deps import OperatorDep, SessionDep, require_onboarded
 
@@ -33,17 +33,27 @@ def activity_events(
     request: Request,
     operator: OperatorDep,
     session: SessionDep,
-    since: int | None = None,
+    # A negative cursor is malformed input, not a bootstrap; reject it (422)
+    # rather than let it page the whole retained backlog.
+    since: int | None = Query(default=None, ge=0),
 ) -> JSONResponse:
     if not request.app.state.settings.console_activity_enabled:
         raise HTTPException(status_code=404, detail="not found")
 
     badge = jobs_badge_count(session)
     hw = high_water(session)
+    floor = retained_floor(session)
     if since is None:
         # Bootstrap: baseline at the high-water mark, no historical toasts.
         return JSONResponse(
-            {"events": [], "next_cursor": hw, "has_more": False, "badge": badge, "high_water": hw}
+            {
+                "events": [],
+                "next_cursor": hw,
+                "has_more": False,
+                "badge": badge,
+                "high_water": hw,
+                "floor": floor,
+            }
         )
 
     rows = events_since(session, after_id=since, limit=ACTIVITY_POLL_LIMIT)
@@ -51,9 +61,10 @@ def activity_events(
         {"id": row.id, "kind": row.kind, "title": row.title, "href": row.href} for row in rows
     ]
     next_cursor = rows[-1].id if rows else since
-    # ``high_water`` lets the client detect a cursor that fell outside the
-    # retained range (a DB reset that lowered max(id), or a prune) and rebaseline
-    # to it without a stale flood; a normal cursor is always <= high_water.
+    # ``high_water`` catches a cursor ABOVE the retained range (a DB reset that
+    # lowered max(id)); ``floor`` catches one BELOW it (events pruned while the
+    # tab was closed). Either way the client resyncs to high_water rather than
+    # replaying the retained backlog as if those completions were new.
     return JSONResponse(
         {
             "events": events,
@@ -61,5 +72,6 @@ def activity_events(
             "has_more": len(rows) == ACTIVITY_POLL_LIMIT,
             "badge": badge,
             "high_water": hw,
+            "floor": floor,
         }
     )

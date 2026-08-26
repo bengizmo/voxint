@@ -901,8 +901,19 @@
     try { reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) {}
 
     function readCursor() {
-      try { var v = localStorage.getItem(CURSOR_KEY); return v === null ? null : parseInt(v, 10); }
-      catch (e) { return null; }
+      try {
+        var v = localStorage.getItem(CURSOR_KEY);
+        if (v === null) { return null; }
+        var n = parseInt(v, 10);
+        /* Reject a corrupt value ("NaN", "-1", "10abc") instead of sending it as
+           ?since= (a negative floods the backlog; NaN 422s forever): clear it so
+           the next poll bootstraps cleanly. */
+        if (!isFinite(n) || n < 0 || String(n) !== v) {
+          try { localStorage.removeItem(CURSOR_KEY); } catch (e) {}
+          return null;
+        }
+        return n;
+      } catch (e) { return null; }
     }
     function writeCursor(n) { try { localStorage.setItem(CURSOR_KEY, String(n)); } catch (e) {} }
 
@@ -970,39 +981,66 @@
       } catch (e) { cb(null); }
     }
 
+    /* Single-flight: a drain can span several fetches and outlast one interval,
+       so re-entrancy would double-toast and race the cursor. One poll runs at a
+       time; the next is scheduled only once the current settles (recursive
+       setTimeout, not setInterval). */
+    var inFlight = false;
+    function scheduleNext() { window.setTimeout(poll, POLL_MS); }
+
     function poll() {
+      if (inFlight) { return; }
+      inFlight = true;
       var cursor = readCursor();
       if (cursor === null) {
         /* Bootstrap: baseline at the high-water mark, no backlog toasts. */
         fetchJson(ENDPOINT, function (data) {
-          if (!data) { return; }
-          writeCursor(data.next_cursor);
-          updateBadge(data.badge);
+          if (data) { writeCursor(data.next_cursor); updateBadge(data.badge); }
+          inFlight = false;
+          scheduleNext();
         });
         return;
       }
       var collected = [];
+      /* Persist the cursor only AFTER a successful flush: if the tab dies
+         mid-drain the cursor stays put and the next session re-toasts (a
+         duplicate is honest; a silent miss is not). */
+      function done(finalCursor) {
+        flush(collected);
+        if (typeof finalCursor === "number") { writeCursor(finalCursor); }
+        inFlight = false;
+        scheduleNext();
+      }
       function step(from) {
         fetchJson(ENDPOINT + "?since=" + encodeURIComponent(from), function (data) {
-          if (!data) { return; }
+          if (!data) { inFlight = false; scheduleNext(); return; }  // transient: retry, cursor kept
           updateBadge(data.badge);
-          /* Cursor beyond the retained range (DB reset / prune): rebaseline
-             without a stale flood. */
-          if (typeof data.high_water === "number" && from > data.high_water) {
-            writeCursor(data.high_water);
+          var hw = typeof data.high_water === "number" ? data.high_water : from;
+          var floor = typeof data.floor === "number" ? data.floor : 0;
+          /* Cursor outside the retained range — above it (a DB reset lowered
+             max(id)) or below the retention floor (events pruned while the tab
+             was closed): resync to high_water, never replay the retained
+             backlog as new. */
+          if (from > hw || (floor > 0 && from < floor - 1)) {
+            collected = [];
+            done(hw);
             return;
           }
           for (var i = 0; i < data.events.length; i++) { collected.push(data.events[i]); }
-          writeCursor(data.next_cursor);
-          if (data.has_more && collected.length < DRAIN_CAP) { step(data.next_cursor); return; }
-          flush(collected);
+          if (data.has_more) {
+            /* A long-closed tab: show one coalesced toast and jump to the head so
+               later polls do not re-toast the untoasted remainder. */
+            if (collected.length >= DRAIN_CAP) { done(hw); return; }
+            step(data.next_cursor);
+            return;
+          }
+          done(data.next_cursor);
         });
       }
       step(cursor);
     }
 
     poll();
-    window.setInterval(poll, POLL_MS);
   })();
   </script>
   {% endif %}
