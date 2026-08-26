@@ -125,5 +125,7 @@ def test_single_alembic_head() -> None:
     # audio_clip artifact kind + audio_artifacts.idempotency_key clip cache key,
     # issue #88; 0040 = projects + media_folders + media location split, issue
     # #153; 0041 = speaker_profiles current per-field profile with provenance,
-    # issue #159; 0042 = activity_events console activity outbox, issue #162).
-    assert list(heads) == ["0042"]
+    # issue #159; 0042 = activity_events console activity outbox, issue #162;
+    # 0043 = widen activity_events.kind for speaker_identified, issue #162;
+    # 0044 = media_operations journal + media_operation_files, issue #155).
+    assert list(heads) == ["0044"]

@@ -25,6 +25,7 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from voxint.activity import record_speaker_identified, record_speaker_merge
 from voxint.adjudication.annotations import (
     TIMING_WORD,
     AnnotationError,
@@ -59,7 +60,12 @@ from voxint.adjudication.annotations import (
 )
 from voxint.adjudication.corrections_view import run_reconciliation
 from voxint.adjudication.enrollment import EnrollmentError, enroll_new_speaker
-from voxint.adjudication.ledger import ConflictingReplayError, WordRangeError, record_decision
+from voxint.adjudication.ledger import (
+    ConflictingReplayError,
+    WordRangeError,
+    decision_exists,
+    record_decision,
+)
 from voxint.adjudication.merge import MergeConflictError, MergeError, apply_merge, preview_merge
 from voxint.adjudication.resolver import (
     QUEUE_SORTS,
@@ -800,6 +806,7 @@ def decide(
         raise HTTPException(
             status_code=422, detail="assign requires speaker_id; others forbid it"
         )
+    speaker: Speaker | None = None
     if speaker_id is not None:
         # FOR SHARE: a concurrent archive/merge takes FOR UPDATE on this
         # row, so the active check and the ledger append below serialize
@@ -817,10 +824,17 @@ def decide(
                     " roster identity — refresh and pick another"
                 ),
             )
-    if label not in {s.label for s in label_states(session, run_id)}:
+    states = label_states(session, run_id)
+    if label not in {s.label for s in states}:
         raise HTTPException(status_code=404, detail=f"no label {label!r} in run")
+    # The label's effective speaker BEFORE this ruling: an assign that re-asserts
+    # it identifies nothing new and must not toast (issue #162 activity).
+    prior_speaker_id = next((s.speaker_id for s in states if s.label == label), None)
+    # A replay returns the existing row without changing effective attribution, so
+    # it must not toast (a stale/superseded identification); only a fresh ruling.
+    is_replay = decision_exists(session, nonce)
     try:
-        record_decision(
+        row = record_decision(
             session,
             pipeline_run_id=run_id,
             diarization_label=label,
@@ -831,6 +845,17 @@ def decide(
         )
     except ConflictingReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    settings: Settings = request.app.state.settings
+    if (
+        settings.console_activity_enabled
+        and not is_replay
+        and decision is Decision.ASSIGN
+        and speaker is not None  # ASSIGN <=> speaker_id set (checked above)
+        and speaker_id != prior_speaker_id  # effective attribution actually changed
+    ):
+        record_speaker_identified(
+            session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
+        )
     return _labels_response(request, session, run, token)
 
 @router.post("/review/{run_id}/merge/preview")
@@ -947,7 +972,7 @@ def merge_apply(
         raise HTTPException(status_code=422, detail="malformed expected-state") from exc
     settings: Settings = request.app.state.settings
     try:
-        apply_merge(
+        result = apply_merge(
             session,
             run_id=run_id,
             labels=labels,
@@ -964,6 +989,17 @@ def merge_apply(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except MergeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # One event per merge (server-side coalescing): a merge is one operator
+    # consolidation, keyed on a stable per-merge decision id (issue #162 activity).
+    # A replayed merge (double-click / retry) never re-announces.
+    if settings.console_activity_enabled and not result.is_replay and result.decision_ids:
+        record_speaker_merge(
+            session,
+            run_id=run_id,
+            occurrence_decision_id=min(result.decision_ids.values()),
+            survivor_name=result.survivor_name,
+            label_count=len(result.labels),
+        )
     return _labels_response(request, session, run, token)
 
 @router.post("/review/{run_id}/segments/{segment_id}/relabel")
@@ -1044,6 +1080,7 @@ def relabel_segment(
                     "boundary first"
                 ),
             )
+    speaker: Speaker | None = None
     if speaker_id is not None:
         speaker = session.execute(
             select(Speaker).where(Speaker.id == speaker_id).with_for_update(read=True)
@@ -1058,8 +1095,10 @@ def relabel_segment(
                     " roster identity — refresh and pick another"
                 ),
             )
+    # Only a fresh ruling announces; a replay returns the existing row unchanged.
+    is_replay = decision_exists(session, nonce)
     try:
-        record_decision(
+        row = record_decision(
             session,
             pipeline_run_id=run_id,
             diarization_label=segment.diarization_label,
@@ -1075,6 +1114,18 @@ def relabel_segment(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except WordRangeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    settings: Settings = request.app.state.settings
+    # A per-segment override to a named speaker is a positive identification
+    # (INHERIT is a reset, never announced — issue #162 activity).
+    if (
+        settings.console_activity_enabled
+        and not is_replay
+        and decision is Decision.ASSIGN
+        and speaker is not None
+    ):
+        record_speaker_identified(
+            session, run_id=run_id, decision_id=row.id, speaker_name=speaker.display_name
+        )
     # The island (JSON Accept) reassigns a split child and reconciles against a
     # whole-run render — a child's speaker string moved, which the per-segment
     # review shape can't carry. The htmx labels workbench (and any non-island
@@ -1293,8 +1344,10 @@ def enroll(
     except ClaimMismatchError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     settings: Settings = request.app.state.settings
+    # Only a fresh enrollment announces, never a replay of one.
+    is_replay = decision_exists(session, nonce)
     try:
-        enroll_new_speaker(
+        enrollment = enroll_new_speaker(
             session,
             run_id=run_id,
             diarization_label=label,
@@ -1307,6 +1360,18 @@ def enroll(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ConflictingReplayError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if settings.console_activity_enabled and not is_replay:
+        # Resolve the authoritative roster name from the speaker row, never the
+        # submitted display_name: a replay reuses an existing (maybe renamed)
+        # speaker and enroll deliberately ignores the posted name then.
+        enrolled = session.get(Speaker, enrollment.speaker_id)
+        if enrolled is not None:
+            record_speaker_identified(
+                session,
+                run_id=run_id,
+                decision_id=enrollment.decision_id,
+                speaker_name=enrolled.display_name,
+            )
     return _labels_response(request, session, run, token)
 
 @router.post("/review/{run_id}/enrich/names")

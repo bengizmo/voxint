@@ -68,6 +68,33 @@ class RunStatus(enum.StrEnum):
     CANCELLED = "cancelled"
 
 
+class OperationType(enum.StrEnum):
+    MOVE = "move"
+    TRASH = "trash"
+    RESTORE = "restore"
+    PURGE = "purge"
+
+
+class OperationState(enum.StrEnum):
+    PLANNED = "planned"
+    FS_APPLIED = "fs_applied"
+    DB_APPLIED = "db_applied"
+    AWAITING_RETRY = "awaiting_retry"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+OPERATION_TERMINAL_STATES = frozenset({OperationState.COMPLETED, OperationState.FAILED})
+OPERATION_ACTIVE_STATES = frozenset(set(OperationState) - OPERATION_TERMINAL_STATES)
+
+
+class OperationFileStatus(enum.StrEnum):
+    PENDING = "pending"
+    DONE = "done"
+    MISSING = "missing"
+    FAILED = "failed"
+
+
 class NotifiableEvent(enum.StrEnum):
     """Run transitions that emit a webhook (issue #12).
 
@@ -96,12 +123,15 @@ class NotificationStatus(enum.StrEnum):
 class ActivityKind(enum.StrEnum):
     """The kinds of console activity events (issue #162, Console 2.0 P7).
 
-    Only ``RUN_COMPLETED`` exists in this slice; speaker-identification events
-    are a deferred fast-follow that adds its own value here (and widens the CHECK
-    in its own migration) rather than shipping an unconstrained ``kind`` now.
+    ``RUN_COMPLETED`` announces a run reaching COMPLETED (migration 0042);
+    ``SPEAKER_IDENTIFIED`` announces an operator naming a diarization label
+    (assign / enroll / merge — migration 0043 widened the CHECK to admit it).
+    Both are run-scoped, so ``pipeline_run_id`` stays NOT NULL and the frozen
+    ``title``/``href`` snapshot is the whole payload — no per-kind columns.
     """
 
     RUN_COMPLETED = "run_completed"
+    SPEAKER_IDENTIFIED = "speaker_identified"
 
 
 class Stage(enum.StrEnum):
@@ -363,6 +393,8 @@ class MediaItem(Base):
     size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     sha256: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    trashed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     runs: Mapped[list["PipelineRun"]] = relationship(back_populates="media_item")
     source_metadata: Mapped["MediaSourceMetadata | None"] = relationship(
@@ -371,6 +403,7 @@ class MediaItem(Base):
     media_folder: Mapped["MediaFolder | None"] = relationship(
         back_populates="media_items"
     )
+    operations: Mapped[list["MediaOperation"]] = relationship(back_populates="media_item")
 
 
 class MediaSourceMetadata(Base):
@@ -2562,9 +2595,10 @@ class ActivityEvent(Base):
     # BIGSERIAL/identity in Postgres.
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     kind: Mapped[str] = mapped_column(Text)
-    # NOT NULL for the only kind this slice carries (run_completed always names a
-    # run). The speaker-event follow-up makes this nullable and adds a
-    # kind-specific shape CHECK + typed speaker provenance columns.
+    # NOT NULL: every kind is run-scoped (run_completed names its run;
+    # speaker_identified names the run whose label was identified), so a frozen
+    # title/href snapshot is the whole payload and no per-kind provenance columns
+    # are carried.
     pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
     )
@@ -2825,3 +2859,85 @@ class AnnotationTagLink(Base):
         primary_key=True,
     )
     tag_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("annotation_tags.id"), primary_key=True)
+
+
+class MediaOperation(Base):
+    """Durable journal for byte-touching media file operations (ADR 0007)."""
+
+    __tablename__ = "media_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "operation_type IN ('move', 'trash', 'restore', 'purge')",
+            name="media_operations_operation_type_check",
+        ),
+        CheckConstraint(
+            "state IN ('planned', 'fs_applied', 'db_applied', "
+            "'awaiting_retry', 'completed', 'failed')",
+            name="media_operations_state_check",
+        ),
+        Index("ix_media_operations_media_id", "media_id"),
+        Index("ix_media_operations_reconciler", "state", "next_attempt_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    media_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("media_items.id", ondelete="CASCADE")
+    )
+    operation_type: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(Text, default=OperationState.PLANNED.value)
+    origin_path: Mapped[str | None] = mapped_column(Text)
+    destination_path: Mapped[str | None] = mapped_column(Text)
+    origin_digest: Mapped[str | None] = mapped_column(Text)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claimed_by: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    restores_operation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("media_operations.id")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    media_item: Mapped["MediaItem"] = relationship(back_populates="operations")
+    files: Mapped[list["MediaOperationFile"]] = relationship(back_populates="operation")
+    restores_operation: Mapped["MediaOperation | None"] = relationship(
+        foreign_keys=[restores_operation_id]
+    )
+
+
+class MediaOperationFile(Base):
+    """Per-file progress for purge inventory and sidecar bundling (ADR 0007)."""
+
+    __tablename__ = "media_operation_files"
+    __table_args__ = (
+        CheckConstraint(
+            "file_kind IN ('source', 'sidecar', 'preprocessed_audio', "
+            "'audio_clip', 'peaks')",
+            name="media_operation_files_file_kind_check",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'done', 'missing', 'failed')",
+            name="media_operation_files_status_check",
+        ),
+        Index("ix_media_operation_files_operation_id", "operation_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    operation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("media_operations.id", ondelete="CASCADE")
+    )
+    file_path: Mapped[str] = mapped_column(Text)
+    file_kind: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=OperationFileStatus.PENDING.value)
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    operation: Mapped["MediaOperation"] = relationship(back_populates="files")

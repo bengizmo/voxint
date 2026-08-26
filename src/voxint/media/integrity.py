@@ -79,6 +79,18 @@ def openable_source(media_root: Path, source_path: str) -> Path | None:
     return resolved
 
 
+def openable_current(media_root: Path, media: MediaItem) -> Path | None:
+    """Resolve the live byte location for a media item, or None.
+
+    Uses ``current_path`` (the mutable live location, ADR 0001 / ADR 0007)
+    with a fallback to ``source_path`` for rows that predate the P2a backfill
+    or have a NULL ``current_path``. The resolved path must stay within
+    ``media_root`` and be a regular file, same as ``openable_source``.
+    """
+    path = media.current_path if media.current_path is not None else media.source_path
+    return openable_source(media_root, path)
+
+
 @dataclass(frozen=True)
 class BackfillResult:
     """Outcome of one backfill sweep.
@@ -121,16 +133,13 @@ def backfill_sha256(
     hashed = 0
     missing: list[str] = []
     for media in rows:
-        path = openable_source(media_root, media.source_path)
+        path = openable_current(media_root, media)
         if path is None:
             missing.append(media.source_path)
             continue
         try:
             digest = sha256_file(path)
         except OSError:
-            # Vanished or became unreadable between the guard and the open, or a
-            # read error partway through: leave the row NULL and report it rather
-            # than aborting the sweep. It is retried on a later run.
             missing.append(media.source_path)
             continue
         media.sha256 = digest

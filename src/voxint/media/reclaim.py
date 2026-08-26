@@ -183,7 +183,9 @@ def _select_eligible(
     (``completed``/``cancelled`` — FAILED is deliberately excluded: a requeued
     FAILED run resumes at its failed stage and still needs the intermediate),
     that is neither the tutorial run nor aliased by any
-    ``media_items.source_path``, of one of two kinds aged by different clocks:
+    ``media_items.current_path`` or ``source_path`` (belt-and-suspenders: both
+    checked so a NULL ``current_path`` pre-backfill row is still protected), of
+    one of two kinds aged by different clocks:
 
     - ``preprocessed_audio`` — the normalized-audio intermediate, aged by
       ``PipelineRun.updated_at`` (untouched since ``cutoff``).
@@ -197,7 +199,12 @@ def _select_eligible(
     :func:`_confined_parent_and_name` make it structurally impossible to reclaim
     a retained source file even via a malformed row.
     """
-    source_alias = exists().where(MediaItem.source_path == AudioArtifact.path)
+    source_alias = exists().where(
+        or_(
+            MediaItem.current_path == AudioArtifact.path,
+            MediaItem.source_path == AudioArtifact.path,
+        )
+    )
     age_eligible = or_(
         and_(
             AudioArtifact.kind == ArtifactKind.PREPROCESSED_AUDIO.value,

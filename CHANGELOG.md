@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
+  codec/telephony/speed-degraded children of bona fide clips via the frozen
+  `build_recipe_argv` ffmpeg round trips inside a digest-pinned container
+  (`jrottenberg/ffmpeg:7.1-ubuntu`). Resolves the three PR-2a deferred blockers:
+  B1 (raw/WAV framing through headerless s16le), B2 (combined parent+child
+  manifest validated through `load_manifest`), and B5 (separate immutable degrade
+  root published by atomic rename). New functions: `materialize_degrade`,
+  `_run_containerized_ffmpeg`, `_degrade_one_clip`, `_assemble_combined_manifest`,
+  `resolve_clip_path`, `_write_degrade_artifacts`, `DegradeResult`. The `degrade`
+  CLI verb gains `--corpus-root`/`--parent-root`/`--container-image` flags for
+  execution mode (unchanged dry-run without them).
 - **Console 2.0 P7: run-completion activity indicator and toasts, dark-shipped**
   (#162, epic #149). Behind a new `CONSOLE_ACTIVITY_ENABLED` flag (off by
   default), a completed pipeline run writes one row to a new `activity_events`
@@ -16,8 +27,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   to its newest 500 rows by an opt-in retention sweep. Nothing is reachable until
   the flag is on (the endpoint answers 404, the shell renders no chrome), and
   activation additionally requires Jobs discovery so the badge and links stay
-  honest. Speaker-identification events are a planned follow-up. No redirect or
-  version bump ships here; that activation is a later slice.
+  honest. No redirect or version bump ships here; that activation is a later slice.
+- **Console 2.0 P7: speaker-identification activity events, dark-shipped** (#162,
+  epic #149). Behind the same `CONSOLE_ACTIVITY_ENABLED` flag, naming a
+  diarization label now raises a "Speaker identified: name." toast. The event is
+  written to the `activity_events` outbox in the same transaction as the ledger
+  ruling, so it appears only if the ruling commits. It fires from the four
+  adjudication paths (assign a label, override one segment, enroll a new speaker,
+  merge labels), and only for a positive identification: excluding a label,
+  marking it unknown, resetting a segment, or re-asserting a label's current
+  speaker stays silent. A merge raises one toast for the whole consolidation, not
+  one per label. The Jobs badge is unchanged (it stays a live-jobs count; speaker
+  events affect toasts only). No version bump.
 - **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
   audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
   before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
