@@ -53,6 +53,7 @@ status checks are green, never by a direct push. The required checks are:
 |---|---|
 | `lint-test` | `ruff`, `mypy` (strict), and `pytest` (unit + integration) against a pgvector Postgres service. |
 | `secrets-scan` | Pinned gitleaks over history and the working tree, using `.gitleaks.toml`. |
+| `coverage` | The full `pytest` suite under `--cov`, failing below an 85% floor. Runs in parallel with `lint-test`, off the fast path. |
 
 The `frontend` job (lint, typecheck, build, audit) also runs on every push and
 PR; it is not currently a required check but should still pass before you merge.
