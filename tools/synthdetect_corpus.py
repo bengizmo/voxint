@@ -29,7 +29,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
+import tempfile
 import wave
 from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
@@ -1558,6 +1560,301 @@ def derive_degraded_record(
 
 
 # --------------------------------------------------------------------------- #
+# Prepare executor (S5 PR-2a): materialize bona fide clips by slicing the staged
+# source recordings at the plan's integer sample offsets. ffmpeg-free: the staged
+# sources are already canonical PCM (16 kHz mono s16le), so materialization is
+# deterministic byte slicing of a pin-verified payload, never a codec pass. Inputs
+# (audio dir, corpus root, acquisition manifest) are CLI arguments; nothing here is
+# committed. See docs/plans/2026-08-26-14-21_synthdetect-s5-pr2-executor.md.
+# --------------------------------------------------------------------------- #
+_HASH_CHUNK = 1 << 20
+
+
+@dataclass(frozen=True)
+class AcquisitionPin:
+    """A pinned staged input file: its relative path, sha256, and byte size."""
+
+    rel_path: str
+    sha256: str
+    size: int
+
+
+def _safe_rel_path(rel_path: str, *, where: str) -> str:
+    """Validate a relative path stays inside its root (fail closed on traversal)."""
+    if not isinstance(rel_path, str) or not rel_path:
+        raise CorpusError(f"{where}: rel_path must be a non-empty string")
+    pure = Path(rel_path)
+    if pure.is_absolute() or rel_path.startswith("-") or ".." in pure.parts:
+        raise CorpusError(f"{where}: rel_path {rel_path!r} must be relative and contain no '..'")
+    return rel_path
+
+
+def load_acquisition_manifest(
+    obj: Any,
+) -> tuple[str, dict[str, AcquisitionPin], tuple[AcquisitionPin, ...]]:
+    """Parse and validate an acquisition manifest (pins for the staged inputs).
+
+    Shape: ``{"source": id, "recordings": {rec_id: {rel_path, sha256, size}},
+    "rttms": [{rel_path, sha256, size}, ...]}``. Recordings are keyed by the logical
+    recording id the plan uses; RTTMs are a content-addressed list (matched by sha,
+    so a pin is path-independent). Fails closed on a bad shape, a non-hex sha, a
+    non-positive size, an unsafe rel_path, or a duplicate rttm sha.
+    """
+    if not isinstance(obj, dict):
+        raise CorpusError("acquisition manifest must be a JSON object")
+    source = obj.get("source")
+    if not isinstance(source, str) or not source:
+        raise CorpusError("acquisition manifest: 'source' must be a non-empty string")
+    raw_recordings = obj.get("recordings")
+    if not isinstance(raw_recordings, dict) or not raw_recordings:
+        raise CorpusError("acquisition manifest: 'recordings' must be a non-empty object")
+    recordings: dict[str, AcquisitionPin] = {}
+    for rec_id, entry in raw_recordings.items():
+        recordings[rec_id] = _acquisition_pin(entry, where=f"recording {rec_id!r}")
+    raw_rttms = obj.get("rttms")
+    if not isinstance(raw_rttms, list) or not raw_rttms:
+        raise CorpusError("acquisition manifest: 'rttms' must be a non-empty list")
+    rttms: list[AcquisitionPin] = [
+        _acquisition_pin(entry, where=f"rttm #{i}") for i, entry in enumerate(raw_rttms)
+    ]
+    seen: set[str] = set()
+    for pin in rttms:
+        if pin.sha256 in seen:
+            raise CorpusError(f"acquisition manifest: duplicate rttm sha256 {pin.sha256}")
+        seen.add(pin.sha256)
+    return source, recordings, tuple(rttms)
+
+
+def _acquisition_pin(entry: Any, *, where: str) -> AcquisitionPin:
+    if not isinstance(entry, dict):
+        raise CorpusError(f"{where}: pin must be an object")
+    rel_path = _safe_rel_path(entry.get("rel_path", ""), where=where)
+    sha256 = entry.get("sha256")
+    if not isinstance(sha256, str) or not _is_sha256(sha256):
+        raise CorpusError(f"{where}: sha256 must be 64 lowercase hex")
+    size = entry.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise CorpusError(f"{where}: size must be a positive int")
+    return AcquisitionPin(rel_path=rel_path, sha256=sha256, size=size)
+
+
+def _hash_file(path: Path) -> tuple[str, int]:
+    """Stream a file once, returning ``(sha256, size)`` (open-once, no reopen race)."""
+    hasher = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as fh:
+            for chunk in iter(lambda: fh.read(_HASH_CHUNK), b""):
+                hasher.update(chunk)
+                size += len(chunk)
+    except OSError as exc:
+        raise CorpusError(f"{path}: cannot read: {exc}") from exc
+    return hasher.hexdigest(), size
+
+
+def verify_and_read_rttms(
+    rttm_paths: list[str] | tuple[str, ...],
+    rttm_pins: tuple[AcquisitionPin, ...],
+) -> dict[str, tuple[RttmTurn, ...]]:
+    """Read each RTTM once, verify it against a pin by content sha, then parse it.
+
+    Every RTTM file must match exactly one pin (by sha256 and size), and every pin
+    must be matched (exact keyset coverage), so the plan is built only from pinned
+    bytes. Turns are grouped by the recording id each row declares.
+    """
+    by_sha = {pin.sha256: pin for pin in rttm_pins}
+    matched: set[str] = set()
+    recordings: dict[str, list[RttmTurn]] = {}
+    for rttm_path in rttm_paths:
+        path = Path(rttm_path)
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            raise CorpusError(f"{path}: cannot read: {exc}") from exc
+        sha = hashlib.sha256(data).hexdigest()
+        pin = by_sha.get(sha)
+        if pin is None:
+            raise CorpusError(f"{path}: sha256 {sha} is not pinned in the acquisition manifest")
+        if pin.size != len(data):
+            raise CorpusError(f"{path}: size {len(data)} does not match pinned size {pin.size}")
+        if sha in matched:
+            raise CorpusError(f"{path}: rttm sha256 {sha} supplied twice")
+        matched.add(sha)
+        for turn in parse_rttm(data.decode("utf-8")):
+            recordings.setdefault(turn.recording, []).append(turn)
+    missing = sorted(set(by_sha) - matched)
+    if missing:
+        raise CorpusError(f"acquisition manifest names rttm pins never supplied: {missing}")
+    return {rec: tuple(turns) for rec, turns in recordings.items()}
+
+
+@dataclass(frozen=True)
+class PrepareResult:
+    """Summary of a completed prepare materialization (also written as a receipt)."""
+
+    source: str
+    corpus_root: str
+    turn_clips: int
+    segments: int
+    recordings: int
+
+
+def _read_verified_recording(
+    audio_dir: Path, rec_id: str, recordings: dict[str, AcquisitionPin]
+) -> bytes:
+    """Resolve, pin-verify, and read one source recording's canonical payload."""
+    pin = recordings.get(rec_id)
+    if pin is None:
+        raise CorpusError(f"recording {rec_id!r} is not pinned in the acquisition manifest")
+    path = audio_dir / pin.rel_path
+    sha, size = _hash_file(path)
+    if sha != pin.sha256:
+        raise CorpusError(f"{path}: sha256 {sha} does not match pinned {pin.sha256}")
+    if size != pin.size:
+        raise CorpusError(f"{path}: size {size} does not match pinned {pin.size}")
+    return read_canonical_wav_payload(path)
+
+
+def _materialize_record(
+    record: IngestRecord, payload: bytes, staging: Path
+) -> tuple[str, int]:
+    """Slice one record from its recording payload, write it, return measured facts."""
+    n_samples = len(payload) // _BLOCK_ALIGN
+    start, end = record.interval.start_sample, record.interval.end_sample
+    if not 0 <= start < end <= n_samples:
+        raise CorpusError(
+            f"clip {record.clip_id!r}: interval [{start}, {end}) out of range for "
+            f"{n_samples}-sample recording (plan drift)"
+        )
+    clip = payload[start * _BLOCK_ALIGN : end * _BLOCK_ALIGN]
+    rel = _safe_rel_path(record.rel_path, where=f"clip {record.clip_id!r}")
+    out_path = staging / rel
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_canonical_wav(out_path, clip)
+    # Prove the on-disk file is canonical and recovers the exact sliced bytes.
+    if read_canonical_wav_payload(out_path) != clip:
+        raise CorpusError(f"clip {record.clip_id!r}: written WAV did not round-trip to the slice")
+    sha, count = payload_sha_and_count(clip)
+    if count != end - start:
+        raise CorpusError(
+            f"clip {record.clip_id!r}: measured {count} samples, planned {end - start}"
+        )
+    return sha, count
+
+
+def materialize_prepare(
+    source: OrganicSource,
+    recordings_turns: dict[str, tuple[RttmTurn, ...]],
+    *,
+    corpus_root: Path,
+    audio_dir: Path,
+    recordings: dict[str, AcquisitionPin],
+) -> PrepareResult:
+    """Materialize an organic source into a corpus root, atomically, from pins.
+
+    Builds the same plan as dry-run, reads each pin-verified source recording once,
+    slices every turn and segment clip by sample offset, writes canonical WAVs,
+    finalizes and validates the v1 manifest, and publishes the whole tree by atomic
+    rename. Fails closed on any pin mismatch, plan drift, or a populated destination;
+    nothing is published on failure.
+    """
+    if corpus_root.exists() and any(corpus_root.iterdir()):
+        raise CorpusError(f"corpus root {corpus_root} is already populated; refusing to overwrite")
+    plan = build_plan(source, recordings_turns)
+    all_records = (*plan.turn_clips, *plan.segments)
+    needed = sorted({r.recording for r in all_records})
+    corpus_root.parent.mkdir(parents=True, exist_ok=True)
+    measured: dict[str, tuple[str, int]] = {}
+    clip_rows: list[dict[str, Any]] = []
+    source_rows: list[dict[str, Any]] = []
+    with tempfile.TemporaryDirectory(dir=corpus_root.parent, prefix=".prepare-") as tmp:
+        staging = Path(tmp) / "corpus"
+        staging.mkdir()
+        for rec_id in needed:
+            payload = _read_verified_recording(audio_dir, rec_id, recordings)
+            rec_sha, rec_count = payload_sha_and_count(payload)
+            source_rows.append(
+                {"recording": rec_id, "payload_sha256": rec_sha, "n_samples": rec_count}
+            )
+            for record in all_records:
+                if record.recording != rec_id:
+                    continue
+                sha, count = _materialize_record(record, payload, staging)
+                measured[record.clip_id] = (sha, count)
+                clip_rows.append(
+                    {
+                        "clip_id": record.clip_id,
+                        "recording": record.recording,
+                        "start_sample": record.interval.start_sample,
+                        "end_sample": record.interval.end_sample,
+                        "sha256": sha,
+                    }
+                )
+        manifest = finalize_manifest(all_records, measured)
+        _write_prepare_artifacts(
+            staging, plan, manifest, all_records, measured, source_rows, clip_rows
+        )
+        os.replace(staging, corpus_root)
+    return PrepareResult(
+        source=source.source_id,
+        corpus_root=str(corpus_root),
+        turn_clips=len(plan.turn_clips),
+        segments=len(plan.segments),
+        recordings=len(needed),
+    )
+
+
+def _write_prepare_artifacts(
+    staging: Path,
+    plan: MaterializationPlan,
+    manifest: Manifest,
+    all_records: tuple[IngestRecord | DegradedRecord, ...],
+    measured: dict[str, tuple[str, int]],
+    source_rows: list[dict[str, Any]],
+    clip_rows: list[dict[str, Any]],
+) -> None:
+    """Write the manifest and the (sorted, host-path-free) prepare receipts.
+
+    The manifest.json is serialized from the exact clip dicts ``finalize_manifest``
+    validated (``record.clip_dict(sha, count)``), so the written manifest is the one
+    that passed ``load_manifest``, byte for byte.
+    """
+    clips = sorted(
+        (record.clip_dict(*measured[record.clip_id]) for record in all_records),
+        key=lambda c: c["clip_id"],
+    )
+    (staging / "manifest.json").write_text(
+        json.dumps(
+            {"schema_version": manifest.schema_version, "clips": clips}, indent=2, sort_keys=True
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    clip_rows_sorted = sorted(clip_rows, key=lambda r: r["clip_id"])
+    (staging / "clip_receipt.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in clip_rows_sorted),
+        encoding="utf-8",
+    )
+    (staging / "prepare_receipt.json").write_text(
+        json.dumps(
+            {
+                "source": plan.source,
+                "canonicalization_id": CANONICALIZATION_ID,
+                "plan_schema_version": plan.schema_version,
+                "manifest_schema_version": manifest.schema_version,
+                "turn_clips": len(plan.turn_clips),
+                "segments": len(plan.segments),
+                "recordings": sorted(source_rows, key=lambda r: r["recording"]),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+# --------------------------------------------------------------------------- #
 # CLI: validate a manifest file (schema + integrity, no audio)
 # --------------------------------------------------------------------------- #
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -1591,26 +1888,56 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_prepare(args: argparse.Namespace) -> int:
-    """Plan an organic source from its RTTMs (dry-run: emit a plan, extract nothing).
+    """Plan an organic source from its RTTMs, or materialize it under a corpus root.
 
-    Reads one or more RTTM files, groups their rows by the recording id each row
-    declares, builds the materialization plan, and writes it as JSON. It touches no
-    audio; the executor (a later slice) materializes what the plan describes.
+    Without ``--corpus-root`` this is the dry-run: read the RTTMs, group by recording,
+    build the plan, print it as JSON, touch no audio. With ``--corpus-root`` it
+    executes (PR-2a): the RTTMs and source recordings are pin-verified against the
+    ``--acquisition-manifest``, each recording is sliced at the plan's sample offsets
+    into canonical WAV clips, the v1 manifest is finalized, and the tree is published
+    atomically. The executed plan is identical to the dry-run plan.
     """
     source = ORGANIC_SOURCES.get(args.source)
     if source is None:
         sys.stderr.write(f"unknown source {args.source!r}; known: {sorted(ORGANIC_SOURCES)}\n")
         return 2
-    recordings: dict[str, list[RttmTurn]] = {}
+    if args.corpus_root is None:
+        recordings: dict[str, list[RttmTurn]] = {}
+        try:
+            for rttm_path in args.rttm:
+                for turn in parse_rttm(Path(rttm_path).read_text(encoding="utf-8")):
+                    recordings.setdefault(turn.recording, []).append(turn)
+            plan = build_plan(source, {rec: tuple(turns) for rec, turns in recordings.items()})
+        except (OSError, CorpusError) as exc:
+            sys.stderr.write(f"prepare failed: {exc}\n")
+            return 2
+        sys.stdout.write(json.dumps(plan_to_dict(plan), indent=2, sort_keys=True) + "\n")
+        return 0
+    if args.audio_dir is None or args.acquisition_manifest is None:
+        sys.stderr.write(
+            "prepare --corpus-root requires --audio-dir and --acquisition-manifest\n"
+        )
+        return 2
     try:
-        for rttm_path in args.rttm:
-            for turn in parse_rttm(Path(rttm_path).read_text(encoding="utf-8")):
-                recordings.setdefault(turn.recording, []).append(turn)
-        plan = build_plan(source, {rec: tuple(turns) for rec, turns in recordings.items()})
-    except (OSError, CorpusError) as exc:
+        acq = json.loads(Path(args.acquisition_manifest).read_text(encoding="utf-8"))
+        acq_source, recording_pins, rttm_pins = load_acquisition_manifest(acq)
+        if acq_source != source.source_id:
+            raise CorpusError(
+                f"acquisition manifest source {acq_source!r} does not match "
+                f"--source {source.source_id!r}"
+            )
+        recordings_turns = verify_and_read_rttms(args.rttm, rttm_pins)
+        result = materialize_prepare(
+            source,
+            recordings_turns,
+            corpus_root=Path(args.corpus_root),
+            audio_dir=Path(args.audio_dir),
+            recordings=recording_pins,
+        )
+    except (OSError, json.JSONDecodeError, CorpusError) as exc:
         sys.stderr.write(f"prepare failed: {exc}\n")
         return 2
-    sys.stdout.write(json.dumps(plan_to_dict(plan), indent=2, sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps(asdict(result), indent=2, sort_keys=True) + "\n")
     return 0
 
 
@@ -1656,12 +1983,29 @@ def main(argv: list[str] | None = None) -> int:
     p_validate.set_defaults(func=cmd_validate)
 
     p_prepare = sub.add_parser(
-        "prepare", help="plan an organic source from its RTTMs (dry-run, no audio)"
+        "prepare",
+        help="plan an organic source from its RTTMs (dry-run), or materialize it "
+        "with --corpus-root",
     )
     p_prepare.add_argument(
         "--source", required=True, help=f"organic source id ({sorted(ORGANIC_SOURCES)})"
     )
     p_prepare.add_argument("--rttm", required=True, nargs="+", help="one or more RTTM files")
+    p_prepare.add_argument(
+        "--corpus-root",
+        default=None,
+        help="materialize into this (must-be-empty) root instead of printing the plan",
+    )
+    p_prepare.add_argument(
+        "--audio-dir",
+        default=None,
+        help="directory holding the source recordings (required with --corpus-root)",
+    )
+    p_prepare.add_argument(
+        "--acquisition-manifest",
+        default=None,
+        help="JSON pin file for the source recordings + RTTMs (required with --corpus-root)",
+    )
     p_prepare.set_defaults(func=cmd_prepare)
 
     p_degrade = sub.add_parser(
