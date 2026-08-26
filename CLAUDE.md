@@ -118,9 +118,34 @@ ships inside the images too). Rules:
   `docs/`, CONTRIBUTING, installer/first-run/error copy), follow the house
   style in the `voxint-docs` skill: pick the audience lane (lay-reader vs
   technical), no emdashes, no LLM-isms, emoji-free prose.
-- **Reviews**: non-trivial changes get a multi-model review before landing;
-  never dismiss a finding without verifying it; record applied fixes and
-  deliberate skips (with reasons) in the commit message.
+- **Reviews**: match review depth and lane to a change's blast radius, not its
+  file type. Two independent gates:
+  - **Code-review depth.** Judge impact first. Anything that could touch
+    inference numerics, security, auth or CSRF, concurrency or locking, a DB
+    migration, a public contract or seam, a released artifact, a dependency, or
+    the strength of a test or CI gate is high-risk and gets a full multi-model
+    panel, whatever files it edits. A change with real design choices or a new
+    cross-cutting seam gets a multi-model review. A clear fix in a familiar
+    pattern (a pure backend refactor with strong existing coverage included)
+    gets a single-model review. A change with no plausible blast radius (a typo,
+    a comment, a mechanical rename touching no public name) needs no formal
+    panel, only the standard gates. When unsure, pick the deeper tier.
+  - **Browser acceptance lane.** Run it when a change alters observable
+    review-console behavior or the delivery, data, or auth contracts a console
+    island depends on (island code, the templates and routes islands hydrate
+    against, island CSS or build or assets, security headers, auth or session
+    middleware, media delivery, or a backend response an island consumes). Skip
+    it for backend, pipeline, service, docs, CI, or test-only changes that leave
+    island behavior unchanged.
+  This gating is discretionary and never relaxes a mandatory gate. It does not
+  touch the numerics doctrine's measured-equivalence requirement, the
+  contract-test-in-the-same-commit rule, the required CI checks, or the release
+  process's own Gate E; those override the classification, and a gate assertion
+  is never weakened to reach a lower tier. Reclassify against the final landing
+  diff if it grew. Never dismiss a finding without verifying it; record, in the
+  commit message or PR, both classifications, the gates you ran, and each
+  applied fix and deliberate skip with its reason. Worked triggers:
+  `docs/testing.md`.
 - Commit work before dispatching background reviewers (they can stash-wipe
   uncommitted changes).
 
@@ -156,14 +181,14 @@ ships inside the images too). Rules:
 - Feature branches; `main` is always releasable. GitHub `main` is
   branch-protected (`enforce_admins=true`, so the rule binds maintainer sessions
   too): it advances only by merging a PR whose required checks (`lint-test` +
-  `secrets-scan`) are green. Direct pushes to GitHub `main`, force-pushes, and
-  branch deletion are all rejected. No human reviewer is required (single
-  operator), so a green PR is yours to merge. `ci.yml` also runs a `coverage`
+  `secrets-scan` + `coverage`) are green. Direct pushes to GitHub `main`,
+  force-pushes, and branch deletion are all rejected. No human reviewer is
+  required (single operator), so a green PR is yours to merge. The `coverage`
   job (full suite with `--cov`, in parallel with `lint-test` so it stays off the
-  fast path) that should be added to the required set alongside the two above,
-  and a `frontend` job that runs on every push and PR but is not currently
-  required. Protection is `strict`, so a PR must be up to date with `main` before
-  it can merge; rebase or merge `main` in if it moved.
+  fast path) is the third required check; `ci.yml` also runs a `frontend` job on
+  every push and PR that is not currently required. Protection is `strict`, so a
+  PR must be up to date with `main` before it can merge; rebase or merge `main`
+  in if it moved.
 - After a PR merges on GitHub, sync the private origin (Forgejo `main` is not
   protected): `git fetch github && git push origin github/main:main`. This keeps
   both remotes' `main` identical. When the two ever diverge, merge, do not
