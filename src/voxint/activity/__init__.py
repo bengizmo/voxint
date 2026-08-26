@@ -8,9 +8,16 @@ beyond the DB default. The browser polls the table directly (see
 ``routers/activity.py``); there is no delivery lifecycle.
 
 An event carries a frozen ``title``/``href`` snapshot resolved at emission so the
-poll is a pure ``id``-cursor read that never re-scans the source tables. Only the
-run-completion event exists in this slice; speaker-identification events are a
-deferred follow-up.
+poll is a pure ``id``-cursor read that never re-scans the source tables. Two kinds
+exist: ``run_completed`` (a run reaching COMPLETED, emitted from
+``cas_update_run``) and ``speaker_identified`` (an operator naming a diarization
+label — assign / enroll / merge, emitted from the adjudication routes). Both are
+run-scoped and snapshot-only; neither carries per-kind provenance columns.
+
+Emission lives at the ORCHESTRATION layer (the transition / the routes) where the
+``console_activity_enabled`` flag is in hand, never inside the low-level ledger
+writer ``adjudication.ledger.record_decision`` (kept policy-free). Any future
+``record_decision`` caller that should announce must emit here as well.
 """
 
 from __future__ import annotations
@@ -106,6 +113,59 @@ def record_run_completed(session: Session, run_id: uuid.UUID) -> None:
         pipeline_run_id=run_id,
         title=title,
         href=href,
+    )
+
+
+def record_speaker_identified(
+    session: Session,
+    *,
+    run_id: uuid.UUID,
+    decision_id: uuid.UUID,
+    speaker_name: str,
+) -> None:
+    """Emit one speaker-identification event (caller's tx).
+
+    For a single positive identification: an ``ASSIGN`` naming a speaker (label or
+    segment scope) or a new-speaker enrollment. Keyed on the ledger ``decision_id``
+    (globally unique, stable under idempotent replay), so replaying the decision
+    re-emits the same occurrence and ``ON CONFLICT DO NOTHING`` keeps it one row.
+    ``speaker_name`` must be the authoritative roster name resolved in this tx, not
+    submitted form input (a replay may name a since-renamed speaker).
+    """
+    record_activity_event(
+        session,
+        kind=ActivityKind.SPEAKER_IDENTIFIED,
+        occurrence_key=f"decision:{decision_id}:identified",
+        pipeline_run_id=run_id,
+        title=speaker_name,
+        href=f"/jobs/{run_id}",
+    )
+
+
+def record_speaker_merge(
+    session: Session,
+    *,
+    run_id: uuid.UUID,
+    occurrence_decision_id: uuid.UUID,
+    survivor_name: str,
+    label_count: int,
+) -> None:
+    """Emit ONE speaker-identification event for a merge (caller's tx).
+
+    A merge assigns N labels to a single survivor, but the operator performed one
+    consolidation, so the feed carries one event (server-side coalescing) rather
+    than N near-identical toasts. Keyed on a stable per-merge ledger decision id
+    (the smallest of the merge's decision ids — a nonce is not collision-safe
+    across runs / label sets), so a replayed merge re-emits the same occurrence.
+    ``label_count`` is the resolved (deduplicated) label count, not raw input.
+    """
+    record_activity_event(
+        session,
+        kind=ActivityKind.SPEAKER_IDENTIFIED,
+        occurrence_key=f"merge:{occurrence_decision_id}",
+        pipeline_run_id=run_id,
+        title=f"{survivor_name} ({label_count} labels)",
+        href=f"/jobs/{run_id}",
     )
 
 

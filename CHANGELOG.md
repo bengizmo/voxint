@@ -16,8 +16,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   to its newest 500 rows by an opt-in retention sweep. Nothing is reachable until
   the flag is on (the endpoint answers 404, the shell renders no chrome), and
   activation additionally requires Jobs discovery so the badge and links stay
-  honest. Speaker-identification events are a planned follow-up. No redirect or
-  version bump ships here; that activation is a later slice.
+  honest. No redirect or version bump ships here; that activation is a later slice.
+- **Console 2.0 P7: speaker-identification activity events, dark-shipped** (#162,
+  epic #149). Behind the same `CONSOLE_ACTIVITY_ENABLED` flag, naming a
+  diarization label now raises a "Speaker identified: name." toast. The event is
+  written to the `activity_events` outbox in the same transaction as the ledger
+  ruling, so it appears only if the ruling commits. It fires from the four
+  adjudication paths (assign a label, override one segment, enroll a new speaker,
+  merge labels), and only for a positive identification: excluding a label,
+  marking it unknown, resetting a segment, or re-asserting a label's current
+  speaker stays silent. A merge raises one toast for the whole consolidation, not
+  one per label. The Jobs badge is unchanged (it stays a live-jobs count; speaker
+  events affect toasts only). No version bump.
 - **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
   audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
   before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
