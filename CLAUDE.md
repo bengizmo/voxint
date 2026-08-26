@@ -158,10 +158,12 @@ ships inside the images too). Rules:
   too): it advances only by merging a PR whose required checks (`lint-test` +
   `secrets-scan`) are green. Direct pushes to GitHub `main`, force-pushes, and
   branch deletion are all rejected. No human reviewer is required (single
-  operator), so a green PR is yours to merge. The `frontend` CI job runs on every
-  push and PR but is not currently in the required set. Protection is `strict`,
-  so a PR must be up to date with `main` before it can merge; rebase or merge
-  `main` in if it moved.
+  operator), so a green PR is yours to merge. `ci.yml` also runs a `coverage`
+  job (full suite with `--cov`, in parallel with `lint-test` so it stays off the
+  fast path) that should be added to the required set alongside the two above,
+  and a `frontend` job that runs on every push and PR but is not currently
+  required. Protection is `strict`, so a PR must be up to date with `main` before
+  it can merge; rebase or merge `main` in if it moved.
 - After a PR merges on GitHub, sync the private origin (Forgejo `main` is not
   protected): `git fetch github && git push origin github/main:main`. This keeps
   both remotes' `main` identical. When the two ever diverge, merge, do not

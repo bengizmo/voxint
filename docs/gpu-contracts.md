@@ -1751,6 +1751,50 @@ paired comparison was inspected. Evidence:
 Gate-2 ratifies paired equivalence on the subset. The 2.85 % published EER
 (Gate-1 PASS on the full official cohort) defers to S4.
 
+#### Verdict: Gate-1 full-cohort DF reproduction PASS (RTX 3060, SM 8.6, 2026-08-25, S4)
+
+The unmodified upstream SSL_Anti-spoofing DF runner reproduces the published
+ASVspoof 2021 DF benchmark on the full official eval cohort. All 611,829 official
+DF trials were scored on the untouched native FLAC tree (upstream's own decode and
+64,600-sample crop), and the pooled EER was computed over the 533,928 phase-`eval`
+trials with the official `eval_metrics_DF.compute_eer` math. Evidence:
+`docs/reports/synthdetect-gate1-s4-2026-08-25.md`.
+
+- **Pooled DF-eval EER: 2.8650 %** against the published 2.85 % and the
+  pre-registered ±0.3 pp tolerance, a +0.015 pp miss that PASSES with wide margin.
+  An independently written EER routine cross-checks the official math to four
+  decimals (2.8650 % both).
+- **Cohort:** 611,829 trials scored (zero skips, the official scorer's length
+  check), pooled over phase `eval` (533,928 trials: 14,869 bona-fide, 519,059
+  spoof). The official keys (`DF-keys-full.tar.gz`, sha256 `426f93e1…`, the pin in
+  `synthdetect_df_import.py`) were verified and their real column tokens measured,
+  not assumed (`bonafide`/`spoof` in column 6, `eval`/`progress`/`hidden` in
+  column 8). The full protocol (column 2 of every row) forms an exact bijection
+  with the 611,829-file native tree from the emit acceptance run.
+- **Runner:** the same thin, audited reference driver Gate-2 used (importing the
+  verbatim upstream `model.py` + `data_utils_SSL.py` at commit `4acaa61d…`; the
+  driver owns only the DataLoader wiring and score emission, not literally
+  `main_SSL_DF.py`) in the Gate-2 reference image (id `sha256:03891ac1b090…`,
+  `FROM` the frozen S2b image plus `librosa==0.9.1`), run as published:
+  Ampere-default TF32 and the upstream `batch_size=14`. Scoring is the vendored
+  official `eval_metrics_DF.compute_eer` math, not literally `evaluate_2021_DF.py`.
+  Weights are the QUALIFIED DF anchor (`Best_LA_model_for_DF.pth` sha256
+  `1cf904f1…`, `xlsr2_300m.pt` sha256 `b0892759…`).
+- **Execution:** the protocol was split into two disjoint shards and scored
+  concurrently on two RTX 3060 GPUs (one visible GPU each), both at `batch_size=14`
+  so a trial's score is shard-independent, then concatenated. Scores are run
+  artifacts, not committed (concatenated sha256 `88786ae5…`).
+
+Gate-1 proves the upstream stack reproduces the published number on the full
+cohort. With Gate-2's ratified per-clip subset equivalence this is strong evidence
+that the frozen eval container reproduces the benchmark too, but the shipped
+container's own full-cohort EER on the canonical PCM view is not measured here:
+that carryover is a well-supported inference, not a proven number. A full-cohort
+our-container parity pass on the canonical view is optional and deferred (it needs
+the full canonical transcode). The ±0.3 pp tolerance is labelled provisional in
+the pre-registration, but the margin (+0.015 pp) and the reference's zero EER
+rerun variance make that distinction immaterial to this PASS.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona

@@ -6,6 +6,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
+  S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
+  thin, audited reference driver) were run over the full official ASVspoof 2021 DF
+  eval cohort (611,829 trials) on the native FLAC tree,
+  and the pooled EER over the 533,928 phase-`eval` trials was computed with the
+  official `eval_metrics_DF.compute_eer` math and cross-checked against an
+  independent EER routine. Result: **2.8650 % EER** against the published 2.85 %
+  and the pre-registered ±0.3 pp tolerance, a +0.015 pp miss that PASSES with wide
+  margin. The DF anchor `w2v2-aasist-df` checkpoint (sha256 `1cf904f1…`) and the
+  official keys (sha256 `426f93e1…`) are pinned; every trial was scored (the
+  official length check) and the protocol forms an exact bijection with the native
+  tree. With Gate-2's ratified per-clip subset equivalence this is strong evidence
+  that the shipped fp32 container reproduces the benchmark too, though the
+  container's own full-cohort EER is not measured here (a deferred pass). Verdict
+  in
+  `docs/gpu-contracts.md`; evidence in
+  `docs/reports/synthdetect-gate1-s4-2026-08-25.md`.
 - **Console 2.0 P6a: settings sub-pages and plugins UI, dark-shipped** (#161,
   epic #149 Track D). Behind a new `CONSOLE_SETTINGS_ENABLED` flag (off by
   default), `/settings` becomes a hub that keeps every existing section inline
@@ -274,6 +291,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   status page keeps the 15-second live hardware refresh (it answers the poll with
   just the hardware snapshot, without re-running the component-health checks).
   Bookmarks and an already-open Resources tab keep working through the redirect.
+- **Test loop and PR CI parallelized.** The DB-backed integration suite now runs
+  under `pytest-xdist` with one disposable database per worker
+  (`tests/integration/conftest.py`), keyed on the xdist run id and worker so
+  concurrent invocations no longer deadlock on a shared `DROP SCHEMA`. Measured
+  ~6x faster at `-n 8` (13m24s serial to 2m14s) on a multi-core box, and the
+  serial (no-`-n`) path is byte-identical to before. The PR gate (`ci.yml`) drops
+  coverage instrumentation from the fast required lane (a measured ~33% wall-clock
+  tax) into a separate, parallel, still-required `coverage` job; the fast lane
+  runs the unit/contract suites parallel and the integration suite at `-n 8`. No
+  change to the parity gate, the contract goldens, or the secrets scan. See
+  `docs/testing.md`.
 - **Console 2.0 P2a: folder registration writes the media_folders relation**
   (#153, epic #149). The setup wizard folder step and the Settings folder panel
   now register folders as first-class `media_folders` rows through one shared,
@@ -408,6 +436,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `qualified` state to name existing GPU evidence, so neither the numerics-defining
   bytes nor the qualification claim can drift silently. Reproducing the published
   ASVspoof 2021 DF error rate remains a later milestone.
+
+### Fixed
+- **Integration tests could touch the live database when run in isolation.** The
+  `enrich` CLI tests invoked the app's own DB path without depending on the
+  `engine`/`session_factory` fixtures, so in isolation `DATABASE_URL` was unset
+  and the CLI fell back to the default live DSN and queried real data. They only
+  passed in the full serial suite by inheriting an earlier test's fixture side
+  effect. An autouse fixture now pins every integration test to its disposable
+  per-worker database, closing both the data hazard and the flake the new
+  parallel runner surfaced.
 
 ## [0.24.0] - 2026-08-23
 

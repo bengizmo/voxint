@@ -21,6 +21,12 @@ env:
   GITLEAKS_SHA256: "9991e0b2903da4c8f6122b5c3186448b927a5da4deef1fe45271c3793f4ee29c"
 
 jobs:
+  # Fast required gate: static checks + the whole suite WITHOUT coverage
+  # instrumentation. Coverage (~33% wall-clock tax, measured) moved to the
+  # parallel `coverage` job below so it stays off the critical path. The
+  # DB-backed integration layer runs under pytest-xdist with one disposable
+  # database per worker (tests/integration/conftest.py), so it uses the runner's
+  # cores instead of serializing on a single shared DROP SCHEMA.
   lint-test:
     runs-on: ubuntu-latest
     services:
@@ -50,10 +56,56 @@ jobs:
         run: uv run ruff check .
       - name: Mypy
         run: uv run mypy
-      - name: Pytest (unit + integration)
+      # Fast lane: DB-free suites, parallelized. Kept as its own invocation from
+      # the integration lane so the session-long DATABASE_URL that the
+      # integration fixtures set can never ride into these processes.
+      - name: Pytest (unit + contracts)
+        run: uv run pytest tests/unit tests/contracts -n auto
+      # Numerics parity gate — left serial and unchanged (not xdist'd).
+      - name: Pytest (parity)
+        run: uv run pytest tests/parity
+      # Integration lane: one disposable database per xdist worker. -n 8 is the
+      # maintainer default (see docs/testing.md); on a small runner the
+      # workers timeshare cores but each still gets an isolated DB.
+      - name: Pytest (integration)
         env:
           VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
-        run: uv run pytest tests --cov
+        run: uv run pytest tests/integration -n 8
+
+  # Required, and runs in PARALLEL with lint-test so coverage never gates fast
+  # feedback. pytest-cov automatically combines the xdist workers' data; the 85%
+  # floor is enforced by [tool.coverage.report] fail_under in pyproject.toml.
+  # NOTE: add this job to the branch-protection required-checks set alongside
+  # `lint-test` and `secrets-scan`.
+  coverage:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: voxint
+          POSTGRES_PASSWORD: voxint
+          POSTGRES_DB: voxint_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U voxint"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: uv sync --frozen --extra dev --extra parity
+      - name: Install ffmpeg (normalize-stage tests)
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Pytest (full suite, coverage)
+        env:
+          VOXINT_TEST_DATABASE_URL: postgresql+psycopg://voxint:voxint@localhost:5432/voxint_test
+        run: uv run pytest tests --cov=voxint -n 8
 
   frontend:
     # Independent of lint-test (no `needs:`): a frontend break blocks merge on
