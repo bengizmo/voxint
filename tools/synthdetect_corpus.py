@@ -31,7 +31,9 @@ import io
 import json
 import math
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import wave
@@ -1921,6 +1923,473 @@ def _write_prepare_artifacts(
 
 
 # --------------------------------------------------------------------------- #
+# Degrade executor (S5 PR-2b): materialize degraded children of already-
+# materialized bona fide clips by running the frozen build_recipe_argv ffmpeg
+# round trips inside a digest-pinned container. The output is a separate
+# immutable degrade root containing child WAVs plus a combined parent+child
+# manifest validated through load_manifest. See the PR-2b plan for the B1/B2/B5
+# blocker resolutions.
+# --------------------------------------------------------------------------- #
+_CONTAINER_IMAGE_RE = re.compile(r"^[a-zA-Z0-9._/-]+@sha256:[0-9a-f]{64}$")
+_DEGRADE_LENGTH_MIN = 0.5
+_DEGRADE_LENGTH_MAX = 2.0
+_DEGRADE_SUBPROCESS_TIMEOUT = 300
+_DEGRADE_STDERR_CAP = 4096
+
+
+@dataclass(frozen=True)
+class DegradeResult:
+    """Summary of a completed degrade materialization (host-path-free for stdout)."""
+
+    parent_manifest_sha256: str
+    combined_manifest_sha256: str
+    container_image: str
+    children: int
+    parents_reaudited: int
+
+
+def _run_containerized_ffmpeg(
+    argv: tuple[str, ...],
+    *,
+    workdir: Path,
+    container_image: str,
+    timeout: int = _DEGRADE_SUBPROCESS_TIMEOUT,
+) -> None:
+    """Run one ffmpeg command inside the digest-pinned container.
+
+    Strips the ``"ffmpeg"`` prefix from ``argv`` (since ``--entrypoint ffmpeg`` is
+    set explicitly) and bind-mounts ``workdir`` at ``/work``. ``--network none``
+    isolates the container. After the run, verifies the output file (the last
+    element of argv) exists in workdir as a non-empty regular file (not a symlink).
+    """
+    if not argv or argv[0] != "ffmpeg":
+        raise CorpusError(f"container ffmpeg: argv must start with 'ffmpeg', got {argv[:1]!r}")
+    ff_args = argv[1:]
+    out_container_path = argv[-1]
+    if not out_container_path.startswith("/work/"):
+        raise CorpusError(
+            f"container ffmpeg: output path {out_container_path!r} must be under /work/"
+        )
+    out_host_path = workdir / out_container_path.removeprefix("/work/")
+    cmd = [
+        "docker", "run", "--rm", "--network", "none",
+        "--entrypoint", "ffmpeg",
+        "-v", f"{workdir}:/work:rw",
+        container_image,
+        *ff_args,
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise CorpusError(
+            f"container ffmpeg timed out after {timeout}s"
+        ) from None
+    if proc.returncode != 0:
+        stderr_tail = proc.stderr[-_DEGRADE_STDERR_CAP:].decode("utf-8", errors="replace")
+        raise CorpusError(f"container ffmpeg failed (rc={proc.returncode}): {stderr_tail}")
+    if not out_host_path.exists():
+        raise CorpusError("container ffmpeg: output file missing after run")
+    if out_host_path.is_symlink():
+        raise CorpusError("container ffmpeg: output file is a symlink")
+    if out_host_path.stat().st_size == 0:
+        raise CorpusError("container ffmpeg: output file is empty")
+
+
+def _degrade_one_clip(
+    parent_clip: ClipEntry,
+    child_record: DegradedRecord,
+    recipe_chain: tuple[str, ...],
+    *,
+    parent_root: Path,
+    staging: Path,
+    container_image: str,
+) -> tuple[str, int]:
+    """Execute the full recipe chain for one degraded child and return measured facts.
+
+    B1 resolution: reads the parent WAV's data-chunk payload (headerless s16le),
+    writes it as a raw file, pipes it through the recipe chain (each stage's output
+    feeds the next), wraps the final raw output in a canonical WAV, and proves the
+    round-trip. Returns ``(pcm_sha256, sample_count)``.
+    """
+    parent_wav = parent_root / parent_clip.rel_path
+    parent_payload = read_canonical_wav_payload(parent_wav)
+    parent_sha, parent_count = payload_sha_and_count(parent_payload)
+    if parent_sha != parent_clip.sha256:
+        raise CorpusError(
+            f"clip {parent_clip.clip_id!r}: parent WAV sha256 {parent_sha} "
+            f"does not match manifest {parent_clip.sha256}"
+        )
+
+    clip_workdir = staging / "_work" / child_record.clip_id
+    clip_workdir.mkdir(parents=True, exist_ok=True)
+    (clip_workdir / "input.raw").write_bytes(parent_payload)
+
+    current_input = f"/work/_work/{child_record.clip_id}/input.raw"
+    for i, recipe_id in enumerate(recipe_chain):
+        recipe = DEGRADATION_RECIPES[recipe_id]
+        stage_out = f"/work/_work/{child_record.clip_id}/stage-{i}.raw"
+        if recipe.lossy:
+            fmt = recipe.intermediate_format
+            intermediate = f"/work/_work/{child_record.clip_id}/intermediate-{i}.{fmt}"
+        else:
+            intermediate = None
+        cmds = build_recipe_argv(
+            recipe,
+            in_path=current_input,
+            out_path=stage_out,
+            intermediate_path=intermediate,
+        )
+        for cmd in cmds:
+            _run_containerized_ffmpeg(cmd, workdir=staging, container_image=container_image)
+        current_input = stage_out
+
+    final_host = staging / current_input.removeprefix("/work/")
+    raw_output = final_host.read_bytes()
+    if len(raw_output) % _BLOCK_ALIGN != 0:
+        raise CorpusError(
+            f"clip {child_record.clip_id!r}: raw output is {len(raw_output)} bytes, "
+            f"not a whole number of {_BLOCK_ALIGN}-byte frames"
+        )
+    if not raw_output:
+        raise CorpusError(f"clip {child_record.clip_id!r}: raw output is empty")
+
+    child_count = len(raw_output) // _BLOCK_ALIGN
+    if child_count < parent_count * _DEGRADE_LENGTH_MIN:
+        raise CorpusError(
+            f"clip {child_record.clip_id!r}: output {child_count} samples is below "
+            f"{_DEGRADE_LENGTH_MIN:.0%} of parent {parent_count}"
+        )
+    if child_count > parent_count * _DEGRADE_LENGTH_MAX:
+        raise CorpusError(
+            f"clip {child_record.clip_id!r}: output {child_count} samples exceeds "
+            f"{_DEGRADE_LENGTH_MAX:.0%} of parent {parent_count}"
+        )
+
+    child_rel = _safe_rel_path(child_record.rel_path, where=f"clip {child_record.clip_id!r}")
+    child_wav_path = staging / child_rel
+    child_wav_path.parent.mkdir(parents=True, exist_ok=True)
+    write_canonical_wav(child_wav_path, raw_output)
+    roundtrip = read_canonical_wav_payload(child_wav_path)
+    if roundtrip != raw_output:
+        raise CorpusError(
+            f"clip {child_record.clip_id!r}: written WAV did not round-trip to the raw output"
+        )
+    sha, count = payload_sha_and_count(raw_output)
+    return sha, count
+
+
+def _assemble_combined_manifest(
+    parent_clip_dicts: list[dict[str, Any]],
+    child_records: list[DegradedRecord],
+    measured: dict[str, tuple[str, int]],
+) -> tuple[Manifest, list[dict[str, Any]]]:
+    """Build and validate a combined parent+child manifest (B2 resolution).
+
+    Reproduces ``finalize_manifest``'s measurement-coverage rails for the children
+    while accepting parent clip dicts (already validated, already measured) as-is.
+    Returns the validated :class:`Manifest` plus the combined clip dicts in
+    deterministic order for serialization.
+    """
+    if not child_records:
+        raise CorpusError("_assemble_combined_manifest: no child records")
+    child_ids = {r.clip_id for r in child_records}
+    measured_ids = set(measured)
+    if child_ids != measured_ids:
+        missing = sorted(child_ids - measured_ids)
+        orphan = sorted(measured_ids - child_ids)
+        raise CorpusError(
+            f"_assemble_combined_manifest: child/measurement keyset mismatch "
+            f"missing={missing} orphan={orphan}"
+        )
+    child_dicts: list[dict[str, Any]] = []
+    for record in child_records:
+        sha, count = measured[record.clip_id]
+        if not _is_sha256(sha):
+            raise CorpusError(
+                f"_assemble_combined_manifest: clip {record.clip_id!r} sha256 "
+                f"must be 64 lowercase hex"
+            )
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            raise CorpusError(
+                f"_assemble_combined_manifest: clip {record.clip_id!r} sample_count "
+                f"must be a positive int"
+            )
+        child_dicts.append(record.clip_dict(sha, count))
+    combined = parent_clip_dicts + child_dicts
+    manifest = load_manifest({"schema_version": MANIFEST_SCHEMA_VERSION, "clips": combined})
+    return manifest, combined
+
+
+def resolve_clip_path(clip: ClipEntry, *, roots: tuple[Path, ...]) -> Path:
+    """Resolve a clip's ``rel_path`` against an ordered list of roots (exact-once).
+
+    Returns the resolved path. Fails closed if the clip resolves in zero or
+    multiple roots (the same rel_path must exist as a regular file in exactly one).
+    """
+    found: list[Path] = []
+    for root in roots:
+        candidate = root / clip.rel_path
+        if candidate.is_file() and not candidate.is_symlink():
+            found.append(candidate)
+    if len(found) == 0:
+        raise CorpusError(
+            f"clip {clip.clip_id!r}: rel_path {clip.rel_path!r} not found in any root"
+        )
+    if len(found) > 1:
+        raise CorpusError(
+            f"clip {clip.clip_id!r}: rel_path {clip.rel_path!r} found in multiple roots"
+        )
+    return found[0]
+
+
+def _write_degrade_artifacts(
+    staging: Path,
+    manifest: Manifest,
+    combined_clip_dicts: list[dict[str, Any]],
+    child_records: list[DegradedRecord],
+    measured: dict[str, tuple[str, int]],
+    parent_manifest_sha: str,
+    parent_reaudit: list[dict[str, Any]],
+    container_image: str,
+    toolchain_info: dict[str, str],
+) -> str:
+    """Write manifest.json, clip_receipt.jsonl, and degrade_receipt.json.
+
+    Returns the sha256 of the written manifest bytes.
+    """
+    clips_sorted = sorted(combined_clip_dicts, key=lambda c: c["clip_id"])
+    manifest_bytes = (
+        json.dumps(
+            {"schema_version": manifest.schema_version, "clips": clips_sorted},
+            indent=2, sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    (staging / "manifest.json").write_bytes(manifest_bytes)
+    combined_manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+
+    child_rows = sorted(
+        (
+            {
+                "clip_id": r.clip_id,
+                "parent_clip_id": r.parent_clip_id,
+                "degradation": r.degradation,
+                "sha256": measured[r.clip_id][0],
+                "n_samples": measured[r.clip_id][1],
+            }
+            for r in child_records
+        ),
+        key=lambda row: str(row["clip_id"]),
+    )
+    (staging / "clip_receipt.jsonl").write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in child_rows),
+        encoding="utf-8",
+    )
+    (staging / "degrade_receipt.json").write_text(
+        json.dumps(
+            {
+                "canonicalization_id": CANONICALIZATION_ID,
+                "children": len(child_records),
+                "combined_manifest_sha256": combined_manifest_sha,
+                "container_image": container_image,
+                "manifest_schema_version": manifest.schema_version,
+                "parent_manifest_sha256": parent_manifest_sha,
+                "parent_reaudit": sorted(parent_reaudit, key=lambda r: r["clip_id"]),
+                "parents_reaudited": len(parent_reaudit),
+                "toolchain": toolchain_info,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return combined_manifest_sha
+
+
+def materialize_degrade(
+    *,
+    parent_root: Path,
+    corpus_root: Path,
+    container_image: str,
+    recipe_ids: tuple[str, ...],
+    split_filter: str | None = None,
+    toolchain_info: dict[str, str] | None = None,
+) -> DegradeResult:
+    """Materialize degraded children of a parent bona fide corpus, atomically.
+
+    Reads and re-audits the parent manifest, derives degraded children via
+    ``derive_degraded_record``, executes the recipe chain in the digest-pinned
+    container, and publishes a separate immutable degrade root with a combined
+    parent+child manifest.
+    """
+    # -- preflight ---------------------------------------------------------- #
+    if not _CONTAINER_IMAGE_RE.match(container_image):
+        raise CorpusError(
+            f"container image must be <repo>@sha256:<64hex>, got {container_image!r}"
+        )
+    if corpus_root.exists() and any(corpus_root.iterdir()):
+        raise CorpusError(
+            f"degrade root {corpus_root} is already populated; refusing to overwrite"
+        )
+    parent_manifest_path = parent_root / "manifest.json"
+    if not parent_manifest_path.is_file():
+        raise CorpusError("parent root missing manifest.json")
+    parent_manifest_bytes = parent_manifest_path.read_bytes()
+    parent_manifest_sha = hashlib.sha256(parent_manifest_bytes).hexdigest()
+    parent_obj = json.loads(parent_manifest_bytes)
+    parent_manifest = load_manifest(parent_obj)
+    if parent_manifest.schema_version != MANIFEST_SCHEMA_VERSION:
+        raise CorpusError(
+            f"degrade requires a v{MANIFEST_SCHEMA_VERSION} manifest, "
+            f"got v{parent_manifest.schema_version}"
+        )
+    if parent_manifest.corpus_kind != CORPUS_KIND_SYNTHESIS:
+        raise CorpusError(
+            f"degrade requires corpus_kind {CORPUS_KIND_SYNTHESIS!r}, "
+            f"got {parent_manifest.corpus_kind!r}"
+        )
+    has_degraded = any(c.parent_clip_id is not None for c in parent_manifest.clips)
+    if has_degraded:
+        raise CorpusError("parent manifest already contains degraded entries")
+    non_bonafide = [c.clip_id for c in parent_manifest.clips if c.label != "bona_fide"]
+    if non_bonafide:
+        raise CorpusError(
+            f"degrade requires all parent clips to be bona_fide; "
+            f"found {len(non_bonafide)} non-bona_fide"
+        )
+    for clip in parent_manifest.clips:
+        clip_path = parent_root / clip.rel_path
+        if not clip_path.is_file() or clip_path.is_symlink():
+            raise CorpusError(
+                f"parent clip {clip.clip_id!r}: {clip.rel_path!r} is not a regular file"
+            )
+
+    # -- derive children ---------------------------------------------------- #
+    eligible = [
+        c for c in parent_manifest.clips
+        if c.parent_clip_id is None
+        and (split_filter is None or c.split == split_filter)
+    ]
+    if not eligible:
+        raise CorpusError(
+            f"no eligible parent clips (split={split_filter!r})"
+        )
+    child_records: list[DegradedRecord] = []
+    for parent_clip in eligible:
+        child_records.append(derive_degraded_record(parent_clip, recipe_ids))
+
+    # collision check: child clip_ids and rel_paths must not collide with parents
+    parent_ids = {c.clip_id for c in parent_manifest.clips}
+    parent_paths = {c.rel_path for c in parent_manifest.clips}
+    child_ids = {r.clip_id for r in child_records}
+    child_paths = {r.rel_path for r in child_records}
+    id_collision = child_ids & parent_ids
+    if id_collision:
+        raise CorpusError(f"child clip_id collides with parent: {sorted(id_collision)}")
+    path_collision = child_paths & parent_paths
+    if path_collision:
+        raise CorpusError(f"child rel_path collides with parent: {sorted(path_collision)}")
+    if len(child_ids) != len(child_records):
+        raise CorpusError("duplicate child clip_ids in derivation")
+    if len(child_paths) != len(child_records):
+        raise CorpusError("duplicate child rel_paths in derivation")
+
+    # -- re-audit parents + execute children -------------------------------- #
+    corpus_root.parent.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=corpus_root.parent, prefix=".degrade-")
+    try:
+        staging = Path(tmp) / "corpus"
+        staging.mkdir()
+
+        parent_reaudit: list[dict[str, Any]] = []
+        for clip in parent_manifest.clips:
+            payload = read_canonical_wav_payload(parent_root / clip.rel_path)
+            sha, count = payload_sha_and_count(payload)
+            if sha != clip.sha256:
+                raise CorpusError(
+                    f"parent re-audit failed for {clip.clip_id!r}: "
+                    f"sha256 {sha} != manifest {clip.sha256}"
+                )
+            expected_duration = _duration_s_from_samples(count)
+            if clip.duration_s != expected_duration:
+                raise CorpusError(
+                    f"parent re-audit failed for {clip.clip_id!r}: "
+                    f"duration_s {clip.duration_s} != computed {expected_duration} "
+                    f"(sample_count={count})"
+                )
+            parent_reaudit.append(
+                {"clip_id": clip.clip_id, "sha256": sha, "n_samples": count, "ok": True}
+            )
+
+        measured: dict[str, tuple[str, int]] = {}
+        recipe_chain = recipe_ids
+        for child_record in child_records:
+            parent_clip = next(
+                c for c in parent_manifest.clips if c.clip_id == child_record.parent_clip_id
+            )
+            sha, count = _degrade_one_clip(
+                parent_clip,
+                child_record,
+                recipe_chain,
+                parent_root=parent_root,
+                staging=staging,
+                container_image=container_image,
+            )
+            measured[child_record.clip_id] = (sha, count)
+
+        parent_clip_dicts = [
+            {
+                "clip_id": c.clip_id,
+                "rel_path": c.rel_path,
+                "sha256": c.sha256,
+                "duration_s": c.duration_s,
+                "label": c.label,
+                "language": c.language,
+                "license_spdx": c.license_spdx,
+                "stratum": c.stratum,
+                "source": c.source,
+                "speaker_id": c.speaker_id,
+                "split": c.split,
+                "degradation": c.degradation,
+                "parent_clip_id": c.parent_clip_id,
+                "acquire": c.acquire,
+            }
+            for c in parent_manifest.clips
+        ]
+        manifest, combined_dicts = _assemble_combined_manifest(
+            parent_clip_dicts, child_records, measured
+        )
+        combined_sha = _write_degrade_artifacts(
+            staging, manifest, combined_dicts, child_records, measured,
+            parent_manifest_sha, parent_reaudit, container_image,
+            toolchain_info or {},
+        )
+
+        # Clean up workdir before publish (not part of the artifact)
+        work_dir = staging / "_work"
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+
+        os.replace(staging, corpus_root)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return DegradeResult(
+        parent_manifest_sha256=parent_manifest_sha,
+        combined_manifest_sha256=combined_sha,
+        container_image=container_image,
+        children=len(child_records),
+        parents_reaudited=len(parent_reaudit),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # CLI: validate a manifest file (schema + integrity, no audio)
 # --------------------------------------------------------------------------- #
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -2008,36 +2477,55 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
 
 def cmd_degrade(args: argparse.Namespace) -> int:
-    """Plan degraded children of a parent manifest for a recipe chain (dry-run).
+    """Plan degraded children (dry-run), or materialize them with --corpus-root.
 
-    Loads a parent manifest, optionally restricts to one split, derives a degraded
-    child per non-degraded parent clip for the given recipe chain, and writes the
-    child plan as JSON. Already-degraded clips are skipped so a re-run never plans
-    grandchildren (derivative multiplicity would inflate Platt calibration; the S5
-    pre-registration derives one variant per parent). It builds no audio; the argv
-    the executor will run is unit-covered.
+    Without ``--corpus-root`` this is the unchanged dry-run: loads a parent
+    manifest, derives degraded children per non-degraded parent clip, prints the
+    plan as JSON. With ``--corpus-root`` it executes: re-audits the parent corpus,
+    runs the recipe chain in the pinned container, and publishes a separate
+    immutable degrade root with a combined parent+child manifest.
     """
+    if args.corpus_root is None:
+        try:
+            obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+            manifest = load_manifest(obj)
+            chain = serialize_chain(args.recipe)
+            children = [
+                asdict(derive_degraded_record(clip, args.recipe))
+                for clip in manifest.clips
+                if (args.split is None or clip.split == args.split)
+                and clip.parent_clip_id is None
+            ]
+        except (OSError, json.JSONDecodeError, CorpusError) as exc:
+            sys.stderr.write(f"degrade failed: {exc}\n")
+            return 2
+        if not children:
+            sys.stderr.write(
+                f"degrade: no non-degraded parent clips in split {args.split!r}\n"
+            )
+            return 2
+        sys.stdout.write(
+            json.dumps({"chain": chain, "children": children}, indent=2, sort_keys=True) + "\n"
+        )
+        return 0
+    # execution mode
+    if args.parent_root is None or args.container_image is None:
+        sys.stderr.write(
+            "degrade --corpus-root requires --parent-root and --container-image\n"
+        )
+        return 2
     try:
-        obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-        manifest = load_manifest(obj)
-        chain = serialize_chain(args.recipe)
-        children = [
-            asdict(derive_degraded_record(clip, args.recipe))
-            for clip in manifest.clips
-            if (args.split is None or clip.split == args.split)
-            and clip.parent_clip_id is None
-        ]
+        result = materialize_degrade(
+            parent_root=Path(args.parent_root),
+            corpus_root=Path(args.corpus_root),
+            container_image=args.container_image,
+            recipe_ids=tuple(args.recipe),
+            split_filter=args.split,
+        )
     except (OSError, json.JSONDecodeError, CorpusError) as exc:
         sys.stderr.write(f"degrade failed: {exc}\n")
         return 2
-    if not children:
-        sys.stderr.write(
-            f"degrade: no non-degraded parent clips in split {args.split!r}\n"
-        )
-        return 2
-    sys.stdout.write(
-        json.dumps({"chain": chain, "children": children}, indent=2, sort_keys=True) + "\n"
-    )
+    sys.stdout.write(json.dumps(asdict(result), indent=2, sort_keys=True) + "\n")
     return 0
 
 
@@ -2075,7 +2563,9 @@ def main(argv: list[str] | None = None) -> int:
     p_prepare.set_defaults(func=cmd_prepare)
 
     p_degrade = sub.add_parser(
-        "degrade", help="plan degraded children of a parent manifest (dry-run, no audio)"
+        "degrade",
+        help="plan degraded children of a parent manifest (dry-run), or materialize "
+        "them with --corpus-root",
     )
     p_degrade.add_argument("--manifest", required=True, help="path to the parent manifest JSON")
     p_degrade.add_argument(
@@ -2089,6 +2579,21 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         choices=SPLITS,
         help="restrict to parents in this split (default: all; PR-3 uses calibration)",
+    )
+    p_degrade.add_argument(
+        "--corpus-root",
+        default=None,
+        help="degrade output root (must be empty/nonexistent); triggers execution mode",
+    )
+    p_degrade.add_argument(
+        "--parent-root",
+        default=None,
+        help="parent corpus root containing manifest.json (required with --corpus-root)",
+    )
+    p_degrade.add_argument(
+        "--container-image",
+        default=None,
+        help="digest-pinned ffmpeg container (image@sha256:...; required with --corpus-root)",
     )
     p_degrade.set_defaults(func=cmd_degrade)
 
