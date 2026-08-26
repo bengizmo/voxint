@@ -47,6 +47,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   clips not in the record list; manifest lineage also inherits `source`; and
   `degrade` skips already-degraded parents so a re-run never plans grandchildren.
   Pre-registration in `docs/gpu-contracts.md`.
+- **synthdetect S5 PR-2a prepare executor** (#144, M1 S5). `prepare` gains an
+  execution mode (`--corpus-root`, with `--audio-dir` and `--acquisition-manifest`)
+  that materializes bona fide turn and segment clips from the staged organic
+  recordings; without a corpus root it stays the dry-run planner. Because the staged
+  sources are already canonical PCM (16 kHz mono s16le, measured), materialization is
+  ffmpeg-free: the executor pin-verifies every RTTM and recording against the
+  acquisition manifest on the exact bytes it reads (open-once, no reopen race),
+  slices each clip at the plan's integer sample offsets from the validated payload,
+  wraps each slice in a deterministic canonical WAV, finalizes and validates the v1
+  manifest, and publishes the whole tree by atomic rename (refusing a populated
+  root). New numpy-free canonical-WAV primitives (`read_canonical_wav_payload`,
+  `write_canonical_wav`, `payload_sha_and_count`) share the data-chunk payload
+  identity with `synthdetect_infer.read_canonical_pcm`; a contract test pins their
+  canonical constants equal so a corpus materialized by one and scored by the other
+  can never disagree. The degrade executor and its codec toolchain are a separate
+  later slice (PR-2b).
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF
