@@ -512,9 +512,15 @@ def test_cli_degrade(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None
     assert out["children"][0]["parent_clip_id"] == "ami-m1-A-turn-0-80000"
 
 
-def test_cli_degrade_skips_already_degraded_parents(
+def test_cli_degrade_rejects_manifest_with_degraded_entries(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Dry-run rejects a manifest that already contains degraded entries.
+
+    PR-2b added a shared preflight (_validate_degrade_parent_manifest) that keeps
+    dry-run and execution mode in sync: both reject manifests with existing degraded
+    children, preventing three-root artifacts and grandchild proliferation.
+    """
     import json
 
     root = {
@@ -536,11 +542,8 @@ def test_cli_degrade_skips_already_degraded_parents(
     manifest = tmp_path / "parent.json"
     manifest.write_text(json.dumps({"schema_version": 1, "clips": [root, child]}), encoding="utf-8")
     rc = corpus.main(["degrade", "--manifest", str(manifest), "--recipe", "mp3-cbr48-v1"])
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out)
-    # Only the root parent is degraded; the existing child never becomes a grandchild.
-    assert len(out["children"]) == 1
-    assert out["children"][0]["parent_clip_id"] == "ami-m1-A-turn-0-80000"
+    assert rc == 2
+    assert "degraded entries" in capsys.readouterr().err
 
 
 def test_cli_degrade_split_filter_empty(

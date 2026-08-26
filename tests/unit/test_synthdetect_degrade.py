@@ -5,12 +5,23 @@ recipe vocabulary, canonical chain serialization, the exact ffmpeg argv the
 executor will run, degraded-child derivation with lineage inheritance, and the
 hardened lineage invariants (unknown recipe, cycle, inheritance mismatch). No
 ffmpeg is invoked; the builders return argument lists.
+
+PR-2b executor tests use a fake ``docker`` executable (a shell script that
+copies input to output with a known transform, placed on PATH in the test)
+instead of a real ffmpeg container, so the unit suite stays CI-portable and
+fast. Real-codec acceptance is the Phase 3 maintainer gate.
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
+import os
+import stat
+import struct
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -360,3 +371,765 @@ def test_lineage_source_mismatch_rejected() -> None:
     child = _raw("c1", degradation="mp3-cbr48-v1", parent_clip_id="p1", source="voxconverse")
     with pytest.raises(corpus.CorpusError, match="does not match its parent"):
         corpus.load_manifest({"schema_version": 1, "clips": [parent, child]})
+
+
+# --------------------------------------------------------------------------- #
+# PR-2b executor tests
+# --------------------------------------------------------------------------- #
+
+
+def _make_pcm_payload(n_samples: int = 16000) -> bytes:
+    """Generate a deterministic PCM payload (sine wave, s16le)."""
+    return struct.pack(
+        f"<{n_samples}h",
+        *(int(32767 * (0.5 if i % 2 == 0 else -0.5)) for i in range(n_samples)),
+    )
+
+
+def _write_parent_corpus(
+    parent_root: Path,
+    n_clips: int = 1,
+    *,
+    split: str | None = "calibration",
+    source: str = "ami",
+) -> tuple[list[dict[str, Any]], bytes]:
+    """Create a minimal parent corpus with canonical WAVs and manifest.
+
+    Returns the raw clip dicts and the manifest bytes.
+    """
+    payload = _make_pcm_payload()
+    sha, count = corpus.payload_sha_and_count(payload)
+    clips = []
+    for idx in range(n_clips):
+        clip_id = f"{source}-m1-A-turn-{idx}-{count}"
+        rel_path = f"{source}/turn/{clip_id}.wav"
+        wav_path = parent_root / rel_path
+        wav_path.parent.mkdir(parents=True, exist_ok=True)
+        corpus.write_canonical_wav(wav_path, payload)
+        clips.append({
+            "clip_id": clip_id,
+            "rel_path": rel_path,
+            "sha256": sha,
+            "duration_s": corpus._duration_s_from_samples(count),
+            "label": "bona_fide",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "bona_fide|organic|meetingroom",
+            "source": source,
+            "speaker_id": f"{source}-m1-A",
+            "split": split,
+            "generator": None,
+            "degradation": None,
+            "parent_clip_id": None,
+            "acquire": None,
+        })
+    manifest_obj = {"schema_version": 1, "clips": clips}
+    corpus.load_manifest(manifest_obj)
+    manifest_bytes = (
+        json.dumps(manifest_obj, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    (parent_root / "manifest.json").write_bytes(manifest_bytes)
+    return clips, manifest_bytes
+
+
+_FAKE_DOCKER = textwrap.dedent("""\
+    #!/bin/bash
+    # Fake docker that copies input.raw to the output path (identity transform).
+    # Understands the minimal contract: finds -v <host>:/work:rw, finds -i <in>,
+    # and the last arg is the output path. Copies the input to the output.
+    workdir=""
+    infile=""
+    outfile=""
+    prev=""
+    for arg in "$@"; do
+        case "$prev" in
+            -v) workdir="${arg%%:*}" ;;
+            -i) infile="$arg" ;;
+        esac
+        prev="$arg"
+    done
+    outfile="$arg"
+    # Resolve /work/ paths to host paths
+    host_in="${infile/\\/work/$workdir}"
+    host_out="${outfile/\\/work/$workdir}"
+    mkdir -p "$(dirname "$host_out")"
+    cp "$host_in" "$host_out"
+    exit 0
+""")
+
+
+@pytest.fixture()
+def fake_docker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Install a fake ``docker`` on PATH that performs an identity copy."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(_FAKE_DOCKER)
+    docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+    return docker
+
+
+_FAKE_IMAGE = "test/ffmpeg@sha256:" + "a" * 64
+
+
+# -- _run_containerized_ffmpeg --------------------------------------------- #
+
+class TestRunContainerizedFfmpeg:
+    def test_strips_ffmpeg_prefix(self, tmp_path: Path, fake_docker: Path) -> None:
+        workdir = tmp_path / "work"
+        workdir.mkdir()
+        (workdir / "in.raw").write_bytes(b"\x00" * 100)
+        argv = ("ffmpeg", "-nostdin", "-y", "-f", "s16le", "-i", "/work/in.raw",
+                "-f", "s16le", "/work/out.raw")
+        corpus._run_containerized_ffmpeg(
+            argv, workdir=workdir, container_image=_FAKE_IMAGE
+        )
+        assert (workdir / "out.raw").exists()
+        assert (workdir / "out.raw").read_bytes() == b"\x00" * 100
+
+    def test_rejects_non_ffmpeg_prefix(self, tmp_path: Path) -> None:
+        with pytest.raises(corpus.CorpusError, match="must start with 'ffmpeg'"):
+            corpus._run_containerized_ffmpeg(
+                ("notffmpeg", "-i", "/work/in.raw", "/work/out.raw"),
+                workdir=tmp_path, container_image=_FAKE_IMAGE,
+            )
+
+    def test_rejects_non_work_output(self, tmp_path: Path) -> None:
+        with pytest.raises(corpus.CorpusError, match="must be under /work/"):
+            corpus._run_containerized_ffmpeg(
+                ("ffmpeg", "-i", "/work/in.raw", "/tmp/out.raw"),
+                workdir=tmp_path, container_image=_FAKE_IMAGE,
+            )
+
+
+# -- _degrade_one_clip ----------------------------------------------------- #
+
+class TestDegradeOneClip:
+    def test_identity_transform(self, tmp_path: Path, fake_docker: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        parent_clip = parent_manifest.clips[0]
+        child_record = corpus.derive_degraded_record(
+            parent_clip, ["speed-atempo-0p90-v1"]
+        )
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        sha, count = corpus._degrade_one_clip(
+            parent_clip, child_record, ("speed-atempo-0p90-v1",),
+            parent_root=parent_root, staging=staging, container_image=_FAKE_IMAGE,
+        )
+        assert corpus._is_sha256(sha)
+        assert count == 16000
+        child_wav = staging / child_record.rel_path
+        assert child_wav.is_file()
+        roundtrip = corpus.read_canonical_wav_payload(child_wav)
+        assert corpus.payload_sha_and_count(roundtrip) == (sha, count)
+
+    def test_chain_feeds_stages(self, tmp_path: Path, fake_docker: Path) -> None:
+        """Two-recipe chain: stage-0 output becomes stage-1 input."""
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        parent_clip = parent_manifest.clips[0]
+        chain = ("speed-atempo-0p90-v1", "speed-atempo-0p90-v1")
+        child_record = corpus.derive_degraded_record(parent_clip, list(chain))
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        _sha, count = corpus._degrade_one_clip(
+            parent_clip, child_record, chain,
+            parent_root=parent_root, staging=staging, container_image=_FAKE_IMAGE,
+        )
+        assert count == 16000
+        assert (staging / child_record.rel_path).is_file()
+
+    def test_parent_sha_mismatch_rejected(
+        self, tmp_path: Path, fake_docker: Path
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        clips[0]["sha256"] = "c" * 64
+        manifest_bytes = (
+            json.dumps({"schema_version": 1, "clips": clips}, indent=2, sort_keys=True)
+            + "\n"
+        ).encode("utf-8")
+        (parent_root / "manifest.json").write_bytes(manifest_bytes)
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        parent_clip = parent_manifest.clips[0]
+        child_record = corpus.derive_degraded_record(
+            parent_clip, ["speed-atempo-0p90-v1"]
+        )
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        with pytest.raises(corpus.CorpusError, match="does not match manifest"):
+            corpus._degrade_one_clip(
+                parent_clip, child_record, ("speed-atempo-0p90-v1",),
+                parent_root=parent_root, staging=staging, container_image=_FAKE_IMAGE,
+            )
+
+    def test_length_sanity_too_short_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Fake docker that outputs a very short file
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        docker = bin_dir / "docker"
+        docker.write_text(textwrap.dedent("""\
+            #!/bin/bash
+            prev=""
+            workdir=""
+            for arg in "$@"; do
+                case "$prev" in -v) workdir="${arg%%:*}" ;; esac
+                prev="$arg"
+            done
+            outfile="$arg"
+            host_out="${outfile/\\/work/$workdir}"
+            mkdir -p "$(dirname "$host_out")"
+            # Output 2 samples (4 bytes) — way below 50% of 16000
+            printf '\\x00\\x00\\x00\\x00' > "$host_out"
+            exit 0
+        """))
+        docker.chmod(docker.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        parent_clip = parent_manifest.clips[0]
+        child_record = corpus.derive_degraded_record(
+            parent_clip, ["speed-atempo-0p90-v1"]
+        )
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        with pytest.raises(corpus.CorpusError, match="below"):
+            corpus._degrade_one_clip(
+                parent_clip, child_record, ("speed-atempo-0p90-v1",),
+                parent_root=parent_root, staging=staging, container_image=_FAKE_IMAGE,
+            )
+
+
+# -- _assemble_combined_manifest ------------------------------------------- #
+
+class TestAssembleCombinedManifest:
+    def test_combined_validates(self, tmp_path: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root, n_clips=2)
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        child_records = [
+            corpus.derive_degraded_record(c, ["mp3-cbr48-v1"])
+            for c in parent_manifest.clips
+        ]
+        measured = {}
+        for r in child_records:
+            sha = hashlib.sha256(r.clip_id.encode()).hexdigest()
+            measured[r.clip_id] = (sha, 16000)
+        manifest, combined = corpus._assemble_combined_manifest(
+            clips, child_records, measured
+        )
+        assert len(manifest.clips) == 4
+        assert len(combined) == 4
+
+    def test_orphan_measurement_rejected(self) -> None:
+        clips = [_raw("p1")]
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        child = corpus.derive_degraded_record(
+            parent_manifest.clips[0], ["mp3-cbr48-v1"]
+        )
+        measured = {
+            child.clip_id: ("a" * 64, 16000),
+            "ghost": ("b" * 64, 16000),
+        }
+        with pytest.raises(corpus.CorpusError, match="keyset mismatch"):
+            corpus._assemble_combined_manifest(clips, [child], measured)
+
+    def test_missing_measurement_rejected(self) -> None:
+        clips = [_raw("p1")]
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        child = corpus.derive_degraded_record(
+            parent_manifest.clips[0], ["mp3-cbr48-v1"]
+        )
+        with pytest.raises(corpus.CorpusError, match="keyset mismatch"):
+            corpus._assemble_combined_manifest(clips, [child], {})
+
+    def test_bad_sha_rejected(self) -> None:
+        clips = [_raw("p1")]
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        child = corpus.derive_degraded_record(
+            parent_manifest.clips[0], ["mp3-cbr48-v1"]
+        )
+        measured = {child.clip_id: ("NOT_A_SHA", 16000)}
+        with pytest.raises(corpus.CorpusError, match="64 lowercase hex"):
+            corpus._assemble_combined_manifest(clips, [child], measured)
+
+    def test_zero_count_rejected(self) -> None:
+        clips = [_raw("p1")]
+        parent_manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+        child = corpus.derive_degraded_record(
+            parent_manifest.clips[0], ["mp3-cbr48-v1"]
+        )
+        measured = {child.clip_id: ("a" * 64, 0)}
+        with pytest.raises(corpus.CorpusError, match="positive int"):
+            corpus._assemble_combined_manifest(clips, [child], measured)
+
+
+# -- resolve_clip_path ----------------------------------------------------- #
+
+class TestResolveClipPath:
+    def test_resolves_in_correct_root(self, tmp_path: Path) -> None:
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        (root_b / "ami" / "turn").mkdir(parents=True)
+        (root_b / "ami" / "turn" / "clip.wav").write_bytes(b"\x00")
+        clip = _parent_clip(rel_path="ami/turn/clip.wav")
+        resolved = corpus.resolve_clip_path(clip, roots=(root_a, root_b))
+        assert resolved == root_b / "ami" / "turn" / "clip.wav"
+
+    def test_zero_roots_rejected(self, tmp_path: Path) -> None:
+        clip = _parent_clip(rel_path="ami/turn/clip.wav")
+        with pytest.raises(corpus.CorpusError, match="not found in any root"):
+            corpus.resolve_clip_path(clip, roots=(tmp_path,))
+
+    def test_multiple_roots_rejected(self, tmp_path: Path) -> None:
+        root_a = tmp_path / "a"
+        root_b = tmp_path / "b"
+        for root in (root_a, root_b):
+            (root / "ami" / "turn").mkdir(parents=True)
+            (root / "ami" / "turn" / "clip.wav").write_bytes(b"\x00")
+        clip = _parent_clip(rel_path="ami/turn/clip.wav")
+        with pytest.raises(corpus.CorpusError, match="multiple roots"):
+            corpus.resolve_clip_path(clip, roots=(root_a, root_b))
+
+
+# -- materialize_degrade (integration with fake docker) -------------------- #
+
+class TestMaterializeDegrade:
+    def test_full_pipeline(self, tmp_path: Path, fake_docker: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root, n_clips=2)
+        degrade_root = tmp_path / "degrade"
+        result = corpus.materialize_degrade(
+            parent_root=parent_root,
+            corpus_root=degrade_root,
+            container_image=_FAKE_IMAGE,
+            recipe_ids=("speed-atempo-0p90-v1",),
+        )
+        assert result.children == 2
+        assert result.parents_reaudited == 2
+        assert corpus._is_sha256(result.combined_manifest_sha256)
+        assert corpus._is_sha256(result.parent_manifest_sha256)
+        assert (degrade_root / "manifest.json").is_file()
+        assert (degrade_root / "clip_receipt.jsonl").is_file()
+        assert (degrade_root / "degrade_receipt.json").is_file()
+        manifest = corpus.load_manifest(
+            json.loads((degrade_root / "manifest.json").read_text())
+        )
+        assert len(manifest.clips) == 4
+        parents = [c for c in manifest.clips if c.parent_clip_id is None]
+        children = [c for c in manifest.clips if c.parent_clip_id is not None]
+        assert len(parents) == 2
+        assert len(children) == 2
+        for child in children:
+            child_wav = degrade_root / child.rel_path
+            assert child_wav.is_file()
+            payload = corpus.read_canonical_wav_payload(child_wav)
+            sha, _count = corpus.payload_sha_and_count(payload)
+            assert sha == child.sha256
+
+    def test_split_filter(self, tmp_path: Path, fake_docker: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root, n_clips=1, split="eval")
+        degrade_root = tmp_path / "degrade"
+        with pytest.raises(corpus.CorpusError, match="no eligible"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=degrade_root,
+                container_image=_FAKE_IMAGE,
+                recipe_ids=("speed-atempo-0p90-v1",),
+                split_filter="calibration",
+            )
+
+    def test_populated_root_rejected(self, tmp_path: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        degrade_root = tmp_path / "degrade"
+        degrade_root.mkdir()
+        (degrade_root / "leftover").write_text("x")
+        with pytest.raises(corpus.CorpusError, match="already populated"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=degrade_root,
+                container_image=_FAKE_IMAGE,
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+
+    def test_bad_container_image_rejected(self, tmp_path: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        with pytest.raises(corpus.CorpusError, match="sha256"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=tmp_path / "degrade",
+                container_image="notpinned:latest",
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+
+    def test_v2_manifest_rejected(self, tmp_path: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        v2_manifest = {
+            "schema_version": 2,
+            "corpus_kind": "imported_benchmark",
+            "benchmark": "asvspoof2021-df",
+            "clips": [{
+                "clip_id": "x",
+                "rel_path": "canonical/x.wav",
+                "sha256": "a" * 64,
+                "duration_s": 1.0,
+                "label": "bona_fide",
+                "language": "und",
+                "license_spdx": "LicenseRef-ASVspoof2021-DF",
+                "stratum": "bona_fide|nocodec",
+                "source": "asvspoof2021-df",
+                "speaker_id": "s1",
+                "split": "eval",
+                "imported_provenance": {
+                    "official_trial_id": "x",
+                    "source_dataset": "asvspoof",
+                    "codec_condition": "nocodec",
+                    "official_split": "eval",
+                    "attack_system": None,
+                    "vocoder_family": "bonafide",
+                },
+            }],
+        }
+        (parent_root / "manifest.json").write_text(
+            json.dumps(v2_manifest, indent=2, sort_keys=True) + "\n"
+        )
+        with pytest.raises(corpus.CorpusError, match="v1"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=tmp_path / "degrade",
+                container_image=_FAKE_IMAGE,
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+
+    def test_parent_with_degraded_entries_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        payload = _make_pcm_payload()
+        sha, count = corpus.payload_sha_and_count(payload)
+        child_dict = {
+            "clip_id": clips[0]["clip_id"] + "-mp3-cbr48-v1",
+            "rel_path": "ami/turn/degraded/" + clips[0]["clip_id"] + "-mp3-cbr48-v1.wav",
+            "sha256": sha,
+            "duration_s": corpus._duration_s_from_samples(count),
+            "label": "bona_fide",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "bona_fide|organic|meetingroom|mp3-cbr48-v1",
+            "source": "ami",
+            "speaker_id": "ami-m1-A",
+            "split": "calibration",
+            "degradation": "mp3-cbr48-v1",
+            "parent_clip_id": clips[0]["clip_id"],
+            "acquire": None,
+            "generator": None,
+        }
+        child_wav = parent_root / child_dict["rel_path"]
+        child_wav.parent.mkdir(parents=True, exist_ok=True)
+        corpus.write_canonical_wav(child_wav, payload)
+        all_clips = [*clips, child_dict]
+        manifest_bytes = (
+            json.dumps(
+                {"schema_version": 1, "clips": all_clips},
+                indent=2, sort_keys=True,
+            ) + "\n"
+        ).encode("utf-8")
+        (parent_root / "manifest.json").write_bytes(manifest_bytes)
+        with pytest.raises(corpus.CorpusError, match="degraded entries"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=tmp_path / "degrade",
+                container_image=_FAKE_IMAGE,
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+
+    def test_reaudit_sha_mismatch_rejected(
+        self, tmp_path: Path, fake_docker: Path
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        # Tamper the manifest sha without touching the WAV
+        clips[0]["sha256"] = "c" * 64
+        (parent_root / "manifest.json").write_bytes(
+            (json.dumps({"schema_version": 1, "clips": clips},
+                        indent=2, sort_keys=True) + "\n").encode()
+        )
+        with pytest.raises(corpus.CorpusError, match="re-audit failed"):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=tmp_path / "degrade",
+                container_image=_FAKE_IMAGE,
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+
+    def test_cleanup_on_failure(self, tmp_path: Path, fake_docker: Path) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        degrade_root = tmp_path / "degrade"
+        # Sabotage: remove the parent WAV so the re-audit reads it but then
+        # the degrade step would fail (but re-audit catches sha mismatch first).
+        # Instead, use an invalid container image to fail preflight.
+        with pytest.raises(corpus.CorpusError):
+            corpus.materialize_degrade(
+                parent_root=parent_root,
+                corpus_root=degrade_root,
+                container_image="bad:latest",
+                recipe_ids=("speed-atempo-0p90-v1",),
+            )
+        assert not degrade_root.exists()
+
+    def test_grandchild_skip(
+        self, tmp_path: Path, fake_docker: Path, capsys: Any
+    ) -> None:
+        """cmd_degrade dry-run skips already-degraded clips (no grandchildren)."""
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        clips, _ = _write_parent_corpus(parent_root)
+        # Add a degraded child to the manifest so we can verify it's skipped
+        payload = _make_pcm_payload()
+        sha, count = corpus.payload_sha_and_count(payload)
+        parent_id = clips[0]["clip_id"]
+        child_dict = {
+            "clip_id": f"{parent_id}-mp3-cbr48-v1",
+            "rel_path": f"ami/turn/degraded/{parent_id}-mp3-cbr48-v1.wav",
+            "sha256": sha,
+            "duration_s": corpus._duration_s_from_samples(count),
+            "label": "bona_fide",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "bona_fide|organic|meetingroom|mp3-cbr48-v1",
+            "source": "ami",
+            "speaker_id": "ami-m1-A",
+            "split": "calibration",
+            "degradation": "mp3-cbr48-v1",
+            "parent_clip_id": parent_id,
+            "acquire": None,
+            "generator": None,
+        }
+        child_wav = parent_root / child_dict["rel_path"]
+        child_wav.parent.mkdir(parents=True, exist_ok=True)
+        corpus.write_canonical_wav(child_wav, payload)
+        # Write manifest with both parent and existing child
+        all_clips = [*clips, child_dict]
+        (parent_root / "manifest.json").write_bytes(
+            (json.dumps({"schema_version": 1, "clips": all_clips},
+                        indent=2, sort_keys=True) + "\n").encode()
+        )
+        # Dry-run should reject this manifest (it contains degraded entries)
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(parent_root / "manifest.json"),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=None,
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "degraded entries" in capsys.readouterr().err
+
+
+# -- Dry-run preflight parity --------------------------------------------- #
+
+class TestCmdDegradeDryrunPreflight:
+    def test_v2_manifest_rejected_dryrun(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        v2_manifest = {
+            "schema_version": 2,
+            "corpus_kind": "imported_benchmark",
+            "benchmark": "asvspoof2021-df",
+            "clips": [{
+                "clip_id": "x",
+                "rel_path": "canonical/x.wav",
+                "sha256": "a" * 64,
+                "duration_s": 1.0,
+                "label": "bona_fide",
+                "language": "und",
+                "license_spdx": "LicenseRef-ASVspoof2021-DF",
+                "stratum": "bona_fide|nocodec",
+                "source": "asvspoof2021-df",
+                "speaker_id": "s1",
+                "split": "eval",
+                "imported_provenance": {
+                    "official_trial_id": "x",
+                    "source_dataset": "asvspoof",
+                    "codec_condition": "nocodec",
+                    "official_split": "eval",
+                    "attack_system": None,
+                    "vocoder_family": "bonafide",
+                },
+            }],
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(v2_manifest, indent=2, sort_keys=True) + "\n"
+        )
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(manifest_path),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=None,
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "v1" in capsys.readouterr().err
+
+    def test_spoof_parent_rejected_dryrun(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        spoof_clip = {
+            "clip_id": "s1",
+            "rel_path": "spoof/s1.wav",
+            "sha256": "a" * 64,
+            "duration_s": 1.0,
+            "label": "spoof",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "spoof|tts",
+            "source": "ami",
+            "speaker_id": "spk",
+            "split": "calibration",
+            "generator": {
+                "name": "tts",
+                "version": "1.0",
+                "checkpoint_sha": None,
+                "voice": "v1",
+                "seed": "42",
+                "text_source": "script",
+            },
+            "degradation": None,
+            "parent_clip_id": None,
+            "acquire": None,
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {"schema_version": 1, "clips": [spoof_clip]},
+                indent=2, sort_keys=True,
+            ) + "\n"
+        )
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(manifest_path),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=None,
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "bona_fide" in capsys.readouterr().err
+
+
+# -- CLI execution mode --------------------------------------------------- #
+
+class TestCmdDegradeExecution:
+    def test_execution_mode_requires_flags(self, capsys: Any) -> None:
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest="/dev/null",
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root="/tmp/out",
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "requires" in capsys.readouterr().err
+
+    def test_manifest_path_mismatch_rejected(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        wrong_manifest = tmp_path / "wrong.json"
+        wrong_manifest.write_text("{}")
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(wrong_manifest),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=str(tmp_path / "out"),
+                parent_root=str(parent_root),
+                container_image=_FAKE_IMAGE,
+            )
+        )
+        assert rc == 2
+        assert "manifest.json" in capsys.readouterr().err
+
+    def test_execution_mode_produces_result(
+        self, tmp_path: Path, fake_docker: Path, capsys: Any
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        degrade_root = tmp_path / "degrade"
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(parent_root / "manifest.json"),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=str(degrade_root),
+                parent_root=str(parent_root),
+                container_image=_FAKE_IMAGE,
+            )
+        )
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["children"] == 1
+        assert corpus._is_sha256(out["combined_manifest_sha256"])
+
+
+# -- Container image pin format -------------------------------------------- #
+
+class TestContainerImagePin:
+    @pytest.mark.parametrize("good", [
+        "repo/image@sha256:" + "a" * 64,
+        "registry.io/org/image@sha256:" + "0" * 64,
+        "jrottenberg/ffmpeg@sha256:" + "f" * 64,
+    ])
+    def test_valid_pins_accepted(self, good: str) -> None:
+        assert corpus._CONTAINER_IMAGE_RE.match(good)
+
+    @pytest.mark.parametrize("bad", [
+        "image:latest",
+        "image@sha256:short",
+        "image@sha256:" + "g" * 64,
+        "@sha256:" + "a" * 64,
+    ])
+    def test_invalid_pins_rejected(self, bad: str) -> None:
+        assert not corpus._CONTAINER_IMAGE_RE.match(bad)
