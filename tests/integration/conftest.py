@@ -188,10 +188,14 @@ def session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
     # One combined TRUNCATE, not a statement per table. Listing every ORM table
     # in a single command lets Postgres take the ACCESS EXCLUSIVE locks and wipe
     # them in one pass, instead of paying per-statement parse/plan/lock overhead
-    # ~40 times per test (the measured teardown cost that dominates the suite).
-    # Semantics are identical: CASCADE still reaches any non-ORM table with an FK
-    # into this set, and order is irrelevant inside one TRUNCATE. Sequences are
-    # left as-is (no RESTART IDENTITY), matching the previous per-table wipe.
+    # once per table (the measured teardown cost that dominated the suite).
+    # Same wipe as the old per-table loop for this schema: CASCADE still reaches
+    # any non-ORM table with an FK into this set, order is irrelevant inside one
+    # TRUNCATE, and sequences are left as-is (no RESTART IDENTITY). The two forms
+    # could only diverge under an ON TRUNCATE trigger that writes into another
+    # table in the set (statement-boundary ordering differs); the schema has none
+    # (only row-level BEFORE INSERT/UPDATE immutability triggers, which TRUNCATE
+    # bypasses either way). Revisit this comment if that changes.
     tables = ", ".join(f'"{t.name}"' for t in Base.metadata.sorted_tables)
     if tables:
         with engine.connect() as conn:
