@@ -1,6 +1,6 @@
 # ADR 0007: Media operations journal
 
-> **Status:** Accepted (Console 2.0 P2c, issue #155). Migration 0043, the
+> **Status:** Accepted (Console 2.0 P2c, issue #155). Migration 0044, the
 > executor, the reconciler, and the library UI land in the same slice.
 
 ## Context
