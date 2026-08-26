@@ -143,6 +143,32 @@ def stage_activity(session: Session) -> list[StageActivity]:
     ]
 
 
+def jobs_badge_count(session: Session) -> int:
+    """Count of live jobs for the shell's Jobs-nav badge (issue #162).
+
+    Non-archived pipeline runs that are queued or running, plus queued/running
+    auxiliary jobs across the four families. Shared by the ``/jobs`` page and the
+    activity poll endpoint so the badge equals what the page reports by
+    construction. Excludes ``awaiting_adjudication`` (paused ON the operator, not
+    active work) and every terminal state; ``archived`` runs are already terminal.
+    """
+    active_aux = ("queued", "running")
+    runs = session.execute(
+        select(func.count())
+        .select_from(PipelineRun)
+        .where(
+            PipelineRun.status.in_((RunStatus.QUEUED.value, RunStatus.RUNNING.value)),
+            PipelineRun.archived_at.is_(None),
+        )
+    ).scalar_one()
+    aux = 0
+    for model in (RunAssetJob, TranslationJob, EmbeddingJob, ResearchJob):
+        aux += session.execute(
+            select(func.count()).select_from(model).where(model.status.in_(active_aux))
+        ).scalar_one()
+    return int(runs + aux)
+
+
 def recent_aux_jobs(
     session: Session, *, limit: int = 20, per_family: int | None = None
 ) -> list[AuxJob]:

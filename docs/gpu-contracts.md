@@ -1811,8 +1811,14 @@ payload digest and `duration_s` is derived from the decoded sample count. The pu
 layer therefore emits a `MaterializationPlan` (which clips and segments to extract,
 with their splits) and a `finalize_manifest(plan_records, measured_facts)` function
 that builds and validates the v1 manifest only after the executor supplies the
-per-clip PCM sha256 and sample count. The executor itself is S5 PR-2 (a
-maintainer-hardware, digest-pinned ffmpeg step).
+per-clip PCM sha256 and sample count. The executor splits in two. PR-2a (the
+prepare executor) materializes bona fide clips and is ffmpeg-free: the staged
+organic sources are already canonical PCM (16 kHz mono s16le, measured), so
+materialization is deterministic byte slicing of a pin-verified payload, not a
+codec pass. PR-2b (the degrade executor) is the maintainer-hardware, digest-pinned
+ffmpeg step, because only the degradation round trips run lossy codecs; it also owns
+the combined parent-plus-child manifest assembly (a v1 manifest rejects a child
+whose parent is absent) and the AMR-NB availability decision.
 
 **Bona fide source.** Two CC-BY-4.0 diarization corpora, a meeting-room set and a
 web-video set, each with RTTMs giving per-speaker turns. `prepare` parses the
@@ -1918,6 +1924,16 @@ bona fide false-positive rate against the upstream crop), not separability or EE
 which need the spoof side that arrives in S6. The verdict states this limit
 explicitly, and per-window scores are journaled as a first-class output, not a
 fallback bolted on later.
+
+**PR-2a prepare-executor acceptance verdict (2026-08-26): PASS.** The ffmpeg-free
+prepare executor materialized real bona fide corpora from both organic domains (AMI
+`ES2011a`, 189 clips; VoxConverse `abjxc`, 4 clips) with byte-exact determinism
+across two independent runs, every clip equal to an independently computed source
+slice, all turn/segment overlaps byte-identical, and every materialized clip
+re-audited through the scoring reader `synthdetect_infer.read_canonical_pcm` against
+the finalized manifest. This confirms the numpy-free corpus writer and the numpy
+scoring reader agree on clip identity for real audio. Detail:
+`docs/reports/synthdetect-s5-pr2a-prepare-2026-08-26.md`.
 
 ### Calibration and holdout discipline
 

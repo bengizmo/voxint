@@ -7,6 +7,11 @@
    `voxint stats`, so the page and the CLI always agree. #}
 <h1>Jobs</h1>
 
+{# The live-jobs count (queued + running runs and auxiliary jobs). The shell's
+   activity badge reads the same jobs_badge_count query, so the two always agree
+   (#162). #}
+<p class="muted" data-jobs-live-count>{{ jobs_badge_count }} job{{ "" if jobs_badge_count == 1 else "s" }} in progress</p>
+
 <section class="card">
 <h2>Pipeline activity</h2>
 <dl class="def-grid">

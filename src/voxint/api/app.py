@@ -32,6 +32,7 @@ from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from voxint import __version__
+from voxint.api.routers.activity import router as activity_router
 from voxint.api.routers.deps import (
     _APP_ASSET_MEDIA_TYPES,
     _APP_ASSETS_DIR,
@@ -460,6 +461,12 @@ def _register_routes(app: FastAPI) -> None:
     # area gate), discovery gated by console_jobs_enabled in the sidebar.
     console.include_router(jobs_router)
 
+    # ---- Activity poll endpoint (Console 2.0 P7, #162): /activity/events.
+    # Registered next to Jobs (its badge + toast links target /jobs). Dark-ship:
+    # always registered so the route inventory is stable; the handler 404s until
+    # console_activity_enabled is on.
+    console.include_router(activity_router)
+
     # ---- Run assets, translation, media streaming: moved to
     # routers/legacy_runs.py; included here to keep registration order.
     console.include_router(runs_tail_router)
@@ -552,6 +559,14 @@ def _register_routes(app: FastAPI) -> None:
     # "Add media" quick action at /media — the dark-ship activation switch.
     app.state.media_routed = any(
         route.path == "/media" for route in _iter_api_routes(app.routes)
+    )
+    # Activity (#162) dark-ships routed-but-undiscovered: /activity/events always
+    # registers, so this stamp is always true. shell.activity_enabled ANDs the
+    # flag, this stamp, AND shell.jobs_enabled (the badge lives on the Jobs entry
+    # and the toast links target /jobs), so activity is never surfaced while Jobs
+    # discovery is off.
+    app.state.activity_routed = any(
+        route.path == "/activity/events" for route in _iter_api_routes(app.routes)
     )
 
 

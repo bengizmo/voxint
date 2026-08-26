@@ -1,4 +1,5 @@
 [
+  "voxint.activity_prune",
   "voxint.finish_pipeline",
   "voxint.gc_sweep",
   "voxint.generate_run_asset",

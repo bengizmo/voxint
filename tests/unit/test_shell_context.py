@@ -17,6 +17,7 @@ def _request_with(
     projects_routed: bool | None = None,
     jobs_routed: bool | None = None,
     media_routed: bool | None = None,
+    activity_routed: bool | None = None,
 ) -> Request:
     state = SimpleNamespace(settings=settings)
     if projects_routed is not None:
@@ -25,6 +26,8 @@ def _request_with(
         state.jobs_routed = jobs_routed
     if media_routed is not None:
         state.media_routed = media_routed
+    if activity_routed is not None:
+        state.activity_routed = activity_routed
     app = SimpleNamespace(state=state)
     return cast(Request, SimpleNamespace(app=app))
 
@@ -49,6 +52,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "projects_enabled": True,
             "jobs_enabled": False,
             "media_enabled": False,
+            "activity_enabled": False,
         }
     }
     # Flag on, no /projects route registered yet (today's reality): stays dark.
@@ -59,6 +63,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "projects_enabled": False,
             "jobs_enabled": False,
             "media_enabled": False,
+            "activity_enabled": False,
         }
     }
     # A stale app with no stamp at all fails closed too.
@@ -67,6 +72,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "projects_enabled": False,
             "jobs_enabled": False,
             "media_enabled": False,
+            "activity_enabled": False,
         }
     }
     assert _shell_template_context(
@@ -76,6 +82,7 @@ def test_shell_context_requires_flag_and_route() -> None:
             "projects_enabled": False,
             "jobs_enabled": False,
             "media_enabled": False,
+            "activity_enabled": False,
         }
     }
 
@@ -128,6 +135,41 @@ def test_shell_context_media_discovery_flag() -> None:
     # Defensive: a stale app missing the stamp fails closed even with the flag on.
     assert (
         _shell_template_context(_request_with(on))["shell"]["media_enabled"] is False
+    )
+
+
+def test_shell_context_activity_requires_jobs_discovery() -> None:
+    """Activity (#162) depends on Jobs discovery: the badge lives on the Jobs
+    entry and the toast links target /jobs, so activity stays dark unless its own
+    flag AND route stamp are set AND Jobs discovery is on."""
+    both = Settings(
+        database_url="postgresql+psycopg://x/x",
+        console_activity_enabled=True,
+        console_jobs_enabled=True,
+    )
+    activity_only = Settings(
+        database_url="postgresql+psycopg://x/x", console_activity_enabled=True
+    )
+    # Activity flag + route + Jobs discovery all present: surfaced.
+    assert (
+        _shell_template_context(
+            _request_with(both, jobs_routed=True, activity_routed=True)
+        )["shell"]["activity_enabled"]
+        is True
+    )
+    # Activity on but Jobs discovery off: stays dark (nav-honesty guard).
+    assert (
+        _shell_template_context(
+            _request_with(activity_only, jobs_routed=True, activity_routed=True)
+        )["shell"]["activity_enabled"]
+        is False
+    )
+    # Defensive: a stale app missing the activity stamp fails closed.
+    assert (
+        _shell_template_context(_request_with(both, jobs_routed=True))["shell"][
+            "activity_enabled"
+        ]
+        is False
     )
 
 

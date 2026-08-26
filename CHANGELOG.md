@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Console 2.0 P7: run-completion activity indicator and toasts, dark-shipped**
+  (#162, epic #149). Behind a new `CONSOLE_ACTIVITY_ENABLED` flag (off by
+  default), a completed pipeline run writes one row to a new `activity_events`
+  outbox in the same transaction as the completion, and the console polls
+  `/activity/events` to raise a toast ("Transcription finished: file. Review
+  speakers.") and show a live-jobs count on the Jobs entry. The badge reads the
+  same query the Jobs page renders, so the two always agree; the outbox is kept
+  to its newest 500 rows by an opt-in retention sweep. Nothing is reachable until
+  the flag is on (the endpoint answers 404, the shell renders no chrome), and
+  activation additionally requires Jobs discovery so the badge and links stay
+  honest. Speaker-identification events are a planned follow-up. No redirect or
+  version bump ships here; that activation is a later slice.
 - **synthdetect S5 organic-corpus tooling, pure layer** (#144, M1 S5). The
   audio-free half of the organic (real-speech) corpus lands frozen and unit-tested
   before any audio exists. `tools/synthdetect_corpus.py` gains a strict RTTM
@@ -35,6 +47,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   clips not in the record list; manifest lineage also inherits `source`; and
   `degrade` skips already-degraded parents so a re-run never plans grandchildren.
   Pre-registration in `docs/gpu-contracts.md`.
+- **synthdetect S5 PR-2a prepare executor** (#144, M1 S5). `prepare` gains an
+  execution mode (`--corpus-root`, with `--audio-dir` and `--acquisition-manifest`)
+  that materializes bona fide turn and segment clips from the staged organic
+  recordings; without a corpus root it stays the dry-run planner. Because the staged
+  sources are already canonical PCM (16 kHz mono s16le, measured), materialization is
+  ffmpeg-free: the executor pin-verifies every RTTM and recording against the
+  acquisition manifest on the exact bytes it reads (open-once, no reopen race),
+  slices each clip at the plan's integer sample offsets from the validated payload,
+  wraps each slice in a deterministic canonical WAV, finalizes and validates the v1
+  manifest, and publishes the whole tree by atomic rename (refusing a populated
+  root). New numpy-free canonical-WAV primitives (`read_canonical_wav_payload`,
+  `write_canonical_wav`, `payload_sha_and_count`) share the data-chunk payload
+  identity with `synthdetect_infer.read_canonical_pcm`; a contract test pins their
+  canonical constants equal so a corpus materialized by one and scored by the other
+  can never disagree. The degrade executor and its codec toolchain are a separate
+  later slice (PR-2b).
 - **synthdetect Gate-1: full-cohort DF benchmark reproduction PASS** (#144, M1
   S4). The verbatim upstream SSL_Anti-spoofing model and data modules (under a
   thin, audited reference driver) were run over the full official ASVspoof 2021 DF
