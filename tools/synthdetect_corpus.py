@@ -1970,7 +1970,13 @@ def _run_containerized_ffmpeg(
         raise CorpusError(
             f"container ffmpeg: output path {out_container_path!r} must be under /work/"
         )
-    out_host_path = workdir / out_container_path.removeprefix("/work/")
+    suffix = out_container_path.removeprefix("/work/")
+    if not suffix or Path(suffix).is_absolute() or ".." in Path(suffix).parts:
+        raise CorpusError(
+            f"container ffmpeg: output path {out_container_path!r} "
+            "must be a relative path under /work/ with no traversal"
+        )
+    out_host_path = workdir / suffix
     cmd = [
         "docker", "run", "--rm", "--network", "none",
         "--entrypoint", "ffmpeg",
@@ -2108,7 +2114,13 @@ def _assemble_combined_manifest(
         )
     child_dicts: list[dict[str, Any]] = []
     for record in child_records:
-        sha, count = measured[record.clip_id]
+        fact = measured[record.clip_id]
+        if not isinstance(fact, tuple) or len(fact) != 2:
+            raise CorpusError(
+                f"_assemble_combined_manifest: measured fact for {record.clip_id!r} "
+                "must be a (pcm_sha256, sample_count) tuple"
+            )
+        sha, count = fact
         if not _is_sha256(sha):
             raise CorpusError(
                 f"_assemble_combined_manifest: clip {record.clip_id!r} sha256 "
@@ -2212,6 +2224,33 @@ def _write_degrade_artifacts(
     return combined_manifest_sha
 
 
+def _validate_degrade_parent_manifest(manifest: Manifest) -> None:
+    """Shared preflight for degrade dry-run and execution mode (fail closed).
+
+    Rejects v2 manifests, non-synthesis corpus kinds, manifests already containing
+    degraded entries, and non-bona_fide parents. Keeps the two paths in sync.
+    """
+    if manifest.schema_version != MANIFEST_SCHEMA_VERSION:
+        raise CorpusError(
+            f"degrade requires a v{MANIFEST_SCHEMA_VERSION} manifest, "
+            f"got v{manifest.schema_version}"
+        )
+    if manifest.corpus_kind != CORPUS_KIND_SYNTHESIS:
+        raise CorpusError(
+            f"degrade requires corpus_kind {CORPUS_KIND_SYNTHESIS!r}, "
+            f"got {manifest.corpus_kind!r}"
+        )
+    has_degraded = any(c.parent_clip_id is not None for c in manifest.clips)
+    if has_degraded:
+        raise CorpusError("parent manifest already contains degraded entries")
+    non_bonafide = [c.clip_id for c in manifest.clips if c.label != "bona_fide"]
+    if non_bonafide:
+        raise CorpusError(
+            f"degrade requires all parent clips to be bona_fide; "
+            f"found {len(non_bonafide)} non-bona_fide"
+        )
+
+
 def materialize_degrade(
     *,
     parent_root: Path,
@@ -2244,25 +2283,7 @@ def materialize_degrade(
     parent_manifest_sha = hashlib.sha256(parent_manifest_bytes).hexdigest()
     parent_obj = json.loads(parent_manifest_bytes)
     parent_manifest = load_manifest(parent_obj)
-    if parent_manifest.schema_version != MANIFEST_SCHEMA_VERSION:
-        raise CorpusError(
-            f"degrade requires a v{MANIFEST_SCHEMA_VERSION} manifest, "
-            f"got v{parent_manifest.schema_version}"
-        )
-    if parent_manifest.corpus_kind != CORPUS_KIND_SYNTHESIS:
-        raise CorpusError(
-            f"degrade requires corpus_kind {CORPUS_KIND_SYNTHESIS!r}, "
-            f"got {parent_manifest.corpus_kind!r}"
-        )
-    has_degraded = any(c.parent_clip_id is not None for c in parent_manifest.clips)
-    if has_degraded:
-        raise CorpusError("parent manifest already contains degraded entries")
-    non_bonafide = [c.clip_id for c in parent_manifest.clips if c.label != "bona_fide"]
-    if non_bonafide:
-        raise CorpusError(
-            f"degrade requires all parent clips to be bona_fide; "
-            f"found {len(non_bonafide)} non-bona_fide"
-        )
+    _validate_degrade_parent_manifest(parent_manifest)
     for clip in parent_manifest.clips:
         clip_path = parent_root / clip.rel_path
         if not clip_path.is_file() or clip_path.is_symlink():
@@ -2489,6 +2510,7 @@ def cmd_degrade(args: argparse.Namespace) -> int:
         try:
             obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
             manifest = load_manifest(obj)
+            _validate_degrade_parent_manifest(manifest)
             chain = serialize_chain(args.recipe)
             children = [
                 asdict(derive_degraded_record(clip, args.recipe))
@@ -2514,9 +2536,18 @@ def cmd_degrade(args: argparse.Namespace) -> int:
             "degrade --corpus-root requires --parent-root and --container-image\n"
         )
         return 2
+    parent_root = Path(args.parent_root)
+    manifest_path = Path(args.manifest).resolve()
+    expected_path = (parent_root / "manifest.json").resolve()
+    if manifest_path != expected_path:
+        sys.stderr.write(
+            f"degrade --corpus-root: --manifest must point to the parent root's "
+            f"manifest.json ({expected_path}), got {manifest_path}\n"
+        )
+        return 2
     try:
         result = materialize_degrade(
-            parent_root=Path(args.parent_root),
+            parent_root=parent_root,
             corpus_root=Path(args.corpus_root),
             container_image=args.container_image,
             recipe_ids=tuple(args.recipe),

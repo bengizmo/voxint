@@ -904,12 +904,94 @@ class TestMaterializeDegrade:
             )
         assert not degrade_root.exists()
 
-    def test_grandchild_skip(self, tmp_path: Path, fake_docker: Path) -> None:
+    def test_grandchild_skip(
+        self, tmp_path: Path, fake_docker: Path, capsys: Any
+    ) -> None:
         """cmd_degrade dry-run skips already-degraded clips (no grandchildren)."""
         parent_root = tmp_path / "parent"
         parent_root.mkdir()
-        _write_parent_corpus(parent_root)
-        manifest_path = parent_root / "manifest.json"
+        clips, _ = _write_parent_corpus(parent_root)
+        # Add a degraded child to the manifest so we can verify it's skipped
+        payload = _make_pcm_payload()
+        sha, count = corpus.payload_sha_and_count(payload)
+        parent_id = clips[0]["clip_id"]
+        child_dict = {
+            "clip_id": f"{parent_id}-mp3-cbr48-v1",
+            "rel_path": f"ami/turn/degraded/{parent_id}-mp3-cbr48-v1.wav",
+            "sha256": sha,
+            "duration_s": corpus._duration_s_from_samples(count),
+            "label": "bona_fide",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "bona_fide|organic|meetingroom|mp3-cbr48-v1",
+            "source": "ami",
+            "speaker_id": "ami-m1-A",
+            "split": "calibration",
+            "degradation": "mp3-cbr48-v1",
+            "parent_clip_id": parent_id,
+            "acquire": None,
+            "generator": None,
+        }
+        child_wav = parent_root / child_dict["rel_path"]
+        child_wav.parent.mkdir(parents=True, exist_ok=True)
+        corpus.write_canonical_wav(child_wav, payload)
+        # Write manifest with both parent and existing child
+        all_clips = [*clips, child_dict]
+        (parent_root / "manifest.json").write_bytes(
+            (json.dumps({"schema_version": 1, "clips": all_clips},
+                        indent=2, sort_keys=True) + "\n").encode()
+        )
+        # Dry-run should reject this manifest (it contains degraded entries)
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(parent_root / "manifest.json"),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=None,
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "degraded entries" in capsys.readouterr().err
+
+
+# -- Dry-run preflight parity --------------------------------------------- #
+
+class TestCmdDegradeDryrunPreflight:
+    def test_v2_manifest_rejected_dryrun(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        v2_manifest = {
+            "schema_version": 2,
+            "corpus_kind": "imported_benchmark",
+            "benchmark": "asvspoof2021-df",
+            "clips": [{
+                "clip_id": "x",
+                "rel_path": "canonical/x.wav",
+                "sha256": "a" * 64,
+                "duration_s": 1.0,
+                "label": "bona_fide",
+                "language": "und",
+                "license_spdx": "LicenseRef-ASVspoof2021-DF",
+                "stratum": "bona_fide|nocodec",
+                "source": "asvspoof2021-df",
+                "speaker_id": "s1",
+                "split": "eval",
+                "imported_provenance": {
+                    "official_trial_id": "x",
+                    "source_dataset": "asvspoof",
+                    "codec_condition": "nocodec",
+                    "official_split": "eval",
+                    "attack_system": None,
+                    "vocoder_family": "bonafide",
+                },
+            }],
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(v2_manifest, indent=2, sort_keys=True) + "\n"
+        )
         rc = corpus.cmd_degrade(
             argparse.Namespace(
                 manifest=str(manifest_path),
@@ -920,10 +1002,58 @@ class TestMaterializeDegrade:
                 container_image=None,
             )
         )
-        assert rc == 0
+        assert rc == 2
+        assert "v1" in capsys.readouterr().err
+
+    def test_spoof_parent_rejected_dryrun(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        spoof_clip = {
+            "clip_id": "s1",
+            "rel_path": "spoof/s1.wav",
+            "sha256": "a" * 64,
+            "duration_s": 1.0,
+            "label": "spoof",
+            "language": "en",
+            "license_spdx": "CC-BY-4.0",
+            "stratum": "spoof|tts",
+            "source": "ami",
+            "speaker_id": "spk",
+            "split": "calibration",
+            "generator": {
+                "name": "tts",
+                "version": "1.0",
+                "checkpoint_sha": None,
+                "voice": "v1",
+                "seed": "42",
+                "text_source": "script",
+            },
+            "degradation": None,
+            "parent_clip_id": None,
+            "acquire": None,
+        }
+        manifest_path = tmp_path / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {"schema_version": 1, "clips": [spoof_clip]},
+                indent=2, sort_keys=True,
+            ) + "\n"
+        )
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(manifest_path),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=None,
+                parent_root=None,
+                container_image=None,
+            )
+        )
+        assert rc == 2
+        assert "bona_fide" in capsys.readouterr().err
 
 
-# -- CLI dry-run vs execution equivalence ---------------------------------- #
+# -- CLI execution mode --------------------------------------------------- #
 
 class TestCmdDegradeExecution:
     def test_execution_mode_requires_flags(self, capsys: Any) -> None:
@@ -939,6 +1069,27 @@ class TestCmdDegradeExecution:
         )
         assert rc == 2
         assert "requires" in capsys.readouterr().err
+
+    def test_manifest_path_mismatch_rejected(
+        self, tmp_path: Path, capsys: Any
+    ) -> None:
+        parent_root = tmp_path / "parent"
+        parent_root.mkdir()
+        _write_parent_corpus(parent_root)
+        wrong_manifest = tmp_path / "wrong.json"
+        wrong_manifest.write_text("{}")
+        rc = corpus.cmd_degrade(
+            argparse.Namespace(
+                manifest=str(wrong_manifest),
+                recipe=["speed-atempo-0p90-v1"],
+                split=None,
+                corpus_root=str(tmp_path / "out"),
+                parent_root=str(parent_root),
+                container_image=_FAKE_IMAGE,
+            )
+        )
+        assert rc == 2
+        assert "manifest.json" in capsys.readouterr().err
 
     def test_execution_mode_produces_result(
         self, tmp_path: Path, fake_docker: Path, capsys: Any
