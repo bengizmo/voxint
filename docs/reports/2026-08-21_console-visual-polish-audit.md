@@ -1,5 +1,10 @@
 # Console visual-polish audit
 
+> **Superseded by:** the Ops Console visual direction (1c), approved 2026-08-26.
+> Design spec: `internal/design/voxint-console-2-design-spec.md`. Implementation
+> tracked in epic #205. The spacing, button hierarchy, and interactive-state
+> findings here fed into the design spec's density rules and primitive definitions.
+
 > **Status:** Findings + implementation direction. Audit performed 2026-08-21
 > against `main` @ `9635142` (branch `feat/console-visual-polish`). Evidence is a
 > static read of `src/voxint/api/templates/base.html` and every console

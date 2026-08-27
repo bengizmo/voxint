@@ -1935,6 +1935,18 @@ the finalized manifest. This confirms the numpy-free corpus writer and the numpy
 scoring reader agree on clip identity for real audio. Detail:
 `docs/reports/synthdetect-s5-pr2a-prepare-2026-08-26.md`.
 
+**PR-2b degrade-executor acceptance verdict (2026-08-26): PASS.** The degrade
+executor materialized codec-degraded children from real bona fide audio (AMI
+`ES2011a`, 189 parent clips) for all six degradation recipes and one multi-recipe
+chain (`speed-atempo-0p90-v1|mp3-cbr48-v1`), deterministically: byte-identical
+combined manifests and child PCM sha256 values across two independent runs per
+configuration. Every child re-audited against its manifest sha256, and
+`resolve_clip_path` resolved every combined-manifest entry against the two-root
+layout. AMR-NB ran successfully on real speech. Pinned container:
+`jrottenberg/ffmpeg@sha256:292a972c...`, ffmpeg 7.1, determinism flags
+`-threads 1 -filter_threads 1`. Detail:
+`docs/reports/synthdetect-s5-pr2b-degrade-2026-08-26.md`.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
