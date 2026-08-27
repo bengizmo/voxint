@@ -189,7 +189,7 @@ def test_windowing_pooling_is_logit_mean() -> None:
 def test_sources_version_pinned() -> None:
     # A registry SHAPE change (a new field/model) must move the version so a
     # reshuffle or pin refresh is a visible, deliberate event in artifacts.
-    assert src.SOURCES_VERSION == "synthdetect-sources-v4"
+    assert src.SOURCES_VERSION == "synthdetect-sources-v6"
 
 
 def test_pinned_weight_shas_and_commits_have_real_shape() -> None:
@@ -277,3 +277,33 @@ def test_validator_rejects_a_second_runnable_df_stop_gate() -> None:
     licensed = replace(nes2net, license_class="shippable")
     with pytest.raises(src.SourcesError, match="more than one runnable model"):
         src._validate_registry(_registry_with("nes2net", licensed))
+
+
+# --------------------------------------------------------------------------- #
+# windowing policy contracts
+# --------------------------------------------------------------------------- #
+def test_production_window_width_matches_model_input() -> None:
+    # The production window must exactly equal the model input width so full
+    # windows need no repeat-padding (the PR-4 64000-vs-64600 fix).
+    for mid in src.MODELS:
+        m = src.get_model(mid)
+        w = m.windowing
+        if w.upstream_window_samples is None:
+            continue
+        win_samples = round(w.production_window_s * w.sample_rate_hz)
+        assert win_samples == w.upstream_window_samples, (
+            f"{mid}: production window {win_samples} != model width "
+            f"{w.upstream_window_samples}"
+        )
+
+
+def test_production_tail_floor_is_set_for_all_models() -> None:
+    for mid in src.MODELS:
+        m = src.get_model(mid)
+        w = m.windowing
+        assert w.production_tail_floor_samples is not None, (
+            f"{mid}: production_tail_floor_samples must not be None"
+        )
+        assert w.production_tail_floor_samples > 0, (
+            f"{mid}: production_tail_floor_samples must be positive"
+        )

@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S5 PR-3: cohort freeze** (#144). Frozen calibration cohort
+  policy: exactly one degraded child per eligible calibration-split turn parent,
+  assigned via stable `sha256(clip_id)` hash from the six single-recipe chains.
+  Multi-recipe compound chains are excluded from v1. New constants
+  `FROZEN_COHORT_CHAINS`, `S5_COHORT_VERSION`, `S5_COHORT_SELECTION_POLICY` in
+  `synthdetect_sources.py` (SOURCES_VERSION bumped to v5). New `plan_cohort`,
+  `CohortPlan`, `materialize_cohort`, `CohortResult` in `synthdetect_corpus.py`.
+  New `freeze` CLI verb (dry-run prints plan + `cohort_plan_sha256`; execution
+  materializes atomically with `cohort_receipt.json`). 37 new tests (30 unit +
+  7 contract).
 - **Ops Console COPY: vocabulary contract and stale-term audit** (#209, epic
   #205). Canonical plain-language vocabulary mapping (`vocabulary.py`): maps
   12 internal terms to user-facing equivalents (diarization -> "separate
@@ -15,6 +25,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   CSS, and scripts before scanning. Legacy templates, Settings detail pages,
   and the RTTM export disclosure carry explicit allowlists until their R-issue
   refreshes apply the vocabulary.
+
+### Fixed
+- **Synthdetect M1 S5 PR-4: production windowing fixes** (#144). Two
+  pre-registered fixes to `plan_windows(mode="production")`: (1) production
+  window width aligned to model input width (4.0 s / 64,000 samples changed to
+  4.0375 s / 64,600 samples, eliminating 600-sample repeat-padding on every
+  full window); (2) trailing partial windows below 8,000 samples (0.5 s) are
+  dropped when at least one full window exists, preventing tiny tails from
+  pooling with equal weight. `production_tail_floor_samples` added to
+  `WindowingPolicy`; `dropped_tail_samples` journaled per clip in
+  `ClipOutcome`. SOURCES_VERSION bumped to v6. Contract tests enforce
+  production window == model width invariant.
 
 ### Changed
 - **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system

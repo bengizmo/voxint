@@ -202,6 +202,7 @@ class WindowPlan:
 
     spans: tuple[tuple[int, int], ...]
     repeat_padded: bool
+    dropped_tail_samples: int = 0
 
 
 def model_input_samples(windowing: WindowingPolicy) -> int:
@@ -227,8 +228,9 @@ def plan_windows(n_samples: int, windowing: WindowingPolicy, *, mode: str) -> Wi
     ``upstream`` mode reproduces the gate-1 protocol: a single window that is the
     64,600-sample prefix, repeat-padded when the clip is shorter (the exact Tak
     SSL_Anti-spoofing rule -- NOT zero-padding). ``production`` mode chunks the
-    clip into ``production_window_s`` windows at ``production_hop_s``; the final
-    partial window is kept and repeat-padded so short tails are still scored.
+    clip into ``production_window_s`` windows at ``production_hop_s``; a trailing
+    partial window below ``production_tail_floor_samples`` is dropped when at
+    least one full window exists.
     """
     if n_samples <= 0:
         raise InferError("cannot window an empty clip")
@@ -246,10 +248,20 @@ def plan_windows(n_samples: int, windowing: WindowingPolicy, *, mode: str) -> Wi
         while start < n_samples:
             spans.append((start, min(start + win, n_samples)))
             start += hop
-        # Any span shorter than the model width (short clips, or the final tail)
-        # is repeat-padded when prepared; flag it if so.
+        dropped_tail = 0
+        floor = windowing.production_tail_floor_samples
+        if floor is not None and len(spans) >= 2:
+            last_start, last_end = spans[-1]
+            tail_len = last_end - last_start
+            if tail_len < floor:
+                dropped_tail = tail_len
+                spans.pop()
         padded = any((e - s) < width for s, e in spans)
-        return WindowPlan(spans=tuple(spans), repeat_padded=padded)
+        return WindowPlan(
+            spans=tuple(spans),
+            repeat_padded=padded,
+            dropped_tail_samples=dropped_tail,
+        )
     raise InferError(f"unknown windowing mode {mode!r} (expected 'upstream' or 'production')")
 
 
@@ -391,6 +403,7 @@ def build_header(
             "production_window_s": w.production_window_s,
             "production_hop_s": w.production_hop_s,
             "merge_gap_s": w.merge_gap_s,
+            "production_tail_floor_samples": w.production_tail_floor_samples,
             "short_clip_rule": "repeat-pad",
         },
         "scoring": {
@@ -454,6 +467,11 @@ def _validate_resume_record(obj: Any, lineno: int) -> str:
     n_windows = obj.get("n_windows", 0)
     if not isinstance(n_windows, int) or isinstance(n_windows, bool) or n_windows < 0:
         raise InferError(f"resume journal line {lineno} ({clip_id}): n_windows must be int >= 0")
+    dropped = obj.get("dropped_tail_samples", 0)
+    if not isinstance(dropped, int) or isinstance(dropped, bool) or dropped < 0:
+        raise InferError(
+            f"resume journal line {lineno} ({clip_id}): dropped_tail_samples must be int >= 0"
+        )
     return clip_id
 
 
@@ -611,9 +629,12 @@ class ClipOutcome:
     raw_score: float | None
     skip_reason: str | None
     n_windows: int
+    dropped_tail_samples: int = 0
 
     def as_record(self) -> dict[str, Any]:
         rec: dict[str, Any] = {"clip_id": self.clip_id, "n_windows": self.n_windows}
+        if self.dropped_tail_samples > 0:
+            rec["dropped_tail_samples"] = self.dropped_tail_samples
         if self.skip_reason is None:
             rec["raw_score"] = self.raw_score
         else:
@@ -673,7 +694,11 @@ def score_clip(
         )
     raw = pool_scores(window_scores, model.windowing.pooling)
     return ClipOutcome(
-        clip_id=entry.clip_id, raw_score=raw, skip_reason=None, n_windows=len(plan.spans)
+        clip_id=entry.clip_id,
+        raw_score=raw,
+        skip_reason=None,
+        n_windows=len(plan.spans),
+        dropped_tail_samples=plan.dropped_tail_samples,
     )
 
 
