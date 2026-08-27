@@ -7,6 +7,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.26.0] - 2026-08-27
 
 ### Added
+- **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
+  journaling (`window_scores` field in `ClipOutcome`) and `verdict-windowing`
+  subcommand in `synthdetect_eval.py` for comparing upstream vs production
+  windowing FPR on bona fide clips. GPU verdict on the full S5 calibration
+  corpus (4654 clips): production windowing does not raise false-positive rate
+  at FPR 5% or FPR 1%. Verdict report and `gpu-contracts.md` updated.
 - **Synthdetect M1 S5 PR-3: cohort freeze** (#144). Frozen calibration cohort
   policy: exactly one degraded child per eligible calibration-split turn parent,
   assigned via stable `sha256(clip_id)` hash from the six single-recipe chains.

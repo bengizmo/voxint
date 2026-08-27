@@ -258,6 +258,168 @@ def test_compare_no_common_rejected() -> None:
         se.compare_journals(j1, j2, decision_threshold=0.0)
 
 
+# --------------------------------------------------------------------------- #
+# compare_windowing (S5 verdict)
+# --------------------------------------------------------------------------- #
+def test_compare_windowing_basic() -> None:
+    u_header = _header(windowing={"pooling": "logit-mean", "mode": "upstream"})
+    p_header = _header(windowing={"pooling": "logit-mean", "mode": "production"})
+    j_u = se.parse_journal(_journal_text(u_header, [
+        {"clip_id": "c1", "raw_score": -3.0, "n_windows": 1},
+        {"clip_id": "c2", "raw_score": -2.5, "n_windows": 1},
+    ]))
+    j_p = se.parse_journal(_journal_text(p_header, [
+        {"clip_id": "c1", "raw_score": -3.1, "n_windows": 3},
+        {"clip_id": "c2", "raw_score": -2.4, "n_windows": 2},
+    ]))
+    result = se.compare_windowing(j_u, j_p)
+    assert result["kind"] == "synthdetect_windowing_verdict"
+    assert result["n_common"] == 2
+    assert result["upstream_mode"] == "upstream"
+    assert result["production_mode"] == "production"
+    assert result["direction"]["n_production_higher"] == 1
+    assert result["direction"]["n_production_lower"] == 1
+    assert result["windows"]["upstream_mean_n"] == 1.0
+    assert result["windows"]["production_mean_n"] == 2.5
+
+
+def test_compare_windowing_same_mode_rejected() -> None:
+    h = _header(windowing={"pooling": "logit-mean", "mode": "upstream"})
+    j = se.parse_journal(_journal_text(h, [{"clip_id": "c1", "raw_score": 1.0}]))
+    with pytest.raises(se.EvalError, match="expected modes"):
+        se.compare_windowing(j, j)
+
+
+def test_compare_windowing_wrong_modes_rejected() -> None:
+    h1 = _header(windowing={"pooling": "logit-mean", "mode": "sideways"})
+    h2 = _header(windowing={"pooling": "logit-mean", "mode": "production"})
+    j1 = se.parse_journal(_journal_text(h1, [{"clip_id": "c1", "raw_score": 1.0}]))
+    j2 = se.parse_journal(_journal_text(h2, [{"clip_id": "c1", "raw_score": 1.0}]))
+    with pytest.raises(se.EvalError, match="expected modes"):
+        se.compare_windowing(j1, j2)
+
+
+def test_compare_windowing_pooling_mismatch_rejected() -> None:
+    u = se.parse_journal(_journal_text(
+        _header(windowing={"pooling": "logit-mean", "mode": "upstream"}),
+        [{"clip_id": "c1", "raw_score": 1.0}]))
+    p = se.parse_journal(_journal_text(
+        _header(windowing={"pooling": "max", "mode": "production"}),
+        [{"clip_id": "c1", "raw_score": 1.0}]))
+    with pytest.raises(se.EvalError, match="pooling policy"):
+        se.compare_windowing(u, p)
+
+
+def test_compare_windowing_model_mismatch_rejected() -> None:
+    u = se.parse_journal(_journal_text(
+        _header(windowing={"pooling": "logit-mean", "mode": "upstream"}),
+        [{"clip_id": "c1", "raw_score": 1.0}]))
+    p = se.parse_journal(_journal_text(
+        _header(model_id="w2v2-aasist-df",
+                inference_space="synthdetect-w2v2aasistdf-v1",
+                windowing={"pooling": "logit-mean", "mode": "production"}),
+        [{"clip_id": "c1", "raw_score": 1.0}]))
+    with pytest.raises(se.EvalError, match=r"disagree on header\.model_id"):
+        se.compare_windowing(u, p)
+
+
+def test_compare_windowing_per_window_spread() -> None:
+    u_header = _header(windowing={"pooling": "logit-mean", "mode": "upstream"})
+    p_header = _header(windowing={"pooling": "logit-mean", "mode": "production"})
+    j_u = se.parse_journal(_journal_text(u_header, [
+        {"clip_id": "c1", "raw_score": -3.0, "n_windows": 1},
+        {"clip_id": "c2", "raw_score": -2.5, "n_windows": 1},
+    ]))
+    j_p = se.parse_journal(_journal_text(p_header, [
+        {"clip_id": "c1", "raw_score": -3.0, "n_windows": 3,
+         "window_scores": [-4.0, -3.0, -2.0]},
+        {"clip_id": "c2", "raw_score": -2.5, "n_windows": 1},
+    ]))
+    result = se.compare_windowing(j_u, j_p)
+    assert "per_window_spread" in result
+    assert result["per_window_spread"]["n_multi_window_clips"] == 1
+    assert result["per_window_spread"]["max_spread"] == pytest.approx(2.0)
+
+
+def test_compare_windowing_with_manifest() -> None:
+    u_header = _header(windowing={"pooling": "logit-mean", "mode": "upstream"})
+    p_header = _header(windowing={"pooling": "logit-mean", "mode": "production"})
+    results_u = [
+        {"clip_id": "b1", "raw_score": -3.0, "n_windows": 1},
+        {"clip_id": "b2", "raw_score": -2.0, "n_windows": 1},
+        {"clip_id": "d1", "raw_score": -1.5, "n_windows": 1},
+    ]
+    results_p = [
+        {"clip_id": "b1", "raw_score": -3.1, "n_windows": 2},
+        {"clip_id": "b2", "raw_score": -1.9, "n_windows": 3},
+        {"clip_id": "d1", "raw_score": -1.6, "n_windows": 2},
+    ]
+    j_u = se.parse_journal(_journal_text(u_header, results_u))
+    j_p = se.parse_journal(_journal_text(p_header, results_p))
+    clips = [
+        _clip("b1", "bona_fide", 0.0, "calibration", stratum="organic"),
+        _clip("b2", "bona_fide", 0.0, "calibration", stratum="organic"),
+        _clip("d1", "bona_fide", 0.0, "calibration", stratum="degraded|mp3"),
+    ]
+    manifest = corpus.load_manifest({"schema_version": 1, "clips": clips})
+    result = se.compare_windowing(j_u, j_p, manifest=manifest)
+    assert "per_stratum" in result
+    assert "organic" in result["per_stratum"]
+    assert "degraded|mp3" in result["per_stratum"]
+    assert result["per_stratum"]["organic"]["n"] == 2
+    assert result["per_stratum"]["degraded|mp3"]["n"] == 1
+
+
+def test_cli_verdict_windowing(tmp_path: Path) -> None:
+    u_header = _header(windowing={"pooling": "logit-mean", "mode": "upstream"})
+    p_header = _header(windowing={"pooling": "logit-mean", "mode": "production"})
+    j_u = tmp_path / "upstream.jsonl"
+    j_p = tmp_path / "production.jsonl"
+    j_u.write_text(_journal_text(u_header, [
+        {"clip_id": "c1", "raw_score": -3.0}, {"clip_id": "c2", "raw_score": -2.5}]),
+        encoding="utf-8")
+    j_p.write_text(_journal_text(p_header, [
+        {"clip_id": "c1", "raw_score": -3.1}, {"clip_id": "c2", "raw_score": -2.4}]),
+        encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    rc = se.main(["verdict-windowing", "--upstream", str(j_u), "--production", str(j_p),
+                  "--out", str(out)])
+    assert rc == 0
+    verdict = json.loads(out.read_text())
+    assert verdict["kind"] == "synthdetect_windowing_verdict"
+    assert verdict["n_common"] == 2
+
+
+def test_cli_verdict_windowing_with_manifest(tmp_path: Path) -> None:
+    manifest_sha = _MANIFEST_SHA
+    u_header = _header(windowing={"pooling": "logit-mean", "mode": "upstream"},
+                       manifest_sha256=manifest_sha)
+    p_header = _header(windowing={"pooling": "logit-mean", "mode": "production"},
+                       manifest_sha256=manifest_sha)
+    clips = [_clip("c1", "bona_fide", 0.0, "calibration"),
+             _clip("c2", "bona_fide", 0.0, "calibration")]
+    manifest_text = json.dumps({"schema_version": 1, "clips": clips})
+    real_sha = hashlib.sha256(manifest_text.encode("utf-8")).hexdigest()
+    u_header["manifest_sha256"] = real_sha
+    p_header["manifest_sha256"] = real_sha
+    j_u = tmp_path / "upstream.jsonl"
+    j_p = tmp_path / "production.jsonl"
+    m_path = tmp_path / "manifest.json"
+    m_path.write_text(manifest_text, encoding="utf-8")
+    j_u.write_text(_journal_text(u_header, [
+        {"clip_id": "c1", "raw_score": -3.0}, {"clip_id": "c2", "raw_score": -2.5}]),
+        encoding="utf-8")
+    j_p.write_text(_journal_text(p_header, [
+        {"clip_id": "c1", "raw_score": -3.1}, {"clip_id": "c2", "raw_score": -2.4}]),
+        encoding="utf-8")
+    out = tmp_path / "verdict.json"
+    rc = se.main(["verdict-windowing", "--upstream", str(j_u), "--production", str(j_p),
+                  "--manifest", str(m_path), "--out", str(out)])
+    assert rc == 0
+    verdict = json.loads(out.read_text())
+    assert "per_stratum" in verdict
+
+
 def test_calibrate_policy_end_to_end() -> None:
     clips = []
     results = []

@@ -2052,6 +2052,22 @@ This is a data annotation artifact, not a code change: the `materialize_prepare`
 executor correctly rejects out-of-range intervals, and clamping RTTMs to
 recording length at plan time is an open improvement for a future session.
 
+**S5 windowing verdict (2026-08-27): PASS.** Production windowing (4.0375 s
+windows at 4.0375 s hop, logit-mean pooling, 8,000-sample tail floor) does not
+raise the bona fide false-positive rate at the FPR 5% or FPR 1% regions of the
+raw-logit distribution (no calibrated threshold exists yet; that requires the
+spoof side in S6). Scored
+the full S5 calibration corpus (AMI 3832 clips, VoxConverse 822 clips) with
+`w2v2-aasist` on maintainer hardware (RTX 3060, eval image `s2b`) under both
+windowing modes. At FPR 5%, delta is -0.13 pp (AMI) and -0.49 pp (VC): production
+is marginally better. At FPR 1%, both are indistinguishable (-0.03 pp / -0.24 pp).
+No degradation stratum shows a destabilizing shift. Per-window scores are journaled
+as a first-class output (per the pre-registration), with mean intra-clip spread of
+2.7 to 3.4 logit units across multi-window clips. Scope limitation (stated by
+design): this verdict covers FPR stability only; separability and the threshold
+itself require the spoof side (S6). Detail:
+`docs/reports/synthdetect-s5-windowing-verdict-2026-08-27.md`.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
