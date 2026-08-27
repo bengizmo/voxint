@@ -102,15 +102,13 @@ parallelizable EXCEPT where noted.
   MediaItem. Files: `ingest/service.py`, `api/app.py` (startup hook). Review:
   single-model. Browser: no.
 
-**Batch 0E: Worker hardening** (items share `worker/tasks.py`)
+**Batch 0E: Worker hardening** -- DONE
 - M7: Uniform broker OperationalError handling for all `_autogenerate_*`
   post-finalize jobs. Pair with lane-specific stale-job redispatch. File:
-  `worker/tasks.py`. Review: **full panel** (concurrency/reliability trigger).
-  Browser lane: no.
+  `worker/tasks.py`. Review: **full panel** (codex + grok). Browser: no.
 - M11: Centralize config_resolution_version parsing into one helper. Files:
-  `ingest/service.py:380`, `worker/tasks.py:202-216`,
-  `pipeline/stages/context.py:280-283`. Review: single-model if pure
-  extraction; multi-model if fallback semantics change. Browser: no.
+  `worker/tasks.py`, `pipeline/stages/context.py`. Review: codex (pure
+  extraction, behavior-preserving). Browser: no.
 
 **Batch 0F: Legacy submit redirect** (PR #238 open)
 - H4-qw: When `console_media_enabled` is on, render a "New submissions live in
