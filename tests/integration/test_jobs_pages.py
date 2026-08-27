@@ -81,7 +81,7 @@ def test_jobs_page_reachable_directly_with_flag_off(
     is off — the flag is rollout control, not authorization."""
     resp = client_flag_off.get("/jobs")
     assert resp.status_code == 200
-    assert "Pipeline activity" in resp.text
+    assert "pipeline-board" in resp.text
 
 
 def test_jobs_page_requires_auth(session_factory: sessionmaker[Session], tmp_path: Path) -> None:
