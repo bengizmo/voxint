@@ -4,6 +4,17 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
+## [Unreleased]
+
+### Fixed
+- **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
+  On the project detail page, opening the corrections editor while a project
+  was inheriting corrections (NULL) and saving without adding rules silently
+  wrote an explicit empty list, overriding the folder pack or global baseline.
+  The editor now gates on an `inheriting` prop: when corrections are NULL, a
+  "Set corrections for this project" button must be clicked before the editor
+  and its Save become reachable. Regression tests cover the prop serialization.
+
 ## [0.27.0] - 2026-08-27
 
 ### Changed
