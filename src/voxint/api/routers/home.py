@@ -1,4 +1,4 @@
-"""The Home area: the console landing page at ``/`` (Console 2.0 P1, #152).
+"""The Home area: the console landing page at ``/`` (Console 2.0 R1, #210).
 
 Home answers "what needs my attention and how do I add a recording": the
 needs-attention cards, the quick actions, the windowed activity counts, and a
@@ -28,16 +28,20 @@ from voxint.db.models import RunStatus
 
 router = APIRouter(dependencies=[Depends(require_onboarded)])
 
-# The stat switcher's windows: query value, label, span (None = all time).
-# "hour" and "day" and "week" resolve to the same cutoffs the CLI's --since
-# accepts as 1h / 24h / 7d, so "stats match voxint stats" is checkable by hand.
 _WINDOWS: Final[tuple[tuple[str, str, timedelta | None], ...]] = (
-    ("hour", "Hour", timedelta(hours=1)),
-    ("day", "Day", timedelta(hours=24)),
-    ("week", "Week", timedelta(days=7)),
-    ("all", "All time", None),
+    ("hour", "1h", timedelta(hours=1)),
+    ("day", "24h", timedelta(hours=24)),
+    ("week", "7d", timedelta(days=7)),
+    ("all", "all", None),
 )
 _DEFAULT_WINDOW: Final[str] = "day"
+
+_WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+def _date_summary(now: datetime) -> str:
+    weekday = _WEEKDAYS[now.weekday()]
+    return f"{weekday}, {now.strftime('%b')} {now.day}"
 
 
 @router.get("/", name="home")
@@ -48,18 +52,12 @@ def home(
     window: str | None = None,
 ) -> Response:
     now = datetime.now(UTC)
-    # A bad/bookmarked ?window= degrades to the default rather than 422-ing,
-    # and the page says so - it must never silently show a different window
-    # than was asked for (the old dashboard's ?since= convention).
     known = {value for value, _, _ in _WINDOWS}
     window_invalid = window is not None and window not in known
     selected = window if window in known else _DEFAULT_WINDOW
     span = next(s for value, _, s in _WINDOWS if value == selected)
     since = None if span is None else now - span
 
-    # One adjudication_queue call feeds BOTH attention counts (backlog runs and
-    # unresolved voices), and the failed count comes from the same status query
-    # /metrics uses - the cards cannot drift from the pages they link to.
     queue = adjudication_queue(session)
     status_counts = run_status_counts(session)
 
@@ -67,6 +65,7 @@ def home(
         "request": request,
         "active_nav": "home",
         "now": now,
+        "date_summary": _date_summary(now),
         "window": selected,
         "window_invalid": window_invalid,
         "windows": [(value, label) for value, label, _ in _WINDOWS],

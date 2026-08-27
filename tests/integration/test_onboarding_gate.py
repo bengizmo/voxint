@@ -142,7 +142,8 @@ def test_index_renders_home_when_onboarded(
     seed_onboarded(session_factory)
     resp = client.get("/", follow_redirects=False)
     assert resp.status_code == 200
-    assert "<h1>Home</h1>" in resp.text
+    assert "cb-breadcrumb" in resp.text
+    assert "NEEDS YOUR ATTENTION" in resp.text
 
 
 def test_gate_reads_onboarding_fresh_each_request(

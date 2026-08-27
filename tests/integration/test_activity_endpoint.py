@@ -144,7 +144,8 @@ def test_badge_matches_jobs_page(session_factory: sessionmaker[Session], tmp_pat
     badge = client.get("/activity/events").json()["badge"]
     assert badge == 3
     jobs_page = client.get("/jobs").text
-    assert "3 jobs in progress" in jobs_page
+    assert "1 running" in jobs_page
+    assert "2 queued" in jobs_page
 
 
 def test_shell_chrome_absent_when_off(

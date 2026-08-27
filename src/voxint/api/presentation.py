@@ -178,6 +178,38 @@ def format_age(created_at: datetime, *, now: datetime) -> str:
     return f"{years} year{'s' if years != 1 else ''} ago"
 
 
+def format_clock_time(at: datetime, *, now: datetime) -> str:
+    """A mono-friendly timestamp: ``just now`` within 60 s, else ``HH:MM``.
+
+    Today's events show the wall-clock time; older events fall back to
+    ``format_age``. Both operands should be tz-aware UTC.
+    """
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    delta = now - at
+    if delta.total_seconds() < 60:
+        return "just now"
+    if at.date() == now.date():
+        return at.strftime("%H:%M")
+    return format_age(at, now=now)
+
+
+def format_compact_duration(seconds: float | None) -> str:
+    """A run wall-clock as ``XmYYs`` or ``XhYYm``; ``...`` when unknown."""
+    if seconds is None or not math.isfinite(seconds) or seconds < 0:
+        return "…"
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m{secs:02d}s"
+
+
 def _humanize_enum(value: str) -> str:
     """``diarize_embed`` → ``Diarize embed``: split on ``_``, sentence-case.
 

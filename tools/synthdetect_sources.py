@@ -56,7 +56,9 @@ from typing import Final
 #     vocabulary of deterministic ffmpeg transforms; the argv builders live in
 #     synthdetect_corpus.py). Additive-noise is deferred: its SNR mix needs a
 #     measured parent RMS and so is not a pure argv (see the S5 pre-registration).
-SOURCES_VERSION: Final = "synthdetect-sources-v4"
+# v5 (2026-08-26, S5 PR-3): frozen cohort policy (one degraded child per
+#     calibration parent, hash-assigned from six single-recipe chains).
+SOURCES_VERSION: Final = "synthdetect-sources-v5"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
 # lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
@@ -863,5 +865,46 @@ def _validate_registry(
             raise SourcesError(f"benchmark key {key!r} != dataset_id {bench.dataset_id!r}")
 
 
+# --------------------------------------------------------------------------- #
+# Frozen cohort policy (S5 PR-3)
+# --------------------------------------------------------------------------- #
+S5_COHORT_VERSION: Final[int] = 1
+S5_COHORT_SELECTION_POLICY: Final[str] = "hash-assign-v1"
+
+FROZEN_COHORT_CHAINS: Final[tuple[tuple[str, ...], ...]] = (
+    ("mp3-cbr48-v1",),
+    ("opus-voip-cbr16-f20-v1",),
+    ("aac-lc-cbr48-v1",),
+    ("g711-mulaw-8k-v1",),
+    ("amr-nb-122-v1",),
+    ("speed-atempo-0p90-v1",),
+)
+
+
+def _validate_cohort_chains(
+    chains: tuple[tuple[str, ...], ...] = FROZEN_COHORT_CHAINS,
+    recipes: dict[str, DegradationRecipe] = DEGRADATION_RECIPES,
+) -> None:
+    """Assert cohort-chain integrity at import."""
+    if not chains:
+        raise SourcesError("FROZEN_COHORT_CHAINS must be non-empty")
+    seen_serialized: set[str] = set()
+    for chain in chains:
+        if not chain:
+            raise SourcesError("FROZEN_COHORT_CHAINS contains an empty chain")
+        for recipe_id in chain:
+            if recipe_id not in recipes:
+                raise SourcesError(
+                    f"FROZEN_COHORT_CHAINS names unknown recipe {recipe_id!r}"
+                )
+        serialized = "|".join(chain)
+        if serialized in seen_serialized:
+            raise SourcesError(
+                f"FROZEN_COHORT_CHAINS contains duplicate chain {serialized!r}"
+            )
+        seen_serialized.add(serialized)
+
+
 _validate_registry()
 _validate_recipes()
+_validate_cohort_chains()
