@@ -62,13 +62,19 @@ MANIFEST_SCHEMA_VERSION = 1
 # reproduction pre-registration, for why an imported eval cannot carry synthesis
 # generator provenance and must record officially-absent fields as null.
 IMPORTED_MANIFEST_SCHEMA_VERSION = 2
-SUPPORTED_SCHEMA_VERSIONS = (MANIFEST_SCHEMA_VERSION, IMPORTED_MANIFEST_SCHEMA_VERSION)
+COMPOSITE_MANIFEST_SCHEMA_VERSION = 3
+SUPPORTED_SCHEMA_VERSIONS = (
+    MANIFEST_SCHEMA_VERSION,
+    IMPORTED_MANIFEST_SCHEMA_VERSION,
+    COMPOSITE_MANIFEST_SCHEMA_VERSION,
+)
 
 # The corpus kind. v1 manifests are implicitly ``synthesis`` (clips we generate,
 # each spoof carrying reproducible generator provenance); a v2 manifest MUST declare
 # ``imported_benchmark`` and name the ``benchmark`` it was imported from.
 CORPUS_KIND_SYNTHESIS = "synthesis"
 CORPUS_KIND_IMPORTED = "imported_benchmark"
+CORPUS_KIND_COMPOSITE = "composite"
 
 # Honest provenance: an officially-absent field is JSON null, never a placeholder.
 # These tokens are the placeholders that masquerade as data; a v2 provenance string
@@ -122,21 +128,22 @@ class GeneratorProvenance:
 
     The fields make a synthesis reproducible and let the eval measure
     per-generator behaviour: ``name``/``version`` identify the system,
-    ``checkpoint_sha`` pins its weights, ``voice``/``seed``/``text_source`` pin
-    the exact utterance. A bona fide clip carries no generator (``None``).
+    ``checkpoint_sha`` pins its weights, and ``voice``/``seed``/``text_source``
+    pin the exact utterance. Cloud APIs with no caller-controlled RNG record a
+    null seed. A bona fide clip carries no generator (``None``).
     """
 
     name: str
     version: str
     checkpoint_sha: str | None
     voice: str
-    seed: str
+    seed: str | None
     text_source: str
 
 
 @dataclass(frozen=True)
 class ImportedBenchmarkProvenance:
-    """The official provenance of one imported-benchmark clip (v2 only).
+    """The official provenance of one imported-benchmark clip.
 
     Records only what the source benchmark actually publishes for the clip: its
     official trial id, the source dataset and codec condition, the official split
@@ -152,6 +159,15 @@ class ImportedBenchmarkProvenance:
     official_split: str
     vocoder_family: str
     attack_system: str | None
+
+
+@dataclass(frozen=True)
+class ManifestComponent:
+    component_id: str
+    corpus_kind: str
+    manifest_sha256: str
+    clip_count: int
+    benchmark: str | None = None
 
 
 @dataclass(frozen=True)
@@ -186,20 +202,24 @@ class ClipEntry:
     parent_clip_id: str | None
     acquire: str | None
     imported_provenance: ImportedBenchmarkProvenance | None = None
+    component_id: str | None = None
+    partition_group_id: str | None = None
 
 
 @dataclass(frozen=True)
 class Manifest:
     """A validated corpus manifest: schema version, corpus kind + the clip records.
 
-    ``corpus_kind`` is ``synthesis`` for v1 and ``imported_benchmark`` for v2;
-    ``benchmark`` names the source benchmark for a v2 manifest and is None for v1.
+    ``corpus_kind`` is ``synthesis`` for v1, ``imported_benchmark`` for v2, and
+    ``composite`` for v3. ``benchmark`` names the source benchmark for a v2
+    manifest; ``components`` describes the source manifests for v3.
     """
 
     schema_version: int
     clips: tuple[ClipEntry, ...]
     corpus_kind: str = CORPUS_KIND_SYNTHESIS
     benchmark: str | None = None
+    components: tuple[ManifestComponent, ...] | None = None
 
 
 def _validate_generator(raw: Any, where: str) -> GeneratorProvenance:
@@ -209,10 +229,13 @@ def _validate_generator(raw: Any, where: str) -> GeneratorProvenance:
     extra = set(raw) - allowed
     if extra:
         raise CorpusError(f"{where}: generator has unexpected keys {sorted(extra)}")
-    for key in ("name", "version", "voice", "seed", "text_source"):
+    for key in ("name", "version", "voice", "text_source"):
         val = raw.get(key)
         if not isinstance(val, str) or not val.strip():
             raise CorpusError(f"{where}: generator.{key} must be a non-empty string")
+    seed = raw.get("seed")
+    if seed is not None and (not isinstance(seed, str) or not seed.strip()):
+        raise CorpusError(f"{where}: generator.seed must be a non-empty string or null")
     checkpoint_sha = raw.get("checkpoint_sha")
     # A generator checkpoint sha is optional (CANDIDATE), but if present it must
     # be a real digest, never a placeholder string.
@@ -300,7 +323,13 @@ def _validate_imported_provenance(
     )
 
 
-def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHESIS) -> ClipEntry:
+def validate_clip(
+    raw: Any,
+    index: int,
+    *,
+    corpus_kind: str = CORPUS_KIND_SYNTHESIS,
+    composite: bool = False,
+) -> ClipEntry:
     """Validate one raw clip record into a :class:`ClipEntry` (fail closed).
 
     Enforces the required-field set and types, the label/split vocabularies, a
@@ -311,26 +340,50 @@ def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHE
     clip it forbids the synthesis keys, requires an ``imported_provenance`` block,
     and binds that block to the clip (official trial id equals the clip id, the
     clip is eval-only, and the stratum matches the official label and codec).
+    Composite clips select one of those validation paths with ``provenance_kind``.
     """
     where = f"clip {index}"
     if not isinstance(raw, dict):
         raise CorpusError(f"{where}: must be an object")
-    if corpus_kind not in (CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED):
+    if not composite and corpus_kind not in (CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED):
         raise CorpusError(f"{where}: unknown corpus_kind {corpus_kind!r}")
-    imported = corpus_kind == CORPUS_KIND_IMPORTED
     common = {
         "clip_id", "rel_path", "sha256", "duration_s", "label", "language",
         "license_spdx", "stratum", "source", "speaker_id", "split",
     }
     # An imported-benchmark clip carries official provenance and never a synthesis
     # generator or a degradation chain; a synthesis clip is the reverse.
-    if imported:
+    if composite:
+        allowed = common | {
+            "provenance_kind", "component_id", "partition_group_id", "generator",
+            "degradation", "parent_clip_id", "acquire", "imported_provenance",
+        }
+    elif corpus_kind == CORPUS_KIND_IMPORTED:
         allowed = common | {"imported_provenance"}
     else:
         allowed = common | {"generator", "degradation", "parent_clip_id", "acquire"}
     extra = set(raw) - allowed
     if extra:
         raise CorpusError(f"{where}: unexpected keys {sorted(extra)}")
+
+    component_id: str | None = None
+    partition_group_id: str | None = None
+    if composite:
+        provenance_kind = raw.get("provenance_kind")
+        if provenance_kind not in (CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED):
+            raise CorpusError(
+                f"{where}: provenance_kind must be one of "
+                f"{(CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED)}, got {provenance_kind!r}"
+            )
+        imported = provenance_kind == CORPUS_KIND_IMPORTED
+        component_id = raw.get("component_id")
+        if not isinstance(component_id, str) or not component_id.strip():
+            raise CorpusError(f"{where}: component_id must be a non-empty string")
+        partition_group_id = raw.get("partition_group_id")
+        if partition_group_id is not None and not isinstance(partition_group_id, str):
+            raise CorpusError(f"{where}: partition_group_id must be a string or null")
+    else:
+        imported = corpus_kind == CORPUS_KIND_IMPORTED
 
     clip_id = raw.get("clip_id")
     if not _is_safe_id(clip_id):
@@ -465,6 +518,8 @@ def validate_clip(raw: Any, index: int, *, corpus_kind: str = CORPUS_KIND_SYNTHE
         parent_clip_id=parent_clip_id,
         acquire=acquire,
         imported_provenance=imported_provenance,
+        component_id=component_id,
+        partition_group_id=partition_group_id,
     )
 
 
@@ -475,7 +530,8 @@ def load_manifest(obj: Any) -> Manifest:
     ``clip_id`` values, and that every ``parent_clip_id`` refers to a clip that
     exists in the manifest (a degradation chain can never dangle). A v2 manifest
     additionally declares ``corpus_kind: imported_benchmark`` and names its
-    ``benchmark``; a v1 manifest carries neither and is validated exactly as before.
+    ``benchmark``; a v3 manifest declares its components and binds every clip to
+    one of them. A v1 manifest carries neither and is validated exactly as before.
     """
     if not isinstance(obj, dict):
         raise CorpusError("manifest must be an object")
@@ -486,15 +542,19 @@ def load_manifest(obj: Any) -> Manifest:
             f"got {version!r}"
         )
     imported = version == IMPORTED_MANIFEST_SCHEMA_VERSION
+    composite = version == COMPOSITE_MANIFEST_SCHEMA_VERSION
 
     # Fail closed on unexpected top-level keys, version-aware.
     top_allowed = {"schema_version", "clips"}
     if imported:
         top_allowed |= {"corpus_kind", "benchmark"}
+    elif composite:
+        top_allowed |= {"corpus_kind", "components"}
     top_extra = set(obj) - top_allowed
     if top_extra:
         raise CorpusError(f"manifest has unexpected top-level keys {sorted(top_extra)}")
 
+    components: tuple[ManifestComponent, ...] | None = None
     if imported:
         corpus_kind = obj.get("corpus_kind")
         if corpus_kind != CORPUS_KIND_IMPORTED:
@@ -506,6 +566,71 @@ def load_manifest(obj: Any) -> Manifest:
         if not isinstance(benchmark, str) or not benchmark.strip():
             raise CorpusError("a v2 manifest must name a non-empty benchmark")
         _reject_sentinel(benchmark, "manifest benchmark")
+    elif composite:
+        corpus_kind = obj.get("corpus_kind")
+        if corpus_kind != CORPUS_KIND_COMPOSITE:
+            raise CorpusError(
+                f"a v3 manifest must declare corpus_kind {CORPUS_KIND_COMPOSITE!r}, "
+                f"got {corpus_kind!r}"
+            )
+        benchmark = None
+        raw_components = obj.get("components")
+        if not isinstance(raw_components, list) or not raw_components:
+            raise CorpusError("a v3 manifest 'components' must be a non-empty array")
+        validated_components: list[ManifestComponent] = []
+        for index, raw_component in enumerate(raw_components):
+            where = f"component {index}"
+            if not isinstance(raw_component, dict):
+                raise CorpusError(f"{where}: must be an object")
+            allowed = {
+                "component_id", "corpus_kind", "manifest_sha256", "clip_count", "benchmark",
+            }
+            extra = set(raw_component) - allowed
+            if extra:
+                raise CorpusError(f"{where}: unexpected keys {sorted(extra)}")
+            component_id = raw_component.get("component_id")
+            if not _is_safe_id(component_id):
+                raise CorpusError(
+                    f"{where}: component_id {component_id!r} is not a safe token"
+                )
+            assert isinstance(component_id, str)
+            where = f"component {component_id!r}"
+            component_kind = raw_component.get("corpus_kind")
+            if component_kind not in (CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED):
+                raise CorpusError(
+                    f"{where}: corpus_kind must be one of "
+                    f"{(CORPUS_KIND_SYNTHESIS, CORPUS_KIND_IMPORTED)}, got {component_kind!r}"
+                )
+            manifest_sha256 = raw_component.get("manifest_sha256")
+            if not _is_sha256(manifest_sha256):
+                raise CorpusError(f"{where}: manifest_sha256 must be 64 lowercase hex chars")
+            assert isinstance(manifest_sha256, str)
+            clip_count = raw_component.get("clip_count")
+            if not isinstance(clip_count, int) or isinstance(clip_count, bool) or clip_count <= 0:
+                raise CorpusError(f"{where}: clip_count must be a positive integer")
+            component_benchmark = raw_component.get("benchmark")
+            if component_kind == CORPUS_KIND_IMPORTED:
+                if not isinstance(component_benchmark, str) or not component_benchmark.strip():
+                    raise CorpusError(
+                        f"{where}: an imported_benchmark component must name a non-empty benchmark"
+                    )
+                _reject_sentinel(component_benchmark, f"{where}: benchmark")
+            elif component_benchmark is not None:
+                raise CorpusError(f"{where}: a synthesis component must not name a benchmark")
+            validated_components.append(
+                ManifestComponent(
+                    component_id=component_id,
+                    corpus_kind=component_kind,
+                    manifest_sha256=manifest_sha256,
+                    clip_count=clip_count,
+                    benchmark=component_benchmark,
+                )
+            )
+        component_ids = [component.component_id for component in validated_components]
+        if len(set(component_ids)) != len(component_ids):
+            dupes = sorted({cid for cid in component_ids if component_ids.count(cid) > 1})
+            raise CorpusError(f"manifest has duplicate component_id(s): {dupes}")
+        components = tuple(validated_components)
     else:
         corpus_kind = CORPUS_KIND_SYNTHESIS
         benchmark = None
@@ -513,11 +638,59 @@ def load_manifest(obj: Any) -> Manifest:
     raw_clips = obj.get("clips")
     if not isinstance(raw_clips, list) or not raw_clips:
         raise CorpusError("manifest 'clips' must be a non-empty array")
-    clips = tuple(validate_clip(raw, i, corpus_kind=corpus_kind) for i, raw in enumerate(raw_clips))
+    clips = tuple(
+        validate_clip(raw, i, corpus_kind=corpus_kind, composite=composite)
+        for i, raw in enumerate(raw_clips)
+    )
     ids = [c.clip_id for c in clips]
     if len(set(ids)) != len(ids):
         dupes = sorted({cid for cid in ids if ids.count(cid) > 1})
         raise CorpusError(f"manifest has duplicate clip_id(s): {dupes}")
+    if composite:
+        assert components is not None
+        component_by_id = {component.component_id: component for component in components}
+        component_counts = {component.component_id: 0 for component in components}
+        rel_paths: dict[str, str] = {}
+        split_of_partition: dict[str, str | None] = {}
+        for raw, clip in zip(raw_clips, clips, strict=True):
+            assert clip.component_id is not None
+            component = component_by_id.get(clip.component_id)
+            if component is None:
+                raise CorpusError(
+                    f"clip {clip.clip_id!r}: component_id {clip.component_id!r} "
+                    "is not declared in manifest components"
+                )
+            if raw["provenance_kind"] != component.corpus_kind:
+                raise CorpusError(
+                    f"clip {clip.clip_id!r}: provenance_kind {raw['provenance_kind']!r} "
+                    f"does not match component {component.component_id!r} "
+                    f"corpus_kind {component.corpus_kind!r}"
+                )
+            component_counts[component.component_id] += 1
+            prior_clip_id = rel_paths.get(clip.rel_path)
+            if prior_clip_id is not None:
+                raise CorpusError(
+                    f"clips {prior_clip_id!r} and {clip.clip_id!r} share rel_path "
+                    f"{clip.rel_path!r}"
+                )
+            rel_paths[clip.rel_path] = clip.clip_id
+            if clip.partition_group_id is not None:
+                if (
+                    clip.partition_group_id in split_of_partition
+                    and split_of_partition[clip.partition_group_id] != clip.split
+                ):
+                    raise CorpusError(
+                        f"partition_group_id {clip.partition_group_id!r} straddles splits "
+                        f"{split_of_partition[clip.partition_group_id]!r} and {clip.split!r}"
+                    )
+                split_of_partition[clip.partition_group_id] = clip.split
+        for component in components:
+            actual_count = component_counts[component.component_id]
+            if actual_count != component.clip_count:
+                raise CorpusError(
+                    f"component {component.component_id!r}: clip_count {component.clip_count} "
+                    f"does not match {actual_count} manifest clip(s)"
+                )
     known = set(ids)
     for c in clips:
         if c.parent_clip_id is not None and c.parent_clip_id not in known:
@@ -567,7 +740,11 @@ def load_manifest(obj: Any) -> Manifest:
             )
         split_of_speaker[c.speaker_id] = c.split
     return Manifest(
-        schema_version=version, clips=clips, corpus_kind=corpus_kind, benchmark=benchmark
+        schema_version=version,
+        clips=clips,
+        corpus_kind=corpus_kind,
+        benchmark=benchmark,
+        components=components,
     )
 
 
