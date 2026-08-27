@@ -9,8 +9,9 @@ harmless replay, while a new submission is a new decision (corrections are
 appends; the newest ruling per label wins at read time).
 """
 
+import contextlib
 import logging
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -275,6 +276,31 @@ async def _security_headers_on_error(request: Request, exc: Exception) -> Respon
     return response
 
 
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run one-shot startup tasks that need an initialized app state."""
+    try:
+        from voxint.db.session import build_engine, build_session_factory, session_scope
+        from voxint.ingest.service import reconcile_orphaned_incoming
+
+        resolved: Settings = app.state.settings
+        factory = app.state.session_factory
+        if factory is None:
+            factory = build_session_factory(build_engine(resolved.database_url))
+            app.state.session_factory = factory
+        with session_scope(factory) as session:
+            removed = reconcile_orphaned_incoming(session, resolved.media_root)
+            if removed:
+                logger.info(
+                    "reconciled %d orphaned incoming file(s)", len(removed)
+                )
+    except Exception:
+        logger.warning(
+            "startup reconciler skipped (database unavailable)", exc_info=True
+        )
+    yield
+
+
 def create_app(
     settings: Settings | None = None,
     session_factory: Any = None,
@@ -287,6 +313,7 @@ def create_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan,
     )
     resolved = settings or get_settings()
     app.state.settings = resolved
