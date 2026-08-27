@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Ops Console V2: icon rail and command-bar framework** (#207, epic #205).
+  The 13rem collapsible sidebar is replaced by a 52px icon rail with inline SVG
+  glyphs (Home square, Media circle, Projects diamond, Speakers ring, Jobs
+  bars), a teal "V" brand square, CSS tooltips with aria-labels, and a
+  settings entry with a system-health dot at the bottom. The topbar is replaced
+  by a command-bar framework: a 40px strip with Jinja2 block slots for
+  breadcrumb (`cb_breadcrumb`), summary (`cb_summary`), search (`cb_search`),
+  and actions (`cb_actions`). Pages that don't fill a slot get sensible
+  defaults (page name as breadcrumb, placeholder search, theme toggle). On
+  narrow viewports the rail collapses to a horizontal disclosure behind a
+  hamburger in the command bar. Shell-less pages (setup wizard) unaffected.
+  Print excludes shell chrome. No new runtime dependencies.
 - **Ops Console V1: tokens, typography, and theme contract** (#206, epic #205).
   Dark-theme palette updated from the warm "Reading Room" values to the Ops
   Console direction: darker canvas (#121316), cooler ink, alpha-based semantic
