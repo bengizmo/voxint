@@ -16,6 +16,47 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   New `freeze` CLI verb (dry-run prints plan + `cohort_plan_sha256`; execution
   materializes atomically with `cohort_receipt.json`). 37 new tests (30 unit +
   7 contract).
+- **Ops Console COPY: vocabulary contract and stale-term audit** (#209, epic
+  #205). Canonical plain-language vocabulary mapping (`vocabulary.py`): maps
+  12 internal terms to user-facing equivalents (diarization -> "separate
+  voices", adjudication -> "review", embedding -> "voice sample", etc.). A
+  grep-based contract test (`test_vocabulary_contract.py`) catches prohibited
+  terms in rendered template text, stripping Jinja2 constructs, HTML comments,
+  CSS, and scripts before scanning. Legacy templates, Settings detail pages,
+  and the RTTM export disclosure carry explicit allowlists until their R-issue
+  refreshes apply the vocabulary.
+
+### Changed
+- **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
+  (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
+  canonical label-to-semantic mapping (`chip_semantics.py` + Jinja2 macro
+  `_chips.html`). Ops Console stat tiles (`.oc-stat-tile` with mono numerals,
+  micro-labels, and a time-window segmented control). Grid-row data views
+  (`.grid-table` with micro-headers, subtle row dividers, right-aligned mono
+  numerals, teal action links, row-state tints, and a multi-select action bar).
+  Command-bar action styles (`.cb-btn` secondary/primary/danger variants).
+  Contract test pins the chip mapping and verifies CSS class existence.
+- **Ops Console V2: icon rail and command-bar framework** (#207, epic #205).
+  The 13rem collapsible sidebar is replaced by a 52px icon rail with inline SVG
+  glyphs (Home square, Media circle, Projects diamond, Speakers ring, Jobs
+  bars), a teal "V" brand square, CSS tooltips with aria-labels, and a
+  settings entry with a system-health dot at the bottom. The topbar is replaced
+  by a command-bar framework: a 40px strip with Jinja2 block slots for
+  breadcrumb (`cb_breadcrumb`), summary (`cb_summary`), search (`cb_search`),
+  and actions (`cb_actions`). Pages that don't fill a slot get sensible
+  defaults (page name as breadcrumb, placeholder search, theme toggle). On
+  narrow viewports the rail collapses to a horizontal disclosure behind a
+  hamburger in the command bar. Shell-less pages (setup wizard) unaffected.
+  Print excludes shell chrome. No new runtime dependencies.
+- **Ops Console V1: tokens, typography, and theme contract** (#206, epic #205).
+  Dark-theme palette updated from the warm "Reading Room" values to the Ops
+  Console direction: darker canvas (#121316), cooler ink, alpha-based semantic
+  soft fills, new `--line-subtle` token. Typography switches from the system-ui
+  stack to self-hosted IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500)
+  as latin-subset woff2 (101 KB total), loaded via the Vite build pipeline with
+  system-ui fallback when unbuilt. Type scale tightened (body 13px, new
+  `--t-micro` for 10.5px micro-headers). Light theme and print-stays-light
+  contract preserved. No layout or shell changes.
 - **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
   codec/telephony/speed-degraded children of bona fide clips via the frozen
   `build_recipe_argv` ffmpeg round trips inside a digest-pinned container
