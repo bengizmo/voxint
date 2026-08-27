@@ -10,7 +10,6 @@ appends; the newest ruling per label wins at read time).
 """
 
 import logging
-import secrets
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -302,17 +301,15 @@ def create_app(
     validate_boot(registry, settings=resolved)
     app.state.plugins = registry
     _configure_template_loader(_plugin_template_dirs(registry))
-    # CSRF signing secret: the configured value (persistent, shared by every
-    # worker) or a random per-process fallback so the console works with zero
-    # config. A per-process secret invalidates open forms on restart and mismatches
-    # across workers, so warn when we fall back — see voxint.api.csrf.
-    app.state.csrf_secret = resolved.csrf_secret or secrets.token_urlsafe(32)
-    if not resolved.csrf_secret:
-        logger.warning(
-            "csrf_secret is unset; using a random per-process CSRF secret. Open "
-            "forms will break on restart and across workers. Set csrf_secret to a "
-            "persistent random value to avoid this."
-        )
+    # CSRF signing secret: the configured value when set, otherwise a secret
+    # auto-generated and persisted to the data directory on first run (so open
+    # forms survive a restart and multiple workers share the same secret).
+    if resolved.csrf_secret:
+        app.state.csrf_secret = resolved.csrf_secret
+    else:
+        from voxint.api.csrf import load_or_create_csrf_secret
+
+        app.state.csrf_secret = load_or_create_csrf_secret(resolved.media_root)
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory

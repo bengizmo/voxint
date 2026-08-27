@@ -1096,6 +1096,36 @@ in full** on maintainer hardware before tagging:
 Gates A/R/M carried on empty diffs; Gate E green fresh across all three lanes.
 Clear to tag v0.24.0.
 
+#### Verdict: v0.27.0, Gates A/R/M carry, Gate E browser lane PASS (2026-08-27)
+
+v0.27.0 ships Ops Console R4 (speakers overview + detail refresh, #213) and
+R5 (project detail refresh, #214), completing the visual-refresh epic #205.
+All changes are Jinja templates, `chip_semantics.py`, `base.html`, and
+integration tests. No pipeline, service, or inference code changed.
+
+`git diff v0.26.0..HEAD -- services/` is empty. The three inference model
+services (whisper, pyannote, titanet) and the synthdetect eval container are
+**byte-identical** to v0.26.0. **Gates A (CUDA), R (ROCm), and M (Metal)
+carry** their v0.24.0 verdicts (unchanged since v0.26.0).
+
+Gate E scope: R4/R5 changed speaker overview/roster/profile and project
+detail templates (observable console behavior), triggering the browser
+acceptance lane. The pipeline lane is not triggered (no pipeline/service
+changes).
+
+- **Browser acceptance lane** (maintainer hardware, serial): full
+  `voxint-e2e-review` skill run. Seeded 5-segment run, exercised
+  verify-and-advance, skip, replay (instrumented play()), click-to-edit,
+  discard warning, edit+save, keymap suppression, cheat-sheet modal (open
+  via key/button, dismiss via Escape/close/backdrop, v-suppression behind
+  modal), domain-pack correction provenance (chip present/absent, raw
+  transcript, reconciliation panel with 1 applied + 1 never fired), waveform
+  strip (canvas, playhead, cursor-index sync, single peaks fetch). All
+  assertions green. RECONCILE PASS (2/5 verified, 1 correction match).
+
+Gates A/R/M carried on byte-identical services; Gate E browser lane green.
+Clear to tag v0.27.0.
+
 #### Verdict: v0.26.0, Gates A/R/M carry, Gate E re-run fresh (pipeline PASS, browser deferred) (2026-08-27)
 
 0.26.0 is the largest release since initial: 272 commits since v0.24.0, covering
