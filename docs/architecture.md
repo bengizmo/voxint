@@ -586,7 +586,7 @@ route inventory is stable across the flag flip) and 404 until the flag is on;
 flipping it also points the sidebar Media link and the Home "Add media" action at
 `/media` instead of the legacy `/runs` upload. No schema migration ships in P2b.
 
-## Review console (P5)
+## Review console
 
 Adjudication is **post-hoc**: runs complete normally and the console works a
 queue over COMPLETED runs. A run needs review while any diarization label has

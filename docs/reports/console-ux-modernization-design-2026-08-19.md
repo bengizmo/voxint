@@ -1,5 +1,10 @@
 # Console UX modernization — design direction ("Reading Room") — 2026-08-19
 
+> **Superseded by:** the Ops Console visual direction (1c), approved 2026-08-26.
+> Design spec: `internal/design/voxint-console-2-design-spec.md`. Implementation
+> tracked in epic #205. This report remains valid as historical context for how
+> the design evolved, but the phased plan below is no longer the active roadmap.
+
 > **Status:** research + design spike (no production code). Deliverable of the
 > UX-polish spike requested after the corrections epic (#78) shipped and 0.19.0
 > was cut. Mirrors the #79 spike format: a recommendation, an inspiration
