@@ -210,12 +210,56 @@ def test_plan_windows_upstream_long_is_prefix_not_padded() -> None:
     assert plan.repeat_padded is False
 
 
-def test_plan_windows_production_chunks_and_flags_tail() -> None:
-    # 4 s windows at 16 kHz = 64000 samples/window; 100000 samples -> 2 windows,
-    # the second a short tail (repeat-padded to the model width).
+def test_plan_windows_production_width_matches_model() -> None:
+    # production_window_s = 4.0375 -> 64600 samples = model input width.
+    # 100000 samples -> 1 full window (0-64600) + tail (64600-100000 = 35400).
+    # Tail 35400 >= floor 8000, so kept; tail is shorter than width -> padded.
     plan = si.plan_windows(100000, MODEL.windowing, mode="production")
-    assert plan.spans == ((0, 64000), (64000, 100000))
+    assert plan.spans == ((0, 64600), (64600, 100000))
     assert plan.repeat_padded is True
+    assert plan.dropped_tail_samples == 0
+
+
+def test_plan_windows_production_drops_tiny_tail() -> None:
+    # 64600 + 100 samples -> 1 full window + 100-sample tail.
+    # Tail 100 < floor 8000, dropped.
+    plan = si.plan_windows(64700, MODEL.windowing, mode="production")
+    assert plan.spans == ((0, 64600),)
+    assert plan.repeat_padded is False
+    assert plan.dropped_tail_samples == 100
+
+
+def test_plan_windows_production_keeps_tail_at_floor() -> None:
+    # Tail exactly at the floor (8000) is kept.
+    plan = si.plan_windows(64600 + 8000, MODEL.windowing, mode="production")
+    assert plan.spans == ((0, 64600), (64600, 72600))
+    assert plan.repeat_padded is True
+    assert plan.dropped_tail_samples == 0
+
+
+def test_plan_windows_production_keeps_sole_short_clip() -> None:
+    # A clip shorter than the floor with only one window is never dropped.
+    plan = si.plan_windows(5000, MODEL.windowing, mode="production")
+    assert plan.spans == ((0, 5000),)
+    assert plan.repeat_padded is True
+    assert plan.dropped_tail_samples == 0
+
+
+def test_plan_windows_production_exact_boundary_no_tail() -> None:
+    # Clip exactly one window long -> no tail, no drop.
+    plan = si.plan_windows(64600, MODEL.windowing, mode="production")
+    assert plan.spans == ((0, 64600),)
+    assert plan.repeat_padded is False
+    assert plan.dropped_tail_samples == 0
+
+
+def test_plan_windows_production_multi_window_tail_drop() -> None:
+    # 3 full windows (3 * 64600 = 193800) + 500-sample tail -> tail dropped.
+    plan = si.plan_windows(194300, MODEL.windowing, mode="production")
+    assert len(plan.spans) == 3
+    assert plan.spans == ((0, 64600), (64600, 129200), (129200, 193800))
+    assert plan.repeat_padded is False
+    assert plan.dropped_tail_samples == 500
 
 
 def test_plan_windows_rejects_empty_and_unknown_mode() -> None:
@@ -439,6 +483,12 @@ def test_parse_resume_journal_rejects_bad_states() -> None:
     miss = "\n".join([h, json.dumps({"raw_score": 1.0})])
     with pytest.raises(si.InferError, match="missing a clip_id"):
         si.parse_resume_journal(miss + "\n")
+    # invalid dropped_tail_samples
+    bad_tail = "\n".join([h, json.dumps({
+        "clip_id": "a", "raw_score": 1.0, "dropped_tail_samples": -1,
+    })])
+    with pytest.raises(si.InferError, match="dropped_tail_samples"):
+        si.parse_resume_journal(bad_tail + "\n")
 
 
 # --------------------------------------------------------------------------- #
