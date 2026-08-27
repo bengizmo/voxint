@@ -189,7 +189,7 @@ def test_windowing_pooling_is_logit_mean() -> None:
 def test_sources_version_pinned() -> None:
     # A registry SHAPE change (a new field/model) must move the version so a
     # reshuffle or pin refresh is a visible, deliberate event in artifacts.
-    assert src.SOURCES_VERSION == "synthdetect-sources-v6"
+    assert src.SOURCES_VERSION == "synthdetect-sources-v7"
 
 
 def test_pinned_weight_shas_and_commits_have_real_shape() -> None:

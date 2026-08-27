@@ -535,3 +535,348 @@ def test_imported_manifest_benchmark_sentinel_rejected(sentinel: str) -> None:
     m = _imported_manifest([_imported_spoof("DF_E_1", "s1")], benchmark=sentinel)
     with pytest.raises(corpus.CorpusError, match=r"placeholder|non-empty benchmark"):
         corpus.load_manifest(m)
+
+
+# --------------------------------------------------------------------------- #
+# Schema v3: composite manifest (issue #144, S6)
+# --------------------------------------------------------------------------- #
+def _composite_synthesis_bona_fide(
+    clip_id: str, speaker: str, component: str = "organic", **over: Any
+) -> dict[str, Any]:
+    rec: dict[str, Any] = {
+        "clip_id": clip_id,
+        "rel_path": f"{component}/{clip_id}.wav",
+        "sha256": _SHA,
+        "duration_s": 5.0,
+        "label": "bona_fide",
+        "language": "en",
+        "license_spdx": "CC-BY-4.0",
+        "stratum": "bona_fide|organic|meetingroom",
+        "source": "ami",
+        "speaker_id": speaker,
+        "split": "calibration",
+        "provenance_kind": corpus.CORPUS_KIND_SYNTHESIS,
+        "component_id": component,
+        "partition_group_id": None,
+        "generator": None,
+        "degradation": None,
+        "parent_clip_id": None,
+        "acquire": "turn",
+    }
+    rec.update(over)
+    return rec
+
+
+def _composite_synthesis_spoof(
+    clip_id: str, speaker: str, component: str = "tts-piper", **over: Any
+) -> dict[str, Any]:
+    rec = _composite_synthesis_bona_fide(clip_id, speaker, component=component)
+    rec["label"] = "spoof"
+    rec["stratum"] = "spoof|tts|piper|meetingroom"
+    rec["rel_path"] = f"{component}/{clip_id}.wav"
+    rec["generator"] = {
+        "name": "piper",
+        "version": "2024.11.20",
+        "checkpoint_sha": None,
+        "voice": "en_US-lessac-medium",
+        "seed": "42",
+        "text_source": "whisper-large-v2-transcript",
+    }
+    rec.update(over)
+    return rec
+
+
+def _composite_imported_spoof(
+    clip_id: str, speaker: str, component: str = "asvspoof-df", **over: Any
+) -> dict[str, Any]:
+    rec: dict[str, Any] = {
+        "clip_id": clip_id,
+        "rel_path": f"{component}/{clip_id}.wav",
+        "sha256": _SHA,
+        "duration_s": 4.0,
+        "label": "spoof",
+        "language": "und",
+        "license_spdx": "ODbL-1.0",
+        "stratum": "spoof|nocodec",
+        "source": "asvspoof2021-df",
+        "speaker_id": speaker,
+        "split": "eval",
+        "provenance_kind": corpus.CORPUS_KIND_IMPORTED,
+        "component_id": component,
+        "partition_group_id": None,
+        "imported_provenance": {
+            "official_trial_id": clip_id,
+            "source_dataset": "vcc2020",
+            "codec_condition": "nocodec",
+            "official_split": "eval",
+            "attack_system": "A09",
+            "vocoder_family": "traditional_vocoder",
+        },
+    }
+    rec.update(over)
+    return rec
+
+
+def _component(
+    component_id: str,
+    kind: str = corpus.CORPUS_KIND_SYNTHESIS,
+    clip_count: int = 1,
+    benchmark: str | None = None,
+) -> dict[str, Any]:
+    rec: dict[str, Any] = {
+        "component_id": component_id,
+        "corpus_kind": kind,
+        "manifest_sha256": _SHA,
+        "clip_count": clip_count,
+    }
+    if benchmark is not None:
+        rec["benchmark"] = benchmark
+    return rec
+
+
+def _composite_manifest(
+    clips: list[dict[str, Any]],
+    components: list[dict[str, Any]],
+    **over: Any,
+) -> dict[str, Any]:
+    m: dict[str, Any] = {
+        "schema_version": corpus.COMPOSITE_MANIFEST_SCHEMA_VERSION,
+        "corpus_kind": corpus.CORPUS_KIND_COMPOSITE,
+        "components": components,
+        "clips": clips,
+    }
+    m.update(over)
+    return m
+
+
+def test_composite_manifest_loads() -> None:
+    clips = [
+        _composite_synthesis_bona_fide("bf1", "spk1"),
+        _composite_synthesis_spoof("sp1", "spk2"),
+        _composite_imported_spoof("DF_E_1", "spk3"),
+    ]
+    components = [
+        _component("organic", clip_count=1),
+        _component("tts-piper", clip_count=1),
+        _component(
+            "asvspoof-df",
+            kind=corpus.CORPUS_KIND_IMPORTED,
+            clip_count=1,
+            benchmark="asvspoof2021-df",
+        ),
+    ]
+    m = corpus.load_manifest(_composite_manifest(clips, components))
+    assert m.schema_version == 3
+    assert m.corpus_kind == corpus.CORPUS_KIND_COMPOSITE
+    assert m.components is not None
+    assert len(m.components) == 3
+    assert len(m.clips) == 3
+    assert m.clips[0].component_id == "organic"
+    assert m.clips[1].component_id == "tts-piper"
+    assert m.clips[1].generator is not None
+    assert m.clips[1].generator.name == "piper"
+    assert m.clips[2].component_id == "asvspoof-df"
+    assert m.clips[2].imported_provenance is not None
+
+
+def test_composite_wrong_corpus_kind_rejected() -> None:
+    m = _composite_manifest(
+        [_composite_synthesis_bona_fide("bf1", "s1")],
+        [_component("organic")],
+        corpus_kind="synthesis",
+    )
+    with pytest.raises(corpus.CorpusError, match="corpus_kind"):
+        corpus.load_manifest(m)
+
+
+def test_composite_missing_components_rejected() -> None:
+    m = {
+        "schema_version": 3,
+        "corpus_kind": corpus.CORPUS_KIND_COMPOSITE,
+        "clips": [_composite_synthesis_bona_fide("bf1", "s1")],
+    }
+    with pytest.raises(corpus.CorpusError, match="components"):
+        corpus.load_manifest(m)
+
+
+def test_composite_missing_provenance_kind_rejected() -> None:
+    clip = _composite_synthesis_bona_fide("bf1", "s1")
+    del clip["provenance_kind"]
+    m = _composite_manifest([clip], [_component("organic")])
+    with pytest.raises(corpus.CorpusError, match="provenance_kind"):
+        corpus.load_manifest(m)
+
+
+def test_composite_missing_component_id_rejected() -> None:
+    clip = _composite_synthesis_bona_fide("bf1", "s1")
+    del clip["component_id"]
+    m = _composite_manifest([clip], [_component("organic")])
+    with pytest.raises(corpus.CorpusError, match="component_id"):
+        corpus.load_manifest(m)
+
+
+def test_composite_unknown_component_id_rejected() -> None:
+    clip = _composite_synthesis_bona_fide("bf1", "s1", component="nonexistent")
+    m = _composite_manifest([clip], [_component("organic")])
+    with pytest.raises(corpus.CorpusError, match="not declared"):
+        corpus.load_manifest(m)
+
+
+def test_composite_provenance_kind_mismatch_rejected() -> None:
+    clip = _composite_synthesis_bona_fide("bf1", "s1")
+    clip["provenance_kind"] = corpus.CORPUS_KIND_IMPORTED
+    clip["imported_provenance"] = {
+        "official_trial_id": "bf1",
+        "source_dataset": "asvspoof",
+        "codec_condition": "nocodec",
+        "official_split": "eval",
+        "attack_system": None,
+        "vocoder_family": "bonafide",
+    }
+    clip["split"] = "eval"
+    clip["stratum"] = "bona_fide|nocodec"
+    del clip["generator"]
+    del clip["degradation"]
+    del clip["parent_clip_id"]
+    del clip["acquire"]
+    m = _composite_manifest([clip], [_component("organic")])
+    with pytest.raises(corpus.CorpusError, match=r"provenance_kind.*does not match"):
+        corpus.load_manifest(m)
+
+
+def test_composite_rel_path_collision_rejected() -> None:
+    c1 = _composite_synthesis_bona_fide("bf1", "spk1")
+    c2 = _composite_synthesis_bona_fide("bf2", "spk1", rel_path=c1["rel_path"])
+    m = _composite_manifest([c1, c2], [_component("organic", clip_count=2)])
+    with pytest.raises(corpus.CorpusError, match="share rel_path"):
+        corpus.load_manifest(m)
+
+
+def test_composite_partition_group_across_splits_rejected() -> None:
+    c1 = _composite_synthesis_bona_fide(
+        "bf1", "spk1", split="calibration", partition_group_id="pg1"
+    )
+    c2 = _composite_synthesis_spoof(
+        "sp1", "spk2", split="eval", partition_group_id="pg1"
+    )
+    m = _composite_manifest(
+        [c1, c2],
+        [_component("organic", clip_count=1), _component("tts-piper", clip_count=1)],
+    )
+    with pytest.raises(corpus.CorpusError, match="straddles splits"):
+        corpus.load_manifest(m)
+
+
+def test_composite_partition_group_same_split_accepted() -> None:
+    c1 = _composite_synthesis_bona_fide(
+        "bf1", "spk1", split="calibration", partition_group_id="pg1"
+    )
+    c2 = _composite_synthesis_spoof(
+        "sp1", "spk1", split="calibration", partition_group_id="pg1"
+    )
+    m = corpus.load_manifest(
+        _composite_manifest(
+            [c1, c2],
+            [_component("organic", clip_count=1), _component("tts-piper", clip_count=1)],
+        )
+    )
+    assert m.clips[0].partition_group_id == "pg1"
+    assert m.clips[1].partition_group_id == "pg1"
+
+
+def test_composite_duplicate_component_id_rejected() -> None:
+    m = _composite_manifest(
+        [_composite_synthesis_bona_fide("bf1", "s1")],
+        [_component("organic"), _component("organic")],
+    )
+    with pytest.raises(corpus.CorpusError, match="duplicate component_id"):
+        corpus.load_manifest(m)
+
+
+def test_composite_clip_count_mismatch_rejected() -> None:
+    m = _composite_manifest(
+        [_composite_synthesis_bona_fide("bf1", "s1")],
+        [_component("organic", clip_count=5)],
+    )
+    with pytest.raises(corpus.CorpusError, match=r"clip_count.*does not match"):
+        corpus.load_manifest(m)
+
+
+def test_composite_imported_component_must_name_benchmark() -> None:
+    m = _composite_manifest(
+        [_composite_imported_spoof("DF_E_1", "s1")],
+        [_component("asvspoof-df", kind=corpus.CORPUS_KIND_IMPORTED, clip_count=1)],
+    )
+    with pytest.raises(corpus.CorpusError, match="must name a non-empty benchmark"):
+        corpus.load_manifest(m)
+
+
+def test_composite_synthesis_component_rejects_benchmark() -> None:
+    comp = _component("organic")
+    comp["benchmark"] = "fake"
+    m = _composite_manifest(
+        [_composite_synthesis_bona_fide("bf1", "s1")],
+        [comp],
+    )
+    with pytest.raises(corpus.CorpusError, match="must not name a benchmark"):
+        corpus.load_manifest(m)
+
+
+def test_composite_imported_clip_must_be_eval() -> None:
+    clip = _composite_imported_spoof("DF_E_1", "s1")
+    clip["split"] = "calibration"
+    clip["imported_provenance"]["official_split"] = "calibration"
+    m = _composite_manifest(
+        [clip],
+        [
+            _component(
+                "asvspoof-df",
+                kind=corpus.CORPUS_KIND_IMPORTED,
+                clip_count=1,
+                benchmark="asvspoof2021-df",
+            )
+        ],
+    )
+    with pytest.raises(corpus.CorpusError, match="eval"):
+        corpus.load_manifest(m)
+
+
+def test_composite_unexpected_top_level_key_rejected() -> None:
+    m = _composite_manifest(
+        [_composite_synthesis_bona_fide("bf1", "s1")],
+        [_component("organic")],
+        benchmark="should-not-be-here",
+    )
+    with pytest.raises(corpus.CorpusError, match="unexpected top-level"):
+        corpus.load_manifest(m)
+
+
+def test_composite_speaker_disjoint_still_enforced() -> None:
+    c1 = _composite_synthesis_bona_fide("bf1", "spk1", split="calibration")
+    c2 = _composite_synthesis_spoof("sp1", "spk1", split="eval")
+    m = _composite_manifest(
+        [c1, c2],
+        [_component("organic", clip_count=1), _component("tts-piper", clip_count=1)],
+    )
+    with pytest.raises(corpus.CorpusError, match="straddles splits"):
+        corpus.load_manifest(m)
+
+
+def test_v1_unchanged_by_v3_additions() -> None:
+    m = corpus.load_manifest(_manifest([_bona_fide("c1", "s1")]))
+    assert m.schema_version == 1
+    assert m.corpus_kind == corpus.CORPUS_KIND_SYNTHESIS
+    assert m.components is None
+    assert m.clips[0].component_id is None
+    assert m.clips[0].partition_group_id is None
+
+
+def test_v2_unchanged_by_v3_additions() -> None:
+    m = corpus.load_manifest(
+        _imported_manifest([_imported_bona_fide("DF_E_1", "LA_1")])
+    )
+    assert m.schema_version == 2
+    assert m.corpus_kind == corpus.CORPUS_KIND_IMPORTED
+    assert m.components is None
+    assert m.clips[0].component_id is None
+    assert m.clips[0].partition_group_id is None

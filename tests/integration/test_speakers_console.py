@@ -29,6 +29,7 @@ from voxint.db.models import (
     RunStatus,
     Speaker,
     SpeakerAssignment,
+    SpeakerEmbedding,
     TranscriptSegment,
 )
 
@@ -674,3 +675,70 @@ def test_flag_off_legacy_research_stays_single_id(
     modern = _make_client(session_factory, tmp_path, speakers_enabled=True)
     profile = modern.get(f"/speakers/{target}")
     assert "Draft recorded under the source." in profile.text
+
+
+# ---------------------------------------- #181 possible-duplicates reminder card
+
+
+def _seed_speaker_with_embedding(
+    session: Session, name: str, vector: list[float]
+) -> uuid.UUID:
+    """A speaker with one enrollment centroid and no activity."""
+    speaker = Speaker(display_name=name)
+    session.add(speaker)
+    session.flush()
+    session.add(
+        SpeakerEmbedding(
+            speaker_id=speaker.id,
+            embedding_space=SPACE,
+            embedding=vector,
+        )
+    )
+    session.flush()
+    return speaker.id
+
+
+def _unit_vector(*components: tuple[int, float]) -> list[float]:
+    import math as _m
+
+    vector = [0.0] * EMBEDDING_DIM
+    for dim, value in components:
+        vector[dim] = value
+    norm = _m.sqrt(sum(v * v for v in vector))
+    return [v / norm for v in vector]
+
+
+def test_possible_duplicates_card_shown(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """When two speakers have near-identical centroids, the reminder card appears."""
+    vec_a = _unit_vector((0, 1.0), (1, 0.1))
+    vec_b = _unit_vector((0, 1.0), (1, 0.15))
+    with session_factory() as session:
+        _seed_speaker_with_embedding(session, "NearAlice", vec_a)
+        _seed_speaker_with_embedding(session, "NearBob", vec_b)
+        seed_onboarded(session_factory)
+        session.commit()
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    page = client.get("/speakers")
+    assert page.status_code == 200
+    assert "sound alike" in page.text
+    assert "NearAlice" in page.text
+    assert "NearBob" in page.text
+
+
+def test_possible_duplicates_card_absent_when_no_pairs(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Orthogonal centroids produce no duplicate card."""
+    vec_a = _unit_vector((0, 1.0))
+    vec_b = _unit_vector((1, 1.0))
+    with session_factory() as session:
+        _seed_speaker_with_embedding(session, "FarAlice", vec_a)
+        _seed_speaker_with_embedding(session, "FarBob", vec_b)
+        seed_onboarded(session_factory)
+        session.commit()
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    page = client.get("/speakers")
+    assert page.status_code == 200
+    assert "sound alike" not in page.text

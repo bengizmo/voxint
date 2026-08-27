@@ -166,7 +166,9 @@ def _sigmoid(z: Any) -> Any:
     return out
 
 
-def fit_platt(scores: Any, labels: Any, max_iter: int = 100) -> tuple[float, float]:
+def fit_platt(
+    scores: Any, labels: Any, max_iter: int = 100, sample_weights: Any = None,
+) -> tuple[float, float]:
     """Fit Platt scaling ``P(spoof|s)=sigmoid(A*s+B)`` on RAW scores. Pure numpy.
 
     Uses the Lin-Lin-Weng (2007) target-smoothed, regularized Newton procedure
@@ -175,6 +177,11 @@ def fit_platt(scores: Any, labels: Any, max_iter: int = 100) -> tuple[float, flo
     0=bona_fide; ``scores`` are raw logits (higher = more synthetic). Returns
     ``(A, B)``. A is not constrained in sign here, but on well-behaved detector
     scores it comes out positive (higher score -> higher spoof probability).
+
+    ``sample_weights``, when given, assigns per-clip importance (e.g.
+    ``1/partition_group_size``). Weights enter the effective class priors, the
+    target smoothing, all gradient/Hessian/NLL accumulations, and the
+    initialisation. Pass ``None`` for uniform weighting.
     """
     s = np.asarray(scores, dtype=float)
     y = np.asarray(labels, dtype=float)
@@ -182,50 +189,54 @@ def fit_platt(scores: Any, labels: Any, max_iter: int = 100) -> tuple[float, flo
         raise EvalError("fit_platt: scores and labels must be equal-length 1-D arrays")
     if not np.all(np.isfinite(s)):
         raise EvalError("fit_platt: raw scores must be finite")
-    prior1 = float(np.sum(y == 1.0))
-    prior0 = float(np.sum(y == 0.0))
+    if sample_weights is not None:
+        sw = np.asarray(sample_weights, dtype=float)
+        if sw.shape != s.shape:
+            raise EvalError("fit_platt: sample_weights must match scores in length")
+        if not np.all(np.isfinite(sw)) or np.any(sw < 0):
+            raise EvalError("fit_platt: sample_weights must be finite and non-negative")
+    else:
+        sw = np.ones_like(s)
+    prior1 = float(np.sum(sw[y == 1.0]))
+    prior0 = float(np.sum(sw[y == 0.0]))
     if prior1 == 0.0 or prior0 == 0.0:
         raise EvalError("fit_platt: calibration set needs both bona_fide and spoof clips")
-    # Target smoothing: pull labels off the {0,1} extremes toward the prior.
     hi = (prior1 + 1.0) / (prior1 + 2.0)
     lo = 1.0 / (prior0 + 2.0)
     t = np.where(y == 1.0, hi, lo)
 
-    # Init B to the smoothed spoof (positive-class) log-odds. LIBSVM's original
-    # models P=sigmoid(-(Af+B)); this module uses P(spoof)=sigmoid(A*s+B), so the
-    # positive prior goes in with a positive sign (a flipped sign only costs
-    # iterations, but the correct one converges faster on imbalanced cohorts).
     a, b = 0.0, math.log((prior1 + 1.0) / (prior0 + 1.0))
     min_step, sigma = 1e-10, 1e-12
     for _ in range(max_iter):
         z = a * s + b
         p = _sigmoid(z)
-        d1 = p - t  # gradient pieces
+        d1 = (p - t) * sw
         grad_a = float(np.sum(d1 * s))
         grad_b = float(np.sum(d1))
-        w = p * (1.0 - p)
-        h11 = float(np.sum(w * s * s)) + sigma
-        h22 = float(np.sum(w)) + sigma
-        h12 = float(np.sum(w * s))
+        pw = p * (1.0 - p) * sw
+        h11 = float(np.sum(pw * s * s)) + sigma
+        h22 = float(np.sum(pw)) + sigma
+        h12 = float(np.sum(pw * s))
         det = h11 * h22 - h12 * h12
         if det == 0.0:
             break
         da = -(h22 * grad_a - h12 * grad_b) / det
         db = -(-h12 * grad_a + h11 * grad_b) / det
-        # Backtracking line search on the regularized negative log-likelihood.
         gd = grad_a * da + grad_b * db
         if gd >= 0:
             break
         step = 1.0
+        eps = 1e-12
         while step >= min_step:
             new_a, new_b = a + step * da, b + step * db
             znew = new_a * s + new_b
             pnew = _sigmoid(znew)
-            eps = 1e-12
-            nll = -float(np.sum(t * np.log(pnew + eps) + (1.0 - t) * np.log(1.0 - pnew + eps)))
+            log_l = t * np.log(pnew + eps) + (1.0 - t) * np.log(1.0 - pnew + eps)
+            nll = -float(np.sum(sw * log_l))
             zold = a * s + b
             pold = _sigmoid(zold)
-            nll_old = -float(np.sum(t * np.log(pold + eps) + (1.0 - t) * np.log(1.0 - pold + eps)))
+            log_l_old = t * np.log(pold + eps) + (1.0 - t) * np.log(1.0 - pold + eps)
+            nll_old = -float(np.sum(sw * log_l_old))
             if nll < nll_old + 1e-4 * step * gd:
                 break
             step /= 2.0
@@ -240,13 +251,19 @@ def apply_platt(scores: Any, a: float, b: float) -> Any:
     return _sigmoid(a * np.asarray(scores, dtype=float) + b)
 
 
-def brier_score(probabilities: Any, labels: Any) -> float:
-    """Mean squared error of calibrated probabilities vs 1=spoof / 0=bona_fide."""
+def brier_score(
+    probabilities: Any, labels: Any, sample_weights: Any = None,
+) -> float:
+    """Weighted mean squared error of calibrated probabilities vs 1=spoof / 0=bona_fide."""
     p = np.asarray(probabilities, dtype=float)
     y = np.asarray(labels, dtype=float)
     if p.shape != y.shape or p.size == 0:
         raise EvalError("brier_score: probabilities and labels must be equal-length arrays")
-    return float(np.mean((p - y) ** 2))
+    sq = (p - y) ** 2
+    if sample_weights is not None:
+        sw = np.asarray(sample_weights, dtype=float)
+        return float(np.sum(sw * sq) / np.sum(sw))
+    return float(np.mean(sq))
 
 
 def reliability_curve(probabilities: Any, labels: Any, n_bins: int = 10) -> list[dict[str, float]]:
@@ -539,6 +556,7 @@ class ScoredClip:
     label: int  # 1=spoof, 0=bona_fide
     stratum: str
     raw_score: float
+    partition_group_id: str | None = None
 
 
 def join_scores(
@@ -574,6 +592,7 @@ def join_scores(
                 label=1 if clip.label == POSITIVE_LABEL else 0,
                 stratum=clip.stratum,
                 raw_score=result.raw_score,
+                partition_group_id=getattr(clip, "partition_group_id", None),
             )
         )
     return scored, skipped
@@ -914,7 +933,11 @@ def compare_windowing(
 # `calibrate` command (Platt on raw logits over the calibration split)
 # --------------------------------------------------------------------------- #
 def calibrate_policy(
-    journal: Journal, manifest: Manifest, *, policy_id: str
+    journal: Journal,
+    manifest: Manifest,
+    *,
+    policy_id: str,
+    exclude_strata: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Fit the calibration policy on the CALIBRATION split and report its fit.
 
@@ -922,18 +945,41 @@ def calibrate_policy(
     shipped operating point) and FPR 1% is reported as a diagnostic. The cohort
     hash binds the policy to exactly the clips it was fit on, so a later re-fit on
     a different cohort is a visibly different policy.
+
+    ``exclude_strata`` removes clips whose stratum contains any of the given
+    substrings (case-insensitive). Use this to fit on a generator subset when a
+    generator is uncalibrable (e.g. near-chance EER) and would poison the Platt
+    slope for generators the detector can actually discriminate.
     """
-    scored, _ = join_scores(journal, manifest, split="calibration")
-    if not scored:
+    all_scored, _ = join_scores(journal, manifest, split="calibration")
+    if not all_scored:
         raise EvalError("calibrate: no clips in the calibration split")
+    if exclude_strata:
+        lowered = tuple(p.lower() for p in exclude_strata)
+        scored = [c for c in all_scored if not any(p in c.stratum.lower() for p in lowered)]
+        n_excluded = len(all_scored) - len(scored)
+    else:
+        scored = all_scored
+        n_excluded = 0
+    if not scored:
+        raise EvalError("calibrate: all clips excluded after strata filter")
+    # Partition-group weighting: one effective observation per group. Clips
+    # sharing a partition_group_id (e.g. a bona fide parent and its TTS spoof)
+    # each get weight 1/group_size so the group contributes equally to a
+    # singleton. Clips with no partition_group_id are treated as singletons.
+    group_counts: dict[str, int] = {}
+    for c in scored:
+        gid = c.partition_group_id if c.partition_group_id is not None else c.clip_id
+        group_counts[gid] = group_counts.get(gid, 0) + 1
+    weights = np.array([
+        1.0 / group_counts[c.partition_group_id if c.partition_group_id is not None else c.clip_id]
+        for c in scored
+    ])
+    n_groups = len(group_counts)
+    max_group_size = max(group_counts.values())
     labels = [c.label for c in scored]
     scores = [c.raw_score for c in scored]
-    a, b = fit_platt(scores, labels)
-    # A non-positive Platt slope means spoof probability does NOT increase with
-    # the raw score: either the runner emitted reversed-polarity scores (a
-    # violation of the fixed higher-is-more-synthetic contract) or the detector
-    # carries no signal. Fail closed rather than committing an inverted or
-    # useless calibration policy; the runner must invert its scores upstream.
+    a, b = fit_platt(scores, labels, sample_weights=weights)
     if a <= 0.0:
         raise EvalError(
             f"calibrate: fitted Platt slope A={a:.4g} is not positive; the raw scores do not "
@@ -944,7 +990,7 @@ def calibrate_policy(
     cohort_hash = hashlib.sha256(
         "\x00".join(sorted(c.clip_id for c in scored)).encode()
     ).hexdigest()
-    return {
+    policy: dict[str, Any] = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "kind": "synthdetect_calibration_policy",
         "calibration_policy_id": policy_id,
@@ -954,11 +1000,18 @@ def calibrate_policy(
         "platt": {"A": a, "B": b},
         "primary_threshold": operating_point(labels, scores, PRIMARY_FPR),
         "diagnostic_threshold": operating_point(labels, scores, DIAGNOSTIC_FPR),
-        "brier": brier_score(probs, labels),
+        "brier": brier_score(probs, labels, sample_weights=weights),
         "reliability": reliability_curve(probs, labels),
         "cohort_sha256": cohort_hash,
         "n_calibration": len(scored),
+        "n_partition_groups": n_groups,
+        "max_group_size": max_group_size,
+        "group_weighting": "partition_group_inverse_size",
     }
+    if exclude_strata:
+        policy["excluded_strata"] = list(exclude_strata)
+        policy["n_excluded"] = n_excluded
+    return policy
 
 
 # --------------------------------------------------------------------------- #
@@ -1088,7 +1141,10 @@ def cmd_verdict_windowing(args: argparse.Namespace) -> int:
 def cmd_calibrate(args: argparse.Namespace) -> int:
     journal = _read_journal(args.journal)
     manifest = _bind_manifest(journal, args.manifest)
-    policy = calibrate_policy(journal, manifest, policy_id=args.policy_id)
+    exclude = tuple(args.exclude_strata) if args.exclude_strata else ()
+    policy = calibrate_policy(
+        journal, manifest, policy_id=args.policy_id, exclude_strata=exclude,
+    )
     _write(args.out, policy)
     return 0
 
@@ -1133,6 +1189,10 @@ def main(argv: list[str] | None = None) -> int:
     p_cal.add_argument("--journal", required=True)
     p_cal.add_argument("--manifest", required=True)
     p_cal.add_argument("--policy-id", required=True)
+    p_cal.add_argument(
+        "--exclude-strata", nargs="+", default=None,
+        help="exclude clips whose stratum contains any of these substrings (case-insensitive)",
+    )
     p_cal.add_argument("--out", default=None)
     p_cal.set_defaults(func=cmd_calibrate)
 
