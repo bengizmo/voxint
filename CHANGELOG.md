@@ -59,6 +59,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   now reads "Check for updates" and links to the GitHub releases page instead
   of the hardware sub-page.
 
+### Removed
+- **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration
+  0046 drops `app_settings.media_folders` and `app_settings.folder_domain_packs`,
+  which were retained for one release as rollback inputs after #153 moved
+  registered folders into the `media_folders` relation. The CLI
+  `voxint media folders preflight` subcommand and the unused
+  `resolve_folder_pack_name` registry function are also removed.
+
 ### Fixed
 - **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
   On the project detail page, opening the corrections editor while a project
