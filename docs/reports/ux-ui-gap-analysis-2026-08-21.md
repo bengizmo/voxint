@@ -1,5 +1,12 @@
 # Voxint UX/UI gap analysis and opportunities, 2026-08-21
 
+> **Superseded by:** the Ops Console visual direction (1c), approved 2026-08-26.
+> Design spec: `internal/design/voxint-console-2-design-spec.md`. Implementation
+> tracked in epic #205. This report's findings (plain-language copy, progressive
+> disclosure, task-first dashboard, honest states) directly shaped the design
+> spec's copy rules (section 6) and screen specs (section 5). The report remains
+> valid as the analytical foundation for those decisions.
+
 > **Status:** research + design analysis (no production code). Deliverable of the
 > UX/UI gap-analysis session requested after the "Reading Room" visual refresh
 > (epic #89) and the #86 annotation layer shipped in 0.21.0. Scope, set with the
