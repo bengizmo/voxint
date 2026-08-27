@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Voxint — {{ media_label }}{% endblock %}
+
+{% block cb_breadcrumb %}media / <strong>{{ media_label|lower|replace(" ", "-") }}</strong>{% endblock %}
+{% block cb_summary %}
+{%- if progress.total > 0 -%}
+  {{ progress.verified }}/{{ progress.total }} verified
+{%- elif selected_run -%}
+  {{ selected_run.status }}
+{%- else -%}
+  no runs
+{%- endif -%}
+{% endblock %}
+
+{% block body %}
+{# Media detail page (Console 2.0 P3a, issue #156). Renders run metadata, a
+   run chooser, and — when a completed run is selected — a server-rendered
+   transcript fallback. The editor island (#157) will mount here when it ships,
+   consuming the embedded island_props payload. Until then, the transcript is
+   display-only; edits go through the legacy /review path. #}
+
+<div class="lib-two-col">
+
+  {# ---- Main column: transcript or empty state ---- #}
+  <div class="lib-main">
+
+    {% if selected_run and island_props %}
+      {# Server-rendered transcript fallback (read-only display). The editor
+         island (#157) will replace this with a full interactive surface. #}
+      <div class="card" id="transcript-document">
+        {% if token %}
+        <p class="notice">Editing enabled. Mutations go through the
+        <a href="/review/{{ selected_run.id }}?token={{ token }}">legacy review page</a>
+        until the editor island ships.</p>
+        {% else %}
+        <p class="notice">Read-only view.
+        <a href="/review/{{ selected_run.id }}">Claim this run</a> to edit.</p>
+        {% endif %}
+
+        <table class="grid-table transcript-table">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Speaker</th>
+              <th>Text</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for seg in island_props.segments %}
+            <tr{% if seg.verified %} class="verified"{% endif %}>
+              <td class="mono">{{ "%.1f"|format(seg.start) }}s</td>
+              <td>{{ seg.speaker or seg.label or "—" }}</td>
+              <td>{{ seg.text }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+    {% elif selected_run %}
+      <div class="card">
+        <p>Run <code>{{ selected_run.id.hex[:8] }}</code> is
+        <strong>{{ selected_run.status }}</strong>. The transcript will be
+        available once the run completes.</p>
+        <p><a href="/jobs/{{ selected_run.id }}">View run details</a></p>
+      </div>
+
+    {% else %}
+      <div class="card">
+        <p>No runs for this media file yet.</p>
+        <p><a href="/media">Back to the library</a></p>
+      </div>
+    {% endif %}
+
+  </div>
+
+  {# ---- Side rail: run chooser and media info ---- #}
+  <div class="lib-rail">
+
+    <div class="card">
+      <h3>Media</h3>
+      <dl class="oc-meta-list">
+        <dt>File</dt>
+        <dd title="{{ detail.media.source_path }}">{{ media_label }}</dd>
+        {% if detail.media.duration_seconds is not none %}
+        <dt>Duration</dt>
+        <dd>{{ format_duration(detail.media.duration_seconds) }}</dd>
+        {% endif %}
+        {% if detail.media.size_bytes is not none %}
+        <dt>Size</dt>
+        <dd>{{ format_size(detail.media.size_bytes) }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    {% if detail.chooser %}
+    <div class="card">
+      <h3>Runs</h3>
+      <ul class="run-chooser">
+        {% for entry in detail.chooser %}
+        <li{% if selected_run and entry.id == selected_run.id %} class="active"{% endif %}>
+          <a href="/media/{{ detail.media.id }}/editor?run={{ entry.id }}{% if token %}&amp;token={{ token }}{% endif %}">
+            {{ entry.created_at.strftime("%Y-%m-%d %H:%M") }}
+            <span class="chip {{ entry.status }}">{{ entry.status }}</span>
+            {% if entry.archived %}<span class="chip">archived</span>{% endif %}
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+{% endblock %}
