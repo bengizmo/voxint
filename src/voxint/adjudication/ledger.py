@@ -10,11 +10,11 @@ it with a *different* payload is an error, never a silent overwrite.
 import uuid
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.splits import word_count
 from voxint.db.models import AdjudicationDecision, Decision, TranscriptSegment
+from voxint.idempotency import savepoint_adopt_or_conflict
 
 
 class ConflictingReplayError(Exception):
@@ -111,12 +111,30 @@ def record_decision(
         start_word_index,
         end_word_index,
     )
-    existing = session.execute(
-        select(AdjudicationDecision).where(
-            AdjudicationDecision.idempotency_key == idempotency_key
-        )
-    ).scalar_one_or_none()
-    if existing is None:
+
+    def _lookup() -> AdjudicationDecision | None:
+        return session.execute(
+            select(AdjudicationDecision).where(
+                AdjudicationDecision.idempotency_key == idempotency_key
+            )
+        ).scalar_one_or_none()
+
+    def _adopt_or_conflict(existing: AdjudicationDecision) -> AdjudicationDecision:
+        if _payload_matches(
+            existing,
+            pipeline_run_id,
+            diarization_label,
+            decision,
+            speaker_id,
+            operator,
+            transcript_segment_id,
+            start_word_index,
+            end_word_index,
+        ):
+            return existing
+        raise ConflictingReplayError(idempotency_key)
+
+    def _persist() -> AdjudicationDecision:
         row = AdjudicationDecision(
             pipeline_run_id=pipeline_run_id,
             diarization_label=diarization_label,
@@ -128,40 +146,15 @@ def record_decision(
             start_word_index=start_word_index,
             end_word_index=end_word_index,
         )
-        try:
-            # Savepoint, not a bare flush: callers compose this into larger
-            # transactions (P5 enrollment creates the speaker + embedding in
-            # the same one), and losing the race here must not roll their
-            # work back with it.
-            with session.begin_nested():
-                session.add(row)
-        except IntegrityError:
-            # Only the savepoint rolled back. If a concurrent writer inserted
-            # the same key between our SELECT and flush, adopt their row —
-            # any other constraint violation (FK, CHECK) is not a replay and
-            # must not be masked as one.
-            existing = session.execute(
-                select(AdjudicationDecision).where(
-                    AdjudicationDecision.idempotency_key == idempotency_key
-                )
-            ).scalar_one_or_none()
-            if existing is None:
-                raise
-        else:
-            return row
-    if _payload_matches(
-        existing,
-        pipeline_run_id,
-        diarization_label,
-        decision,
-        speaker_id,
-        operator,
-        transcript_segment_id,
-        start_word_index,
-        end_word_index,
-    ):
-        return existing
-    raise ConflictingReplayError(idempotency_key)
+        session.add(row)
+        return row
+
+    return savepoint_adopt_or_conflict(
+        session,
+        lookup=_lookup,
+        adopt_or_conflict=_adopt_or_conflict,
+        persist=_persist,
+    )
 
 
 def _validate_word_range(

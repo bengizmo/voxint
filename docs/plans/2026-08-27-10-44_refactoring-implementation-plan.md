@@ -129,14 +129,18 @@ parallelizable EXCEPT where noted.
 
 ### Phase 2: Enrichment simplification
 
-**Step 1: M10 helper extraction ONLY** (no semantic relaxation)
-- Extract the adopt-or-conflict pattern into a shared helper. Byte-for-byte
-  behavior-preserving: same key + fingerprint + savepoint logic.
-- Files: `adjudication/ledger.py`, `annotations.py`, `enrichment/drafts.py`,
-  `enrichment/run_assets.py`, `merge.py`, `ingest/service.py`.
-- Review: single-model (behavior-preserving extraction with existing tests).
-- Any key-only relaxation (weakening fingerprint checks) is a **separate**
-  follow-up requiring full panel review and concurrent-insert test evidence.
+**Step 1: M10 helper extraction ONLY** (no semantic relaxation) -- DONE
+- Extracted `savepoint_adopt_or_conflict()` to `voxint/idempotency.py`.
+  Survey found 4 true adopt-or-conflict sites (ledger, annotations, drafts,
+  run_assets) sharing a common skeleton; `merge.py` delegates to ledger and
+  `ingest/service.py` uses a different get-or-create pattern.
+  `enrichment/review.py` has dual-UNIQUE + materialization-repair logic that
+  doesn't fit the generic helper. All 4 sites refactored; 6 helper unit tests
+  + full suite green (4065 passed).
+- Files changed: `idempotency.py` (new), `adjudication/ledger.py`,
+  `adjudication/annotations.py`, `enrichment/drafts.py`,
+  `enrichment/run_assets.py`, `tests/unit/test_idempotency.py` (new).
+- Review: single-model (codex, behavior-preserving extraction).
 
 **Step 2: H7 design spike** (ADR, not implementation)
 - Before implementation, produce a focused ADR answering:
