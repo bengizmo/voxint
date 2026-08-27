@@ -587,7 +587,7 @@ def test_reminders_pending_names_and_unverified_high_activity(
     client = _make_client(session_factory, tmp_path, speakers_enabled=True)
     with session_factory() as session:
         # 40 segments x 8s = 320s > the 5-minute floor, no human ruling.
-        loud_id = _seed_speaker_with_activity(
+        _seed_speaker_with_activity(
             session, "Loud stranger", minutes_rank=40, human=False
         )
         # Below the floor: never a reminder.
