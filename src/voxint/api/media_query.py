@@ -79,6 +79,7 @@ class FolderGroup:
     total_duration_seconds: float
     failed_count: int
     running_count: int
+    needs_review_count: int
     completed_count: int
     latest_date: datetime | None
     items: list[MediaLibraryRow]
@@ -131,6 +132,10 @@ def group_by_folder(
             running_count=sum(
                 1 for r in items
                 if r.latest_run_status in ("running", "queued")
+            ),
+            needs_review_count=sum(
+                1 for r in items
+                if r.latest_run_status == "awaiting_adjudication"
             ),
             completed_count=sum(
                 1 for r in items if r.latest_run_status == "completed"

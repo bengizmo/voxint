@@ -54,6 +54,13 @@
 </label>
 {% endmacro %}
 
+{% if archived %}
+<p class="oc-muted" style="margin-bottom:var(--space-3)">
+  Archived runs are hidden from the active library.
+  <a href="{{ archived_toggle_url }}">← Back to active media</a>
+</p>
+{% endif %}
+
 {% if notice %}
 <p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
 {% endif %}
@@ -163,6 +170,18 @@
   </div>
   {% endif %}
 
+  <div class="lib-toolbar">
+    <nav class="view-toggle" aria-label="Sort by">
+      {% for value, label in sorts %}
+      <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <span style="flex:1"></span>
+    {% if not archived %}
+    <a href="{{ archived_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Archived →</a>
+    {% endif %}
+  </div>
+
 {% if view == "table" %}
   <div class="grid-table media-grid" role="region" aria-label="Media library" tabindex="0"
        style="grid-template-columns: 2.2rem 1fr auto auto auto auto auto;">
@@ -197,10 +216,12 @@
         <span class="chip chip-danger">{{ group.failed_count }} failed</span>
         {% elif group.running_count %}
         {{ chip("transcribing") }}
-        {% elif group.completed_count == group.item_count %}
+        {% elif group.needs_review_count %}
+        <span class="chip chip-warn">{{ group.needs_review_count }} need you</span>
+        {% elif group.completed_count == group.item_count and group.item_count > 0 %}
         {{ chip("all reviewed") }}
         {% else %}
-        <span class="chip chip-neutral">in progress</span>
+        <span class="chip chip-neutral">—</span>
         {% endif %}
       </span>
       <span class="num">{% if group.latest_date %}{{ format_age(group.latest_date, now=now) }}{% endif %}</span>
