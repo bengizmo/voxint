@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Ops Console V1: tokens, typography, and theme contract** (#206, epic #205).
+  Dark-theme palette updated from the warm "Reading Room" values to the Ops
+  Console direction: darker canvas (#121316), cooler ink, alpha-based semantic
+  soft fills, new `--line-subtle` token. Typography switches from the system-ui
+  stack to self-hosted IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500)
+  as latin-subset woff2 (101 KB total), loaded via the Vite build pipeline with
+  system-ui fallback when unbuilt. Type scale tightened (body 13px, new
+  `--t-micro` for 10.5px micro-headers). Light theme and print-stays-light
+  contract preserved. No layout or shell changes.
+
 ### Added
 - **Console 2.0 P2c: journaled media operations primitives and executor**
   (#155, epic #149, ADR 0007). Concurrency primitives for the media operations
