@@ -16,6 +16,7 @@ route inventory is stable across the dark-ship flip; access is gated by
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Final
@@ -30,11 +31,14 @@ from sqlalchemy.orm.exc import StaleDataError
 from voxint.api.csrf import (
     CSRF_MEDIA_ARCHIVE,
     CSRF_MEDIA_ASSIGN,
+    CSRF_MEDIA_EMPTY_TRASH,
     CSRF_MEDIA_FETCH,
     CSRF_MEDIA_FOLDERS,
     CSRF_MEDIA_RERUN,
     CSRF_MEDIA_RERUN_CONFIRM,
+    CSRF_MEDIA_RESTORE,
     CSRF_MEDIA_SUBMIT,
+    CSRF_MEDIA_TRASH,
     CSRF_MEDIA_UNARCHIVE,
     mint_csrf_token,
 )
@@ -58,7 +62,14 @@ from voxint.api.routers.deps import (
 )
 from voxint.app_settings import get_app_settings, resolve_effective_ytdlp_enabled
 from voxint.config import Settings
-from voxint.db.models import MediaFolder, MediaItem, PipelineRun
+from voxint.db.models import (
+    MediaFolder,
+    MediaItem,
+    MediaOperation,
+    OperationState,
+    OperationType,
+    PipelineRun,
+)
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import operator_correction_message
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
@@ -78,11 +89,20 @@ from voxint.ingest import (
     unarchive_run,
 )
 from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
+from voxint.media.executor import (
+    execute_operation,
+    plan_restore,
+    plan_trash,
+)
+from voxint.media.operations import OperationRefused
+from voxint.media.purge import build_manifest, execute_purge, plan_purge
 from voxint.media.registration import register_folder, unregister_folder_by_id
 
 # require_onboarded first (an un-onboarded operator is sent to setup), then the
 # area gate (404 when the flag is off) — the same order the module docstring and
 # the projects area will follow.
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
 )
@@ -235,6 +255,9 @@ def _success_notice(
     reverted: str | None,
     archive_done: str | None = None,
     unarchive_done: str | None = None,
+    trash_done: str | None = None,
+    restore_done: str | None = None,
+    empty_trash_done: str | None = None,
     skipped: str | None = None,
     live_skipped: str | None = None,
 ) -> dict[str, str] | None:
@@ -289,6 +312,27 @@ def _success_notice(
                 "loaded the page)."
             )
         return {"kind": "success", "text": text}
+    trash_n = _nonneg(trash_done)
+    if trash_n is not None:
+        text = f"Moved {_files(trash_n)} to trash."
+        skip = _nonneg(skipped) or 0
+        if skip > 0:
+            text += f" {_files(skip)} skipped."
+        return {"kind": "success", "text": text}
+    restore_n = _nonneg(restore_done)
+    if restore_n is not None:
+        text = f"Restored {_files(restore_n)} from trash."
+        skip = _nonneg(skipped) or 0
+        if skip > 0:
+            text += f" {_files(skip)} skipped."
+        return {"kind": "success", "text": text}
+    purged_n = _nonneg(empty_trash_done)
+    if purged_n is not None:
+        text = f"Permanently deleted {_files(purged_n)}."
+        skip = _nonneg(skipped) or 0
+        if skip > 0:
+            text += f" {_files(skip)} skipped."
+        return {"kind": "success", "text": text}
     return None
 
 
@@ -300,6 +344,7 @@ def _library_context(
     sort: str | None,
     view: str | None,
     archived: bool = False,
+    trashed: bool = False,
     submitted: str | None = None,
     notice: dict[str, str] | None = None,
     selected_ids: frozenset[str] = frozenset(),
@@ -313,12 +358,16 @@ def _library_context(
     the same allowlists the GET uses, so a crafted hidden field cannot skew the
     re-render. ``archived`` picks the active vs archived view (the latter shows only
     items whose latest run is archived, the target set for bulk unarchive).
-    ``selected_ids``/``attempted_folder_id`` let a rejected bulk action re-check the
-    operator's boxes and target instead of silently dropping them.
+    ``trashed`` selects the trash item view and is mutually exclusive with archived
+    at the GET route. ``selected_ids``/``attempted_folder_id`` let a rejected bulk
+    action re-check the operator's boxes and target instead of silently dropping
+    them.
     """
     selected_sort = _safe_sort(sort)
     selected_view = _safe_view(view)
-    rows = media_library(session, sort=selected_sort, archived=archived)
+    rows = media_library(
+        session, sort=selected_sort, archived=archived, trashed=trashed
+    )
     secret = request.app.state.csrf_secret
     # The archive-view toggle target: the same sort/layout in the opposite view.
     # Active -> add ?archived=1; archived -> drop it (mirrors the /runs toggle).
@@ -326,6 +375,21 @@ def _library_context(
     if not archived:
         toggle_params["archived"] = "1"
     archived_toggle_url = f"/media?{urlencode(toggle_params)}"
+    trash_params = {"sort": selected_sort, "view": selected_view}
+    if not trashed:
+        trash_params["trashed"] = "1"
+    trash_toggle_url = f"/media?{urlencode(trash_params)}"
+    media_root = settings.media_root
+    missing: set[uuid.UUID] = set()
+    for row in rows:
+        path = row.current_path if row.current_path is not None else row.source_path
+        resolved = media_root / path
+        try:
+            if not resolved.resolve().is_file():
+                missing.add(row.id)
+        except (OSError, RuntimeError):
+            missing.add(row.id)
+    missing_file_ids = frozenset(missing)
     return {
         "request": request,
         "active_nav": "media",
@@ -338,7 +402,9 @@ def _library_context(
         # The archived view shows only items with an archived latest run (the bulk
         # unarchive target set); the active view hides archived runs.
         "archived": archived,
+        "trashed": trashed,
         "archived_toggle_url": archived_toggle_url,
+        "trash_toggle_url": trash_toggle_url,
         # The listing is capped; say so honestly when it is full rather than
         # implying the library ends here.
         "truncated": len(rows) >= MEDIA_LIBRARY_LIMIT,
@@ -355,6 +421,9 @@ def _library_context(
         "csrf_media_rerun": mint_csrf_token(secret, CSRF_MEDIA_RERUN),
         "csrf_media_archive": mint_csrf_token(secret, CSRF_MEDIA_ARCHIVE),
         "csrf_media_unarchive": mint_csrf_token(secret, CSRF_MEDIA_UNARCHIVE),
+        "csrf_media_trash": mint_csrf_token(secret, CSRF_MEDIA_TRASH),
+        "csrf_media_restore": mint_csrf_token(secret, CSRF_MEDIA_RESTORE),
+        "csrf_media_empty_trash": mint_csrf_token(secret, CSRF_MEDIA_EMPTY_TRASH),
         # The settings-folder picker; renders whether or not projects are enabled.
         "folder_options": folder_options(session),
         # Gate the URL-fetch form: off => rendered disabled and POST /media/fetch
@@ -370,6 +439,7 @@ def _library_context(
         # re-renders, so a rejected bulk action does not drop their work.
         "selected_ids": selected_ids,
         "attempted_folder_id": attempted_folder_id,
+        "missing_file_ids": missing_file_ids,
     }
 
 
@@ -381,25 +451,33 @@ def media_library_page(
     sort: str | None = None,
     view: str | None = None,
     archived: str | None = None,
+    trashed: str | None = None,
     submitted: str | None = None,
     assigned: str | None = None,
     folder: str | None = None,
     reverted: str | None = None,
     archive_done: str | None = None,
     unarchive_done: str | None = None,
+    trash_done: str | None = None,
+    restore_done: str | None = None,
+    empty_trash_done: str | None = None,
     skipped: str | None = None,
     live_skipped: str | None = None,
 ) -> Response:
     settings: Settings = request.app.state.settings
     # ?archived=1 flips to the archived-only view (mirrors /runs); anything else
     # (absent / "0" / blank) is the default active listing that hides archived runs.
-    show_archived = archived == "1"
+    show_trashed = trashed == "1"
+    show_archived = archived == "1" and not show_trashed
     notice = _success_notice(
         assigned=assigned,
         folder=folder,
         reverted=reverted,
         archive_done=archive_done,
         unarchive_done=unarchive_done,
+        trash_done=trash_done,
+        restore_done=restore_done,
+        empty_trash_done=empty_trash_done,
         skipped=skipped,
         live_skipped=live_skipped,
     )
@@ -410,6 +488,7 @@ def media_library_page(
         sort=sort,
         view=view,
         archived=show_archived,
+        trashed=show_trashed,
         submitted=submitted,
         notice=notice,
     )
@@ -1195,8 +1274,14 @@ def media_archive(
     _require_csrf(request, CSRF_MEDIA_ARCHIVE, csrf_token)
     settings: Settings = request.app.state.settings
     return _bulk_set_archived(
-        request, session, settings, media_id=media_id, run_baseline=run_baseline,
-        sort=sort, view=view, archiving=True,
+        request,
+        session,
+        settings,
+        media_id=media_id,
+        run_baseline=run_baseline,
+        sort=sort,
+        view=view,
+        archiving=True,
     )
 
 
@@ -1218,6 +1303,233 @@ def media_unarchive(
     _require_csrf(request, CSRF_MEDIA_UNARCHIVE, csrf_token)
     settings: Settings = request.app.state.settings
     return _bulk_set_archived(
-        request, session, settings, media_id=media_id, run_baseline=run_baseline,
-        sort=sort, view=view, archiving=False,
+        request,
+        session,
+        settings,
+        media_id=media_id,
+        run_baseline=run_baseline,
+        sort=sort,
+        view=view,
+        archiving=False,
     )
+
+
+def _reject_media_operation(
+    request: Request,
+    session: SessionDep,
+    settings: Settings,
+    *,
+    status_code: int,
+    text: str,
+    sort: str,
+    view: str,
+    trashed: bool,
+    selected_ids: list[str] | None = None,
+) -> Response:
+    """Roll back and re-render the originating media-operation view."""
+    session.rollback()
+    context = _library_context(
+        request,
+        session,
+        settings,
+        sort=sort,
+        view=view,
+        trashed=trashed,
+        notice={"kind": "error", "text": text},
+        selected_ids=frozenset(selected_ids or []),
+    )
+    return templates.TemplateResponse(
+        request, "media/media.html", context, status_code=status_code
+    )
+
+
+@router.post("/media/trash")
+def media_trash(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    media_id: Annotated[list[str] | None, Form()] = None,
+    sort: Annotated[str, Form()] = DEFAULT_SORT,
+    view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Move selected active media into the durable operation-owned trash tree."""
+    _require_csrf(request, CSRF_MEDIA_TRASH, csrf_token)
+    settings: Settings = request.app.state.settings
+    raw_ids = media_id or []
+    try:
+        parsed = _parse_media_selection(raw_ids)
+        _load_selection(session, parsed)
+    except _SelectionError as exc:
+        return _reject_media_operation(
+            request,
+            session,
+            settings,
+            status_code=exc.status_code,
+            text=exc.text,
+            sort=sort,
+            view=view,
+            trashed=False,
+            selected_ids=raw_ids,
+        )
+
+    done = 0
+    skipped = 0
+    for media_uuid in parsed:
+        claim_token = uuid.uuid4().hex
+        try:
+            operation = plan_trash(session, media_uuid, claim_token)
+            session.commit()
+            execute_operation(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
+        except OperationRefused:
+            session.rollback()
+            skipped += 1
+        except Exception:
+            logger.exception("unexpected error trashing media %s", media_uuid)
+            session.rollback()
+            skipped += 1
+
+    params: dict[str, Any] = {
+        "trash_done": done,
+        "sort": _safe_sort(sort),
+        "view": _safe_view(view),
+    }
+    if skipped:
+        params["skipped"] = skipped
+    return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
+
+
+@router.post("/media/restore")
+def media_restore(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    media_id: Annotated[list[str] | None, Form()] = None,
+    sort: Annotated[str, Form()] = DEFAULT_SORT,
+    view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Restore selected trash items to their pre-trash paths."""
+    _require_csrf(request, CSRF_MEDIA_RESTORE, csrf_token)
+    settings: Settings = request.app.state.settings
+    raw_ids = media_id or []
+    try:
+        parsed = _parse_media_selection(raw_ids)
+        _load_selection(session, parsed)
+    except _SelectionError as exc:
+        return _reject_media_operation(
+            request,
+            session,
+            settings,
+            status_code=exc.status_code,
+            text=exc.text,
+            sort=sort,
+            view=view,
+            trashed=True,
+            selected_ids=raw_ids,
+        )
+
+    done = 0
+    skipped = 0
+    for media_uuid in parsed:
+        claim_token = uuid.uuid4().hex
+        try:
+            trash_operation = session.execute(
+                select(MediaOperation)
+                .where(
+                    MediaOperation.media_id == media_uuid,
+                    MediaOperation.operation_type == OperationType.TRASH.value,
+                    MediaOperation.state == OperationState.COMPLETED.value,
+                )
+                .order_by(MediaOperation.created_at.desc(), MediaOperation.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if trash_operation is None:
+                raise OperationRefused("completed trash operation does not exist")
+            operation = plan_restore(
+                session, media_uuid, trash_operation.id, claim_token
+            )
+            session.commit()
+            execute_operation(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
+        except OperationRefused:
+            session.rollback()
+            skipped += 1
+        except Exception:
+            logger.exception("unexpected error restoring media %s", media_uuid)
+            session.rollback()
+            skipped += 1
+
+    params: dict[str, Any] = {
+        "trashed": "1",
+        "restore_done": done,
+        "sort": _safe_sort(sort),
+        "view": _safe_view(view),
+    }
+    if skipped:
+        params["skipped"] = skipped
+    return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
+
+
+@router.post("/media/empty-trash")
+def media_empty_trash(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    sort: Annotated[str, Form()] = DEFAULT_SORT,
+    view: Annotated[str, Form()] = _DEFAULT_VIEW,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    """Permanently delete every trashed, non-purged media item and its artifacts."""
+    _require_csrf(request, CSRF_MEDIA_EMPTY_TRASH, csrf_token)
+    settings: Settings = request.app.state.settings
+    media_ids = list(
+        session.execute(
+            select(MediaItem.id).where(
+                MediaItem.trashed_at.is_not(None),
+                MediaItem.purged_at.is_(None),
+            )
+        ).scalars()
+    )
+
+    done = 0
+    skipped = 0
+    for media_uuid in media_ids:
+        claim_token = uuid.uuid4().hex
+        try:
+            operation = plan_purge(session, media_uuid, claim_token)
+            session.commit()
+            build_manifest(session, operation)
+            session.commit()
+            execute_purge(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
+        except OperationRefused:
+            session.rollback()
+            skipped += 1
+        except Exception:
+            logger.exception("unexpected error purging media %s", media_uuid)
+            session.rollback()
+            skipped += 1
+
+    params: dict[str, Any] = {
+        "trashed": "1",
+        "empty_trash_done": done,
+        "sort": _safe_sort(sort),
+        "view": _safe_view(view),
+    }
+    if skipped:
+        params["skipped"] = skipped
+    return RedirectResponse(f"/media?{urlencode(params)}", status_code=303)
