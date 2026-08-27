@@ -1653,8 +1653,8 @@ def _cohort_plan_hash(
     projection = {
         "cohort_version": cohort_version,
         "selection_policy": selection_policy,
-        "chains": list(chains),
-        "assignments": rows,
+        "chains": sorted(chains),
+        "assignments": sorted(rows, key=lambda r: r["parent_clip_id"]),
     }
     canonical = json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -1692,7 +1692,7 @@ def plan_cohort(
             acq = json.loads(clip.acquire)
         except (json.JSONDecodeError, TypeError):
             continue
-        if acq.get("kind") != "turn":
+        if not isinstance(acq, dict) or acq.get("kind") != "turn":
             continue
         eligible.append(clip)
 

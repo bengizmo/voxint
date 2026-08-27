@@ -178,11 +178,16 @@ class TestPlanCohort:
         assert len(plan.assignments) == 1
         assert plan.assignments[0].parent_clip_id == "turn-0"
 
-    def test_skips_already_degraded(self) -> None:
+    def test_rejects_manifest_with_degraded_entries(self) -> None:
         parent = _cal_clip("parent-0")
-        manifest = _make_manifest([parent])
-        plan = corpus.plan_cohort(manifest)
-        assert len(plan.assignments) == 1
+        child = {
+            **_cal_clip("child-0"),
+            "parent_clip_id": "parent-0",
+            "degradation": "mp3-cbr48-v1",
+            "stratum": "bona_fide|organic|meetingroom|mp3-cbr48-v1",
+        }
+        with pytest.raises(corpus.CorpusError, match="already contains degraded"):
+            corpus.plan_cohort(_make_manifest([parent, child]))
 
     def test_no_eligible_parents_raises(self) -> None:
         clips = [_cal_clip("eval-only", split="eval")]
@@ -231,6 +236,19 @@ class TestPlanCohort:
 
     def test_null_acquire_excluded(self) -> None:
         clips = [_cal_clip("null-acq", acquire=None)]
+        manifest = _make_manifest(clips)
+        with pytest.raises(corpus.CorpusError, match="no eligible"):
+            corpus.plan_cohort(manifest)
+
+    @pytest.mark.parametrize("bad_acquire", [
+        json.dumps(42),
+        json.dumps([1, 2]),
+        json.dumps("a string"),
+        json.dumps(True),
+        json.dumps(None),
+    ])
+    def test_non_object_acquire_excluded(self, bad_acquire: str) -> None:
+        clips = [_cal_clip("bad-acq", acquire=bad_acquire)]
         manifest = _make_manifest(clips)
         with pytest.raises(corpus.CorpusError, match="no eligible"):
             corpus.plan_cohort(manifest)

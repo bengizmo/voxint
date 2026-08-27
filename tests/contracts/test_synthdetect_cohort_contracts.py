@@ -46,13 +46,12 @@ class TestAssignmentStability:
     """A golden clip_id must always map to the same chain (hash stability)."""
 
     GOLDEN_CLIP_ID = "ami-ES2011a-MEE069-turn-0-64600"
+    GOLDEN_ASSIGNED_CHAIN = "mp3-cbr48-v1"
 
-    def test_golden_assignment_stable(self) -> None:
+    def test_golden_assignment_pinned(self) -> None:
         serialized = tuple(sorted("|".join(c) for c in sources.FROZEN_COHORT_CHAINS))
         chain = corpus._assign_chain(self.GOLDEN_CLIP_ID, serialized)
-        assert chain in serialized
-        expected = corpus._assign_chain(self.GOLDEN_CLIP_ID, serialized)
-        assert chain == expected
+        assert chain == self.GOLDEN_ASSIGNED_CHAIN
 
 
 class TestCohortPlanHashContract:
@@ -91,7 +90,15 @@ class TestCohortPlanHashContract:
         assert len(plan.cohort_plan_sha256) == 64
         int(plan.cohort_plan_sha256, 16)
 
+    GOLDEN_COHORT_PLAN_SHA256 = (
+        "60ba839a203589bb818210b36e23b2bf82c5831e32c461428a8df903c34aa68c"
+    )
+
     def test_hash_reproducible(self) -> None:
         h1 = self._make_plan_fixture().cohort_plan_sha256
         h2 = self._make_plan_fixture().cohort_plan_sha256
         assert h1 == h2
+
+    def test_hash_pinned(self) -> None:
+        plan = self._make_plan_fixture()
+        assert plan.cohort_plan_sha256 == self.GOLDEN_COHORT_PLAN_SHA256
