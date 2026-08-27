@@ -12,8 +12,9 @@
   <a href="/settings/hardware" role="tab">Hardware</a>
   <a href="/settings/database" role="tab">Database</a>
   <a href="/settings/plugins" role="tab">Plugins</a>
+  <a href="/settings/features" role="tab">Features</a>
   <span class="ft-spacer"></span>
-  <span class="oc-muted">Some changes restart parts of Voxint</span>
+  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
 </nav>
 
 <section class="oc-section" aria-label="System status">
@@ -23,7 +24,7 @@
       <strong class="sb-headline">{% if overall_ok %}Everything is running normally{% else %}Some parts need attention{% endif %}</strong>
       <span class="sb-detail">{{ install_summary }}</span>
     </div>
-    <a class="cb-btn cb-btn-secondary" href="/settings/hardware">Check hardware</a>
+    <a class="cb-btn cb-btn-secondary" href="https://github.com/bengizmo/voxint/releases" target="_blank" rel="noopener">Check for updates</a>
   </div>
 </section>
 
@@ -37,7 +38,13 @@
         <span class="cr-name">{{ c.label }}</span>
         <span class="cr-state">{{ c.state_text }}</span>
         <span class="cr-action">
-          {% if c.action_url %}<a href="{{ c.action_url }}">{{ c.action_label }}</a>{% endif %}
+          {% if c.action_url %}
+          {% if c.action_style == "primary" %}
+          <a class="cb-btn cb-btn-primary" href="{{ c.action_url }}">{{ c.action_label }}</a>
+          {% else %}
+          <a href="{{ c.action_url }}">{{ c.action_label }}</a>
+          {% endif %}
+          {% endif %}
         </span>
       </li>
       {% endfor %}

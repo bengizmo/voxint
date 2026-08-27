@@ -367,18 +367,26 @@ down.](../images/setup-wizard.png)
 ### Checking your hardware
 
 If runs feel slow or keep failing, the **Hardware** link in the sidebar opens
-the status page: a compact status strip up top, then the full readout of
-what your graphics card is doing. Both are quiet on purpose: a card running
-flat out
-during a transcription is healthy, not a warning, so most of the time the strip
-just tells you each service is working.
+the status page. At the top, a banner shows whether everything is running
+normally, your install type, GPU acceleration status, and the current version.
+A **Check for updates** button links to the releases page.
 
-![The Voxint status page, listing each model service (transcription,
-diarization, speaker embedding), whether it is reachable, and the device it runs
-on, above a note that GPU readings appear here when a graphics card is in
-use.](../images/resources.png)
+Below the banner, the page has two panels:
 
-It speaks up in only two cases, each with one plain fix:
+- **Parts of Voxint** lists each component (Console & API, Transcriber, Voice
+  separation, Voice identity, Database, Task queue, Local AI model) with a
+  colored dot showing its health. The Local AI model row has a **Turn on**
+  button when it is not yet enabled.
+- **This computer right now** shows five live gauges that refresh every 15
+  seconds: Processor, Memory, Graphics card, Graphics memory, and Disk (media).
+  The first three tell you how hard the machine is working; the last two show
+  how much storage is left.
+
+![The Voxint status page, listing each component's health and five hardware
+gauges for processor, memory, graphics card, graphics memory, and
+disk.](../images/resources.png)
+
+The page speaks up in only two cases, each with one plain fix:
 
 - **The card is too hot and has slowed itself down** (thermal throttling). The
   graphics driver does this on its own to protect the hardware, so nothing is
@@ -390,13 +398,13 @@ It speaks up in only two cases, each with one plain fix:
   time, or see the single-GPU tuning notes in
   [operations.md](../operations.md#gpu-memory-on-a-single-modest-gpu-issue-96).
 
-> A high memory (VRAM) number on its own is not a problem. The services hold
-> their models in memory for the whole session by design; that is expected, not
-> a leak. The Resources page shows it as context, never as an alarm.
+> A high graphics memory (VRAM) number on its own is not a problem. The services
+> hold their models in memory for the whole session by design; that is expected,
+> not a leak. The status page shows it as context, never as an alarm.
 
-> **A run keeps failing with an out-of-memory error.** Open **Resources** and
-> check the card's memory while a run is going. If it is genuinely running out,
-> the fix is to lower how much runs at once. The
+> **A run keeps failing with an out-of-memory error.** Open the status page and
+> check the graphics memory gauge while a run is going. If it is genuinely
+> running out, the fix is to lower how much runs at once. The
 > [single-GPU section of operations.md](../operations.md#gpu-memory-on-a-single-modest-gpu-issue-96)
 > walks through the levers, and is a setting your maintainer usually adjusts.
 
