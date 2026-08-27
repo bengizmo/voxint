@@ -23,7 +23,7 @@ from voxint.speakers.aggregate import (
     aggregate_speakers,
     empty_aggregate,
 )
-from voxint.speakers.matching import MatchingGates
+from voxint.speakers.matching import DuplicatePair, MatchingGates, find_possible_duplicates
 from voxint.speakers.roster import RosterEntry, roster_overview
 from voxint.speakers.tiers import TierSummary, evidence_for, tier_for
 
@@ -61,9 +61,10 @@ class OverviewRow:
     tier: TierSummary
 
 
-# Reminders (#159): flat caps + honest truncation (the lib-kit convention).
+# Reminders (#159, #181): flat caps + honest truncation (the lib-kit convention).
 NAME_SUGGESTION_CAP = 5
 UNVERIFIED_CAP = 5
+DUPLICATE_CAP = 3
 # A speaker below this much attributed speech is not "high-activity" — the
 # card nudges toward the biggest unconfirmed voices, not every stray minute.
 UNVERIFIED_FLOOR_SECONDS = 5 * 60.0
@@ -79,6 +80,18 @@ class NameSuggestionReminder:
 
 
 @dataclass(frozen=True)
+class DuplicateReminder:
+    """A pair of active speakers whose enrollment centroids are similar enough
+    to warrant a merge review (#181)."""
+
+    speaker_a_id: uuid.UUID
+    speaker_a_name: str
+    speaker_b_id: uuid.UUID
+    speaker_b_name: str
+    similarity: float
+
+
+@dataclass(frozen=True)
 class SpeakersOverview:
     rows: tuple[OverviewRow, ...]
     inactive: tuple[RosterEntry, ...]
@@ -91,6 +104,8 @@ class SpeakersOverview:
     name_suggestion_total: int = 0
     unverified_active: tuple[OverviewRow, ...] = ()
     unverified_active_total: int = 0
+    possible_duplicates: tuple[DuplicateReminder, ...] = ()
+    possible_duplicates_total: int = 0
 
 
 def _pending_name_suggestions(
@@ -122,6 +137,29 @@ def _pending_name_suggestions(
         for row in rows[:NAME_SUGGESTION_CAP]
     )
     return reminders, int(sum(row.n for row in rows))
+
+
+def _possible_duplicate_reminders(
+    session: Session,
+    gates: MatchingGates,
+    name_by_id: dict[uuid.UUID, str],
+) -> tuple[tuple[DuplicateReminder, ...], int]:
+    """Pairs of active speakers whose centroids clear the grounded threshold."""
+    pairs: list[DuplicatePair] = find_possible_duplicates(
+        session, gates.grounded_min_cosine
+    )
+    reminders = tuple(
+        DuplicateReminder(
+            speaker_a_id=p.speaker_a_id,
+            speaker_a_name=name_by_id.get(p.speaker_a_id, "?"),
+            speaker_b_id=p.speaker_b_id,
+            speaker_b_name=name_by_id.get(p.speaker_b_id, "?"),
+            similarity=p.similarity,
+        )
+        for p in pairs
+        if p.speaker_a_id in name_by_id and p.speaker_b_id in name_by_id
+    )
+    return reminders[:DUPLICATE_CAP], len(reminders)
 
 
 def _sort_rows(rows: list[OverviewRow], sort: str) -> list[OverviewRow]:
@@ -187,6 +225,12 @@ def speakers_overview(
         ),
         key=lambda r: (-r.aggregate.seconds, r.entry.speaker.display_name.casefold()),
     )
+    # Possible duplicates (#181): pairs whose enrollment centroids clear the
+    # grounded cosine threshold, suggesting the same physical voice.
+    name_by_id = {e.speaker.id: e.speaker.display_name for e in overview.active}
+    dup_reminders, dup_total = _possible_duplicate_reminders(
+        session, gates, name_by_id
+    )
     return SpeakersOverview(
         rows=tuple(_sort_rows(rows, sort)),
         inactive=overview.inactive,
@@ -197,4 +241,6 @@ def speakers_overview(
         name_suggestion_total=name_total,
         unverified_active=tuple(unverified[:UNVERIFIED_CAP]),
         unverified_active_total=len(unverified),
+        possible_duplicates=dup_reminders,
+        possible_duplicates_total=dup_total,
     )

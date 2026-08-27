@@ -30,8 +30,8 @@ from voxint.db.models import (
 from voxint.speakers.matching import (
     CosineProposal,
     MatchingGates,
-    _roster_centroids,
     replace_run_proposals,
+    roster_centroids,
 )
 from voxint.speakers.roster import (
     RosterConflictError,
@@ -283,8 +283,8 @@ def test_archive_excludes_from_matching_and_purges_assignments(
         assert deleted == 1
         assert session.execute(select(SpeakerAssignment.id)).first() is None
         # Out of the matching roster and the assignable list…
-        assert bob not in _roster_centroids(session, SPACE)
-        assert alice in _roster_centroids(session, SPACE)
+        assert bob not in roster_centroids(session, SPACE)
+        assert alice in roster_centroids(session, SPACE)
         assert {s.id for s in active_speakers(session)} == {alice}
         # …but human attribution still renders the historical name.
         by_label = {s.label: s for s in label_states(session, run_id)}
@@ -295,7 +295,7 @@ def test_archive_excludes_from_matching_and_purges_assignments(
 
         restore_speaker(session, bob)
         session.commit()
-        assert bob in _roster_centroids(session, SPACE)
+        assert bob in roster_centroids(session, SPACE)
         # Purged machine assignments are NOT resurrected.
         assert session.execute(select(SpeakerAssignment.id)).first() is None
 
@@ -357,8 +357,8 @@ def test_delete_embedding_keeps_ledger_and_blocks_rematch(
             == decision_count
         )
         # With no embeddings left, Bob drops out of the matching roster.
-        assert bob not in _roster_centroids(session, SPACE)
-        assert alice in _roster_centroids(session, SPACE)
+        assert bob not in roster_centroids(session, SPACE)
+        assert alice in roster_centroids(session, SPACE)
 
 
 def test_delete_embedding_replayed_enrollment_does_not_remint(

@@ -417,7 +417,7 @@ class Settings(BaseSettings):
     domain_pack_path: Path | None = None
     # Optional directory whose direct child folders are each a named domain pack
     # (a folder with a manifest.yaml). Enables selecting a pack BY NAME per
-    # watched folder (app_settings.folder_domain_packs). Unset ⇒ only the bundled
+    # watched folder (media_folders.domain_pack). Unset ⇒ only the bundled
     # generic pack and the configured default (domain_pack_path) are resolvable.
     domain_packs_dir: Path | None = None
 
