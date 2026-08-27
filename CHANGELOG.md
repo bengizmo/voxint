@@ -17,6 +17,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   contract preserved. No layout or shell changes.
 
 ### Added
+- **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
+  codec/telephony/speed-degraded children of bona fide clips via the frozen
+  `build_recipe_argv` ffmpeg round trips inside a digest-pinned container
+  (`jrottenberg/ffmpeg:7.1-ubuntu`). Resolves the three PR-2a deferred blockers:
+  B1 (raw/WAV framing through headerless s16le), B2 (combined parent+child
+  manifest validated through `load_manifest`), and B5 (separate immutable degrade
+  root published by atomic rename). New functions: `materialize_degrade`,
+  `_run_containerized_ffmpeg`, `_degrade_one_clip`, `_assemble_combined_manifest`,
+  `resolve_clip_path`, `_write_degrade_artifacts`, `DegradeResult`. The `degrade`
+  CLI verb gains `--corpus-root`/`--parent-root`/`--container-image` flags for
+  execution mode (unchanged dry-run without them).
 - **Console 2.0 P7: run-completion activity indicator and toasts, dark-shipped**
   (#162, epic #149). Behind a new `CONSOLE_ACTIVITY_ENABLED` flag (off by
   default), a completed pipeline run writes one row to a new `activity_events`
