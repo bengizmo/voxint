@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
+  (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
+  canonical label-to-semantic mapping (`chip_semantics.py` + Jinja2 macro
+  `_chips.html`). Ops Console stat tiles (`.oc-stat-tile` with mono numerals,
+  micro-labels, and a time-window segmented control). Grid-row data views
+  (`.grid-table` with micro-headers, subtle row dividers, right-aligned mono
+  numerals, teal action links, row-state tints, and a multi-select action bar).
+  Command-bar action styles (`.cb-btn` secondary/primary/danger variants).
+  Contract test pins the chip mapping and verifies CSS class existence.
 - **Ops Console V2: icon rail and command-bar framework** (#207, epic #205).
   The 13rem collapsible sidebar is replaced by a 52px icon rail with inline SVG
   glyphs (Home square, Media circle, Projects diamond, Speakers ring, Jobs
