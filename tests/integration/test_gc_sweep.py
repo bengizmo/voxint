@@ -241,13 +241,16 @@ def test_multiple_preprocessed_rows_all_reclaimed(session: Session, media_root: 
     assert not a.exists() and not b.exists()
 
 
-def test_source_alias_is_protected(session: Session, media_root: Path) -> None:
-    # An artifact path that also appears as some run's source_path must never be
+def test_current_path_alias_is_protected(session: Session, media_root: Path) -> None:
+    # An artifact path that also appears as some media item's current_path must never be
     # unlinked — that would violate the source-retention guarantee.
     rid = _seed_run(session)
     shared = f"artifacts/{rid}/normalized.wav"
     session.execute(
-        text("INSERT INTO media_items (id, source_path) VALUES (:mid, :sp)"),
+        text(
+            "INSERT INTO media_items (id, source_path, current_path)"
+            " VALUES (:mid, :sp, :sp)"
+        ),
         {"mid": uuid.uuid4(), "sp": shared},
     )
     session.commit()

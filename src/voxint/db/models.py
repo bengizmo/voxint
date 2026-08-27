@@ -2918,7 +2918,7 @@ class MediaOperationFile(Base):
     __table_args__ = (
         CheckConstraint(
             "file_kind IN ('source', 'sidecar', 'preprocessed_audio', "
-            "'audio_clip', 'peaks')",
+            "'audio_clip', 'peaks', 'chunk', 'transcript_export')",
             name="media_operation_files_file_kind_check",
         ),
         CheckConstraint(

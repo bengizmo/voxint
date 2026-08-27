@@ -20,7 +20,7 @@ from voxint.db.models import Base, MediaItem
 from voxint.media.integrity import (
     BackfillResult,
     backfill_sha256,
-    openable_source,
+    openable_path,
     sha256_file,
 )
 
@@ -71,42 +71,42 @@ def test_sha256_file_empty(media_root: Path) -> None:
     assert sha256_file(media_root / rel) == hashlib.sha256(b"").hexdigest()
 
 
-# --- openable_source -----------------------------------------------------
+# --- openable_path -------------------------------------------------------
 
 
-def test_openable_source_regular_file(media_root: Path) -> None:
+def test_openable_path_regular_file(media_root: Path) -> None:
     rel = _write(media_root, "sub/a.wav", b"x")
-    resolved = openable_source(media_root, rel)
+    resolved = openable_path(media_root, rel)
     assert resolved == (media_root / rel).resolve()
 
 
-def test_openable_source_missing_is_none(media_root: Path) -> None:
-    assert openable_source(media_root, "nope.wav") is None
+def test_openable_path_missing_is_none(media_root: Path) -> None:
+    assert openable_path(media_root, "nope.wav") is None
 
 
-def test_openable_source_escape_is_none(media_root: Path, tmp_path: Path) -> None:
+def test_openable_path_escape_is_none(media_root: Path, tmp_path: Path) -> None:
     outside = tmp_path / "outside.wav"
     outside.write_bytes(b"secret")
-    assert openable_source(media_root, "../outside.wav") is None
+    assert openable_path(media_root, "../outside.wav") is None
 
 
-def test_openable_source_directory_is_none(media_root: Path) -> None:
+def test_openable_path_directory_is_none(media_root: Path) -> None:
     (media_root / "adir").mkdir()
-    assert openable_source(media_root, "adir") is None
+    assert openable_path(media_root, "adir") is None
 
 
-def test_openable_source_nul_byte_is_none(media_root: Path) -> None:
+def test_openable_path_nul_byte_is_none(media_root: Path) -> None:
     # A NUL byte in the path raises ValueError inside pathlib; the guard must
     # fail closed rather than propagate it.
-    assert openable_source(media_root, "bad\x00.wav") is None
+    assert openable_path(media_root, "bad\x00.wav") is None
 
 
-def test_openable_source_symlink_escape_is_none(media_root: Path, tmp_path: Path) -> None:
+def test_openable_path_symlink_escape_is_none(media_root: Path, tmp_path: Path) -> None:
     secret = tmp_path / "secret.wav"
     secret.write_bytes(b"s")
     link = media_root / "link.wav"
     link.symlink_to(secret)
-    assert openable_source(media_root, "link.wav") is None
+    assert openable_path(media_root, "link.wav") is None
 
 
 # --- backfill_sha256 -----------------------------------------------------
@@ -234,7 +234,7 @@ def test_backfill_continues_past_an_unreadable_file(
     media_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # openable_source passes (the file exists) but the read raises OSError, e.g.
+    # openable_path passes (the file exists) but the read raises OSError, e.g.
     # a permission error or a file vanishing mid-hash. The sweep must record it
     # and keep going, not abort and lose the remaining rows.
     _write(media_root, "unreadable.wav", b"x")
