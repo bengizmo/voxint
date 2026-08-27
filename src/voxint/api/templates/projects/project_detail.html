@@ -1,154 +1,194 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip %}
 {% block title %}Voxint — {{ detail.name }}{% endblock %}
+
+{% block cb_breadcrumb %}projects / <strong>{{ detail.name }}</strong>{% endblock %}
+{% block cb_summary %}{{ chip("active") }}{% endblock %}
+{% block cb_actions %}{% endblock %}
+
 {% block body %}
-<p class="muted"><a href="/projects">Projects</a></p>
-<h1>{{ detail.name }}</h1>
-{% if detail.description %}<p class="muted">{{ detail.description }}</p>{% endif %}
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
 {# The fields this project actually overrides, named so the supersede copy never
    claims blanket replacement when only one field is set (ADR 0002 per-field). #}
 {% set own_fields %}{% if detail.has_own_vocabulary and detail.has_own_corrections %}vocabulary and corrections{% elif detail.has_own_vocabulary %}vocabulary{% elif detail.has_own_corrections %}corrections{% endif %}{% endset %}
 
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-
 {% if assigned %}
-{# The assign flow confirms the move and names the pack precedence so it is
-   never a surprise: a folder pack keeps applying until this project sets its
-   own vocabulary or corrections, which then replace it (ADR 0002). #}
-<p class="notice">
+<p class="notice" role="status">
   Assigned <code>{{ assigned.path }}</code> to this project.
   {% if assigned.domain_pack %}
     {% if detail.has_own_config %}
-    This project now applies its own {{ own_fields }} instead of the folder's “{{ assigned.domain_pack }}” pack for its recordings; the pack still supplies everything else.
+    This project now applies its own {{ own_fields }} instead of the folder's "{{ assigned.domain_pack }}" pack for its recordings; the pack still supplies everything else.
     {% else %}
-    The folder's “{{ assigned.domain_pack }}” pack keeps applying until this project sets its own vocabulary or corrections.
+    The folder's "{{ assigned.domain_pack }}" pack keeps applying until this project sets its own vocabulary or corrections.
     {% endif %}
   {% endif %}
 </p>
 {% endif %}
 
-<section class="card">
-  <h2>Folders</h2>
-  {% if detail.folders %}
-  <div class="lib-table" role="region" aria-label="Folders" tabindex="0">
-    <table>
-      <thead><tr><th scope="col">Folder</th><th scope="col">Pack</th><th scope="col">Media</th></tr></thead>
-      <tbody>
-        {% for folder in detail.folders %}
-        <tr>
-          <td><code>{{ folder.path }}</code></td>
-          <td>
-            {% if folder.domain_pack %}{{ folder.domain_pack }}
-              {% if detail.has_own_config %}<br><span class="muted">{{ own_fields }} superseded by this project</span>{% endif %}
-            {% else %}<span class="muted">default</span>{% endif %}
-          </td>
-          <td>{{ folder.media_count }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <p class="muted">No folders yet. Assign one below.</p>
-  {% endif %}
+<div class="lib-rail">
+<div>
+  <section class="oc-section">
+    <h2 class="oc-section-title">VOCABULARY</h2>
+    <p class="oc-muted">names and terms Voxint should spell correctly in this project</p>
 
-  <h3>Assign a folder</h3>
-  {% if detail.assignable %}
-  <form method="post" action="/projects/{{ detail.id }}/folders" class="upload">
-    <input type="hidden" name="csrf_token" value="{{ csrf_assign }}">
-    <label>Folder
-      <select name="folder_id" required>
-        <option value="" disabled selected>Choose a folder</option>
-        {% for folder in detail.assignable %}
-        <option value="{{ folder.id }}">{{ folder.path }}{% if folder.domain_pack %} ({{ folder.domain_pack }} pack){% endif %}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <div class="action-row">
-      <button type="submit" class="primary">Assign folder</button>
+    {% if detail.vocabulary is not none and detail.vocabulary %}
+    <div class="vocab-chips" aria-label="Vocabulary terms">
+      {% for term in detail.vocabulary %}
+      <span class="vocab-chip">{{ term }}</span>
+      {% endfor %}
     </div>
-  </form>
-  {% else %}
-  <p class="muted">Every registered folder is already assigned to a project. Register more in <a href="/settings">Settings</a>.</p>
-  {% endif %}
-</section>
+    {% elif detail.vocabulary is not none %}
+    <p class="oc-muted">No terms (explicitly set to none).</p>
+    {% else %}
+    <p class="oc-muted">Inheriting from the folder pack or global settings.</p>
+    {% endif %}
 
-<section class="card">
-  <h2>Project vocabulary</h2>
-  <p class="muted">Names, jargon, and acronyms this project's recordings use. When
-     set, it replaces the folder pack's and the global glossary for this project's
-     new runs; leave it inheriting to use those instead.</p>
-  {% if vocabulary_error %}<p class="notice" role="alert">{{ vocabulary_error }}</p>{% endif %}
-  <form method="post" action="/projects/{{ detail.id }}/vocabulary" class="upload">
-    <input type="hidden" name="csrf_token" value="{{ csrf_vocab }}">
-    <fieldset>
-      <legend>Source</legend>
-      <label><input type="radio" name="mode" value="inherit"{% if (vocabulary_mode is none and detail.vocabulary is none) or vocabulary_mode == 'inherit' %} checked{% endif %}>
-        Inherit from the folder pack or global settings</label>
-      <label><input type="radio" name="mode" value="set"{% if (vocabulary_mode is none and detail.vocabulary is not none) or vocabulary_mode == 'set' %} checked{% endif %}>
-        Set for this project (an empty list means explicitly none)</label>
-    </fieldset>
-    <label>Terms, one per line
-      <textarea name="vocabulary" rows="6">{{ vocabulary_text }}</textarea>
-    </label>
-    <div class="action-row">
-      <button type="submit" class="primary">Save vocabulary</button>
+    {% if vocabulary_error %}<p class="notice error" role="alert">{{ vocabulary_error }}</p>{% endif %}
+    <details class="pd-edit-toggle">
+      <summary>Edit vocabulary</summary>
+      <form method="post" action="/projects/{{ detail.id }}/vocabulary" class="pd-vocab-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_vocab }}">
+        <fieldset>
+          <legend class="visually-hidden">Source</legend>
+          <label><input type="radio" name="mode" value="inherit"{% if (vocabulary_mode is none and detail.vocabulary is none) or vocabulary_mode == 'inherit' %} checked{% endif %}>
+            Inherit from the folder pack or global settings</label>
+          <label><input type="radio" name="mode" value="set"{% if (vocabulary_mode is none and detail.vocabulary is not none) or vocabulary_mode == 'set' %} checked{% endif %}>
+            Set for this project</label>
+        </fieldset>
+        <label>Terms, one per line
+          <textarea name="vocabulary" rows="5">{{ vocabulary_text }}</textarea>
+        </label>
+        <div class="pd-form-actions">
+          <button type="submit" class="primary">Save vocabulary</button>
+        </div>
+      </form>
+    </details>
+
+    <p class="oc-muted pd-helper">Applies to the next run — finished transcripts don't change.</p>
+  </section>
+
+  <section class="oc-section">
+    <h2 class="oc-section-title">AUTO-CORRECT RULES</h2>
+    <p class="oc-muted">fix a repeated mishearing once, it's fixed everywhere</p>
+
+    {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
+
+    <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
+      <noscript><p class="oc-muted">Editing corrections needs JavaScript. Current rules are shown below.</p></noscript>
+      {% if detail.corrections %}
+      <div class="grid-table pd-rules-grid" role="region" aria-label="Correction rules" tabindex="0"
+           style="grid-template-columns: 1fr auto 1fr auto auto;">
+        <div class="gt-header">
+          <span>HEARD</span>
+          <span></span>
+          <span>REPLACE WITH</span>
+          <span>SOURCE</span>
+          <span></span>
+        </div>
+        {% for rule in detail.corrections %}
+        <div class="gt-row">
+          <span><code>{{ rule.match }}</code></span>
+          <span class="pd-arrow">→</span>
+          <span><code>{{ rule.replace }}</code></span>
+          <span>manual</span>
+          <span></span>
+        </div>
+        {% endfor %}
+      </div>
+      {% elif detail.corrections is not none %}
+      <p class="oc-muted">No correction rules (explicitly none).</p>
+      {% else %}
+      <p class="oc-muted">Inheriting from the folder pack or global corrections.</p>
+      {% endif %}
     </div>
-  </form>
-</section>
 
-<section class="card">
-  <h2>Project corrections</h2>
-  <p class="muted">Find-and-replace fixes for this project — a name, an acronym, a
-     piece of jargon. When set, they replace the folder pack's and global
-     corrections for this project's new runs.</p>
-  {% if corrections_error %}<p class="notice" role="alert">{{ corrections_error }}</p>{% endif %}
-  {% if detail.corrections is none %}
-  <p class="muted">Inheriting the folder pack or global corrections. Add rules below
-     to set corrections for this project instead.</p>
-  {% endif %}
-  <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
-    {# No-JS fallback: the editor needs JavaScript, stated honestly. The current
-       rules render read-only so the section is never blank. #}
-    <noscript><p class="muted">Editing corrections needs JavaScript. This project's
-       current rules are shown below.</p></noscript>
-    {% if detail.corrections %}
-    <ul class="corrections-fallback">
-      {% for rule in detail.corrections %}
-      <li><code>{{ rule.match }}</code> → <code>{{ rule.replace }}</code>
-        <span class="muted">({{ "case-sensitive" if rule.case_sensitive else "any case" }},
-        {{ "whole word" if rule.whole_word else "anywhere" }})</span></li>
+    {% if detail.corrections is not none %}
+    <form method="post" action="/projects/{{ detail.id }}/corrections" style="margin-top:var(--space-3)">
+      <input type="hidden" name="csrf_token" value="{{ csrf_corrections }}">
+      <input type="hidden" name="mode" value="inherit">
+      <button type="submit" class="cb-btn cb-btn-secondary">Reset to inherited corrections</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+
+<aside>
+  <section class="oc-section">
+    <div class="oc-section-header">
+      <h2 class="oc-section-title">MEDIA FOLDERS</h2>
+    </div>
+    {% if detail.folders %}
+    <ul class="pd-sidebar-list">
+      {% for folder in detail.folders %}
+      <li class="pd-sidebar-item">
+        <div class="pd-folder-info">
+          <svg class="pd-folder-icon" width="16" height="16" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
+          <strong>{{ folder.path }}</strong>
+          <span class="oc-muted">{{ folder.media_count }} item{{ "" if folder.media_count == 1 else "s" }}</span>
+        </div>
+        {% if folder.domain_pack %}
+        <span class="oc-muted pd-pack-note">{{ folder.domain_pack }} pack{% if detail.has_own_config %} · {{ own_fields }} superseded by this project{% endif %}</span>
+        {% endif %}
+      </li>
       {% endfor %}
     </ul>
-    {% elif detail.corrections is not none %}
-    <p class="muted">No correction rules (explicitly none).</p>
+    {% else %}
+    <p class="oc-muted">No folders yet.</p>
     {% endif %}
-  </div>
-  {% if detail.corrections is not none %}
-  <form method="post" action="/projects/{{ detail.id }}/corrections" class="my-2">
-    <input type="hidden" name="csrf_token" value="{{ csrf_corrections }}">
-    <input type="hidden" name="mode" value="inherit">
-    <div class="action-row">
-      <button type="submit">Reset to inherited corrections</button>
-    </div>
-  </form>
-  {% endif %}
-</section>
 
-<section class="card">
-  <h2>Speakers</h2>
-  <p class="muted">Everyone Voxint has resolved across this project's finished recordings.</p>
-  {% if detail.speakers %}
-  <ul class="lib-cards" aria-label="Speakers">
-    {% for speaker in detail.speakers %}
-    <li>
-      <div class="media-title">{% if speaker.name %}<a href="/speakers">{{ speaker.name }}</a>{% else %}<span class="muted">Unnamed speaker</span>{% endif %}</div>
-      <p class="muted">in {{ speaker.run_count }} recording{{ "" if speaker.run_count == 1 else "s" }}</p>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="muted">No speakers yet. They appear here once this project's recordings finish and are reviewed.</p>
-  {% endif %}
-</section>
+    {% if detail.assignable %}
+    <details class="pd-edit-toggle">
+      <summary>Assign a folder</summary>
+      <form method="post" action="/projects/{{ detail.id }}/folders" class="pd-assign-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_assign }}">
+        <label>Folder
+          <select name="folder_id" required>
+            <option value="" disabled selected>Choose a folder</option>
+            {% for folder in detail.assignable %}
+            <option value="{{ folder.id }}">{{ folder.path }}{% if folder.domain_pack %} ({{ folder.domain_pack }} pack){% endif %}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit" class="primary">Assign folder</button>
+      </form>
+    </details>
+    {% else %}
+    <p class="oc-muted">Every registered folder is already assigned to a project. Register more in <a href="/settings">Settings</a>.</p>
+    {% endif %}
+  </section>
+
+  <section class="oc-section">
+    <div class="oc-section-header">
+      <h2 class="oc-section-title">PROJECT SPEAKERS</h2>
+    </div>
+    {% if detail.speakers %}
+    <ul class="pd-sidebar-list">
+      {% for speaker in detail.speakers %}
+      <li class="pd-speaker-row">
+        <span class="pd-spk-badge{% if speaker.name %} pd-spk-named{% endif %}">{{ (speaker.name or "?")[:2]|upper }}</span>
+        <span class="pd-spk-name">
+          {% if speaker.name %}
+          <a href="/speakers">{{ speaker.name }}</a>
+          {% else %}
+          <span class="oc-muted">Unnamed voice</span>
+          {% endif %}
+        </span>
+        {% if speaker.name %}
+        <span class="pd-spk-status">{{ chip("verified") }}</span>
+        {% else %}
+        <span class="pd-spk-status">{{ chip("needs you") }}</span>
+        {% endif %}
+        <span class="pd-spk-count num">{{ speaker.run_count }} file{{ "" if speaker.run_count == 1 else "s" }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="oc-muted">No speakers yet. They appear here once this project's recordings finish and are reviewed.</p>
+    {% endif %}
+  </section>
+</aside>
+</div>
+
+<p class="oc-muted pd-footer-note">Project settings shape how new runs are transcribed. They never rewrite what you've already reviewed.</p>
 {% endblock %}
