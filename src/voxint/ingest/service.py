@@ -101,6 +101,14 @@ class RunNotFailedError(IngestError):
         self.status = status
 
 
+class RunArchivedError(IngestError):
+    """Requeue attempted on an archived run (unarchive it first)."""
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__("this run is archived and cannot be requeued -- unarchive it first")
+        self.run_id = run_id
+
+
 class MissingStageError(IngestError):
     """A FAILED run carrying no current_stage — the state machine was violated.
 
@@ -680,13 +688,16 @@ def requeue_failed_run(
     omits it — there is no gap to race within a single transaction.
 
     DB-only: the caller commits then lazily publishes ``voxint.run_pipeline``.
-    Raises :class:`RunNotFoundError`, :class:`RunNotFailedError`,
-    :class:`MissingStageError`, or — from the CAS — ``StaleRevisionError`` /
-    ``InvalidTransitionError``, which callers map to their own responses.
+    Raises :class:`RunNotFoundError`, :class:`RunArchivedError`,
+    :class:`RunNotFailedError`, :class:`MissingStageError`, or — from the
+    CAS — ``StaleRevisionError`` / ``InvalidTransitionError``, which callers
+    map to their own responses.
     """
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise RunNotFoundError(run_id)
+    if run.archived_at is not None:
+        raise RunArchivedError(run_id)
     held = snapshot(run)
     if held.status is not RunStatus.FAILED:
         raise RunNotFailedError(run_id, held.status)
@@ -1235,3 +1246,43 @@ def submit_url(
             session, winner, source_url=validated_url, domain_pack=domain_pack
         )
     return submit(session, media.id, domain_pack=domain_pack)
+
+
+def reconcile_orphaned_incoming(
+    session: Session,
+    media_root: Path,
+) -> list[str]:
+    """Remove files under ``incoming/`` that have no committed MediaItem.
+
+    After a crash between ``os.replace`` (which publishes the uploaded file) and
+    the caller's ``session.commit()`` (which persists the MediaItem row), the
+    file exists on disk but has no DB row. A same-bytes retry re-inserts and
+    re-replaces identically, so these orphans are self-healing for retries of
+    the SAME file. But if the operator never retries, the orphan stays forever.
+
+    Called once at app startup (before any new submissions) so there are no
+    concurrent writers to race with. Returns the list of relative paths removed.
+    """
+    incoming = media_root / "incoming"
+    if not incoming.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(incoming.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            rel = str(PurePosixPath(path.relative_to(media_root)))
+        except ValueError:
+            continue
+        exists_in_db = session.execute(
+            select(MediaItem.id).where(MediaItem.source_path == rel).limit(1)
+        ).scalar_one_or_none()
+        if exists_in_db is None:
+            path.unlink()
+            removed.append(rel)
+            logger.info("removed orphaned incoming file: %s", rel)
+    for dirpath in sorted(incoming.rglob("*"), reverse=True):
+        if dirpath.is_dir():
+            with contextlib.suppress(OSError):
+                dirpath.rmdir()
+    return removed
