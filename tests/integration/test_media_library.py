@@ -285,10 +285,10 @@ def test_table_view_renders_a_table(
         session.commit()
     resp = client.get("/media?view=table")
     assert resp.status_code == 200
-    assert "<table>" in resp.text
+    assert "grid-table" in resp.text
 
 
-def test_unknown_view_degrades_to_cards(
+def test_unknown_view_degrades_to_table(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with session_factory() as session:
@@ -296,5 +296,4 @@ def test_unknown_view_degrades_to_cards(
         session.commit()
     resp = client.get("/media?view=bogus")
     assert resp.status_code == 200
-    # The cards list, not the table region.
-    assert 'class="lib-cards"' in resp.text
+    assert "grid-table" in resp.text
