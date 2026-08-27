@@ -58,7 +58,7 @@ from typing import Final
 #     measured parent RMS and so is not a pure argv (see the S5 pre-registration).
 # v5 (2026-08-26, S5 PR-3): frozen cohort policy (one degraded child per
 #     calibration parent, hash-assigned from six single-recipe chains).
-SOURCES_VERSION: Final = "synthdetect-sources-v5"
+SOURCES_VERSION: Final = "synthdetect-sources-v6"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
 # lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
@@ -180,6 +180,7 @@ class WindowingPolicy:
     production_window_s: float
     production_hop_s: float
     merge_gap_s: float
+    production_tail_floor_samples: int | None
     pooling: str  # "logit-mean"
 
 
@@ -253,23 +254,27 @@ class BenchmarkDataset:
 # --------------------------------------------------------------------------- #
 # AASIST-family models crop to a fixed 64,600-sample (~4.0375 s) window at
 # 16 kHz; the production path merges same-speaker turns (<1 s gap), chunks into
-# 4 s windows, and logit-mean pools. Models that accept arbitrary length
-# (AntiDeepfake) set ``upstream_window_samples=None`` but share the production
-# policy so the deployed function is identical across models.
+# 64,600-sample (4.0375 s) windows matching the model width, drops trailing
+# tails below 8000 samples when a full window exists, and logit-mean pools.
+# Models that accept arbitrary length (AntiDeepfake) set
+# ``upstream_window_samples=None`` but share the production policy so the
+# deployed function is identical across models.
 _AASIST_WINDOWING: Final = WindowingPolicy(
     sample_rate_hz=16000,
     upstream_window_samples=64600,
-    production_window_s=4.0,
-    production_hop_s=4.0,
+    production_window_s=4.0375,
+    production_hop_s=4.0375,
     merge_gap_s=1.0,
+    production_tail_floor_samples=8000,
     pooling="logit-mean",
 )
 _ARBITRARY_WINDOWING: Final = WindowingPolicy(
     sample_rate_hz=16000,
     upstream_window_samples=None,
-    production_window_s=4.0,
-    production_hop_s=4.0,
+    production_window_s=4.0375,
+    production_hop_s=4.0375,
     merge_gap_s=1.0,
+    production_tail_floor_samples=8000,
     pooling="logit-mean",
 )
 
