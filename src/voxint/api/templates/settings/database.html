@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Voxint — database{% endblock %}
 {% block body %}
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings/status" role="tab">Status</a>
+  <a href="/settings/hardware" role="tab">Hardware</a>
+  <a href="/settings/database" role="tab" aria-current="true">Database</a>
+  <a href="/settings/plugins" role="tab">Plugins</a>
+  <a href="/settings/features" role="tab">Features</a>
+  <span class="ft-spacer"></span>
+  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
+</nav>
+
 {# Console 2.0 P6 database sub-page (issue #161): size, per-table row estimates,
    and the retention/GC settings. Counts are estimates from pg_stat_user_tables,
    not live COUNT(*), and every query is fail-soft: a down or unmigrated database

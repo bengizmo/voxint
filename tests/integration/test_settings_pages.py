@@ -163,6 +163,9 @@ def test_status_page_reports_health_and_unknown_install(
     assert "Install type unknown" in body
     assert "Console &amp; API" in body
     assert "Database" in body
+    assert "Processor" in body
+    assert "Memory" in body
+    assert "Disk (media)" in body
 
 
 def test_hardware_page_shows_env_keys(
