@@ -283,6 +283,8 @@ def plan_restore(
 ) -> MediaOperation:
     """Plan and claim restoration of a completed trash operation."""
     media = _load_media(session, media_id)
+    if media.trashed_at is None:
+        raise OperationRefused("media item is not trashed")
     current_path = media.current_path
     assert current_path is not None
     trash_operation = session.execute(
@@ -433,8 +435,15 @@ def _execute_move_like(
     if operation.origin_path is None or operation.destination_path is None:
         raise OperationRefused("move-like operation is missing a path")
 
+    resolved_root = media_root.resolve()
     origin = media_root / operation.origin_path
     destination = media_root / operation.destination_path
+    if not origin.resolve().is_relative_to(resolved_root):
+        raise OperationRefused("origin path escapes the media root")
+    if not destination.resolve(strict=False).parent.resolve().is_relative_to(
+        resolved_root
+    ):
+        raise OperationRefused("destination path escapes the media root")
     destination_dir = str(PurePosixPath(operation.destination_path).parent)
     temp = media_root / temp_path(operation.id, destination_dir)
     from_state = OperationState.PLANNED

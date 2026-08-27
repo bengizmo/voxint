@@ -16,6 +16,7 @@ route inventory is stable across the dark-ship flip; access is gated by
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Final
@@ -61,7 +62,13 @@ from voxint.api.routers.deps import (
 )
 from voxint.app_settings import get_app_settings, resolve_effective_ytdlp_enabled
 from voxint.config import Settings
-from voxint.db.models import MediaFolder, MediaItem, MediaOperation, PipelineRun
+from voxint.db.models import (
+    MediaFolder,
+    MediaItem,
+    MediaOperation,
+    OperationState,
+    PipelineRun,
+)
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.corrections import operator_correction_message
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
@@ -93,6 +100,8 @@ from voxint.media.registration import register_folder, unregister_folder_by_id
 # require_onboarded first (an un-onboarded operator is sent to setup), then the
 # area gate (404 when the flag is off) — the same order the module docstring and
 # the projects area will follow.
+logger = logging.getLogger(__name__)
+
 router = APIRouter(
     dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
 )
@@ -1373,11 +1382,18 @@ def media_trash(
             operation = plan_trash(session, media_uuid, claim_token)
             session.commit()
             execute_operation(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
         except OperationRefused:
             session.rollback()
             skipped += 1
-            continue
-        done += 1
+        except Exception:
+            logger.exception("unexpected error trashing media %s", media_uuid)
+            session.rollback()
+            skipped += 1
 
     params: dict[str, Any] = {
         "trash_done": done,
@@ -1441,11 +1457,18 @@ def media_restore(
             )
             session.commit()
             execute_operation(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
         except OperationRefused:
             session.rollback()
             skipped += 1
-            continue
-        done += 1
+        except Exception:
+            logger.exception("unexpected error restoring media %s", media_uuid)
+            session.rollback()
+            skipped += 1
 
     params: dict[str, Any] = {
         "trashed": "1",
@@ -1489,11 +1512,18 @@ def media_empty_trash(
             build_manifest(session, operation)
             session.commit()
             execute_purge(session, settings.media_root, operation, claim_token)
+            session.expire(operation)
+            if operation.state == OperationState.COMPLETED.value:
+                done += 1
+            else:
+                skipped += 1
         except OperationRefused:
             session.rollback()
             skipped += 1
-            continue
-        done += 1
+        except Exception:
+            logger.exception("unexpected error purging media %s", media_uuid)
+            session.rollback()
+            skipped += 1
 
     params: dict[str, Any] = {
         "trashed": "1",
