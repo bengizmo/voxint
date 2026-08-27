@@ -128,5 +128,6 @@ def test_single_alembic_head() -> None:
     # issue #159; 0042 = activity_events console activity outbox, issue #162;
     # 0043 = widen activity_events.kind for speaker_identified, issue #162;
     # 0044 = media_operations journal + media_operation_files, issue #155;
-    # 0045 = widen file_kind CHECK for chunk + transcript_export, issue #155).
-    assert list(heads) == ["0045"]
+    # 0045 = widen file_kind CHECK for chunk + transcript_export, issue #155;
+    # 0046 = drop legacy app_settings.media_folders / folder_domain_packs, #177).
+    assert list(heads) == ["0046"]

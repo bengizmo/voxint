@@ -47,12 +47,9 @@ def _seed_settings_row(
             AppSettings(
                 id=1,
                 onboarding_complete=True,
-                media_folders=folders,
                 watch_folder_enabled=enabled,
             )
         )
-        # Since #153 the sweep walks the media_folders relation (watch=true), not the
-        # legacy app_settings column; register a row per folder.
         for folder in folders:
             s.add(MediaFolder(path=folder, watch=True))
         s.commit()

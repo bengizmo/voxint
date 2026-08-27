@@ -41,11 +41,11 @@ from voxint.harness_export import (
 )
 from voxint.speakers.matching import (
     MatchingGates,
-    roster_centroids,
     evaluate_run,
     match_speakers,
     replace_run_match_candidates,
     replace_run_proposals,
+    roster_centroids,
 )
 
 SPACE = "titanet-large-v1"

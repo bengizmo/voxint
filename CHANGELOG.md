@@ -42,6 +42,14 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   of a placeholder. Runs from a registered settings folder show the folder path
   below the filename. Failed runs show their error message in the REVIEW column.
 
+### Removed
+- **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration
+  0046 drops `app_settings.media_folders` and `app_settings.folder_domain_packs`,
+  which were retained for one release as rollback inputs after #153 moved
+  registered folders into the `media_folders` relation. The CLI
+  `voxint media folders preflight` subcommand and the unused
+  `resolve_folder_pack_name` registry function are also removed.
+
 ### Fixed
 - **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
   On the project detail page, opening the corrections editor while a project
@@ -80,6 +88,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.26.0] - 2026-08-27
 
 ### Added
+- **Synthdetect M1 S7: Platt calibration and holdout evaluation** (#144).
+  Piper-only calibration policy (`w2v2aasist-s6-piper-only`): Chatterbox
+  strata excluded from Platt fitting because near-chance EER (48.25% on
+  holdout) poisons the slope for detectable generators (A flattens from 0.96
+  to 0.32). Holdout opened exactly once (1420 clips): Piper-only EER 18.04%
+  (calibration 19.01%), Brier 0.140 (calibration 0.136), confirming the
+  policy generalizes. Coverage statement documents five findings: VITS-family
+  and commercial TTS detectable at 10-20% EER; Chatterbox-class TTS
+  uncalibrable; ASVspoof benchmark healthy; VoxConverse channel confound; FPR
+  5% operating point is a high-confidence flag (TPR ~16%), not a reliable
+  filter. `calibrate_policy` gains `exclude_strata` parameter for fitting on
+  a generator subset.
+- **Synthdetect M1 S6: spoof corpus, composite assembly, and first EER**
+  (#144). Four TTS generators materialized (Piper 2540, Chatterbox 2540,
+  ElevenLabs 969, Google Cloud TTS 969 clips) plus ASVspoof 2021 DF
+  benchmark anchor (53,392 clips). v3 composite manifest (63,905 clips).
+  First EER measurement: primary 34.31%, benchmark anchor 7.05% (healthy).
+  Per-generator and per-domain EER matrix reveals Chatterbox AR+flow TTS
+  is near-undetectable (EER 45.32%, independently confirmed by DFADD 2024
+  at 44.21% for flow-matching TTS vs AASIST). VoxConverse channel confound
+  identified as a separate issue. Scoring results, 4-model analysis, and
+  proceed-to-calibration decision documented in `gpu-contracts.md`.
 - **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
   journaling (`window_scores` field in `ClipOutcome`) and `verdict-windowing`
   subcommand in `synthdetect_eval.py` for comparing upstream vs production
