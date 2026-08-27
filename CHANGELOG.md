@@ -6,6 +6,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S6 pre-registration: spoof corpus and composite manifest**
+  (#144). Frozen S6 protocol for the spoof side of the calibration corpus.
+  Three TTS generator families (Piper VITS as seen/calibration, Coqui XTTS-v2
+  as seen/calibration, ElevenLabs as unseen/eval-only) plus the existing
+  ASVspoof 2021 DF subset as an eval-only benchmark anchor. v3 composite
+  manifest schema with tagged-union provenance (synthesis or
+  imported-benchmark per clip), component pinning, and partition-group-aware
+  calibration weighting. Pre-registered in `gpu-contracts.md` before any
+  spoof audio is generated or scored.
 - **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
   journaling (`window_scores` field in `ClipOutcome`) and `verdict-windowing`
   subcommand in `synthdetect_eval.py` for comparing upstream vs production

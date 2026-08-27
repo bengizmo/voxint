@@ -2011,6 +2011,201 @@ design): this verdict covers FPR stability only; separability and the threshold
 itself require the spoof side (S6). Detail:
 `docs/reports/synthdetect-s5-windowing-verdict-2026-08-27.md`.
 
+### S6 spoof corpus and composite manifest pre-registration (2026-08-27)
+
+This is the frozen S6 protocol, recorded before any spoof audio is generated or
+scored. S6 builds the **spoof (synthetic speech) side** of the calibration
+corpus. With bona fide (S5) and spoof (S6) together, S7 can compute EER, fit
+Platt calibration, and open the holdout split. S6 lands eval-first: the
+composite manifest schema and assembly logic freeze and are unit-tested before
+any TTS audio exists.
+
+**Architectural constraint that forces TTS.** The v2 `imported_benchmark`
+schema requires every imported clip to be eval-only (the official split is
+preserved, not reassigned). The Platt calibration split needs both bona fide
+and spoof clips. Therefore ASVspoof 2021 DF clips **cannot populate
+calibration**, and a locally generated TTS spoof corpus is required for every
+split that participates in threshold fitting. Converting ASVspoof metadata to
+v1 `GeneratorProvenance` would require inventing checkpoint sha, voice, seed,
+and text-source facts that the official metadata does not publish. The honest
+path is to keep each provenance kind intact and combine them under a tagged
+union.
+
+#### Spoof sources
+
+S6 uses three materially distinct TTS generator families plus the existing
+ASVspoof 2021 DF benchmark subset. Each family has a different synthesis
+architecture, ensuring the unseen-generator-eval requirement tests genuine
+generalization rather than checkpoint variation within one family.
+
+| Generator | Architecture | License | Venue | Role | Splits |
+|---|---|---|---|---|---|
+| Piper (VITS) | Hybrid VITS vocoder, CPU-only | MIT | Any node | **Seen** (calibration) | Inherits source parent's split |
+| Coqui XTTS-v2 | Autoregressive neural TTS with voice cloning | Apache-2.0 | GPU (beast RTX 5090 preferred) | **Seen** (calibration) | Inherits source parent's split |
+| ElevenLabs | Proprietary cloud neural TTS | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
+| ASVspoof 2021 DF | 110 official attack systems, 4 vocoder families | ODbL-1.0 (data) | Existing subset (53,392 clips) | **Benchmark anchor** (eval-only) | v2 imported-benchmark, eval-only by schema |
+
+**Seen generators** (Piper + XTTS-v2) produce spoof clips from bona fide
+parents across all three splits (calibration, eval, holdout). Their clips
+participate in Platt fitting (calibration split) and are visible to the
+operating-point selection. Seen-generator spoof clips inherit their source
+parent's split assignment, so no speaker can straddle splits.
+
+**Unseen generator** (ElevenLabs) produces spoof clips ONLY from eval-split
+parents. None of its clips appear in calibration or holdout. This tests
+whether the detector generalizes to a synthesis system the operating point was
+never tuned on. The unseen family is chosen because its proprietary cloud
+architecture is the most representative of real-world deepfake tooling.
+
+**Benchmark anchor** (ASVspoof 2021 DF) provides an external reference EER
+on a standardized corpus. It is never pooled with the organic TTS track for a
+composition-weighted combined EER, because its 53,392 clips would numerically
+dominate the organic cohort. Track-specific metrics are primary.
+
+#### Spoof generation protocol
+
+**Ratio.** 1:1: one spoof counterpart per eligible bona fide parent clip.
+"Eligible" means turn clips (kind `turn` in `acquire`) in the parent manifest;
+session segments (kind `segment`) are not synthesized (they are for
+production-windowing validation, not calibration). The 1:1 ratio matches the
+degradation policy (one degraded chain per parent in the cohort freeze).
+
+**Text derivation.** Each TTS clip is synthesized from a transcript of its
+bona fide parent. The transcript source is the bona fide audio itself
+(passed through ASR or, for XTTS-v2 voice cloning, as the reference audio
+prompt). The exact text-source derivation is recorded per clip in
+`GeneratorProvenance.text_source`.
+
+**Generator identity.** Generator identity for split assignment and
+per-generator metrics is `GeneratorProvenance.name` (the family, not the
+voice or checkpoint variant). A generator's clips are assigned to exactly
+one split role: both seen generators span all three splits (following their
+parents); the unseen generator is eval-only. Different voices within one
+generator family are NOT treated as different generators for the
+unseen-generator-eval requirement.
+
+**Assignment rule for TTS clips.** A TTS spoof clip inherits its source
+parent's split. The seen generators (Piper, XTTS-v2) each produce one clip
+per eligible parent in every split. The unseen generator (ElevenLabs)
+produces one clip per eligible eval-split parent only. The `partition_group_id`
+field (new in v3) ties each TTS clip to its source parent, preventing the
+scorer from interpreting a paired bona fide and spoof from the same utterance
+as independent observations. A calibration weighting policy (one effective
+observation per partition group) is applied in Platt fitting.
+
+**Provenance fields.** Each TTS spoof clip carries a full
+`GeneratorProvenance`:
+
+- `name`: generator family (`piper`, `coqui-xtts-v2`, `elevenlabs`)
+- `version`: engine version string (pinned before generation)
+- `checkpoint_sha`: sha256 of the model weights file (None for cloud API)
+- `voice`: voice/speaker id used
+- `seed`: RNG seed for reproducibility (None for cloud API)
+- `text_source`: how the input text was derived (e.g. `whisper-large-v2-transcript`, `parent-audio-prompt`)
+
+**Stratum.** A TTS spoof clip's stratum is
+`spoof|tts|{generator_name}|{domain}` (e.g.
+`spoof|tts|piper|meetingroom`). This is distinct from the bona fide
+stratum (`bona_fide|organic|{domain}`) and the ASVspoof stratum
+(`{label}|{codec_condition}`), so per-stratum EER breakdowns are
+meaningful.
+
+#### v3 composite manifest schema
+
+The v3 manifest extends the existing schema with a composite corpus kind
+and per-clip provenance discrimination. It serves the scorer's single-manifest
+contract while keeping both provenance kinds honest.
+
+**Top-level fields** (new or changed from v1/v2):
+
+- `schema_version`: 3
+- `corpus_kind`: `composite` (new value; v1=`synthesis`, v2=`imported_benchmark`)
+- `components`: array of `{component_id, corpus_kind, manifest_sha256,
+  clip_count}` pinning each constituent manifest's identity. The composite
+  manifest is reproducible from its components.
+- `benchmark`: present only for components that are `imported_benchmark`
+  kind (carries through from v2)
+
+**Per-clip fields** (new or changed):
+
+- `provenance_kind`: `synthesis` | `imported_benchmark` (discriminator for
+  the tagged union; replaces the implicit per-manifest `corpus_kind` dispatch)
+- `generator`: present iff `provenance_kind == "synthesis"` and `label == "spoof"`
+  (unchanged from v1)
+- `imported_provenance`: present iff `provenance_kind == "imported_benchmark"`
+  (unchanged from v2)
+- `component_id`: which constituent manifest this clip belongs to
+- `partition_group_id`: ties paired bona fide and TTS spoof clips from the
+  same source utterance (for calibration weighting). Set for TTS spoof clips
+  and their source parents; None for ASVspoof clips and for bona fide clips
+  with no TTS counterpart.
+
+**Validation rules** (all fail-closed at load time):
+
+- Every clip has exactly one of `generator` or `imported_provenance`, matched
+  to its `provenance_kind`
+- No duplicate `clip_id` across components
+- No `rel_path` collision across components (namespaced by component)
+- Every `component_id` references a declared component
+- `imported_benchmark` clips remain eval-only
+- Unseen-generator clips are eval-only (generator name in a declared
+  unseen set)
+- A `partition_group_id` must not span splits (same partition-group,
+  same split)
+- Component manifest sha256 values match the declared components
+- Composite manifest `sha256` = sha256 of the serialized composite
+  manifest file bytes (as with v1/v2)
+
+**Scoring path.** The scorer (`synthdetect_eval.py`) is manifest-kind-agnostic:
+it reads `clip_id`, `label`, `stratum`, and `split` from any manifest version.
+The `join_scores` function joins journal results to manifest clips by `clip_id`;
+no change is needed for v3. Per-stratum breakdowns use the stratum field, which
+already distinguishes organic, TTS, and imported-benchmark clips. The `score`
+command takes one `--manifest` and one `--journal`; both the bona fide and
+spoof clips appear in a single v3 manifest, and a single scoring journal covers
+the full corpus.
+
+#### Corpus assembly
+
+The composite corpus root is a single directory containing namespaced
+subdirectories for each component:
+
+```
+s6-composite-corpus/
+  organic-bonafide/     # S5 bona fide clips (hardlinked from s5-corpus)
+  tts-piper/            # Piper TTS spoof clips
+  tts-xtts/             # XTTS-v2 spoof clips
+  tts-elevenlabs/       # ElevenLabs spoof clips
+  asvspoof-df/          # ASVspoof 2021 DF canonical subset (hardlinked)
+  manifest.json         # v3 composite manifest
+  assembly_receipt.json # component hashes, assembly metadata
+```
+
+`rel_path` in the manifest is relative to the composite root and includes the
+component subdirectory prefix. Every clip is re-audited against its manifest
+sha256 during assembly (the full-tree revalidation established in S5 PR-2a).
+
+#### Metrics and reporting
+
+**Primary field result:** organic bona fide versus organic-source TTS (both
+seen generators combined). This is the EER and operating point that
+calibration targets.
+
+**Required generalization slice:** organic eval clips scored against the
+eval-only (unseen) ElevenLabs generator. If this slice's EER is materially
+worse than the seen-generator eval EER, the detector may not generalize to
+novel synthesis systems, and the shipped confidence should reflect that.
+
+**Benchmark anchor:** ASVspoof bona fide versus ASVspoof spoof, scored under
+the same inference space and windowing. This is a diagnostic, not the
+calibration target. It contextualizes the field result against a published
+benchmark but does not drive the shipped threshold.
+
+**Per-generator, per-stratum, per-domain, per-vocoder-family breakdowns** are
+reported as diagnostics. A composition-weighted pooled EER across all tracks is
+explicitly secondary and labelled as such, because the ASVspoof clip count
+dominates it.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona

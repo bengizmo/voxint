@@ -60,7 +60,7 @@ from typing import Final
 #     calibration parent, hash-assigned from six single-recipe chains).
 # v6 (2026-08-27, S5 PR-4): added WindowingPolicy.production_tail_floor_samples;
 #     production window/hop now 4.0375 s so production windows equal model width.
-SOURCES_VERSION: Final = "synthdetect-sources-v6"
+SOURCES_VERSION: Final = "synthdetect-sources-v7"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
 # lowercase hex git sha1. Enforced at import so a truncated/placeholder digest
