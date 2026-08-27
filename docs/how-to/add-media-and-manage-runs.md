@@ -40,10 +40,11 @@ one out of sight, free up disk space, and jot down notes.
 
 This is the most direct way, and it needs nothing but the file on your computer.
 
-1. Open **Media** in the sidebar; it opens the **Runs** page
-   (`http://127.0.0.1:8080/runs`).
-2. At the top of the page, find the **Upload media** control. Click it and pick
-   an audio or video file.
+1. Open **Media** in the sidebar. If your Voxint has the Media library turned
+   on, this takes you to the **Media** page. Otherwise it opens the **Runs**
+   page.
+2. Find the **Upload media** control near the top. Click it and pick an audio
+   or video file.
 3. Click **Submit for transcription**.
 
 Voxint saves the file and starts a run straight away. You are taken to the run's
@@ -64,7 +65,9 @@ A couple of honest notes:
 If your recording lives on a web page, you can give Voxint the link and let it
 fetch the file. This uses a tool called yt-dlp as the run's first stage.
 
-1. On the **Runs** page, find the **Fetch from URL** box.
+1. On the same page where you upload files (the **Media** page if the Media
+   library is on, or the **Runs** page otherwise), find the **Fetch from URL**
+   box.
 2. Paste the link and click **Fetch & transcribe**.
 
 Voxint downloads the media, then processes it exactly like an uploaded file.

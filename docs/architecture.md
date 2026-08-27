@@ -395,13 +395,25 @@ routable network, still wants a host-level egress firewall. See
 **CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
 and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 (`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. `/claim` needs its
-own because claiming is what *mints* the run's claim token: it has no unguessable
+missing/mis-signed token is refused before any state change. When
+`console_media_enabled` is on, `POST /submit` and `POST /fetch` redirect to
+`/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
+and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
+because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
 enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
 secret is auto-generated and persisted to `DATA_DIR/csrf_secret` on first start,
 so forms survive restarts without manual configuration; an explicit `CSRF_SECRET`
 env var overrides the persisted value.
+
+**Startup reconciler.** The app lifespan runs `reconcile_orphaned_incoming` once
+at startup, scanning `media_root/incoming/` for files with no committed
+`MediaItem` row (crash orphans from the `os.replace`-before-commit window) and
+removing them.
+
+**Requeue guard.** `requeue_failed_run` raises `RunArchivedError` before checking
+the FAILED status, so an archived run cannot be requeued from any surface (the
+route-level guard was already present; the service-level guard covers the CLI).
 
 ## Web research egress (issue #39)
 
