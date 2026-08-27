@@ -73,13 +73,11 @@ parallelizable EXCEPT where noted.
   from cancel copy. Files: `home.py`, `ingest/service.py:126-130`. Review:
   single-model. Browser: yes (home).
 
-**Batch 0B: Global HTML error renderer** (depends on 0A landing first)
+**Batch 0B: Global HTML error renderer** -- DONE
 - H2-renderer: Add a global HTML error template for `Accept: text/html`
   requests (friendly 4xx/500 with "reload and try again"). Adopt the media
   router's `_reject` pattern. File: `api/app.py` (exception handlers).
-  Review: **multi-model** (new cross-cutting response seam; must preserve JSON
-  content negotiation, status codes, security headers, and information-hiding).
-  Browser lane: **yes**.
+  Review: **multi-model** (codex + grok). Browser lane: **yes**.
 
 **Batch 0C: CSRF persistence** -- DONE (PR #234, merged)
 - M8: Persist generated CSRF secret to data dir on first run; change 403 copy
