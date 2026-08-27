@@ -4,6 +4,29 @@ All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
 
+## [0.27.0] - 2026-08-27
+
+### Changed
+- **Ops Console R4: speakers overview and detail refresh** (#213, epic #205).
+  Both `/speakers` and `/speakers/{id}` rewritten with V3 primitives. The
+  overview moves its people count and verified summary into the command bar,
+  adds an amber TO DO strip for unverified voices and pending name suggestions,
+  and replaces the card-based roster with a grid-table showing initials badges,
+  status chips (verified/needs you/unknown), voice match percentages
+  (green >=85%, amber <85%), and Open links. The detail page adds a profile
+  header with a large avatar badge, six stat tiles (recordings, speaking time,
+  segments, avg match, first heard, last heard), and a heard-in grid-table.
+  New "active" chip semantic added to both the Python mapping and Jinja macro.
+- **Ops Console R5: project detail refresh** (#214, epic #205). The
+  `/projects/{id}` page rewritten with V3 primitives: command-bar breadcrumb
+  with an "active" chip, two-column layout (vocabulary + corrections on the
+  left, media folders + project speakers sidebar on the right, stacking on
+  narrow viewports). Vocabulary terms render as bordered chip pills; the edit
+  form is in a collapsible disclosure. The corrections grid-table shows the
+  existing React editor island. Speakers in the sidebar show initials badges
+  with verified/needs-you status chips. Completes epic #205 (10/10 checklist
+  items done).
+
 ## [0.26.0] - 2026-08-27
 
 ### Added
@@ -3333,6 +3356,7 @@ First public release.
   one-shot `migrate` gate, swappable domain pack.
 
 [Unreleased]: https://github.com/bengizmo/voxint/compare/v0.26.0...HEAD
+[0.27.0]: https://github.com/bengizmo/voxint/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/bengizmo/voxint/compare/v0.24.0...v0.26.0
 [0.24.0]: https://github.com/bengizmo/voxint/compare/v0.23.1...v0.24.0
 [0.23.1]: https://github.com/bengizmo/voxint/compare/v0.23.0...v0.23.1
