@@ -350,9 +350,7 @@ def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> st
 # The folder browser and the Settings "Media folders" section register folders
 # through the shared media_folders write service (issue #153): it serializes every
 # mutation on a Postgres advisory lock, refuses overlapping (nested) registrations,
-# and enforces the folder cap. The legacy app_settings.media_folders /
-# folder_domain_packs columns are no longer written — they remain as a one-release
-# rollback/audit input the P2c drop migration removes.
+# and enforces the folder cap.
 
 
 def _apply_folder_mutation(

@@ -20,7 +20,6 @@ from voxint.domain_packs.registry import (
     available_domain_packs,
     default_domain_pack,
     resolve_domain_pack_by_name,
-    resolve_folder_pack_name,
     resolve_run_domain_pack,
 )
 
@@ -175,39 +174,6 @@ def test_resolve_by_name_unknown_raises(tmp_path: Path) -> None:
         resolve_domain_pack_by_name("nonesuch", settings)
 
 
-# --- folder → pack name resolution (pure) ------------------------------------
-
-
-def test_folder_match_returns_mapped_name() -> None:
-    mapping = {"podcasts": "podcast", "interviews": "interview"}
-    assert resolve_folder_pack_name("podcasts/ep1.wav", mapping) == "podcast"
-    assert resolve_folder_pack_name("interviews/subdir/a.wav", mapping) == "interview"
-
-
-def test_folder_unmapped_returns_none() -> None:
-    assert resolve_folder_pack_name("misc/x.wav", {"podcasts": "podcast"}) is None
-
-
-def test_folder_empty_mapping_returns_none() -> None:
-    assert resolve_folder_pack_name("podcasts/ep1.wav", {}) is None
-
-
-def test_folder_longest_ancestor_wins() -> None:
-    mapping = {"audio": "general", "audio/interviews": "interview"}
-    assert resolve_folder_pack_name("audio/interviews/a.wav", mapping) == "interview"
-    assert resolve_folder_pack_name("audio/other/a.wav", mapping) == "general"
-
-
-def test_folder_matches_on_components_not_string_prefix() -> None:
-    # "pod" must NOT match a file under "podcasts" — component-wise ancestry only.
-    mapping = {"pod": "wrong"}
-    assert resolve_folder_pack_name("podcasts/ep1.wav", mapping) is None
-
-
-def test_folder_key_equal_to_parent_dir_matches() -> None:
-    assert resolve_folder_pack_name("podcasts/ep1.wav", {"podcasts": "podcast"}) == "podcast"
-
-
 # --- resolve_run_domain_pack (snapshot selection precedence) -----------------
 
 
@@ -216,49 +182,24 @@ def test_run_pack_explicit_name_wins(tmp_path: Path) -> None:
     _write_pack(tmp_path, "interview")
     settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
     snap = resolve_run_domain_pack(
-        "podcasts/ep1.wav",
         settings=settings,
-        folder_domain_packs={"podcasts": "podcast"},
         explicit_name="interview",
     )
     assert snap["name"] == "interview"
 
 
-def test_run_pack_folder_mapping_used(tmp_path: Path) -> None:
-    _write_pack(tmp_path, "podcast", vocabulary=["cold open"])
-    settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
-    snap = resolve_run_domain_pack(
-        "podcasts/ep1.wav",
-        settings=settings,
-        folder_domain_packs={"podcasts": "podcast"},
-    )
-    assert snap["name"] == "podcast"
-    assert snap["vocabulary"] == ["cold open"]
-
-
-def test_run_pack_unmapped_folder_uses_default() -> None:
+def test_run_pack_no_explicit_uses_default() -> None:
     settings = Settings(_env_file=None)
-    snap = resolve_run_domain_pack(
-        "misc/x.wav", settings=settings, folder_domain_packs={"podcasts": "podcast"}
-    )
+    snap = resolve_run_domain_pack(settings=settings)
     assert snap["name"] == "generic"
 
 
-def test_run_pack_none_source_uses_default() -> None:
-    settings = Settings(_env_file=None)
-    snap = resolve_run_domain_pack(
-        None, settings=settings, folder_domain_packs={"podcasts": "podcast"}
-    )
-    assert snap["name"] == "generic"
-
-
-def test_run_pack_mapped_name_unresolvable_raises(tmp_path: Path) -> None:
+def test_run_pack_explicit_name_unresolvable_raises(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
     with pytest.raises(DomainPackError):
         resolve_run_domain_pack(
-            "podcasts/ep1.wav",
             settings=settings,
-            folder_domain_packs={"podcasts": "ghost"},
+            explicit_name="ghost",
         )
 
 
@@ -266,9 +207,8 @@ def test_run_pack_snapshot_round_trips_to_pack(tmp_path: Path) -> None:
     _write_pack(tmp_path, "podcast", vocabulary=["a"], name_seeds=["Jane"])
     settings = Settings(_env_file=None, domain_packs_dir=tmp_path)
     snap = resolve_run_domain_pack(
-        "podcasts/ep1.wav",
         settings=settings,
-        folder_domain_packs={"podcasts": "podcast"},
+        explicit_name="podcast",
     )
     restored = DomainPack.from_mapping(snap)
     assert restored.name == "podcast"
