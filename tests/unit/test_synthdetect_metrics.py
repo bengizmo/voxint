@@ -356,3 +356,138 @@ def test_calibrate_exclude_all_raises() -> None:
             journal, manifest, policy_id="bad",
             exclude_strata=("spoof", "bonafide"),
         )
+
+
+# --------------------------------------------------------------------------- #
+# calibrate_policy: partition-group weighting
+# --------------------------------------------------------------------------- #
+def _make_grouped_fixtures(
+    n_bf: int,
+    n_spoof_per_bf: int,
+    bf_mean: float = 0.0,
+    spoof_mean: float = 4.0,
+    seed: int = 42,
+) -> tuple[se.Journal, sc.Manifest]:
+    """Build fixtures where each bf clip has n_spoof_per_bf paired spoofs."""
+    rng = np.random.default_rng(seed)
+    clips: list[sc.ClipEntry] = []
+    results: list[se.ClipScore] = []
+    gen = sc.GeneratorProvenance(
+        name="test", version="1.0", checkpoint_sha=None,
+        voice="default", seed=None, text_source="test",
+    )
+    for i in range(n_bf):
+        bf_cid = f"bf-{i:04d}"
+        clips.append(sc.ClipEntry(
+            clip_id=bf_cid, rel_path=f"bf/{bf_cid}.wav", sha256="a" * 64,
+            duration_s=3.0, label="bona_fide", language="en",
+            license_spdx="CC-BY-4.0", stratum="organic-bonafide",
+            source="test", speaker_id=f"spk-{i}", split="calibration",
+            generator=None, degradation=None, parent_clip_id=None, acquire=None,
+            partition_group_id=bf_cid,
+        ))
+        results.append(se.ClipScore(
+            clip_id=bf_cid, raw_score=rng.normal(bf_mean, 1.0),
+            skip_reason=None, n_windows=1,
+        ))
+        for j in range(n_spoof_per_bf):
+            sp_cid = f"bf-{i:04d}--gen{j}"
+            clips.append(sc.ClipEntry(
+                clip_id=sp_cid, rel_path=f"spoof/{sp_cid}.wav", sha256="b" * 64,
+                duration_s=3.0, label="spoof", language="en",
+                license_spdx="CC-BY-4.0", stratum="spoof|tts|test|meetingroom",
+                source="test", speaker_id=f"spk-{i}", split="calibration",
+                generator=gen, degradation=None, parent_clip_id=None, acquire=None,
+                partition_group_id=bf_cid,
+            ))
+            results.append(se.ClipScore(
+                clip_id=sp_cid, raw_score=rng.normal(spoof_mean, 1.0),
+                skip_reason=None, n_windows=1,
+            ))
+
+    manifest = sc.Manifest(schema_version=3, clips=tuple(clips), corpus_kind="composite")
+    header = {
+        "kind": "synthdetect_journal", "schema_version": 1,
+        "inference_space": "synthdetect-w2v2-aasist-v1", "model_id": "w2v2-aasist",
+        "manifest_sha256": "a" * 64,
+        "windowing": {"pooling": "mean"},
+    }
+    return se.Journal(header=header, results=tuple(results)), manifest
+
+
+def test_calibrate_emits_group_metadata() -> None:
+    journal, manifest = _make_grouped_fixtures(30, 1)
+    policy = se.calibrate_policy(journal, manifest, policy_id="grouped")
+    assert policy["n_partition_groups"] == 30
+    assert policy["max_group_size"] == 2
+    assert policy["group_weighting"] == "partition_group_inverse_size"
+
+
+def test_calibrate_singleton_groups_match_uniform() -> None:
+    """When all groups are singletons, weighting is a no-op."""
+    rng = np.random.default_rng(99)
+    bf = rng.normal(0.0, 1.0, 40).tolist()
+    spoof = rng.normal(4.0, 1.0, 40).tolist()
+    journal, manifest = _make_calibration_fixtures(bf, spoof, [])
+    policy = se.calibrate_policy(journal, manifest, policy_id="singleton")
+    assert policy["max_group_size"] == 1
+    a_singleton, b_singleton = policy["platt"]["A"], policy["platt"]["B"]
+    a_direct, b_direct = se.fit_platt(
+        bf + spoof, [0] * 40 + [1] * 40,
+    )
+    assert a_singleton == pytest.approx(a_direct, rel=1e-6)
+    assert b_singleton == pytest.approx(b_direct, rel=1e-6)
+
+
+def test_calibrate_grouped_changes_intercept() -> None:
+    """Paired groups (bf + spoof) should produce a different B than singletons."""
+    journal_grouped, manifest_grouped = _make_grouped_fixtures(50, 2, seed=7)
+    policy_grouped = se.calibrate_policy(
+        journal_grouped, manifest_grouped, policy_id="grouped",
+    )
+    assert policy_grouped["max_group_size"] == 3
+
+    journal_singleton, manifest_singleton = _make_grouped_fixtures(50, 2, seed=7)
+    clips_no_group = tuple(
+        sc.ClipEntry(
+            clip_id=c.clip_id, rel_path=c.rel_path, sha256=c.sha256,
+            duration_s=c.duration_s, label=c.label, language=c.language,
+            license_spdx=c.license_spdx, stratum=c.stratum, source=c.source,
+            speaker_id=c.speaker_id, split=c.split, generator=c.generator,
+            degradation=c.degradation, parent_clip_id=c.parent_clip_id,
+            acquire=c.acquire, partition_group_id=None,
+        )
+        for c in manifest_singleton.clips
+    )
+    manifest_nogroup = sc.Manifest(
+        schema_version=3, clips=clips_no_group, corpus_kind="composite",
+    )
+    policy_singleton = se.calibrate_policy(
+        journal_singleton, manifest_nogroup, policy_id="singleton",
+    )
+    assert policy_singleton["max_group_size"] == 1
+    assert policy_grouped["platt"]["B"] != pytest.approx(
+        policy_singleton["platt"]["B"], rel=0.01,
+    )
+
+
+def test_fit_platt_uniform_weights_match_no_weights() -> None:
+    scores = np.array([-3.0, -2.0, -1.0, 1.0, 2.0, 3.0])
+    labels = np.array([0, 0, 0, 1, 1, 1])
+    a1, b1 = se.fit_platt(scores, labels)
+    a2, b2 = se.fit_platt(scores, labels, sample_weights=np.ones(6))
+    assert a1 == pytest.approx(a2, rel=1e-9)
+    assert b1 == pytest.approx(b2, rel=1e-9)
+
+
+def test_fit_platt_weights_bad_length_raises() -> None:
+    with pytest.raises(se.EvalError, match="sample_weights"):
+        se.fit_platt(np.array([1.0, 2.0]), np.array([0, 1]), sample_weights=np.array([1.0]))
+
+
+def test_brier_weighted_vs_uniform() -> None:
+    probs = [0.9, 0.1, 0.8]
+    labels = [1, 0, 1]
+    unweighted = se.brier_score(probs, labels)
+    weighted = se.brier_score(probs, labels, sample_weights=[1.0, 1.0, 1.0])
+    assert unweighted == pytest.approx(weighted)
