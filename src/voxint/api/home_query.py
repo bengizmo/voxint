@@ -21,6 +21,7 @@ from sqlalchemy import func
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import unresolved_label_count
 from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
     MediaItem,
@@ -49,6 +50,7 @@ class ActivityItem:
     source_path: str
     run_id: uuid.UUID | None = None
     speaker_id: uuid.UUID | None = None
+    unresolved_count: int = 0
 
 
 # One terminal-outcome entry per run, not per stage attempt: the feed reports
@@ -57,9 +59,7 @@ class ActivityItem:
 _TERMINAL_STATUSES = (RunStatus.COMPLETED.value, RunStatus.FAILED.value)
 
 
-def _run_rows(
-    session: Session, *, limit: int, terminal: bool
-) -> list[ActivityItem]:
+def _run_rows(session: Session, *, limit: int, terminal: bool) -> list[ActivityItem]:
     """Newest runs by start (``terminal=False``) or by last stage finish."""
     last_finished = (
         sa_select(func.max(StageRun.finished_at))
@@ -70,18 +70,25 @@ def _run_rows(
     # A terminal run's meaningful timestamp is when its last stage attempt
     # finished (the same convention as runs_query.latest_completed_run),
     # coalesced to updated_at for seeded/legacy runs with no stage rows.
-    at = func.coalesce(last_finished, PipelineRun.updated_at) if terminal else (
-        PipelineRun.created_at
+    at = (
+        func.coalesce(last_finished, PipelineRun.updated_at)
+        if terminal
+        else (PipelineRun.created_at)
     )
-    stmt = (
-        sa_select(
-            PipelineRun.id,
-            PipelineRun.status,
-            PipelineRun.sidecar,
-            MediaItem.source_path,
-            MediaSourceMetadata.title.label("source_title"),
-            at.label("at"),
+    columns = [
+        PipelineRun.id,
+        PipelineRun.status,
+        PipelineRun.sidecar,
+        MediaItem.source_path,
+        MediaSourceMetadata.title.label("source_title"),
+        at.label("at"),
+    ]
+    if terminal:
+        columns.append(
+            func.coalesce(unresolved_label_count(PipelineRun.id), 0).label("unresolved_count")
         )
+    stmt = (
+        sa_select(*columns)
         .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
         # Outer: most media has no metadata snapshot (uploads, pre-#36 runs).
         .outerjoin(
@@ -97,11 +104,7 @@ def _run_rows(
     items: list[ActivityItem] = []
     for row in session.execute(stmt):
         if terminal:
-            kind = (
-                "run_completed"
-                if row.status == RunStatus.COMPLETED.value
-                else "run_failed"
-            )
+            kind = "run_completed" if row.status == RunStatus.COMPLETED.value else "run_failed"
         else:
             kind = "run_started"
         items.append(
@@ -113,6 +116,7 @@ def _run_rows(
                 title=title_from_snapshot(row.sidecar) or row.source_title,
                 source_path=row.source_path,
                 run_id=row.id,
+                unresolved_count=row.unresolved_count if terminal else 0,
             )
         )
     return items
@@ -147,7 +151,5 @@ def recent_activity(session: Session, *, limit: int = 10) -> list[ActivityItem]:
         *_run_rows(session, limit=limit, terminal=True),
         *_speaker_rows(session, limit=limit),
     ]
-    merged.sort(
-        key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id)), reverse=True
-    )
+    merged.sort(key=lambda i: (i.at, i.kind, str(i.run_id or i.speaker_id)), reverse=True)
     return merged[:limit]

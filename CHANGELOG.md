@@ -6,6 +6,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Home feed: unresolved voice count on completed runs** (#249, epic #149).
+  Run-completed events in the Home activity feed now show an amber "X voices
+  need you" chip when unresolved speaker labels exist for that run.
+- **Media overview: child-row review state** (#249, epic #149). Child rows and
+  ungrouped rows now render review-oriented chips ("X voices need you" when
+  unresolved labels exist, "reviewed" when all resolved) instead of the raw
+  run status, matching the folder-row treatment.
+- **Media overview: selected-row teal tint** (#249, epic #149). Checking a media
+  row now highlights it with the existing teal-tint background rule.
+
 ### Fixed
 - **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
   On the project detail page, opening the corrections editor while a project
