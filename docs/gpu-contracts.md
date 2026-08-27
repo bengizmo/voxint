@@ -2212,6 +2212,93 @@ reported as diagnostics. A composition-weighted pooled EER across all tracks is
 explicitly secondary and labelled as such, because the ASVspoof clip count
 dominates it.
 
+#### S6 scoring results: first EER measurement (2026-08-27)
+
+**Verdict: SCORED.** All 63,905 composite clips scored by w2v2-aasist
+(eval container `voxint-synthdetect-eval:s2b`, maintainer RTX 3060). Journal:
+`journal_composite.jsonl` (63,906 lines, 1 header + 63,905 clip outcomes,
+zero skips). Structured results:
+`eer_report_w2v2aasist.json`, `eer_matrix_w2v2aasist.json`.
+
+**Primary field result (organic bona fide vs seen TTS, Piper + Chatterbox
+combined):** EER = 34.31 % (95 % CI: 33.29--35.30 %, 1000 bootstrap
+resamples). AUC = 0.707. n = 8,575 (3,495 bona fide + 5,080 spoof).
+
+**Required generalization slices:**
+
+| Generator | Role | EER | AUC | n |
+|---|---|---|---|---|
+| ElevenLabs | unseen | 18.06 % | 0.886 | 4,464 |
+| Google Cloud TTS | unseen | 17.96 % | 0.882 | 4,464 |
+
+Both unseen generators are *more* detectable than the seen-generator
+combined average (34.31 %). The primary is dominated by the Chatterbox
+blind spot (see below).
+
+**Benchmark anchor (ASVspoof DF eval):** EER = 7.05 % (95 % CI:
+6.25--7.64 %). AUC = 0.986. n = 53,392 (1,487 bona fide + 51,905 spoof).
+Within the expected range for w2v2-aasist on ASVspoof 2021 DF (~5--8 %
+published). Confirms the model is functioning correctly on in-distribution
+data.
+
+**Per-generator breakdown (diagnostic):**
+
+| Generator | Role | vs AMI bf | vs VC bf | vs Both |
+|---|---|---|---|---|
+| Piper (VITS) | seen | 12.0 % | 41.9 % | 20.0 % |
+| Chatterbox (AR + flow) | seen | 40.3 % | 71.5 % | 45.3 % |
+| ElevenLabs | unseen | 11.1 % | 34.9 % | 18.1 % |
+| Google Cloud TTS | unseen | 10.4 % | 37.4 % | 18.0 % |
+
+**Finding 1: Chatterbox evasion.** Chatterbox (AR autoregressive token
+prediction + conditional flow matching + HiFT source-filter vocoder) is
+near-undetectable: EER = 45.32 % (AUC 0.558, near chance). Even against
+AMI-only bona fide (the cleanest comparison), EER = 40.3 %. 59.4 % of
+Chatterbox scores fall within the bona fide IQR. KS statistic
+(bona fide vs Chatterbox) = 0.14 (vs 0.66 for Piper). A 4-model consult
+(codex + deepseek-v4-pro + grok-4.5 + kimi-k3, 2026-08-27) identified the
+root cause as OOD: w2v2-aasist's production checkpoint was trained on
+ASVspoof 2019 LA (6 attack systems, no flow-matching or modern AR+flow
+architectures). The DFADD benchmark (2024) independently reports 44.21 %
+average EER for ASVspoof-trained AASIST on unseen flow-matching TTS,
+closely matching our 45.32 %. The evasion is likely a closeable coverage
+gap (DFADD reports ~23--25 % after fine-tuning on flow-matching examples),
+not a fundamental detection impossibility. Codex also identified that
+flow matching operates in mel space (not waveform): phase coherence comes
+from HiFT's explicit F0-driven source-filter vocoder, not from the ODE
+transport.
+
+**Finding 2: VoxConverse channel confound.** VoxConverse bona fide
+scores substantially higher than AMI (mean 3.616 vs 0.884), degrading
+ALL generators by 20--30 pp EER when used as the bona fide reference.
+The detector's score axis is partly a channel/style axis, not purely
+a synthesis axis. This is independent of the Chatterbox evasion.
+
+**Finding 3: voice-cloning reference transfer.** Chatterbox is the only
+generator that clones from each bona fide parent clip; others use
+fixed/provider voices. Chatterbox from same-domain parents (AMI text vs
+AMI bona fide) scores 42.5 % EER; cross-domain (VoxConverse text vs AMI
+bona fide) scores 28.0 %. The cloning transfers channel cues but is
+secondary to the OOD gap.
+
+**Implication for calibration:** Platt scaling on the seen-generator
+calibration split will not produce meaningful probabilities for
+Chatterbox-class generators. A single threshold cannot serve both
+detectable (Piper, ElevenLabs, Google) and undetectable (Chatterbox)
+families. Calibration (S7) must account for this limitation explicitly.
+
+**Decision (2026-08-27):** proceed to S7 calibration with the current
+corpus. The Chatterbox evasion is a documented, expected OOD gap
+(independently confirmed by DFADD 2024 at 44.21 % avg EER on
+flow-matching TTS). The eval corpus successfully detected this gap,
+which is the corpus working as designed. The VoxConverse channel confound
+is by design (degraded bona fide in calibration is pre-registered). Both
+findings must be reported honestly in the shipped coverage statement.
+Fine-tuning experiments (adding flow-matching examples to training data)
+are deferred to M2 (model service, issue #252); corpus diversification
+(clean read-speech control set, held-out reference speakers) is optional
+measurement tightening, not a prerequisite for calibration.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona

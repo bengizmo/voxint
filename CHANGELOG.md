@@ -6,15 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
-- **Synthdetect M1 S6 pre-registration: spoof corpus and composite manifest**
-  (#144). Frozen S6 protocol for the spoof side of the calibration corpus.
-  Four TTS generator families (Piper VITS and Chatterbox AR+flow-matching
-  as seen/calibration, ElevenLabs and Descript as unseen/eval-only) plus the
-  ASVspoof 2021 DF subset as an eval-only benchmark anchor. v3 composite
-  manifest schema with tagged-union provenance (synthesis or
-  imported-benchmark per clip), component pinning, and partition-group-aware
-  calibration weighting. Pre-registered in `gpu-contracts.md` before any
-  spoof audio is generated or scored.
+- **Synthdetect M1 S6: spoof corpus, composite assembly, and first EER**
+  (#144). Four TTS generators materialized (Piper 2540, Chatterbox 2540,
+  ElevenLabs 969, Google Cloud TTS 969 clips) plus ASVspoof 2021 DF
+  benchmark anchor (53,392 clips). v3 composite manifest (63,905 clips).
+  First EER measurement: primary 34.31%, benchmark anchor 7.05% (healthy).
+  Per-generator and per-domain EER matrix reveals Chatterbox AR+flow TTS
+  is near-undetectable (EER 45.32%, independently confirmed by DFADD 2024
+  at 44.21% for flow-matching TTS vs AASIST). VoxConverse channel confound
+  identified as a separate issue. Scoring results, 4-model analysis, and
+  proceed-to-calibration decision documented in `gpu-contracts.md`.
 - **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
   journaling (`window_scores` field in `ClipOutcome`) and `verdict-windowing`
   subcommand in `synthdetect_eval.py` for comparing upstream vs production
