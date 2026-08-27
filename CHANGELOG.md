@@ -7,6 +7,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Idempotent insert helper extracted** (Phase 2, finding M10). The
+  savepoint-adopt-or-conflict skeleton that was duplicated across ledger,
+  annotations, drafts, and run assets is now a single
+  `savepoint_adopt_or_conflict()` in `voxint.idempotency`. Each site calls
+  it with its own lookup, match, and persist callbacks. Behavior-preserving:
+  same key, fingerprint, savepoint, and advisory-lock semantics.
 - **Ingest: SubmissionResult makes commit-before-publish visible** (Forgejo #7,
   finding H5). All submit functions (`submit_upload`, `submit_url`,
   `submit_media_item`, `submit_media_item_if_new`) now return a
