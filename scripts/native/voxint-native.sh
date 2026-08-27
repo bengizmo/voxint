@@ -69,6 +69,14 @@ fi
 
 VOXINT_NATIVE_HOME=${VOXINT_NATIVE_HOME:-$HOME/.voxint-native}
 
+# Transcript semantic-search (issue #121) MiniLM ONNX weights. The Docker image
+# bakes them; a native install fetches the minilm-onnx-v1 asset. The embedder
+# reads these via raw os.getenv (NOT the .env-backed Settings), so they must be
+# in the process env -- baked into the api/worker/beat plists below. Convention
+# path under the native home; operator-overridable for a shared/alternate copy.
+NATIVE_MINILM_ONNX_PATH=${VOXINT_NATIVE_MINILM_ONNX_PATH:-$VOXINT_NATIVE_HOME/models/minilm/model.onnx}
+NATIVE_MINILM_TOKENIZER_PATH=${VOXINT_NATIVE_MINILM_TOKENIZER_PATH:-$VOXINT_NATIVE_HOME/models/minilm/tokenizer.json}
+
 # Supervised processes. Datastores come up (and go down) as a group distinct
 # from the core services, with the migrate gate between them in `up`.
 NATIVE_DATASTORES="postgres redis"
@@ -490,6 +498,13 @@ native_service_env() {
   printf 'EMBEDDER_URL=%s\n' "$NATIVE_EMBEDDER_URL"
   printf 'COMPUTE_TIER=metal\n'
   printf 'PYTHONUNBUFFERED=1\n'
+  # Transcript semantic-search MiniLM weights: the embedder resolves these with
+  # raw os.getenv, so the supervised processes need them in-env (not just .env).
+  # Guard against a newline forging a second plist record (as MEDIA_ROOT is).
+  _reject_control_chars VOXINT_MINILM_ONNX_PATH "$NATIVE_MINILM_ONNX_PATH"
+  _reject_control_chars VOXINT_MINILM_TOKENIZER_PATH "$NATIVE_MINILM_TOKENIZER_PATH"
+  printf 'VOXINT_MINILM_ONNX_PATH=%s\n' "$NATIVE_MINILM_ONNX_PATH"
+  printf 'VOXINT_MINILM_TOKENIZER_PATH=%s\n' "$NATIVE_MINILM_TOKENIZER_PATH"
   # venv/bin first, then Homebrew (ffmpeg/ffprobe), then the system dirs.
   printf 'PATH=%s/bin:%s/bin:/usr/bin:/bin:/usr/sbin:/sbin\n' \
     "$(core_venv)" "$NATIVE_BREW_PREFIX"
@@ -2123,7 +2138,10 @@ cmd_doctor() {
   # vendored MiniLM ONNX weights. The Docker image bakes them; a native install
   # must fetch the minilm-onnx-v1 asset and point VOXINT_MINILM_ONNX_PATH /
   # VOXINT_MINILM_TOKENIZER_PATH at the files. Use the app's own probe so this
-  # check resolves paths exactly as the worker and CLI do.
+  # check resolves paths exactly as the worker and CLI do -- against the SAME
+  # convention paths the plists bake, so doctor and the services agree.
+  export VOXINT_MINILM_ONNX_PATH="$NATIVE_MINILM_ONNX_PATH"
+  export VOXINT_MINILM_TOKENIZER_PATH="$NATIVE_MINILM_TOKENIZER_PATH"
   venv=$(core_venv)
   if [ -x "$venv/bin/python" ]; then
     if "$venv/bin/python" -c \
