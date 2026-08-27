@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ status_code }} · {{ title }}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --paper: #f7f4ee;
+        --surface: #fffdf8;
+        --ink: #23201b;
+        --muted: #69635b;
+        --accent: #2f7d76;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        display: grid;
+        place-items: center;
+        padding: 2rem;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", system-ui, sans-serif;
+      }
+
+      main {
+        width: min(34rem, 100%);
+        padding: clamp(2rem, 7vw, 4rem);
+        border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+        border-radius: 1rem;
+        background: var(--surface);
+        box-shadow: 0 1rem 3rem color-mix(in srgb, var(--ink) 8%, transparent);
+      }
+
+      .status {
+        margin: 0 0 .5rem;
+        color: var(--accent);
+        font-size: clamp(4rem, 18vw, 7rem);
+        font-weight: 700;
+        line-height: .9;
+        letter-spacing: -.06em;
+      }
+
+      h1 { margin: 1.25rem 0 .75rem; font-size: 1.65rem; }
+      p { margin: 0; color: var(--muted); line-height: 1.6; }
+      .advice { margin-top: .75rem; }
+
+      a {
+        display: inline-block;
+        margin-top: 2rem;
+        color: var(--accent);
+        font-weight: 600;
+        text-underline-offset: .2em;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #1a1917;
+          --surface: #242220;
+          --ink: #e8e4dc;
+          --muted: #b7b1a7;
+          --accent: #5bb8af;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="status">{{ status_code }}</p>
+      <h1>{{ title }}</h1>
+      <p>{{ detail }}</p>
+      {% if status_code >= 500 %}
+        <p class="advice">Try reloading the page. If the problem continues, check that all services are running.</p>
+      {% endif %}
+      <a href="javascript:history.back()">Go back</a>
+    </main>
+  </body>
+</html>
