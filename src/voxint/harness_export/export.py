@@ -33,11 +33,11 @@ from voxint.db.models import (
 )
 from voxint.speakers.matching import (
     MatchingGates,
-    _roster_centroids,
     _unit,
     eligible_label_vectors,
     gates_from_settings,
     label_centroid,
+    roster_centroids,
 )
 from voxint.speakers.roster import active_speaker_clause, canonicalize, merge_map
 
@@ -332,7 +332,7 @@ def agreement_enrollment(
     """Render the active roster into a ``score agreement`` enrollment document.
 
     Each voiceprint is the EXACT centroid production matching compares (reused
-    from :func:`voxint.speakers.matching._roster_centroids`, over stored
+    from :func:`voxint.speakers.matching.roster_centroids`, over stored
     enrollment vectors — never recomputed). ``enrollment_items`` counts only the
     rows that contributed a valid (non-zero) vector to that centroid.
     ``source_item_ids`` lists the runs the enrollment came from; ``held_out`` is
@@ -340,7 +340,7 @@ def agreement_enrollment(
     provenance means we cannot attest the voiceprint did not see the item being
     scored, so we fail the attestation (the CLI then abstains on every use).
     """
-    centroids = _roster_centroids(session, embedding_space)
+    centroids = roster_centroids(session, embedding_space)
     rows = session.execute(
         select(
             SpeakerEmbedding.speaker_id,
@@ -479,7 +479,7 @@ def _roster_digest(session: Session, embedding_space: str) -> list[dict[str, str
     import hashlib
     import json
 
-    centroids = _roster_centroids(session, embedding_space)
+    centroids = roster_centroids(session, embedding_space)
     digest: list[dict[str, str]] = []
     for speaker_id in sorted(centroids, key=str):
         payload = json.dumps(
