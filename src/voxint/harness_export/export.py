@@ -33,11 +33,11 @@ from voxint.db.models import (
 )
 from voxint.speakers.matching import (
     MatchingGates,
-    roster_centroids,
     _unit,
     eligible_label_vectors,
     gates_from_settings,
     label_centroid,
+    roster_centroids,
 )
 from voxint.speakers.roster import active_speaker_clause, canonicalize, merge_map
 
