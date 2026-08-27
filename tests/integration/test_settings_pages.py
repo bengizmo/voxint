@@ -153,11 +153,11 @@ def test_subpages_reachable_regardless_of_flag(
 
 
 def test_status_page_reports_health_and_unknown_install(
-    session_factory: sessionmaker[Session],
+    session_factory: sessionmaker[Session], tmp_path: Path,
 ) -> None:
     # No model services in the test env, so this proves the doctor checks render
     # and the page is a 200 even with dependencies down (fail-soft).
-    client = _client(session_factory)
+    client = _client(session_factory, media_root=tmp_path)
     body = client.get("/settings/status").text
     assert "PARTS OF VOXINT" in body
     assert "Install type unknown" in body
