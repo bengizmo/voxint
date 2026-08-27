@@ -1970,6 +1970,31 @@ layout. AMR-NB ran successfully on real speech. Pinned container:
 `-threads 1 -filter_threads 1`. Detail:
 `docs/reports/synthdetect-s5-pr2b-degrade-2026-08-26.md`.
 
+**Full bona fide calibration corpus materialization (2026-08-27): PASS.** The
+full 14-recording scoring subset (7 AMI meetingroom + 7 VoxConverse webvideo)
+was materialized on maintainer hardware using the `prepare` and `freeze` CLI
+verbs.
+
+| Domain | Recordings | Turn clips | Segments | Parents total | Degraded children |
+|---|---|---|---|---|---|
+| AMI (meetingroom) | 7 | 2081 | 706 | 2787 | 1045 |
+| VoxConverse (webvideo) | 7 | 471 | 237 | 708 | 114 |
+| **Total** | **14** | **2552** | **943** | **3495** | **1159** |
+
+Cohort plan hashes: AMI `a819df1b...`, VoxConverse `60d3d64a...`. Combined
+manifest shas: AMI `a27b8b09...`, VoxConverse `20d8f64a...`. Pinned container:
+`jrottenberg/ffmpeg@sha256:292a972c...`. All six degradation chains represented
+in each corpus (hash-assign-v1 distribution verified uniform).
+
+**VoxConverse RTTM trimming.** Two recordings (uicid, gtnjb, both 1200.064 s)
+had a final RTTM entry extending 256 samples (16 ms) past the recording's
+actual sample count. The last entry's duration was trimmed to the recording
+boundary before materialization. Trimmed RTTMs and a separate acquisition
+manifest (`acq_voxconverse_trimmed.json`) are stored alongside the corpus data.
+This is a data annotation artifact, not a code change: the `materialize_prepare`
+executor correctly rejects out-of-range intervals, and clamping RTTMs to
+recording length at plan time is an open improvement for a future session.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
