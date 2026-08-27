@@ -474,7 +474,7 @@ def test_merge_enroll_new_all_ineligible_is_400(
     fields["nonce"] = uuid.uuid4().hex
     resp = client.post(f"/review/{run_id}/merge", data=fields, headers=HX)
     assert resp.status_code == 400
-    assert "embedded turns" in resp.text
+    assert "speaker audio" in resp.text
 
 
 def test_merge_apply_rejects_archived_survivor(
