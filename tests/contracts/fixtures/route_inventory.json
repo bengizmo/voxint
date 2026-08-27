@@ -508,6 +508,12 @@
   [
     "/settings/features",
     [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/features",
+    [
       "POST"
     ]
   ],
