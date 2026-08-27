@@ -127,7 +127,7 @@ def test_light_dark_and_forced_colors_preserved(client: TestClient) -> None:
         # follow: the teal accent gets a dark value, and the ring is bound to
         # it, so keyboard focus stays visible on the dark canvas; .error reads
         # --danger, retargeted to a lighter red (AC4).
-        assert re.search(r"--accent:\s*#5eb8ae", block), f"{scope} block lost dark --accent"
+        assert re.search(r"--accent:\s*#4fc0b5", block), f"{scope} block lost dark --accent"
         assert re.search(r"--danger:\s*#f2685e", block), f"{scope} block lost dark --danger"
     assert re.search(r"--focus-ring:\s*var\(--accent\)", body)
     # The forced-colors fallback actually retargets the ring to the system

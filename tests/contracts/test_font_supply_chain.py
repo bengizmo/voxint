@@ -11,8 +11,6 @@ These tests pin the invariants that would otherwise rot silently:
    system-ui / ui-monospace fallbacks.
 """
 
-from pathlib import Path
-
 from tests.contracts.conftest import REPO_ROOT
 
 _FONTS_DIR = REPO_ROOT / "frontend" / "src" / "fonts"
