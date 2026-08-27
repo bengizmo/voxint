@@ -26,6 +26,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   existing React editor island. Speakers in the sidebar show initials badges
   with verified/needs-you status chips. Completes epic #205 (10/10 checklist
   items done).
+- **Error copy refactor** (#232). Internal-vocabulary error strings rewritten
+  for operators: replaces technical jargon (adjudication, diarization, embedding)
+  with plain-language equivalents throughout user-facing error messages.
 
 ## [0.26.0] - 2026-08-27
 
@@ -525,26 +528,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   child file rows indented underneath. File rows show a status chip, duration,
   size, and a single action link. Trash and restore views use the same grid
   table with state-appropriate tints. Default view changes from cards to table.
-- **Ops Console R5: project detail refresh** (#214, epic #205). The
-  `/projects/{id}` page is rewritten with V3 primitives: command-bar breadcrumb
-  with an "active" chip, two-column layout (vocabulary + corrections on the
-  left, media folders + project speakers sidebar on the right, stacking on
-  narrow viewports). Vocabulary terms render as bordered chip pills; the edit
-  form is in a collapsible disclosure. The corrections grid-table shows the
-  existing React editor island. Speakers in the sidebar show initials badges
-  with verified/needs-you status chips.
-- **Ops Console R4: speakers overview and detail refresh** (#213, epic #205).
-  Both `/speakers` and `/speakers/{id}` are rewritten with V3 primitives. The
-  overview moves its people count and verified summary into the command bar,
-  adds an amber TO DO strip for unverified voices and pending name suggestions,
-  and replaces the card-based roster with a grid-table showing initials badges,
-  status chips (verified/needs you/unknown), voice match percentages
-  (green >=85%, amber <85%), and Open links. The detail page adds a profile
-  header with a large avatar badge, six stat tiles (recordings, speaking time,
-  segments, avg match, first heard, last heard), and a heard-in grid-table.
-  Profile panel and web research blocks are unchanged. New "active" chip
-  semantic added to both the Python mapping and Jinja macro. Completes epic
-  #205 (10/10 checklist items done).
 - **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
   (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
   canonical label-to-semantic mapping (`chip_semantics.py` + Jinja2 macro
