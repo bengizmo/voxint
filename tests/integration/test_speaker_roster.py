@@ -30,8 +30,8 @@ from voxint.db.models import (
 from voxint.speakers.matching import (
     CosineProposal,
     MatchingGates,
-    roster_centroids,
     replace_run_proposals,
+    roster_centroids,
 )
 from voxint.speakers.roster import (
     RosterConflictError,
