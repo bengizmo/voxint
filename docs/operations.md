@@ -741,7 +741,11 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,
   so re-uploading a name yields a distinct immutable media item and never
   overwrites history. A hidden `submission_id` makes form replay idempotent.
+  When `console_media_enabled` is on, this route redirects to `/media` (303)
+  without processing; uploads go through `/media/submit` instead.
 - **`POST /fetch`**: the browser equivalent of `voxint fetch` (URL ingestion).
+  When `console_media_enabled` is on, this route redirects to `/media` (303);
+  URL fetches go through `/media/fetch` instead.
 - **`POST /runs/{id}/requeue`**: an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
 - **`POST /runs/{id}/cancel`**: an exact-revision (CAS) cancel of a *live* run
@@ -761,7 +765,9 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   is operator-visibility metadata: last-write-wins, orthogonal to `status`, no
   CAS/revision bump (like operator notes), and idempotent. A *live* run refuses
   archive (`409`, cancel it first), and an **archived run refuses requeue/claim**
-  so a stale tab can't drive a hidden run back to live. `/runs` hides archived by
+  so a stale tab can't drive a hidden run back to live. The guard is enforced at
+  both the route level (API) and the service level (`RunArchivedError` in
+  `requeue_failed_run`), so the CLI path is also covered. `/runs` hides archived by
   default; `?archived=1` shows the archived-only view. Home, `/metrics`, and
   `voxint stats` exclude archived runs from their counts.
 - **`POST /runs/{id}/media/delete`**: **destructive**, terminal-only. Deletes
@@ -885,11 +891,18 @@ selects the segment, never seeks, and no playhead is shown. If the amplitude
 data cannot be computed (e.g. the media file is gone and nothing was cached)
 the strip simply does not appear; the transcript list is unaffected.
 
-**Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
+**Broker-degraded submission.** `/submit` (or `/media/submit` when the Media
+library is enabled), `/fetch` (or `/media/fetch`), and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
 that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)
 with a clear linked note, and the recovery sweep re-enqueues it once the broker
 returns. Read pages (`/runs*`) render from Postgres only and never touch Redis.
+
+**Orphaned incoming cleanup.** At app startup, `reconcile_orphaned_incoming`
+scans `media_root/incoming/` and removes files that have no committed
+`MediaItem` row. These are crash orphans from the brief window between
+`os.replace` and the DB commit during upload. The reconciler runs once per
+process start and logs each removal.
 
 ### Failure lanes and recovery
 
@@ -1357,8 +1370,8 @@ mutations are gated by their per-run claim token.
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
-| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item |
-| `POST /fetch` | yt-dlp URL ingestion (create media item + run, enqueue) |
+| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item (redirects to `/media` when `console_media_enabled` is on) |
+| `POST /fetch` | yt-dlp URL ingestion (redirects to `/media` when `console_media_enabled` is on) |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `GET /review` | Review queue |
 | `POST /review/{run_id}/claim` · `/release` | Claim / release an exclusive review slot |
