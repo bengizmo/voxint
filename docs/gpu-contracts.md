@@ -2033,7 +2033,7 @@ union.
 
 #### Spoof sources
 
-S6 uses three materially distinct TTS generator families plus the existing
+S6 uses four materially distinct TTS generator families plus the existing
 ASVspoof 2021 DF benchmark subset. Each family has a different synthesis
 architecture, ensuring the unseen-generator-eval requirement tests genuine
 generalization rather than checkpoint variation within one family.
@@ -2043,6 +2043,7 @@ generalization rather than checkpoint variation within one family.
 | Piper (VITS) | Hybrid VITS vocoder, CPU-only | MIT | Any node | **Seen** (calibration) | Inherits source parent's split |
 | Coqui XTTS-v2 | Autoregressive neural TTS with voice cloning | Apache-2.0 | GPU (beast RTX 5090 preferred) | **Seen** (calibration) | Inherits source parent's split |
 | ElevenLabs | Proprietary cloud neural TTS | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
+| Descript | Overdub voice cloning | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
 | ASVspoof 2021 DF | 110 official attack systems, 4 vocoder families | ODbL-1.0 (data) | Existing subset (53,392 clips) | **Benchmark anchor** (eval-only) | v2 imported-benchmark, eval-only by schema |
 
 **Seen generators** (Piper + XTTS-v2) produce spoof clips from bona fide
@@ -2051,11 +2052,12 @@ participate in Platt fitting (calibration split) and are visible to the
 operating-point selection. Seen-generator spoof clips inherit their source
 parent's split assignment, so no speaker can straddle splits.
 
-**Unseen generator** (ElevenLabs) produces spoof clips ONLY from eval-split
-parents. None of its clips appear in calibration or holdout. This tests
-whether the detector generalizes to a synthesis system the operating point was
-never tuned on. The unseen family is chosen because its proprietary cloud
-architecture is the most representative of real-world deepfake tooling.
+**Unseen generators** (ElevenLabs + Descript) produce spoof clips ONLY from
+eval-split parents. None of their clips appear in calibration or holdout.
+This tests whether the detector generalizes to synthesis systems the
+operating point was never tuned on. Two distinct unseen cloud APIs with
+different architectures (ElevenLabs neural TTS, Descript Overdub voice
+cloning) provide a stronger generalization test than a single unseen family.
 
 **Benchmark anchor** (ASVspoof 2021 DF) provides an external reference EER
 on a standardized corpus. It is never pooled with the organic TTS track for a
@@ -2096,7 +2098,7 @@ observation per partition group) is applied in Platt fitting.
 **Provenance fields.** Each TTS spoof clip carries a full
 `GeneratorProvenance`:
 
-- `name`: generator family (`piper`, `coqui-xtts-v2`, `elevenlabs`)
+- `name`: generator family (`piper`, `coqui-xtts-v2`, `elevenlabs`, `descript`)
 - `version`: engine version string (pinned before generation)
 - `checkpoint_sha`: sha256 of the model weights file (None for cloud API)
 - `voice`: voice/speaker id used
@@ -2175,7 +2177,8 @@ s6-composite-corpus/
   organic-bonafide/     # S5 bona fide clips (hardlinked from s5-corpus)
   tts-piper/            # Piper TTS spoof clips
   tts-xtts/             # XTTS-v2 spoof clips
-  tts-elevenlabs/       # ElevenLabs spoof clips
+  tts-elevenlabs/       # ElevenLabs spoof clips (eval-only)
+  tts-descript/         # Descript spoof clips (eval-only)
   asvspoof-df/          # ASVspoof 2021 DF canonical subset (hardlinked)
   manifest.json         # v3 composite manifest
   assembly_receipt.json # component hashes, assembly metadata
@@ -2191,10 +2194,13 @@ sha256 during assembly (the full-tree revalidation established in S5 PR-2a).
 seen generators combined). This is the EER and operating point that
 calibration targets.
 
-**Required generalization slice:** organic eval clips scored against the
-eval-only (unseen) ElevenLabs generator. If this slice's EER is materially
-worse than the seen-generator eval EER, the detector may not generalize to
-novel synthesis systems, and the shipped confidence should reflect that.
+**Required generalization slices:** organic eval clips scored against each
+eval-only (unseen) generator individually (ElevenLabs and Descript). If
+either unseen generator's EER is materially worse than the seen-generator
+eval EER, the detector may not generalize to novel synthesis systems, and
+the shipped confidence should reflect that. Reporting both unseen families
+separately (not pooled) shows whether the generalization gap is
+architecture-dependent.
 
 **Benchmark anchor:** ASVspoof bona fide versus ASVspoof spoof, scored under
 the same inference space and windowing. This is a diagnostic, not the
