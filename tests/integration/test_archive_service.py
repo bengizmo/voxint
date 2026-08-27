@@ -39,7 +39,7 @@ from voxint.pipeline.transitions import cas_update_run, next_stage, snapshot
 
 
 def _make_completed(session: Session, source_path: str) -> uuid.UUID:
-    run_id = submit_media_item(session, source_path).id
+    run_id = submit_media_item(session, source_path).run_id
     session.commit()
     held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
     held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=STAGE_ORDER[0])
@@ -53,7 +53,7 @@ def _make_completed(session: Session, source_path: str) -> uuid.UUID:
 
 
 def _make_failed(session: Session, source_path: str) -> uuid.UUID:
-    run_id = submit_media_item(session, source_path).id
+    run_id = submit_media_item(session, source_path).run_id
     session.commit()
     held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
     held = cas_update_run(
@@ -67,7 +67,7 @@ def _make_failed(session: Session, source_path: str) -> uuid.UUID:
 
 
 def _make_cancelled(session: Session, source_path: str) -> uuid.UUID:
-    run_id = submit_media_item(session, source_path).id
+    run_id = submit_media_item(session, source_path).run_id
     session.commit()
     cancel_run(session, run_id)
     session.commit()
@@ -75,7 +75,7 @@ def _make_cancelled(session: Session, source_path: str) -> uuid.UUID:
 
 
 def _make_queued(session: Session, source_path: str) -> uuid.UUID:
-    run_id = submit_media_item(session, source_path).id
+    run_id = submit_media_item(session, source_path).run_id
     session.commit()
     return run_id
 

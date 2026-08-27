@@ -90,7 +90,11 @@ class _PublishRecorder:
 def _mock_publish(monkeypatch: pytest.MonkeyPatch) -> _PublishRecorder:
     """Replace SubmissionResult.publish with a no-broker recorder."""
     recorder = _PublishRecorder()
-    monkeypatch.setattr(SubmissionResult, "publish", recorder)
+
+    def fake_publish(self: SubmissionResult) -> bool:
+        return recorder(self)
+
+    monkeypatch.setattr(SubmissionResult, "publish", fake_publish)
     return recorder
 
 

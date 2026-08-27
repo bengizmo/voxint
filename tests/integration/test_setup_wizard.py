@@ -65,6 +65,14 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     monkeypatch.setattr(
         "voxint.api.routers.deps._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
     )
+
+    from voxint.ingest.service import SubmissionResult
+
+    def _record_publish(self: SubmissionResult) -> bool:
+        calls.append(self.run_id)
+        return True
+
+    monkeypatch.setattr(SubmissionResult, "publish", _record_publish)
     return calls
 
 

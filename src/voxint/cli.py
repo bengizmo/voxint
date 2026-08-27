@@ -482,7 +482,12 @@ def _fetch(args: argparse.Namespace) -> int:
     # Print the id BEFORE publishing so a broker outage never costs the operator
     # the run id (the durable QUEUED run already exists); publish degrades cleanly.
     print(run_id)
-    result.publish()
+    if not result.publish():
+        print(
+            f"warning: broker unavailable; run {run_id} stays QUEUED for the "
+            "recovery sweep to re-enqueue",
+            file=sys.stderr,
+        )
     return 0
 
 
