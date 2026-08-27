@@ -46,6 +46,9 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
 from synthdetect_sources import (  # noqa: E402
     DEGRADATION_RECIPES,
+    FROZEN_COHORT_CHAINS,
+    S5_COHORT_SELECTION_POLICY,
+    S5_COHORT_VERSION,
     SELECTION_SEED,
     DegradationRecipe,
 )
@@ -1583,6 +1586,153 @@ def derive_degraded_record(
 
 
 # --------------------------------------------------------------------------- #
+# Cohort freeze (S5 PR-3): deterministic one-child-per-parent assignment from
+# the frozen chain vocabulary. The pre-registration requires exactly one degraded
+# variant per calibration parent (no group weighting in the calibrator), so the
+# plan assigns chains via a stable hash rather than a cross-product.
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class CohortAssignment:
+    """One parent-to-chain assignment in a frozen cohort plan."""
+
+    parent_clip_id: str
+    parent_pcm_sha256: str
+    source: str
+    speaker_id: str
+    split: str
+    assigned_chain: str
+    child_clip_id: str
+
+
+@dataclass(frozen=True)
+class CohortPlan:
+    """The pure, pre-audio cohort identity: which parents get which chain."""
+
+    cohort_version: int
+    selection_policy: str
+    chains: tuple[str, ...]
+    assignments: tuple[CohortAssignment, ...]
+    children: tuple[DegradedRecord, ...]
+    cohort_plan_sha256: str
+
+
+def _assign_chain(
+    parent_clip_id: str,
+    chains: tuple[str, ...],
+) -> str:
+    """Deterministically assign one chain to a parent via stable hashing.
+
+    Uses sha256(clip_id) mod len(chains) on the sorted chain list, so the
+    assignment is reproducible from the clip_id alone and approximately balanced.
+    """
+    digest = hashlib.sha256(parent_clip_id.encode("utf-8")).digest()
+    index = int.from_bytes(digest[:8], "big") % len(chains)
+    return chains[index]
+
+
+def _cohort_plan_hash(
+    cohort_version: int,
+    selection_policy: str,
+    chains: tuple[str, ...],
+    assignments: tuple[CohortAssignment, ...],
+) -> str:
+    """Compute the deterministic cohort_plan_sha256 from the canonical projection."""
+    rows = [
+        {
+            "parent_clip_id": a.parent_clip_id,
+            "parent_pcm_sha256": a.parent_pcm_sha256,
+            "source": a.source,
+            "speaker_id": a.speaker_id,
+            "split": a.split,
+            "assigned_chain": a.assigned_chain,
+            "child_clip_id": a.child_clip_id,
+        }
+        for a in assignments
+    ]
+    projection = {
+        "cohort_version": cohort_version,
+        "selection_policy": selection_policy,
+        "chains": list(chains),
+        "assignments": rows,
+    }
+    canonical = json.dumps(projection, sort_keys=True, separators=(",", ":")) + "\n"
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def plan_cohort(
+    manifest: Manifest,
+    *,
+    chains: tuple[tuple[str, ...], ...] = FROZEN_COHORT_CHAINS,
+    cohort_version: int = S5_COHORT_VERSION,
+    selection_policy: str = S5_COHORT_SELECTION_POLICY,
+) -> CohortPlan:
+    """Plan the frozen degradation cohort (pure, no audio).
+
+    Selects calibration-split, non-degraded, bona_fide turn clips from the
+    manifest, assigns exactly one chain per parent via stable hashing, and
+    returns the cohort plan with its pre-audio identity hash.
+    """
+    _validate_degrade_parent_manifest(manifest)
+    serialized_chains = tuple(sorted(serialize_chain(c) for c in chains))
+    if not serialized_chains:
+        raise CorpusError("plan_cohort: no chains provided")
+
+    eligible: list[ClipEntry] = []
+    for clip in manifest.clips:
+        if clip.parent_clip_id is not None:
+            continue
+        if clip.split != "calibration":
+            continue
+        if clip.label != "bona_fide":
+            continue
+        if clip.acquire is None:
+            continue
+        try:
+            acq = json.loads(clip.acquire)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if acq.get("kind") != "turn":
+            continue
+        eligible.append(clip)
+
+    if not eligible:
+        raise CorpusError("plan_cohort: no eligible calibration turn parents")
+
+    eligible.sort(key=lambda c: c.clip_id)
+
+    assignments: list[CohortAssignment] = []
+    children: list[DegradedRecord] = []
+    for parent in eligible:
+        chain_str = _assign_chain(parent.clip_id, serialized_chains)
+        recipe_ids = parse_chain(chain_str)
+        child = derive_degraded_record(parent, recipe_ids)
+        assignments.append(CohortAssignment(
+            parent_clip_id=parent.clip_id,
+            parent_pcm_sha256=parent.sha256,
+            source=parent.source,
+            speaker_id=parent.speaker_id,
+            split=parent.split or "calibration",
+            assigned_chain=chain_str,
+            child_clip_id=child.clip_id,
+        ))
+        children.append(child)
+
+    plan_hash = _cohort_plan_hash(
+        cohort_version, selection_policy,
+        serialized_chains, tuple(assignments),
+    )
+    return CohortPlan(
+        cohort_version=cohort_version,
+        selection_policy=selection_policy,
+        chains=serialized_chains,
+        assignments=tuple(assignments),
+        children=tuple(children),
+        cohort_plan_sha256=plan_hash,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Prepare executor (S5 PR-2a): materialize bona fide clips by slicing the staged
 # source recordings at the plan's integer sample offsets. ffmpeg-free: the staged
 # sources are already canonical PCM (16 kHz mono s16le), so materialization is
@@ -2411,6 +2561,240 @@ def materialize_degrade(
 
 
 # --------------------------------------------------------------------------- #
+# Cohort executor (S5 PR-3): materialize the full frozen cohort in one atomic
+# operation.  Each CohortAssignment maps one parent to one chain; the executor
+# runs the chains, collects measured facts, and publishes a single combined
+# manifest (all parents + exactly one degraded child per eligible parent).
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class CohortResult:
+    """Returned by :func:`materialize_cohort` on success."""
+
+    cohort_plan_sha256: str
+    parent_manifest_sha256: str
+    combined_manifest_sha256: str
+    container_image: str
+    children: int
+    parents_reaudited: int
+    chain_counts: dict[str, int]
+
+
+def materialize_cohort(
+    *,
+    plan: CohortPlan,
+    parent_root: Path,
+    corpus_root: Path,
+    container_image: str,
+    toolchain_info: dict[str, str] | None = None,
+) -> CohortResult:
+    """Materialize the frozen degradation cohort atomically.
+
+    Re-audits the parent corpus, executes every assignment's chain in the
+    digest-pinned container, assembles one combined manifest (parents + all
+    cohort children), and publishes via atomic ``os.replace``.
+    """
+    if not _CONTAINER_IMAGE_RE.match(container_image):
+        raise CorpusError(
+            f"container image must be <repo>@sha256:<64hex>, got {container_image!r}"
+        )
+    if corpus_root.exists() and any(corpus_root.iterdir()):
+        raise CorpusError(
+            f"cohort root {corpus_root} is already populated; refusing to overwrite"
+        )
+    parent_manifest_path = parent_root / "manifest.json"
+    if not parent_manifest_path.is_file():
+        raise CorpusError("parent root missing manifest.json")
+    parent_manifest_bytes = parent_manifest_path.read_bytes()
+    parent_manifest_sha = hashlib.sha256(parent_manifest_bytes).hexdigest()
+    parent_obj = json.loads(parent_manifest_bytes)
+    parent_manifest = load_manifest(parent_obj)
+    _validate_degrade_parent_manifest(parent_manifest)
+    for clip in parent_manifest.clips:
+        clip_path = parent_root / clip.rel_path
+        if not clip_path.is_file() or clip_path.is_symlink():
+            raise CorpusError(
+                f"parent clip {clip.clip_id!r}: {clip.rel_path!r} is not a regular file"
+            )
+
+    child_records = list(plan.children)
+    parent_ids = {c.clip_id for c in parent_manifest.clips}
+    child_ids = {r.clip_id for r in child_records}
+    child_paths = {r.rel_path for r in child_records}
+    id_collision = child_ids & parent_ids
+    if id_collision:
+        raise CorpusError(f"child clip_id collides with parent: {sorted(id_collision)}")
+    parent_paths = {c.rel_path for c in parent_manifest.clips}
+    path_collision = child_paths & parent_paths
+    if path_collision:
+        raise CorpusError(f"child rel_path collides with parent: {sorted(path_collision)}")
+    if len(child_ids) != len(child_records):
+        raise CorpusError("duplicate child clip_ids in cohort plan")
+    if len(child_paths) != len(child_records):
+        raise CorpusError("duplicate child rel_paths in cohort plan")
+
+    parent_by_id = {c.clip_id: c for c in parent_manifest.clips}
+
+    for assignment in plan.assignments:
+        loaded_clip = parent_by_id.get(assignment.parent_clip_id)
+        if loaded_clip is None:
+            raise CorpusError(
+                f"plan assignment references parent {assignment.parent_clip_id!r} "
+                "which is not in the loaded manifest"
+            )
+        if loaded_clip.sha256 != assignment.parent_pcm_sha256:
+            raise CorpusError(
+                f"plan/manifest mismatch for {assignment.parent_clip_id!r}: "
+                f"plan sha256 {assignment.parent_pcm_sha256} != "
+                f"manifest sha256 {loaded_clip.sha256}"
+            )
+
+    corpus_root.parent.mkdir(parents=True, exist_ok=True)
+    tmp = tempfile.mkdtemp(dir=corpus_root.parent, prefix=".cohort-")
+    try:
+        staging = Path(tmp) / "corpus"
+        staging.mkdir()
+
+        parent_reaudit: list[dict[str, Any]] = []
+        for clip in parent_manifest.clips:
+            payload = read_canonical_wav_payload(parent_root / clip.rel_path)
+            sha, count = payload_sha_and_count(payload)
+            if sha != clip.sha256:
+                raise CorpusError(
+                    f"parent re-audit failed for {clip.clip_id!r}: "
+                    f"sha256 {sha} != manifest {clip.sha256}"
+                )
+            expected_duration = _duration_s_from_samples(count)
+            if clip.duration_s != expected_duration:
+                raise CorpusError(
+                    f"parent re-audit failed for {clip.clip_id!r}: "
+                    f"duration_s {clip.duration_s} != computed {expected_duration} "
+                    f"(sample_count={count})"
+                )
+            parent_reaudit.append(
+                {"clip_id": clip.clip_id, "sha256": sha, "n_samples": count, "ok": True}
+            )
+
+        measured: dict[str, tuple[str, int]] = {}
+        chain_counts: dict[str, int] = {}
+        for child_record in child_records:
+            parent_clip = parent_by_id.get(child_record.parent_clip_id)
+            if parent_clip is None:
+                raise CorpusError(
+                    f"cohort child {child_record.clip_id!r} references unknown parent "
+                    f"{child_record.parent_clip_id!r}"
+                )
+            recipe_ids = parse_chain(child_record.degradation)
+            sha, count = _degrade_one_clip(
+                parent_clip,
+                child_record,
+                recipe_ids,
+                parent_root=parent_root,
+                staging=staging,
+                container_image=container_image,
+            )
+            measured[child_record.clip_id] = (sha, count)
+            chain_counts[child_record.degradation] = (
+                chain_counts.get(child_record.degradation, 0) + 1
+            )
+
+        parent_clip_dicts = [
+            {
+                "clip_id": c.clip_id,
+                "rel_path": c.rel_path,
+                "sha256": c.sha256,
+                "duration_s": c.duration_s,
+                "label": c.label,
+                "language": c.language,
+                "license_spdx": c.license_spdx,
+                "stratum": c.stratum,
+                "source": c.source,
+                "speaker_id": c.speaker_id,
+                "split": c.split,
+                "degradation": c.degradation,
+                "parent_clip_id": c.parent_clip_id,
+                "acquire": c.acquire,
+            }
+            for c in parent_manifest.clips
+        ]
+        manifest, combined_dicts = _assemble_combined_manifest(
+            parent_clip_dicts, child_records, measured
+        )
+
+        clips_sorted = sorted(combined_dicts, key=lambda c: c["clip_id"])
+        manifest_bytes = (
+            json.dumps(
+                {"schema_version": manifest.schema_version, "clips": clips_sorted},
+                indent=2, sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        (staging / "manifest.json").write_bytes(manifest_bytes)
+        combined_manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
+
+        child_rows = sorted(
+            (
+                {
+                    "clip_id": r.clip_id,
+                    "parent_clip_id": r.parent_clip_id,
+                    "degradation": r.degradation,
+                    "sha256": measured[r.clip_id][0],
+                    "n_samples": measured[r.clip_id][1],
+                }
+                for r in child_records
+            ),
+            key=lambda row: str(row["clip_id"]),
+        )
+        (staging / "clip_receipt.jsonl").write_text(
+            "".join(json.dumps(row, sort_keys=True) + "\n" for row in child_rows),
+            encoding="utf-8",
+        )
+
+        assignment_rows = [asdict(a) for a in plan.assignments]
+        (staging / "cohort_receipt.json").write_text(
+            json.dumps(
+                {
+                    "cohort_version": plan.cohort_version,
+                    "selection_policy": plan.selection_policy,
+                    "cohort_plan_sha256": plan.cohort_plan_sha256,
+                    "chains": list(plan.chains),
+                    "chain_counts": dict(sorted(chain_counts.items())),
+                    "children": len(child_records),
+                    "combined_manifest_sha256": combined_manifest_sha,
+                    "container_image": container_image,
+                    "parent_manifest_sha256": parent_manifest_sha,
+                    "parents_reaudited": len(parent_reaudit),
+                    "parent_reaudit": sorted(parent_reaudit, key=lambda r: r["clip_id"]),
+                    "assignments": sorted(assignment_rows, key=lambda r: r["parent_clip_id"]),
+                    "toolchain": toolchain_info or {},
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        work_dir = staging / "_work"
+        if work_dir.exists():
+            shutil.rmtree(work_dir)
+
+        os.replace(staging, corpus_root)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    return CohortResult(
+        cohort_plan_sha256=plan.cohort_plan_sha256,
+        parent_manifest_sha256=parent_manifest_sha,
+        combined_manifest_sha256=combined_manifest_sha,
+        container_image=container_image,
+        children=len(child_records),
+        parents_reaudited=len(parent_reaudit),
+        chain_counts=chain_counts,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # CLI: validate a manifest file (schema + integrity, no audio)
 # --------------------------------------------------------------------------- #
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -2560,6 +2944,71 @@ def cmd_degrade(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_freeze(args: argparse.Namespace) -> int:
+    """Plan the frozen cohort (dry-run), or materialize it with --corpus-root.
+
+    Uses ``FROZEN_COHORT_CHAINS`` and selects calibration-split turn parents
+    implicitly.  Dry-run prints the plan + cohort_plan_sha256.  Execution mode
+    materializes the full cohort atomically.
+    """
+    try:
+        obj = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        manifest = load_manifest(obj)
+        cohort = plan_cohort(manifest)
+    except (OSError, json.JSONDecodeError, CorpusError) as exc:
+        sys.stderr.write(f"freeze failed: {exc}\n")
+        return 2
+
+    if args.corpus_root is None:
+        chain_counts: dict[str, int] = {}
+        for a in cohort.assignments:
+            chain_counts[a.assigned_chain] = chain_counts.get(a.assigned_chain, 0) + 1
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "cohort_version": cohort.cohort_version,
+                    "selection_policy": cohort.selection_policy,
+                    "cohort_plan_sha256": cohort.cohort_plan_sha256,
+                    "chains": list(cohort.chains),
+                    "chain_counts": dict(sorted(chain_counts.items())),
+                    "assignments": len(cohort.assignments),
+                    "children": [asdict(c) for c in cohort.children],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 0
+
+    if args.parent_root is None or args.container_image is None:
+        sys.stderr.write(
+            "freeze --corpus-root requires --parent-root and --container-image\n"
+        )
+        return 2
+    parent_root = Path(args.parent_root)
+    manifest_path = Path(args.manifest).resolve()
+    expected_path = (parent_root / "manifest.json").resolve()
+    if manifest_path != expected_path:
+        sys.stderr.write(
+            f"freeze --corpus-root: --manifest must point to the parent root's "
+            f"manifest.json ({expected_path}), got {manifest_path}\n"
+        )
+        return 2
+    try:
+        result = materialize_cohort(
+            plan=cohort,
+            parent_root=parent_root,
+            corpus_root=Path(args.corpus_root),
+            container_image=args.container_image,
+        )
+    except (OSError, json.JSONDecodeError, CorpusError) as exc:
+        sys.stderr.write(f"freeze failed: {exc}\n")
+        return 2
+    sys.stdout.write(json.dumps(asdict(result), indent=2, sort_keys=True) + "\n")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="synthdetect corpus manifest tools (#144)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2627,6 +3076,29 @@ def main(argv: list[str] | None = None) -> int:
         help="digest-pinned ffmpeg container (image@sha256:...; required with --corpus-root)",
     )
     p_degrade.set_defaults(func=cmd_degrade)
+
+    p_freeze = sub.add_parser(
+        "freeze",
+        help="plan or materialize the frozen calibration cohort "
+        "(implicit calibration split + FROZEN_COHORT_CHAINS)",
+    )
+    p_freeze.add_argument("--manifest", required=True, help="path to the parent manifest JSON")
+    p_freeze.add_argument(
+        "--corpus-root",
+        default=None,
+        help="cohort output root (must be empty/nonexistent); triggers execution mode",
+    )
+    p_freeze.add_argument(
+        "--parent-root",
+        default=None,
+        help="parent corpus root containing manifest.json (required with --corpus-root)",
+    )
+    p_freeze.add_argument(
+        "--container-image",
+        default=None,
+        help="digest-pinned ffmpeg container (image@sha256:...; required with --corpus-root)",
+    )
+    p_freeze.set_defaults(func=cmd_freeze)
 
     args = parser.parse_args(argv)
     return int(args.func(args))

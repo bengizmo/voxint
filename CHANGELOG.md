@@ -6,6 +6,16 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S5 PR-3: cohort freeze** (#144). Frozen calibration cohort
+  policy: exactly one degraded child per eligible calibration-split turn parent,
+  assigned via stable `sha256(clip_id)` hash from the six single-recipe chains.
+  Multi-recipe compound chains are excluded from v1. New constants
+  `FROZEN_COHORT_CHAINS`, `S5_COHORT_VERSION`, `S5_COHORT_SELECTION_POLICY` in
+  `synthdetect_sources.py` (SOURCES_VERSION bumped to v5). New `plan_cohort`,
+  `CohortPlan`, `materialize_cohort`, `CohortResult` in `synthdetect_corpus.py`.
+  New `freeze` CLI verb (dry-run prints plan + `cohort_plan_sha256`; execution
+  materializes atomically with `cohort_receipt.json`). 37 new tests (30 unit +
+  7 contract).
 - **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
   codec/telephony/speed-degraded children of bona fide clips via the frozen
   `build_recipe_argv` ffmpeg round trips inside a digest-pinned container
