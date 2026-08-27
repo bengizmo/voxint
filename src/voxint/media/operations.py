@@ -1,17 +1,23 @@
-"""Pure helpers for the media operations journal (ADR 0007, issue #155).
-
-No database access, no I/O. The executor and reconciler import these; they
-live here so they can be unit-tested without a database.
-"""
+"""Helpers and concurrency primitives for the media operations journal."""
 
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
-from voxint.db.models import OPERATION_TERMINAL_STATES, OperationState
+from sqlalchemy import CursorResult, exists, func, or_, select, update
+from sqlalchemy.orm import Session
+
+from voxint.db.models import (
+    OPERATION_TERMINAL_STATES,
+    MediaItem,
+    MediaOperation,
+    OperationState,
+    PipelineRun,
+)
 
 TRASH_TREE = "_trash"
 TEMP_PREFIX = ".voxint-op-"
@@ -51,6 +57,105 @@ class PointerClass(StrEnum):
     ORIGIN = "origin"
     DESTINATION = "destination"
     OTHER = "other"
+
+
+def claim_operation(
+    session: Session,
+    operation_id: uuid.UUID,
+    claim_token: str,
+    lease_duration_seconds: int = 300,
+) -> bool:
+    """Claim an available operation lease."""
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(MediaOperation)
+            .where(
+                MediaOperation.id == operation_id,
+                or_(
+                    MediaOperation.claimed_by.is_(None),
+                    MediaOperation.lease_expires_at < func.now(),
+                ),
+            )
+            .values(
+                claimed_by=claim_token,
+                lease_expires_at=func.now()
+                + timedelta(seconds=lease_duration_seconds),
+            )
+        ),
+    )
+    return result.rowcount == 1
+
+
+def cas_transition(
+    session: Session,
+    operation_id: uuid.UUID,
+    expected_state: str,
+    new_state: str,
+    claim_token: str,
+    **extra_columns: Any,
+) -> bool:
+    """Transition an operation if its state and claim still match."""
+    guard_transition(expected_state, new_state)
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(MediaOperation)
+            .where(
+                MediaOperation.id == operation_id,
+                MediaOperation.state == expected_state,
+                MediaOperation.claimed_by == claim_token,
+            )
+            .values(state=new_state, **extra_columns)
+        ),
+    )
+    return result.rowcount == 1
+
+
+def cas_pointer(
+    session: Session,
+    media_id: uuid.UUID,
+    expected_path: str,
+    new_path: str,
+) -> bool:
+    """Update a media pointer if its current path still matches."""
+    result = cast(
+        CursorResult[Any],
+        session.execute(
+            update(MediaItem)
+            .where(MediaItem.id == media_id, MediaItem.current_path == expected_path)
+            .values(current_path=new_path)
+        ),
+    )
+    return result.rowcount == 1
+
+
+def has_active_operation(session: Session, media_id: uuid.UUID) -> bool:
+    """Return whether a media operation is non-terminal."""
+    stmt = select(
+        exists().where(
+            MediaOperation.media_id == media_id,
+            MediaOperation.state.not_in(("completed", "failed")),
+        )
+    )
+    return bool(session.execute(stmt).scalar_one())
+
+
+def has_active_run(session: Session, media_id: uuid.UUID) -> bool:
+    """Return whether a pipeline run is non-terminal."""
+    stmt = select(
+        exists().where(
+            PipelineRun.media_item_id == media_id,
+            PipelineRun.status.not_in(("completed", "failed", "cancelled")),
+        )
+    )
+    return bool(session.execute(stmt).scalar_one())
+
+
+def lock_media_row(session: Session, media_id: uuid.UUID) -> MediaItem | None:
+    """Lock and return a media row."""
+    stmt = select(MediaItem).where(MediaItem.id == media_id).with_for_update()
+    return session.execute(stmt).scalar_one_or_none()
 
 
 def trash_path(operation_id: uuid.UUID, filename: str) -> str:

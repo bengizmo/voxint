@@ -7,9 +7,11 @@ The broker is never imported here — callers commit, then lazily publish
 from voxint.ingest.service import (
     EffectiveConfigPreview,
     IngestError,
+    ItemTrashedError,
     MediaDeletePlan,
     MediaUnlinkResult,
     MissingStageError,
+    OperationInProgressError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
     RunNotCancellableError,
@@ -37,9 +39,11 @@ from voxint.pipeline.transitions import RunSnapshot
 __all__ = [
     "EffectiveConfigPreview",
     "IngestError",
+    "ItemTrashedError",
     "MediaDeletePlan",
     "MediaUnlinkResult",
     "MissingStageError",
+    "OperationInProgressError",
     "RunMediaNotDeletableError",
     "RunNotArchivableError",
     "RunNotCancellableError",

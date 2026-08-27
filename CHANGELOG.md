@@ -57,6 +57,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   system-ui fallback when unbuilt. Type scale tightened (body 13px, new
   `--t-micro` for 10.5px micro-headers). Light theme and print-stays-light
   contract preserved. No layout or shell changes.
+
+### Added
+- **Console 2.0 P2c: journaled media operations primitives and executor**
+  (#155, epic #149, ADR 0007). Concurrency primitives for the media operations
+  journal: `claim_operation` (row-lock serialized), `cas_transition` and
+  `cas_pointer` (CAS state machine), `has_active_operation` and `has_active_run`
+  guards, `lock_media_row` (`FOR UPDATE`). Run admission in ingest rejects
+  trashed/purged/active-op items. Prepare stage defers when a media item has an
+  active operation. `openable_source` renamed to `openable_path` (generic
+  media-root-relative resolver); `openable_current` resolves `current_path` with
+  `source_path` fallback. Reclaim alias guard checks both `current_path` and
+  `source_path`. The filesystem executor (`media/executor.py`) drives move,
+  trash, and restore through the ADR 0007 state machine: plan, claim, publish
+  (same-device link+rename or cross-device durable sequence), CAS pointer,
+  metadata, cleanup. Destination-collision handling per R3 (replay detection,
+  owned-temp cleanup). Transient-error retry with exponential backoff. Purge
+  refused (step 5). `_trash` added to setup wizard reserved trees.
 - **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
   codec/telephony/speed-degraded children of bona fide clips via the frozen
   `build_recipe_argv` ffmpeg round trips inside a digest-pinned container

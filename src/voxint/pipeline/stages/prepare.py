@@ -4,6 +4,8 @@ Everything downstream — the GPU contracts included — assumes normalized audi
 this stage is where that guarantee is created and recorded.
 """
 
+from __future__ import annotations
+
 import uuid
 
 from sqlalchemy import delete
@@ -12,8 +14,9 @@ from sqlalchemy.orm import Session
 from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun
 from voxint.media.integrity import openable_current
 from voxint.media.normalize import normalize_to_wav
+from voxint.media.operations import has_active_operation
 from voxint.media.peaks import peaks_relative
-from voxint.pipeline.stages.context import StageContext, StageDataError
+from voxint.pipeline.stages.context import StageContext, StageDataError, StageDeferError
 
 # Run-scoped so retries overwrite their own output and runs never collide.
 _ARTIFACT_TEMPLATE = "artifacts/{run_id}/normalized.wav"
@@ -26,6 +29,8 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     media = session.get(MediaItem, pipeline_run.media_item_id)
     if media is None:
         raise StageDataError(f"run {run_id}: media item missing")
+    if has_active_operation(session, media.id):
+        raise StageDeferError("media item has an active operation — deferring")
 
     source = openable_current(ctx.media_root, media)
     if source is None:

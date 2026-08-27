@@ -7,6 +7,8 @@ at-least-once (engine contract), so every one is idempotent: it deletes or
 resets exactly the rows it owns for the run before writing them again.
 """
 
+from __future__ import annotations
+
 import dataclasses
 import logging
 import socket
@@ -40,6 +42,10 @@ logger = logging.getLogger(__name__)
 class StageDataError(Exception):
     """A stage's persisted inputs are missing or inconsistent — a pipeline bug
     or operator error, never transient."""
+
+
+class StageDeferError(Exception):
+    """The stage should be retried later (not a failure)."""
 
 
 @dataclass(frozen=True)

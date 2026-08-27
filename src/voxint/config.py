@@ -398,6 +398,13 @@ class Settings(BaseSettings):
     # the wait (accept files immediately).
     watch_folder_settle_seconds: int = Field(default=60, ge=0)
 
+    # Media operations reconciler (ADR 0007). Drives interrupted journal rows
+    # (move, trash, restore) to a consistent terminal state by classifying
+    # filesystem reality against recorded intent. Always registered on beat
+    # (like the recovery sweep): a no-op when no non-terminal rows exist.
+    media_reconcile_sweep_seconds: int = Field(default=300, ge=60)
+    media_reconcile_batch_limit: int = Field(default=50, ge=1)
+
     # Redis redelivery horizon for acks-late tasks; must exceed the longest
     # possible run_pipeline execution — one task runs all SIX stages back to
     # back, so the horizon has to clear the sum of every stage lease. With

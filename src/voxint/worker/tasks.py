@@ -530,6 +530,28 @@ def activity_prune() -> dict[str, int]:
     return {"pruned": pruned}
 
 
+@app.task(name="voxint.media_reconcile")  # type: ignore[misc, untyped-decorator, unused-ignore]
+def media_reconcile() -> dict[str, int]:
+    """Drive interrupted media operations to a consistent terminal state (ADR 0007).
+
+    Processes non-terminal journal rows (move, trash, restore) by classifying
+    filesystem reality against recorded intent. Always registered on beat; a
+    no-op when no non-terminal rows exist.
+    """
+    from voxint.media.reconcile import reconcile_operations
+
+    settings = get_settings()
+    factory, _ = _runtime()
+    summary = reconcile_operations(
+        factory,
+        settings.media_root,
+        batch_limit=settings.media_reconcile_batch_limit,
+    )
+    if summary.selected > 0:
+        logger.info("media_reconcile %s", summary.as_dict())
+    return summary.as_dict()
+
+
 def _publish_watch_run(run_id: uuid.UUID) -> bool:
     """Publish a committed watch-sweep run, returning ``False`` (never raising) on a
     broker outage so the durable QUEUED row is simply left for ``recovery_sweep``.
