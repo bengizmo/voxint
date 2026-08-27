@@ -467,6 +467,11 @@ def _validate_resume_record(obj: Any, lineno: int) -> str:
     n_windows = obj.get("n_windows", 0)
     if not isinstance(n_windows, int) or isinstance(n_windows, bool) or n_windows < 0:
         raise InferError(f"resume journal line {lineno} ({clip_id}): n_windows must be int >= 0")
+    dropped = obj.get("dropped_tail_samples", 0)
+    if not isinstance(dropped, int) or isinstance(dropped, bool) or dropped < 0:
+        raise InferError(
+            f"resume journal line {lineno} ({clip_id}): dropped_tail_samples must be int >= 0"
+        )
     return clip_id
 
 

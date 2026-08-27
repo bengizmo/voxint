@@ -253,6 +253,15 @@ def test_plan_windows_production_exact_boundary_no_tail() -> None:
     assert plan.dropped_tail_samples == 0
 
 
+def test_plan_windows_production_multi_window_tail_drop() -> None:
+    # 3 full windows (3 * 64600 = 193800) + 500-sample tail -> tail dropped.
+    plan = si.plan_windows(194300, MODEL.windowing, mode="production")
+    assert len(plan.spans) == 3
+    assert plan.spans == ((0, 64600), (64600, 129200), (129200, 193800))
+    assert plan.repeat_padded is False
+    assert plan.dropped_tail_samples == 500
+
+
 def test_plan_windows_rejects_empty_and_unknown_mode() -> None:
     with pytest.raises(si.InferError, match="empty clip"):
         si.plan_windows(0, MODEL.windowing, mode="upstream")
@@ -474,6 +483,12 @@ def test_parse_resume_journal_rejects_bad_states() -> None:
     miss = "\n".join([h, json.dumps({"raw_score": 1.0})])
     with pytest.raises(si.InferError, match="missing a clip_id"):
         si.parse_resume_journal(miss + "\n")
+    # invalid dropped_tail_samples
+    bad_tail = "\n".join([h, json.dumps({
+        "clip_id": "a", "raw_score": 1.0, "dropped_tail_samples": -1,
+    })])
+    with pytest.raises(si.InferError, match="dropped_tail_samples"):
+        si.parse_resume_journal(bad_tail + "\n")
 
 
 # --------------------------------------------------------------------------- #

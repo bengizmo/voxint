@@ -58,6 +58,8 @@ from typing import Final
 #     measured parent RMS and so is not a pure argv (see the S5 pre-registration).
 # v5 (2026-08-26, S5 PR-3): frozen cohort policy (one degraded child per
 #     calibration parent, hash-assigned from six single-recipe chains).
+# v6 (2026-08-27, S5 PR-4): added WindowingPolicy.production_tail_floor_samples;
+#     production window/hop now 4.0375 s so production windows equal model width.
 SOURCES_VERSION: Final = "synthdetect-sources-v6"
 
 # A frozen weight sha is a lowercase hex sha256; a pinned model commit is a
