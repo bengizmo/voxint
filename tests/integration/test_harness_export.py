@@ -41,7 +41,7 @@ from voxint.harness_export import (
 )
 from voxint.speakers.matching import (
     MatchingGates,
-    _roster_centroids,
+    roster_centroids,
     evaluate_run,
     match_speakers,
     replace_run_match_candidates,
@@ -355,7 +355,7 @@ def test_enrollment_matches_production_centroid(session: Session) -> None:
     assert enroll["embedding_space"] == SPACE
     assert enroll["dims"] == EMBEDDING_DIM
     (host_id, vp), = enroll["voiceprints"].items()  # type: ignore[attr-defined]
-    centroid = _roster_centroids(session, SPACE)[uuid.UUID(host_id)]
+    centroid = roster_centroids(session, SPACE)[uuid.UUID(host_id)]
     assert np.allclose(vp["embedding"], centroid.tolist())
     assert vp["enrollment_items"] == 2
     assert vp["held_out"] is True

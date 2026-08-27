@@ -21,6 +21,7 @@ Method (v1, thresholds in docs/quality-gates.md):
   not a low-confidence proposal.
 """
 
+import itertools
 import logging
 import math
 import uuid
@@ -310,7 +311,7 @@ def evaluate_run(
             )
             continue
         if space not in rosters:
-            rosters[space] = _roster_centroids(session, space)
+            rosters[space] = roster_centroids(session, space)
         roster = rosters[space]
         roster_size = len(roster)
         if not roster:
@@ -598,7 +599,7 @@ def replace_run_match_candidates(
         )
 
 
-def _roster_centroids(session: Session, space: str) -> dict[uuid.UUID, np.ndarray]:
+def roster_centroids(session: Session, space: str) -> dict[uuid.UUID, np.ndarray]:
     """One unit centroid per active enrolled speaker, within one embedding space.
 
     Merged and archived speakers leave the matching roster: a merge repoints
@@ -636,3 +637,46 @@ def _unit(vector: np.ndarray) -> np.ndarray | None:
     if not math.isfinite(norm) or norm == 0.0:
         return None
     return vector / norm
+
+
+@dataclass(frozen=True)
+class DuplicatePair:
+    speaker_a_id: uuid.UUID
+    speaker_b_id: uuid.UUID
+    similarity: float
+
+
+def find_possible_duplicates(
+    session: Session, threshold: float
+) -> list[DuplicatePair]:
+    """Active speaker pairs whose enrollment centroids exceed *threshold*.
+
+    Computes pairwise cosine within each embedding space separately (cross-space
+    comparisons are meaningless). O(active-roster^2) per space — fine at
+    single-operator scale. If the same pair appears in multiple spaces the
+    highest cosine wins.
+    """
+    spaces: list[str] = list(
+        session.scalars(
+            select(SpeakerEmbedding.embedding_space)
+            .join(Speaker, Speaker.id == SpeakerEmbedding.speaker_id)
+            .where(active_speaker_clause())
+            .distinct()
+        )
+    )
+    best: dict[tuple[uuid.UUID, uuid.UUID], float] = {}
+    for space in spaces:
+        centroids = roster_centroids(session, space)
+        for (id_a, vec_a), (id_b, vec_b) in itertools.combinations(
+            centroids.items(), 2
+        ):
+            cos = float(vec_a @ vec_b)
+            if cos < threshold:
+                continue
+            key = (min(id_a, id_b), max(id_a, id_b))
+            if key not in best or cos > best[key]:
+                best[key] = cos
+    return sorted(
+        (DuplicatePair(k[0], k[1], v) for k, v in best.items()),
+        key=lambda p: (-p.similarity, p.speaker_a_id, p.speaker_b_id),
+    )

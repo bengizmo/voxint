@@ -13,7 +13,7 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_archive }}" data-csrf-archive>
 
 {# TO DO strip (#159 R4): action reminders the operator needs to address. #}
-{% if overview.unverified_active or overview.name_suggestions %}
+{% if overview.unverified_active or overview.name_suggestions or overview.possible_duplicates %}
 <div class="spk-todo-strip" aria-label="Action reminders">
   <span class="spk-todo-label">TO DO</span>
   {% if overview.unverified_active %}
@@ -24,6 +24,18 @@
   {% if overview.name_suggestions %}
   <span class="spk-todo-item">
     {{ overview.name_suggestion_total }} name suggestion{{ "s" if overview.name_suggestion_total != 1 }} to review
+  </span>
+  {% endif %}
+  {% if overview.possible_duplicates %}
+  <span class="spk-todo-item">
+    {{ overview.possible_duplicates_total }} pair{{ "s" if overview.possible_duplicates_total != 1 }} of voices sound alike —
+    {% for d in overview.possible_duplicates %}
+    <a href="/speakers/{{ d.speaker_a_id }}">{{ d.speaker_a_name }}</a> &amp;
+    <a href="/speakers/{{ d.speaker_b_id }}">{{ d.speaker_b_name }}</a>{% if not loop.last %}, {% endif %}
+    {% endfor %}
+    {% if overview.possible_duplicates_total > overview.possible_duplicates|length %}
+    and {{ overview.possible_duplicates_total - overview.possible_duplicates|length }} more
+    {% endif %}
   </span>
   {% endif %}
 </div>
