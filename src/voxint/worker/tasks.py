@@ -552,44 +552,18 @@ def media_reconcile() -> dict[str, int]:
     return summary.as_dict()
 
 
-def _publish_watch_run(run_id: uuid.UUID) -> bool:
-    """Publish a committed watch-sweep run, returning ``False`` (never raising) on a
-    broker outage so the durable QUEUED row is simply left for ``recovery_sweep``.
-
-    The worker must not import the API's ``_publish_or_defer``; this mirrors its
-    intent inline. Only kombu's ``OperationalError`` (every transport/connection
-    failure, re-exported by celery) is swallowed — a genuine publish bug still raises.
-    """
-    from celery.exceptions import OperationalError
-
-    # Watch submissions are fresh runs, so stage=None mechanically selects the
-    # default GPU lane through the same routing decision as every other publisher.
-    try:
-        pipeline_task_for_stage(None).apply_async((str(run_id),), ignore_result=True)
-    except OperationalError:
-        logger.warning(
-            "watch_sweep enqueue deferred (broker unavailable); run %s stays QUEUED "
-            "for the recovery sweep",
-            run_id,
-            exc_info=True,
-        )
-        return False
-    return True
-
-
 @app.task(name="voxint.watch_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
 def watch_sweep() -> dict[str, Any]:
     """Auto-ingest new media from the operator's registered folders (issue #60).
 
     Thin wrapper: :func:`voxint.ingest.watch.sweep_watch_folders` owns the pass
     (effective-gate recheck, bounded scan, settle-filter, race-safe submit,
-    commit-before-publish, status persistence). ``_publish_watch_run`` is injected so
-    the broker-defer path stays here and the sweep logic stays broker-free and
-    directly testable.
+    commit-before-publish via :class:`~voxint.ingest.service.SubmissionResult`,
+    status persistence).
     """
     settings = get_settings()
     factory, _ = _runtime()
-    summary = sweep_watch_folders(factory, settings, publish=_publish_watch_run)
+    summary = sweep_watch_folders(factory, settings)
     logger.info("watch_sweep %s", summary.as_dict())
     return summary.as_dict()
 

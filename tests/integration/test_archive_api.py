@@ -55,7 +55,7 @@ def client(session_factory: sessionmaker[Session]) -> TestClient:
 
 def _make_completed(session_factory: sessionmaker[Session]) -> uuid.UUID:
     with session_factory() as session:
-        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").id
+        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").run_id
         session.commit()
         held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
         held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=STAGE_ORDER[0])
@@ -69,7 +69,7 @@ def _make_completed(session_factory: sessionmaker[Session]) -> uuid.UUID:
 
 def _make_failed(session_factory: sessionmaker[Session]) -> tuple[uuid.UUID, int]:
     with session_factory() as session:
-        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").id
+        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").run_id
         session.commit()
         held = snapshot(session.get(PipelineRun, run_id))  # type: ignore[arg-type]
         held = cas_update_run(session, held, status=RunStatus.RUNNING, current_stage=STAGE_ORDER[0])
@@ -82,7 +82,7 @@ def _make_failed(session_factory: sessionmaker[Session]) -> tuple[uuid.UUID, int
 
 def _make_queued(session_factory: sessionmaker[Session]) -> uuid.UUID:
     with session_factory() as session:
-        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").id
+        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").run_id
         session.commit()
         return run_id
 

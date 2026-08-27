@@ -54,6 +54,14 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     monkeypatch.setattr(
         "voxint.api.routers.deps._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
     )
+
+    from voxint.ingest.service import SubmissionResult
+
+    def _record_publish(self: SubmissionResult) -> bool:
+        calls.append(self.run_id)
+        return True
+
+    monkeypatch.setattr(SubmissionResult, "publish", _record_publish)
     return calls
 
 
@@ -72,8 +80,9 @@ def _drive_to_running(session: Session, run_id: uuid.UUID, stage: Stage) -> RunS
 
 def _make_queued_run(session_factory: sessionmaker[Session]) -> tuple[uuid.UUID, int]:
     with session_factory() as session:
-        run = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav")
+        result = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav")
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         return run.id, run.revision
 
 
