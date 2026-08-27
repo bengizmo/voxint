@@ -171,22 +171,25 @@ def test_job_detail_suppresses_the_tutorial_banner(
 def test_sidebar_jobs_entry_points_at_runs_when_flag_off(
     client_flag_off: TestClient,
 ) -> None:
-    """With the flag off (shipped default) the sidebar is byte-unchanged: the
-    Jobs entry still points at the /runs placeholder, and no /jobs nav link."""
+    """With the flag off (shipped default) the icon rail Jobs entry still points
+    at the /runs placeholder, and no /jobs nav link."""
     home = client_flag_off.get("/")
     assert home.status_code == 200
-    assert '<a href="/runs">Jobs</a>' in home.text
+    assert 'href="/runs"' in home.text
+    assert 'aria-label="Jobs"' in home.text
     assert '<a href="/jobs"' not in home.text
 
 
 def test_sidebar_jobs_entry_points_at_jobs_when_flag_on(
     client_flag_on: TestClient,
 ) -> None:
-    """With the flag on, the sidebar repoints Jobs at /jobs; the entry carries
-    aria-current on the Jobs page itself."""
+    """With the flag on, the icon rail Jobs entry repoints at /jobs; the entry
+    carries aria-current on the Jobs page itself."""
     home = client_flag_on.get("/")
     assert home.status_code == 200
-    assert '<a href="/jobs"' in home.text
+    assert 'href="/jobs"' in home.text
+    assert 'aria-label="Jobs"' in home.text
     # On /jobs, the entry is the current page.
     jobs = client_flag_on.get("/jobs")
-    assert '<a href="/jobs" aria-current="page">Jobs</a>' in jobs.text
+    assert 'href="/jobs"' in jobs.text
+    assert 'aria-current="page"' in jobs.text
