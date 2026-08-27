@@ -54,7 +54,7 @@ MAX_NOTE_CHARS = 2_000
 class ConflictingReplayError(Exception):
     def __init__(self, idempotency_key: str) -> None:
         super().__init__(
-            f"idempotency key {idempotency_key!r} was already used with a different payload"
+            "this action conflicts with a previous submission — refresh the page and try again"
         )
         self.idempotency_key = idempotency_key
 

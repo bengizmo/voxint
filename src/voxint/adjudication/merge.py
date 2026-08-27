@@ -297,8 +297,8 @@ def apply_merge(
         enrollable = [label for label in clean if label in eligible]
         if not enrollable:
             raise MergeError(
-                "none of the selected labels have embedded turns to enroll a new "
-                "speaker from — assign them to an existing speaker instead"
+                "none of the selected labels have speaker audio to create a new "
+                "identity from — assign them to an existing speaker instead"
             )
         primary = max(enrollable, key=lambda label: states[label].turn_count)
         try:

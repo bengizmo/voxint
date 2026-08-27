@@ -162,6 +162,8 @@ what operators do. Classify by what the change can affect.
 | New cross-cutting backend seam or public API | non-trivial | multi-model review | only if an island consumes it | Design choices and a new contract. |
 | Bump a dependency | high (supply chain) | full panel | yes if it is a frontend, build, or island runtime dependency | Supply-chain escalation; the lane only if island runtime can change. |
 | Edit a release or CI workflow (`release.yml`, required-check wiring) | high (released artifact, gate strength) | full panel | no | Changes the supply chain or the gate set. |
+| Localized internal restructuring (helper extraction, module split) preserving all public imports, with no ORM registration, migration, concurrency, or numerics implications | routine | single-model review | no | Structural move, not a contract change. Existing coverage verifies behaviour is preserved. Escalate if the move touches ORM mapper registration, creates circular imports, or changes import-time side effects. |
+| Operator-facing error/UX copy rewrite that changes message text but not HTTP status, error conditions, or behaviour | routine | single-model review | yes, if the affected error path is console-visible | Copy is observable behaviour. Single-model review verifies no information-hiding or recovery-instruction regressions. |
 
 This choice is about the slice in front of you. It does not replace the release
 process's **Gate E**, which runs its own browser acceptance lane before tagging a

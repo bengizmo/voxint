@@ -442,8 +442,10 @@ _reject_unsafe_env_value() {
 _is_full_sha() {
   # $1 = candidate; success iff exactly 40 lowercase hex chars (the whisper
   # service's revision gate). Empty or any non-hex character fails. Bash 3.2.
+  # Spell out abcdef instead of a-f: on macOS Bash 3.2 the default locale
+  # makes [a-f] include uppercase letters, so A-F would pass the check.
   case $1 in
-    *[!0-9a-f]*) return 1 ;;
+    *[!0-9abcdef]*) return 1 ;;
   esac
   [ "${#1}" -eq 40 ]
 }
