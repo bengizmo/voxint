@@ -16,6 +16,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   run status, matching the folder-row treatment.
 - **Media overview: selected-row teal tint** (#249, epic #149). Checking a media
   row now highlights it with the existing teal-tint background rule.
+- **Jobs page: TOOK column, subfolder line, failure reason** (#244, epic #149).
+  Completed and failed runs now show actual elapsed time (e.g. "3m40s") instead
+  of a placeholder. Runs from a registered settings folder show the folder path
+  below the filename. Failed runs show their error message in the REVIEW column.
 
 ### Fixed
 - **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
