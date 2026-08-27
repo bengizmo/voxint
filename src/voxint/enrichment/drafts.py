@@ -42,7 +42,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import exists, func, select, text, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from voxint.db.models import (
@@ -56,6 +55,7 @@ from voxint.db.models import (
     ProfileReviewDecision,
 )
 from voxint.enrichment.review import ConflictingReplayError
+from voxint.idempotency import savepoint_adopt_or_conflict
 
 MAX_PRODUCER_CHARS = 200
 MAX_VALUE_CHARS = 4_000
@@ -547,56 +547,50 @@ def record_producer_run(
         text("SELECT pg_advisory_xact_lock(hashtext(:producer), hashtext(:scope))"),
         {"producer": producer, "scope": scope.lock_key()},
     )
-    # Re-check after winning the lock: a same-key retry that raced the first
-    # check adopts here instead of burning an INSERT on a known conflict.
-    existing = _existing()
-    if existing is not None:
-        return _adopt_or_conflict(existing)
-    generation = (
-        session.execute(
-            select(func.coalesce(func.max(EnrichmentProducerRun.generation), 0)).where(
-                EnrichmentProducerRun.producer == producer, *_scope_filter(scope)
-            )
-        ).scalar_one()
-        + 1
+
+    def _persist() -> EnrichmentProducerRun:
+        generation = (
+            session.execute(
+                select(func.coalesce(func.max(EnrichmentProducerRun.generation), 0)).where(
+                    EnrichmentProducerRun.producer == producer, *_scope_filter(scope)
+                )
+            ).scalar_one()
+            + 1
+        )
+        run = EnrichmentProducerRun(
+            producer=producer,
+            producer_version=producer_version,
+            target_kind=scope.kind.value,
+            speaker_id=scope.speaker_id,
+            pipeline_run_id=scope.pipeline_run_id,
+            diarization_label=scope.diarization_label,
+            covered_fields=[f.value for f in covered],
+            generation=generation,
+            outcome=(
+                EnrichmentOutcome.NONE.value
+                if not candidates
+                else EnrichmentOutcome.FOUND.value
+            ),
+            config_schema_version=config_schema_version,
+            idempotency_key=idempotency_key,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        if config is not None:
+            run.config = dict(config)
+        session.add(run)
+        session.flush()
+        _insert_candidates(session, run, candidates)
+        _supersede_prior(session, run, scope, covered)
+        return run
+
+    # The helper's lookup() acts as the post-lock re-check.
+    return savepoint_adopt_or_conflict(
+        session,
+        lookup=_existing,
+        adopt_or_conflict=_adopt_or_conflict,
+        persist=_persist,
     )
-    run = EnrichmentProducerRun(
-        producer=producer,
-        producer_version=producer_version,
-        target_kind=scope.kind.value,
-        speaker_id=scope.speaker_id,
-        pipeline_run_id=scope.pipeline_run_id,
-        diarization_label=scope.diarization_label,
-        covered_fields=[f.value for f in covered],
-        generation=generation,
-        outcome=(
-            EnrichmentOutcome.NONE.value
-            if not candidates
-            else EnrichmentOutcome.FOUND.value
-        ),
-        config_schema_version=config_schema_version,
-        idempotency_key=idempotency_key,
-        started_at=started_at,
-        completed_at=completed_at,
-    )
-    # Assign only when present: an explicit ``config=None`` would serialize as
-    # a JSON ``null`` (not SQL NULL) and trip the jsonb_typeof CHECK.
-    if config is not None:
-        run.config = dict(config)
-    try:
-        # Savepoint, not a bare flush: losing an idempotency race must not
-        # roll back the caller's enclosing transaction (ledger.py pattern).
-        with session.begin_nested():
-            session.add(run)
-            session.flush()
-            _insert_candidates(session, run, candidates)
-            _supersede_prior(session, run, scope, covered)
-    except IntegrityError:
-        existing = _existing()
-        if existing is None:
-            raise
-        return _adopt_or_conflict(existing)
-    return run
 
 
 def _insert_candidates(

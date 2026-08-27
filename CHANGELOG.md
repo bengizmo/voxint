@@ -7,6 +7,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Idempotent insert helper extracted** (Phase 2, finding M10). The
+  savepoint-adopt-or-conflict skeleton that was duplicated across ledger,
+  annotations, drafts, and run assets is now a single
+  `savepoint_adopt_or_conflict()` in `voxint.idempotency`. Each site calls
+  it with its own lookup, match, and persist callbacks. Behavior-preserving:
+  same key, fingerprint, savepoint, and advisory-lock semantics.
+- **Stage graph contract tests and runtime guard** (Phase 1 H6). Twelve
+  contract tests lock the pipeline stage invariants: enum/STAGE_ORDER
+  agreement, GPU/POST lane partition completeness and contiguity,
+  build_stage_fns coverage, and lane routing correctness. A runtime guard in
+  `build_stage_fns` fails at startup if a new Stage member is missing a
+  function mapping.
 - **Ingest: SubmissionResult makes commit-before-publish visible** (Forgejo #7,
   finding H5). All submit functions (`submit_upload`, `submit_url`,
   `submit_media_item`, `submit_media_item_if_new`) now return a

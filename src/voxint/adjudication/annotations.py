@@ -48,6 +48,7 @@ from voxint.db.models import (
     TranscriptAnnotation,
     TranscriptSegment,
 )
+from voxint.idempotency import savepoint_adopt_or_conflict
 
 # Anchor kinds (mirror the DB CHECK). segment_range ALWAYS means whole immutable
 # parents; a whole split-child selection is word_range, not segment_range.
@@ -828,9 +829,12 @@ def capture_annotation(
     key = _idempotency_key(run_id, nonce)
     fingerprint = _create_fingerprint(payload, color_index, note, tags)
 
-    existing = session.execute(
-        select(TranscriptAnnotation).where(TranscriptAnnotation.idempotency_key == key)
-    ).scalar_one_or_none()
+    def _lookup() -> TranscriptAnnotation | None:
+        return session.execute(
+            select(TranscriptAnnotation).where(TranscriptAnnotation.idempotency_key == key)
+        ).scalar_one_or_none()
+
+    existing = _lookup()
     if existing is not None:
         return _adopt_or_conflict(existing, fingerprint)
 
@@ -854,23 +858,22 @@ def capture_annotation(
         request_fingerprint=fingerprint,
     )
     _assign_anchor(row, derived)
-    try:
-        # Savepoint, not a bare flush: the route composes this into the claimed
-        # write transaction, and losing the same-nonce race must not roll that back.
-        with session.begin_nested():
-            session.add(row)
-            session.flush()
-    except IntegrityError:
-        adopted = session.execute(
-            select(TranscriptAnnotation).where(TranscriptAnnotation.idempotency_key == key)
-        ).scalar_one_or_none()
-        if adopted is None:
-            raise  # not a replay race — a real FK/CHECK violation
-        return _adopt_or_conflict(adopted, fingerprint)
 
-    _replace_tag_links(session, row.id, deduped_tags)
-    session.flush()
-    return row
+    def _persist() -> TranscriptAnnotation:
+        session.add(row)
+        session.flush()
+        return row
+
+    result = savepoint_adopt_or_conflict(
+        session,
+        lookup=_lookup,
+        adopt_or_conflict=lambda e: _adopt_or_conflict(e, fingerprint),
+        persist=_persist,
+    )
+    if result is row:
+        _replace_tag_links(session, row.id, deduped_tags)
+        session.flush()
+    return result
 
 
 def _adopt_or_conflict(existing: TranscriptAnnotation, fingerprint: str) -> TranscriptAnnotation:
