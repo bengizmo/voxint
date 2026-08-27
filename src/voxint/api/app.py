@@ -10,6 +10,7 @@ appends; the newest ruling per label wins at read time).
 """
 
 import logging
+import re
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
+from voxint.api.routers.editor import router as editor_router
 from voxint.api.routers.home import router as home_router
 from voxint.api.routers.jobs import router as jobs_router
 from voxint.api.routers.legacy_review import router as review_router
@@ -225,26 +227,49 @@ class _SecurityHeadersMiddleware:
             await self._app(scope, receive, send)
             return
 
-        review_path = scope.get("path", "").startswith("/review")
+        token_path = _is_token_sensitive_path(scope.get("path", ""))
 
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 _apply_security_headers(
-                    MutableHeaders(scope=message), review_path=review_path
+                    MutableHeaders(scope=message), token_path=token_path
                 )
             await send(message)
 
         await self._app(scope, receive, send_with_headers)
 
 
-def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> None:
+_MEDIA_DETAIL_RE = re.compile(
+    r"^/media/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/editor(?:\?|$)",
+    re.IGNORECASE,
+)
+
+
+def _is_token_sensitive_path(path: str) -> bool:
+    """True for route families that may carry a claim token in the URL or response.
+
+    Matched paths get ``Cache-Control: no-store`` so token-bearing responses are
+    never written to a browser or proxy cache. Currently two families:
+
+    * ``/review`` and all descendants (the legacy review flow).
+    * ``/media/{uuid}`` and descendants (the editor detail page, #156).
+
+    Library-level ``/media`` routes (listing, upload, assign, rerun, archive) are
+    excluded -- they never carry tokens and should remain cacheable by the browser.
+    """
+    if path.startswith("/review"):
+        return True
+    return bool(_MEDIA_DETAIL_RE.match(path))
+
+
+def _apply_security_headers(headers: MutableHeaders, *, token_path: bool) -> None:
     """Stamp the console's baseline security headers (idempotent via ``setdefault``).
 
     Shared by ``_SecurityHeadersMiddleware`` and the 500 handler so the policy has
     one definition.
 
     * ``Referrer-Policy: no-referrer`` and ``Cache-Control: no-store`` (on
-      ``/review``) contain the URL-borne claim token (finding D1).
+      token-sensitive paths) contain the URL-borne claim token (finding D1).
     * ``X-Content-Type-Options: nosniff`` on **every** response (issue #103): the
       console serves user-controlled transcript text as downloadable exports
       (``.txt``/``.md``/``.srt``/``.vtt``/``.json``/``.rttm``) and the built
@@ -256,7 +281,7 @@ def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> No
     """
     headers.setdefault("referrer-policy", "no-referrer")
     headers.setdefault("x-content-type-options", "nosniff")
-    if review_path:
+    if token_path:
         headers.setdefault("cache-control", "no-store")
 
 
@@ -270,7 +295,7 @@ async def _security_headers_on_error(request: Request, exc: Exception) -> Respon
     this response, so it does not mask exceptions from the server or tests."""
     response = Response("Internal Server Error", status_code=500, media_type="text/plain")
     _apply_security_headers(
-        response.headers, review_path=request.url.path.startswith("/review")
+        response.headers, token_path=_is_token_sensitive_path(request.url.path)
     )
     return response
 
@@ -382,6 +407,12 @@ def _register_routes(app: FastAPI) -> None:
     # Always registered so the route inventory is stable across the dark-ship
     # flip; the router's require_media_enabled gate 404s until the flag is on.
     console.include_router(media_router)
+
+    # ---- Media detail / editor (Console 2.0 P3a, #156): the /media/{id} page.
+    # Registered immediately after media_router so the UUID path parameter does
+    # not shadow the library's named action routes (/media/submit etc.). Same
+    # area gate (require_media_enabled) on the router.
+    console.include_router(editor_router)
 
     # ---- Projects (Console 2.0 P2b, #153): the /projects list + detail pages.
     # Always registered (stable route inventory); require_projects_enabled 404s
