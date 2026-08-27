@@ -140,6 +140,7 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_timespan, transcript_payload
 from voxint.ingest import (
     MissingStageError,
+    RunArchivedError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
     RunNotCancellableError,
@@ -1118,7 +1119,7 @@ def requeue_run(
         requeue_failed_run(session, run_id, expected_revision=revision)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (RunNotFailedError, MissingStageError) as exc:
+    except (RunArchivedError, RunNotFailedError, MissingStageError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (StaleRevisionError, InvalidTransitionError) as exc:
         # StaleRevisionError: the tab's revision lost the CAS.

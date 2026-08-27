@@ -654,6 +654,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   `/submit` and POST `/fetch` redirect to `/media` (303) instead of
   processing the upload, so a direct POST or stale browser tab never
   bypasses the banner.
+- **Requeue refuses archived runs** (#7, refactoring batch 0D M9). A
+  `RunArchivedError` now fires before the FAILED status check in
+  `requeue_failed_run`, so an archived run cannot be driven live from
+  any surface (the API's route-level guard was already there; the
+  service-level guard protects the CLI path too).
+- **Startup reconciler for orphaned incoming/ files** (#7, refactoring
+  batch 0D M4). `reconcile_orphaned_incoming` scans `media_root/incoming/`
+  at app startup and removes files that have no committed MediaItem row
+  (crash orphans from the os.replace-before-commit window).
 
 ### Fixed
 - **Synthdetect M1 S5 PR-4: production windowing fixes** (#144). Two
