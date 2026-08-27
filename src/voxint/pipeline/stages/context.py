@@ -388,7 +388,7 @@ def build_stage_fns(ctx: StageContext) -> dict[Stage, StageFn]:
         transcribe,
     )
 
-    return {
+    fns: dict[Stage, StageFn] = {
         Stage.ACQUIRE: partial(acquire.run, ctx),
         Stage.PREPARE: partial(prepare.run, ctx),
         Stage.TRANSCRIBE: partial(transcribe.run, ctx),
@@ -396,6 +396,10 @@ def build_stage_fns(ctx: StageContext) -> dict[Stage, StageFn]:
         Stage.ENHANCE_MATCH: partial(enhance_match.run, ctx),
         Stage.FINALIZE: partial(finalize.run, ctx),
     }
+    missing = set(Stage) - fns.keys()
+    if missing:
+        raise RuntimeError(f"build_stage_fns missing stages: {missing}")
+    return fns
 
 
 def normalized_audio_path(session: Session, run_id: uuid.UUID, media_root: Path) -> Path:
