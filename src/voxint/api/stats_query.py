@@ -230,9 +230,40 @@ def speakers_enrolled_since(session: Session, *, since: datetime | None) -> int:
     return session.execute(stmt).scalar_one()
 
 
+def minutes_transcribed_since(session: Session, *, since: datetime | None) -> int:
+    """Total minutes of audio with at least one completed run, windowed.
+
+    Sums ``MediaItem.duration_seconds`` for items that have at least one
+    non-archived completed run created at or after ``since``. Returns whole
+    minutes (truncated). Items with no probed duration are excluded (they
+    contribute zero, not an unknown).
+    """
+    completed_media_stmt = (
+        sa_select(PipelineRun.media_item_id)
+        .where(
+            PipelineRun.status == RunStatus.COMPLETED.value,
+            PipelineRun.archived_at.is_(None),
+        )
+    )
+    if since is not None:
+        completed_media_stmt = completed_media_stmt.where(
+            PipelineRun.created_at >= since
+        )
+    completed_sub = completed_media_stmt.distinct().correlate(None).subquery()
+
+    raw = session.execute(
+        sa_select(func.coalesce(func.sum(MediaItem.duration_seconds), 0.0).cast(Float))
+        .where(
+            MediaItem.id.in_(sa_select(completed_sub.c.media_item_id)),
+            MediaItem.duration_seconds.isnot(None),
+        )
+    ).scalar_one()
+    return int(float(raw) // 60)
+
+
 @dataclass(frozen=True)
 class WindowedCounts:
-    """The three windowed activity counts Home's stat switcher renders (#152).
+    """The four windowed activity counts Home's stat switcher renders (#152).
 
     ``since=None`` is the "all time" window. The counts share their query
     functions with :func:`collect_stats`, so Home and ``voxint stats`` cannot
@@ -243,6 +274,7 @@ class WindowedCounts:
     media_added: int
     runs_started: int
     speakers_enrolled: int
+    minutes_transcribed: int
 
 
 def windowed_counts(session: Session, *, since: datetime | None) -> WindowedCounts:
@@ -252,6 +284,7 @@ def windowed_counts(session: Session, *, since: datetime | None) -> WindowedCoun
         media_added=media_added_since(session, since=since),
         runs_started=runs_created_since(session, since=since),
         speakers_enrolled=speakers_enrolled_since(session, since=since),
+        minutes_transcribed=minutes_transcribed_since(session, since=since),
     )
 
 

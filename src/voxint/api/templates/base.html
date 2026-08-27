@@ -829,6 +829,127 @@
               color: var(--danger); }
     .cb-btn-danger:hover { background: var(--danger-soft); }
 
+    /* ============================================================
+       Ops Console R1 Home + R2 Jobs (epic #205, #210/#211).
+       Section layout, attention cards, start actions, recent feed,
+       pipeline board, degraded banner, filter tabs.
+       ============================================================ */
+
+    /* --- Shared section layout ---------------------------------- */
+    .oc-section { margin-bottom: var(--space-5); }
+    .oc-section-title { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); margin-bottom: var(--space-3);
+                font-weight: 500; }
+    .oc-section-header { display: flex; align-items: center; gap: var(--space-4);
+                flex-wrap: wrap; margin-bottom: var(--space-3); }
+    .oc-section-header .oc-section-title { margin-bottom: 0; }
+    .oc-muted { font-size: var(--t-sm); color: var(--ink-3); }
+
+    /* --- Attention cards (R1 Home) ------------------------------- */
+    .attention-cards { display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+                gap: var(--space-3); }
+    .attention-card { display: flex; align-items: center; gap: var(--space-3);
+                padding: var(--space-3) var(--space-4);
+                border: 1px dashed var(--line); border-radius: 8px;
+                background: transparent; }
+    .attention-card .attention-count { font-family: var(--font-mono);
+                font-size: var(--t-xl); line-height: 1;
+                font-variant-numeric: tabular-nums; color: var(--ink-2); min-width: 2ch; }
+    .attention-card .attention-body { flex: 1; min-width: 0; }
+    .attention-card .attention-label { display: block; font-size: var(--t-sm);
+                font-weight: 500; color: var(--ink); }
+    .attention-card .attention-note { display: block; font-size: var(--t-xs);
+                color: var(--ink-3); }
+    .attention-card .attention-arrow { font-size: var(--t-base);
+                color: var(--accent); text-decoration: none; flex-shrink: 0; }
+    .attention-card .attention-arrow:hover { text-decoration: underline; }
+    .attention-warn { border-color: rgba(227,179,65,.4);
+                background: rgba(227,179,65,.04); }
+    .attention-warn .attention-count { color: var(--warn); }
+    .attention-warn .attention-label { color: var(--warn); }
+    .attention-danger { border-color: rgba(242,104,94,.4);
+                background: rgba(242,104,94,.04); }
+    .attention-danger .attention-count { color: var(--danger); }
+    .attention-danger .attention-label { color: var(--danger); }
+
+    /* --- Start actions (R1 Home) -------------------------------- */
+    .start-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+    .start-btn { display: inline-flex; align-items: center;
+                padding: 6px 16px; border: 1px solid var(--line);
+                border-radius: var(--r-sm); font-size: var(--t-sm);
+                color: var(--ink); text-decoration: none;
+                background: transparent; cursor: pointer; }
+    .start-btn:hover { background: var(--surface-2);
+                border-color: var(--line-strong); }
+
+    /* --- Recent feed (R1 Home) ---------------------------------- */
+    .recent-feed { border-top: 1px solid var(--line); }
+    .recent-row { display: flex; align-items: baseline; gap: var(--space-3);
+                padding: 7px 0; border-bottom: 1px solid var(--line-subtle); }
+    .recent-row:hover { background: var(--surface-2); }
+    .recent-time { font-family: var(--font-mono); font-size: var(--t-sm);
+                color: var(--ink-2); white-space: nowrap; min-width: 5.5em; flex-shrink: 0;
+                font-variant-numeric: tabular-nums; }
+    .recent-body { flex: 1; font-size: var(--t-sm); color: var(--ink); min-width: 0; }
+    .recent-body a { color: var(--accent); text-decoration: none; }
+    .recent-body a:hover { text-decoration: underline; }
+    .recent-action { flex-shrink: 0; white-space: nowrap; }
+    .recent-action a { color: var(--accent); text-decoration: none;
+                font-size: var(--t-sm); }
+    .recent-action a:hover { text-decoration: underline; }
+
+    /* --- Pipeline board (R2 Jobs) ------------------------------- */
+    .pipeline-board { display: grid;
+                grid-template-columns: repeat(5, 1fr);
+                border: 1px solid var(--line); border-radius: 8px;
+                overflow: hidden; margin-bottom: var(--space-4); }
+    .pipeline-cell { padding: var(--space-3) var(--space-4);
+                border-right: 1px solid var(--line); position: relative; }
+    .pipeline-cell:last-child { border-right: 0; }
+    .pipeline-cell.is-active { border-top: 2px solid var(--accent); }
+    .pipeline-cell.is-degraded { border-top: 2px solid var(--warn); }
+    .pipeline-cell .pc-header { display: flex; align-items: center; gap: .4em;
+                margin-bottom: 2px; }
+    .pipeline-cell .pc-dot { width: 6px; height: 6px; border-radius: 50%;
+                flex-shrink: 0; }
+    .pc-dot-ok { background: var(--ok); }
+    .pc-dot-warn { background: var(--warn); }
+    .pc-dot-idle { background: var(--ink-3); }
+    .pipeline-cell .pc-stage { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); font-weight: 500; }
+    .pipeline-cell.is-active .pc-stage { color: var(--accent); }
+    .pipeline-cell.is-degraded .pc-stage { color: var(--warn); }
+    .pipeline-cell .pc-count { font-family: var(--font-mono); font-size: var(--t-lg);
+                line-height: 1.2; font-variant-numeric: tabular-nums; }
+    .pipeline-cell .pc-sub { font-size: var(--t-xs); color: var(--ink-3); }
+    .pipeline-cell.is-degraded .pc-sub { color: var(--warn); }
+    @media (max-width: 48rem) {
+      .pipeline-board { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 30rem) {
+      .pipeline-board { grid-template-columns: 1fr 1fr; }
+    }
+
+    /* --- Degraded banner (R2 Jobs) ------------------------------ */
+    .degraded-banner { display: flex; align-items: center; gap: var(--space-3);
+                padding: var(--space-3) var(--space-4);
+                background: var(--warn-soft); border: 1px solid rgba(227,179,65,.3);
+                border-radius: 8px; margin-bottom: var(--space-4); }
+    .degraded-banner .db-text { flex: 1; font-size: var(--t-sm); color: var(--ink); }
+    .degraded-banner .db-text strong { color: var(--warn); }
+
+    /* --- Filter tabs (R2 Jobs) ---------------------------------- */
+    .filter-tabs { display: flex; align-items: center; gap: var(--space-1);
+                margin-bottom: var(--space-3); border-bottom: 1px solid var(--line); }
+    .filter-tabs a { display: inline-block; padding: var(--space-2) var(--space-3);
+                font-size: var(--t-sm); color: var(--ink-2); text-decoration: none;
+                border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .filter-tabs a:hover { color: var(--ink); }
+    .filter-tabs a[aria-current="true"] { color: var(--ink); font-weight: 500;
+                border-bottom-color: var(--accent); }
+    .filter-tabs .ft-spacer { flex: 1; }
+
     /* Operator annotation layer (issue #86). A highlight mark paints one of the six
        --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
        `color: inherit` keeps the segment's own text color. The swatches and tag
