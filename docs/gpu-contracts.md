@@ -1903,6 +1903,23 @@ validation. To keep Platt honest, calibration uses one pre-registered variant pe
 parent (or parent-group weighting): N degraded children of one utterance are not N
 independent observations.
 
+**Cohort freeze policy (S5 PR-3, implemented).** The frozen cohort (v1) assigns
+exactly one degraded chain per eligible calibration-split turn parent via
+`hash-assign-v1`: `sha256(clip_id)` mod 6 indexes the sorted chain vocabulary.
+The six frozen chains are the six single recipes (`mp3-cbr48-v1`,
+`opus-voip-cbr16-f20-v1`, `aac-lc-cbr48-v1`, `g711-mulaw-8k-v1`,
+`amr-nb-122-v1`, `speed-atempo-0p90-v1`); multi-recipe compound chains are
+demonstrated (PR-2b acceptance) but excluded from v1. Session segments (kind
+`segment` in `acquire`) are not degraded. The pre-audio plan identity is
+`cohort_plan_sha256` (hash of version, policy id, sorted chain strings, and
+sorted per-parent assignment rows including parent PCM sha256); the realized
+artifact identity is `combined_manifest_sha256` in `cohort_receipt.json`.
+Neither is the evaluator's scored calibration cohort hash (S7 scope).
+`FROZEN_COHORT_CHAINS`, `S5_COHORT_VERSION`, and `S5_COHORT_SELECTION_POLICY`
+are in `synthdetect_sources.py`; `plan_cohort` and `materialize_cohort` are in
+`synthdetect_corpus.py`. The `freeze` CLI verb runs both dry-run and execution
+mode.
+
 **Production windowing fixes (pre-registered, implemented in S5 PR-4).** The
 production windowing path (`plan_windows(mode="production")` in
 `synthdetect_infer.py`) has two issues that must be fixed and versioned before it
