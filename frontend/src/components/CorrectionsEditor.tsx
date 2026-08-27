@@ -27,6 +27,7 @@ export interface CorrectionsEditorProps {
   action: string;
   csrfToken: string;
   limits: Limits;
+  inheriting?: boolean;
 }
 
 interface Row extends CorrectionRuleProps {
@@ -68,6 +69,7 @@ export function CorrectionsEditor(props: CorrectionsEditorProps) {
   const [error, setError] = useState<FieldError | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [inheriting, setInheriting] = useState(props.inheriting ?? false);
 
   function patch(index: number, patchFields: Partial<CorrectionRuleProps>): void {
     setRows((current) =>
@@ -171,6 +173,17 @@ export function CorrectionsEditor(props: CorrectionsEditorProps) {
     } finally {
       setSaving(false);
     }
+  }
+
+  if (inheriting) {
+    return (
+      <div className="corrections-editor my-2">
+        <p className="muted">Inheriting from the folder pack or global corrections.</p>
+        <button type="button" onClick={() => setInheriting(false)}>
+          Set corrections for this project
+        </button>
+      </div>
+    );
   }
 
   return (
