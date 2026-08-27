@@ -26,10 +26,11 @@
        base; both dark token blocks below pin `color-scheme: dark`. */
     :root { color-scheme: light; }
     /* ============================================================
-       "Reading Room" design tokens (epic #89: #90 foundation, #91 palette +
-       type). ONE semantic source of truth: base.html chrome consumes these
-       directly and tailwind.config.ts ALIASES them (never duplicates hex) so
-       the page chrome and the React islands theme from a single layer.
+       "Ops Console" design tokens (epic #205, V1 #206; evolved from the
+       #89 Reading Room foundation). ONE semantic source of truth: base.html
+       chrome consumes these directly and tailwind.config.ts ALIASES them
+       (never duplicates hex) so the page chrome and the React islands theme
+       from a single layer.
 
        Two token forms live here on purpose:
        - Full colors (--paper, --ink, --accent, …) — read by this stylesheet.
@@ -48,10 +49,12 @@
        duplication is structural; a contract test keeps the two declaration
        sets identical. The status vars
        (--uncertain/--corrected/--focus-ring) and .error reference tokens, so
-       they re-theme automatically without their own dark overrides. Ship the
-       system-ui stack; a bundled font is a gated follow-up. */
+       they re-theme automatically without their own dark overrides.
+
+       Typography: IBM Plex Sans + Mono (self-hosted woff2, loaded via the
+       Tailwind bundle; system-ui fallback when unbuilt). */
     :root {
-      /* Warm paper & ink (light) */
+      /* Light theme (warm paper retained; dark is primary design target) */
       --paper: #f7f4ee;        /* app canvas — warm, not pure white */
       --surface: #fffdf9;      /* cards, nav — float slightly brighter */
       --surface-2: #f1ece2;    /* inset / row hover / subtle raise */
@@ -61,6 +64,7 @@
       --line-rgb: 230 223 210; /* hairline border channels (islands: border-line/40) */
       --line: rgb(var(--line-rgb));
       --line-strong: #d3cab9;  /* stronger divider */
+      --line-subtle: #f0ebe1;  /* row divider — lighter than --line */
 
       /* Calm teal accent — brand · links · focus · primary. Kept distinct from
          --ok green so "interactive" never reads as "success". */
@@ -103,11 +107,13 @@
       --spk-0: #2f7d8f; --spk-1: #b5651d; --spk-2: #2e7d43; --spk-3: #6a4fb0;
       --spk-4: #1f8a86; --spk-5: #b03d78; --spk-6: #8a6d1f; --spk-7: #b13d3d;
 
-      /* Type — system-ui stack (Inter deferred, report §7); mono for time/IDs */
-      --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
-      --t-xs: .75rem; --t-sm: .8125rem; --t-base: .9375rem; --t-md: 1.0625rem;
-      --t-lg: 1.375rem; --t-xl: 1.75rem; --t-2xl: 2.25rem;
+      /* Type — IBM Plex (self-hosted woff2, loaded via the Tailwind bundle;
+         system-ui fallback when unbuilt). Mono for timestamps/counts/IDs. */
+      --font-ui: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      --font-mono: 'IBM Plex Mono', ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", monospace;
+      --t-micro: .65625rem; /* 10.5px — uppercase micro-headers */
+      --t-xs: .75rem; --t-sm: .78125rem; --t-base: .8125rem; --t-md: 1.0625rem;
+      --t-lg: 1.1875rem; --t-xl: 1.5rem; --t-2xl: 2.25rem;
 
       /* Radius + restrained elevation (two soft shadows, used sparingly) */
       --r-sm: .375rem; --r-md: .625rem; --r-lg: 1rem; --r-full: 999px;
@@ -120,7 +126,7 @@
          elevated-panel padding, consumed by the .card primitive below. */
       --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem;
       --space-5: 1.25rem; --space-6: 1.5rem; --space-7: 2rem;
-      --card-pad: var(--space-4) var(--space-5);
+      --card-pad: var(--space-3) var(--space-4);
 
       /* App-shell metrics (#152). Theme-agnostic like the spacing scale (no
          dark override); the sidebar and topbar colour from the existing
@@ -146,20 +152,20 @@
     @media screen and (prefers-color-scheme: dark) {
       :root:not([data-theme="light"]) {
         color-scheme: dark;
-        --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
-        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #a39e94;
-        --line-rgb: 46 51 58; --line-strong: #3d434b;
-        --accent: #5eb8ae; --accent-ink: #7fccc3; --accent-strong: #74c4bb;
-        --accent-soft: #1e2e2c;
-        --ok: #3fb950;   --ok-soft: #16261a;
-        --warn: #d29922; --warn-soft: #2a2411;
-        --danger: #f2685e; --danger-soft: #301715;
-        --info: #6ba7dd; --info-soft: #14212e;
+        --paper: #121316; --surface: #16181c; --surface-2: #1a1c20;
+        --ink: #dfe3e8; --ink-2: #8b929c; --ink-3: #6b7280;
+        --line-rgb: 38 41 47; --line-strong: #33373e; --line-subtle: #1c1f24;
+        --accent: #4fc0b5; --accent-ink: #6dd0c6; --accent-strong: #5fc8be;
+        --accent-soft: #172423;
+        --ok: #3fb950;   --ok-soft: rgba(63,185,80,.12);
+        --warn: #e3b341; --warn-soft: rgba(227,179,65,.12);
+        --danger: #f2685e; --danger-soft: rgba(242,104,94,.12);
+        --info: #6ba7dd; --info-soft: rgba(107,167,221,.12);
         --spk-0: #5fb8cf; --spk-1: #e0954a; --spk-2: #57c06f; --spk-3: #a78be6;
         --spk-4: #4fc9c4; --spk-5: #e879b0; --spk-6: #d0af4f; --spk-7: #ec7a72;
         --shadow-1: 0 1px 2px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.34);
         --shadow-2: 0 6px 18px rgba(0,0,0,.40), 0 18px 40px rgba(0,0,0,.46);
-        --accent-contrast: var(--paper);
+        --accent-contrast: #121316;
       }
     }
     /* Dark tokens, case 2 of 2 — EXPLICIT dark chosen in Settings (#94),
@@ -168,28 +174,29 @@
     @media screen {
       :root[data-theme="dark"] {
         color-scheme: dark;
-        --paper: #17191c; --surface: #1e2126; --surface-2: #262a30;
-        --ink: #ece7dd; --ink-2: #b2aca2; --ink-3: #a39e94;
-        --line-rgb: 46 51 58; --line-strong: #3d434b;
-        --accent: #5eb8ae; --accent-ink: #7fccc3; --accent-strong: #74c4bb;
-        --accent-soft: #1e2e2c;
-        --ok: #3fb950;   --ok-soft: #16261a;
-        --warn: #d29922; --warn-soft: #2a2411;
-        --danger: #f2685e; --danger-soft: #301715;
-        --info: #6ba7dd; --info-soft: #14212e;
+        --paper: #121316; --surface: #16181c; --surface-2: #1a1c20;
+        --ink: #dfe3e8; --ink-2: #8b929c; --ink-3: #6b7280;
+        --line-rgb: 38 41 47; --line-strong: #33373e; --line-subtle: #1c1f24;
+        --accent: #4fc0b5; --accent-ink: #6dd0c6; --accent-strong: #5fc8be;
+        --accent-soft: #172423;
+        --ok: #3fb950;   --ok-soft: rgba(63,185,80,.12);
+        --warn: #e3b341; --warn-soft: rgba(227,179,65,.12);
+        --danger: #f2685e; --danger-soft: rgba(242,104,94,.12);
+        --info: #6ba7dd; --info-soft: rgba(107,167,221,.12);
         --spk-0: #5fb8cf; --spk-1: #e0954a; --spk-2: #57c06f; --spk-3: #a78be6;
         --spk-4: #4fc9c4; --spk-5: #e879b0; --spk-6: #d0af4f; --spk-7: #ec7a72;
         --shadow-1: 0 1px 2px rgba(0,0,0,.30), 0 2px 10px rgba(0,0,0,.34);
         --shadow-2: 0 6px 18px rgba(0,0,0,.40), 0 18px 40px rgba(0,0,0,.46);
-        --accent-contrast: var(--paper);
+        --accent-contrast: #121316;
       }
     }
 
     /* The body is the full canvas (#152): the app shell below owns the layout,
        and .content-wrap carries the old 72rem centered column so every
        existing page renders at its accustomed width inside the shell. */
-    body { font-family: var(--font-ui); margin: 0; line-height: 1.55;
-           overflow-wrap: break-word; background: var(--paper); color: var(--ink);
+    body { font-family: var(--font-ui); font-size: var(--t-base); margin: 0;
+           line-height: 1.5; overflow-wrap: break-word;
+           background: var(--paper); color: var(--ink);
            -webkit-font-smoothing: antialiased; }
     /* Console 2.0 app shell (#152): fixed-width sidebar + fluid main column.
        Flex, not grid, so a shellless page (setup overrides the sidebar/topbar
@@ -580,8 +587,8 @@
     /* Destructive-action variant (visual-polish pass). Soft danger fill + danger
        ink + danger border so a destructive action reads distinct from a benign
        neutral button without shouting; hover flips to a solid danger fill.
-       Measured AA as button text: 5.0:1 light (#b3261e on #f6dcd9), 5.5:1 dark
-       (#f2685e on #301715); hover text (--accent-contrast on --danger) clears AA
+       Measured AA as button text: 5.0:1 light (#b3261e on #f6dcd9), ~5.3:1 dark
+       (#f2685e on alpha-tinted canvas); hover (--accent-contrast on --danger) AA
        in both themes too. transition:none because the fill and ink invert
        together on hover, and the base button's background-only transition would
        otherwise leave a few frames of light ink on the un-darkened soft fill. */

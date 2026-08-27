@@ -19,6 +19,10 @@ export default {
         splitword: "rgb(var(--splitword-rgb) / <alpha-value>)",
         line: "rgb(var(--line-rgb) / <alpha-value>)",
       },
+      fontFamily: {
+        ui: "var(--font-ui)",
+        mono: "var(--font-mono)",
+      },
     },
   },
   plugins: [],
