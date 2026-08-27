@@ -739,13 +739,15 @@ def submit_media_upload(
     submission_id: Annotated[str, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
+    settings: Settings = request.app.state.settings
+    if settings.console_media_enabled:
+        return RedirectResponse("/media", status_code=303)
     # CSRF before anything: a forged cross-site upload is refused before the DB
     # write / file finalize. (FastAPI spools the multipart file part before this
     # body runs — the pre-body spool is bounded by _RequestSizeLimitMiddleware +
     # the streaming cap, so a forgery cannot write past those; the DB and the
     # os.replace publish are still gated here.)
     _require_csrf(request, CSRF_SUBMIT, csrf_token)
-    settings: Settings = request.app.state.settings
     # An over-cap Content-Length was already rejected before the body was read
     # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
     # cap authoritatively while streaming (covers a lying/absent length).
@@ -787,6 +789,9 @@ def fetch_media_url(
     submission_id: Annotated[str, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
+    settings: Settings = request.app.state.settings
+    if settings.console_media_enabled:
+        return RedirectResponse("/media", status_code=303)
     # CSRF first — reject a forged cross-site fetch before any other check, so
     # a forgery is refused regardless of the ytdlp_enabled flag's state.
     _require_csrf(request, CSRF_FETCH, csrf_token)
@@ -794,7 +799,6 @@ def fetch_media_url(
     # submission surface: refuse before touching the DB when it is off, so no
     # row is created and nothing is published. (The worker's ACQUIRE stage
     # never consults the flag — an already-queued URL run still completes.)
-    settings: Settings = request.app.state.settings
     if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
         # Generic message — never echo the submitted URL into an error body.
         raise HTTPException(status_code=403, detail="URL ingestion is disabled")

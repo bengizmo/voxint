@@ -17,6 +17,10 @@
    and, when enabled, a URL fetch — so elevating one never demotes the other. #}
 <section id="add-media" class="add-media">
 <h2>Add media</h2>
+{% if shell.media_enabled %}
+<p>New submissions live in the <a href="/media">Media</a> library.
+Upload files and fetch URLs from there.</p>
+{% else %}
 <form method="post" action="/submit" enctype="multipart/form-data" class="upload">
   <input type="hidden" name="submission_id" value="{{ submission_id }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_submit }}">
@@ -45,6 +49,7 @@ restricted URL-download overlay (<code>compose.ytdlp-egress.yaml</code>) — see
 operations guide, &ldquo;URL ingestion &amp; egress security&rdquo;.</p>
 {% else %}
 <p class="muted">URL ingestion is disabled.</p>
+{% endif %}
 {% endif %}
 </section>
 
