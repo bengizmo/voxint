@@ -145,19 +145,6 @@ def _stat_value(body: str, label: str) -> int:
     return int(match.group(1))
 
 
-def _completed_run_id(session_factory: sessionmaker[Session]) -> uuid.UUID:
-    """The single COMPLETED, non-archived run the snapshot seed creates."""
-    from sqlalchemy import select
-
-    with session_factory() as session:
-        return session.execute(
-            select(PipelineRun.id).where(
-                PipelineRun.status == RunStatus.COMPLETED.value,
-                PipelineRun.archived_at.is_(None),
-            )
-        ).scalar_one()
-
-
 def test_home_renders_attention_cards_and_stats(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
@@ -276,7 +263,6 @@ def test_home_activity_feed_lists_runs_and_speakers(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     seed_snapshot(session_factory)
-    completed = _completed_run_id(session_factory)
     body = client.get("/").text
     # The feed names each family with a link to its surface.
     assert "Run started" in body
