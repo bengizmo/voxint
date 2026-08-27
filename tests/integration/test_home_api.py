@@ -237,7 +237,7 @@ def test_home_malformed_window_degrades_with_notice(
     # Falls back to the day window and says so; never silently a different one.
     assert "Unrecognized" in body
     assert _stat_value(body, "JOBS RUN") == 3
-    assert re.search(r'href="/\?window=day"[^>]*is-active', body)
+    assert 'is-active" href="/?window=day"' in body
 
 
 def test_home_matches_metrics_snapshot(
