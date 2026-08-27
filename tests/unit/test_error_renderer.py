@@ -167,6 +167,23 @@ def test_4xx_headers_preserved(app_client: TestClient) -> None:
     assert response.headers["WWW-Authenticate"] == "Bearer"
 
 
+def test_non_error_status_preserves_empty_body(app_client: TestClient) -> None:
+    app = app_client.app
+
+    async def no_content(request: Request) -> None:
+        raise HTTPException(
+            status_code=204,
+            headers={"HX-Redirect": "/setup"},
+        )
+
+    app.add_api_route("/_test/nocontent", no_content)  # type: ignore[union-attr]
+    response = app_client.get("/_test/nocontent")
+
+    assert response.status_code == 204
+    assert response.text == ""
+    assert response.headers["HX-Redirect"] == "/setup"
+
+
 def test_nonexistent_route_returns_html_to_browser(app_client: TestClient) -> None:
     response = app_client.get("/definitely-not-a-route", headers={"accept": "text/html"})
 

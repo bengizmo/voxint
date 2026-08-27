@@ -307,7 +307,20 @@ def _html_error_response(request: Request, status_code: int, detail: Any) -> Res
 
 
 async def _http_exception_handler(request: Request, exc: HTTPException) -> Response:
-    """Render HTTP errors as HTML for browsers and JSON for API clients."""
+    """Render HTTP errors as HTML for browsers and JSON for API clients.
+
+    Non-error status codes (< 400, e.g. 204 with hx-redirect) are returned
+    with the original detail and no content-negotiation so the default
+    Starlette behavior is preserved."""
+    if exc.status_code < 400:
+        response = Response(
+            status_code=exc.status_code,
+            headers=exc.headers,  # type: ignore[arg-type]
+        )
+        _apply_security_headers(
+            response.headers, review_path=request.url.path.startswith("/review")
+        )
+        return response
     detail: Any = "Internal Server Error" if exc.status_code >= 500 else exc.detail
     if _wants_html(request):
         response = _html_error_response(request, exc.status_code, detail)
