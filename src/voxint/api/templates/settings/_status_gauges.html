@@ -1,0 +1,30 @@
+{# Hardware gauges for the status page (R6 #215). Polled every 15s via htmx;
+   the route handler returns just this fragment for HX-Request polls, so the
+   doctor checks (expensive network probes) are NOT re-run on every tick. #}
+{% if warnings %}
+{% for w in warnings %}
+<div class="degraded-banner" role="alert" style="margin-bottom:var(--space-3)">
+  <div class="db-text">
+    <strong>{{ w.message }}</strong> {{ w.remedy }}
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+{% if gauges %}
+{% for g in gauges %}
+<div class="gauge-row">
+  <div class="gauge-header">
+    <span class="gauge-label">{{ g.label }}</span>
+    <span class="gauge-value">{{ g.value }}</span>
+  </div>
+  <div class="gauge-track" role="meter" aria-label="{{ g.label }}" aria-valuenow="{{ g.percent }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="gauge-fill" style="width:{{ g.percent }}%"></div>
+  </div>
+</div>
+{% endfor %}
+{% if gauge_note %}
+<p class="oc-muted" style="margin-top:var(--space-3)">{{ gauge_note }}</p>
+{% endif %}
+{% else %}
+<p class="oc-muted">Hardware status unavailable. No service reported telemetry.</p>
+{% endif %}
