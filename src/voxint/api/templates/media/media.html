@@ -40,14 +40,19 @@
   [hidden] { display: none !important; }
 </style>
 
-<h1>Media{% if archived %} <span class="muted">· archived</span>{% endif %}</h1>
+<h1>Media{% if trashed %} <span class="muted">· trash</span>{% elif archived %} <span class="muted">· archived</span>{% endif %}</h1>
 <p class="muted">
-  {% if archived %}
+  {% if trashed %}
+  Trashed files awaiting permanent deletion.
+  <a href="{{ trash_toggle_url }}">← Back to active media</a>
+  {% elif archived %}
   Archived runs are hidden from the active library and the review queue.
   <a href="{{ archived_toggle_url }}">← Back to active media</a>
+  <a href="{{ trash_toggle_url }}">View trash</a>
   {% else %}
   Every recording Voxint knows about, and where each one stands.
   <a href="{{ archived_toggle_url }}">View archived runs</a>
+  <a href="{{ trash_toggle_url }}">View trash</a>
   {% endif %}
 </p>
 
@@ -60,7 +65,7 @@
 
 {# Adding media and organizing folders belong to the active library; the archived
    view is a focused surface for restoring runs, so both are hidden there. #}
-{% if not archived %}
+{% if not archived and not trashed %}
 <section class="add-media" aria-labelledby="add-media-h">
   <h2 id="add-media-h">Add media</h2>
   {% if submitted %}
@@ -105,12 +110,12 @@
      so switching sort or layout keeps you in the same view. #}
   <nav class="view-toggle" aria-label="Sort by">
     {% for value, label in sorts %}
-    <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+    <a href="/media?sort={{ value }}&view={{ view }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
     {% endfor %}
   </nav>
   <nav class="view-toggle" aria-label="Show as">
     {% for value in views %}
-    <a href="/media?sort={{ sort }}&view={{ value }}{% if archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+    <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
     {% endfor %}
   </nav>
   {# Select-all is a JS convenience; it is hidden until the script below reveals
@@ -130,7 +135,7 @@
    one target ride with the submission — per-action CSRF with no JS and no nested
    forms. The folder <select> is only read by /media/assign; /media/rerun ignores
    it. #}
-<form method="post" action="{% if archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
+<form method="post" action="{% if trashed %}/media/restore{% elif archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
 
@@ -142,7 +147,7 @@
         <th scope="col" class="lib-select-cell"><span class="visually-hidden">Select</span></th>
         <th scope="col">Name</th><th scope="col">Folder</th>
         <th scope="col">Length</th><th scope="col">Size</th>
-        <th scope="col">Latest run</th><th scope="col">Added</th>
+        <th scope="col">Latest run</th><th scope="col">{% if trashed %}Trashed{% else %}Added{% endif %}</th>
       </tr>
     </thead>
     <tbody>
@@ -171,7 +176,10 @@
           <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
           {% else %}<span class="muted">Not processed yet</span>{% endif %}
         </td>
-        <td><span title="{{ row.added_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.added_at, now=now) }}</span></td>
+        <td>
+          {% if trashed %}<span title="{{ row.trashed_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.trashed_at, now=now) }}</span>
+          {% else %}<span title="{{ row.added_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.added_at, now=now) }}</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
@@ -200,6 +208,9 @@
       <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
       {% else %}<span class="muted">Not processed yet</span>{% endif %}
     </p>
+    {% if trashed %}
+    <p class="muted" title="{{ row.trashed_at.strftime('%Y-%m-%d %H:%M UTC') }}">Trashed {{ format_age(row.trashed_at, now=now) }}</p>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>
@@ -211,7 +222,9 @@
      one target ride with the submission. Archive lives in the active view (over the
      latest non-archived run); the archived view offers only unarchive. #}
   <div class="bulk-bar">
-    {% if archived %}
+    {% if trashed %}
+    <button type="submit" formaction="/media/restore" name="csrf_token" value="{{ csrf_media_restore }}">Restore selected</button>
+    {% elif archived %}
     <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}">Restore latest archived run</button>
     {% else %}
     {# "Use settings from…" never moves the bytes; "Archive latest run" is per-run. #}
@@ -226,6 +239,7 @@
     <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Use these settings for the selected files</button>
     <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}">Re-run transcription…</button>
     <button type="submit" formaction="/media/archive" name="csrf_token" value="{{ csrf_media_archive }}">Archive latest run</button>
+    <button type="submit" formaction="/media/trash" name="csrf_token" value="{{ csrf_media_trash }}" class="danger">Move to trash</button>
     {% endif %}
     <span class="muted selected-count" data-selected-count hidden></span>
   </div>
@@ -235,11 +249,22 @@
 <p class="muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
-{% if archived %}
+{% if trashed %}
+<p class="muted">Trash is empty.</p>
+{% elif archived %}
 <p class="muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
 {% else %}
 <p class="muted">No media yet. Add a recording above, or register a folder below.</p>
 {% endif %}
+{% endif %}
+
+{% if trashed %}
+<form method="post" action="/media/empty-trash">
+  <input type="hidden" name="csrf_token" value="{{ csrf_media_empty_trash }}">
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="view" value="{{ view }}">
+  <button type="submit" class="danger">Empty trash permanently</button>
+</form>
 {% endif %}
 
 {# Folder panel: register folders so their files can share vocabulary and
@@ -247,7 +272,7 @@
    addendum); unregistering reverts its files to global settings. This section is
    a sibling of the bulk-assign form, never nested inside it, and belongs to the
    active library (hidden in the archived view). #}
-{% if not archived %}
+{% if not archived and not trashed %}
 <section class="folder-panel" aria-labelledby="folders-h">
   <h2 id="folders-h">Folders</h2>
   <p class="muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>

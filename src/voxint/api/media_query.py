@@ -59,6 +59,7 @@ class MediaLibraryRow:
     latest_run_id: uuid.UUID | None
     latest_run_status: str | None
     latest_run_at: datetime | None
+    trashed_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -140,18 +141,18 @@ def media_library(
     sort: str = DEFAULT_SORT,
     limit: int = MEDIA_LIBRARY_LIMIT,
     archived: bool = False,
+    trashed: bool = False,
 ) -> list[MediaLibraryRow]:
     """The media library rows, newest-first by default.
 
     ``sort`` is coerced to :data:`DEFAULT_SORT` when not in the allowlist. At most
     ``limit`` rows are returned; the caller surfaces truncation.
 
-    ``archived`` picks the view. Default (``False``): every media item, its latest
-    NON-archived run, matching the run listing and the Home feed — a file whose only
-    runs were archived reads as "not processed yet". Archived view (``True``): ONLY
-    items whose most-recent ARCHIVED run exists (inner join), showing that run — the
-    discoverable set for bulk unarchive, since the default view hides archived runs
-    and so gives unarchive no target (Console 2.0 P2b).
+    ``archived`` picks the run view. Default (``False``): each visible media item and
+    its latest NON-archived run, matching the run listing and Home feed. Archived
+    view (``True``): only items whose most-recent ARCHIVED run exists (inner join).
+    ``trashed`` switches the item filter from active, non-purged rows to trashed,
+    non-purged rows; callers keep it mutually exclusive with ``archived``.
     """
     order_by = _SORTS.get(sort, _SORTS[DEFAULT_SORT])
 
@@ -188,6 +189,7 @@ def media_library(
         MediaItem.duration_seconds,
         MediaItem.size_bytes,
         MediaItem.created_at,
+        MediaItem.trashed_at,
         MediaSourceMetadata.title.label("source_title"),
         MediaFolder.path.label("folder_path"),
         Project.id.label("project_id"),
@@ -198,10 +200,12 @@ def media_library(
     )
     # Outer: most media has no metadata snapshot (uploads, pre-#36 runs), sits under
     # no settings folder, or belongs to a folder with no project.
-    stmt = stmt.outerjoin(
-        MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
-    ).outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id).outerjoin(
-        Project, Project.id == MediaFolder.project_id
+    stmt = (
+        stmt.outerjoin(
+            MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
+        )
+        .outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
+        .outerjoin(Project, Project.id == MediaFolder.project_id)
     )
     if archived:
         # Archived view: only items that actually have an archived run — an INNER
@@ -209,7 +213,17 @@ def media_library(
         stmt = stmt.join(latest, latest.c.media_item_id == MediaItem.id)
     else:
         stmt = stmt.outerjoin(latest, latest.c.media_item_id == MediaItem.id)
-    stmt = stmt.order_by(*order_by).limit(limit)
+    if trashed:
+        item_view = (
+            MediaItem.trashed_at.is_not(None),
+            MediaItem.purged_at.is_(None),
+        )
+    else:
+        item_view = (
+            MediaItem.trashed_at.is_(None),
+            MediaItem.purged_at.is_(None),
+        )
+    stmt = stmt.where(*item_view).order_by(*order_by).limit(limit)
 
     rows: list[MediaLibraryRow] = []
     for row in session.execute(stmt):
@@ -232,6 +246,11 @@ def media_library(
                 latest_run_at=(
                     row.run_created_at.astimezone(UTC)
                     if row.run_created_at is not None
+                    else None
+                ),
+                trashed_at=(
+                    row.trashed_at.astimezone(UTC)
+                    if row.trashed_at is not None
                     else None
                 ),
             )

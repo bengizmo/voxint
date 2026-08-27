@@ -78,6 +78,12 @@
     ]
   ],
   [
+    "/media/empty-trash",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/fetch",
     [
       "POST"
@@ -102,7 +108,19 @@
     ]
   ],
   [
+    "/media/restore",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/media/submit",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/media/trash",
     [
       "POST"
     ]
