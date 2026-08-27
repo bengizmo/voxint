@@ -24,6 +24,7 @@ from sqlalchemy import func
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
+from voxint.adjudication.resolver import unresolved_label_count
 from voxint.db.models import (
     MediaFolder,
     MediaItem,
@@ -64,6 +65,7 @@ class MediaLibraryRow:
     latest_run_status: str | None
     latest_run_at: datetime | None
     trashed_at: datetime | None
+    unresolved_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -116,35 +118,28 @@ def group_by_folder(
     for folder_id, items in by_folder.items():
         first = items[0]
         total_dur = sum(
-            r.duration_seconds for r in items
+            r.duration_seconds
+            for r in items
             if r.duration_seconds is not None and math.isfinite(r.duration_seconds)
         )
-        latest = max(
-            (r.added_at for r in items), default=None
+        latest = max((r.added_at for r in items), default=None)
+        groups.append(
+            FolderGroup(
+                folder_id=folder_id,
+                folder_path=first.folder_path or "unknown",
+                project_name=first.project_name,
+                item_count=len(items),
+                total_duration_seconds=total_dur,
+                failed_count=sum(1 for r in items if r.latest_run_status == "failed"),
+                running_count=sum(1 for r in items if r.latest_run_status in ("running", "queued")),
+                needs_review_count=sum(
+                    1 for r in items if r.latest_run_status == "awaiting_adjudication"
+                ),
+                completed_count=sum(1 for r in items if r.latest_run_status == "completed"),
+                latest_date=latest,
+                items=items,
+            )
         )
-        groups.append(FolderGroup(
-            folder_id=folder_id,
-            folder_path=first.folder_path or "unknown",
-            project_name=first.project_name,
-            item_count=len(items),
-            total_duration_seconds=total_dur,
-            failed_count=sum(
-                1 for r in items if r.latest_run_status == "failed"
-            ),
-            running_count=sum(
-                1 for r in items
-                if r.latest_run_status in ("running", "queued")
-            ),
-            needs_review_count=sum(
-                1 for r in items
-                if r.latest_run_status == "awaiting_adjudication"
-            ),
-            completed_count=sum(
-                1 for r in items if r.latest_run_status == "completed"
-            ),
-            latest_date=latest,
-            items=items,
-        ))
     groups.sort(key=lambda g: g.folder_path.lower())
     return groups, ungrouped
 
@@ -157,7 +152,8 @@ def media_summary(
     folder_count = len(folder_groups)
     file_count = sum(g.item_count for g in folder_groups) + len(ungrouped)
     total_seconds = sum(g.total_duration_seconds for g in folder_groups) + sum(
-        r.duration_seconds for r in ungrouped
+        r.duration_seconds
+        for r in ungrouped
         if r.duration_seconds is not None and math.isfinite(r.duration_seconds)
     )
     hours = total_seconds / 3600
@@ -273,9 +269,7 @@ def media_library(
     # archived-only in the archived view), picked with a window rather than a
     # correlated per-row subquery so the whole page is one round trip.
     run_view = (
-        PipelineRun.archived_at.is_not(None)
-        if archived
-        else PipelineRun.archived_at.is_(None)
+        PipelineRun.archived_at.is_not(None) if archived else PipelineRun.archived_at.is_(None)
     )
     ranked = (
         sa_select(
@@ -311,13 +305,16 @@ def media_library(
         latest.c.run_id,
         latest.c.status,
         latest.c.run_created_at,
+        # Correlated via PipelineRun (joined below), NOT latest.c.run_id:
+        # _label_unresolved's .correlate(PipelineRun, DiarizationTurn) would
+        # re-add the entire latest subquery into each nested EXISTS if given a
+        # subquery column reference.
+        func.coalesce(unresolved_label_count(PipelineRun.id), 0).label("unresolved_count"),
     )
     # Outer: most media has no metadata snapshot (uploads, pre-#36 runs), sits under
     # no settings folder, or belongs to a folder with no project.
     stmt = (
-        stmt.outerjoin(
-            MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
-        )
+        stmt.outerjoin(MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id)
         .outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
         .outerjoin(Project, Project.id == MediaFolder.project_id)
     )
@@ -327,6 +324,7 @@ def media_library(
         stmt = stmt.join(latest, latest.c.media_item_id == MediaItem.id)
     else:
         stmt = stmt.outerjoin(latest, latest.c.media_item_id == MediaItem.id)
+    stmt = stmt.outerjoin(PipelineRun, PipelineRun.id == latest.c.run_id)
     if trashed:
         item_view = (
             MediaItem.trashed_at.is_not(None),
@@ -359,15 +357,10 @@ def media_library(
                 latest_run_id=row.run_id,
                 latest_run_status=row.status,
                 latest_run_at=(
-                    row.run_created_at.astimezone(UTC)
-                    if row.run_created_at is not None
-                    else None
+                    row.run_created_at.astimezone(UTC) if row.run_created_at is not None else None
                 ),
-                trashed_at=(
-                    row.trashed_at.astimezone(UTC)
-                    if row.trashed_at is not None
-                    else None
-                ),
+                trashed_at=(row.trashed_at.astimezone(UTC) if row.trashed_at is not None else None),
+                unresolved_count=row.unresolved_count,
             )
         )
     return rows

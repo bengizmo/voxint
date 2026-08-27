@@ -88,14 +88,12 @@ class Settings(BaseSettings):
     api_port: int = 8080
     voxint_user: str = "admin"
     voxint_password: str = "change-me"
-    # Secret keying the stateless CSRF token on the mutation forms (POST /submit,
-    # /fetch, /runs/{id}/requeue). Independent of voxint_password ON PURPOSE: a
-    # human-memorable password would turn every rendered token into a fast offline
-    # password-verification oracle. Empty ⇒ create_app() mints a random per-process
-    # secret (fine for a single-operator localhost console, but open forms break on
-    # restart / across workers); set a persistent random value
-    # (`python -c "import secrets; print(secrets.token_urlsafe(32))"`) to make
-    # tokens stable across restarts and multiple workers.
+    # Secret keying the stateless CSRF token on the mutation forms. Independent
+    # of voxint_password ON PURPOSE: a human-memorable password would turn every
+    # rendered token into a fast offline password-verification oracle. Empty
+    # (the default) ⇒ create_app() auto-generates a secret and persists it to
+    # media_root/.csrf_secret, so tokens survive restarts with zero config. Set
+    # an explicit value to override the auto-generated file.
     csrf_secret: str = ""
     # How long a reviewer holds a run before the slot self-releases. Long
     # enough for one careful listen-through; short enough that a closed tab

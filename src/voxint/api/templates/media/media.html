@@ -250,7 +250,13 @@
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>
         {% if row.latest_run_id %}
-        {{ chip(humanize_status(row.latest_run_status)) }}
+          {% if row.unresolved_count %}
+          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {% elif row.latest_run_status == "completed" %}
+          {{ chip("reviewed") }}
+          {% else %}
+          {{ chip(humanize_status(row.latest_run_status)) }}
+          {% endif %}
         {% else %}<span class="oc-muted">—</span>{% endif %}
       </span>
       <span class="num">
@@ -282,7 +288,13 @@
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>
         {% if row.latest_run_id %}
-        {{ chip(humanize_status(row.latest_run_status)) }}
+          {% if row.unresolved_count %}
+          <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
+          {% elif row.latest_run_status == "completed" %}
+          {{ chip("reviewed") }}
+          {% else %}
+          {{ chip(humanize_status(row.latest_run_status)) }}
+          {% endif %}
         {% else %}<span class="oc-muted">—</span>{% endif %}
       </span>
       <span class="num">
@@ -400,6 +412,10 @@
     if (actionBar) { actionBar.hidden = n === 0; }
     if (countEl) { countEl.textContent = n + ' selected'; }
     if (selectAllBox) { selectAllBox.checked = n > 0 && n === boxes.length; }
+    for (var b of boxes) {
+      var row = b.closest('.gt-row');
+      if (row) { row.classList.toggle('is-selected', b.checked); }
+    }
   }
   for (var b of boxes) { b.addEventListener('change', refresh); }
   if (selectAllBox) {

@@ -1,13 +1,19 @@
 """Stateless, action-bound, time-limited CSRF token mint/verify (pure functions)."""
 
+import os
+import stat
+from pathlib import Path
+
 from voxint.api.csrf import (
     _CSRF_FUTURE_SKEW_SECONDS,
+    _CSRF_SECRET_FILENAME,
     _CSRF_TTL_SECONDS,
     CSRF_CLAIM,
     CSRF_FETCH,
     CSRF_REQUEUE,
     CSRF_SETUP,
     CSRF_SUBMIT,
+    load_or_create_csrf_secret,
     mint_csrf_token,
     verify_csrf_token,
 )
@@ -132,3 +138,47 @@ def test_future_dated_token_fails_but_tolerates_small_skew() -> None:
     assert verify_csrf_token(
         _CSRF_KEY, CSRF_SUBMIT, token, now=_NOW - _CSRF_FUTURE_SKEW_SECONDS - 1
     ) is False
+
+
+# ---- Persistent secret (load_or_create_csrf_secret) -------------------------
+
+
+def test_first_run_creates_secret_file(tmp_path: Path) -> None:
+    secret = load_or_create_csrf_secret(tmp_path)
+    assert len(secret) >= 16
+    path = tmp_path / _CSRF_SECRET_FILENAME
+    assert path.exists()
+    assert path.read_text().strip() == secret
+
+
+def test_restart_reloads_existing_secret(tmp_path: Path) -> None:
+    first = load_or_create_csrf_secret(tmp_path)
+    second = load_or_create_csrf_secret(tmp_path)
+    assert first == second
+
+
+def test_secret_file_has_restrictive_permissions(tmp_path: Path) -> None:
+    load_or_create_csrf_secret(tmp_path)
+    path = tmp_path / _CSRF_SECRET_FILENAME
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    assert mode == 0o600
+
+
+def test_corrupt_secret_file_regenerates(tmp_path: Path) -> None:
+    path = tmp_path / _CSRF_SECRET_FILENAME
+    path.write_text("short\n")
+    secret = load_or_create_csrf_secret(tmp_path)
+    assert len(secret) >= 16
+    assert secret != "short"
+
+
+def test_unwritable_dir_falls_back_to_memory(tmp_path: Path) -> None:
+    unwritable = tmp_path / "no-write"
+    unwritable.mkdir()
+    unwritable.chmod(0o555)
+    try:
+        secret = load_or_create_csrf_secret(unwritable)
+        assert len(secret) >= 16
+        assert not (unwritable / _CSRF_SECRET_FILENAME).exists()
+    finally:
+        unwritable.chmod(0o755)

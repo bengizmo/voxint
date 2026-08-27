@@ -111,12 +111,13 @@ def _baseline_run(
     notes: str | None = None,
     num_speakers: int | None = None,
 ) -> PipelineRun:
-    run = submit_media_item(
+    result = submit_media_item(
         session,
         source_path,
         settings=settings,
         diarization_num_speakers=num_speakers,
     )
+    run = session.get(PipelineRun, result.run_id)
     if notes is not None:
         run.operator_notes = notes
     session.flush()

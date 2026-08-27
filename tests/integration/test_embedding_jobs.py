@@ -292,9 +292,11 @@ def test_autogenerate_skips_enqueue_when_weights_absent(
     settings = make_settings()
     run_id = _seed_run(session, [("S0", "a completed run awaiting its index")])
 
-    dispatched: list[str] = []
+    dispatched: list[tuple[tuple[str], dict[str, object]]] = []
     monkeypatch.setattr(
-        tasks.generate_segment_embeddings, "delay", lambda job_id: dispatched.append(job_id)
+        tasks.generate_segment_embeddings,
+        "apply_async",
+        lambda args, **kwargs: dispatched.append((args, kwargs)),
     )
 
     # Weights absent → no job row, nothing dispatched.
@@ -319,7 +321,7 @@ def test_autogenerate_skips_enqueue_when_weights_absent(
         ).scalars()
     )
     assert len(jobs) == 1
-    assert dispatched == [str(jobs[0].id)]
+    assert dispatched == [((str(jobs[0].id),), {"ignore_result": True})]
 
 
 def test_active_job_returns_the_one_active_row(session: Session) -> None:

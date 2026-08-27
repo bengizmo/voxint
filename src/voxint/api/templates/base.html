@@ -1039,6 +1039,69 @@
     .lib-cards-placeholder { padding: var(--space-6); text-align: center; }
     [hidden] { display: none !important; }
 
+    /* --- R4 Speakers overview + detail -------------------------------- */
+    .spk-todo-strip { display: flex; flex-wrap: wrap; align-items: center;
+                gap: var(--space-3); padding: var(--space-2) var(--space-3);
+                background: var(--warn-soft); border: 1px solid rgba(227,179,65,.4);
+                border-radius: var(--r-md); margin-bottom: var(--space-4); }
+    .spk-todo-label { font-size: var(--t-micro); font-weight: 700;
+                text-transform: uppercase; letter-spacing: .06em;
+                color: var(--warn); }
+    .spk-todo-item { font-size: var(--t-sm); }
+    .spk-roster-grid { grid-template-columns: auto 1fr auto auto auto auto auto auto; }
+    .spk-card-header { display: flex; align-items: center; gap: var(--space-2); }
+    .spk-match-ok { color: var(--ok); font-family: var(--font-mono); }
+    .spk-match-warn { color: var(--warn); font-family: var(--font-mono); }
+    .spk-profile-header { display: flex; align-items: center; gap: var(--space-4);
+                margin-bottom: var(--space-4); }
+    .spk-avatar { display: inline-flex; align-items: center; justify-content: center;
+                width: 3.2rem; height: 3.2rem; border-radius: var(--r-full);
+                font-size: var(--t-lg); font-weight: 700; letter-spacing: .02em;
+                background: var(--surface-2); color: var(--ink-2); flex: none; }
+    .spk-profile-name { margin: 0; }
+    .spk-heardin-grid .gt-row span:first-child { min-width: 0; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+
+    /* --- R5 Project detail ------------------------------------------ */
+    .vocab-chips { display: flex; flex-wrap: wrap; gap: var(--space-2);
+                margin: var(--space-3) 0; }
+    .vocab-chip { display: inline-block; padding: .2rem .6rem;
+                border: 1px solid var(--line-strong); border-radius: var(--r-full);
+                font-family: var(--font-mono); font-size: var(--t-sm); }
+    .pd-edit-toggle { margin: var(--space-3) 0; }
+    .pd-edit-toggle summary { font-size: var(--t-sm); color: var(--accent-ink);
+                cursor: pointer; }
+    .pd-edit-toggle summary:hover { color: var(--accent-strong); }
+    .pd-vocab-form { display: flex; flex-direction: column; gap: var(--space-2);
+                margin-top: var(--space-2); }
+    .pd-vocab-form fieldset { border: 0; padding: 0; margin: 0;
+                display: flex; flex-direction: column; gap: var(--space-1); }
+    .pd-form-actions { display: flex; gap: var(--space-2); }
+    .pd-helper { font-size: var(--t-xs); margin-top: var(--space-1); }
+    .pd-arrow { color: var(--ink-3); }
+    .pd-rules-grid .gt-row code { font-size: var(--t-sm); }
+    .pd-sidebar-list { list-style: none; padding: 0; margin: var(--space-2) 0;
+                display: flex; flex-direction: column; gap: var(--space-3); }
+    .pd-sidebar-item { display: flex; flex-direction: column; gap: 2px; }
+    .pd-folder-info { display: flex; align-items: center; gap: var(--space-2); }
+    .pd-folder-icon { flex: none; }
+    .pd-pack-note { font-size: var(--t-xs); padding-left: calc(16px + var(--space-2)); }
+    .pd-speaker-row { display: grid;
+                grid-template-columns: auto 1fr auto auto;
+                gap: var(--space-2); align-items: center; }
+    .pd-spk-badge { display: inline-flex; align-items: center; justify-content: center;
+                width: 1.8rem; height: 1.8rem; border-radius: var(--r-full);
+                font-size: var(--t-xs); font-weight: 600; letter-spacing: .02em;
+                background: var(--surface-2); color: var(--ink-2); flex: none; }
+    .pd-spk-named { background: var(--accent-soft); color: var(--accent-ink); }
+    .pd-spk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+    .pd-spk-count { font-size: var(--t-sm); color: var(--ink-2); text-align: right; }
+    .pd-assign-form { display: flex; flex-wrap: wrap; gap: var(--space-2);
+                align-items: end; margin-top: var(--space-2); }
+    .pd-footer-note { margin-top: var(--space-5); padding-top: var(--space-3);
+                border-top: 1px solid var(--line); }
+
     /* Operator annotation layer (issue #86). A highlight mark paints one of the six
        --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
        `color: inherit` keeps the segment's own text color. The swatches and tag

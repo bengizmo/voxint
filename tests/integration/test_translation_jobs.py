@@ -481,8 +481,12 @@ class TestAutogenerateHook:
     ) -> None:
         from voxint.worker import tasks
 
-        delays: list[str] = []
-        monkeypatch.setattr(tasks.translate_run, "delay", delays.append)
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.translate_run,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
         with session_factory() as session:
             run_id = seed_run(session)
         settings = make_settings(
@@ -492,15 +496,20 @@ class TestAutogenerateHook:
         with session_factory() as session:
             jobs = session.query(TranslationJob).all()
             assert [j.target_language for j in jobs] == ["es"]
-        assert len(delays) == 1
+        assert len(dispatches) == 1
+        assert dispatches[0][1] == {"ignore_result": True}
 
     def test_gating_skips_and_never_raises(
         self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from voxint.worker import tasks
 
-        delays: list[str] = []
-        monkeypatch.setattr(tasks.translate_run, "delay", delays.append)
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.translate_run,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
         with session_factory() as session:
             run_id = seed_run(session)
             spanish_run = seed_run(session, detected_language="es")
@@ -535,15 +544,19 @@ class TestAutogenerateHook:
         )
         with session_factory() as session:
             assert session.query(TranslationJob).count() == 0
-        assert delays == []
+        assert dispatches == []
 
     def test_fresh_translation_skips_requeue(
         self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from voxint.worker import tasks
 
-        delays: list[str] = []
-        monkeypatch.setattr(tasks.translate_run, "delay", delays.append)
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.translate_run,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
         with session_factory() as session:
             run_id = seed_run(session)
             record_spanish(session, run_id)
@@ -555,7 +568,7 @@ class TestAutogenerateHook:
         )
         with session_factory() as session:
             assert session.query(TranslationJob).count() == 0
-        assert delays == []
+        assert dispatches == []
 
 
 class TestCancelHardening:

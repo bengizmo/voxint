@@ -18,7 +18,6 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from celery.exceptions import OperationalError
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -86,6 +85,14 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     monkeypatch.setattr(
         "voxint.api.routers.deps._publish_run", lambda run_id, **_kwargs: calls.append(run_id)
     )
+
+    from voxint.ingest.service import SubmissionResult
+
+    def _record_publish(self: SubmissionResult) -> bool:
+        calls.append(self.run_id)
+        return True
+
+    monkeypatch.setattr(SubmissionResult, "publish", _record_publish)
     return calls
 
 
@@ -201,10 +208,9 @@ def test_broker_down_submit_leaves_run_queued_and_flags_banner(
     # and the redirect flags the deferred-enqueue banner. The recovery sweep
     # republishes it later. Simulated by making the publish raise the exact broker
     # exception _publish_or_defer catches.
-    def _broker_down(_run_id: uuid.UUID, **_kwargs: object) -> None:
-        raise OperationalError("Error 111 connecting to redis. Connection refused.")
+    from voxint.ingest.service import SubmissionResult
 
-    monkeypatch.setattr("voxint.api.routers.deps._publish_run", _broker_down)
+    monkeypatch.setattr(SubmissionResult, "publish", lambda self: False)
 
     sub = uuid.uuid4().hex
     resp = client.post(
@@ -351,7 +357,7 @@ def test_concurrent_conflicting_uploads_never_corrupt_disk(
                 media_root=media_root,
                 max_bytes=10**9,
             )
-            outcomes["run_a"] = run.id
+            outcomes["run_a"] = run.run_id
             a_ready.set()  # A now holds the source_path row lock (uncommitted)
             a_may_commit.wait(timeout=10)
             session.commit()

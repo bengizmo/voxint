@@ -9,10 +9,10 @@ records NO asset and consumes NO generation — one kind failing never blocks
 or retires the others (the issue's failure-isolation requirement, held
 structurally).
 
-Deliberate v1 cuts, mirroring ``research_jobs``: no automatic retries and no
-recovery sweep — but cancel is deadline-aware (one LLM call is the only
-legitimate overrun), so a crashed RUNNING row can always be cleared and the
-one-active-per-(run, kind) slot recovered.
+There are no automatic execution retries. The recovery sweep only republishes
+stale QUEUED jobs; cancel remains deadline-aware (one LLM call is the only
+legitimate overrun), so a crashed RUNNING row can be cleared and the
+one-active-per-(run, kind) slot recovered by the operator.
 """
 
 import logging
@@ -606,6 +606,23 @@ def kinds_needing_generation(
     )
 
 
+def stale_queued_job_ids(
+    session: Session, *, cutoff: datetime, limit: int | None = None
+) -> list[uuid.UUID]:
+    """Return oldest QUEUED job ids created before ``cutoff``."""
+    query = (
+        select(RunAssetJob.id)
+        .where(
+            RunAssetJob.status == RunAssetJobStatus.QUEUED.value,
+            RunAssetJob.created_at < cutoff,
+        )
+        .order_by(RunAssetJob.created_at)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(session.execute(query).scalars())
+
+
 __all__ = [
     "RunAssetJobError",
     "active_or_last_jobs",
@@ -617,4 +634,5 @@ __all__ = [
     "request_cancel",
     "run_asset_gates_open",
     "source_content_hash",
+    "stale_queued_job_ids",
 ]

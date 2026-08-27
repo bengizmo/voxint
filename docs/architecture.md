@@ -32,8 +32,8 @@ run's LLM enhancement with the next run's transcription.
 local or uploaded media (`source_url IS NULL`), and a yt-dlp download for URL runs
 (`voxint fetch` / `POST /fetch`). Making it the first stage, rather than a special
 submit-time step, keeps the "every fresh run starts at `STAGE_ORDER[0]`" invariant
-intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op and
-`submit()` keeps its signature. Download mechanics and the SSRF model are below.
+intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op.
+Download mechanics and the SSRF model are below.
 
 ## State machine
 
@@ -99,6 +99,17 @@ queued run and re-publishes it, routing by `current_stage` through the shared
 `pipeline_task_for_stage` helper that every publisher (API, CLI, sweep,
 handoff) uses. A task delivered to the wrong lane is a pure no-op: it takes no
 entry CAS and creates no claims.
+
+### Commit-before-publish
+
+Every submit function in `voxint.ingest.service` (`submit_upload`, `submit_url`,
+`submit_media_item`, `submit_media_item_if_new`) returns a `SubmissionResult`
+carrying `run_id` and a `publish()` method. The caller commits the session
+(creating the durable QUEUED row), then calls `result.publish()` to send the run
+to the broker. `publish()` returns `False` on a broker outage and never raises,
+so a down Redis degrades to "run stays QUEUED for the recovery sweep" rather than
+a failed request. The ingest module never imports Celery at module level; the
+lazy import lives inside `SubmissionResult.publish()`.
 
 The LLM-bound post-run jobs (`voxint.generate_run_asset`,
 `voxint.research_speaker`) are also routed to the `post` queue, so they never
@@ -214,8 +225,8 @@ repointing (`speakers/profile.py`, `speakers/roster.py`) take the same lock,
 so an accept, an edit, and a merge can never interleave on one speaker. A
 replayed accept fills an absent field or refreshes its own value only; it
 never reverses a later manual edit. Draft-claim history stays in the immutable
-enrichment tables. The Console 2.0 speakers overview and `/speakers/{id}`
-profile pages (behind `CONSOLE_SPEAKERS_ENABLED`) read this table plus
+enrichment tables. The speakers overview (`/speakers`) and detail
+(`/speakers/{id}`) pages read this table plus
 per-speaker aggregates folded from effective resolution
 (`speakers/aggregate.py`: one canonical newest completed run per recording,
 human rulings over automatic matches), with voice-match tiers graded against
@@ -395,10 +406,25 @@ routable network, still wants a host-level egress firewall. See
 **CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
 and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 (`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. `/claim` needs its
-own because claiming is what *mints* the run's claim token: it has no unguessable
+missing/mis-signed token is refused before any state change. When
+`console_media_enabled` is on, `POST /submit` and `POST /fetch` redirect to
+`/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
+and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
+because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
-enroll) are instead gated by that per-run claim token.
+enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
+secret is auto-generated and persisted to `DATA_DIR/csrf_secret` on first start,
+so forms survive restarts without manual configuration; an explicit `CSRF_SECRET`
+env var overrides the persisted value.
+
+**Startup reconciler.** The app lifespan runs `reconcile_orphaned_incoming` once
+at startup, scanning `media_root/incoming/` for files with no committed
+`MediaItem` row (crash orphans from the `os.replace`-before-commit window) and
+removing them.
+
+**Requeue guard.** `requeue_failed_run` raises `RunArchivedError` before checking
+the FAILED status, so an archived run cannot be requeued from any surface (the
+route-level guard was already present; the service-level guard covers the CLI).
 
 ## Web research egress (issue #39)
 

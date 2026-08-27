@@ -421,7 +421,10 @@ def _require_csrf(request: Request, action: str, token: str | None) -> None:
     Optional, so FastAPI never turns an absent token into a 422), giving a forged
     cross-site POST one uniform refusal before the DB is touched."""
     if not verify_csrf_token(request.app.state.csrf_secret, action, token):
-        raise HTTPException(status_code=403, detail="invalid or missing CSRF token")
+        raise HTTPException(
+            status_code=403,
+            detail="this form is invalid or expired — reload the page and try again",
+        )
 
 
 def _publish_run(run_id: uuid.UUID, *, stage: Stage | None = None) -> None:

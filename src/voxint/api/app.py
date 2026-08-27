@@ -9,9 +9,10 @@ harmless replay, while a new submission is a new decision (corrections are
 appends; the newest ruling per label wins at read time).
 """
 
+import contextlib
+import json
 import logging
-import secrets
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -24,10 +25,12 @@ from fastapi import (
 )
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     Response,
 )
 from fastapi.routing import APIRoute
 from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -261,19 +264,125 @@ def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> No
         headers.setdefault("cache-control", "no-store")
 
 
+def _wants_html(request: Request) -> bool:
+    """Return whether the request's Accept header includes HTML.
+
+    Intentionally simple: ``*/*`` and missing Accept fall through to JSON,
+    which is what scripted clients and curl expect."""
+    return "text/html" in request.headers.get("accept", "").lower()
+
+
+def _error_page_values(status_code: int, detail: Any) -> tuple[str, str]:
+    """Return client-safe title and detail text for an HTML error page."""
+    if status_code >= 500:
+        return "Something went wrong", "Internal Server Error"
+    if status_code == 404:
+        return (
+            "Page not found",
+            "The page you were looking for does not exist or has been moved.",
+        )
+    if status_code == 403:
+        return "Forbidden", str(detail)
+    return "Request error", str(detail)
+
+
+def _html_error_response(request: Request, status_code: int, detail: Any) -> Response:
+    """Render the standalone error template, with a resilient text fallback."""
+    title, safe_detail = _error_page_values(status_code, detail)
+    try:
+        response: HTMLResponse = templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "status_code": status_code,
+                "title": title,
+                "detail": safe_detail,
+            },
+            status_code=status_code,
+        )
+        return response
+    except Exception:
+        logger.error("failed to render HTML error page", exc_info=True)
+        return Response(safe_detail, status_code=status_code, media_type="text/plain")
+
+
+async def _http_exception_handler(request: Request, exc: HTTPException) -> Response:
+    """Render HTTP errors as HTML for browsers and JSON for API clients.
+
+    Non-error status codes (< 400, e.g. 204 with hx-redirect) are returned
+    with the original detail and no content-negotiation so the default
+    Starlette behavior is preserved."""
+    if exc.status_code < 400:
+        response = Response(
+            status_code=exc.status_code,
+            headers=exc.headers,
+        )
+        _apply_security_headers(
+            response.headers, review_path=request.url.path.startswith("/review")
+        )
+        return response
+    detail: Any = "Internal Server Error" if exc.status_code >= 500 else exc.detail
+    if _wants_html(request):
+        response = _html_error_response(request, exc.status_code, detail)
+    else:
+        response = Response(
+            json.dumps({"detail": detail}),
+            status_code=exc.status_code,
+            media_type="application/json",
+        )
+    if exc.headers and exc.status_code < 500:
+        response.headers.update(exc.headers)
+    _apply_security_headers(
+        response.headers, review_path=request.url.path.startswith("/review")
+    )
+    return response
+
+
 async def _security_headers_on_error(request: Request, exc: Exception) -> Response:
-    """Re-apply the D1 headers to an unhandled-exception 500.
+    """Content-negotiate an unhandled 500 and re-apply the D1 headers.
 
     Starlette's ``ServerErrorMiddleware`` wraps the whole app *outside* the
     user-added ``_SecurityHeadersMiddleware``, so a truly-unhandled exception's
     500 would otherwise skip the header stamp. Registering this as the ``Exception``
     handler closes that gap. ``ServerErrorMiddleware`` still re-raises after sending
     this response, so it does not mask exceptions from the server or tests."""
-    response = Response("Internal Server Error", status_code=500, media_type="text/plain")
+    if _wants_html(request):
+        response = _html_error_response(request, 500, "Internal Server Error")
+    else:
+        response = Response(
+            json.dumps({"detail": "Internal Server Error"}),
+            status_code=500,
+            media_type="application/json",
+        )
     _apply_security_headers(
         response.headers, review_path=request.url.path.startswith("/review")
     )
     return response
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Run one-shot startup tasks that need an initialized app state."""
+    try:
+        from voxint.db.session import build_engine, build_session_factory, session_scope
+        from voxint.ingest.service import reconcile_orphaned_incoming
+
+        resolved: Settings = app.state.settings
+        factory = app.state.session_factory
+        if factory is None:
+            factory = build_session_factory(build_engine(resolved.database_url))
+            app.state.session_factory = factory
+        with session_scope(factory) as session:
+            removed = reconcile_orphaned_incoming(session, resolved.media_root)
+            if removed:
+                logger.info(
+                    "reconciled %d orphaned incoming file(s)", len(removed)
+                )
+    except Exception:
+        logger.warning(
+            "startup reconciler skipped (database unavailable)", exc_info=True
+        )
+    yield
 
 
 def create_app(
@@ -288,6 +397,7 @@ def create_app(
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
+        lifespan=_lifespan,
     )
     resolved = settings or get_settings()
     app.state.settings = resolved
@@ -302,17 +412,15 @@ def create_app(
     validate_boot(registry, settings=resolved)
     app.state.plugins = registry
     _configure_template_loader(_plugin_template_dirs(registry))
-    # CSRF signing secret: the configured value (persistent, shared by every
-    # worker) or a random per-process fallback so the console works with zero
-    # config. A per-process secret invalidates open forms on restart and mismatches
-    # across workers, so warn when we fall back — see voxint.api.csrf.
-    app.state.csrf_secret = resolved.csrf_secret or secrets.token_urlsafe(32)
-    if not resolved.csrf_secret:
-        logger.warning(
-            "csrf_secret is unset; using a random per-process CSRF secret. Open "
-            "forms will break on restart and across workers. Set csrf_secret to a "
-            "persistent random value to avoid this."
-        )
+    # CSRF signing secret: the configured value when set, otherwise a secret
+    # auto-generated and persisted to the data directory on first run (so open
+    # forms survive a restart and multiple workers share the same secret).
+    if resolved.csrf_secret:
+        app.state.csrf_secret = resolved.csrf_secret
+    else:
+        from voxint.api.csrf import load_or_create_csrf_secret
+
+        app.state.csrf_secret = load_or_create_csrf_secret(resolved.media_root)
     # Lazy: building the engine at import time would make `/healthz` (and any
     # DB-less test import) depend on a reachable database.
     app.state.session_factory = session_factory
@@ -330,6 +438,12 @@ def create_app(
     # redirects; the Exception handler below covers unhandled 500s, which Starlette
     # generates OUTSIDE this middleware.
     app.add_middleware(_SecurityHeadersMiddleware)
+    # Starlette raises its base HTTPException for router-generated errors such
+    # as a nonexistent path; FastAPI's HTTPException is a subclass used by routes.
+    app.add_exception_handler(
+        StarletteHTTPException, _http_exception_handler  # type: ignore[arg-type]
+    )
+    app.add_exception_handler(HTTPException, _http_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, _security_headers_on_error)
     _register_routes(app)
     return app

@@ -460,9 +460,35 @@ def test_project_detail_renders_config_editors(
         pid = _make_project(session).id
         session.commit()
     html = client.get(f"/projects/{pid}").text
-    assert "Project vocabulary" in html
-    assert "Project corrections" in html
+    assert "VOCABULARY" in html
+    assert "AUTO-CORRECT RULES" in html
     assert 'data-island="corrections-editor"' in html
+
+
+def test_corrections_props_inheriting_true_when_null(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """Issue #176: the island must know it is inheriting so it cannot
+    silently convert NULL into an explicit empty list on save."""
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = None
+        pid = project.id
+        session.commit()
+    html = client.get(f"/projects/{pid}").text
+    assert '"inheriting": true' in html
+
+
+def test_corrections_props_inheriting_false_when_explicit(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        project.corrections = []
+        pid = project.id
+        session.commit()
+    html = client.get(f"/projects/{pid}").text
+    assert '"inheriting": false' in html
 
 
 def test_set_project_vocabulary_persists_override(

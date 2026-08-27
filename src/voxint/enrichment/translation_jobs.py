@@ -20,10 +20,10 @@ Two guards beyond the asset-job template:
 - **Same-language guard**: a request to translate into the run's detected
   language is refused at creation (the auto-hook silently skips it first).
 
-Deliberate v1 cuts, mirroring ``asset_jobs``: no automatic retries and no
-recovery sweep — cancel is deadline-aware (the LLM batch sequence is bounded
-by attempts x timeout per batch), so a crashed RUNNING row can always be
-cleared and the one-active-per-(run, language) slot recovered.
+There are no automatic execution retries. The recovery sweep only republishes
+stale QUEUED jobs; cancel is deadline-aware (the LLM batch sequence is bounded
+by attempts x timeout per batch), so a crashed RUNNING row can be cleared and
+the one-active-per-(run, language) slot recovered by the operator.
 """
 
 import logging
@@ -607,6 +607,23 @@ def translation_needed(
     return head.source_content_hash != translation_source_hash(source)
 
 
+def stale_queued_job_ids(
+    session: Session, *, cutoff: datetime, limit: int | None = None
+) -> list[uuid.UUID]:
+    """Return oldest QUEUED job ids created before ``cutoff``."""
+    query = (
+        select(TranslationJob.id)
+        .where(
+            TranslationJob.status == TranslationJobStatus.QUEUED.value,
+            TranslationJob.created_at < cutoff,
+        )
+        .order_by(TranslationJob.created_at)
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list(session.execute(query).scalars())
+
+
 __all__ = [
     "SOURCE_CHANGED_ERROR",
     "TranslationJobError",
@@ -617,6 +634,7 @@ __all__ = [
     "job_config_snapshot",
     "normalized_language",
     "request_cancel",
+    "stale_queued_job_ids",
     "translation_gates_open",
     "translation_needed",
 ]

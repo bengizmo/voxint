@@ -170,12 +170,13 @@ def _submit(args: argparse.Namespace) -> int:
         factory = build_session_factory(engine)
         try:
             with session_scope(factory) as session:
-                run_id = submit_media_item(
+                result = submit_media_item(
                     session,
                     str(relative),
                     diarization_max_speakers=args.max_speakers,
                     diarization_num_speakers=args.num_speakers,
-                ).id
+                )
+                run_id = result.run_id
         except DomainPackError as exc:
             # Freeze-time domain-pack collision (issue #84) / unresolvable pack
             # (issue #11): fail honestly (exit 2) with a plain-language message
@@ -191,12 +192,18 @@ def _submit(args: argparse.Namespace) -> int:
         print(run_id)
         # Publish AFTER the durable commit and OUTSIDE its transaction; a broker
         # outage degrades cleanly (run stays QUEUED for the recovery sweep).
-        published = _publish_or_defer(run_id)
+        published = result.publish()
+        if not published:
+            print(
+                f"warning: broker unavailable; run {run_id} stays QUEUED for "
+                "the recovery sweep to re-enqueue",
+                file=sys.stderr,
+            )
         if args.wait:
             if not published:
                 print(
-                    "note: enqueue deferred (broker unavailable); polling will "
-                    "wait until the recovery sweep re-enqueues the run",
+                    "note: polling will wait until the recovery sweep "
+                    "re-enqueues the run",
                     file=sys.stderr,
                 )
             try:
@@ -457,7 +464,8 @@ def _fetch(args: argparse.Namespace) -> int:
             if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
                 print("error: URL ingestion is disabled (ytdlp_enabled is off)")
                 return 2
-            run_id = submit_url(session, url=url, submission_id=submission_id).id
+            result = submit_url(session, url=url, submission_id=submission_id)
+            run_id = result.run_id
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
         return 2
@@ -480,7 +488,12 @@ def _fetch(args: argparse.Namespace) -> int:
     # Print the id BEFORE publishing so a broker outage never costs the operator
     # the run id (the durable QUEUED run already exists); publish degrades cleanly.
     print(run_id)
-    _publish_or_defer(run_id)
+    if not result.publish():
+        print(
+            f"warning: broker unavailable; run {run_id} stays QUEUED for the "
+            "recovery sweep to re-enqueue",
+            file=sys.stderr,
+        )
     return 0
 
 

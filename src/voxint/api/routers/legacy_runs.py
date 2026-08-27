@@ -140,6 +140,7 @@ from voxint.enrichment.translations import (
 from voxint.export import MEDIA_TYPES, format_timespan, transcript_payload
 from voxint.ingest import (
     MissingStageError,
+    RunArchivedError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
     RunNotCancellableError,
@@ -206,9 +207,7 @@ def _export_raw_host_only(raw: dict[str, Any] | None) -> dict[str, Any] | None:
 def _publish_translation_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed translation job, returning False on a broker outage.
 
-    Mirrors ``_publish_run_asset_job``: no recovery sweep (v1), so the console
-    shows a deferred job as queued with its age and the operator cancels and
-    retries."""
+    The recovery sweep republishes stale QUEUED jobs after the grace period."""
     from celery.exceptions import OperationalError
 
     from voxint.worker.tasks import translate_run
@@ -228,9 +227,7 @@ def _publish_translation_job(job_id: uuid.UUID) -> bool:
 def _publish_run_asset_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed run-asset job, returning False on a broker outage.
 
-    Mirrors ``_publish_research_job``: no recovery sweep (v1), so the console
-    shows a deferred job as queued with its age and the operator cancels and
-    retries."""
+    The recovery sweep republishes stale QUEUED jobs after the grace period."""
     from celery.exceptions import OperationalError
 
     from voxint.worker.tasks import generate_run_asset
@@ -739,18 +736,20 @@ def submit_media_upload(
     submission_id: Annotated[str, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
+    settings: Settings = request.app.state.settings
+    if settings.console_media_enabled:
+        return RedirectResponse("/media", status_code=303)
     # CSRF before anything: a forged cross-site upload is refused before the DB
     # write / file finalize. (FastAPI spools the multipart file part before this
     # body runs — the pre-body spool is bounded by _RequestSizeLimitMiddleware +
     # the streaming cap, so a forgery cannot write past those; the DB and the
     # os.replace publish are still gated here.)
     _require_csrf(request, CSRF_SUBMIT, csrf_token)
-    settings: Settings = request.app.state.settings
     # An over-cap Content-Length was already rejected before the body was read
     # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
     # cap authoritatively while streaming (covers a lying/absent length).
     try:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=file.file,
             filename=file.filename or "",
@@ -770,13 +769,12 @@ def submit_media_upload(
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
         ) from exc
-    run_id = run.id
     # Commit-before-publish: the durable QUEUED run must exist before the
     # enqueue, so commit here rather than leaning on the dependency's
     # post-return commit (which would run after publish). A broker outage is
     # then non-fatal — the run stays QUEUED and the recovery sweep republishes.
     session.commit()
-    return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
+    return _run_redirect(result.run_id, published=result.publish())
 
 @core_router.post("/fetch")
 def fetch_media_url(
@@ -787,6 +785,9 @@ def fetch_media_url(
     submission_id: Annotated[str, Form()],
     csrf_token: Annotated[str | None, Form()] = None,
 ) -> RedirectResponse:
+    settings: Settings = request.app.state.settings
+    if settings.console_media_enabled:
+        return RedirectResponse("/media", status_code=303)
     # CSRF first — reject a forged cross-site fetch before any other check, so
     # a forgery is refused regardless of the ytdlp_enabled flag's state.
     _require_csrf(request, CSRF_FETCH, csrf_token)
@@ -794,7 +795,6 @@ def fetch_media_url(
     # submission surface: refuse before touching the DB when it is off, so no
     # row is created and nothing is published. (The worker's ACQUIRE stage
     # never consults the flag — an already-queued URL run still completes.)
-    settings: Settings = request.app.state.settings
     if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
         # Generic message — never echo the submitted URL into an error body.
         raise HTTPException(status_code=403, detail="URL ingestion is disabled")
@@ -804,7 +804,7 @@ def fetch_media_url(
     # URL; a conflict names only the internal source_path), so a signed query
     # string can't leak into a 4xx body.
     try:
-        run = submit_url(session, url=url, submission_id=submission_id)
+        result = submit_url(session, url=url, submission_id=submission_id)
     except (UrlValidationError, UploadValidationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UploadConflictError as exc:
@@ -816,12 +816,11 @@ def fetch_media_url(
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
         ) from exc
-    run_id = run.id
     # Commit-before-publish, exactly as /submit: the durable QUEUED run must
     # exist before the enqueue, so a broker outage leaves it QUEUED for the
     # recovery sweep rather than failing the request.
     session.commit()
-    return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
+    return _run_redirect(result.run_id, published=result.publish())
 
 def build_run_detail_context(
     run_id: uuid.UUID,
@@ -1114,7 +1113,7 @@ def requeue_run(
         requeue_failed_run(session, run_id, expected_revision=revision)
     except RunNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except (RunNotFailedError, MissingStageError) as exc:
+    except (RunArchivedError, RunNotFailedError, MissingStageError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (StaleRevisionError, InvalidTransitionError) as exc:
         # StaleRevisionError: the tab's revision lost the CAS.
@@ -1737,4 +1736,3 @@ def media_peaks(
     row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
     session.commit()
     return _peaks_cache_response(request, payload.to_json_bytes(), row_id)
-

@@ -96,7 +96,7 @@ def test_submit_media_item_creates_media_and_queued_run(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/a.wav")
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
 
     with session_factory() as session:
         media = session.execute(select(MediaItem)).scalar_one()
@@ -115,7 +115,7 @@ def test_submit_stamps_default_domain_pack(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/a.wav")
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -134,7 +134,7 @@ def test_submit_stamps_explicit_domain_pack(
             session, "incoming/a.wav", settings=settings, domain_pack_name="podcast"
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -159,7 +159,7 @@ def test_submit_stamps_from_folder_mapping(
         )
         unmapped = submit_media_item(session, "misc/x.wav", settings=settings)
         session.commit()
-        mapped_id, unmapped_id = mapped.id, unmapped.id
+        mapped_id, unmapped_id = mapped.run_id, unmapped.run_id
     with session_factory() as session:
         assert session.get(PipelineRun, mapped_id).domain_pack["name"] == "interview"
         assert session.get(PipelineRun, unmapped_id).domain_pack["name"] == "generic"
@@ -189,7 +189,7 @@ def test_submit_unions_operator_corrections_into_snapshot(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/a.wav")
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -234,7 +234,7 @@ def test_submit_unions_operator_corrections_onto_default_pack(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/a.wav", settings=settings)
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -305,7 +305,7 @@ def test_submit_explicit_pack_drops_operator_corrections(
             session, "incoming/a.wav", settings=settings, domain_pack_name="civic"
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -316,8 +316,8 @@ def test_submit_media_item_reuses_media_but_mints_new_run(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        first = submit_media_item(session, "incoming/a.wav").id
-        second = submit_media_item(session, "incoming/a.wav").id
+        first = submit_media_item(session, "incoming/a.wav").run_id
+        second = submit_media_item(session, "incoming/a.wav").run_id
         session.commit()
 
     assert first != second
@@ -335,7 +335,7 @@ def test_submit_media_item_if_new_creates_once_then_skips(
         run = submit_media_item_if_new(session, "scan/a.wav")
         assert run is not None
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
 
     with session_factory() as session:
         # Same path again → skip, so a double-clicked/re-scanned confirm can't spam runs.
@@ -403,7 +403,7 @@ def test_submit_media_item_recovers_from_concurrent_insert(
         loser_released.wait(timeout=10)
         try:
             with session_factory() as session:
-                loser_out["run_id"] = submit_media_item(session, path).id
+                loser_out["run_id"] = submit_media_item(session, path).run_id
                 session.commit()
         except Exception as exc:  # pragma: no cover - only on a real failure
             loser_out["error"] = exc
@@ -411,7 +411,7 @@ def test_submit_media_item_recovers_from_concurrent_insert(
     thread = threading.Thread(target=loser)
     thread.start()
     with session_factory() as winner:
-        winner_run = submit_media_item(winner, path).id  # INSERT holds the index lock
+        winner_run = submit_media_item(winner, path).run_id  # INSERT holds the index lock
         loser_released.set()
         time.sleep(0.5)  # let the loser reach its blocking INSERT before we commit
         winner.commit()  # release the lock -> loser conflicts -> recovery re-reads
@@ -440,7 +440,7 @@ def test_requeue_non_failed_run_raises_not_failed(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/q.wav").id
+        run_id = submit_media_item(session, "incoming/q.wav").run_id
         session.commit()
     with session_factory() as session:
         with pytest.raises(RunNotFailedError) as exc:
@@ -452,7 +452,7 @@ def test_requeue_failed_without_stage_raises_missing_stage(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/corrupt.wav").id
+        run_id = submit_media_item(session, "incoming/corrupt.wav").run_id
         session.commit()
         _corrupt_to_failed_without_stage(session, run_id)
     with session_factory() as session, pytest.raises(MissingStageError):
@@ -463,7 +463,7 @@ def test_requeue_failed_run_returns_to_queued_at_same_stage(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/r.wav").id
+        run_id = submit_media_item(session, "incoming/r.wav").run_id
         session.commit()
         failed = _drive_to_failed(session, run_id, Stage.TRANSCRIBE)
         prior_revision = failed.revision
@@ -488,7 +488,7 @@ def test_requeue_with_stale_expected_revision_rejects(
     """A caller acting on a revision the run has moved past is rejected before any
     write — models a stale browser tab requeuing a run that changed underneath it."""
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/stale.wav").id
+        run_id = submit_media_item(session, "incoming/stale.wav").run_id
         session.commit()
         failed = _drive_to_failed(session, run_id, Stage.PREPARE)
         live_revision = failed.revision
@@ -515,7 +515,7 @@ def test_requeue_two_operators_second_sees_run_no_longer_failed(
     one wins; the other is cleanly told the run is no longer FAILED (not a crash,
     not a double-enqueue). Proves the CAS serialises concurrent requeues."""
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/two.wav").id
+        run_id = submit_media_item(session, "incoming/two.wav").run_id
         session.commit()
     with session_factory() as session:
         rev = _drive_to_failed(session, run_id, Stage.PREPARE).revision
@@ -551,7 +551,7 @@ def test_submit_url_creates_media_with_source_url_and_queued_run(
     with session_factory() as session:
         run = submit_url(session, url=_URL, submission_id=submission_id)
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
 
     with session_factory() as session:
         media = session.execute(select(MediaItem)).scalar_one()
@@ -572,8 +572,8 @@ def test_submit_url_distinct_submission_ids_mint_distinct_runs(
     """source_url is non-unique: the SAME url under two submission_ids yields two
     independent immutable MediaItems + runs (distinct uuid-namespaced paths)."""
     with session_factory() as session:
-        first = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).id
-        second = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).id
+        first = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).run_id
+        second = submit_url(session, url=_URL, submission_id=str(uuid.uuid4())).run_id
         session.commit()
 
     assert first != second
@@ -589,10 +589,10 @@ def test_submit_url_same_submission_id_same_url_is_idempotent(
     created the first time — no duplicate MediaItem, no duplicate run."""
     submission_id = str(uuid.uuid4())
     with session_factory() as session:
-        first = submit_url(session, url=_URL, submission_id=submission_id).id
+        first = submit_url(session, url=_URL, submission_id=submission_id).run_id
         session.commit()
     with session_factory() as session:
-        second = submit_url(session, url=_URL, submission_id=submission_id).id
+        second = submit_url(session, url=_URL, submission_id=submission_id).run_id
         session.commit()
 
     assert first == second
@@ -636,7 +636,7 @@ def test_submit_url_replay_heals_media_with_no_run(
     with session_factory() as session:
         run = submit_url(session, url=_URL, submission_id=submission_id)
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
 
     with session_factory() as session:
         assert len(session.execute(select(MediaItem)).scalars().all()) == 1
@@ -699,7 +699,7 @@ def test_cancel_queued_run_cancels_keeping_no_stage(
     # A fresh QUEUED run carries no current_stage; cancelling it before dispatch
     # keeps that None (it never started a stage).
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/q-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/q-cancel.wav").run_id
         session.commit()
 
     with session_factory() as session:
@@ -721,7 +721,7 @@ def test_cancel_running_run_keeps_stage(
     # Cancelling a RUNNING run preserves current_stage so the console shows where
     # it stopped.
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/run-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/run-cancel.wav").run_id
         session.commit()
         _drive_to_running(session, run_id, Stage.TRANSCRIBE)
 
@@ -743,7 +743,7 @@ def test_cancel_awaiting_adjudication_run(
 ) -> None:
     # A human-paused run (no live worker) is cancellable; stage is kept.
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/await-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/await-cancel.wav").run_id
         session.commit()
         held = _drive_to_running(session, run_id, Stage.DIARIZE_EMBED)
         held = cas_update_run(
@@ -766,7 +766,7 @@ def test_cancel_failed_run_raises_not_cancellable(
 ) -> None:
     # FAILED is requeueable, not cancellable — a distinct refusal.
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/failed-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/failed-cancel.wav").run_id
         session.commit()
         _drive_to_failed(session, run_id, Stage.TRANSCRIBE)
 
@@ -783,7 +783,7 @@ def test_cancel_completed_run_raises_not_cancellable(
     session_factory: sessionmaker[Session],
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/done-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/done-cancel.wav").run_id
         session.commit()
         held = _drive_to_running(session, run_id, STAGE_ORDER[-1])
         cas_update_run(session, held, status=RunStatus.COMPLETED, current_stage=None)
@@ -801,7 +801,7 @@ def test_cancel_already_cancelled_is_idempotent(
     # A second cancel (double-click / stale tab) is a no-op success, not an
     # error and not a second revision bump.
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/idem-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/idem-cancel.wav").run_id
         session.commit()
 
     with session_factory() as session:
@@ -827,7 +827,7 @@ def test_cancel_with_stale_expected_revision_rejects(
     # A stale browser tab acting on a revision the run moved past is rejected
     # before any write; the matching revision is accepted.
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/stale-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/stale-cancel.wav").run_id
         session.commit()
         held = _drive_to_running(session, run_id, Stage.PREPARE)
         live_revision = held.revision
@@ -852,7 +852,7 @@ def test_cancel_loser_of_concurrent_cas_is_idempotent(
     loses it — but must still return success (CANCELLED), not StaleRevisionError.
     A genuine double-click / racing POST is idempotent, not a spurious 409."""
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/concurrent-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/concurrent-cancel.wav").run_id
         session.commit()
 
     first = session_factory()
@@ -887,7 +887,7 @@ def test_cancel_cas_loss_to_non_cancel_reraises(
     CANCELLED, so cancel_run re-raises StaleRevisionError rather than falsely
     reporting success — mirrors the engine-level narrowing."""
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/advanced-cancel.wav").id
+        run_id = submit_media_item(session, "incoming/advanced-cancel.wav").run_id
         session.commit()
     with session_factory() as session:
         _drive_to_running(session, run_id, Stage.PREPARE)
@@ -942,7 +942,7 @@ def test_submit_media_item_applies_sidecar(
             session, "incoming/a.wav", settings=settings, sidecar=sidecar
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -973,7 +973,7 @@ def test_caller_pack_name_beats_sidecar_pack_name(
             sidecar=sidecar,
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         assert session.get(PipelineRun, run_id).domain_pack["name"] == "lecture"
 
@@ -991,7 +991,7 @@ def test_submit_persists_explicit_speaker_hint(
             session, "incoming/a.wav", diarization_num_speakers=2
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_num_speakers == 2
@@ -1006,7 +1006,7 @@ def test_submit_persists_explicit_bound(
             session, "incoming/b.wav", diarization_max_speakers=4
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_max_speakers == 4
@@ -1020,7 +1020,7 @@ def test_submit_without_hint_leaves_columns_null(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/c.wav")
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_max_speakers is None
@@ -1036,7 +1036,7 @@ def test_submit_reads_speaker_hint_from_sidecar(
     with session_factory() as session:
         run = submit_media_item(session, "incoming/d.wav", sidecar=sidecar)
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_num_speakers == 3
@@ -1055,7 +1055,7 @@ def test_explicit_speaker_hint_beats_sidecar(
             session, "incoming/e.wav", sidecar=sidecar, diarization_max_speakers=2
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_max_speakers == 2
@@ -1072,7 +1072,7 @@ def test_if_new_persists_sidecar_speaker_hint(
         run = submit_media_item_if_new(session, "incoming/f.wav", sidecar=sidecar)
         session.commit()
         assert run is not None
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored.diarization_max_speakers == 5

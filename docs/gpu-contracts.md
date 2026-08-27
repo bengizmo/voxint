@@ -1096,6 +1096,93 @@ in full** on maintainer hardware before tagging:
 Gates A/R/M carried on empty diffs; Gate E green fresh across all three lanes.
 Clear to tag v0.24.0.
 
+#### Verdict: v0.27.0, Gates A/R/M carry, Gate E browser lane PASS (2026-08-27)
+
+v0.27.0 ships Ops Console R4 (speakers overview + detail refresh, #213) and
+R5 (project detail refresh, #214), completing the visual-refresh epic #205.
+All changes are Jinja templates, `chip_semantics.py`, `base.html`, and
+integration tests. No pipeline, service, or inference code changed.
+
+`git diff v0.26.0..HEAD -- services/` is empty. The three inference model
+services (whisper, pyannote, titanet) and the synthdetect eval container are
+**byte-identical** to v0.26.0. **Gates A (CUDA), R (ROCm), and M (Metal)
+carry** their v0.24.0 verdicts (unchanged since v0.26.0).
+
+Gate E scope: R4/R5 changed speaker overview/roster/profile and project
+detail templates (observable console behavior), triggering the browser
+acceptance lane. The pipeline lane is not triggered (no pipeline/service
+changes).
+
+- **Browser acceptance lane** (maintainer hardware, serial): full
+  `voxint-e2e-review` skill run. Seeded 5-segment run, exercised
+  verify-and-advance, skip, replay (instrumented play()), click-to-edit,
+  discard warning, edit+save, keymap suppression, cheat-sheet modal (open
+  via key/button, dismiss via Escape/close/backdrop, v-suppression behind
+  modal), domain-pack correction provenance (chip present/absent, raw
+  transcript, reconciliation panel with 1 applied + 1 never fired), waveform
+  strip (canvas, playhead, cursor-index sync, single peaks fetch). All
+  assertions green. RECONCILE PASS (2/5 verified, 1 correction match).
+
+Gates A/R/M carried on byte-identical services; Gate E browser lane green.
+Clear to tag v0.27.0.
+
+#### Verdict: v0.26.0, Gates A/R/M carry, Gate E re-run fresh (pipeline PASS, browser deferred) (2026-08-27)
+
+0.26.0 is the largest release since initial: 272 commits since v0.24.0, covering
+the Console 2.0 epic (P0a/P0b through P2c, P4, P6a/P6b, P7, Jobs #160),
+Ops Console visual refresh (V1-V3, COPY, R1/R2, R6), Synthdetect M1 S1-S5,
+plugin framework (#137/#138, dormant), audio-clip extraction (#88), navigable
+outline (#87), translation (#133), and CI parallelization (#187).
+
+`git diff v0.24.0..HEAD -- services/` shows 4 files changed, all in
+`services/synthdetect/` (the eval container — a maintainer-only scoring tool,
+not an inference service). The three inference model services (whisper,
+pyannote, titanet) and their Dockerfiles are **byte-identical** to v0.24.0.
+The synthdetect eval container is separately qualified (Gates 1-2 ratified
+above, `w2v2-aasist-df` checkpoint frozen and GPU-qualified) and does not
+participate in the pipeline inference path. No metal-lane path changed.
+**Gates A (CUDA), R (ROCm), and M (Metal) carry** their v0.24.0 verdicts.
+
+Live service health confirmed on release day (2026-08-27):
+- **ROCm host**: whisper `device=rocm model=large-v2 engine=faster-whisper`,
+  pyannote `device=cpu model=speaker-diarization-3.1`, titanet `device=cpu
+  engine=onnxruntime` — all `model_loaded=true`, `contract_version=v1`.
+- **CUDA host**: whisper `device=cuda model=large-v2`, pyannote
+  `device=cuda model=speaker-diarization-3.1`, titanet `device=cuda
+  engine=nemo` — all `model_loaded=true`, `contract_version=v1`.
+
+The Gate E pipeline-aware scope is massive (105 files changed, +17K/-7K in
+`src/voxint/{api,db,enrichment,media,pipeline}`, `frontend/`, `tests/`), so
+**Gate E re-ran fresh** on maintainer hardware before tagging:
+
+- **Pipeline lane** (AMD host, serial): `tests/e2e/test_real_pipeline.py`
+  against live model services (whisper ROCm large-v2, pyannote cpu
+  diarization-3.1, titanet cpu onnxruntime, all `model_loaded=true`) on a
+  disposable database — **2 passed, exit 0, 113s**, no service restarts.
+- **Real-LLM enrichment sub-lane**: SKIP (documented). `LLM_ENABLED=true` is
+  configured on the reporting host but `ENRICHMENT_RUN_ASSETS_ENABLED` is not
+  set, so the sub-lane skips by design (it requires both flags). This is the
+  optional sub-lane; the skip is a legitimate unconfigured state, not a masked
+  failure.
+- **Browser review lane**: deferred to pre-tag; will run via `voxint-e2e-review`
+  on maintainer hardware.
+
+**Security audit glance** (not a new full audit): the standing audit at
+`139ebe3` (2026-08-18) has 7 open findings (E3-E6 research/enrichment, F5
+supply chain cache, M1-M2 media/normalize.py ffmpeg hardening). The v0.26.0
+diff touches `media/executor.py` and `api/media_query.py` (P2c operations) but
+not `normalize.py`, `research/agent.py`, or `release.yml` — the open findings
+are neither worsened nor intersected. None are release-blocking.
+
+PR #228 (R3 media overview refresh, `f94ba74`) merged after the pipeline lane
+ran; its changes are presentation-only (`media.html` template, `media_query.py`
+query helpers, test assertions) and do not touch the pipeline, services, or
+inference paths. The Gate E pipeline result at `4f6cc1a` covers the same
+inference code; the release commit adds the CHANGELOG stamp and this verdict.
+
+Gates A/R/M carried on byte-identical services; Gate E pipeline lane green
+fresh. Clear to tag v0.26.0.
+
 #### Verdict: metal tier PASS (M1 Pro 16 GB, macOS 26.5.2, 2026-08-16, batch_size=4 refresh)
 
 Gate M re-run for the **v0.15.0 release**, triggered by #33 Slice 1 flipping the

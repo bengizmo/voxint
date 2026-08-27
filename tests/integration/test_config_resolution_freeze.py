@@ -141,7 +141,7 @@ def _freeze(
             sidecar=sidecar,
         )
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         stored = session.get(PipelineRun, run_id)
         assert stored is not None
@@ -372,7 +372,7 @@ def test_preview_matches_dispatched_snapshot(
     with session_factory() as session:
         run = submit_media_item(session, f"{folder_path}/a.wav", settings=settings)
         session.commit()
-        run_id = run.id
+        run_id = run.run_id
     with session_factory() as session:
         snapshot = session.get(PipelineRun, run_id).domain_pack  # type: ignore[union-attr]
     assert snapshot is not None
