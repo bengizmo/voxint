@@ -103,7 +103,7 @@ def _patch_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: ResourceSnapshot)
     )
 
 
-def test_resources_page_renders_gpu_card_and_nav(
+def test_resources_page_renders_gpu_gauges_and_components(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     snap = ResourceSnapshot(
@@ -115,13 +115,12 @@ def test_resources_page_renders_gpu_card_and_nav(
     resp = client.get("/settings/status")
     assert resp.status_code == 200
     body = resp.text
-    # The status page carries the Settings current-page marker (the hardware view
-    # is now a Settings sub-page); the "Hardware" shortcut points here unmarked.
-    assert 'href="/settings" aria-current="page"' in body
-    assert "GPU aaaaaaaa" in body
-    assert "42%" in body  # instantaneous utilization
-    assert "GiB" in body  # VRAM figure rendered
-    assert "2/8" in body  # admission queue row
+    assert "PARTS OF VOXINT" in body
+    assert "THIS COMPUTER RIGHT NOW" in body
+    assert "42%" in body
+    assert "Graphics card" in body
+    assert "Graphics memory" in body
+    assert "GB" in body
 
 
 def test_resources_htmx_fragment_omits_chrome(
@@ -134,8 +133,8 @@ def test_resources_htmx_fragment_omits_chrome(
     resp = client.get("/settings/status", headers={"HX-Request": "true"})
     assert resp.status_code == 200
     body = resp.text
-    assert "<nav" not in body and "<h1" not in body  # no page chrome on the poll
-    assert "GPU aaaaaaaa" in body  # but the live detail is present
+    assert "<nav" not in body and "<h1" not in body
+    assert "Graphics card" in body
 
 
 def test_stale_resources_poll_survives_the_redirect(
@@ -154,8 +153,8 @@ def test_stale_resources_poll_survives_the_redirect(
     assert resp.status_code == 200  # followed the 303 to the status fragment
     assert str(resp.url).endswith("/settings/status")
     body = resp.text
-    assert "<nav" not in body and "<h1" not in body  # bare fragment, no chrome
-    assert "GPU aaaaaaaa" in body
+    assert "<nav" not in body and "<h1" not in body
+    assert "Graphics card" in body
 
 
 def test_resource_strip_shows_thermal_warning_with_remedy(

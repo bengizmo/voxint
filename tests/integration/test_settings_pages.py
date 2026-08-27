@@ -159,8 +159,10 @@ def test_status_page_reports_health_and_unknown_install(
     # and the page is a 200 even with dependencies down (fail-soft).
     client = _client(session_factory)
     body = client.get("/settings/status").text
-    assert "Component health" in body
-    assert "unknown" in body  # install kind
+    assert "PARTS OF VOXINT" in body
+    assert "Install type unknown" in body
+    assert "Console &amp; API" in body
+    assert "Database" in body
 
 
 def test_hardware_page_shows_env_keys(

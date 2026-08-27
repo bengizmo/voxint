@@ -950,6 +950,54 @@
                 border-bottom-color: var(--accent); }
     .filter-tabs .ft-spacer { flex: 1; }
 
+    /* --- R6 Settings status ---------------------------------------- */
+    .status-banner { display: flex; align-items: center; gap: var(--space-4);
+                padding: var(--space-4); background: var(--surface);
+                border: 1px solid var(--line); border-radius: 8px;
+                margin-bottom: var(--space-5); }
+    .status-banner .sb-dot { width: 12px; height: 12px; border-radius: 50%;
+                flex-shrink: 0; }
+    .status-banner .sb-dot.is-ok { background: var(--ok); }
+    .status-banner .sb-dot.is-warn { background: var(--warn); }
+    .status-banner .sb-body { flex: 1; min-width: 0; }
+    .status-banner .sb-headline { display: block; font-weight: 600;
+                font-size: var(--t-base); }
+    .status-banner .sb-detail { display: block; font-size: var(--t-sm);
+                color: var(--ink-2); margin-top: 2px; }
+
+    .status-columns { display: grid; grid-template-columns: 3fr 2fr;
+                gap: var(--space-5); align-items: start; }
+    @media (max-width: 56rem) { .status-columns { grid-template-columns: 1fr; } }
+
+    .component-list { list-style: none; padding: 0; margin: 0; }
+    .component-row { display: flex; align-items: center; gap: var(--space-3);
+                padding: var(--space-3) 0;
+                border-bottom: 1px solid var(--line); }
+    .component-row:last-child { border-bottom: 0; }
+    .component-row .cr-dot { width: 8px; height: 8px; border-radius: 50%;
+                flex-shrink: 0; }
+    .component-row .cr-dot.is-ok { background: var(--ok); }
+    .component-row .cr-dot.is-warn { background: var(--warn); }
+    .component-row .cr-dot.is-off { background: var(--ink-3); }
+    .component-row .cr-name { font-weight: 600; min-width: 10em;
+                font-size: var(--t-sm); }
+    .component-row .cr-state { flex: 1; font-size: var(--t-sm);
+                color: var(--ink-2); }
+    .component-row .cr-action { font-size: var(--t-sm); white-space: nowrap; }
+    .component-row .cr-action a { color: var(--accent); text-decoration: none; }
+    .component-row .cr-action a:hover { text-decoration: underline; }
+
+    .gauge-row { margin-bottom: var(--space-4); }
+    .gauge-row:last-child { margin-bottom: 0; }
+    .gauge-header { display: flex; justify-content: space-between;
+                align-items: baseline; margin-bottom: var(--space-1); }
+    .gauge-label { font-size: var(--t-sm); }
+    .gauge-value { font-family: var(--font-mono); font-size: var(--t-sm); }
+    .gauge-track { height: 8px; background: var(--surface-2);
+                border-radius: 4px; overflow: hidden; }
+    .gauge-fill { height: 100%; background: var(--accent);
+                border-radius: 4px; transition: width .3s ease; }
+
     /* Operator annotation layer (issue #86). A highlight mark paints one of the six
        --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
        `color: inherit` keeps the segment's own text color. The swatches and tag
