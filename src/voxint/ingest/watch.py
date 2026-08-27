@@ -28,8 +28,6 @@ from __future__ import annotations
 import logging
 import os
 import stat
-import uuid
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
@@ -45,7 +43,7 @@ from voxint.config import Settings
 from voxint.db.models import AppSettings
 from voxint.domain_packs.base import DomainPackError
 from voxint.domain_packs.registry import resolve_domain_pack_by_name
-from voxint.ingest.service import submit_media_item_if_new
+from voxint.ingest.service import SubmissionResult, submit_media_item_if_new
 from voxint.ingest.sidecar import Sidecar, SidecarError, find_sidecar, read_sidecar
 from voxint.media.registration import watched_folder_paths
 
@@ -121,8 +119,6 @@ class WatchSweepSummary:
 def sweep_watch_folders(
     factory: sessionmaker[Session],
     settings: Settings,
-    *,
-    publish: Callable[[uuid.UUID], bool],
 ) -> WatchSweepSummary:
     """Run one watch-folder ingest pass and return its summary (issue #60).
 
@@ -134,8 +130,9 @@ def sweep_watch_folders(
     skips files a ``MediaItem`` claims), settle-filter each net-new candidate so a
     file still being copied in is not ingested mid-write, submit the rest with the
     race-safe :func:`submit_media_item_if_new`, COMMIT the whole batch once, then
-    ``publish`` each run (``publish`` returns ``False`` on a broker outage, counted
-    "deferred" — the durable QUEUED rows are left for the recovery sweep).
+    call :meth:`~SubmissionResult.publish` on each result (returns ``False`` on a
+    broker outage, counted "deferred" — the durable QUEUED rows are left for the
+    recovery sweep).
 
     The latest summary is persisted to ``app_settings.watch_folder_last_sweep``,
     newest-wins, for the plain-language Settings status line.
@@ -167,12 +164,12 @@ def sweep_watch_folders(
                 settling += 1
             else:  # SettleState.SKIP — vanished / unreadable / not a regular file
                 stat_errors += 1
-        run_ids: list[uuid.UUID] = []
+        pending: list[SubmissionResult] = []
         raced_known = 0
         sidecar_errors = 0
         hit_file_cap = result.hit_file_cap
         for rel in settled:
-            if len(run_ids) >= settings.setup_scan_max_files:
+            if len(pending) >= settings.setup_scan_max_files:
                 # The submission cap: everything beyond it simply waits for the
                 # next sweep (same operator-facing meaning hit_file_cap always had).
                 hit_file_cap = True
@@ -214,7 +211,7 @@ def sweep_watch_folders(
                 # is now known, not newly picked up.
                 raced_known += 1
             else:
-                run_ids.append(submitted.id)
+                pending.append(submitted)
         # Commit-before-publish: the durable QUEUED rows exist before any enqueue, so
         # a broker outage only defers publishing, never loses a submission.
         session.commit()
@@ -224,15 +221,15 @@ def sweep_watch_folders(
     # every durable QUEUED row regardless.
     deferred = 0
     broker_down = False
-    for rid in run_ids:
+    for sub in pending:
         if broker_down:
             deferred += 1
             continue
-        if not publish(rid):
+        if not sub.publish():
             broker_down = True
             deferred += 1
     summary = WatchSweepSummary(
-        picked_up=len(run_ids),
+        picked_up=len(pending),
         already_known=result.already_known + raced_known,
         settling=settling,
         deferred=deferred,

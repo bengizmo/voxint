@@ -2,8 +2,9 @@
 
 Drives :func:`voxint.ingest.watch.sweep_watch_folders` directly (the task is a thin
 wrapper): the effective-gate recheck, the scan+settle+submit pipeline, the
-commit-before-publish + broker-defer path, the "already known" skip, and the
-persisted status summary. Publishing is a fake callable so no broker is needed.
+commit-before-publish via :class:`~voxint.ingest.service.SubmissionResult`, the
+"already known" skip, and the persisted status summary. ``SubmissionResult.publish``
+is monkeypatched so no broker is needed.
 """
 
 import os
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from voxint.api.setup_wizard import ScanResult
 from voxint.config import Settings
 from voxint.db.models import AppSettings, MediaFolder, MediaItem, PipelineRun, RunStatus
+from voxint.ingest.service import SubmissionResult
 from voxint.ingest.watch import WatchSweepSummary, _store_summary, sweep_watch_folders
 
 FOLDER = "clips"
@@ -72,16 +74,30 @@ def _media_paths(factory: sessionmaker[Session]) -> set[str]:
         return {m.source_path for m in s.query(MediaItem).all()}
 
 
-class _Publisher:
+class _PublishRecorder:
     """Records published run ids; ``ok=False`` simulates a broker outage."""
 
     def __init__(self, ok: bool = True) -> None:
         self.ok = ok
         self.published: list[uuid.UUID] = []
 
-    def __call__(self, run_id: uuid.UUID) -> bool:
-        self.published.append(run_id)
+    def __call__(self, result_self: SubmissionResult) -> bool:
+        self.published.append(result_self.run_id)
         return self.ok
+
+
+@pytest.fixture(autouse=True)
+def _mock_publish(monkeypatch: pytest.MonkeyPatch) -> _PublishRecorder:
+    """Replace SubmissionResult.publish with a no-broker recorder."""
+    recorder = _PublishRecorder()
+    monkeypatch.setattr(SubmissionResult, "publish", recorder)
+    return recorder
+
+
+@pytest.fixture()
+def publish_recorder(_mock_publish: _PublishRecorder) -> _PublishRecorder:
+    """Explicit handle when a test needs to inspect what was published."""
+    return _mock_publish
 
 
 @pytest.fixture()
@@ -91,13 +107,12 @@ def session(session_factory: sessionmaker[Session]) -> Iterator[Session]:
 
 
 def test_new_file_is_ingested_and_published(
-    session_factory: sessionmaker[Session], media_root: Path
+    session_factory: sessionmaker[Session], media_root: Path, publish_recorder: _PublishRecorder
 ) -> None:
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "a.wav")
-    pub = _Publisher()
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=pub)
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 1
     assert summary.already_known == 0
@@ -105,22 +120,21 @@ def test_new_file_is_ingested_and_published(
     runs = _runs(session_factory)
     assert len(runs) == 1
     assert runs[0].status == RunStatus.QUEUED.value
-    assert pub.published == [runs[0].id]  # commit-before-publish handed off the run
+    assert publish_recorder.published == [runs[0].id]
 
 
 def test_disabled_is_a_noop(
-    session_factory: sessionmaker[Session], media_root: Path
+    session_factory: sessionmaker[Session], media_root: Path, publish_recorder: _PublishRecorder
 ) -> None:
     # env default off AND no runtime override → nothing walked or submitted.
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=None)
     _drop(media_root, "a.wav")
-    pub = _Publisher()
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=pub)
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary == WatchSweepSummary()  # all-zero, completed_at None
     assert _runs(session_factory) == []
-    assert pub.published == []
+    assert publish_recorder.published == []
 
 
 def test_runtime_override_enables_without_env(
@@ -130,7 +144,7 @@ def test_runtime_override_enables_without_env(
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "a.wav")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
     assert summary.picked_up == 1
 
 
@@ -142,14 +156,12 @@ def test_already_known_file_is_skipped(
     with session_factory() as s:  # pre-claim the path
         s.add(MediaItem(source_path=f"{FOLDER}/a.wav"))
         s.commit()
-    pub = _Publisher()
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=pub)
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 0
     assert summary.already_known == 1
     assert _runs(session_factory) == []  # no run minted for a known file
-    assert pub.published == []
 
 
 def test_second_sweep_is_idempotent(
@@ -157,9 +169,9 @@ def test_second_sweep_is_idempotent(
 ) -> None:
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "a.wav")
-    first = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    first = sweep_watch_folders(session_factory, _settings(media_root))
     assert first.picked_up == 1
-    second = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    second = sweep_watch_folders(session_factory, _settings(media_root))
     assert second.picked_up == 0
     assert second.already_known == 1
     assert len(_runs(session_factory)) == 1  # no duplicate run
@@ -174,7 +186,6 @@ def test_too_fresh_file_is_settling_then_ingested(
     summary = sweep_watch_folders(
         session_factory,
         _settings(media_root, watch_folder_settle_seconds=3600),
-        publish=_Publisher(),
     )
     assert summary.picked_up == 0
     assert summary.settling == 1
@@ -183,24 +194,27 @@ def test_too_fresh_file_is_settling_then_ingested(
     old = os.stat(f).st_mtime - 10_000
     os.utime(f, (old, old))
     # settle=0 ignores the fresh ctime for this assertion (accept immediately).
-    later = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    later = sweep_watch_folders(session_factory, _settings(media_root))
     assert later.picked_up == 1
 
 
 def test_broker_outage_defers_but_keeps_queued_run(
-    session_factory: sessionmaker[Session], media_root: Path
+    session_factory: sessionmaker[Session],
+    media_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    publish_recorder: _PublishRecorder,
 ) -> None:
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "a.wav")
-    pub = _Publisher(ok=False)  # broker down
+    publish_recorder.ok = False  # broker down
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=pub)
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 1
     assert summary.deferred == 1
     runs = _runs(session_factory)
     assert len(runs) == 1 and runs[0].status == RunStatus.QUEUED.value  # durable, for recovery
-    assert pub.published == [runs[0].id]  # it WAS attempted
+    assert publish_recorder.published == [runs[0].id]  # it WAS attempted
 
 
 def test_summary_is_persisted_for_the_status_line(
@@ -210,7 +224,7 @@ def test_summary_is_persisted_for_the_status_line(
     _drop(media_root, "a.wav")
     _drop(media_root, "b.wav")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     with session_factory() as s:
         stored = s.get(AppSettings, 1)
@@ -231,7 +245,7 @@ def test_vanished_candidate_is_counted_not_fatal(
     _drop(media_root, "a.wav")
     monkeypatch.setattr(watch_mod, "classify_settle", lambda *a, **k: watch_mod.SettleState.SKIP)
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 0
     assert summary.stat_errors == 1
@@ -261,7 +275,7 @@ def test_domain_pack_collision_is_skipped_not_fatal(
 
     monkeypatch.setattr(watch_mod, "submit_media_item_if_new", _submit)
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     # The good file still ingests; the colliding one is counted, not fatal.
     assert summary.picked_up == 1
@@ -281,7 +295,7 @@ def test_race_loss_at_submit_counts_as_already_known(
     _drop(media_root, "a.wav")
     monkeypatch.setattr(watch_mod, "submit_media_item_if_new", lambda *a, **k: None)
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 0
     assert summary.already_known == 1
@@ -318,7 +332,7 @@ def test_real_unique_conflict_at_submit_does_not_poison_the_batch(
         ),
     )
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 1  # b.wav survived the batch despite a's real conflict
     assert summary.already_known == 1  # a.wav's UNIQUE conflict → counted, not raised
@@ -335,7 +349,7 @@ def test_missing_media_root_is_surfaced_not_a_silent_empty_sweep(
     gone = tmp_path / "unmounted"  # never created
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
 
-    summary = sweep_watch_folders(session_factory, _settings(gone), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(gone))
 
     assert summary.root_missing is True
     assert summary.picked_up == 0
@@ -375,7 +389,7 @@ def test_reserved_and_symlink_paths_are_not_ingested(
     (media_root / FOLDER / "link.wav").symlink_to(real)
     _drop(media_root, "good.wav")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert _media_paths(session_factory) == {f"{FOLDER}/good.wav"}
     assert summary.picked_up == 1
@@ -420,7 +434,6 @@ def test_sidecar_pair_ingests_with_all_fields_applied(
     summary = sweep_watch_folders(
         session_factory,
         _settings(media_root, domain_packs_dir=packs),
-        publish=_Publisher(),
     )
 
     assert summary.picked_up == 1
@@ -450,7 +463,7 @@ def test_malformed_sidecar_holds_then_fixed_file_ingests(
     _drop(media_root, "talk.wav")
     bad = _drop_sidecar(media_root, "talk.wav.yaml", "title: [unclosed\n")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     # The media is HELD, not dropped and not half-ingested.
     assert summary.picked_up == 0
@@ -459,7 +472,7 @@ def test_malformed_sidecar_holds_then_fixed_file_ingests(
 
     # The operator fixes the sidecar; the next sweep ingests the pair.
     bad.write_text("title: Fixed now\n", encoding="utf-8")
-    later = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    later = sweep_watch_folders(session_factory, _settings(media_root))
     assert later.picked_up == 1
     assert later.sidecar_errors == 0
     assert _run_for(session_factory, f"{FOLDER}/talk.wav").sidecar == {"title": "Fixed now"}
@@ -472,7 +485,7 @@ def test_unknown_pack_in_sidecar_is_a_sidecar_error(
     _drop(media_root, "talk.wav")
     _drop_sidecar(media_root, "talk.wav.yaml", "domain_pack: no-such-pack\n")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     # Attributed to the SIDECAR (fix that file), not the folder config.
     assert summary.sidecar_errors == 1
@@ -491,7 +504,7 @@ def test_reference_only_sidecar_ingests_with_nothing_applied(
         "content_item_id: 7\nsource_type: rss_feed\npublished: 2026-01-15\n",
     )
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 1
     run = _run_for(session_factory, f"{FOLDER}/ep.mp3")
@@ -517,7 +530,7 @@ def test_stem_ambiguity_holds_both_while_full_name_pair_ingests(
     _drop(media_root, "other.wav")
     _drop_sidecar(media_root, "other.wav.yaml", "title: mine\n")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     # Both same-stem media files are held (the sidecar could describe either);
     # the full-name pair ingests untouched.
@@ -545,7 +558,7 @@ def test_sidecar_still_settling_holds_media_as_settling(
 
     monkeypatch.setattr(watch_mod, "classify_settle", _classify)
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 0
     assert summary.settling == 1
@@ -558,13 +571,13 @@ def test_sidecar_arriving_after_ingest_is_too_late(
 ) -> None:
     _seed_settings_row(session_factory, folders=[FOLDER], enabled=True)
     _drop(media_root, "talk.wav")
-    first = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    first = sweep_watch_folders(session_factory, _settings(media_root))
     assert first.picked_up == 1
 
     # The sidecar shows up late: the media is already known, nothing re-triggers,
     # and the run keeps its NULL sidecar (frozen at submit).
     _drop_sidecar(media_root, "talk.wav.yaml", "title: too late\n")
-    later = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    later = sweep_watch_folders(session_factory, _settings(media_root))
     assert later.picked_up == 0
     assert later.already_known == 1
     run = _run_for(session_factory, f"{FOLDER}/talk.wav")
@@ -603,7 +616,6 @@ def test_held_sidecar_cannot_starve_later_files_past_the_cap(
     summary = sweep_watch_folders(
         session_factory,
         _settings(media_root, setup_scan_max_files=1),
-        publish=_Publisher(),
     )
 
     # bad is held WITHOUT consuming the single cap slot; good takes it; extra
@@ -623,7 +635,7 @@ def test_blank_sidecar_file_ingests_and_stamps_empty_mapping(
     _drop(media_root, "talk.wav")
     _drop_sidecar(media_root, "talk.wav.yaml", "# nothing for Voxint yet\n")
 
-    summary = sweep_watch_folders(session_factory, _settings(media_root), publish=_Publisher())
+    summary = sweep_watch_folders(session_factory, _settings(media_root))
 
     assert summary.picked_up == 1
     assert summary.sidecar_errors == 0

@@ -753,7 +753,7 @@ def submit_media_upload(
     # (_RequestSizeLimitMiddleware); submit_upload enforces the exact per-file
     # cap authoritatively while streaming (covers a lying/absent length).
     try:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=file.file,
             filename=file.filename or "",
@@ -773,13 +773,12 @@ def submit_media_upload(
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
         ) from exc
-    run_id = run.id
     # Commit-before-publish: the durable QUEUED run must exist before the
     # enqueue, so commit here rather than leaning on the dependency's
     # post-return commit (which would run after publish). A broker outage is
     # then non-fatal — the run stays QUEUED and the recovery sweep republishes.
     session.commit()
-    return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
+    return _run_redirect(result.run_id, published=result.publish())
 
 @core_router.post("/fetch")
 def fetch_media_url(
@@ -809,7 +808,7 @@ def fetch_media_url(
     # URL; a conflict names only the internal source_path), so a signed query
     # string can't leak into a 4xx body.
     try:
-        run = submit_url(session, url=url, submission_id=submission_id)
+        result = submit_url(session, url=url, submission_id=submission_id)
     except (UrlValidationError, UploadValidationError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except UploadConflictError as exc:
@@ -821,12 +820,11 @@ def fetch_media_url(
         raise HTTPException(
             status_code=422, detail=deps._submit_domain_pack_detail(exc)
         ) from exc
-    run_id = run.id
     # Commit-before-publish, exactly as /submit: the durable QUEUED run must
     # exist before the enqueue, so a broker outage leaves it QUEUED for the
     # recovery sweep rather than failing the request.
     session.commit()
-    return _run_redirect(run_id, published=deps._publish_or_defer(run_id))
+    return _run_redirect(result.run_id, published=result.publish())
 
 def build_run_detail_context(
     run_id: uuid.UUID,
