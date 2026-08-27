@@ -25,6 +25,7 @@ from voxint.media.operations import (
     cas_transition,
     claim_operation,
     extract_filename,
+    has_active_operation,
     has_active_run,
     lock_media_row,
     temp_path,
@@ -166,11 +167,16 @@ def _plan_operation(
     claim_token: str | None,
     operation_id: uuid.UUID | None,
 ) -> MediaOperation:
+    destination = PurePosixPath(destination_path)
+    if destination.is_absolute() or ".." in destination.parts:
+        raise OperationRefused("destination path must stay within the media root")
     media = lock_media_row(session, media_id)
     if media is None:
         raise OperationRefused("media item does not exist")
     if has_active_run(session, media_id):
         raise OperationRefused("media item has an active run")
+    if has_active_operation(session, media_id):
+        raise OperationRefused("media item has an active operation")
     if media.purged_at is not None:
         raise OperationRefused("media item is purged")
     if media.trashed_at is not None and op_type != OperationType.RESTORE:
@@ -280,6 +286,8 @@ def plan_restore(
 ) -> MediaOperation:
     """Plan and claim restoration of a completed trash operation."""
     media = _load_media(session, media_id)
+    if media.trashed_at is None:
+        raise OperationRefused("media item is not trashed")
     current_path = media.current_path
     assert current_path is not None
     trash_operation = session.execute(
@@ -363,7 +371,7 @@ def _destination_is_owned(operation: MediaOperation) -> bool:
         expected_prefix = PurePosixPath(TRASH_TREE, str(operation.id))
         path = PurePosixPath(destination)
         return path.parts[: len(expected_prefix.parts)] == expected_prefix.parts
-    return destination == operation.destination_path
+    return False
 
 
 def _is_publication_replay(operation: MediaOperation, destination: Path) -> bool:
@@ -430,8 +438,15 @@ def _execute_move_like(
     if operation.origin_path is None or operation.destination_path is None:
         raise OperationRefused("move-like operation is missing a path")
 
+    resolved_root = media_root.resolve()
     origin = media_root / operation.origin_path
     destination = media_root / operation.destination_path
+    if not origin.resolve().is_relative_to(resolved_root):
+        raise OperationRefused("origin path escapes the media root")
+    if not destination.resolve(strict=False).parent.resolve().is_relative_to(
+        resolved_root
+    ):
+        raise OperationRefused("destination path escapes the media root")
     destination_dir = str(PurePosixPath(operation.destination_path).parent)
     temp = media_root / temp_path(operation.id, destination_dir)
     from_state = OperationState.PLANNED

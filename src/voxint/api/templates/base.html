@@ -998,6 +998,47 @@
     .gauge-fill { height: 100%; background: var(--accent);
                 border-radius: 4px; transition: width .3s ease; }
 
+    /* --- R3 Media overview ----------------------------------------- */
+    .add-media-dd { position: relative; }
+    .add-media-menu { position: absolute; right: 0; top: calc(100% + 4px);
+                z-index: 10; min-width: 18rem; background: var(--surface);
+                border: 1px solid var(--line); border-radius: var(--r-md);
+                box-shadow: var(--shadow-2, 0 4px 12px rgba(0,0,0,.25));
+                padding: var(--space-1) 0; }
+    .add-media-choice { display: flex; flex-direction: column; gap: 2px;
+                width: 100%; padding: var(--space-2) var(--space-3);
+                text-align: left; border: 0; background: transparent;
+                cursor: pointer; color: var(--ink); }
+    .add-media-choice:hover { background: var(--surface-2); }
+    .add-media-choice strong { font-size: var(--t-sm); }
+    .add-media-choice .oc-muted { font-size: var(--t-xs); }
+    .add-media-panel { padding: var(--space-3) var(--space-4);
+                background: var(--surface); border: 1px solid var(--line);
+                border-radius: var(--r-md); margin-bottom: var(--space-4); }
+    .add-media-panel form { display: flex; flex-wrap: wrap;
+                gap: var(--space-3); align-items: end; }
+
+    .media-grid .gt-folder-row > * { background: var(--surface-2); }
+    .gt-folder-name { display: flex; align-items: center; gap: var(--space-2); }
+    .folder-toggle { border: 0; background: transparent; padding: 0; cursor: pointer;
+                color: var(--ink-2); font-size: var(--t-sm); line-height: 1;
+                width: 1.2rem; text-align: center; }
+    .gt-child-indent { padding-left: calc(1.2rem + var(--space-2) + 16px + var(--space-2)); }
+
+    .dropzone { border: 1px dashed var(--line); border-radius: var(--r-md);
+                padding: .8rem 1rem; background: var(--surface-2); cursor: pointer; }
+    .dropzone.is-drag { border-color: var(--accent); background: var(--surface); }
+    .notice.success { border-color: var(--accent); background: var(--accent-soft); }
+    .notice.error { border-color: var(--danger); background: var(--danger-soft); }
+
+    .lib-folders { list-style: none; padding: 0; display: grid; gap: .4rem; }
+    .lib-folders li { display: flex; gap: .8rem; align-items: baseline;
+                      justify-content: space-between; }
+    .register-folder { display: flex; gap: .8rem; align-items: end;
+                       flex-wrap: wrap; margin-top: .8rem; }
+    .lib-cards-placeholder { padding: var(--space-6); text-align: center; }
+    [hidden] { display: none !important; }
+
     /* Operator annotation layer (issue #86). A highlight mark paints one of the six
        --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
        `color: inherit` keeps the segment's own text color. The swatches and tag

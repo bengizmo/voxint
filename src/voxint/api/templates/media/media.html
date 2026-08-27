@@ -1,9 +1,47 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip %}
 {% block title %}Voxint — media{% endblock %}
+
+{% block cb_breadcrumb %}media /{% endblock %}
+{% block cb_summary %}
+{%- if media_summary.folder_count %}{{ media_summary.folder_count }} folder{{ "s" if media_summary.folder_count != 1 else "" }} · {% endif -%}
+{{ media_summary.file_count }} recording{{ "s" if media_summary.file_count != 1 else "" }} · {{ media_summary.total_hours }}
+{%- endblock %}
+{% block cb_search %}
+<div class="cb-search" aria-hidden="true">
+  <span>Filter media</span>
+  <kbd>/</kbd>
+</div>
+{% endblock %}
+{% block cb_actions %}
+<nav class="view-toggle" aria-label="Show as">
+  {% for value in views %}
+  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+  {% endfor %}
+</nav>
+{% if not archived and not trashed %}
+<div class="add-media-dd" data-dropdown>
+  <button type="button" class="cb-btn cb-btn-primary" data-dropdown-toggle aria-expanded="false" aria-haspopup="true">+ Add media</button>
+  <div class="add-media-menu" data-dropdown-menu hidden>
+    <button type="button" class="add-media-choice" data-show-panel="upload-panel">
+      <strong>Upload from this computer</strong>
+      <span class="oc-muted">drag &amp; drop works anywhere on this page</span>
+    </button>
+    <button type="button" class="add-media-choice" data-show-panel="server-panel">
+      <strong>Pick from the server</strong>
+      <span class="oc-muted">browse folders Voxint can already see</span>
+    </button>
+    <button type="button" class="add-media-choice" data-show-panel="fetch-panel">
+      <strong>Fetch from a link</strong>
+      <span class="oc-muted">downloads on your machine, nothing shared</span>
+    </button>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
 {% block body %}
-{# The settings-folder picker is shared by the upload and URL forms. It sets which
-   folder's vocabulary and corrections apply to the run; it never moves the file
-   (ADR 0002 addendum). It renders whether or not the projects area is enabled. #}
+{# The settings-folder picker is shared by the upload and URL forms. #}
 {% macro folder_picker(select_id) %}
 <label for="{{ select_id }}">Settings folder (optional)
   <select id="{{ select_id }}" name="media_folder_id">
@@ -12,65 +50,36 @@
     <option value="{{ opt.id }}">{{ opt.path }}{% if opt.project_name %} — {{ opt.project_name }}{% endif %}</option>
     {% endfor %}
   </select>
-  <small class="muted">Applies this folder's vocabulary and corrections. The file is not moved.</small>
+  <small class="oc-muted">Applies this folder's vocabulary and corrections. The file is not moved.</small>
 </label>
 {% endmacro %}
 
-{# Page-scoped: the media page is flag-gated (404 when off), so these rules never
-   reach a flag-off page and keep every shared page byte-identical. #}
-<style>
-  .dropzone { border: 1px dashed var(--line); border-radius: var(--r-md);
-              padding: .8rem 1rem; background: var(--surface-2); cursor: pointer; }
-  .dropzone.is-drag { border-color: var(--accent); background: var(--surface); }
-  .notice.success { border-color: var(--accent); background: var(--accent-soft); }
-  .notice.error { border-color: var(--danger); background: var(--danger-soft); }
-  .lib-select-cell { width: 2.2rem; text-align: center; }
-  .card-select { display: flex; gap: .4rem; align-items: baseline; }
-  .bulk-bar { position: sticky; bottom: 0; z-index: 1; display: flex; gap: .8rem;
-              align-items: end; flex-wrap: wrap; margin-top: .6rem;
-              padding: .7rem .9rem; background: var(--surface-2);
-              border: 1px solid var(--line); border-radius: var(--r-md); }
-  .bulk-bar .selected-count { align-self: center; }
-  .folder-panel { margin-top: 1.4rem; }
-  .lib-folders { list-style: none; padding: 0; display: grid; gap: .4rem; }
-  .lib-folders li { display: flex; gap: .8rem; align-items: baseline;
-                    justify-content: space-between; }
-  .register-folder { display: flex; gap: .8rem; align-items: end;
-                     flex-wrap: wrap; margin-top: .8rem; }
-  [hidden] { display: none !important; }
-</style>
-
-<h1>Media{% if archived %} <span class="muted">· archived</span>{% endif %}</h1>
-<p class="muted">
-  {% if archived %}
-  Archived runs are hidden from the active library and the review queue.
-  <a href="{{ archived_toggle_url }}">← Back to active media</a>
-  {% else %}
-  Every recording Voxint knows about, and where each one stands.
-  <a href="{{ archived_toggle_url }}">View archived runs</a>
-  {% endif %}
+{% if trashed %}
+<p class="oc-muted" style="margin-bottom:var(--space-3)">
+  Trashed files awaiting permanent deletion.
+  <a href="{{ trash_toggle_url }}">← Back to active media</a>
 </p>
+{% elif archived %}
+<p class="oc-muted" style="margin-bottom:var(--space-3)">
+  Archived runs are hidden from the active library.
+  <a href="{{ archived_toggle_url }}">← Back to active media</a>
+</p>
+{% endif %}
 
-{# Success/error banner for the bulk-assign and folder-panel flows. Success rides
-   in on a PRG redirect; an error re-renders this page with the operator's
-   selection preserved. #}
 {% if notice %}
 <p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
 {% endif %}
 
-{# Adding media and organizing folders belong to the active library; the archived
-   view is a focused surface for restoring runs, so both are hidden there. #}
-{% if not archived %}
-<section class="add-media" aria-labelledby="add-media-h">
-  <h2 id="add-media-h">Add media</h2>
-  {% if submitted %}
-  <p class="notice" role="status">
-    {% if submitted == "deferred" %}Queued for transcription. It will start when the worker is available.
-    {% else %}Queued for transcription.{% endif %}
-  </p>
-  {% endif %}
+{% if not archived and not trashed %}
+{% if submitted %}
+<p class="notice" role="status">
+  {% if submitted == "deferred" %}Queued for transcription. It will start when the worker is available.
+  {% else %}Queued for transcription.{% endif %}
+</p>
+{% endif %}
 
-  <form method="post" action="/media/submit" enctype="multipart/form-data" class="upload">
+<div id="upload-panel" class="add-media-panel" hidden>
+  <form method="post" action="/media/submit" enctype="multipart/form-data">
     <input type="hidden" name="submission_id" value="{{ submission_id }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_media_submit }}">
     <label class="dropzone" data-dropzone>Drop a file here, or choose one
@@ -79,8 +88,46 @@
     {{ folder_picker("submit-folder") }}
     <button type="submit" class="primary">Submit for transcription</button>
   </form>
+</div>
 
-  <form method="post" action="/media/fetch" class="upload">
+<div id="server-panel" class="add-media-panel" hidden>
+  <section class="folder-panel" aria-labelledby="folders-h">
+    <h3 id="folders-h">Registered folders</h3>
+    <p class="oc-muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>
+    {% if folder_options %}
+    <ul class="lib-folders">
+      {% for opt in folder_options %}
+      <li>
+        <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="oc-muted">— {{ opt.project_name }}</span>{% endif %}</span>
+        <form method="post" action="/media/folders">
+          <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+          <input type="hidden" name="action" value="remove">
+          <input type="hidden" name="folder_id" value="{{ opt.id }}">
+          <input type="hidden" name="sort" value="{{ sort }}">
+          <input type="hidden" name="view" value="{{ view }}">
+          <button type="submit" class="danger">Unregister</button>
+        </form>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="oc-muted">No folders registered yet.</p>
+    {% endif %}
+    <form method="post" action="/media/folders" class="register-folder">
+      <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="view" value="{{ view }}">
+      <label for="register-folder-path">Folder path (under the media root)
+        <input id="register-folder-path" type="text" name="folder" placeholder="interviews/2026" required>
+      </label>
+      <button type="submit">Register folder</button>
+    </form>
+  </section>
+</div>
+
+<div id="fetch-panel" class="add-media-panel" hidden>
+  <form method="post" action="/media/fetch">
     <input type="hidden" name="submission_id" value="{{ fetch_submission_id }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_media_fetch }}">
     <label>Media URL
@@ -89,132 +136,32 @@
     {{ folder_picker("fetch-folder") }}
     <button type="submit"{% if not ytdlp_enabled %} disabled{% endif %}>Fetch and transcribe</button>
     {% if not ytdlp_enabled %}
-    <p class="muted">Fetching from a URL is turned off. Turn it on in <a href="/settings">Settings</a>.</p>
+    <p class="oc-muted">Fetching from a URL is turned off. Turn it on in <a href="/settings">Settings</a>.</p>
     {% endif %}
   </form>
-</section>
+</div>
 {% endif %}
 
 {% if rows %}
-{# One toolbar row (#152 library kit): the sort control on the left, the
-   card/table view toggle on the right. Each control's links carry the OTHER
-   control's current value so switching sort keeps the view and vice versa. An
-   unknown ?sort=/?view= already degraded to the default in the route. #}
-<div class="lib-toolbar">
-  {# Both controls carry the OTHER control's current value AND the archived flag,
-     so switching sort or layout keeps you in the same view. #}
-  <nav class="view-toggle" aria-label="Sort by">
-    {% for value, label in sorts %}
-    <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
-    {% endfor %}
-  </nav>
-  <nav class="view-toggle" aria-label="Show as">
-    {% for value in views %}
-    <a href="/media?sort={{ sort }}&view={{ value }}{% if archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
-    {% endfor %}
-  </nav>
-  {# Select-all is a JS convenience; it is hidden until the script below reveals
-     and wires it, so no-JS operators never see a dead control. #}
-  <label data-select-all hidden style="margin-left:auto;">
-    <input type="checkbox" data-select-all-box> Select all shown
-  </label>
-</div>
-
-{# The multi-select bulk-assign form wraps only the listing and its action bar.
-   The upload/fetch forms above and the folder panel below are siblings, never
-   descendants, so no <form> is nested inside another. Without JS the checkboxes
-   plus the in-form folder <select> and submit button are the whole feature. #}
-{# One form holds the checkboxes and every bulk action. Each action button carries
-   its OWN action-bound CSRF token as its name/value and (for re-run) its own
-   formaction: an unclicked submit button sends nothing, so exactly one token and
-   one target ride with the submission — per-action CSRF with no JS and no nested
-   forms. The folder <select> is only read by /media/assign; /media/rerun ignores
-   it. #}
-<form method="post" action="{% if archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
+<form method="post" action="{% if trashed %}/media/restore{% elif archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
 
-{% if view == "table" %}
-<div class="lib-table" role="region" aria-label="Media" tabindex="0">
-  <table>
-    <thead>
-      <tr>
-        <th scope="col" class="lib-select-cell"><span class="visually-hidden">Select</span></th>
-        <th scope="col">Name</th><th scope="col">Folder</th>
-        <th scope="col">Length</th><th scope="col">Size</th>
-        <th scope="col">Latest run</th><th scope="col">Added</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in rows %}
-      <tr>
-        <td class="lib-select-cell">
-          <input type="checkbox" name="media_id" value="{{ row.id }}"
-                 aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
-                 {% if (row.id|string) in selected_ids %}checked{% endif %}>
-          {# Render-time latest-run baseline: archive/unarchive target this exact run
-             so a double-submit is idempotent (a replay drifts and skips). #}
-          <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
-        </td>
-        <td>
-          <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
-          <br><code class="muted">{{ row.source_path }}</code>
-        </td>
-        <td>{% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{{ format_duration(row.duration_seconds) }}</td>
-        <td>{{ format_size(row.size_bytes) }}</td>
-        <td>
-          {% if row.latest_run_id %}
-          {# Humanized LABEL only; the pill's CSS class stays the raw enum so it
-             keeps its status colour (the run-listing display invariant). #}
-          <a href="/runs/{{ row.latest_run_id }}"><span class="pill {{ row.latest_run_status }}">{{ humanize_status(row.latest_run_status) }}</span></a>
-          <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
-          {% else %}<span class="muted">Not processed yet</span>{% endif %}
-        </td>
-        <td><span title="{{ row.added_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.added_at, now=now) }}</span></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-<ul class="lib-cards" aria-label="Media">
-  {% for row in rows %}
-  <li>
-    <label class="card-select">
-      <input type="checkbox" name="media_id" value="{{ row.id }}"
-             aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
-             {% if (row.id|string) in selected_ids %}checked{% endif %}>
-      <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
-    </label>
-    {# Render-time latest-run baseline (see the table view): idempotent archive. #}
-    <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
-    <code class="muted">{{ row.source_path }}</code>
-    <p class="muted">
-      {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
-      · {{ format_duration(row.duration_seconds) }} · {{ format_size(row.size_bytes) }}
-    </p>
-    <p>
-      {% if row.latest_run_id %}
-      <a href="/runs/{{ row.latest_run_id }}"><span class="pill {{ row.latest_run_status }}">{{ humanize_status(row.latest_run_status) }}</span></a>
-      <span class="muted" title="{{ row.latest_run_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.latest_run_at, now=now) }}</span>
-      {% else %}<span class="muted">Not processed yet</span>{% endif %}
-    </p>
-  </li>
-  {% endfor %}
-</ul>
-{% endif %}
-
-  {# The bulk action bar. Each button carries its OWN action-bound CSRF token as
-     its name/value and (where the target differs from the form action) its own
-     formaction; an unclicked submit button sends nothing, so exactly one token and
-     one target ride with the submission. Archive lives in the active view (over the
-     latest non-archived run); the archived view offers only unarchive. #}
-  <div class="bulk-bar">
-    {% if archived %}
-    <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}">Restore latest archived run</button>
+  <div class="gt-action-bar" data-action-bar hidden>
+    <span class="gt-count" data-selected-count>0 selected</span>
+    {% if trashed %}
+    <button type="submit" formaction="/media/restore" name="csrf_token" value="{{ csrf_media_restore }}" class="cb-btn cb-btn-secondary">Restore selected</button>
+    {% elif archived %}
+    <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}" class="cb-btn cb-btn-secondary">Restore latest archived run</button>
     {% else %}
-    {# "Use settings from…" never moves the bytes; "Archive latest run" is per-run. #}
+    <button type="button" class="cb-btn cb-btn-secondary" data-show-panel="assign-panel-inline">Move to folder...</button>
+    <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}" class="cb-btn cb-btn-secondary">Re-run</button>
+    <button type="submit" formaction="/media/trash" name="csrf_token" value="{{ csrf_media_trash }}" class="cb-btn cb-btn-danger" style="border:0;background:transparent">Delete...</button>
+    {% endif %}
+  </div>
+
+  {% if not archived and not trashed %}
+  <div id="assign-panel-inline" class="add-media-panel" hidden style="margin-bottom:var(--space-3)">
     <label for="assign-folder">Assign settings folder
       <select id="assign-folder" name="media_folder_id">
         <option value=""{% if not attempted_folder_id %} selected{% endif %}>No folder — use global settings</option>
@@ -223,107 +170,255 @@
         {% endfor %}
       </select>
     </label>
-    <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Use these settings for the selected files</button>
-    <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}">Re-run transcription…</button>
-    <button type="submit" formaction="/media/archive" name="csrf_token" value="{{ csrf_media_archive }}">Archive latest run</button>
-    {% endif %}
-    <span class="muted selected-count" data-selected-count hidden></span>
+    <button type="submit" name="csrf_token" value="{{ csrf_media_assign }}">Apply to selected</button>
   </div>
+  {% endif %}
+
+  <div class="lib-toolbar">
+    <nav class="view-toggle" aria-label="Sort by">
+      {% for value, label in sorts %}
+      <a href="/media?sort={{ value }}&view={{ view }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </nav>
+    <span style="flex:1"></span>
+    {% if not trashed and not archived %}
+    <a href="{{ archived_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Archived →</a>
+    <a href="{{ trash_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none;margin-left:var(--space-3)">Trash →</a>
+    {% elif archived %}
+    <a href="{{ trash_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Trash →</a>
+    {% endif %}
+  </div>
+
+{% if view == "table" %}
+  <div class="grid-table media-grid" role="region" aria-label="Media library" tabindex="0"
+       style="grid-template-columns: 2.2rem 1fr auto auto auto auto auto;">
+    <div class="gt-header">
+      <span><input type="checkbox" data-select-all-box aria-label="Select all"></span>
+      <span>NAME</span>
+      <span>ITEMS</span>
+      <span>LENGTH</span>
+      <span>REVIEW</span>
+      <span>{% if trashed %}TRASHED{% endif %}</span>
+      <span></span>
+    </div>
+
+    {% for group in folder_groups %}
+    <div class="gt-row gt-folder-row" data-folder="{{ group.folder_id }}" role="row">
+      <span>
+        <input type="checkbox" class="folder-check" data-folder-check="{{ group.folder_id }}"
+               aria-label="Select all in {{ group.folder_path }}">
+      </span>
+      <span class="gt-folder-name">
+        <button type="button" class="folder-toggle" data-expand="{{ group.folder_id }}"
+                aria-expanded="false" aria-label="Expand {{ group.folder_path }}">▸</button>
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
+        <span>{{ group.folder_path }}</span>
+        {% if not archived and not trashed %}{{ chip("watched") }}{% endif %}
+      </span>
+      <span class="num">{{ group.item_count }}</span>
+      <span class="num">{{ format_compact_duration(group.total_duration_seconds) }}</span>
+      <span>
+        {% if group.failed_count %}
+        <span class="chip chip-danger">{{ group.failed_count }} failed</span>
+        {% elif group.running_count %}
+        {{ chip("transcribing") }}
+        {% elif group.needs_review_count %}
+        <span class="chip chip-warn">{{ group.needs_review_count }} need you</span>
+        {% elif group.completed_count == group.item_count and group.item_count > 0 %}
+        {{ chip("all reviewed") }}
+        {% else %}
+        <span class="chip chip-neutral">—</span>
+        {% endif %}
+      </span>
+      <span class="num">{% if group.latest_date %}{{ format_age(group.latest_date, now=now) }}{% endif %}</span>
+      <span class="gt-action"><a href="#" data-expand="{{ group.folder_id }}" class="folder-open">Open →</a></span>
+    </div>
+    {% for row in group.items %}
+    <div class="gt-row gt-child-row" data-parent="{{ group.folder_id }}" hidden>
+      <span>
+        <input type="checkbox" name="media_id" value="{{ row.id }}"
+               data-child-of="{{ group.folder_id }}"
+               aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+               {% if (row.id|string) in selected_ids %}checked{% endif %}>
+        <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
+      </span>
+      <span class="gt-child-indent">
+        {{ friendly_media_label(row.source_title, row.source_path) }}
+        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+      </span>
+      <span class="num">—</span>
+      <span class="num">{{ format_duration(row.duration_seconds) }}</span>
+      <span>
+        {% if row.latest_run_id %}
+        {{ chip(humanize_status(row.latest_run_status)) }}
+        {% else %}<span class="oc-muted">—</span>{% endif %}
+      </span>
+      <span class="num">
+        {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
+        {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
+      </span>
+      <span class="gt-action">
+        {% if row.latest_run_id %}
+        <a href="/runs/{{ row.latest_run_id }}">View →</a>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+    {% endfor %}
+
+    {% for row in ungrouped_items %}
+    <div class="gt-row">
+      <span>
+        <input type="checkbox" name="media_id" value="{{ row.id }}"
+               aria-label="Select {{ friendly_media_label(row.source_title, row.source_path) }}"
+               {% if (row.id|string) in selected_ids %}checked{% endif %}>
+        <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
+      </span>
+      <span>
+        {{ friendly_media_label(row.source_title, row.source_path) }}
+        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+      </span>
+      <span class="num">—</span>
+      <span class="num">{{ format_duration(row.duration_seconds) }}</span>
+      <span>
+        {% if row.latest_run_id %}
+        {{ chip(humanize_status(row.latest_run_status)) }}
+        {% else %}<span class="oc-muted">—</span>{% endif %}
+      </span>
+      <span class="num">
+        {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
+        {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
+      </span>
+      <span class="gt-action">
+        {% if row.latest_run_id %}
+        <a href="/runs/{{ row.latest_run_id }}">View →</a>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
+
+{% else %}
+<div class="lib-cards-placeholder">
+  <p class="oc-muted">Cards view is coming soon. Switch to Table view above.</p>
+</div>
+{% endif %}
+
 </form>
 
 {% if truncated %}
-<p class="muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
+<p class="oc-muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
-{% if archived %}
-<p class="muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
+{% if trashed %}
+<p class="oc-muted">Trash is empty.</p>
+{% elif archived %}
+<p class="oc-muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
 {% else %}
-<p class="muted">No media yet. Add a recording above, or register a folder below.</p>
+<p class="oc-muted">No media yet. Add a recording with the button above, or register a folder on the server.</p>
 {% endif %}
 {% endif %}
 
-{# Folder panel: register folders so their files can share vocabulary and
-   corrections, or unregister one. Registering never moves files (ADR 0002
-   addendum); unregistering reverts its files to global settings. This section is
-   a sibling of the bulk-assign form, never nested inside it, and belongs to the
-   active library (hidden in the archived view). #}
-{% if not archived %}
-<section class="folder-panel" aria-labelledby="folders-h">
-  <h2 id="folders-h">Folders</h2>
-  <p class="muted">Registered folders share vocabulary and corrections across their files. Registering or unregistering a folder never moves any file.</p>
-  {% if folder_options %}
-  <ul class="lib-folders">
-    {% for opt in folder_options %}
-    <li>
-      <span><code>{{ opt.path }}</code>{% if opt.project_name %} <span class="muted">— {{ opt.project_name }}</span>{% endif %}</span>
-      <form method="post" action="/media/folders">
-        <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
-        <input type="hidden" name="action" value="remove">
-        <input type="hidden" name="folder_id" value="{{ opt.id }}">
-        <input type="hidden" name="sort" value="{{ sort }}">
-        <input type="hidden" name="view" value="{{ view }}">
-        <button type="submit" class="danger">Unregister</button>
-      </form>
-    </li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="muted">No folders registered yet.</p>
-  {% endif %}
-  <form method="post" action="/media/folders" class="register-folder">
-    <input type="hidden" name="csrf_token" value="{{ csrf_media_folders }}">
-    <input type="hidden" name="action" value="add">
-    <input type="hidden" name="sort" value="{{ sort }}">
-    <input type="hidden" name="view" value="{{ view }}">
-    <label for="register-folder-path">Folder path (under the media root)
-      <input id="register-folder-path" type="text" name="folder" placeholder="interviews/2026" required>
-    </label>
-    <button type="submit">Register folder</button>
-  </form>
-</section>
+{% if trashed and rows %}
+<form method="post" action="/media/empty-trash" style="margin-top:var(--space-4)">
+  <input type="hidden" name="csrf_token" value="{{ csrf_media_empty_trash }}">
+  <p class="oc-muted">Emptying the trash permanently deletes the files from disk. This cannot be undone.</p>
+  <button type="submit" class="danger">Empty trash permanently</button>
+</form>
 {% endif %}
 
-{# Progressive enhancement: without JS the file input, checkboxes, and folder
-   <select> all work on their own; JS adds the drop zone, select-all, and a live
-   selection count. No behaviour depends on this running. #}
 <script>
 (function () {
-  for (const zone of document.querySelectorAll('[data-dropzone]')) {
-    const input = zone.querySelector('input[type=file]');
+  for (var dd of document.querySelectorAll('[data-dropdown]')) {
+    var btn = dd.querySelector('[data-dropdown-toggle]');
+    var menu = dd.querySelector('[data-dropdown-menu]');
+    if (!btn || !menu) continue;
+    btn.addEventListener('click', function () {
+      var open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function (e) {
+      if (!dd.contains(e.target)) { menu.hidden = true; btn.setAttribute('aria-expanded', 'false'); }
+    });
+  }
+
+  for (var choice of document.querySelectorAll('[data-show-panel]') ) {
+    choice.addEventListener('click', function () {
+      var id = this.getAttribute('data-show-panel');
+      var panel = document.getElementById(id);
+      if (!panel) return;
+      var wasHidden = panel.hidden;
+      for (var p of document.querySelectorAll('.add-media-panel')) { p.hidden = true; }
+      panel.hidden = !wasHidden;
+      var ddMenu = document.querySelector('[data-dropdown-menu]');
+      if (ddMenu) ddMenu.hidden = true;
+      var ddBtn = document.querySelector('[data-dropdown-toggle]');
+      if (ddBtn) ddBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  function toggleFolder(folderId) {
+    var btn = document.querySelector('button.folder-toggle[data-expand="' + folderId + '"]');
+    if (!btn) return;
+    var expanded = btn.getAttribute('aria-expanded') === 'true';
+    btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+    btn.textContent = expanded ? '▸' : '▾';
+    var children = document.querySelectorAll('[data-parent="' + folderId + '"]');
+    for (var c of children) { c.hidden = expanded; }
+  }
+  for (var toggle of document.querySelectorAll('button.folder-toggle[data-expand]')) {
+    toggle.addEventListener('click', function () { toggleFolder(this.getAttribute('data-expand')); });
+  }
+  for (var openLink of document.querySelectorAll('a.folder-open[data-expand]')) {
+    openLink.addEventListener('click', function (e) {
+      e.preventDefault();
+      toggleFolder(this.getAttribute('data-expand'));
+    });
+  }
+
+  for (var zone of document.querySelectorAll('[data-dropzone]')) {
+    var input = zone.querySelector('input[type=file]');
     if (!input) continue;
     zone.addEventListener('dragover', function (e) { e.preventDefault(); zone.classList.add('is-drag'); });
     zone.addEventListener('dragleave', function () { zone.classList.remove('is-drag'); });
     zone.addEventListener('drop', function (e) {
-      e.preventDefault();
-      zone.classList.remove('is-drag');
+      e.preventDefault(); zone.classList.remove('is-drag');
       if (e.dataTransfer && e.dataTransfer.files.length) { input.files = e.dataTransfer.files; }
     });
   }
 
-  const form = document.getElementById('bulk-form');
+  var form = document.getElementById('bulk-form');
   if (!form) return;
-  const boxes = Array.from(form.querySelectorAll('input[name=media_id]'));
-  const count = form.querySelector('[data-selected-count]');
-  const selectAllWrap = document.querySelector('[data-select-all]');
-  const selectAll = document.querySelector('[data-select-all-box]');
+  var boxes = Array.from(form.querySelectorAll('input[name=media_id]'));
+  var actionBar = form.querySelector('[data-action-bar]');
+  var countEl = form.querySelector('[data-selected-count]');
+  var selectAllBox = form.querySelector('[data-select-all-box]');
 
   function refresh() {
-    const n = boxes.filter(function (b) { return b.checked; }).length;
-    if (count) {
-      count.hidden = n === 0;
-      count.textContent = n === 1 ? '1 file selected' : n + ' files selected';
-    }
-    if (selectAll) { selectAll.checked = n > 0 && n === boxes.length; }
+    var n = boxes.filter(function (b) { return b.checked; }).length;
+    if (actionBar) { actionBar.hidden = n === 0; }
+    if (countEl) { countEl.textContent = n + ' selected'; }
+    if (selectAllBox) { selectAllBox.checked = n > 0 && n === boxes.length; }
   }
-
-  for (const b of boxes) { b.addEventListener('change', refresh); }
-  if (selectAllWrap && selectAll && boxes.length) {
-    selectAllWrap.hidden = false;
-    selectAll.addEventListener('change', function () {
-      for (const b of boxes) { b.checked = selectAll.checked; }
+  for (var b of boxes) { b.addEventListener('change', refresh); }
+  if (selectAllBox) {
+    selectAllBox.addEventListener('change', function () {
+      for (var b of boxes) { b.checked = selectAllBox.checked; }
       refresh();
     });
   }
+
+  for (var fc of document.querySelectorAll('[data-folder-check]')) {
+    fc.addEventListener('change', function () {
+      var fid = this.getAttribute('data-folder-check');
+      var checked = this.checked;
+      var children = form.querySelectorAll('[data-child-of="' + fid + '"]');
+      for (var c of children) { c.checked = checked; }
+      refresh();
+    });
+  }
+
   refresh();
 })();
 </script>
