@@ -1,8 +1,19 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip %}
 {% block title %}Voxint — speakers{% endblock %}
-{% block body %}
-<h1>Speakers</h1>
-<p class="muted">Everyone Voxint has heard, with how much of your library each voice covers.</p>
 
+{% block cb_breadcrumb %}speakers /{% endblock %}
+{% block cb_summary %}
+{%- if overview.rows %}{{ overview.rows|length }} people · {{ overview.verified_count }} verified by you{% endif -%}
+{% endblock %}
+{% block cb_actions %}
+<nav class="view-toggle" aria-label="Show as">
+  {% for value in views %}
+  <a href="/speakers?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+  {% endfor %}
+</nav>
+{% endblock %}
+
+{% block body %}
 <div id="roster">{% include "speakers/overview_roster.html" %}</div>
 {% endblock %}

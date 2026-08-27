@@ -1039,6 +1039,29 @@
     .lib-cards-placeholder { padding: var(--space-6); text-align: center; }
     [hidden] { display: none !important; }
 
+    /* --- R4 Speakers overview + detail -------------------------------- */
+    .spk-todo-strip { display: flex; flex-wrap: wrap; align-items: center;
+                gap: var(--space-3); padding: var(--space-2) var(--space-3);
+                background: var(--warn-soft); border: 1px solid rgba(227,179,65,.4);
+                border-radius: var(--r-md); margin-bottom: var(--space-4); }
+    .spk-todo-label { font-size: var(--t-micro); font-weight: 700;
+                text-transform: uppercase; letter-spacing: .06em;
+                color: var(--warn); }
+    .spk-todo-item { font-size: var(--t-sm); }
+    .spk-roster-grid { grid-template-columns: auto 1fr auto auto auto auto auto auto; }
+    .spk-card-header { display: flex; align-items: center; gap: var(--space-2); }
+    .spk-match-ok { color: var(--ok); font-family: var(--font-mono); }
+    .spk-match-warn { color: var(--warn); font-family: var(--font-mono); }
+    .spk-profile-header { display: flex; align-items: center; gap: var(--space-4);
+                margin-bottom: var(--space-4); }
+    .spk-avatar { display: inline-flex; align-items: center; justify-content: center;
+                width: 3.2rem; height: 3.2rem; border-radius: var(--r-full);
+                font-size: var(--t-lg); font-weight: 700; letter-spacing: .02em;
+                background: var(--surface-2); color: var(--ink-2); flex: none; }
+    .spk-profile-name { margin: 0; }
+    .spk-heardin-grid .gt-row span:first-child { min-width: 0; overflow: hidden;
+                text-overflow: ellipsis; white-space: nowrap; }
+
     /* --- R5 Project detail ------------------------------------------ */
     .vocab-chips { display: flex; flex-wrap: wrap; gap: var(--space-2);
                 margin: var(--space-3) 0; }

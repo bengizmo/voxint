@@ -1,184 +1,136 @@
-{# Console 2.0 speakers overview (#159) — full-page include and the htmx
-   post-mutation refresh target (#roster). Numbers come from effective
+{# Console 2.0 speakers overview (#159, R4 #213) — full-page include and the
+   htmx post-mutation refresh target (#roster). Numbers come from effective
    resolution (the canonical-run fold), never raw machine proposals. Every
    mutating form's action carries the current ?sort/?view so its re-render
    preserves both. Operator refusals (RosterError) arrive as roster_error. #}
+{% from "fragments/_chips.html" import chip %}
 {% set qs = "sort=" ~ sort ~ "&view=" ~ view %}
-{% if roster_error %}<p class="error" role="alert">{{ roster_error }}</p>{% endif %}
+{% if roster_error %}<p class="notice error" role="alert">{{ roster_error }}</p>{% endif %}
 
-{# Action reminders (#159): the review work waiting on this roster. Capped
-   lists with honest "and N more" totals; the duplicates card is deferred to a
-   follow-up issue. #}
-{% if overview.name_suggestions or overview.unverified_active %}
-<section class="card" aria-label="Suggested next steps">
-  {% if overview.name_suggestions %}
-  <p>
-    <strong>{{ overview.name_suggestion_total }} speaker-name suggestion{{ "s" if overview.name_suggestion_total != 1 }}</strong>
-    waiting for review:
-    {% for reminder in overview.name_suggestions %}
-    <a href="/review/{{ reminder.run_id }}">{% if reminder_runs.get(reminder.run_id) %}{{ run_source_title(reminder_runs[reminder.run_id]) }}{% else %}a recording{% endif %}</a>
-    ({{ reminder.count }}){{ ", " if not loop.last }}
-    {% endfor %}
-    {%- if overview.name_suggestion_total > overview.name_suggestions|sum(attribute="count") %}
-    and more on other recordings
-    {%- endif %}
-  </p>
-  {% endif %}
+{# TO DO strip (#159 R4): action reminders the operator needs to address. #}
+{% if overview.unverified_active or overview.name_suggestions %}
+<div class="spk-todo-strip" aria-label="Action reminders">
+  <span class="spk-todo-label">TO DO</span>
   {% if overview.unverified_active %}
-  <p>
-    <strong>{{ overview.unverified_active_total }} frequently heard voice{{ "s" if overview.unverified_active_total != 1 }}</strong>
-    you haven't confirmed yet:
-    {% for row in overview.unverified_active %}
-    <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
-    ({{ format_duration(row.aggregate.seconds) }}){{ ", " if not loop.last }}
-    {% endfor %}
-    {%- if overview.unverified_active_total > overview.unverified_active|length %}
-    and {{ overview.unverified_active_total - overview.unverified_active|length }} more
-    {%- endif %}
-  </p>
+  <span class="spk-todo-item">
+    {{ overview.unverified_active_total }} voice{{ "s" if overview.unverified_active_total != 1 }} waiting for a name
+  </span>
   {% endif %}
-</section>
+  {% if overview.name_suggestions %}
+  <span class="spk-todo-item">
+    {{ overview.name_suggestion_total }} name suggestion{{ "s" if overview.name_suggestion_total != 1 }} to review
+  </span>
+  {% endif %}
+</div>
 {% endif %}
 
 {% if overview.rows %}
-<p class="muted">
-  {{ overview.rows|length }} speaker{{ "s" if overview.rows|length != 1 }}
-  · {{ overview.verified_count }} verified
-  · {{ format_duration(overview.total_seconds) }} attributed
-  across {{ overview.runs_scanned }} processed recording{{ "s" if overview.runs_scanned != 1 }}
-</p>
-
 <div class="lib-toolbar">
   <nav class="view-toggle" aria-label="Sort by">
     {% for value, label in sorts %}
     <a href="/speakers?sort={{ value }}&view={{ view }}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
     {% endfor %}
   </nav>
-  <nav class="view-toggle" aria-label="View" style="margin-left:auto;">
-    {% for value in views %}
-    <a href="/speakers?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
-    {% endfor %}
-  </nav>
 </div>
 
-{% macro tier_chip(row) %}
+{% macro spk_badge(row) %}
+  {%- set name = row.entry.speaker.display_name -%}
+  {%- set initials = name[:2]|upper if name else "?" -%}
+  <span class="pd-spk-badge{% if row.aggregate.verified %} pd-spk-named{% endif %}">{{ initials }}</span>
+{%- endmacro %}
+
+{% macro match_pct(row) %}
   {%- if row.tier.tier -%}
-  <span class="pill" title="Strongest voice evidence across {{ row.tier.evidence|length }} matched appearance{{ "s" if row.tier.evidence|length != 1 }}: {{ row.tier.strong }} strong, {{ row.tier.moderate }} moderate, {{ row.tier.weak }} weak{% if row.tier.unavailable %}, {{ row.tier.unavailable }} without recorded numbers{% endif %}">{{ row.tier.tier }} voice match</span>
+    {%- set evidence = row.tier.evidence -%}
+    {%- set best = evidence|map(attribute="similarity")|select("number")|list -%}
+    {%- if best -%}
+      {%- set pct = (best|max * 100)|round|int -%}
+      <span class="{% if pct >= 85 %}spk-match-ok{% else %}spk-match-warn{% endif %}">{{ pct }}%</span>
+    {%- else -%}
+      <span class="oc-muted">–</span>
+    {%- endif -%}
   {%- elif row.tier.has_voice_evidence -%}
-  <span class="muted" title="This speaker's voice matches predate recorded match diagnostics.">match details unavailable</span>
+    <span class="oc-muted">–</span>
   {%- else -%}
-  <span class="muted">no voice evidence</span>
+    <span class="oc-muted">–</span>
   {%- endif -%}
 {% endmacro %}
 
-{% macro verified_badge(row) %}
-  {%- if row.aggregate.verified -%}<span class="pill completed">Verified</span>{%- endif -%}
-{% endmacro %}
-
-{% macro actions(row) %}
-  <form class="inline" method="post"
-        action="/speakers/{{ row.entry.speaker.id }}/rename?{{ qs }}"
-        hx-post="/speakers/{{ row.entry.speaker.id }}/rename?{{ qs }}"
-        hx-target="#roster" hx-swap="innerHTML">
-    <input type="hidden" name="csrf_token" value="{{ csrf_rename }}">
-    <input type="text" name="display_name" value="{{ row.entry.speaker.display_name }}"
-           minlength="1" maxlength="120" required
-           aria-label="New name for {{ row.entry.speaker.display_name }}">
-    <button type="submit">Rename</button>
-  </form>
-  {% set targets = overview.rows | rejectattr("entry.speaker.id", "equalto", row.entry.speaker.id) | list %}
-  {% if targets %}
-  <form class="inline" method="post"
-        action="/speakers/{{ row.entry.speaker.id }}/merge?{{ qs }}"
-        hx-post="/speakers/{{ row.entry.speaker.id }}/merge?{{ qs }}"
-        hx-target="#roster" hx-swap="innerHTML"
-        hx-confirm="Merge {{ row.entry.speaker.display_name }} into the selected speaker? Its enrollments and machine proposals move over, and the merge cannot be undone.">
-    <input type="hidden" name="csrf_token" value="{{ csrf_merge }}">
-    <select name="target_id" required
-            aria-label="Merge {{ row.entry.speaker.display_name }} into">
-      <option value="" disabled selected>— merge into… —</option>
-      {% for other in targets %}
-      <option value="{{ other.entry.speaker.id }}">{{ other.entry.speaker.display_name }}</option>
-      {% endfor %}
-    </select>
-    <button type="submit" class="danger">Merge</button>
-  </form>
-  {% endif %}
-  <form class="inline" method="post"
-        action="/speakers/{{ row.entry.speaker.id }}/archive?{{ qs }}"
-        hx-post="/speakers/{{ row.entry.speaker.id }}/archive?{{ qs }}"
-        hx-target="#roster" hx-swap="innerHTML"
-        hx-confirm="Archive {{ row.entry.speaker.display_name }}? Existing decisions stay; the voice stops matching new recordings until restored.">
-    <input type="hidden" name="csrf_token" value="{{ csrf_archive }}">
-    <button type="submit" class="danger">Archive</button>
-  </form>
+{% macro status_chip(row) %}
+  {%- if row.aggregate.verified -%}
+    {{ chip("verified") }}
+  {%- elif row.aggregate.files > 0 -%}
+    {{ chip("needs you") }}
+  {%- else -%}
+    {{ chip("unknown") }}
+  {%- endif -%}
 {% endmacro %}
 
 {% if view == "table" %}
-<div class="lib-table" role="region" aria-label="Speakers" tabindex="0">
-  <table>
-    <thead>
-      <tr>
-        <th scope="col">Name</th><th scope="col">Files</th>
-        <th scope="col">Minutes</th><th scope="col">Last heard</th>
-        <th scope="col">Voice match</th><th scope="col">Actions</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in overview.rows %}
-      <tr>
-        <td>
-          <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
-          {{ verified_badge(row) }}
-        </td>
-        <td>{{ row.aggregate.files }}</td>
-        <td>{{ format_duration(row.aggregate.seconds) }}</td>
-        <td>{% if row.aggregate.last_seen %}<span title="{{ row.aggregate.last_seen.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.aggregate.last_seen, now=now) }}</span>{% else %}<span class="muted">never</span>{% endif %}</td>
-        <td>{{ tier_chip(row) }}</td>
-        <td><div class="card-actions">{{ actions(row) }}</div></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="grid-table spk-roster-grid" role="region" aria-label="Speakers" tabindex="0"
+     style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
+  <div class="gt-header">
+    <span></span>
+    <span>NAME</span>
+    <span>STATUS</span>
+    <span class="num">FILES</span>
+    <span class="num">MINUTES</span>
+    <span class="num">VOICE MATCH</span>
+    <span>LAST HEARD</span>
+    <span></span>
+  </div>
+
+  {% for row in overview.rows %}
+  <div class="gt-row">
+    <span>{{ spk_badge(row) }}</span>
+    <span>
+      <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
+    </span>
+    <span>{{ status_chip(row) }}</span>
+    <span class="num">{{ row.aggregate.files }}</span>
+    <span class="num">{{ format_duration(row.aggregate.seconds) }}</span>
+    <span class="num">{{ match_pct(row) }}</span>
+    <span>
+      {% if row.aggregate.last_seen %}
+      <span title="{{ row.aggregate.last_seen.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(row.aggregate.last_seen, now=now) }}</span>
+      {% else %}<span class="oc-muted">never</span>{% endif %}
+    </span>
+    <span class="gt-action">
+      <a href="/speakers/{{ row.entry.speaker.id }}">Open →</a>
+    </span>
+  </div>
+  {% endfor %}
 </div>
 {% else %}
 <ul class="lib-cards" aria-label="Speakers">
   {% for row in overview.rows %}
   <li>
-    <div class="media-title">
-      {% set bars = voiceprints.get(row.entry.speaker.id) %}
-      {% if bars %}
-      <svg class="voiceprint" viewBox="0 0 96 22" aria-hidden="true">
-        {%- for h in bars -%}
-        <rect x="{{ loop.index0 * 2 }}" y="{{ "%.2f"|format(11 - 10 * h) }}"
-              width="1.4" height="{{ "%.2f"|format([20 * h, 0.6]|max) }}"/>
-        {%- endfor -%}
-      </svg>
-      {% endif %}
-      <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
-      {{ verified_badge(row) }}
+    <div class="spk-card-header">
+      {{ spk_badge(row) }}
+      <div>
+        <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
+        {{ status_chip(row) }}
+      </div>
     </div>
-    <p class="muted">
+    <p class="oc-muted">
       {{ row.aggregate.files }} file{{ "s" if row.aggregate.files != 1 }}
       · {{ format_duration(row.aggregate.seconds) }}
-      · {% if row.aggregate.last_seen %}last heard {{ format_age(row.aggregate.last_seen, now=now) }}{% else %}never heard in a processed recording{% endif %}
+      · {% if row.aggregate.last_seen %}last heard {{ format_age(row.aggregate.last_seen, now=now) }}{% else %}never heard{% endif %}
     </p>
-    <p>{{ tier_chip(row) }}</p>
-    <div class="card-actions">{{ actions(row) }}</div>
+    <p>{{ match_pct(row) }}</p>
   </li>
   {% endfor %}
 </ul>
 {% endif %}
 {% else %}
-<p class="muted">No speakers yet. Voices join the roster when you name them while
-reviewing a recording.</p>
+<p class="oc-muted">No speakers yet. Voices join the roster when you name them while reviewing a recording.</p>
 {% endif %}
 
 {% if overview.inactive %}
 <details class="roster-inactive">
   <summary>Former speakers ({{ overview.inactive|length }})</summary>
   {% for entry in overview.inactive %}
-  <p class="muted">
+  <p class="oc-muted">
     {{ entry.speaker.display_name }} —
     {% if entry.merged_into_name %}
     merged into {{ entry.merged_into_name }}

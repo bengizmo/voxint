@@ -144,13 +144,12 @@ def test_flag_on_renders_overview_with_numbers(
     page = client.get("/speakers")
     assert page.status_code == 200
     assert 'class="lib-toolbar"' in page.text
-    assert "2 speakers" in page.text
-    assert "1 verified" in page.text
-    # Alice (human assign) carries the badge; Bob (grounded, no diagnostics
-    # row) shows the honest unavailable state, never "weak".
-    assert "Verified" in page.text
-    assert "match details unavailable" in page.text
-    assert "weak voice match" not in page.text
+    assert "2 people" in page.text
+    assert "1 verified by you" in page.text
+    # Alice (human assign) carries the verified chip; Bob (grounded, no
+    # diagnostics row) shows "needs you", never "weak".
+    assert "verified" in page.text
+    assert "needs you" in page.text
     # Default sort = minutes: Alice (2 segments) before Bob (1).
     assert page.text.index("Alice") < page.text.index("Bob")
 
@@ -182,7 +181,7 @@ def test_view_toggle_and_cross_preservation(
         _seed_speaker_with_activity(session, "Alice", minutes_rank=1, human=True)
         session.commit()
     table = client.get("/speakers", params={"sort": "name", "view": "table"})
-    assert 'class="lib-table"' in table.text
+    assert 'class="grid-table' in table.text
     # Each toggle's links carry the other control's current value.
     assert "/speakers?sort=name&view=cards" in table.text  # view links keep sort
     assert "/speakers?sort=minutes&view=table" in table.text  # sort links keep view
@@ -376,16 +375,16 @@ def test_profile_page_renders_stats_research_and_recordings(
     page = client.get(f"/speakers/{speaker_id}")
     assert page.status_code == 200
     assert "Alice" in page.text
-    assert "Verified" in page.text
-    # Stats header: 1 file, 2 segments, first/last "file added" labeling.
-    assert "First file added" in page.text
-    assert "2 segments" in page.text
+    assert "verified" in page.text
+    # Stats tiles: recordings, segments, first/last heard.
+    assert "FIRST HEARD" in page.text
+    assert "SEGMENTS" in page.text
     # Profile panel with edit forms, research block, recordings table.
     assert 'id="profile-panel"' in page.text
     assert "not set" in page.text
     assert f'id="research-{speaker_id}"' in page.text
     assert "/runs/" in page.text  # recordings drill through to the run page
-    assert "confirmed" in page.text  # the human-assign chip on the appearance
+    assert "verified" in page.text  # the human-assign chip on the appearance
 
 
 def test_profile_tombstone_redirects_and_archived_reads_only(

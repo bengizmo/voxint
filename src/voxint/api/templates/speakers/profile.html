@@ -1,69 +1,66 @@
 {% extends "base.html" %}
+{% from "fragments/_chips.html" import chip %}
 {% block title %}Voxint — {{ speaker.display_name }}{% endblock %}
-{% block body %}
-<p><a href="/speakers">&larr; All speakers</a></p>
-<h1>
-  {{ speaker.display_name }}
-  {% if aggregate.verified %}<span class="pill completed">Verified</span>{% endif %}
-  {% if tier.tier %}<span class="pill">{{ tier.tier }} voice match</span>{% endif %}
-</h1>
 
+{% block cb_breadcrumb %}speakers / <strong>{{ speaker.display_name|lower|replace(" ", "-") }}</strong>{% endblock %}
+{% block cb_summary %}
+{%- if aggregate.verified %}{{ chip("verified") }}{% elif aggregate.files > 0 %}{{ chip("needs you") }}{% endif -%}
+{% endblock %}
+{% block cb_actions %}{% endblock %}
+
+{% block body %}
 {% if archived %}
-<p class="error" role="alert">This speaker is archived: the profile is read-only
+<p class="notice error" role="alert">This speaker is archived: the profile is read-only
 and web research is off. Restore the speaker from the
 <a href="/speakers">speakers page</a> to edit again.</p>
 {% endif %}
 
-<section class="card">
-  <dl class="def-grid">
-    <dt>Files</dt>
-    <dd>{{ aggregate.files }}</dd>
-    <dt>Spoken time</dt>
-    <dd>{{ format_duration(aggregate.seconds) }} across {{ aggregate.segments }} segment{{ "s" if aggregate.segments != 1 }}</dd>
-    <dt>Enrolled voiceprints</dt>
-    <dd>{{ enrollments }}</dd>
-    <dt>First file added</dt>
-    <dd>{% if aggregate.first_seen %}{{ aggregate.first_seen.strftime('%Y-%m-%d') }}{% else %}<span class="muted">never heard in a processed recording</span>{% endif %}</dd>
-    <dt>Latest file added</dt>
-    <dd>{% if aggregate.last_seen %}{{ aggregate.last_seen.strftime('%Y-%m-%d') }}{% else %}<span class="muted">—</span>{% endif %}</dd>
-    <dt>Voice match</dt>
-    <dd>
-      {% if tier.tier %}{{ tier.tier }} (strongest voice evidence)
-      {% elif tier.has_voice_evidence %}match details unavailable
-      {% else %}<span class="muted">no voice evidence{% if aggregate.verified %} — identified by you{% endif %}</span>{% endif %}
-      {% if tier.has_voice_evidence %}
-      <details>
-        <summary>Why this match?</summary>
-        <p class="muted">
-          {{ tier.strong }} strong, {{ tier.moderate }} moderate, {{ tier.weak }} weak{% if tier.unavailable %},
-          {{ tier.unavailable }} without recorded numbers{% endif %} —
-          graded against the current gates (strong needs cosine ≥ {{ "%.2f"|format(gates.grounded_min_cosine) }},
-          margin ≥ {{ "%.2f"|format(gates.grounded_min_margin) }},
-          vote agreement ≥ {{ "%.2f"|format(gates.grounded_min_vote_agreement) }};
-          moderate needs cosine ≥ {{ "%.2f"|format(gates.min_cosine) }},
-          margin ≥ {{ "%.2f"|format(gates.min_margin) }},
-          vote agreement ≥ {{ "%.2f"|format(gates.min_vote_agreement) }}).
-        </p>
-        <ul>
-          {% for e in tier.evidence %}
-          <li class="muted">
-            {% if e.available %}
-            cosine {{ "%.2f"|format(e.similarity) }},
-            margin {% if e.margin is not none %}{{ "%.2f"|format(e.margin) }}{% else %}n/a (only voice on the roster){% endif %},
-            vote agreement {{ "%.2f"|format(e.vote_agreement) }},
-            {{ e.eligible_turns }} turn{{ "s" if e.eligible_turns != 1 }} / {{ "%.0f"|format(e.eligible_seconds) }}s
-            {% else %}
-            matched before Voxint recorded match numbers — no diagnostics for this appearance
-            {% endif %}
-            {% if runs_by_id.get(e.run_id) %}— in <a href="/runs/{{ e.run_id }}">{{ run_source_title(runs_by_id[e.run_id]) }}</a>{% endif %}
-          </li>
-          {% endfor %}
-        </ul>
-      </details>
-      {% endif %}
-    </dd>
-  </dl>
-</section>
+<div class="spk-profile-header">
+  <span class="spk-avatar{% if aggregate.verified %} pd-spk-named{% endif %}">{{ (speaker.display_name or "?")[:2]|upper }}</span>
+  <div>
+    <h1 class="spk-profile-name">{{ speaker.display_name }}</h1>
+    {% set bio = profile.get("bio") %}
+    {% set affiliation = profile.get("affiliation") %}
+    {% if bio or affiliation %}
+    <p class="oc-muted">{% if bio %}{{ bio.value }}{% endif %}{% if bio and affiliation %}, {% endif %}{% if affiliation %}{{ affiliation.value }}{% endif %}</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="oc-stat-tiles">
+  <div class="oc-stat-tile">
+    <div class="tile-value">{{ aggregate.files }}</div>
+    <div class="tile-label">RECORDINGS</div>
+  </div>
+  <div class="oc-stat-tile">
+    <div class="tile-value">{{ format_duration(aggregate.seconds) }}</div>
+    <div class="tile-label">SPEAKING TIME</div>
+  </div>
+  <div class="oc-stat-tile">
+    <div class="tile-value">{{ aggregate.segments }}</div>
+    <div class="tile-label">SEGMENTS</div>
+  </div>
+  <div class="oc-stat-tile">
+    <div class="tile-value">
+      {%- if tier.tier -%}
+        {%- set best = tier.evidence|map(attribute="similarity")|select("number")|list -%}
+        {%- if best -%}
+          {%- set pct = (best|max * 100)|round|int -%}
+          <span class="{% if pct >= 85 %}spk-match-ok{% else %}spk-match-warn{% endif %}">{{ pct }}%</span>
+        {%- else -%}–{%- endif -%}
+      {%- else -%}–{%- endif -%}
+    </div>
+    <div class="tile-label">AVG MATCH</div>
+  </div>
+  <div class="oc-stat-tile">
+    <div class="tile-value">{% if aggregate.first_seen %}{{ aggregate.first_seen.strftime("%b %d") }}{% else %}–{% endif %}</div>
+    <div class="tile-label">FIRST HEARD</div>
+  </div>
+  <div class="oc-stat-tile">
+    <div class="tile-value">{% if aggregate.last_seen %}{{ aggregate.last_seen.strftime("%b %d") }}{% else %}–{% endif %}</div>
+    <div class="tile-label">LAST HEARD</div>
+  </div>
+</div>
 
 {% include "speakers/profile_panel.html" %}
 
@@ -71,32 +68,60 @@ and web research is off. Restore the speaker from the
 {% include "speakers/research.html" %}
 {% endif %}
 
-<section class="card">
-  <h2>Recordings</h2>
+<section class="oc-section">
+  <h2 class="oc-section-title">HEARD IN</h2>
   {% if aggregate.appearances %}
-  <div class="lib-table" role="region" aria-label="Recordings featuring {{ speaker.display_name }}" tabindex="0">
-    <table>
-      <thead>
-        <tr>
-          <th scope="col">Recording</th><th scope="col">Spoken time</th>
-          <th scope="col">Segments</th><th scope="col">File added</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for a in aggregate.appearances %}
-        <tr>
-          <td>{% if runs_by_id.get(a.run_id) %}<a href="/runs/{{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>{% else %}<span class="muted">recording removed</span>{% endif %}
-            {% if a.human_assigned %}<span class="pill completed" title="You confirmed this speaker in this recording">confirmed</span>{% endif %}</td>
-          <td>{{ format_duration(a.seconds) }}</td>
-          <td>{{ a.segments }}</td>
-          <td><span title="{{ a.media_created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(a.media_created_at, now=now) }}</span></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="grid-table spk-heardin-grid" role="region" aria-label="Recordings featuring {{ speaker.display_name }}" tabindex="0"
+       style="grid-template-columns: 1fr auto auto auto auto;">
+    <div class="gt-header">
+      <span>RECORDING</span>
+      <span class="num">SPOKE</span>
+      <span class="num">SEGMENTS</span>
+      <span class="num">MATCH</span>
+      <span></span>
+    </div>
+    {% for a in aggregate.appearances %}
+    <div class="gt-row">
+      <span>
+        {% if runs_by_id.get(a.run_id) %}
+        <a href="/runs/{{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>
+        {% else %}<span class="oc-muted">recording removed</span>{% endif %}
+        {% if a.human_assigned %}{{ chip("verified") }}{% endif %}
+      </span>
+      <span class="num">{{ format_duration(a.seconds) }}</span>
+      <span class="num">{{ a.segments }}</span>
+      <span class="num">
+        {%- if a.similarity is defined and a.similarity is not none -%}
+          {%- set pct = (a.similarity * 100)|round|int -%}
+          <span class="{% if pct >= 85 %}spk-match-ok{% else %}spk-match-warn{% endif %}">{{ pct }}%</span>
+        {%- else -%}<span class="oc-muted">–</span>{%- endif -%}
+      </span>
+      <span class="gt-action">
+        {% if runs_by_id.get(a.run_id) %}
+        <a href="/runs/{{ a.run_id }}">Open →</a>
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
   </div>
   {% else %}
-  <p class="muted">Not heard in any processed recording yet.</p>
+  <p class="oc-muted">Not heard in any processed recording yet.</p>
   {% endif %}
 </section>
+
+{% if tier.has_voice_evidence %}
+<details>
+  <summary class="oc-muted">Voice match details</summary>
+  <p class="oc-muted">
+    {{ tier.strong }} strong, {{ tier.moderate }} moderate, {{ tier.weak }} weak{% if tier.unavailable %},
+    {{ tier.unavailable }} without recorded numbers{% endif %} —
+    graded against the current gates (strong needs cosine ≥ {{ "%.2f"|format(gates.grounded_min_cosine) }},
+    margin ≥ {{ "%.2f"|format(gates.grounded_min_margin) }},
+    vote agreement ≥ {{ "%.2f"|format(gates.grounded_min_vote_agreement) }};
+    moderate needs cosine ≥ {{ "%.2f"|format(gates.min_cosine) }},
+    margin ≥ {{ "%.2f"|format(gates.min_margin) }},
+    vote agreement ≥ {{ "%.2f"|format(gates.min_vote_agreement) }}).
+  </p>
+</details>
+{% endif %}
 {% endblock %}
