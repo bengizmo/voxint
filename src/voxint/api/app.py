@@ -315,7 +315,7 @@ async def _http_exception_handler(request: Request, exc: HTTPException) -> Respo
     if exc.status_code < 400:
         response = Response(
             status_code=exc.status_code,
-            headers=exc.headers,  # type: ignore[arg-type]
+            headers=exc.headers,
         )
         _apply_security_headers(
             response.headers, review_path=request.url.path.startswith("/review")
