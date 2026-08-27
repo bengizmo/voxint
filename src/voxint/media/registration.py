@@ -1,8 +1,7 @@
 """The single write path for the media_folders relation (issue #153).
 
-Console 2.0 P2a moves registered folders out of the ``app_settings.media_folders``
-/ ``folder_domain_packs`` columns into first-class :class:`~voxint.db.models.MediaFolder`
-rows (ADR 0002). Every registration mutation - the setup wizard folder step, the
+Registered folders are first-class :class:`~voxint.db.models.MediaFolder` rows
+(ADR 0002). Every registration mutation - the setup wizard folder step, the
 Settings folder panel, and any future project-assignment flow - goes through this
 module so three invariants hold uniformly and in one place:
 
@@ -96,10 +95,8 @@ def watched_folder_paths(session: Session) -> list[str]:
 def folder_pack_map(session: Session) -> dict[str, str]:
     """The ``{path: domain_pack}`` mapping for pack-assigned folders.
 
-    Only folders whose ``domain_pack`` is set appear, exactly the shape the old
-    ``app_settings.folder_domain_packs`` column held and that
-    ``domain_packs.registry.resolve_folder_pack_name`` consumes - so submit-time
-    pack resolution is byte-identical, just sourced from the relation.
+    Only folders whose ``domain_pack`` is set appear; used by submit-time pack
+    resolution to determine which pack a run inherits from its folder.
     """
     rows = session.execute(
         select(MediaFolder.path, MediaFolder.domain_pack).where(

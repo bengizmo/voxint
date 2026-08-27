@@ -293,22 +293,17 @@ class Project(Base):
 
 
 class MediaFolder(Base):
-    """A registered media folder, the relational successor to the app_settings list.
+    """A registered media folder (issue #153, ADR 0002).
 
-    Pre-#153 the watched folders lived in ``app_settings.media_folders`` (a Text
-    array) with per-folder packs in ``app_settings.folder_domain_packs``. P2a moves
-    each registration to a first-class row so media membership is a foreign key
-    (ADR 0002) and a folder can join a :class:`Project`. ``path`` is MEDIA_ROOT-
-    relative POSIX (matching the old list), unique, and non-empty; overlapping
-    (nested) registrations are refused at write time by the shared registration
-    service, not by a DB constraint.
+    Each registration is a first-class row so media membership is a foreign key
+    and a folder can join a :class:`Project`. ``path`` is MEDIA_ROOT-relative
+    POSIX, unique, and non-empty; overlapping (nested) registrations are refused
+    at write time by the shared registration service, not by a DB constraint.
 
-    ``domain_pack`` is the per-folder pack name (was ``folder_domain_packs[path]``);
-    NULL means the folder inherits the default pack. ``watch`` mirrors the pre-#153
-    behavior where every registered folder is swept when the installation-wide
-    ``app_settings`` watch gate is on; the per-row flag lets a folder opt out later
-    without a schema change. The app_settings columns are retained for one release
-    (dropped in a later migration) as a rollback/audit input.
+    ``domain_pack`` is the per-folder pack name; NULL means the folder inherits
+    the default pack. ``watch`` gates per-folder sweep inclusion when the
+    installation-wide watch gate is on; the per-row flag lets a folder opt out
+    without a schema change.
     """
 
     __tablename__ = "media_folders"
@@ -1760,26 +1755,7 @@ class AppSettings(Base):
 
     id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, default=1)
     onboarding_complete: Mapped[bool] = mapped_column(Boolean, default=False)
-    # Rollback-only since #153 (P2a): the ``media_folders`` RELATION is now
-    # authoritative for registered folders and ingest reads it there. Retained one
-    # release for rollback, drops next. Was: folders the wizard registered under
-    # MEDIA_ROOT (paths relative to it).
-    media_folders: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
-    # User vocabulary (names/jargon/acronyms): augments the selected domain pack,
-    # surfaced to the LLM enhancement context and the bounded whisper initial_prompt.
     vocabulary: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
-    # Rollback-only since #153 (P2a): NO LONGER consulted at submit. The per-folder
-    # pack now lives on ``media_folders.domain_pack`` (the relation) and ingest
-    # resolves it there. Retained one release for rollback, drops next.
-    # Was (issue #11): {media_folder -> pack_name} mapping a watched folder to a
-    # pack name, consulted at submit to freeze each run's pack; an unmapped folder
-    # fell back to the default pack, and default {} meant every folder used it.
-    folder_domain_packs: Mapped[dict[str, str]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
-        nullable=False,
-        default=dict,
-        server_default=text("'{}'"),
-    )
     # Operator-authored correction rules (issue #84): a list of rule mappings
     # {id, match, replace, case_sensitive, whole_word}, each already validated
     # through the #80 gate at author time. This is the global glossary layer:
