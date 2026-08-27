@@ -221,8 +221,8 @@ def test_home_window_switch_changes_counts(
     assert _stat_value(day, "JOBS RUN") == 3
     assert _stat_value(week, "JOBS RUN") == 4
     # The switch marks the active window (default day; week when chosen).
-    assert re.search(r'href="/\?window=day" aria-current', day)
-    assert re.search(r'href="/\?window=week" aria-current', week)
+    assert re.search(r'href="/\?window=day"[^>]*is-active', day)
+    assert re.search(r'href="/\?window=week"[^>]*is-active', week)
     # All time includes everything as well.
     assert _stat_value(client.get("/", params={"window": "all"}).text, "JOBS RUN") == 4
 
@@ -237,7 +237,7 @@ def test_home_malformed_window_degrades_with_notice(
     # Falls back to the day window and says so; never silently a different one.
     assert "Unrecognized" in body
     assert _stat_value(body, "JOBS RUN") == 3
-    assert re.search(r'href="/\?window=day" aria-current', body)
+    assert re.search(r'href="/\?window=day"[^>]*is-active', body)
 
 
 def test_home_matches_metrics_snapshot(
