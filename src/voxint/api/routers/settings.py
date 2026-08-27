@@ -1363,10 +1363,10 @@ def setup_scan_confirm(
     # #11) aborts the batch with a plain-language 422 rather than a raw 500 — no
     # run is committed (the commit is a single call below), so nothing is stranded.
     try:
-        run_ids = [
-            run.id
+        submissions = [
+            sub
             for path in result.candidates
-            if (run := submit_media_item_if_new(session, path)) is not None
+            if (sub := submit_media_item_if_new(session, path)) is not None
         ]
     except DomainPackError as exc:
         raise HTTPException(
@@ -1377,7 +1377,7 @@ def setup_scan_confirm(
     session.commit()
     # After the durable QUEUED rows exist, publish each. A broker outage leaves
     # them QUEUED for the recovery sweep — never roll back a published batch.
-    published = sum(deps._publish_or_defer(run_id) for run_id in run_ids)
+    published = sum(s.publish() for s in submissions)
     confirmed = ScanResult(
         candidates=[],
         inspected=result.inspected,
@@ -1392,7 +1392,7 @@ def setup_scan_confirm(
             {
                 "request": request,
                 "result": confirmed,
-                "queued": len(run_ids),
+                "queued": len(submissions),
                 "published": published,
                 "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
             },
