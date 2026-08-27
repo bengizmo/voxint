@@ -23,6 +23,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Centralized config-resolution-version parsing** (Forgejo #8, finding M11).
   The inline parsing in `worker/tasks.py` is now
   `parse_config_resolution_version()` in `pipeline/stages/context.py`.
+- **Global HTML error renderer** (Forgejo #5, finding H2). HTTP errors and
+  unhandled exceptions now content-negotiate between a styled HTML error page
+  (for browsers) and JSON (for API/CLI clients). The standalone error template
+  shows the status code, a friendly title, and recovery advice for 5xx. Server
+  errors never leak exception details or headers to the client.
 - **Home feed: unresolved voice count on completed runs** (#249, epic #149).
   Run-completed events in the Home activity feed now show an amber "X voices
   need you" chip when unresolved speaker labels exist for that run.
