@@ -221,8 +221,8 @@ def test_home_window_switch_changes_counts(
     assert _stat_value(day, "JOBS RUN") == 3
     assert _stat_value(week, "JOBS RUN") == 4
     # The switch marks the active window (default day; week when chosen).
-    assert re.search(r'href="/\?window=day"[^>]*is-active', day)
-    assert re.search(r'href="/\?window=week"[^>]*is-active', week)
+    assert 'is-active" href="/?window=day"' in day
+    assert 'is-active" href="/?window=week"' in week
     # All time includes everything as well.
     assert _stat_value(client.get("/", params={"window": "all"}).text, "JOBS RUN") == 4
 
