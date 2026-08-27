@@ -732,6 +732,103 @@
                border-radius: var(--r-full); background: var(--surface-2); overflow: hidden;
                margin-left: .5rem; }
     .minibar > span { display: block; height: 100%; background: var(--accent); opacity: .55; }
+
+    /* ============================================================
+       Ops Console shared primitives (epic #205, V3 #208).
+       Chips, stat tiles, grid-row data views, and command-bar
+       action styles used across R1-R6 route refreshes.
+       ============================================================ */
+
+    /* --- Semantic chips ----------------------------------------- */
+    .chip { display: inline-flex; align-items: center; gap: .25em;
+            font-size: 11px; line-height: 1.3; padding: 1px 8px;
+            border-radius: 4px; white-space: nowrap;
+            font-variant-numeric: tabular-nums; }
+    .chip-ok { background: var(--ok-soft); border: 1px solid rgba(63,185,80,.5);
+               color: var(--ok); }
+    .chip-warn { background: var(--warn-soft); border: 1px solid rgba(227,179,65,.5);
+                 color: var(--warn); }
+    .chip-danger { background: var(--danger-soft); border: 1px solid rgba(242,104,94,.5);
+                   color: var(--danger); }
+    .chip-info { background: var(--info-soft); border: 1px solid rgba(107,167,221,.5);
+                 color: var(--info); }
+    .chip-accent { background: var(--accent-soft); border: 1px solid rgba(79,192,181,.5);
+                   color: var(--accent); }
+    .chip-neutral { background: var(--surface-2); border: 1px solid var(--line);
+                    color: var(--ink-3); }
+
+    /* --- Stat tiles (Ops Console update) ------------------------ */
+    .oc-stat-tiles { display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+                gap: var(--space-3); margin: var(--space-4) 0; }
+    .oc-stat-tile { background: var(--surface); border: 1px solid var(--line);
+                border-radius: 8px; padding: var(--space-3) var(--space-4); }
+    .oc-stat-tile .tile-value { font-family: var(--font-mono); font-size: var(--t-xl);
+                line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .oc-stat-tile .tile-value .tile-unit { font-size: var(--t-sm);
+                font-weight: 400; color: var(--ink-2); margin-left: .2em; }
+    .oc-stat-tile .tile-label { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); margin-top: 2px; }
+
+    /* Time-window segmented control */
+    .time-window { display: inline-flex; align-items: center;
+                gap: var(--space-2); margin-bottom: var(--space-3); }
+    .time-window .tw-label { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); }
+    .time-window .tw-segments { display: inline-flex; border: 1px solid var(--line);
+                border-radius: var(--r-sm); overflow: hidden; }
+    .time-window .tw-seg { font-family: var(--font-mono); font-size: var(--t-xs);
+                padding: 2px 10px; border: 0; background: transparent;
+                color: var(--ink-2); cursor: pointer; }
+    .time-window .tw-seg:hover { background: var(--surface-2); }
+    .time-window .tw-seg.is-active { background: var(--accent);
+                color: var(--accent-contrast); }
+
+    /* --- Grid-row data views ------------------------------------ */
+    .grid-table { display: grid; width: 100%; overflow-x: auto; }
+    .grid-table .gt-header { display: contents; }
+    .grid-table .gt-header > * { font-size: var(--t-micro); text-transform: uppercase;
+                letter-spacing: .06em; color: var(--ink-3); padding: var(--space-2) var(--space-3);
+                border-bottom: 1px solid var(--line); white-space: nowrap; }
+    .grid-table .gt-row { display: contents; }
+    .grid-table .gt-row > * { padding: 7px var(--space-3);
+                border-bottom: 1px solid var(--line-subtle); }
+    .grid-table .gt-row:hover > * { background: var(--surface-2); }
+    .grid-table .gt-row .num { text-align: right; font-family: var(--font-mono);
+                font-variant-numeric: tabular-nums; }
+    .grid-table .gt-row .gt-action { text-align: right; white-space: nowrap; }
+    .grid-table .gt-row .gt-action a { color: var(--accent); text-decoration: none;
+                font-size: var(--t-sm); }
+    .grid-table .gt-row .gt-action a:hover { text-decoration: underline; }
+    /* Row state tints */
+    .gt-row.is-selected > * { background: rgba(79,192,181,.04); }
+    .gt-row.is-needs-human > * { background: rgba(227,179,65,.04); }
+    .gt-row.is-machine-active > * { background: rgba(107,167,221,.04); }
+
+    /* Multi-select action bar */
+    .gt-action-bar { display: flex; align-items: center; gap: var(--space-3);
+                padding: var(--space-2) var(--space-3); margin-bottom: 2px;
+                background: rgba(79,192,181,.08); border-radius: var(--r-sm); }
+    .gt-action-bar .gt-count { font-family: var(--font-mono); font-size: var(--t-sm);
+                color: var(--accent); font-weight: 500; white-space: nowrap; }
+
+    /* --- Command-bar action styles ------------------------------ */
+    .cb-btn { display: inline-flex; align-items: center; gap: .3em;
+              font-size: var(--t-sm); padding: 4px 12px; border-radius: var(--r-sm);
+              cursor: pointer; text-decoration: none; white-space: nowrap;
+              transition: background 120ms ease, border-color 120ms ease; }
+    .cb-btn-secondary { background: transparent; border: 1px solid var(--line);
+              color: var(--ink); }
+    .cb-btn-secondary:hover { background: var(--surface-2);
+              border-color: var(--line-strong); }
+    .cb-btn-primary { background: var(--accent); border: 1px solid var(--accent);
+              color: var(--accent-contrast); font-weight: 600; }
+    .cb-btn-primary:hover { background: var(--accent-strong);
+              border-color: var(--accent-strong); }
+    .cb-btn-danger { background: transparent; border: 1px solid var(--danger);
+              color: var(--danger); }
+    .cb-btn-danger:hover { background: var(--danger-soft); }
+
     /* Operator annotation layer (issue #86). A highlight mark paints one of the six
        --hl-N tints at a low alpha so the ink keeps its contrast on BOTH grounds;
        `color: inherit` keeps the segment's own text color. The swatches and tag

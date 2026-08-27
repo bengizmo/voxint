@@ -1,0 +1,29 @@
+{# Ops Console semantic chip macros (V3 #208).
+   Canonical label-to-semantic mapping for the Ops Console chip system.
+   Import: {% from "fragments/_chips.html" import chip %}
+   Usage:  {{ chip("done") }}  {{ chip("2 voices need you") }}
+
+   The mapping is the single source; R1-R6 consume it via the macro.
+   Extending: add a row to CHIP_MAP below and the CSS class if needed. #}
+
+{# Map: label → (css_class, display_text). Labels are the canonical
+   user-facing strings from the design spec (#208). #}
+{% set CHIP_MAP = {
+  "verified":       ("chip-ok",      "✓ verified"),
+  "reviewed":       ("chip-ok",      "✓ reviewed"),
+  "all reviewed":   ("chip-ok",      "✓ all reviewed"),
+  "done":           ("chip-ok",      "done"),
+  "transcribing":   ("chip-info",    none),
+  "needs you":      ("chip-warn",    "needs you"),
+  "need you":       ("chip-warn",    none),
+  "failed":         ("chip-danger",  "failed"),
+  "watched":        ("chip-accent",  "watched"),
+  "learned":        ("chip-info",    none),
+  "unknown":        ("chip-neutral", "unknown"),
+} %}
+
+{% macro chip(label, extra_class="") -%}
+{%- set key = label.split()[0] if label.split()[0] in ["transcribing", "learned"] else label.lower().rstrip("s") if label.lower().rstrip("s") in CHIP_MAP else label.lower() -%}
+{%- set entry = CHIP_MAP.get(key, ("chip-neutral", none)) -%}
+<span class="chip {{ entry[0] }} {{ extra_class }}">{{ entry[1] or label }}</span>
+{%- endmacro %}
