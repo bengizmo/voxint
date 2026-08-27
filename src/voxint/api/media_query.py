@@ -305,7 +305,11 @@ def media_library(
         latest.c.run_id,
         latest.c.status,
         latest.c.run_created_at,
-        func.coalesce(unresolved_label_count(latest.c.run_id), 0).label("unresolved_count"),
+        # Correlated via PipelineRun (joined below), NOT latest.c.run_id:
+        # _label_unresolved's .correlate(PipelineRun, DiarizationTurn) would
+        # re-add the entire latest subquery into each nested EXISTS if given a
+        # subquery column reference.
+        func.coalesce(unresolved_label_count(PipelineRun.id), 0).label("unresolved_count"),
     )
     # Outer: most media has no metadata snapshot (uploads, pre-#36 runs), sits under
     # no settings folder, or belongs to a folder with no project.
@@ -320,6 +324,7 @@ def media_library(
         stmt = stmt.join(latest, latest.c.media_item_id == MediaItem.id)
     else:
         stmt = stmt.outerjoin(latest, latest.c.media_item_id == MediaItem.id)
+    stmt = stmt.outerjoin(PipelineRun, PipelineRun.id == latest.c.run_id)
     if trashed:
         item_view = (
             MediaItem.trashed_at.is_not(None),

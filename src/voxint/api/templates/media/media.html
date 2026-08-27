@@ -250,7 +250,7 @@
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>
         {% if row.latest_run_id %}
-          {% if row.latest_run_status == "awaiting_adjudication" %}
+          {% if row.unresolved_count %}
           <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
@@ -288,7 +288,7 @@
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>
         {% if row.latest_run_id %}
-          {% if row.latest_run_status == "awaiting_adjudication" %}
+          {% if row.unresolved_count %}
           <span class="chip chip-warn">{{ row.unresolved_count }} voice{{ "s" if row.unresolved_count != 1 else "" }} need you</span>
           {% elif row.latest_run_status == "completed" %}
           {{ chip("reviewed") }}
