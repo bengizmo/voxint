@@ -336,7 +336,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.22.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.27.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -1258,11 +1258,11 @@ The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
 token, so it has none of its own to gate a forged POST), the web-research
 forms on `/speakers` (start, cancel, and per-draft accept/reject, each under
 its own token action), and the run-asset forms on `/runs/{id}` (generate and
-cancel, each under its own token action). Set `CSRF_SECRET` to a
-persistent random value
-(`python -c "import secrets; print(secrets.token_urlsafe(32))"`); otherwise a
-random per-process secret is used, which invalidates open forms on restart and
-mismatches across multiple workers.
+cancel, each under its own token action). Since v0.27.0, the app auto-generates
+a CSRF secret on first start and persists it to the data directory
+(`DATA_DIR/csrf_secret`), so forms survive restarts and work across workers
+without manual configuration. Set `CSRF_SECRET` explicitly to override the
+auto-generated value (useful when multiple app instances share no filesystem).
 
 ### LLM endpoint timeouts: local models and proxies
 

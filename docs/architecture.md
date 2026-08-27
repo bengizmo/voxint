@@ -398,7 +398,10 @@ and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 missing/mis-signed token is refused before any state change. `/claim` needs its
 own because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
-enroll) are instead gated by that per-run claim token.
+enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
+secret is auto-generated and persisted to `DATA_DIR/csrf_secret` on first start,
+so forms survive restarts without manual configuration; an explicit `CSRF_SECRET`
+env var overrides the persisted value.
 
 ## Web research egress (issue #39)
 
