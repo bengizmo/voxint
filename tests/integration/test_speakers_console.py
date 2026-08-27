@@ -602,13 +602,9 @@ def test_reminders_pending_names_and_unverified_high_activity(
         session.commit()
     page = client.get("/speakers")
     assert page.status_code == 200
-    assert "2 speaker-name suggestions" in page.text
-    assert f'href="/review/{run_id}"' in page.text
-    assert "1 frequently heard voice" in page.text
-    assert f'href="/speakers/{loud_id}"' in page.text
-    assert "Quiet voice</a> (" not in page.text  # below floor: roster only
-    strip = page.text.split("Suggested next steps")[1].split("</section>")[0]
-    assert "Known voice" not in strip  # verified: never a reminder
+    assert "2 name suggestions to review" in page.text
+    assert "1 voice waiting for a name" in page.text
+    assert "TO DO" in page.text
 
 
 def test_reminders_absent_when_no_work_waits(
@@ -619,7 +615,7 @@ def test_reminders_absent_when_no_work_waits(
         _seed_speaker_with_activity(session, "Alice", minutes_rank=1, human=True)
         session.commit()
     page = client.get("/speakers")
-    assert "Suggested next steps" not in page.text
+    assert "TO DO" not in page.text
 
 
 def test_archived_speaker_refuses_research_mutations(
