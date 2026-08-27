@@ -222,6 +222,12 @@ ignore_missing_imports = true
 module = ["torch", "torch.*", "fairseq", "fairseq.*"]
 ignore_missing_imports = true
 
+# TTS generation tool (tools/synthdetect_tts_generate.py, #144 S6) runs in a
+# separate venv; these deps have no py.typed marker.
+[[tool.mypy.overrides]]
+module = ["perth", "perth.*", "google", "google.auth", "google.auth.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

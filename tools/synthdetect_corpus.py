@@ -128,15 +128,16 @@ class GeneratorProvenance:
 
     The fields make a synthesis reproducible and let the eval measure
     per-generator behaviour: ``name``/``version`` identify the system,
-    ``checkpoint_sha`` pins its weights, ``voice``/``seed``/``text_source`` pin
-    the exact utterance. A bona fide clip carries no generator (``None``).
+    ``checkpoint_sha`` pins its weights, and ``voice``/``seed``/``text_source``
+    pin the exact utterance. Cloud APIs with no caller-controlled RNG record a
+    null seed. A bona fide clip carries no generator (``None``).
     """
 
     name: str
     version: str
     checkpoint_sha: str | None
     voice: str
-    seed: str
+    seed: str | None
     text_source: str
 
 
@@ -228,10 +229,13 @@ def _validate_generator(raw: Any, where: str) -> GeneratorProvenance:
     extra = set(raw) - allowed
     if extra:
         raise CorpusError(f"{where}: generator has unexpected keys {sorted(extra)}")
-    for key in ("name", "version", "voice", "seed", "text_source"):
+    for key in ("name", "version", "voice", "text_source"):
         val = raw.get(key)
         if not isinstance(val, str) or not val.strip():
             raise CorpusError(f"{where}: generator.{key} must be a non-empty string")
+    seed = raw.get("seed")
+    if seed is not None and (not isinstance(seed, str) or not seed.strip()):
+        raise CorpusError(f"{where}: generator.seed must be a non-empty string or null")
     checkpoint_sha = raw.get("checkpoint_sha")
     # A generator checkpoint sha is optional (CANDIDATE), but if present it must
     # be a real digest, never a placeholder string.
