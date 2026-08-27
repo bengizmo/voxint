@@ -179,7 +179,7 @@ def test_library_lists_a_file_with_folder_and_status(
     assert "Mayor interview" in body
     assert "interviews" in body
     assert "1:01:01" in body  # format_duration
-    assert "1.0 MB" in body  # format_size
+    # R3 grid table does not show file size (mockup omits the column).
     assert "Completed" in body  # humanize_status of the latest run
 
 
