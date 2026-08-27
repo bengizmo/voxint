@@ -10,6 +10,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from voxint.db.models import ArtifactKind, AudioArtifact, MediaItem, PipelineRun
+from voxint.media.integrity import openable_current
 from voxint.media.normalize import normalize_to_wav
 from voxint.media.peaks import peaks_relative
 from voxint.pipeline.stages.context import StageContext, StageDataError
@@ -26,16 +27,13 @@ def run(ctx: StageContext, session: Session, run_id: uuid.UUID) -> None:
     if media is None:
         raise StageDataError(f"run {run_id}: media item missing")
 
-    media_root = ctx.media_root.resolve()
-    source = ctx.media_root / media.source_path
-    try:
-        source.resolve().relative_to(media_root)
-    except ValueError:
+    source = openable_current(ctx.media_root, media)
+    if source is None:
+        live_path = media.current_path or media.source_path
         raise StageDataError(
-            f"source {media.source_path!r} escapes media root {media_root}"
-        ) from None
-    if not source.is_file():
-        raise StageDataError(f"source {media.source_path!r} is not a regular file")
+            f"source {live_path!r} is not a readable regular file "
+            f"under media root {ctx.media_root}"
+        )
 
     relative = _ARTIFACT_TEMPLATE.format(run_id=run_id)
     info = normalize_to_wav(
