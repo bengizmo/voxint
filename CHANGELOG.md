@@ -3,7 +3,8 @@
 All notable changes to Voxint. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between minors).
 
-## [Unreleased]
+
+## [0.26.0] - 2026-08-27
 
 ### Added
 - **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
@@ -31,52 +32,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   CSS, and scripts before scanning. Legacy templates, Settings detail pages,
   and the RTTM export disclosure carry explicit allowlists until their R-issue
   refreshes apply the vocabulary.
-
-### Fixed
-- **Synthdetect M1 S5 PR-4: production windowing fixes** (#144). Two
-  pre-registered fixes to `plan_windows(mode="production")`: (1) production
-  window width aligned to model input width (4.0 s / 64,000 samples changed to
-  4.0375 s / 64,600 samples, eliminating 600-sample repeat-padding on every
-  full window); (2) trailing partial windows below 8,000 samples (0.5 s) are
-  dropped when at least one full window exists, preventing tiny tails from
-  pooling with equal weight. `production_tail_floor_samples` added to
-  `WindowingPolicy`; `dropped_tail_samples` journaled per clip in
-  `ClipOutcome`. SOURCES_VERSION bumped to v6. Contract tests enforce
-  production window == model width invariant.
-
-### Changed
-- **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
-  (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
-  canonical label-to-semantic mapping (`chip_semantics.py` + Jinja2 macro
-  `_chips.html`). Ops Console stat tiles (`.oc-stat-tile` with mono numerals,
-  micro-labels, and a time-window segmented control). Grid-row data views
-  (`.grid-table` with micro-headers, subtle row dividers, right-aligned mono
-  numerals, teal action links, row-state tints, and a multi-select action bar).
-  Command-bar action styles (`.cb-btn` secondary/primary/danger variants).
-  Contract test pins the chip mapping and verifies CSS class existence.
-- **Ops Console V2: icon rail and command-bar framework** (#207, epic #205).
-  The 13rem collapsible sidebar is replaced by a 52px icon rail with inline SVG
-  glyphs (Home square, Media circle, Projects diamond, Speakers ring, Jobs
-  bars), a teal "V" brand square, CSS tooltips with aria-labels, and a
-  settings entry with a system-health dot at the bottom. The topbar is replaced
-  by a command-bar framework: a 40px strip with Jinja2 block slots for
-  breadcrumb (`cb_breadcrumb`), summary (`cb_summary`), search (`cb_search`),
-  and actions (`cb_actions`). Pages that don't fill a slot get sensible
-  defaults (page name as breadcrumb, placeholder search, theme toggle). On
-  narrow viewports the rail collapses to a horizontal disclosure behind a
-  hamburger in the command bar. Shell-less pages (setup wizard) unaffected.
-  Print excludes shell chrome. No new runtime dependencies.
-- **Ops Console V1: tokens, typography, and theme contract** (#206, epic #205).
-  Dark-theme palette updated from the warm "Reading Room" values to the Ops
-  Console direction: darker canvas (#121316), cooler ink, alpha-based semantic
-  soft fills, new `--line-subtle` token. Typography switches from the system-ui
-  stack to self-hosted IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500)
-  as latin-subset woff2 (101 KB total), loaded via the Vite build pipeline with
-  system-ui fallback when unbuilt. Type scale tightened (body 13px, new
-  `--t-micro` for 10.5px micro-headers). Light theme and print-stays-light
-  contract preserved. No layout or shell changes.
-
-### Added
 - **Console 2.0 P2c: journaled media operations primitives and executor**
   (#155, epic #149, ADR 0007). Concurrency primitives for the media operations
   journal: `claim_operation` (row-lock serialized), `cas_transition` and
@@ -449,89 +404,6 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   sibling gain the two new windowed counts. The guided tutorial's
   page-to-route map is data-driven now, and unfinished console areas ship
   dark behind environment flags (`CONSOLE_PROJECTS_ENABLED`).
-
-### Changed
-- **Console 2.0 P6b: Settings activated; the hardware page folds into it** (#161,
-  epic #149 Track D). The settings hub and its read-only sub-pages
-  (status, hardware, database, plugins) are now the default `/settings`, so the
-  console opens on the grouped hub rather than the single long page
-  (`CONSOLE_SETTINGS_ENABLED` still gates the content and defaults on; set it off
-  to fall back to the flat page). The old `/resources` hardware view is now
-  `/settings/status`: `/resources` issues a permanent redirect there, the sidebar
-  "Hardware" shortcut and the Jobs "Full hardware view" link point at it, and the
-  status page keeps the 15-second live hardware refresh (it answers the poll with
-  just the hardware snapshot, without re-running the component-health checks).
-  Bookmarks and an already-open Resources tab keep working through the redirect.
-- **Test loop and PR CI parallelized.** The DB-backed integration suite now runs
-  under `pytest-xdist` with one disposable database per worker
-  (`tests/integration/conftest.py`), keyed on the xdist run id and worker so
-  concurrent invocations no longer deadlock on a shared `DROP SCHEMA`. Measured
-  ~6x faster at `-n 8` (13m24s serial to 2m14s) on a multi-core box, and the
-  serial (no-`-n`) path is byte-identical to before. The PR gate (`ci.yml`) drops
-  coverage instrumentation from the fast required lane (a measured ~33% wall-clock
-  tax) into a separate, parallel, still-required `coverage` job; the fast lane
-  runs the unit/contract suites parallel and the integration suite at `-n 8`. No
-  change to the parity gate, the contract goldens, or the secrets scan. See
-  `docs/testing.md`.
-- **Pure driver tests moved to the unit lane; new coverage for the read-time
-  attribution helpers.** The 27 database-free tests in
-  `tests/integration/test_export_match_evidence_driver.py` (manifest parsing,
-  serialization, atomic writes, git helpers, and the CLI paths that fail closed
-  before any database access) moved to a same-named unit module, each assertion
-  unchanged; the six tests that seed real runs stay in the integration lane. The
-  CLI error-path tests now also assert the database is never reached on those
-  paths. Added direct unit coverage for the pure read-time attribution helpers
-  (`winning_attribution`, `display_name`, `segment_speaker`,
-  `parse_transcript_text`), previously exercised only through database-backed
-  walks. First slice of an incremental effort to keep the integration lane focused
-  on what needs Postgres; the relocation rubric is documented in `docs/testing.md`.
-- **Console 2.0 P2a: folder registration writes the media_folders relation**
-  (#153, epic #149). The setup wizard folder step and the Settings folder panel
-  now register folders as first-class `media_folders` rows through one shared,
-  serialized write service instead of the `app_settings` list, and the
-  submit-time domain-pack snapshot, the folder scan, and the watch-folder sweep
-  all read the folder set from that relation (no dual-write). Each run submitted
-  under a registered folder records its folder membership
-  (`media_items.media_folder_id`). One operator-visible change: registering a
-  folder that nests inside (or contains) an already-registered folder is now
-  refused, so every file belongs to exactly one folder; register only the parent
-  or only the child. The `app_settings.media_folders` / `folder_domain_packs`
-  columns are no longer written and remain only as a one-release rollback input.
-- **Console 2.0 P2a: per-field config resolution and the submit-time freeze**
-  (#153, epic #149). A new run's effective vocabulary and corrections now resolve
-  by first present layer, each independently: an explicit per-run pack (a CLI or
-  sidecar name), then the project, then the folder pack, then the global baseline
-  (the default pack plus the operator's glossary and corrections). Both fields
-  are frozen at submit into the run's snapshot, tagged
-  `config_resolution_version: 2`, so a later settings edit cannot change a run
-  already queued. One behavior change worth noting: a run that resolves to an
-  explicit folder pack, or to an explicit CLI or sidecar pack, no longer also
-  inherits the global glossary and corrections; before, both were added to every
-  run. A run with no project and no folder pack still resolves to the default
-  pack plus the global settings exactly as before, so an install that never set a
-  per-folder pack sees no change. Existing runs are untouched; no migration
-  rewrites their snapshots.
-- **The dashboard folded into Home** (#152). `/dashboard` now issues a
-  permanent redirect to `/`, and `/` no longer redirects to `/review`. The
-  dashboard's task cards and stat figures live on Home; the hardware strip
-  stays on the Resources page (sidebar: Hardware); the per-status and
-  stage-timing detail tables are retired from HTML (the same figures remain
-  on `GET /metrics` and `voxint stats`). The pre-onboarding setup wizard
-  renders without the new shell.
-- **Console 2.0 groundwork, P0b: the console API is decomposed into per-area
-  routers** (#151, epic #149). Internal refactor with no operator-visible
-  change: the single 7.5k-line `api/app.py` module is split into
-  `api/routers/{speakers,settings,legacy_review,legacy_runs}.py` plus shared
-  dependency, triage, transcript-island, and tutorial-banner modules, with
-  empty scaffolds for the areas later phases fill (home, media, projects,
-  jobs, editor) and template files grouped into matching per-area
-  directories. `app.py` keeps only the application factory, middleware, and
-  route registration. Every route's path, method, status codes, onboarding
-  gate, operator auth, CSRF verification, and registration order are pinned
-  unchanged by the P0a characterization contracts plus a new
-  registration-order golden added in this change.
-
-### Added
 - **Navigable outline: grounded entity-mention jump targets** (#87, epic #47).
   The review transcript gains an Outline panel that turns grounded entity
   mentions into clickable jump targets: each seeks the player to the mention's
@@ -620,7 +492,137 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   bytes nor the qualification claim can drift silently. Reproducing the published
   ASVspoof 2021 DF error rate remains a later milestone.
 
+### Changed
+- **Ops Console R3: media overview refresh** (#212, epic #205). The `/media`
+  page is rewritten with the V3 design system: a command bar with breadcrumb,
+  summary stats (folder/file count, total hours), filter field, table/cards
+  toggle, and an add-media dropdown (upload, pick from server, fetch from link)
+  replacing the old stacked forms. Folder rows expand in place with a disclosure
+  triangle showing aggregate stats (item count, duration, review chip) and
+  child file rows indented underneath. File rows show a status chip, duration,
+  size, and a single action link. Trash and restore views use the same grid
+  table with state-appropriate tints. Default view changes from cards to table.
+- **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
+  (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
+  canonical label-to-semantic mapping (`chip_semantics.py` + Jinja2 macro
+  `_chips.html`). Ops Console stat tiles (`.oc-stat-tile` with mono numerals,
+  micro-labels, and a time-window segmented control). Grid-row data views
+  (`.grid-table` with micro-headers, subtle row dividers, right-aligned mono
+  numerals, teal action links, row-state tints, and a multi-select action bar).
+  Command-bar action styles (`.cb-btn` secondary/primary/danger variants).
+  Contract test pins the chip mapping and verifies CSS class existence.
+- **Ops Console V2: icon rail and command-bar framework** (#207, epic #205).
+  The 13rem collapsible sidebar is replaced by a 52px icon rail with inline SVG
+  glyphs (Home square, Media circle, Projects diamond, Speakers ring, Jobs
+  bars), a teal "V" brand square, CSS tooltips with aria-labels, and a
+  settings entry with a system-health dot at the bottom. The topbar is replaced
+  by a command-bar framework: a 40px strip with Jinja2 block slots for
+  breadcrumb (`cb_breadcrumb`), summary (`cb_summary`), search (`cb_search`),
+  and actions (`cb_actions`). Pages that don't fill a slot get sensible
+  defaults (page name as breadcrumb, placeholder search, theme toggle). On
+  narrow viewports the rail collapses to a horizontal disclosure behind a
+  hamburger in the command bar. Shell-less pages (setup wizard) unaffected.
+  Print excludes shell chrome. No new runtime dependencies.
+- **Ops Console V1: tokens, typography, and theme contract** (#206, epic #205).
+  Dark-theme palette updated from the warm "Reading Room" values to the Ops
+  Console direction: darker canvas (#121316), cooler ink, alpha-based semantic
+  soft fills, new `--line-subtle` token. Typography switches from the system-ui
+  stack to self-hosted IBM Plex Sans (400/500/600) and IBM Plex Mono (400/500)
+  as latin-subset woff2 (101 KB total), loaded via the Vite build pipeline with
+  system-ui fallback when unbuilt. Type scale tightened (body 13px, new
+  `--t-micro` for 10.5px micro-headers). Light theme and print-stays-light
+  contract preserved. No layout or shell changes.
+- **Console 2.0 P6b: Settings activated; the hardware page folds into it** (#161,
+  epic #149 Track D). The settings hub and its read-only sub-pages
+  (status, hardware, database, plugins) are now the default `/settings`, so the
+  console opens on the grouped hub rather than the single long page
+  (`CONSOLE_SETTINGS_ENABLED` still gates the content and defaults on; set it off
+  to fall back to the flat page). The old `/resources` hardware view is now
+  `/settings/status`: `/resources` issues a permanent redirect there, the sidebar
+  "Hardware" shortcut and the Jobs "Full hardware view" link point at it, and the
+  status page keeps the 15-second live hardware refresh (it answers the poll with
+  just the hardware snapshot, without re-running the component-health checks).
+  Bookmarks and an already-open Resources tab keep working through the redirect.
+- **Test loop and PR CI parallelized.** The DB-backed integration suite now runs
+  under `pytest-xdist` with one disposable database per worker
+  (`tests/integration/conftest.py`), keyed on the xdist run id and worker so
+  concurrent invocations no longer deadlock on a shared `DROP SCHEMA`. Measured
+  ~6x faster at `-n 8` (13m24s serial to 2m14s) on a multi-core box, and the
+  serial (no-`-n`) path is byte-identical to before. The PR gate (`ci.yml`) drops
+  coverage instrumentation from the fast required lane (a measured ~33% wall-clock
+  tax) into a separate, parallel, still-required `coverage` job; the fast lane
+  runs the unit/contract suites parallel and the integration suite at `-n 8`. No
+  change to the parity gate, the contract goldens, or the secrets scan. See
+  `docs/testing.md`.
+- **Pure driver tests moved to the unit lane; new coverage for the read-time
+  attribution helpers.** The 27 database-free tests in
+  `tests/integration/test_export_match_evidence_driver.py` (manifest parsing,
+  serialization, atomic writes, git helpers, and the CLI paths that fail closed
+  before any database access) moved to a same-named unit module, each assertion
+  unchanged; the six tests that seed real runs stay in the integration lane. The
+  CLI error-path tests now also assert the database is never reached on those
+  paths. Added direct unit coverage for the pure read-time attribution helpers
+  (`winning_attribution`, `display_name`, `segment_speaker`,
+  `parse_transcript_text`), previously exercised only through database-backed
+  walks. First slice of an incremental effort to keep the integration lane focused
+  on what needs Postgres; the relocation rubric is documented in `docs/testing.md`.
+- **Console 2.0 P2a: folder registration writes the media_folders relation**
+  (#153, epic #149). The setup wizard folder step and the Settings folder panel
+  now register folders as first-class `media_folders` rows through one shared,
+  serialized write service instead of the `app_settings` list, and the
+  submit-time domain-pack snapshot, the folder scan, and the watch-folder sweep
+  all read the folder set from that relation (no dual-write). Each run submitted
+  under a registered folder records its folder membership
+  (`media_items.media_folder_id`). One operator-visible change: registering a
+  folder that nests inside (or contains) an already-registered folder is now
+  refused, so every file belongs to exactly one folder; register only the parent
+  or only the child. The `app_settings.media_folders` / `folder_domain_packs`
+  columns are no longer written and remain only as a one-release rollback input.
+- **Console 2.0 P2a: per-field config resolution and the submit-time freeze**
+  (#153, epic #149). A new run's effective vocabulary and corrections now resolve
+  by first present layer, each independently: an explicit per-run pack (a CLI or
+  sidecar name), then the project, then the folder pack, then the global baseline
+  (the default pack plus the operator's glossary and corrections). Both fields
+  are frozen at submit into the run's snapshot, tagged
+  `config_resolution_version: 2`, so a later settings edit cannot change a run
+  already queued. One behavior change worth noting: a run that resolves to an
+  explicit folder pack, or to an explicit CLI or sidecar pack, no longer also
+  inherits the global glossary and corrections; before, both were added to every
+  run. A run with no project and no folder pack still resolves to the default
+  pack plus the global settings exactly as before, so an install that never set a
+  per-folder pack sees no change. Existing runs are untouched; no migration
+  rewrites their snapshots.
+- **The dashboard folded into Home** (#152). `/dashboard` now issues a
+  permanent redirect to `/`, and `/` no longer redirects to `/review`. The
+  dashboard's task cards and stat figures live on Home; the hardware strip
+  stays on the Resources page (sidebar: Hardware); the per-status and
+  stage-timing detail tables are retired from HTML (the same figures remain
+  on `GET /metrics` and `voxint stats`). The pre-onboarding setup wizard
+  renders without the new shell.
+- **Console 2.0 groundwork, P0b: the console API is decomposed into per-area
+  routers** (#151, epic #149). Internal refactor with no operator-visible
+  change: the single 7.5k-line `api/app.py` module is split into
+  `api/routers/{speakers,settings,legacy_review,legacy_runs}.py` plus shared
+  dependency, triage, transcript-island, and tutorial-banner modules, with
+  empty scaffolds for the areas later phases fill (home, media, projects,
+  jobs, editor) and template files grouped into matching per-area
+  directories. `app.py` keeps only the application factory, middleware, and
+  route registration. Every route's path, method, status codes, onboarding
+  gate, operator auth, CSRF verification, and registration order are pinned
+  unchanged by the P0a characterization contracts plus a new
+  registration-order golden added in this change.
+
 ### Fixed
+- **Synthdetect M1 S5 PR-4: production windowing fixes** (#144). Two
+  pre-registered fixes to `plan_windows(mode="production")`: (1) production
+  window width aligned to model input width (4.0 s / 64,000 samples changed to
+  4.0375 s / 64,600 samples, eliminating 600-sample repeat-padding on every
+  full window); (2) trailing partial windows below 8,000 samples (0.5 s) are
+  dropped when at least one full window exists, preventing tiny tails from
+  pooling with equal weight. `production_tail_floor_samples` added to
+  `WindowingPolicy`; `dropped_tail_samples` journaled per clip in
+  `ClipOutcome`. SOURCES_VERSION bumped to v6. Contract tests enforce
+  production window == model width invariant.
 - **Integration tests could touch the live database when run in isolation.** The
   `enrich` CLI tests invoked the app's own DB path without depending on the
   `engine`/`session_factory` fixtures, so in isolation `DATABASE_URL` was unset
@@ -3330,7 +3332,20 @@ First public release.
   build-from-source overlays (`compose.build.yaml`, `compose.gpu.build.yaml`),
   one-shot `migrate` gate, swappable domain pack.
 
-[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/bengizmo/voxint/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/bengizmo/voxint/compare/v0.24.0...v0.26.0
+[0.24.0]: https://github.com/bengizmo/voxint/compare/v0.23.1...v0.24.0
+[0.23.1]: https://github.com/bengizmo/voxint/compare/v0.23.0...v0.23.1
+[0.23.0]: https://github.com/bengizmo/voxint/compare/v0.22.1...v0.23.0
+[0.22.1]: https://github.com/bengizmo/voxint/compare/v0.22.0...v0.22.1
+[0.22.0]: https://github.com/bengizmo/voxint/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/bengizmo/voxint/compare/v0.20.0...v0.21.0
+[0.20.0]: https://github.com/bengizmo/voxint/compare/v0.19.0...v0.20.0
+[0.19.0]: https://github.com/bengizmo/voxint/compare/v0.18.0...v0.19.0
+[0.18.0]: https://github.com/bengizmo/voxint/compare/v0.17.0...v0.18.0
+[0.17.0]: https://github.com/bengizmo/voxint/compare/v0.16.0...v0.17.0
+[0.16.0]: https://github.com/bengizmo/voxint/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/bengizmo/voxint/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/bengizmo/voxint/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/bengizmo/voxint/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/bengizmo/voxint/compare/v0.11.0...v0.12.0
