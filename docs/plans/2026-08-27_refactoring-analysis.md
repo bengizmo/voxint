@@ -419,6 +419,7 @@ confirmed NOT dead code (isolated, DB-free, covered by tests).
 
 `AppSettings.media_folders` and `folder_domain_packs` are no longer written.
 Only consumed by migration-preflight CLI.
+**Resolved**: columns dropped in migration 0046, CLI subcommand and dead code removed (#177).
 
 ---
 

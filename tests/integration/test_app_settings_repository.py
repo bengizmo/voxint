@@ -21,7 +21,6 @@ def test_get_or_create_defaults_and_is_idempotent(
         first = store.get_or_create(session, llm_enabled_default=False)
         assert first.id == store.SINGLETON_ID
         assert first.onboarding_complete is False
-        assert first.media_folders == []
         assert first.vocabulary == []
         assert first.llm_enabled is False
         assert first.llm_base_url is None

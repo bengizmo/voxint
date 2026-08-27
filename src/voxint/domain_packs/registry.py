@@ -1,10 +1,10 @@
 """Resolve domain packs by name from the configured sources (issue #11).
 
-Per-run/per-folder selection stores a pack *name* (in ``folder_domain_packs``)
-and freezes the resolved pack's content onto the run. This module is the name →
-:class:`DomainPack` resolver those seams share. Three sources, in precedence
-order when names collide (identical content is idempotent; a genuine clash is a
-config error, raised loudly):
+Per-run/per-folder selection stores a pack *name* (on ``media_folders.domain_pack``
+or as an explicit CLI arg) and freezes the resolved pack's content onto the run.
+This module is the name → :class:`DomainPack` resolver those seams share. Three
+sources, in precedence order when names collide (identical content is idempotent;
+a genuine clash is a config error, raised loudly):
 
 1. the bundled ``generic`` pack (always available, zero config);
 2. the configured default pack (``DOMAIN_PACK_PATH``), if set;
@@ -16,7 +16,6 @@ widely) because resolution reads :class:`Settings` and touches the filesystem.
 
 import logging
 from collections.abc import Mapping
-from pathlib import PurePosixPath
 from typing import Any
 
 from voxint.config import Settings
@@ -86,54 +85,21 @@ def resolve_domain_pack_by_name(name: str, settings: Settings) -> DomainPack:
         ) from None
 
 
-def resolve_folder_pack_name(
-    source_path: str, folder_domain_packs: Mapping[str, str]
-) -> str | None:
-    """The pack name mapped to the deepest watched-folder ancestor of ``source_path``.
-
-    Longest-ancestor wins, compared on path *components* (``PurePosixPath.parents``)
-    so ``/audio/pod`` never spuriously matches a file under ``/audio/podcasts``.
-    A folder key that equals the file's own directory (or any ancestor) matches;
-    ``None`` when no configured folder is an ancestor (the caller then uses the
-    default pack). Empty mapping ⇒ ``None`` immediately.
-    """
-    if not folder_domain_packs:
-        return None
-    src = PurePosixPath(source_path)
-    best_name: str | None = None
-    best_depth = -1
-    for folder, pack_name in folder_domain_packs.items():
-        folder_path = PurePosixPath(folder)
-        if src == folder_path or folder_path in src.parents:
-            depth = len(folder_path.parts)
-            if depth > best_depth:
-                best_depth = depth
-                best_name = pack_name
-    return best_name
-
-
 def resolve_run_domain_pack(
-    source_path: str | None,
     *,
     settings: Settings,
-    folder_domain_packs: Mapping[str, str],
     explicit_name: str | None = None,
 ) -> dict[str, Any]:
     """Resolve the pack for a NEW run and return its frozen snapshot mapping.
 
-    Precedence: an explicit caller-supplied name, then the deepest watched-folder
-    mapping for ``source_path``, then the configured default pack. An explicit or
-    mapped name that does not resolve raises :class:`DomainPackError` (a config
-    error the operator must see) rather than falling back. ``source_path`` is
-    ``None`` for uploads/URLs (uuid-namespaced, never under a watched folder), so
-    those take the default unless an explicit name is given — matching the design.
+    If ``explicit_name`` is given, that pack is resolved by name (raising
+    :class:`DomainPackError` if it does not exist). Otherwise the configured
+    default pack is used. Per-folder pack selection is handled by the caller
+    (reading ``MediaFolder.domain_pack``) and passed through as
+    ``explicit_name`` when set.
     """
     if explicit_name is not None:
         return resolve_domain_pack_by_name(explicit_name, settings).to_mapping()
-    if source_path is not None:
-        mapped = resolve_folder_pack_name(source_path, folder_domain_packs)
-        if mapped is not None:
-            return resolve_domain_pack_by_name(mapped, settings).to_mapping()
     return default_domain_pack(settings).to_mapping()
 
 
