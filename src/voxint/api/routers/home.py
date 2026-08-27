@@ -32,7 +32,7 @@ _WINDOWS: Final[tuple[tuple[str, str, timedelta | None], ...]] = (
     ("hour", "1h", timedelta(hours=1)),
     ("day", "24h", timedelta(hours=24)),
     ("week", "7d", timedelta(days=7)),
-    ("all", "all", None),
+    ("all", "All time", None),
 )
 _DEFAULT_WINDOW: Final[str] = "day"
 

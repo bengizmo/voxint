@@ -804,7 +804,7 @@ def decide(
         raise HTTPException(status_code=422, detail=f"invalid label action {action!r}")
     if (decision is Decision.ASSIGN) != (speaker_id is not None):
         raise HTTPException(
-            status_code=422, detail="assign requires speaker_id; others forbid it"
+            status_code=422, detail="choose a speaker to assign, or pick a different action"
         )
     speaker: Speaker | None = None
     if speaker_id is not None:
@@ -1053,12 +1053,16 @@ def relabel_segment(
         )
     if (decision is Decision.ASSIGN) != (speaker_id is not None):
         raise HTTPException(
-            status_code=422, detail="assign requires speaker_id; inherit forbids it"
+            status_code=422,
+            detail="choose a speaker to assign this segment to, or use inherit to follow the label",
         )
     if (start_word_index is None) != (end_word_index is None):
         raise HTTPException(
             status_code=422,
-            detail="start_word_index and end_word_index must be set together",
+            detail=(
+                "provide both word-range boundaries together,"
+                " or omit both for whole-segment scope"
+            ),
         )
     segment = session.get(TranscriptSegment, segment_id)
     if segment is None or segment.pipeline_run_id != run_id:
@@ -1075,9 +1079,8 @@ def relabel_segment(
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"word-range [{start_word_index}, {end_word_index}) is not a "
-                    "current split child of this segment; split it at that "
-                    "boundary first"
+                    "that word range does not match a current split — split "
+                    "the segment at that boundary first, then try again"
                 ),
             )
     speaker: Speaker | None = None
@@ -1270,8 +1273,9 @@ def split_segment(
         raise HTTPException(
             status_code=409,
             detail=(
-                "segment is already split; splitting into more than two parts is "
-                "not supported in this release — re-transcribe to clear the split"
+                "this segment already has a split; only one split per segment "
+                "is supported — reassign the existing halves, or remove "
+                "their word-range rulings and try a different boundary"
             ),
         )
     try:

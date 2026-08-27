@@ -84,7 +84,9 @@ def enroll_new_speaker(
     ).scalar_one_or_none()
     if existing is not None:
         if existing.speaker_id is None:
-            raise EnrollmentError("idempotency key was used for a non-assign decision")
+            raise EnrollmentError(
+                "this action conflicts with a previous submission — refresh the page and try again"
+            )
         if (
             existing.pipeline_run_id != run_id
             or existing.diarization_label != diarization_label
@@ -118,7 +120,7 @@ def enroll_new_speaker(
     by_label = eligible_label_vectors(session, run_id, gates)
     if diarization_label not in by_label:
         raise EnrollmentError(
-            f"label {diarization_label!r} has no eligible embedded turns to enroll from"
+            f"label {diarization_label!r} has no speaker audio to create an identity from"
         )
     space, entries = by_label[diarization_label]
     centroid = label_centroid(entries, gates.turn_weight_cap_seconds)
