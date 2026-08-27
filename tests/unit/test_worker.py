@@ -40,6 +40,7 @@ def test_worker_reliability_settings() -> None:
         "voxint.notify_sweep": {"queue": POST_QUEUE},
         "voxint.watch_sweep": {"queue": POST_QUEUE},
         "voxint.activity_prune": {"queue": POST_QUEUE},
+        "voxint.media_reconcile": {"queue": POST_QUEUE},
     }
 
 

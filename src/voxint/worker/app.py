@@ -31,6 +31,7 @@ _CORE_TASK_NAMES: frozenset[str] = frozenset(
         "voxint.finish_pipeline",
         "voxint.gc_sweep",
         "voxint.generate_run_asset",
+        "voxint.media_reconcile",
         "voxint.generate_segment_embeddings",
         "voxint.notify_sweep",
         "voxint.recovery_sweep",
@@ -81,6 +82,10 @@ def build_beat_schedule(settings: Settings) -> dict[str, dict[str, Any]]:
         "watch-sweep": {
             "task": "voxint.watch_sweep",
             "schedule": settings.watch_folder_sweep_seconds,
+        },
+        "media-reconcile": {
+            "task": "voxint.media_reconcile",
+            "schedule": settings.media_reconcile_sweep_seconds,
         },
     }
     if settings.media_retention_enabled:
@@ -136,6 +141,7 @@ app.conf.task_routes = {
     "voxint.notify_sweep": {"queue": POST_QUEUE},
     "voxint.watch_sweep": {"queue": POST_QUEUE},
     "voxint.activity_prune": {"queue": POST_QUEUE},
+    "voxint.media_reconcile": {"queue": POST_QUEUE},
     # Active plugins' post-queue routes (registry validates a plugin only routes a
     # task it declares). Empty ⇒ no extra keys, an equal dict.
     **_registry.task_routes(),

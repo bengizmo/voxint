@@ -55,7 +55,7 @@ MAX_BROWSE_ENTRIES = 500
 # Top-level trees under MEDIA_ROOT that Voxint writes itself — uploaded/acquired
 # sources (incoming) and normalized audio (artifacts). Never scanned, even when the
 # operator registers the media root itself (".") as a folder.
-_RESERVED_TREES = frozenset({"incoming", "artifacts"})
+_RESERVED_TREES = frozenset({"incoming", "artifacts", "_trash"})
 
 # Case-insensitive suffix allowlist for the scan — shared policy, so sidecar
 # pairing (ingest.sidecar) can never diverge from what the scan calls media.
