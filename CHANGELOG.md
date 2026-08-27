@@ -41,6 +41,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Completed and failed runs now show actual elapsed time (e.g. "3m40s") instead
   of a placeholder. Runs from a registered settings folder show the folder path
   below the filename. Failed runs show their error message in the REVIEW column.
+- **Settings status: host-level hardware gauges** (#248, epic #149). The status
+  page now shows five gauges (Processor, Memory, Graphics card, Graphics memory,
+  Disk) instead of two GPU-only gauges. CPU and memory are read from the host
+  via `/proc/meminfo` and `os.getloadavg`; disk usage is the media root
+  partition via `shutil.disk_usage`. No new runtime dependencies.
+- **Settings status: GPU acceleration in install summary** (#248, epic #149).
+  The banner line now includes "GPU acceleration on (16 GB)" (or "off" for
+  CPU-only installs) between the install type and the version number.
+- **Settings status: LLM component description** (#248, epic #149). The Local
+  AI model row shows "off, used for polish & profiles" with a primary "Turn on"
+  button instead of a plain text link.
+- **Settings sub-page nav: Features tab** (#248, epic #149). All four settings
+  sub-pages (Status, Hardware, Database, Plugins) now include a Features tab
+  that links back to the hub page's Features section.
+- **Settings status: Check for updates** (#248, epic #149). The banner button
+  now reads "Check for updates" and links to the GitHub releases page instead
+  of the hardware sub-page.
 
 ### Removed
 - **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration

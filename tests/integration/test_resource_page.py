@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tests.integration.conftest import seed_onboarded
 from voxint.api.app import create_app
+from voxint.api.host_metrics import HostMetricsSnapshot
 from voxint.api.resource_status import (
     AdmissionInfo,
     AggregatedGpu,
@@ -100,6 +101,16 @@ def _patch_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: ResourceSnapshot)
     monkeypatch.setattr(
         "voxint.api.resource_status.collect_resource_status",
         lambda settings, **kw: snapshot,
+    )
+
+
+_EMPTY_HOST = HostMetricsSnapshot(None, None, None, None, None)
+
+
+def _patch_host_metrics_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "voxint.api.host_metrics.collect_host_metrics",
+        lambda media_root: _EMPTY_HOST,
     )
 
 
@@ -178,6 +189,7 @@ def test_resource_strip_unavailable_when_empty(
         monkeypatch,
         ResourceSnapshot(gpus=(), services=(), collected_age_seconds=0.0),
     )
+    _patch_host_metrics_empty(monkeypatch)
     body = client.get("/settings/status").text
     assert "Hardware status unavailable" in body
 
@@ -191,6 +203,7 @@ def test_probe_failure_degrades_to_unavailable(
         raise RuntimeError("nvml exploded")
 
     monkeypatch.setattr("voxint.api.resource_status.collect_resource_status", _boom)
+    _patch_host_metrics_empty(monkeypatch)
     resp = client.get("/settings/status")
     assert resp.status_code == 200
     assert "Hardware status unavailable" in resp.text
@@ -296,8 +309,8 @@ def test_resources_page_renders_unknown_readings(
 def test_resources_page_cpu_only_says_no_gpu(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A CPU-only install reports admission but no GPU: the gauges section says
-    # hardware status is unavailable; the component list still renders.
+    # A CPU-only install reports admission but no GPU: host gauges still render
+    # (CPU / memory / disk), the component list shows, but no GPU gauge appears.
     _patch_snapshot(
         monkeypatch,
         ResourceSnapshot(
@@ -307,5 +320,6 @@ def test_resources_page_cpu_only_says_no_gpu(
         ),
     )
     body = client.get("/settings/status").text
-    assert "Hardware status unavailable" in body
+    assert "Processor" in body
+    assert "Graphics card" not in body
     assert "Transcriber" in body
