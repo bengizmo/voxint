@@ -656,8 +656,12 @@ class TestAutogenerateHook:
     ) -> None:
         from voxint.worker import tasks
 
-        delays: list[str] = []
-        monkeypatch.setattr(tasks.generate_run_asset, "delay", delays.append)
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.generate_run_asset,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
         with session_factory() as session:
             run_id = seed_run(session)
             # A fresh summary asset → only the two missing kinds get jobs.
@@ -668,15 +672,20 @@ class TestAutogenerateHook:
         with session_factory() as session:
             kinds = sorted(j.asset_kind for j in session.query(RunAssetJob).all())
         assert kinds == ["entity_mentions", "topics"]
-        assert len(delays) == 2
+        assert len(dispatches) == 2
+        assert all(kwargs == {"ignore_result": True} for _, kwargs in dispatches)
 
     def test_disabled_or_failing_never_raises(
         self, session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from voxint.worker import tasks
 
-        delays: list[str] = []
-        monkeypatch.setattr(tasks.generate_run_asset, "delay", delays.append)
+        dispatches: list[tuple[tuple[str], dict[str, object]]] = []
+        monkeypatch.setattr(
+            tasks.generate_run_asset,
+            "apply_async",
+            lambda args, **kwargs: dispatches.append((args, kwargs)),
+        )
         with session_factory() as session:
             run_id = seed_run(session)
         # Autogenerate off → no-op.
@@ -688,7 +697,7 @@ class TestAutogenerateHook:
             uuid.uuid4(),
             make_settings(enrichment_run_assets_autogenerate=True),
         )
-        assert delays == []
+        assert dispatches == []
 
 
 class TestCancelHardening:

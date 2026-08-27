@@ -69,6 +69,7 @@ from voxint.pipeline.stages.context import (
     apply_run_preferences,
     build_stage_context,
     build_stage_fns,
+    parse_config_resolution_version,
     resolve_run_preferences,
 )
 from voxint.pipeline.transitions import (
@@ -199,21 +200,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
         # failure lane, so an exception would leave the run un-failed for the
         # recovery sweep to re-publish forever. Fall back to the live-union path (1),
         # the same corrupt-snapshot tolerance domain_pack_from_snapshot already takes.
-        raw_version = (
-            pack_snapshot.get("config_resolution_version", 1)
-            if isinstance(pack_snapshot, dict)
-            else 1
-        )
-        try:
-            config_resolution_version = int(raw_version)
-        except (TypeError, ValueError, OverflowError):
-            logger.warning(
-                "run %s has a malformed config_resolution_version %r; "
-                "falling back to live-union config resolution",
-                run_id,
-                raw_version,
-            )
-            config_resolution_version = 1
+        config_resolution_version = parse_config_resolution_version(pack_snapshot)
         max_speakers_hint = (
             run_row.diarization_max_speakers if run_row is not None else None
         )
@@ -336,13 +323,15 @@ def _publish_finish_or_defer(run_id: uuid.UUID) -> bool:
 @app.task(name="voxint.recovery_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
 def recovery_sweep() -> dict[str, int]:
     """Reclaim expired-lease runs and re-enqueue stale QUEUED runs, and
-    re-dispatch stale QUEUED embedding jobs whose dispatch was lost (issue #130).
+    re-dispatch stale QUEUED built-in jobs whose dispatch was lost.
 
     Duplicate enqueues are safe — stage claims and job-claim CAS arbitrate — so
     this errs toward re-publishing. The staleness grace keeps it from stepping on
-    freshly-submitted runs, pending retry countdowns, and just-enqueued embedding
-    jobs still waiting for a worker.
+    freshly-submitted runs, pending retry countdowns, and just-enqueued jobs still
+    waiting for a worker.
     """
+    from celery.exceptions import OperationalError
+
     settings = get_settings()
     factory, _ = _runtime()
     with factory() as session:
@@ -384,8 +373,6 @@ def recovery_sweep() -> dict[str, int]:
         # One unavailable broker must not abort the sweep midway through this
         # durable set. Each row stays QUEUED and becomes eligible again after the
         # stale grace, while the remaining rows still get their publish attempt.
-        from celery.exceptions import OperationalError
-
         for rid, stage_value in resumable:
             stage = Stage(stage_value) if stage_value else None
             try:
@@ -400,7 +387,7 @@ def recovery_sweep() -> dict[str, int]:
                     exc_info=True,
                 )
     # Stranded embedding jobs (issue #130): a job committed QUEUED whose Celery
-    # dispatch evaporated (crash/broker down between the row commit and .delay())
+    # dispatch evaporated (crash/broker down between the row commit and publish)
     # holds the one-active slot forever, so the run stays unindexed and
     # `voxint embed backfill` skips it as already-active. Re-dispatch each by id
     # past the SAME staleness grace — no row mutation; the guarded queued→running
@@ -418,8 +405,6 @@ def recovery_sweep() -> dict[str, int]:
             session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
         )
     if stale_embedding_jobs:
-        from celery.exceptions import OperationalError
-
         for job_id in stale_embedding_jobs:
             try:
                 generate_segment_embeddings.apply_async(
@@ -432,6 +417,34 @@ def recovery_sweep() -> dict[str, int]:
                     job_id,
                     exc_info=True,
                 )
+    with factory() as session:
+        stale_asset_jobs = asset_jobs.stale_queued_job_ids(
+            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        )
+    for job_id in stale_asset_jobs:
+        try:
+            generate_run_asset.apply_async((str(job_id),), ignore_result=True)
+        except OperationalError:
+            logger.warning(
+                "run-asset recovery enqueue deferred (broker unavailable); "
+                "job %s stays QUEUED for a later sweep",
+                job_id,
+                exc_info=True,
+            )
+    with factory() as session:
+        stale_translation_jobs = translation_jobs.stale_queued_job_ids(
+            session, cutoff=cutoff, limit=STALE_EMBEDDING_REDISPATCH_LIMIT
+        )
+    for job_id in stale_translation_jobs:
+        try:
+            translate_run.apply_async((str(job_id),), ignore_result=True)
+        except OperationalError:
+            logger.warning(
+                "translation recovery enqueue deferred (broker unavailable); "
+                "job %s stays QUEUED for a later sweep",
+                job_id,
+                exc_info=True,
+            )
     # Generic stale-QUEUED recovery for plugin job lanes (issue #138): the same
     # oldest-first, bounded, no-mutation redispatch the embedding block above does
     # (issue #130), driven by each active plugin's JobLaneSpec. The embedding lane
@@ -442,11 +455,11 @@ def recovery_sweep() -> dict[str, int]:
         "stale_queued": len(stale_queued),
         "cancelled_claims_closed": len(cancelled_claims),
         "stale_embedding_jobs": len(stale_embedding_jobs),
+        "stale_asset_jobs": len(stale_asset_jobs),
+        "stale_translation_jobs": len(stale_translation_jobs),
     }
-    # Surface the plugin-lane count only when a plugin actually declares a lane, so
-    # an empty registry (the #138 dormant state) returns the exact pre-change
-    # four-key result — no new key for result consumers, logs, or monitoring to
-    # trip over. A converted lane (#140) adds the key when its lane exists.
+    # Surface the plugin-lane count only when a plugin actually declares a lane;
+    # built-in lane counts above are always present.
     if lanes:
         plugin_lane_counts = redispatch_stale_lane_jobs(
             lanes,
@@ -552,44 +565,18 @@ def media_reconcile() -> dict[str, int]:
     return summary.as_dict()
 
 
-def _publish_watch_run(run_id: uuid.UUID) -> bool:
-    """Publish a committed watch-sweep run, returning ``False`` (never raising) on a
-    broker outage so the durable QUEUED row is simply left for ``recovery_sweep``.
-
-    The worker must not import the API's ``_publish_or_defer``; this mirrors its
-    intent inline. Only kombu's ``OperationalError`` (every transport/connection
-    failure, re-exported by celery) is swallowed — a genuine publish bug still raises.
-    """
-    from celery.exceptions import OperationalError
-
-    # Watch submissions are fresh runs, so stage=None mechanically selects the
-    # default GPU lane through the same routing decision as every other publisher.
-    try:
-        pipeline_task_for_stage(None).apply_async((str(run_id),), ignore_result=True)
-    except OperationalError:
-        logger.warning(
-            "watch_sweep enqueue deferred (broker unavailable); run %s stays QUEUED "
-            "for the recovery sweep",
-            run_id,
-            exc_info=True,
-        )
-        return False
-    return True
-
-
 @app.task(name="voxint.watch_sweep")  # type: ignore[misc, untyped-decorator, unused-ignore]
 def watch_sweep() -> dict[str, Any]:
     """Auto-ingest new media from the operator's registered folders (issue #60).
 
     Thin wrapper: :func:`voxint.ingest.watch.sweep_watch_folders` owns the pass
     (effective-gate recheck, bounded scan, settle-filter, race-safe submit,
-    commit-before-publish, status persistence). ``_publish_watch_run`` is injected so
-    the broker-defer path stays here and the sweep logic stays broker-free and
-    directly testable.
+    commit-before-publish via :class:`~voxint.ingest.service.SubmissionResult`,
+    status persistence).
     """
     settings = get_settings()
     factory, _ = _runtime()
-    summary = sweep_watch_folders(factory, settings, publish=_publish_watch_run)
+    summary = sweep_watch_folders(factory, settings)
     logger.info("watch_sweep %s", summary.as_dict())
     return summary.as_dict()
 
@@ -634,7 +621,7 @@ def _autogenerate_run_assets(
             session.commit()
             job_ids = [str(job.id) for job in created]
         for job_id in job_ids:
-            generate_run_asset.delay(job_id)
+            generate_run_asset.apply_async((job_id,), ignore_result=True)
     except Exception:
         logger.exception("post-finalize run-asset enqueue failed for run %s", run_id)
 
@@ -685,7 +672,7 @@ def _autogenerate_translation(
             session.commit()
             job_id = str(job.id) if job is not None else None
         if job_id is not None:
-            translate_run.delay(job_id)
+            translate_run.apply_async((job_id,), ignore_result=True)
     except Exception:
         logger.exception("post-finalize translation enqueue failed for run %s", run_id)
 
@@ -736,7 +723,7 @@ def _autogenerate_segment_embeddings(
             session.commit()
             job_id = str(job.id) if job is not None else None
         if job_id is not None:
-            generate_segment_embeddings.delay(job_id)
+            generate_segment_embeddings.apply_async((job_id,), ignore_result=True)
     except Exception:
         logger.exception("post-finalize embedding enqueue failed for run %s", run_id)
 

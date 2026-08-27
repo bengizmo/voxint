@@ -68,7 +68,7 @@ def test_upload_freezes_against_picked_folder(
         session_factory, path="research", project_vocab=list(PROJECT_VOCAB)
     )
     with session_factory() as session:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=io.BytesIO(b"audio-bytes"),
             filename="clip.wav",
@@ -79,6 +79,7 @@ def test_upload_freezes_against_picked_folder(
             media_folder_id=folder_id,
         )
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         run_id, media_id = run.id, run.media_item_id
     with session_factory() as session:
         media = session.get(MediaItem, media_id)
@@ -98,7 +99,7 @@ def test_upload_default_is_global_baseline(
     """No folder pick ⇒ media_folder_id NULL and the pre-P2b global baseline."""
     settings = _make_settings(tmp_path)
     with session_factory() as session:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=io.BytesIO(b"audio-bytes"),
             filename="clip.wav",
@@ -108,6 +109,7 @@ def test_upload_default_is_global_baseline(
             settings=settings,
         )
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         run_id, media_id = run.id, run.media_item_id
     with session_factory() as session:
         assert session.get(MediaItem, media_id).media_folder_id is None  # type: ignore[union-attr]
@@ -126,7 +128,7 @@ def test_upload_replay_keeps_first_membership(
     sub = uuid.uuid4().hex
 
     with session_factory() as session:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=io.BytesIO(b"same-bytes"),
             filename="a.wav",
@@ -137,6 +139,7 @@ def test_upload_replay_keeps_first_membership(
             media_folder_id=first,
         )
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         original_run_id, media_id = run.id, run.media_item_id
 
     with session_factory() as session:
@@ -151,7 +154,7 @@ def test_upload_replay_keeps_first_membership(
             media_folder_id=second,  # a different pick — must be ignored on replay
         )
         session.commit()
-        assert replay.id == original_run_id  # no duplicate run
+        assert replay.run_id == original_run_id  # no duplicate run
 
     with session_factory() as session:
         assert session.get(MediaItem, media_id).media_folder_id == first  # type: ignore[union-attr]
@@ -165,7 +168,7 @@ def test_url_freezes_against_picked_folder(
         session_factory, path="urls", project_vocab=list(PROJECT_VOCAB)
     )
     with session_factory() as session:
-        run = submit_url(
+        result = submit_url(
             session,
             url="https://example.com/audio.mp3",
             submission_id=uuid.uuid4().hex,
@@ -173,6 +176,7 @@ def test_url_freezes_against_picked_folder(
             media_folder_id=folder_id,
         )
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         run_id, media_id = run.id, run.media_item_id
     with session_factory() as session:
         media = session.get(MediaItem, media_id)

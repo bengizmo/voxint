@@ -7,6 +7,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Ingest: SubmissionResult makes commit-before-publish visible** (Forgejo #7,
+  finding H5). All submit functions (`submit_upload`, `submit_url`,
+  `submit_media_item`, `submit_media_item_if_new`) now return a
+  `SubmissionResult` carrying `run_id` and a `publish()` method instead of a
+  bare `PipelineRun`. Callers commit, then call `result.publish()`. The three
+  duplicate publish-or-defer implementations (API deps, CLI, worker) are
+  consolidated into the single `publish()` method. The watch sweep no longer
+  needs an injected publish callback. `deps._publish_or_defer` is retained for
+  the requeue handler (which uses a stage parameter).
+- **Worker hardening: uniform broker fault tolerance** (Forgejo #8, finding M7).
+  Post-finalize autogeneration functions now use `.apply_async(ignore_result=True)`
+  instead of `.delay()`, and the recovery sweep redispatches stale QUEUED
+  run-asset and translation jobs alongside the existing embedding lane.
+- **Centralized config-resolution-version parsing** (Forgejo #8, finding M11).
+  The inline parsing in `worker/tasks.py` is now
+  `parse_config_resolution_version()` in `pipeline/stages/context.py`.
 - **Home feed: unresolved voice count on completed runs** (#249, epic #149).
   Run-completed events in the Home activity feed now show an amber "X voices
   need you" chip when unresolved speaker labels exist for that run.
