@@ -39,6 +39,8 @@ from voxint.api.csrf import CSRF_PLUGIN, verify_csrf_token
 from voxint.api.languages import language_label
 from voxint.api.presentation import (
     format_age,
+    format_clock_time,
+    format_compact_duration,
     format_duration,
     format_size,
     friendly_media_label,
@@ -330,6 +332,8 @@ templates.env.globals["friendly_media_label"] = friendly_media_label
 templates.env.globals["format_duration"] = format_duration
 templates.env.globals["format_size"] = format_size
 templates.env.globals["format_age"] = format_age
+templates.env.globals["format_clock_time"] = format_clock_time
+templates.env.globals["format_compact_duration"] = format_compact_duration
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
 templates.env.globals["language_label"] = language_label
