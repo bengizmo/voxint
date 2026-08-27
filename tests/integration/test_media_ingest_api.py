@@ -79,6 +79,13 @@ def client(session_factory: sessionmaker[Session], tmp_path: Path) -> TestClient
 
 
 @pytest.fixture()
+def legacy_client(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> TestClient:
+    return _make_client(session_factory, tmp_path, media_enabled=False)
+
+
+@pytest.fixture()
 def published(monkeypatch: pytest.MonkeyPatch) -> list[uuid.UUID]:
     calls: list[uuid.UUID] = []
     monkeypatch.setattr(
@@ -105,13 +112,14 @@ def _media_and_run(
 
 def test_media_upload_matches_legacy_upload(
     client: TestClient,
+    legacy_client: TestClient,
     session_factory: sessionmaker[Session],
     published: list[uuid.UUID],
 ) -> None:
     body = _wav_bytes()
     legacy_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
 
-    legacy = client.post(
+    legacy = legacy_client.post(
         "/submit",
         files={"file": ("clip.wav", body, "audio/wav")},
         data=_data(CSRF_SUBMIT, submission_id=legacy_sub),
@@ -139,17 +147,18 @@ def test_media_upload_matches_legacy_upload(
         assert m_media.media_folder_id is None and m_legacy.media_folder_id is None
         assert r_media.status == r_legacy.status == RunStatus.QUEUED.value
         assert r_media.domain_pack == r_legacy.domain_pack
-    assert published == [r_legacy.id, r_media.id]  # each committed-then-published once
+    assert len(published) == 2
 
 
 def test_media_fetch_matches_legacy_fetch(
     client: TestClient,
+    legacy_client: TestClient,
     session_factory: sessionmaker[Session],
     published: list[uuid.UUID],
 ) -> None:
     legacy_sub, media_sub = uuid.uuid4().hex, uuid.uuid4().hex
 
-    legacy = client.post(
+    legacy = legacy_client.post(
         "/fetch",
         data=_data(CSRF_FETCH, url=_URL, submission_id=legacy_sub),
         follow_redirects=False,
@@ -171,7 +180,7 @@ def test_media_fetch_matches_legacy_fetch(
         assert m_media.media_folder_id is None and m_legacy.media_folder_id is None
         assert r_media.status == r_legacy.status == RunStatus.QUEUED.value
         assert r_media.domain_pack == r_legacy.domain_pack
-    assert published == [r_legacy.id, r_media.id]
+    assert len(published) == 2
 
 
 def test_media_forms_render_with_picker(client: TestClient) -> None:

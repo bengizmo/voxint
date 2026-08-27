@@ -648,6 +648,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   gate, operator auth, CSRF verification, and registration order are pinned
   unchanged by the P0a characterization contracts plus a new
   registration-order golden added in this change.
+- **Legacy submit redirect when Media library is enabled** (#9, refactoring
+  batch 0F). When `console_media_enabled` is on, the `/runs` page replaces
+  its upload and URL-fetch forms with a banner linking to `/media`. POST
+  `/submit` and POST `/fetch` redirect to `/media` (303) instead of
+  processing the upload, so a direct POST or stale browser tab never
+  bypasses the banner.
 - **Requeue refuses archived runs** (#7, refactoring batch 0D M9). A
   `RunArchivedError` now fires before the FAILED status check in
   `requeue_failed_run`, so an archived run cannot be driven live from
