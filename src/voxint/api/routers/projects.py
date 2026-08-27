@@ -147,6 +147,7 @@ def _detail_context(
         "rules": detail.corrections or [],
         "action": f"/projects/{detail.id}/corrections",
         "csrfToken": corrections_token,
+        "inheriting": detail.corrections is None,
         "limits": {
             "maxRules": MAX_RULES_PER_PACK,
             "maxMatchChars": MAX_MATCH_CHARS,
