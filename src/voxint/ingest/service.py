@@ -125,8 +125,7 @@ class RunNotCancellableError(IngestError):
 
     def __init__(self, run_id: uuid.UUID, status: RunStatus) -> None:
         super().__init__(
-            f"run is {status.value}, only queued/running/awaiting_adjudication "
-            "runs can be cancelled"
+            "this run has already finished and can no longer be cancelled"
         )
         self.run_id = run_id
         self.status = status
