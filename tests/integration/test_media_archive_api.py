@@ -407,7 +407,7 @@ def test_archived_view_shows_only_archived_items(
     # The archived-only file still lists (media items are never hidden) but its
     # archived run is hidden, so it reads "Not processed yet".
     assert "active.wav" in active_view.text
-    assert "/media/archive" in active_view.text
+    assert "/media/trash" in active_view.text
     # The active view offers the archived-view toggle.
     assert "archived=1" in active_view.text
 
