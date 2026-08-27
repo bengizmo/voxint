@@ -79,6 +79,7 @@ from voxint.ingest import (
     EffectiveConfigPreview,
     RunNotArchivableError,
     RunNotFoundError,
+    SubmissionResult,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
@@ -518,7 +519,7 @@ def media_submit_upload(
     settings: Settings = request.app.state.settings
     folder_id = _resolve_picked_folder(session, media_folder_id)
     try:
-        run = submit_upload(
+        result = submit_upload(
             session,
             stream=file.file,
             filename=file.filename or "",
@@ -545,11 +546,10 @@ def media_submit_upload(
             status_code=409,
             detail="The selected settings folder was removed. Reload and try again.",
         ) from exc
-    run_id = run.id
     # Commit-before-publish: the durable QUEUED run must exist before the enqueue,
     # so a broker outage is non-fatal (the recovery sweep republishes).
     session.commit()
-    return _media_redirect(published=deps._publish_or_defer(run_id))
+    return _media_redirect(published=result.publish())
 
 
 @router.post("/media/fetch")
@@ -571,7 +571,7 @@ def media_fetch_url(
         raise HTTPException(status_code=403, detail="URL ingestion is disabled")
     folder_id = _resolve_picked_folder(session, media_folder_id)
     try:
-        run = submit_url(
+        result = submit_url(
             session,
             url=url,
             submission_id=submission_id,
@@ -593,9 +593,8 @@ def media_fetch_url(
             status_code=409,
             detail="The selected settings folder was removed. Reload and try again.",
         ) from exc
-    run_id = run.id
     session.commit()
-    return _media_redirect(published=deps._publish_or_defer(run_id))
+    return _media_redirect(published=result.publish())
 
 
 @router.post("/media/assign")
@@ -1053,7 +1052,7 @@ def media_rerun_confirm(
     by_id = {item_row.id: item_row for item_row in items}
 
     results: list[dict[str, Any]] = []
-    minted: list[uuid.UUID] = []
+    pending: list[SubmissionResult] = []
     for media_uuid in parsed:  # process + report in the operator's selection order
         media = by_id[media_uuid]
         label = friendly_media_label(None, media.source_path)
@@ -1078,7 +1077,7 @@ def media_rerun_confirm(
             )
             continue
         try:
-            run = submit_media_item(
+            submission = submit_media_item(
                 session, media.source_path, settings=settings, sidecar=sidecar
             )
         except DomainPackError as exc:
@@ -1095,8 +1094,8 @@ def media_rerun_confirm(
                 }
             )
             continue
-        minted.append(run.id)
-        results.append({"label": label, "status": "queued", "run_id": run.id})
+        pending.append(submission)
+        results.append({"label": label, "status": "queued", "run_id": submission.run_id})
 
     try:
         session.commit()
@@ -1111,7 +1110,7 @@ def media_rerun_confirm(
 
     # Commit-before-publish: the durable QUEUED runs exist, so a broker outage only
     # defers the enqueue (the recovery sweep republishes). Annotate each queued row.
-    published_ids = {run_id: deps._publish_or_defer(run_id) for run_id in minted}
+    published_ids = {s.run_id: s.publish() for s in pending}
     for result in results:
         if result["status"] == "queued":
             result["published"] = published_ids.get(result["run_id"], False)
@@ -1120,7 +1119,7 @@ def media_rerun_confirm(
         "request": request,
         "active_nav": "media",
         "results": results,
-        "queued": len(minted),
+        "queued": len(pending),
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
         "any_deferred": any(
             r["status"] == "queued" and not r.get("published") for r in results
