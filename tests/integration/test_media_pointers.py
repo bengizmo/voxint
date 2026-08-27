@@ -45,7 +45,9 @@ def test_home_add_media_points_at_media_when_enabled(
     client = _client(session_factory, tmp_path, media_enabled=True)
     home = client.get("/")
     assert home.status_code == 200
-    assert '<a class="btn-primary" href="/media">Add media</a>' in home.text
+    assert 'cb-btn-primary' in home.text
+    assert 'href="/media"' in home.text
+    assert "Add media" in home.text
 
 
 def test_home_add_media_points_at_runs_when_disabled(
@@ -54,7 +56,8 @@ def test_home_add_media_points_at_runs_when_disabled(
     client = _client(session_factory, tmp_path, media_enabled=False)
     home = client.get("/")
     assert home.status_code == 200
-    assert '<a class="btn-primary" href="/runs#add-media">Add media</a>' in home.text
+    assert 'cb-btn-primary' in home.text
+    assert 'href="/runs#add-media"' in home.text
 
 
 def test_sidebar_media_link_follows_flag(

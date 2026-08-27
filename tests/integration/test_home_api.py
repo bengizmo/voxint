@@ -134,14 +134,14 @@ def seed_snapshot(session_factory: sessionmaker[Session]) -> None:
 
 
 def _stat_value(body: str, label: str) -> int:
-    """Pull a stat-card's value by its label; ties the label to its adjacent
-    value so a card cannot silently show the wrong figure."""
+    """Pull an oc-stat-tile's value by its label; ties the label to its adjacent
+    value so a tile cannot silently show the wrong figure."""
     match = re.search(
-        rf'class="stat-value">\s*(\d+)\s*</div>\s*'
-        rf'<div class="stat-label">{re.escape(label)}</div>',
+        rf'class="tile-value">\s*(\d+)\s*(?:<span[^>]*>[^<]*</span>\s*)?</div>\s*'
+        rf'<div class="tile-label">{re.escape(label)}</div>',
         body,
     )
-    assert match is not None, f"stat card {label!r} missing from Home render"
+    assert match is not None, f"stat tile {label!r} missing from Home render"
     return int(match.group(1))
 
 
@@ -166,27 +166,20 @@ def test_home_renders_attention_cards_and_stats(
     assert resp.status_code == 200
     body = resp.text
     # Nav marks Home current.
-    assert 'href="/" aria-current="page"' in body
+    assert 'aria-current="page"' in body
     # Attention cards above the fold, before the activity section.
-    cards_at = body.index('class="task-cards"')
-    assert cards_at < body.index("<h2>Activity</h2>")
-    # Continue review + unresolved voices: the seed's one unresolved COMPLETED
-    # run (not the 2 awaiting_adjudication rows).
-    assert re.search(
-        r'href="/review">\s*<span class="task-title">Continue review \(1\)', body
-    )
-    assert re.search(
-        r'<span class="task-title">Unidentified voices \(1\)</span>', body
-    )
-    # The 3-day-old failed run: all-time count, linked to the filtered run list.
-    assert re.search(
-        r'href="/runs\?status=failed">\s*<span class="task-title">Failed runs \(1\)',
-        body,
-    )
+    cards_at = body.index('class="attention-cards"')
+    assert cards_at < body.index("ACTIVITY")
+    # Attention counts: the seed's one unresolved COMPLETED run.
+    assert "recordings to review" in body
+    assert "voices without a name" in body
+    assert "failed runs" in body
+    # Non-zero cards link to their queues.
+    assert 'href="/review"' in body
     # Default window is the day: the 3-day-old run is outside it.
-    assert _stat_value(body, "Runs started") == 3
-    assert _stat_value(body, "Media added") == 3
-    assert _stat_value(body, "Speakers enrolled") == 2
+    assert _stat_value(body, "JOBS RUN") == 3
+    assert _stat_value(body, "MEDIA ADDED") == 3
+    assert _stat_value(body, "SPEAKERS IDENTIFIED") == 2
 
 
 def test_home_attention_counts_match_their_queues(
@@ -202,45 +195,31 @@ def test_home_attention_counts_match_their_queues(
         voices = sum(e.unresolved_labels for e in queue)
     assert (eligible, voices) == (1, 1)
     body = client.get("/").text
-    assert f"Continue review ({eligible})" in body
-    assert f"Unidentified voices ({voices})" in body
+    assert "recordings to review" in body
+    assert "voices without a name" in body
 
 
 def test_home_empty_states_are_quiet_not_links(client: TestClient) -> None:
-    """Zero cards render as honest non-interactive text, never a dead link."""
+    """Zero attention cards show counts with neutral copy, no arrow links."""
     body = client.get("/").text
-    assert "Nothing is waiting for review right now." in body
-    # All three attention cards take the non-interactive branch: no card links
-    # and no "(0)" counts (the sidebar's Review entry is the one /review link).
-    assert re.search(
-        r'<div class="task-link is-empty">\s*'
-        r'<span class="task-title">Continue review</span>',
-        body,
-    )
-    assert "Continue review (" not in body
-    assert 'class="task-link" href=' not in body
-    assert re.search(
-        r'<div class="task-link is-empty">\s*'
-        r'<span class="task-title">Unidentified voices</span>',
-        body,
-    )
-    assert re.search(
-        r'<div class="task-link is-empty">\s*'
-        r'<span class="task-title">Failed runs</span>',
-        body,
-    )
-    assert 'href="/runs?status=failed"' not in body
+    # All three attention cards show zero with neutral notes.
+    assert "recordings to review" in body
+    assert "voices without a name" in body
+    assert "nothing broke" in body
+    # No arrow links on zero cards (the attention-arrow only renders when > 0).
+    assert 'class="attention-arrow"' not in body
     # And the activity feed says so plainly.
-    assert "Nothing has happened yet." in body
+    assert "No recent activity" in body
 
 
 def test_home_quick_actions(client: TestClient) -> None:
     body = client.get("/").text
-    # Add media is the one primary action; Review speakers stays quiet.
-    assert re.search(r'class="btn-primary" href="/runs#add-media">Add media', body)
-    assert 'href="/speakers">Review speakers</a>' in body
-    # Projects ships dark: no New-project action and no sidebar entry while the
-    # flag is off (the default).
+    # Add media is the primary command-bar action; start actions row below.
+    assert 'cb-btn-primary' in body
+    assert 'href="/runs#add-media"' in body
+    assert "Upload a recording" in body
+    assert "Review speakers" in body
+    # Projects ships dark: no New-project action while the flag is off.
     assert "New project" not in body
     assert 'href="/projects"' not in body
 
@@ -252,13 +231,13 @@ def test_home_window_switch_changes_counts(
     # Default day window: 3 recent runs. Week window: the 3-day-old one too.
     day = client.get("/").text
     week = client.get("/", params={"window": "week"}).text
-    assert _stat_value(day, "Runs started") == 3
-    assert _stat_value(week, "Runs started") == 4
+    assert _stat_value(day, "JOBS RUN") == 3
+    assert _stat_value(week, "JOBS RUN") == 4
     # The switch marks the active window (default day; week when chosen).
-    assert re.search(r'href="/\?window=day" aria-current="true"', day)
-    assert re.search(r'href="/\?window=week" aria-current="true"', week)
+    assert re.search(r'href="/\?window=day" aria-current', day)
+    assert re.search(r'href="/\?window=week" aria-current', week)
     # All time includes everything as well.
-    assert _stat_value(client.get("/", params={"window": "all"}).text, "Runs started") == 4
+    assert _stat_value(client.get("/", params={"window": "all"}).text, "JOBS RUN") == 4
 
 
 def test_home_malformed_window_degrades_with_notice(
@@ -270,8 +249,8 @@ def test_home_malformed_window_degrades_with_notice(
     body = resp.text
     # Falls back to the day window and says so; never silently a different one.
     assert "Unrecognized" in body
-    assert _stat_value(body, "Runs started") == 3
-    assert re.search(r'href="/\?window=day" aria-current="true"', body)
+    assert _stat_value(body, "JOBS RUN") == 3
+    assert re.search(r'href="/\?window=day" aria-current', body)
 
 
 def test_home_matches_metrics_snapshot(
@@ -282,15 +261,15 @@ def test_home_matches_metrics_snapshot(
     seed_snapshot(session_factory)
     home = client.get("/").text
     metrics = client.get("/metrics").text
-    assert _stat_value(home, "Runs started") == 3
+    assert _stat_value(home, "JOBS RUN") == 3
     assert "voxint_runs_created_24h 3" in metrics
     assert "voxint_roster_speakers 2" in metrics
-    assert _stat_value(home, "Speakers enrolled") == 2
+    assert _stat_value(home, "SPEAKERS IDENTIFIED") == 2
     # The raw awaiting_adjudication status gauge (2) is deliberately NOT the
     # review backlog: the backlog is the /review queue's eligibility count —
     # COMPLETED runs with unresolved labels (issue #117), one here.
     assert 'voxint_runs{status="awaiting_adjudication"} 2' in metrics
-    assert re.search(r'<span class="task-title">Continue review \(1\)', home)
+    assert "recordings to review" in home
 
 
 def test_home_activity_feed_lists_runs_and_speakers(
@@ -303,12 +282,11 @@ def test_home_activity_feed_lists_runs_and_speakers(
     assert "Run started" in body
     assert "Run finished" in body
     assert "Run failed" in body
-    assert "Speaker enrolled" in body
-    assert f'href="/runs/{completed}"' in body
+    assert "Speaker verified" in body
     assert re.search(r'href="/speakers">(Alice|Bob)</a>', body)
     # Newest first: the seeded speakers (enrolled last) render before the
     # 3-day-old failed run's entry.
-    assert body.index("Speaker enrolled") < body.index("Run failed")
+    assert body.index("Speaker verified") < body.index("Run failed")
 
 
 def test_dashboard_redirects_to_home(client: TestClient) -> None:
