@@ -16,6 +16,7 @@ CHIP_SEMANTICS: dict[str, str] = {
     "transcribing": "info",
     "needs you": "warn",
     "failed": "danger",
+    "active": "ok",
     "watched": "accent",
     "learned": "info",
     "unknown": "neutral",

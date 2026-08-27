@@ -460,8 +460,8 @@ def test_project_detail_renders_config_editors(
         pid = _make_project(session).id
         session.commit()
     html = client.get(f"/projects/{pid}").text
-    assert "Project vocabulary" in html
-    assert "Project corrections" in html
+    assert "VOCABULARY" in html
+    assert "AUTO-CORRECT RULES" in html
     assert 'data-island="corrections-editor"' in html
 
 
