@@ -8,8 +8,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ### Added
 - **Synthdetect M1 S6 pre-registration: spoof corpus and composite manifest**
   (#144). Frozen S6 protocol for the spoof side of the calibration corpus.
-  Four TTS generator families (Piper VITS and Coqui XTTS-v2 as
-  seen/calibration, ElevenLabs and Descript as unseen/eval-only) plus the
+  Four TTS generator families (Piper VITS and Chatterbox AR+flow-matching
+  as seen/calibration, ElevenLabs and Descript as unseen/eval-only) plus the
   ASVspoof 2021 DF subset as an eval-only benchmark anchor. v3 composite
   manifest schema with tagged-union provenance (synthesis or
   imported-benchmark per clip), component pinning, and partition-group-aware

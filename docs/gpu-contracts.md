@@ -2041,12 +2041,12 @@ generalization rather than checkpoint variation within one family.
 | Generator | Architecture | License | Venue | Role | Splits |
 |---|---|---|---|---|---|
 | Piper (VITS) | Hybrid VITS vocoder, CPU-only | MIT | Any node | **Seen** (calibration) | Inherits source parent's split |
-| Coqui XTTS-v2 | Autoregressive neural TTS with voice cloning | Apache-2.0 | GPU (beast RTX 5090 preferred) | **Seen** (calibration) | Inherits source parent's split |
+| Chatterbox (AR + flow-matching) | Autoregressive speech-token model + conditional flow-matching decoder, zero-shot voice cloning | MIT | GPU (RTX 3060 or better) | **Seen** (calibration) | Inherits source parent's split |
 | ElevenLabs | Proprietary cloud neural TTS | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
 | Descript | Overdub voice cloning | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
 | ASVspoof 2021 DF | 110 official attack systems, 4 vocoder families | ODbL-1.0 (data) | Existing subset (53,392 clips) | **Benchmark anchor** (eval-only) | v2 imported-benchmark, eval-only by schema |
 
-**Seen generators** (Piper + XTTS-v2) produce spoof clips from bona fide
+**Seen generators** (Piper + Chatterbox) produce spoof clips from bona fide
 parents across all three splits (calibration, eval, holdout). Their clips
 participate in Platt fitting (calibration split) and are visible to the
 operating-point selection. Seen-generator spoof clips inherit their source
@@ -2074,7 +2074,7 @@ degradation policy (one degraded chain per parent in the cohort freeze).
 
 **Text derivation.** Each TTS clip is synthesized from a transcript of its
 bona fide parent. The transcript source is the bona fide audio itself
-(passed through ASR or, for XTTS-v2 voice cloning, as the reference audio
+(passed through ASR or, for Chatterbox voice cloning, as the reference audio
 prompt). The exact text-source derivation is recorded per clip in
 `GeneratorProvenance.text_source`.
 
@@ -2087,7 +2087,7 @@ generator family are NOT treated as different generators for the
 unseen-generator-eval requirement.
 
 **Assignment rule for TTS clips.** A TTS spoof clip inherits its source
-parent's split. The seen generators (Piper, XTTS-v2) each produce one clip
+parent's split. The seen generators (Piper, Chatterbox) each produce one clip
 per eligible parent in every split. The unseen generator (ElevenLabs)
 produces one clip per eligible eval-split parent only. The `partition_group_id`
 field (new in v3) ties each TTS clip to its source parent, preventing the
@@ -2098,7 +2098,7 @@ observation per partition group) is applied in Platt fitting.
 **Provenance fields.** Each TTS spoof clip carries a full
 `GeneratorProvenance`:
 
-- `name`: generator family (`piper`, `coqui-xtts-v2`, `elevenlabs`, `descript`)
+- `name`: generator family (`piper`, `chatterbox`, `elevenlabs`, `descript`)
 - `version`: engine version string (pinned before generation)
 - `checkpoint_sha`: sha256 of the model weights file (None for cloud API)
 - `voice`: voice/speaker id used
@@ -2176,7 +2176,7 @@ subdirectories for each component:
 s6-composite-corpus/
   organic-bonafide/     # S5 bona fide clips (hardlinked from s5-corpus)
   tts-piper/            # Piper TTS spoof clips
-  tts-xtts/             # XTTS-v2 spoof clips
+  tts-chatterbox/       # Chatterbox spoof clips
   tts-elevenlabs/       # ElevenLabs spoof clips (eval-only)
   tts-descript/         # Descript spoof clips (eval-only)
   asvspoof-df/          # ASVspoof 2021 DF canonical subset (hardlinked)
