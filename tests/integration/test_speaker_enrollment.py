@@ -173,7 +173,7 @@ def test_label_without_eligible_turns_refused(
         # Overlap ratio 100% — ineligible under the default 20% gate.
         add_turn(session, run_id, 0, "S0", duration=8.0, overlap_seconds=8.0)
         session.commit()
-        with pytest.raises(EnrollmentError, match="no eligible"):
+        with pytest.raises(EnrollmentError, match="no speaker audio"):
             enroll_new_speaker(
                 session,
                 run_id=run_id,
@@ -310,7 +310,7 @@ def test_key_reused_from_non_assign_decision_refused(
             idempotency_key="k-mixed",
         )
         session.commit()
-        with pytest.raises(EnrollmentError, match="non-assign"):
+        with pytest.raises(EnrollmentError, match="conflicts with a previous"):
             enroll_new_speaker(
                 session,
                 run_id=run_id,

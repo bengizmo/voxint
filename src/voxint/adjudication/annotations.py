@@ -464,7 +464,8 @@ def _require_quote_within_cap(quote: str) -> None:
     DB CHECK violation surfaced as an uncaught IntegrityError."""
     if len(quote) > MAX_ANNOTATION_QUOTE_CHARS:
         raise AnnotationValidationError(
-            f"quote is {len(quote)} code points, exceeds {MAX_ANNOTATION_QUOTE_CHARS}"
+            f"the highlight text is too long ({len(quote)} characters,"
+            f" limit {MAX_ANNOTATION_QUOTE_CHARS})"
         )
 
 
@@ -657,7 +658,7 @@ def _normalize_note(note: str | None) -> str | None:
         return None
     if len(note) > MAX_ANNOTATION_NOTE_CHARS:
         raise AnnotationValidationError(
-            f"note is {len(note)} code points, exceeds {MAX_ANNOTATION_NOTE_CHARS}"
+            f"the note is too long ({len(note)} characters, limit {MAX_ANNOTATION_NOTE_CHARS})"
         )
     return note
 
@@ -1025,7 +1026,9 @@ def refresh_annotation(
         return row
 
     # text_range with a changed hash: the offsets no longer name the same text.
-    raise AnnotationStaleError("text-range anchor is stale; re-anchor to recover")
+    raise AnnotationStaleError(
+        "the transcript changed since this highlight was placed — refresh and re-anchor it"
+    )
 
 
 def soft_delete_annotation(
@@ -1090,7 +1093,7 @@ def _validate_tag_name(name: str) -> str:
         raise AnnotationValidationError("tag name is empty")
     if len(trimmed) > MAX_TAG_NAME_CHARS:
         raise AnnotationValidationError(
-            f"tag name is {len(trimmed)} code points, exceeds {MAX_TAG_NAME_CHARS}"
+            f"the tag name is too long ({len(trimmed)} characters, limit {MAX_TAG_NAME_CHARS})"
         )
     return trimmed
 
