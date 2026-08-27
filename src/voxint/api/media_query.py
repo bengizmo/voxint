@@ -12,6 +12,9 @@ Archived runs are excluded, matching the run listing and the Home feed, so a
 file whose only runs were archived reads as "not processed yet".
 """
 
+from __future__ import annotations
+
+import math
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -61,6 +64,115 @@ class MediaLibraryRow:
     latest_run_status: str | None
     latest_run_at: datetime | None
     trashed_at: datetime | None
+
+
+@dataclass(frozen=True)
+class FolderGroup:
+    """A registered folder and its media items, with aggregate stats.
+
+    Used by the R3 media overview to render expandable folder rows in the
+    grid table. Review counts let the template pick the right chip.
+    """
+
+    folder_id: uuid.UUID
+    folder_path: str
+    project_name: str | None
+    item_count: int
+    total_duration_seconds: float
+    failed_count: int
+    running_count: int
+    needs_review_count: int
+    completed_count: int
+    latest_date: datetime | None
+    items: list[MediaLibraryRow]
+
+
+@dataclass(frozen=True)
+class MediaSummary:
+    """Aggregate counts for the command-bar summary line."""
+
+    folder_count: int
+    file_count: int
+    total_hours: str
+
+
+def group_by_folder(
+    rows: list[MediaLibraryRow],
+) -> tuple[list[FolderGroup], list[MediaLibraryRow]]:
+    """Group library rows by folder, computing per-folder aggregates.
+
+    Returns ``(folder_groups, ungrouped)`` where ``ungrouped`` is media items
+    with no settings folder. Folder groups are sorted by path (case-insensitive).
+    """
+    by_folder: dict[uuid.UUID, list[MediaLibraryRow]] = {}
+    ungrouped: list[MediaLibraryRow] = []
+    for row in rows:
+        if row.media_folder_id is not None:
+            by_folder.setdefault(row.media_folder_id, []).append(row)
+        else:
+            ungrouped.append(row)
+
+    groups: list[FolderGroup] = []
+    for folder_id, items in by_folder.items():
+        first = items[0]
+        total_dur = sum(
+            r.duration_seconds for r in items
+            if r.duration_seconds is not None and math.isfinite(r.duration_seconds)
+        )
+        latest = max(
+            (r.added_at for r in items), default=None
+        )
+        groups.append(FolderGroup(
+            folder_id=folder_id,
+            folder_path=first.folder_path or "unknown",
+            project_name=first.project_name,
+            item_count=len(items),
+            total_duration_seconds=total_dur,
+            failed_count=sum(
+                1 for r in items if r.latest_run_status == "failed"
+            ),
+            running_count=sum(
+                1 for r in items
+                if r.latest_run_status in ("running", "queued")
+            ),
+            needs_review_count=sum(
+                1 for r in items
+                if r.latest_run_status == "awaiting_adjudication"
+            ),
+            completed_count=sum(
+                1 for r in items if r.latest_run_status == "completed"
+            ),
+            latest_date=latest,
+            items=items,
+        ))
+    groups.sort(key=lambda g: g.folder_path.lower())
+    return groups, ungrouped
+
+
+def media_summary(
+    folder_groups: list[FolderGroup],
+    ungrouped: list[MediaLibraryRow],
+) -> MediaSummary:
+    """Compute the command-bar summary: folder count, file count, total hours."""
+    folder_count = len(folder_groups)
+    file_count = sum(g.item_count for g in folder_groups) + len(ungrouped)
+    total_seconds = sum(g.total_duration_seconds for g in folder_groups) + sum(
+        r.duration_seconds for r in ungrouped
+        if r.duration_seconds is not None and math.isfinite(r.duration_seconds)
+    )
+    hours = total_seconds / 3600
+    if hours >= 10:
+        total_hours = f"{hours:.0f} hrs"
+    elif hours >= 1:
+        total_hours = f"{hours:.1f} hrs"
+    else:
+        minutes = total_seconds / 60
+        total_hours = f"{minutes:.0f} min"
+    return MediaSummary(
+        folder_count=folder_count,
+        file_count=file_count,
+        total_hours=total_hours,
+    )
 
 
 @dataclass(frozen=True)

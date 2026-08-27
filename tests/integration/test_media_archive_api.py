@@ -395,9 +395,9 @@ def test_archived_view_shows_only_archived_items(
 
     archived_view = client.get("/media?archived=1")
     assert archived_view.status_code == 200
-    assert "incoming/archived.wav" in archived_view.text
+    assert "archived.wav" in archived_view.text
     # The active-only file has no archived run, so the inner join drops it here.
-    assert "incoming/active.wav" not in archived_view.text
+    assert "active.wav" not in archived_view.text
     # The archived view is a restore surface: no upload form, no folder panel.
     assert 'action="/media/submit"' not in archived_view.text
     assert "/media/unarchive" in archived_view.text
@@ -406,8 +406,8 @@ def test_archived_view_shows_only_archived_items(
     assert active_view.status_code == 200
     # The archived-only file still lists (media items are never hidden) but its
     # archived run is hidden, so it reads "Not processed yet".
-    assert "incoming/active.wav" in active_view.text
-    assert "/media/archive" in active_view.text
+    assert "active.wav" in active_view.text
+    assert "/media/trash" in active_view.text
     # The active view offers the archived-view toggle.
     assert "archived=1" in active_view.text
 

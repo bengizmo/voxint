@@ -47,7 +47,9 @@ from voxint.api.media_query import (
     MEDIA_LIBRARY_LIMIT,
     SORT_LABELS,
     folder_options,
+    group_by_folder,
     media_library,
+    media_summary,
     sort_is_known,
 )
 from voxint.api.presentation import friendly_media_label
@@ -110,8 +112,8 @@ router = APIRouter(
 # The layout toggle: cards for scanning, a table for dense comparison. A ?view=
 # outside this set degrades to the default rather than 422-ing (the Home ?window=
 # convention), so a bookmarked value never breaks the page.
-_VIEWS: Final[tuple[str, ...]] = ("cards", "table")
-_DEFAULT_VIEW: Final[str] = "cards"
+_VIEWS: Final[tuple[str, ...]] = ("table", "cards")
+_DEFAULT_VIEW: Final[str] = "table"
 
 
 def _files(count: int) -> str:
@@ -368,6 +370,8 @@ def _library_context(
     rows = media_library(
         session, sort=selected_sort, archived=archived, trashed=trashed
     )
+    folder_groups, ungrouped_items = group_by_folder(rows)
+    summary = media_summary(folder_groups, ungrouped_items)
     secret = request.app.state.csrf_secret
     # The archive-view toggle target: the same sort/layout in the opposite view.
     # Active -> add ?archived=1; archived -> drop it (mirrors the /runs toggle).
@@ -395,6 +399,9 @@ def _library_context(
         "active_nav": "media",
         "now": datetime.now(UTC),
         "rows": rows,
+        "folder_groups": folder_groups,
+        "ungrouped_items": ungrouped_items,
+        "media_summary": summary,
         "sort": selected_sort,
         "sorts": SORT_LABELS,
         "view": selected_view,
