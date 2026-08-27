@@ -472,6 +472,23 @@ def _validate_resume_record(obj: Any, lineno: int) -> str:
         raise InferError(
             f"resume journal line {lineno} ({clip_id}): dropped_tail_samples must be int >= 0"
         )
+    ws = obj.get("window_scores")
+    if ws is not None and (
+        not isinstance(ws, list)
+        or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+            for v in ws
+        )
+    ):
+        raise InferError(
+            f"resume journal line {lineno} ({clip_id}): "
+            "window_scores must be a list of finite numbers"
+        )
+    if ws is not None and has_score and len(ws) != n_windows:
+        raise InferError(
+            f"resume journal line {lineno} ({clip_id}): "
+            f"window_scores length {len(ws)} != n_windows {n_windows}"
+        )
     return clip_id
 
 
@@ -630,6 +647,7 @@ class ClipOutcome:
     skip_reason: str | None
     n_windows: int
     dropped_tail_samples: int = 0
+    window_scores: tuple[float, ...] | None = None
 
     def as_record(self) -> dict[str, Any]:
         rec: dict[str, Any] = {"clip_id": self.clip_id, "n_windows": self.n_windows}
@@ -637,6 +655,8 @@ class ClipOutcome:
             rec["dropped_tail_samples"] = self.dropped_tail_samples
         if self.skip_reason is None:
             rec["raw_score"] = self.raw_score
+            if self.window_scores is not None:
+                rec["window_scores"] = list(self.window_scores)
         else:
             rec["skip_reason"] = self.skip_reason
         return rec
@@ -699,6 +719,7 @@ def score_clip(
         skip_reason=None,
         n_windows=len(plan.spans),
         dropped_tail_samples=plan.dropped_tail_samples,
+        window_scores=tuple(float(s) for s in window_scores),
     )
 
 

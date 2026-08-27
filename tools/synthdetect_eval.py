@@ -24,6 +24,9 @@ Subcommands:
   implementation parity and subset regression): max-abs score delta, rank
   correlation, decision agreement. Aggregate EER matching is NEVER accepted as
   equivalence evidence, so this reads scores per clip, not summary numbers.
+* ``verdict-windowing`` -- S5 windowing verdict: paired comparison of upstream vs
+  production windowing on bona fide clips. Reports per-clip score deltas, FPR at
+  a threshold sweep, per-stratum breakdown, and per-window analysis.
 * ``calibrate`` -- fit a Platt policy on RAW logits over the calibration split;
   the primary shipped threshold is at FPR 5% (FPR 1% is a noisy diagnostic from
   ~1000 bona fide clips), with a reliability curve + Brier score.
@@ -398,6 +401,7 @@ class ClipScore:
     raw_score: float | None
     skip_reason: str | None
     n_windows: int
+    window_scores: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -473,11 +477,24 @@ def _validate_result(raw: Any, lineno: int) -> ClipScore:
     n_windows = raw.get("n_windows", 0)
     if not isinstance(n_windows, int) or isinstance(n_windows, bool) or n_windows < 0:
         raise EvalError(f"journal line {lineno} ({clip_id}): n_windows must be an int >= 0")
+    ws_raw = raw.get("window_scores")
+    ws: tuple[float, ...] | None = None
+    if ws_raw is not None:
+        if not isinstance(ws_raw, list) or not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+            for v in ws_raw
+        ):
+            raise EvalError(
+                f"journal line {lineno} ({clip_id}): "
+                "window_scores must be a list of finite numbers"
+            )
+        ws = tuple(float(v) for v in ws_raw)
     return ClipScore(
         clip_id=clip_id,
         raw_score=float(raw_score) if raw_score is not None else None,
         skip_reason=skip_reason if skip_reason is not None else None,
         n_windows=n_windows,
+        window_scores=ws,
     )
 
 
@@ -716,6 +733,184 @@ def _rankdata(x: Any) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
+# `verdict-windowing` command (upstream vs production FPR stability)
+# --------------------------------------------------------------------------- #
+def _fpr_at_thresholds(
+    scores: np.ndarray, thresholds: np.ndarray,
+) -> np.ndarray:
+    """Bona fide FPR at each threshold: fraction scoring >= threshold."""
+    n = len(scores)
+    if n == 0:
+        return np.zeros_like(thresholds, dtype=float)
+    return np.array([float(np.sum(scores >= t)) / n for t in thresholds])
+
+
+def _percentile_thresholds(all_scores: np.ndarray) -> np.ndarray:
+    """Threshold sweep from the data: percentiles 50..99 plus 99.5 and 99.9."""
+    pcts = [*list(range(50, 100, 5)), 99, 99.5, 99.9]
+    return np.unique(np.percentile(all_scores, pcts))
+
+
+def compare_windowing(
+    upstream: Journal,
+    production: Journal,
+    *,
+    manifest: Manifest | None = None,
+) -> dict[str, Any]:
+    """Windowing verdict: does production windowing raise bona fide FPR?
+
+    The two journals must share model_id, inference_space, and manifest_sha256
+    but differ in windowing mode. With bona fide-only data, FPR is the fraction
+    of bona fide clips scoring above a threshold (higher = more synthetic).
+    Per-window scores, if present, are summarized per clip.
+    """
+    for key in ("model_id", "inference_space", "manifest_sha256"):
+        if upstream.header.get(key) != production.header.get(key):
+            raise EvalError(
+                f"verdict-windowing: journals disagree on header.{key} "
+                f"({upstream.header.get(key)!r} vs {production.header.get(key)!r})"
+            )
+    u_wind = upstream.header.get("windowing", {})
+    p_wind = production.header.get("windowing", {})
+    u_mode = u_wind.get("mode", "unknown")
+    p_mode = p_wind.get("mode", "unknown")
+    if u_mode != "upstream" or p_mode != "production":
+        raise EvalError(
+            f"verdict-windowing: expected modes 'upstream' and 'production', "
+            f"got {u_mode!r} and {p_mode!r}"
+        )
+    if u_wind.get("pooling") != p_wind.get("pooling"):
+        raise EvalError(
+            f"verdict-windowing: journals disagree on pooling policy "
+            f"({u_wind.get('pooling')!r} vs {p_wind.get('pooling')!r})"
+        )
+
+    u_by = {r.clip_id: r for r in upstream.results if r.raw_score is not None}
+    p_by = {r.clip_id: r for r in production.results if r.raw_score is not None}
+    common = sorted(set(u_by) & set(p_by))
+    if not common:
+        raise EvalError("verdict-windowing: no clips scored in both journals")
+
+    u_scores = np.array([u_by[c].raw_score for c in common], dtype=float)
+    p_scores = np.array([p_by[c].raw_score for c in common], dtype=float)
+    delta = p_scores - u_scores
+
+    all_scores = np.concatenate([u_scores, p_scores])
+    thresholds = _percentile_thresholds(all_scores)
+    u_fpr = _fpr_at_thresholds(u_scores, thresholds)
+    p_fpr = _fpr_at_thresholds(p_scores, thresholds)
+
+    fpr_sweep = [
+        {
+            "threshold": float(t),
+            "upstream_fpr": float(uf),
+            "production_fpr": float(pf),
+            "delta_fpr": float(pf - uf),
+        }
+        for t, uf, pf in zip(thresholds, u_fpr, p_fpr, strict=True)
+    ]
+
+    u_n_win = np.array([u_by[c].n_windows for c in common], dtype=int)
+    p_n_win = np.array([p_by[c].n_windows for c in common], dtype=int)
+
+    n_prod_higher = int(np.sum(delta > 0))
+    n_prod_lower = int(np.sum(delta < 0))
+    n_tied = int(np.sum(delta == 0))
+
+    result: dict[str, Any] = {
+        "kind": "synthdetect_windowing_verdict",
+        "schema_version": METRICS_SCHEMA_VERSION,
+        "model_id": upstream.header["model_id"],
+        "inference_space": upstream.header["inference_space"],
+        "manifest_sha256": upstream.header["manifest_sha256"],
+        "upstream_mode": u_mode,
+        "production_mode": p_mode,
+        "n_common": len(common),
+        "n_scored_upstream_only": len(set(u_by) - set(p_by)),
+        "n_scored_production_only": len(set(p_by) - set(u_by)),
+        "score_delta": {
+            "mean": float(np.mean(delta)),
+            "median": float(np.median(delta)),
+            "std": float(np.std(delta)),
+            "max_abs": float(np.max(np.abs(delta))),
+            "min": float(np.min(delta)),
+            "max": float(np.max(delta)),
+        },
+        "direction": {
+            "n_production_higher": n_prod_higher,
+            "n_production_lower": n_prod_lower,
+            "n_tied": n_tied,
+        },
+        "upstream_summary": {
+            "mean": float(np.mean(u_scores)),
+            "std": float(np.std(u_scores)),
+            "median": float(np.median(u_scores)),
+            "p5": float(np.percentile(u_scores, 5)),
+            "p95": float(np.percentile(u_scores, 95)),
+        },
+        "production_summary": {
+            "mean": float(np.mean(p_scores)),
+            "std": float(np.std(p_scores)),
+            "median": float(np.median(p_scores)),
+            "p5": float(np.percentile(p_scores, 5)),
+            "p95": float(np.percentile(p_scores, 95)),
+        },
+        "windows": {
+            "upstream_mean_n": float(np.mean(u_n_win)),
+            "production_mean_n": float(np.mean(p_n_win)),
+            "upstream_max_n": int(np.max(u_n_win)),
+            "production_max_n": int(np.max(p_n_win)),
+        },
+        "fpr_sweep": fpr_sweep,
+    }
+
+    prod_spreads = []
+    for cid in common:
+        ws = p_by[cid].window_scores
+        if ws is not None and len(ws) > 1:
+            prod_spreads.append(max(ws) - min(ws))
+    if prod_spreads:
+        sa = np.array(prod_spreads, dtype=float)
+        result["per_window_spread"] = {
+            "n_multi_window_clips": len(prod_spreads),
+            "mean_spread": float(np.mean(sa)),
+            "median_spread": float(np.median(sa)),
+            "max_spread": float(np.max(sa)),
+        }
+
+    if manifest is not None:
+        by_id = {c.clip_id: c for c in manifest.clips}
+        strata_map: dict[str, list[int]] = {}
+        for i, cid in enumerate(common):
+            entry = by_id.get(cid)
+            if entry is None:
+                raise EvalError(
+                    f"verdict-windowing: common clip {cid!r} not in the supplied manifest"
+                )
+            strata_map.setdefault(entry.stratum, []).append(i)
+        per_stratum: dict[str, Any] = {}
+        for stratum in sorted(strata_map):
+            idx = np.array(strata_map[stratum])
+            sd = delta[idx]
+            su = u_scores[idx]
+            sp = p_scores[idx]
+            per_stratum[stratum] = {
+                "n": len(idx),
+                "mean_delta": float(np.mean(sd)),
+                "median_delta": float(np.median(sd)),
+                "std_delta": float(np.std(sd)),
+                "max_abs_delta": float(np.max(np.abs(sd))),
+                "upstream_mean": float(np.mean(su)),
+                "production_mean": float(np.mean(sp)),
+                "n_production_higher": int(np.sum(sd > 0)),
+                "n_production_lower": int(np.sum(sd < 0)),
+            }
+        result["per_stratum"] = per_stratum
+
+    return result
+
+
+# --------------------------------------------------------------------------- #
 # `calibrate` command (Platt on raw logits over the calibration split)
 # --------------------------------------------------------------------------- #
 def calibrate_policy(
@@ -879,6 +1074,17 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verdict_windowing(args: argparse.Namespace) -> int:
+    upstream = _read_journal(args.upstream)
+    production = _read_journal(args.production)
+    manifest = None
+    if args.manifest:
+        manifest = _bind_manifest(upstream, args.manifest)
+    report = compare_windowing(upstream, production, manifest=manifest)
+    _write(args.out, report)
+    return 0
+
+
 def cmd_calibrate(args: argparse.Namespace) -> int:
     journal = _read_journal(args.journal)
     manifest = _bind_manifest(journal, args.manifest)
@@ -910,6 +1116,18 @@ def main(argv: list[str] | None = None) -> int:
     p_compare.add_argument("--decision-threshold", type=float, default=0.0)
     p_compare.add_argument("--out", default=None)
     p_compare.set_defaults(func=cmd_compare)
+
+    p_vw = sub.add_parser(
+        "verdict-windowing",
+        help="compare upstream vs production windowing FPR on bona fide clips",
+    )
+    p_vw.add_argument("--upstream", required=True, help="journal scored with --windowing upstream")
+    p_vw.add_argument(
+        "--production", required=True, help="journal scored with --windowing production",
+    )
+    p_vw.add_argument("--manifest", default=None, help="corpus manifest for per-stratum breakdown")
+    p_vw.add_argument("--out", default=None)
+    p_vw.set_defaults(func=cmd_verdict_windowing)
 
     p_cal = sub.add_parser("calibrate", help="fit a Platt policy on the calibration split")
     p_cal.add_argument("--journal", required=True)
