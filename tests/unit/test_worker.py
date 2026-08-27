@@ -185,8 +185,8 @@ def test_gc_sweep_task_noops_when_disabled(monkeypatch) -> None:  # type: ignore
 
 
 def test_watch_sweep_task_delegates_to_sweep(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    # The task is a thin wrapper: it hands the process session factory and the
-    # broker-defer publisher to sweep_watch_folders and returns its summary dict.
+    # The task is a thin wrapper: it hands the process session factory to
+    # sweep_watch_folders and returns its summary dict.
     import voxint.worker.tasks as tasks_mod
     from voxint.ingest.watch import WatchSweepSummary
 
@@ -195,9 +195,8 @@ def test_watch_sweep_task_delegates_to_sweep(monkeypatch) -> None:  # type: igno
     monkeypatch.setattr(tasks_mod, "_runtime", lambda: (sentinel_factory, None))
     captured: dict[str, object] = {}
 
-    def fake_sweep(factory, settings, *, publish):  # type: ignore[no-untyped-def]
+    def fake_sweep(factory, settings):  # type: ignore[no-untyped-def]
         captured["factory"] = factory
-        captured["publish"] = publish
         return WatchSweepSummary(picked_up=2, already_known=1)
 
     monkeypatch.setattr(tasks_mod, "sweep_watch_folders", fake_sweep)
@@ -205,29 +204,6 @@ def test_watch_sweep_task_delegates_to_sweep(monkeypatch) -> None:  # type: igno
     result = tasks_mod.watch_sweep()
     assert result == WatchSweepSummary(picked_up=2, already_known=1).as_dict()
     assert captured["factory"] is sentinel_factory
-    assert captured["publish"] is tasks_mod._publish_watch_run
-
-
-def test_publish_watch_run_defers_on_broker_outage(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    import uuid
-
-    from celery.exceptions import OperationalError
-
-    import voxint.worker.tasks as tasks_mod
-
-    def boom(args, **kwargs):  # type: ignore[no-untyped-def]
-        raise OperationalError("broker down")
-
-    monkeypatch.setattr(tasks_mod.run_pipeline, "apply_async", boom)
-    assert tasks_mod._publish_watch_run(uuid.uuid4()) is False  # swallowed → deferred
-
-    calls: list[tuple[str, ...]] = []
-    monkeypatch.setattr(
-        tasks_mod.run_pipeline, "apply_async", lambda args, **kw: calls.append(args)
-    )
-    rid = uuid.uuid4()
-    assert tasks_mod._publish_watch_run(rid) is True
-    assert calls == [(str(rid),)]
 
 
 def test_watch_sweep_beat_entry_is_unconditional() -> None:

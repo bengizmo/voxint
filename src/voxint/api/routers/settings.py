@@ -21,13 +21,15 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.responses import RedirectResponse
 
 from voxint.api import settings_view
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
+from voxint.api.host_metrics import HostMetricsSnapshot, collect_host_metrics_or_empty
 from voxint.api.languages import LANGUAGE_NAMES
 from voxint.api.resource_status import (
     ResourceSnapshot,
@@ -350,9 +352,7 @@ def _llm_disable_strand_error(row: AppSettings | None, settings: Settings) -> st
 # The folder browser and the Settings "Media folders" section register folders
 # through the shared media_folders write service (issue #153): it serializes every
 # mutation on a Postgres advisory lock, refuses overlapping (nested) registrations,
-# and enforces the folder cap. The legacy app_settings.media_folders /
-# folder_domain_packs columns are no longer written — they remain as a one-release
-# rollback/audit input the P2c drop migration removes.
+# and enforces the folder cap.
 
 
 def _apply_folder_mutation(
@@ -832,6 +832,7 @@ def _build_components(
                 "state_text": "running",
                 "action_url": None,
                 "action_label": None,
+                "action_style": None,
             })
             continue
         check = by_name.get(key)
@@ -844,31 +845,54 @@ def _build_components(
             state_text = f"running · {check['detail']}" if check["detail"] else "running"
         elif key == "llm endpoint" and not llm_enabled:
             dot = "off"
-            state_text = "off"
+            state_text = "off -- used for polish & profiles"
         else:
             dot = "warn"
             state_text = check["detail"] or state
         action_url: str | None = None
         action_label: str | None = None
+        action_style: str | None = None
         if key == "llm endpoint" and dot == "off":
             action_url = "/settings#llm"
             action_label = "Turn on"
+            action_style = "primary"
         rows.append({
             "label": label,
             "dot": dot,
             "state_text": state_text,
             "action_url": action_url,
             "action_label": action_label,
+            "action_style": action_style,
         })
     return rows
 
 
 def _build_gauges(
     snapshot: ResourceSnapshot,
+    host: HostMetricsSnapshot,
 ) -> list[dict[str, Any]]:
-    """Build the hardware gauge rows from the resource snapshot."""
+    """Build the hardware gauge rows from resource and host snapshots."""
 
     gauges: list[dict[str, Any]] = []
+    if host.cpu_percent is not None:
+        gauges.append({
+            "label": "Processor",
+            "value": f"{host.cpu_percent}%",
+            "percent": host.cpu_percent,
+        })
+    if (
+        host.memory_used_bytes is not None
+        and host.memory_total_bytes is not None
+        and host.memory_total_bytes > 0
+    ):
+        used_gb = host.memory_used_bytes / (1024**3)
+        total_gb = host.memory_total_bytes / (1024**3)
+        pct = round(100 * host.memory_used_bytes / host.memory_total_bytes)
+        gauges.append({
+            "label": "Memory",
+            "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
+            "percent": pct,
+        })
     for gpu in snapshot.gpus:
         if gpu.utilization_percent is not None:
             gauges.append({
@@ -876,8 +900,8 @@ def _build_gauges(
                 "value": f"{gpu.utilization_percent}%",
                 "percent": gpu.utilization_percent,
             })
-        pct = vram_percent(gpu.vram_used_bytes, gpu.vram_total_bytes)
-        if pct is not None:
+        vram_pct = vram_percent(gpu.vram_used_bytes, gpu.vram_total_bytes)
+        if vram_pct is not None:
             assert gpu.vram_used_bytes is not None
             assert gpu.vram_total_bytes is not None
             used_gb = gpu.vram_used_bytes / (1024**3)
@@ -885,17 +909,39 @@ def _build_gauges(
             gauges.append({
                 "label": "Graphics memory",
                 "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
-                "percent": pct,
+                "percent": vram_pct,
             })
+    if (
+        host.disk_used_bytes is not None
+        and host.disk_total_bytes is not None
+        and host.disk_total_bytes > 0
+    ):
+        used_gb = host.disk_used_bytes / (1024**3)
+        total_gb = host.disk_total_bytes / (1024**3)
+        pct = round(100 * host.disk_used_bytes / host.disk_total_bytes)
+        gauges.append({
+            "label": "Disk (media)",
+            "value": f"{used_gb:.0f} / {total_gb:.0f} GB",
+            "percent": pct,
+        })
     return gauges
 
 
-def _install_summary(settings: Settings) -> str:
+def _install_summary(settings: Settings, snapshot: ResourceSnapshot) -> str:
     """One-line install summary for the status banner."""
     import voxint
 
     kind = settings_view.install_kind()
     parts = [f"{kind} install" if kind != "unknown" else "Install type unknown"]
+    if settings.compute_tier == "cpu":
+        parts.append("GPU acceleration off")
+    elif snapshot.gpus:
+        gpu = snapshot.gpus[0]
+        if gpu.vram_total_bytes is not None:
+            total_gb = round(gpu.vram_total_bytes / (1024**3))
+            parts.append(f"GPU acceleration on ({total_gb} GB)")
+        else:
+            parts.append("GPU acceleration on")
     parts.append(f"version {voxint.__version__}")
     return " · ".join(parts)
 
@@ -1365,10 +1411,10 @@ def setup_scan_confirm(
     # #11) aborts the batch with a plain-language 422 rather than a raw 500 — no
     # run is committed (the commit is a single call below), so nothing is stranded.
     try:
-        run_ids = [
-            run.id
+        submissions = [
+            sub
             for path in result.candidates
-            if (run := submit_media_item_if_new(session, path)) is not None
+            if (sub := submit_media_item_if_new(session, path)) is not None
         ]
     except DomainPackError as exc:
         raise HTTPException(
@@ -1379,7 +1425,7 @@ def setup_scan_confirm(
     session.commit()
     # After the durable QUEUED rows exist, publish each. A broker outage leaves
     # them QUEUED for the recovery sweep — never roll back a published batch.
-    published = sum(deps._publish_or_defer(run_id) for run_id in run_ids)
+    published = sum(s.publish() for s in submissions)
     confirmed = ScanResult(
         candidates=[],
         inspected=result.inspected,
@@ -1394,7 +1440,7 @@ def setup_scan_confirm(
             {
                 "request": request,
                 "result": confirmed,
-                "queued": len(run_ids),
+                "queued": len(submissions),
                 "published": published,
                 "csrf_setup": mint_csrf_token(request.app.state.csrf_secret, CSRF_SETUP),
             },
@@ -1979,13 +2025,19 @@ def _app_settings_or_none(session: Session) -> AppSettings | None:
         return None
 
 
+@router.get("/settings/features", name="settings_features")
+def settings_features_page(request: Request, operator: OperatorDep) -> Response:
+    return RedirectResponse("/settings#features", status_code=303)
+
+
 @router.get("/settings/status", name="settings_status")
 def settings_status_page(
     request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
     settings: Settings = request.app.state.settings
     snapshot = collect_resource_status_or_empty(settings)
-    gauges = _build_gauges(snapshot)
+    host = collect_host_metrics_or_empty(settings.media_root)
+    gauges = _build_gauges(snapshot, host)
     strip = build_resource_strip(snapshot)
     warnings = list(strip.warnings)
     # The hardware gauges poll this route every 15s via htmx. Answer the poll
@@ -2009,7 +2061,7 @@ def settings_status_page(
     context = _sub_page_context(
         request,
         overall_ok=overall_ok,
-        install_summary=_install_summary(settings),
+        install_summary=_install_summary(settings, snapshot),
         components=components,
         gauges=gauges,
         gauge_note=None,
@@ -2575,4 +2627,3 @@ def tutorial_replay(
     clear_tutorial_completion(session)
     session.commit()
     return RedirectResponse(f"/runs/{run_id}?tutorial=run", status_code=303)
-

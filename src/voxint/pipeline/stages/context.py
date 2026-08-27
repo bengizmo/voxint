@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -37,6 +38,27 @@ from voxint.pipeline.engine import StageFn
 from voxint.speakers.matching import MatchingGates, gates_from_settings
 
 logger = logging.getLogger(__name__)
+
+
+def parse_config_resolution_version(pack_snapshot: dict[str, Any] | None) -> int:
+    """Extract the config-resolution version from a domain-pack snapshot.
+
+    NULL snapshots, pre-#153 rows, and malformed metadata use the version-1
+    live-union path.
+    """
+    if not isinstance(pack_snapshot, dict):
+        return 1
+    raw = pack_snapshot.get("config_resolution_version", 1)
+    try:
+        version: int = int(raw)
+        return version
+    except (TypeError, ValueError, OverflowError):
+        logger.warning(
+            "malformed config_resolution_version %r; falling back to "
+            "live-union config resolution",
+            raw,
+        )
+        return 1
 
 
 class StageDataError(Exception):

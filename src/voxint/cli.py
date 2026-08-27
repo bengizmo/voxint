@@ -170,12 +170,13 @@ def _submit(args: argparse.Namespace) -> int:
         factory = build_session_factory(engine)
         try:
             with session_scope(factory) as session:
-                run_id = submit_media_item(
+                result = submit_media_item(
                     session,
                     str(relative),
                     diarization_max_speakers=args.max_speakers,
                     diarization_num_speakers=args.num_speakers,
-                ).id
+                )
+                run_id = result.run_id
         except DomainPackError as exc:
             # Freeze-time domain-pack collision (issue #84) / unresolvable pack
             # (issue #11): fail honestly (exit 2) with a plain-language message
@@ -191,12 +192,18 @@ def _submit(args: argparse.Namespace) -> int:
         print(run_id)
         # Publish AFTER the durable commit and OUTSIDE its transaction; a broker
         # outage degrades cleanly (run stays QUEUED for the recovery sweep).
-        published = _publish_or_defer(run_id)
+        published = result.publish()
+        if not published:
+            print(
+                f"warning: broker unavailable; run {run_id} stays QUEUED for "
+                "the recovery sweep to re-enqueue",
+                file=sys.stderr,
+            )
         if args.wait:
             if not published:
                 print(
-                    "note: enqueue deferred (broker unavailable); polling will "
-                    "wait until the recovery sweep re-enqueues the run",
+                    "note: polling will wait until the recovery sweep "
+                    "re-enqueues the run",
                     file=sys.stderr,
                 )
             try:
@@ -457,7 +464,8 @@ def _fetch(args: argparse.Namespace) -> int:
             if not resolve_effective_ytdlp_enabled(get_app_settings(session), settings):
                 print("error: URL ingestion is disabled (ytdlp_enabled is off)")
                 return 2
-            run_id = submit_url(session, url=url, submission_id=submission_id).id
+            result = submit_url(session, url=url, submission_id=submission_id)
+            run_id = result.run_id
     except (UrlValidationError, UploadValidationError, UploadConflictError) as exc:
         print(f"error: {exc}")
         return 2
@@ -480,7 +488,12 @@ def _fetch(args: argparse.Namespace) -> int:
     # Print the id BEFORE publishing so a broker outage never costs the operator
     # the run id (the durable QUEUED run already exists); publish degrades cleanly.
     print(run_id)
-    _publish_or_defer(run_id)
+    if not result.publish():
+        print(
+            f"warning: broker unavailable; run {run_id} stays QUEUED for the "
+            "recovery sweep to re-enqueue",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -910,78 +923,6 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
         for source_path in result.skipped_missing:
             print(f"  - {source_path}")
     return 0
-
-
-def _media_folders_preflight(args: argparse.Namespace) -> int:
-    """Report the folder-migration ambiguities an operator must reconcile (#153).
-
-    Read-only. Reproduces the checks the P2a migration runs before it moves the
-    ``app_settings`` folder list into ``media_folders`` rows: nested/overlapping
-    registrations, folder-pack keys with no matching folder, registered folders
-    whose directory is gone, and — the condition the migration aborts on — any
-    media file whose effective domain pack would change once membership is a flat
-    folder relation. Exit 0 when nothing blocks the cutover, 1 when it does, 2 on
-    a settings/DB configuration error.
-    """
-    del args
-    from sqlalchemy import select
-
-    from voxint.app_settings import get_app_settings
-    from voxint.config import SettingsError, get_settings
-    from voxint.db.models import MediaItem
-    from voxint.db.session import build_session_factory
-    from voxint.media.folders import build_preflight_report
-
-    try:
-        settings = get_settings()
-    except SettingsError as exc:
-        print(f"error: {exc}")
-        return 2
-
-    engine, code = _engine_or_report()
-    if engine is None:
-        return code
-    try:
-        with build_session_factory(engine)() as session:
-            row = get_app_settings(session)
-            folders = list(row.media_folders) if row and row.media_folders else []
-            packs = dict(row.folder_domain_packs) if row and row.folder_domain_packs else {}
-            source_paths = list(session.scalars(select(MediaItem.source_path)).all())
-    finally:
-        engine.dispose()
-
-    root = settings.media_root.resolve()
-    missing = [f for f in folders if not (root / f).is_dir()]
-    report = build_preflight_report(
-        folders=folders,
-        folder_domain_packs=packs,
-        source_paths=source_paths,
-        missing_dirs=missing,
-    )
-
-    if not folders:
-        print("no registered media folders — nothing to migrate")
-        return 0
-    print(f"checked {len(folders)} registered folder(s) against {len(source_paths)} media item(s)")
-    for parent, child in report.nested:
-        print(f"  nested: {child!r} sits inside registered folder {parent!r}")
-    for key in report.orphan_pack_keys:
-        print(f"  orphan pack: {key!r} has a domain pack but is not a registered folder")
-    for folder in report.missing_dirs:
-        print(f"  missing directory (non-blocking): {folder!r}")
-    for div in report.pack_divergences:
-        print(
-            f"  pack change: {div.source_path!r} resolves to {div.old_pack!r} today"
-            f" but would resolve to {div.new_pack!r} after the cutover"
-        )
-    if report.ok:
-        print("ok — the folder migration will preserve every run's effective domain pack")
-        return 0
-    print(
-        "reconcile the folders above (register only the parent or only the child, and"
-        " assign each folder its own pack) before upgrading"
-    )
-    return 1
 
 
 def _serve(args: argparse.Namespace) -> int:
@@ -1638,18 +1579,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="compute sha256 for media rows missing it (integrity aid; idempotent)",
     )
     media_bf_p.set_defaults(fn=_media_backfill_hashes)
-    media_folders_p = media_sub.add_parser(
-        "folders", help="registered media-folder maintenance"
-    )
-    media_folders_sub = media_folders_p.add_subparsers(
-        dest="media_folders_command", required=True
-    )
-    media_folders_preflight_p = media_folders_sub.add_parser(
-        "preflight",
-        help="report folder-migration ambiguities before a P2a upgrade (#153)",
-    )
-    media_folders_preflight_p.set_defaults(fn=_media_folders_preflight)
-
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
     seed_p = tutorial_sub.add_parser(

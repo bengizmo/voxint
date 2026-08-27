@@ -56,6 +56,10 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[tuple[uuid.UUID, Stage | 
         calls.append((run_id, stage))
 
     monkeypatch.setattr("voxint.api.routers.deps._publish_run", capture)
+
+    from voxint.ingest.service import SubmissionResult
+
+    monkeypatch.setattr(SubmissionResult, "publish", lambda self: True)
     return calls
 
 
@@ -82,7 +86,7 @@ def _make_failed_run(
 ) -> tuple[uuid.UUID, int]:
     """Seed a FAILED run at ``stage``; return its id and current revision."""
     with session_factory() as session:
-        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").id
+        run_id = submit_media_item(session, f"incoming/{uuid.uuid4()}.wav").run_id
         session.commit()
         failed = _drive_to_failed(session, run_id, stage)
     return run_id, failed.revision
@@ -182,8 +186,9 @@ def test_requeue_non_failed_run_conflicts(
 ) -> None:
     # A QUEUED run carries a real revision but is not requeuable → 409, not 5xx.
     with session_factory() as session:
-        run = submit_media_item(session, "incoming/queued.wav")
+        result = submit_media_item(session, "incoming/queued.wav")
         session.commit()
+        run = session.get(PipelineRun, result.run_id)
         run_id, revision = run.id, run.revision
 
     resp = client.post(
@@ -315,7 +320,7 @@ def test_no_requeue_button_for_queued_run(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/notfailed.wav").id
+        run_id = submit_media_item(session, "incoming/notfailed.wav").run_id
         session.commit()
     body = client.get(f"/runs/{run_id}").text
     assert "/requeue" not in body

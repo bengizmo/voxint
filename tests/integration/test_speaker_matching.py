@@ -2,6 +2,7 @@
 
 import math
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -42,6 +43,7 @@ from voxint.speakers.matching import (
     ProposalError,
     confidence_from_similarity,
     evaluate_run,
+    find_possible_duplicates,
     match_speakers,
     replace_run_match_candidates,
     replace_run_proposals,
@@ -818,3 +820,88 @@ def test_match_candidates_ineligible_shape_constraint(session: Session) -> None:
     with pytest.raises(IntegrityError):
         session.flush()
     session.rollback()
+
+
+# ------------------------------------------------------ #181 possible duplicates
+
+
+def test_find_possible_duplicates_similar_pair(session: Session) -> None:
+    """Two speakers with near-identical centroids are flagged."""
+    vec_a = unit((0, 1.0), (1, 0.1))
+    vec_b = unit((0, 1.0), (1, 0.15))
+    add_speaker(session, "Alice", [vec_a])
+    add_speaker(session, "Bob", [vec_b])
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.70)
+    assert len(pairs) == 1
+    assert pairs[0].similarity > 0.70
+
+
+def test_find_possible_duplicates_orthogonal_no_match(session: Session) -> None:
+    """Orthogonal centroids produce no pairs."""
+    add_speaker(session, "Alice", [E0])
+    add_speaker(session, "Bob", [E1])
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.70)
+    assert pairs == []
+
+
+def test_find_possible_duplicates_three_speakers_one_pair(session: Session) -> None:
+    """A≈B but C is far → exactly one pair returned."""
+    vec_a = unit((0, 1.0), (1, 0.1))
+    vec_b = unit((0, 1.0), (1, 0.15))
+    add_speaker(session, "Alice", [vec_a])
+    add_speaker(session, "Bob", [vec_b])
+    add_speaker(session, "Charlie", [E1])
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.70)
+    assert len(pairs) == 1
+
+
+def test_find_possible_duplicates_deterministic_order(session: Session) -> None:
+    """The smaller UUID is always speaker_a_id."""
+    vec = unit((0, 1.0), (1, 0.1))
+    id_a = add_speaker(session, "Alice", [vec])
+    id_b = add_speaker(session, "Bob", [vec])
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.01)
+    assert len(pairs) == 1
+    assert pairs[0].speaker_a_id == min(id_a, id_b)
+    assert pairs[0].speaker_b_id == max(id_a, id_b)
+
+
+def test_find_possible_duplicates_cross_space_isolation(session: Session) -> None:
+    """Similar centroids in different spaces never pair."""
+    vec = unit((0, 1.0))
+    add_speaker(session, "Alice", [vec], space="space-a")
+    add_speaker(session, "Bob", [vec], space="space-b")
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.01)
+    assert pairs == []
+
+
+def test_find_possible_duplicates_excludes_archived(session: Session) -> None:
+    """Archived speakers do not appear in duplicate pairs."""
+    vec = unit((0, 1.0))
+    add_speaker(session, "Alice", [vec])
+    bob_id = add_speaker(session, "Bob", [vec])
+    bob = session.get(Speaker, bob_id)
+    assert bob is not None
+    bob.deleted_at = datetime(2026, 1, 1, tzinfo=UTC)
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.01)
+    assert pairs == []
+
+
+def test_find_possible_duplicates_excludes_merged(session: Session) -> None:
+    """Merged speakers do not appear in duplicate pairs."""
+    vec = unit((0, 1.0))
+    alice_id = add_speaker(session, "Alice", [vec])
+    bob_id = add_speaker(session, "Bob", [vec])
+    bob = session.get(Speaker, bob_id)
+    assert bob is not None
+    bob.merged_into_id = alice_id
+    bob.merged_at = datetime(2026, 1, 1, tzinfo=UTC)
+    session.flush()
+    pairs = find_possible_duplicates(session, threshold=0.01)
+    assert pairs == []

@@ -336,7 +336,7 @@ services:
   worker:
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q celery --concurrency=1
   worker-post:
-    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.22.0}
+    image: ghcr.io/bengizmo/voxint:${VOXINT_IMAGE_TAG:-0.27.0}
     pull_policy: missing
     command: celery -A voxint.worker.app worker --loglevel=INFO -Q post --concurrency=2
     restart: unless-stopped
@@ -637,13 +637,20 @@ service reports telemetry the strip says "hardware status unavailable" rather
 than claiming all-clear.
 
 The **Status** page (`GET /settings/status`, authenticated, 15s htmx refresh) is
-the fuller live view behind the strip: the aggregated per-GPU card with
-utilization, VRAM, and temperature labeled as instantaneous (now) readings, peak
-temperature and throttle-event counts labeled as cumulative-since-restart, and
-each service's admission depth and rejected-since-restart count. It is reachable
-from the sidebar "Hardware" shortcut; the older `GET /resources` address still
-works and redirects here. Warnings are warn-only in v1; the NVIDIA driver already
-protects the hardware, so Voxint advises rather than pausing work.
+the fuller live view behind the strip. It shows five hardware gauges: Processor
+(load-average percentage), Memory (used / total), Graphics card (GPU
+utilization), Graphics memory (VRAM used / total), and Disk (media root
+partition used / total). CPU, memory, and disk are read from the host via
+stdlib (`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come
+from the model services' `/healthz` telemetry. A "Parts of Voxint" component
+list shows live health for the console, each model service, the database, the
+task queue, and the Local AI model (with a primary "Turn on" button when
+disabled). The banner includes an install summary with GPU acceleration status
+and a "Check for updates" link to the GitHub releases page. The page is
+reachable from the sidebar "Hardware" shortcut; the older `GET /resources`
+address still works and redirects here. Warnings are warn-only in v1; the NVIDIA
+driver already protects the hardware, so Voxint advises rather than pausing
+work.
 
 ### Exporting transcripts
 
@@ -741,7 +748,11 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   lands under a server-issued, uuid-namespaced `incoming/{submission_id}/…` path,
   so re-uploading a name yields a distinct immutable media item and never
   overwrites history. A hidden `submission_id` makes form replay idempotent.
+  When `console_media_enabled` is on, this route redirects to `/media` (303)
+  without processing; uploads go through `/media/submit` instead.
 - **`POST /fetch`**: the browser equivalent of `voxint fetch` (URL ingestion).
+  When `console_media_enabled` is on, this route redirects to `/media` (303);
+  URL fetches go through `/media/fetch` instead.
 - **`POST /runs/{id}/requeue`**: an exact-revision (CAS) requeue of a FAILED run,
   the browser equivalent of `voxint requeue` (covers failed downloads).
 - **`POST /runs/{id}/cancel`**: an exact-revision (CAS) cancel of a *live* run
@@ -761,7 +772,9 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   is operator-visibility metadata: last-write-wins, orthogonal to `status`, no
   CAS/revision bump (like operator notes), and idempotent. A *live* run refuses
   archive (`409`, cancel it first), and an **archived run refuses requeue/claim**
-  so a stale tab can't drive a hidden run back to live. `/runs` hides archived by
+  so a stale tab can't drive a hidden run back to live. The guard is enforced at
+  both the route level (API) and the service level (`RunArchivedError` in
+  `requeue_failed_run`), so the CLI path is also covered. `/runs` hides archived by
   default; `?archived=1` shows the archived-only view. Home, `/metrics`, and
   `voxint stats` exclude archived runs from their counts.
 - **`POST /runs/{id}/media/delete`**: **destructive**, terminal-only. Deletes
@@ -885,11 +898,18 @@ selects the segment, never seeks, and no playhead is shown. If the amplitude
 data cannot be computed (e.g. the media file is gone and nothing was cached)
 the strip simply does not appear; the transcript list is unaffected.
 
-**Broker-degraded submission.** `/submit`, `/fetch`, and `/runs/{id}/requeue`
+**Broker-degraded submission.** `/submit` (or `/media/submit` when the Media
+library is enabled), `/fetch` (or `/media/fetch`), and `/runs/{id}/requeue`
 commit the durable run *before* publishing the Celery task. If Redis is down at
 that moment the mutation still succeeds: the run stays `QUEUED` (never `FAILED`)
 with a clear linked note, and the recovery sweep re-enqueues it once the broker
 returns. Read pages (`/runs*`) render from Postgres only and never touch Redis.
+
+**Orphaned incoming cleanup.** At app startup, `reconcile_orphaned_incoming`
+scans `media_root/incoming/` and removes files that have no committed
+`MediaItem` row. These are crash orphans from the brief window between
+`os.replace` and the DB commit during upload. The reconciler runs once per
+process start and logs each removal.
 
 ### Failure lanes and recovery
 
@@ -1258,11 +1278,11 @@ The mutation forms that require a CSRF token are `POST /submit`, `/fetch`,
 token, so it has none of its own to gate a forged POST), the web-research
 forms on `/speakers` (start, cancel, and per-draft accept/reject, each under
 its own token action), and the run-asset forms on `/runs/{id}` (generate and
-cancel, each under its own token action). Set `CSRF_SECRET` to a
-persistent random value
-(`python -c "import secrets; print(secrets.token_urlsafe(32))"`); otherwise a
-random per-process secret is used, which invalidates open forms on restart and
-mismatches across multiple workers.
+cancel, each under its own token action). Since v0.27.0, the app auto-generates
+a CSRF secret on first start and persists it to the data directory
+(`DATA_DIR/csrf_secret`), so forms survive restarts and work across workers
+without manual configuration. Set `CSRF_SECRET` explicitly to override the
+auto-generated value (useful when multiple app instances share no filesystem).
 
 ### LLM endpoint timeouts: local models and proxies
 
@@ -1357,8 +1377,8 @@ mutations are gated by their per-run claim token.
 | `GET /runs` | Execution-history browser (keyset-paged; `status=` / `review=` filters) |
 | `GET /runs/{run_id}` | Run detail + per-stage attempt ledger |
 | `GET /runs/{run_id}/transcript?text=raw\|enhanced` | Resolver-attributed transcript (HTML); `&read=1&timestamps=false` renders the on-screen read-mode prose view |
-| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item |
-| `POST /fetch` | yt-dlp URL ingestion (create media item + run, enqueue) |
+| `POST /submit` | Bounded browser file upload → immutable uuid-namespaced media item (redirects to `/media` when `console_media_enabled` is on) |
+| `POST /fetch` | yt-dlp URL ingestion (redirects to `/media` when `console_media_enabled` is on) |
 | `POST /runs/{run_id}/requeue` | Exact-revision (CAS) requeue of a FAILED run |
 | `GET /review` | Review queue |
 | `POST /review/{run_id}/claim` · `/release` | Claim / release an exclusive review slot |
@@ -1371,6 +1391,7 @@ mutations are gated by their per-run claim token.
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
 | `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |
+| `GET /settings/features` | 303 redirect to `/settings#features` (the Features section on the hub page) |
 | `GET /settings/{hardware,database,plugins}`, `GET /settings/plugins/{id}` | Read-only settings sub-pages: effective hardware config, database size/retention, and the plugin registry |
 | `GET /activity/events?since={id}` | Activity feed poll (JSON): run-completion and speaker-identification events after a cursor plus the live-jobs badge count. Dark-shipped behind `CONSOLE_ACTIVITY_ENABLED` (answers 404 until on); no `since` bootstraps at the high-water mark so a fresh tab does not replay history (#162) |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |

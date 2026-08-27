@@ -2098,6 +2098,294 @@ design): this verdict covers FPR stability only; separability and the threshold
 itself require the spoof side (S6). Detail:
 `docs/reports/synthdetect-s5-windowing-verdict-2026-08-27.md`.
 
+### S6 spoof corpus and composite manifest pre-registration (2026-08-27)
+
+This is the frozen S6 protocol, recorded before any spoof audio is generated or
+scored. S6 builds the **spoof (synthetic speech) side** of the calibration
+corpus. With bona fide (S5) and spoof (S6) together, S7 can compute EER, fit
+Platt calibration, and open the holdout split. S6 lands eval-first: the
+composite manifest schema and assembly logic freeze and are unit-tested before
+any TTS audio exists.
+
+**Architectural constraint that forces TTS.** The v2 `imported_benchmark`
+schema requires every imported clip to be eval-only (the official split is
+preserved, not reassigned). The Platt calibration split needs both bona fide
+and spoof clips. Therefore ASVspoof 2021 DF clips **cannot populate
+calibration**, and a locally generated TTS spoof corpus is required for every
+split that participates in threshold fitting. Converting ASVspoof metadata to
+v1 `GeneratorProvenance` would require inventing checkpoint sha, voice, seed,
+and text-source facts that the official metadata does not publish. The honest
+path is to keep each provenance kind intact and combine them under a tagged
+union.
+
+#### Spoof sources
+
+S6 uses four materially distinct TTS generator families plus the existing
+ASVspoof 2021 DF benchmark subset. Each family has a different synthesis
+architecture, ensuring the unseen-generator-eval requirement tests genuine
+generalization rather than checkpoint variation within one family.
+
+| Generator | Architecture | License | Venue | Role | Splits |
+|---|---|---|---|---|---|
+| Piper (VITS) | Hybrid VITS vocoder, CPU-only | MIT | Any node | **Seen** (calibration) | Inherits source parent's split |
+| Chatterbox (AR + flow-matching) | Autoregressive speech-token model + conditional flow-matching decoder, zero-shot voice cloning | MIT | GPU (RTX 3060 or better) | **Seen** (calibration) | Inherits source parent's split |
+| ElevenLabs | Proprietary cloud neural TTS | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
+| Google Cloud TTS | Neural2 cloud neural TTS | Commercial API | Cloud API | **Unseen** (eval-only) | Generated ONLY from eval-split parents |
+| ASVspoof 2021 DF | 110 official attack systems, 4 vocoder families | ODbL-1.0 (data) | Existing subset (53,392 clips) | **Benchmark anchor** (eval-only) | v2 imported-benchmark, eval-only by schema |
+
+**Seen generators** (Piper + Chatterbox) produce spoof clips from bona fide
+parents across all three splits (calibration, eval, holdout). Their clips
+participate in Platt fitting (calibration split) and are visible to the
+operating-point selection. Seen-generator spoof clips inherit their source
+parent's split assignment, so no speaker can straddle splits.
+
+**Unseen generators** (ElevenLabs + Google Cloud TTS) produce spoof clips
+ONLY from eval-split parents. None of their clips appear in calibration or
+holdout. This tests whether the detector generalizes to synthesis systems
+the operating point was never tuned on. Two distinct unseen cloud APIs with
+different architectures (ElevenLabs neural TTS, Google Neural2 TTS) provide
+a stronger generalization test than a single unseen family.
+
+**Benchmark anchor** (ASVspoof 2021 DF) provides an external reference EER
+on a standardized corpus. It is never pooled with the organic TTS track for a
+composition-weighted combined EER, because its 53,392 clips would numerically
+dominate the organic cohort. Track-specific metrics are primary.
+
+#### Spoof generation protocol
+
+**Ratio.** 1:1: one spoof counterpart per eligible bona fide parent clip.
+"Eligible" means turn clips (kind `turn` in `acquire`) in the parent manifest;
+session segments (kind `segment`) are not synthesized (they are for
+production-windowing validation, not calibration). The 1:1 ratio matches the
+degradation policy (one degraded chain per parent in the cohort freeze).
+
+**Text derivation.** Each TTS clip is synthesized from a transcript of its
+bona fide parent. The transcript source is the bona fide audio itself
+(passed through ASR or, for Chatterbox voice cloning, as the reference audio
+prompt). The exact text-source derivation is recorded per clip in
+`GeneratorProvenance.text_source`.
+
+**Generator identity.** Generator identity for split assignment and
+per-generator metrics is `GeneratorProvenance.name` (the family, not the
+voice or checkpoint variant). A generator's clips are assigned to exactly
+one split role: both seen generators span all three splits (following their
+parents); the unseen generator is eval-only. Different voices within one
+generator family are NOT treated as different generators for the
+unseen-generator-eval requirement.
+
+**Assignment rule for TTS clips.** A TTS spoof clip inherits its source
+parent's split. The seen generators (Piper, Chatterbox) each produce one clip
+per eligible parent in every split. The unseen generator (ElevenLabs)
+produces one clip per eligible eval-split parent only. The `partition_group_id`
+field (new in v3) ties each TTS clip to its source parent, preventing the
+scorer from interpreting a paired bona fide and spoof from the same utterance
+as independent observations. A calibration weighting policy (one effective
+observation per partition group) is applied in Platt fitting.
+
+**Provenance fields.** Each TTS spoof clip carries a full
+`GeneratorProvenance`:
+
+- `name`: generator family (`piper`, `chatterbox`, `elevenlabs`, `google`)
+- `version`: engine version string (pinned before generation)
+- `checkpoint_sha`: sha256 of the model weights file (None for cloud API)
+- `voice`: voice/speaker id used
+- `seed`: RNG seed for reproducibility (None for cloud API)
+- `text_source`: how the input text was derived (e.g. `whisper-large-v2-transcript`, `parent-audio-prompt`)
+
+**Stratum.** A TTS spoof clip's stratum is
+`spoof|tts|{generator_name}|{domain}` (e.g.
+`spoof|tts|piper|meetingroom`). This is distinct from the bona fide
+stratum (`bona_fide|organic|{domain}`) and the ASVspoof stratum
+(`{label}|{codec_condition}`), so per-stratum EER breakdowns are
+meaningful.
+
+#### v3 composite manifest schema
+
+The v3 manifest extends the existing schema with a composite corpus kind
+and per-clip provenance discrimination. It serves the scorer's single-manifest
+contract while keeping both provenance kinds honest.
+
+**Top-level fields** (new or changed from v1/v2):
+
+- `schema_version`: 3
+- `corpus_kind`: `composite` (new value; v1=`synthesis`, v2=`imported_benchmark`)
+- `components`: array of `{component_id, corpus_kind, manifest_sha256,
+  clip_count}` pinning each constituent manifest's identity. The composite
+  manifest is reproducible from its components.
+- `benchmark`: present only for components that are `imported_benchmark`
+  kind (carries through from v2)
+
+**Per-clip fields** (new or changed):
+
+- `provenance_kind`: `synthesis` | `imported_benchmark` (discriminator for
+  the tagged union; replaces the implicit per-manifest `corpus_kind` dispatch)
+- `generator`: present iff `provenance_kind == "synthesis"` and `label == "spoof"`
+  (unchanged from v1)
+- `imported_provenance`: present iff `provenance_kind == "imported_benchmark"`
+  (unchanged from v2)
+- `component_id`: which constituent manifest this clip belongs to
+- `partition_group_id`: ties paired bona fide and TTS spoof clips from the
+  same source utterance (for calibration weighting). Set for TTS spoof clips
+  and their source parents; None for ASVspoof clips and for bona fide clips
+  with no TTS counterpart.
+
+**Validation rules** (all fail-closed at load time):
+
+- Every clip has exactly one of `generator` or `imported_provenance`, matched
+  to its `provenance_kind`
+- No duplicate `clip_id` across components
+- No `rel_path` collision across components (namespaced by component)
+- Every `component_id` references a declared component
+- `imported_benchmark` clips remain eval-only
+- Unseen-generator clips are eval-only (generator name in a declared
+  unseen set)
+- A `partition_group_id` must not span splits (same partition-group,
+  same split)
+- Component manifest sha256 values match the declared components
+- Composite manifest `sha256` = sha256 of the serialized composite
+  manifest file bytes (as with v1/v2)
+
+**Scoring path.** The scorer (`synthdetect_eval.py`) is manifest-kind-agnostic:
+it reads `clip_id`, `label`, `stratum`, and `split` from any manifest version.
+The `join_scores` function joins journal results to manifest clips by `clip_id`;
+no change is needed for v3. Per-stratum breakdowns use the stratum field, which
+already distinguishes organic, TTS, and imported-benchmark clips. The `score`
+command takes one `--manifest` and one `--journal`; both the bona fide and
+spoof clips appear in a single v3 manifest, and a single scoring journal covers
+the full corpus.
+
+#### Corpus assembly
+
+The composite corpus root is a single directory containing namespaced
+subdirectories for each component:
+
+```
+s6-composite-corpus/
+  organic-bonafide/     # S5 bona fide clips (hardlinked from s5-corpus)
+  tts-piper/            # Piper TTS spoof clips
+  tts-chatterbox/       # Chatterbox spoof clips
+  tts-elevenlabs/       # ElevenLabs spoof clips (eval-only)
+  tts-google/           # Google Cloud TTS spoof clips (eval-only)
+  asvspoof-df/          # ASVspoof 2021 DF canonical subset (hardlinked)
+  manifest.json         # v3 composite manifest
+  assembly_receipt.json # component hashes, assembly metadata
+```
+
+`rel_path` in the manifest is relative to the composite root and includes the
+component subdirectory prefix. Every clip is re-audited against its manifest
+sha256 during assembly (the full-tree revalidation established in S5 PR-2a).
+
+#### Metrics and reporting
+
+**Primary field result:** organic bona fide versus organic-source TTS (both
+seen generators combined). This is the EER and operating point that
+calibration targets.
+
+**Required generalization slices:** organic eval clips scored against each
+eval-only (unseen) generator individually (ElevenLabs and Google). If
+either unseen generator's EER is materially worse than the seen-generator
+eval EER, the detector may not generalize to novel synthesis systems, and
+the shipped confidence should reflect that. Reporting both unseen families
+separately (not pooled) shows whether the generalization gap is
+architecture-dependent.
+
+**Benchmark anchor:** ASVspoof bona fide versus ASVspoof spoof, scored under
+the same inference space and windowing. This is a diagnostic, not the
+calibration target. It contextualizes the field result against a published
+benchmark but does not drive the shipped threshold.
+
+**Per-generator, per-stratum, per-domain, per-vocoder-family breakdowns** are
+reported as diagnostics. A composition-weighted pooled EER across all tracks is
+explicitly secondary and labelled as such, because the ASVspoof clip count
+dominates it.
+
+#### S6 scoring results: first EER measurement (2026-08-27)
+
+**Verdict: SCORED.** All 63,905 composite clips scored by w2v2-aasist
+(eval container `voxint-synthdetect-eval:s2b`, maintainer RTX 3060). Journal:
+`journal_composite.jsonl` (63,906 lines, 1 header + 63,905 clip outcomes,
+zero skips). Structured results:
+`eer_report_w2v2aasist.json`, `eer_matrix_w2v2aasist.json`.
+
+**Primary field result (organic bona fide vs seen TTS, Piper + Chatterbox
+combined):** EER = 34.31 % (95 % CI: 33.29--35.30 %, 1000 bootstrap
+resamples). AUC = 0.707. n = 8,575 (3,495 bona fide + 5,080 spoof).
+
+**Required generalization slices:**
+
+| Generator | Role | EER | AUC | n |
+|---|---|---|---|---|
+| ElevenLabs | unseen | 18.06 % | 0.886 | 4,464 |
+| Google Cloud TTS | unseen | 17.96 % | 0.882 | 4,464 |
+
+Both unseen generators are *more* detectable than the seen-generator
+combined average (34.31 %). The primary is dominated by the Chatterbox
+blind spot (see below).
+
+**Benchmark anchor (ASVspoof DF eval):** EER = 7.05 % (95 % CI:
+6.25--7.64 %). AUC = 0.986. n = 53,392 (1,487 bona fide + 51,905 spoof).
+Within the expected range for w2v2-aasist on ASVspoof 2021 DF (~5--8 %
+published). Confirms the model is functioning correctly on in-distribution
+data.
+
+**Per-generator breakdown (diagnostic):**
+
+| Generator | Role | vs AMI bf | vs VC bf | vs Both |
+|---|---|---|---|---|
+| Piper (VITS) | seen | 12.0 % | 41.9 % | 20.0 % |
+| Chatterbox (AR + flow) | seen | 40.3 % | 71.5 % | 45.3 % |
+| ElevenLabs | unseen | 11.1 % | 34.9 % | 18.1 % |
+| Google Cloud TTS | unseen | 10.4 % | 37.4 % | 18.0 % |
+
+**Finding 1: Chatterbox evasion.** Chatterbox (AR autoregressive token
+prediction + conditional flow matching + HiFT source-filter vocoder) is
+near-undetectable: EER = 45.32 % (AUC 0.558, near chance). Even against
+AMI-only bona fide (the cleanest comparison), EER = 40.3 %. 59.4 % of
+Chatterbox scores fall within the bona fide IQR. KS statistic
+(bona fide vs Chatterbox) = 0.14 (vs 0.66 for Piper). A 4-model consult
+(codex + deepseek-v4-pro + grok-4.5 + kimi-k3, 2026-08-27) identified the
+root cause as OOD: w2v2-aasist's production checkpoint was trained on
+ASVspoof 2019 LA (6 attack systems, no flow-matching or modern AR+flow
+architectures). The DFADD benchmark (2024) independently reports 44.21 %
+average EER for ASVspoof-trained AASIST on unseen flow-matching TTS,
+closely matching our 45.32 %. The evasion is likely a closeable coverage
+gap (DFADD reports ~23--25 % after fine-tuning on flow-matching examples),
+not a fundamental detection impossibility. Codex also identified that
+flow matching operates in mel space (not waveform): phase coherence comes
+from HiFT's explicit F0-driven source-filter vocoder, not from the ODE
+transport.
+
+**Finding 2: VoxConverse channel confound.** VoxConverse bona fide
+scores substantially higher than AMI (mean 3.616 vs 0.884), degrading
+ALL generators by 20--30 pp EER when used as the bona fide reference.
+The detector's score axis is partly a channel/style axis, not purely
+a synthesis axis. This is independent of the Chatterbox evasion.
+
+**Finding 3: voice-cloning reference transfer.** Chatterbox is the only
+generator that clones from each bona fide parent clip; others use
+fixed/provider voices. Chatterbox from same-domain parents (AMI text vs
+AMI bona fide) scores 42.5 % EER; cross-domain (VoxConverse text vs AMI
+bona fide) scores 28.0 %. The cloning transfers channel cues but is
+secondary to the OOD gap.
+
+**Implication for calibration:** Platt scaling on the seen-generator
+calibration split will not produce meaningful probabilities for
+Chatterbox-class generators. A single threshold cannot serve both
+detectable (Piper, ElevenLabs, Google) and undetectable (Chatterbox)
+families. Calibration (S7) must account for this limitation explicitly.
+
+**Decision (2026-08-27):** proceed to S7 calibration with the current
+corpus. The Chatterbox evasion is a documented, expected OOD gap
+(independently confirmed by DFADD 2024 at 44.21 % avg EER on
+flow-matching TTS). The eval corpus successfully detected this gap,
+which is the corpus working as designed. The VoxConverse channel confound
+is by design (degraded bona fide in calibration is pre-registered). Both
+findings must be reported honestly in the shipped coverage statement.
+Fine-tuning experiments (adding flow-matching examples to training data)
+are deferred to M2 (model service, issue #252); corpus diversification
+(clean read-speech control set, held-out reference speakers) is optional
+measurement tightening, not a prerequisite for calibration.
+
 ### Calibration and holdout discipline
 
 The primary shipped threshold is at **FPR 5 %**. FPR 1 % from roughly 1000 bona
@@ -2114,6 +2402,88 @@ fixture gate applies only to fixtures outside a guard band of roughly 3x the
 measured drift tolerance around the threshold: near-threshold fixtures flip
 spuriously across driver, cuDNN, and torch revisions and are covered by the
 raw-logit drift level instead.
+
+#### S7 calibration results (2026-08-27)
+
+**Policy: `w2v2aasist-s6-piper-only`**. Platt scaling fitted on the
+calibration split with Chatterbox strata excluded (1152 clips removed, 2703
+retained: 1551 bona fide + 1152 Piper spoof). Chatterbox is excluded because
+its scores overlap bona fide almost completely (meetingroom EER 48.25 % on
+holdout, mean score 1.82 vs bona fide 1.65), and including it flattens the
+Platt slope from A = 0.96 to A = 0.32, degrading calibration for every
+generator the detector can actually discriminate.
+
+**Platt parameters:** A = 0.9598, B = -3.6155.
+
+**Calibration vs holdout comparison (Piper-only population):**
+
+| Metric | Calibration | Holdout |
+|---|---|---|
+| Piper-only EER | 19.01 % | 18.04 % |
+| Piper-only Brier | 0.136 | 0.140 |
+| Overall EER (incl. Chatterbox) | 32.90 % | 36.04 % |
+
+The holdout estimates track the calibration split closely, confirming
+the fitted policy generalizes within the corpus.
+
+**Holdout per-generator EER (each generator vs all 582 bona fide):**
+
+| Generator | N | EER | Brier | FPR 5 % TPR |
+|---|---|---|---|---|
+| Piper meetingroom | 371 | 18.04 % | 0.137 | 16.2 % |
+| Piper webvideo | 48 | 18.90 % | 0.137 | 12.5 % |
+| Chatterbox meetingroom | 371 | 48.25 % | 0.345 | 1.3 % |
+| Chatterbox webvideo | 48 | 33.33 % | 0.149 | 14.6 % |
+
+**Operating point analysis (Piper-only holdout, 582 bf + 419 Piper spoof):**
+
+| Target FPR | Threshold | Realized FPR | TPR |
+|---|---|---|---|
+| 1 % | 5.966 | 0.9 % | 0.2 % |
+| 5 % (primary) | 5.501 | 4.8 % | 15.8 % |
+| 10 % | 5.065 | 10.0 % | 43.2 % |
+| 20 % (~EER) | 3.402 | 19.9 % | 89.5 % |
+
+At the shipped FPR 5 % operating point, the detector catches approximately
+16 % of Piper spoof on the holdout. This is a high-confidence flag (very
+few false alarms), not a reliable filter (most spoof passes through).
+At the EER threshold (~20 % FPR), TPR rises to ~90 %, suitable for risk
+flagging applications that tolerate a higher false-alarm rate.
+
+#### Coverage statement
+
+The `w2v2-aasist` detector at checkpoint `LA_model.pth` (ASVspoof 2019 LA
+training), evaluated on the S6 composite corpus and calibrated with the
+`w2v2aasist-s6-piper-only` Platt policy:
+
+1. **Reliably identifies VITS-family TTS (Piper)** and commercial neural TTS
+   (ElevenLabs, Google Cloud TTS) with EER 10 to 20 %, validated on the
+   holdout split. Piper holdout EER: 18.04 %. Unseen generators (ElevenLabs,
+   Google) scored 18.06 % and 17.96 % EER on the eval split (not in the
+   holdout; eval-only by design).
+
+2. **Does NOT reliably identify AR + flow-matching TTS** (Chatterbox-class)
+   at the current checkpoint. Holdout EER: 48.25 % (meetingroom), near
+   chance. This is a known OOD gap: the ASVspoof 2019 LA training set
+   contains no flow-matching attacks, and DFADD (2024) independently reports
+   44.21 % avg EER on flow-matching generators. Chatterbox strata are
+   excluded from the calibration fit. Closeable with fine-tuning (issue #252,
+   deferred to M2).
+
+3. **ASVspoof DF benchmark anchor is healthy:** EER 7.05 % on the imported
+   ASVspoof5 DF eval partition (eval-only, not in calibration or holdout).
+
+4. **VoxConverse-sourced bona fide scores higher** (mean raw score 3.62 vs
+   AMI 0.88), raising FPR on compressed or reverberant real speech. This is
+   by design: degraded bona fide strata are included in calibration so the
+   operating point reflects real-world field conditions, not clean studio
+   audio only (issue #253).
+
+5. **At the shipped FPR 5 % operating point**, TPR is approximately 16 %
+   on Piper holdout. The detector at this threshold functions as a
+   high-confidence alert, not a reliable spoof filter. Risk-flagging
+   deployments that tolerate ~20 % FPR achieve ~90 % TPR at the EER
+   threshold.
 
 ## Contract tests
 

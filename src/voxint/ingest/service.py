@@ -1,9 +1,13 @@
 """Shared submission + requeue service used by the CLI and the API.
 
-Every function here operates on a live SQLAlchemy ``Session`` and **never**
-imports Celery: the caller owns the commit boundary and lazily publishes
-``voxint.run_pipeline`` *after* the transaction commits (commit-before-publish).
-Keeping the broker out of this module is what lets the API's read path stay
+Every submit function returns a :class:`SubmissionResult` carrying the run id
+and a :meth:`~SubmissionResult.publish` method. The caller commits the session
+(creating the durable QUEUED row), then calls ``result.publish()`` to send
+the run to the broker (commit-before-publish). ``publish`` never raises on a
+broker outage — the run stays QUEUED for the beat recovery sweep.
+
+The service itself **never** imports Celery at module level: the lazy import
+lives inside ``SubmissionResult.publish()``. This keeps the API's read path
 Postgres-only and guarantees a broker outage can never leave a half-written
 run — the durable QUEUED row exists before anything is enqueued.
 
@@ -63,6 +67,40 @@ from voxint.pipeline.transitions import (
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True, slots=True)
+class SubmissionResult:
+    """A committed-but-unpublished pipeline run.
+
+    The contract: the caller commits the session (creating the durable QUEUED
+    row), then calls :meth:`publish` to send the run to the broker.
+    ``publish`` never raises on a broker outage — the run stays QUEUED for
+    the beat recovery sweep.
+    """
+
+    run_id: uuid.UUID
+
+    def publish(self) -> bool:
+        """Enqueue the run's pipeline task; return False on a broker outage."""
+        from celery.exceptions import OperationalError
+
+        from voxint.worker.tasks import pipeline_task_for_stage
+
+        try:
+            pipeline_task_for_stage(None).apply_async(
+                (str(self.run_id),), ignore_result=True
+            )
+        except OperationalError:
+            logger.warning(
+                "pipeline enqueue deferred (broker unavailable); run %s stays "
+                "QUEUED for the recovery sweep",
+                self.run_id,
+                exc_info=True,
+            )
+            return False
+        return True
+
+
 # Copy the upload in bounded chunks so a huge body never lands in one buffer;
 # the authoritative size cap is checked against the running total, not read().
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
@@ -99,6 +137,14 @@ class RunNotFailedError(IngestError):
         super().__init__(f"run is {status.value}, only failed runs can be requeued")
         self.run_id = run_id
         self.status = status
+
+
+class RunArchivedError(IngestError):
+    """Requeue attempted on an archived run (unarchive it first)."""
+
+    def __init__(self, run_id: uuid.UUID) -> None:
+        super().__init__("this run is archived and cannot be requeued -- unarchive it first")
+        self.run_id = run_id
 
 
 class MissingStageError(IngestError):
@@ -496,11 +542,11 @@ def submit_media_item(
     sidecar: Sidecar | None = None,
     diarization_max_speakers: int | None = None,
     diarization_num_speakers: int | None = None,
-) -> PipelineRun:
+) -> SubmissionResult:
     """Create-or-reuse the MediaItem for ``source_path`` and queue a fresh run.
 
-    DB-only: the caller owns the commit and, once it commits, lazily publishes
-    ``voxint.run_pipeline`` (commit-before-publish). ``source_path`` is UNIQUE,
+    DB-only: the caller owns the commit and, once it commits, calls
+    :meth:`SubmissionResult.publish` (commit-before-publish). ``source_path`` is UNIQUE,
     so a repeated local path reuses its MediaItem while every submission still
     mints a distinct run. The run's config snapshot is frozen by per-field
     resolution off the media row's folder membership (issues #11, #153);
@@ -528,7 +574,7 @@ def submit_media_item(
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
     )
-    return submit(
+    run = submit(
         session,
         media.id,
         domain_pack=domain_pack,
@@ -537,6 +583,7 @@ def submit_media_item(
         diarization_max_speakers=max_hint,
         diarization_num_speakers=num_hint,
     )
+    return SubmissionResult(run_id=run.id)
 
 
 def submit_media_item_if_new(
@@ -548,7 +595,7 @@ def submit_media_item_if_new(
     sidecar: Sidecar | None = None,
     diarization_max_speakers: int | None = None,
     diarization_num_speakers: int | None = None,
-) -> PipelineRun | None:
+) -> SubmissionResult | None:
     """Queue a run for ``source_path`` ONLY if no MediaItem claims it yet.
 
     Unlike :func:`submit_media_item` — which reuses an existing MediaItem and always
@@ -562,7 +609,7 @@ def submit_media_item_if_new(
     error (mirrors :func:`_get_or_create_media`).
 
     DB-only, like the rest of this module: the caller commits the whole batch once,
-    then lazily publishes ``voxint.run_pipeline`` for each returned run
+    then calls :meth:`SubmissionResult.publish` on each returned result
     (commit-before-publish).
 
     ``sidecar`` (issue #104) applies exactly as in :func:`submit_media_item`:
@@ -604,7 +651,7 @@ def submit_media_item_if_new(
     max_hint, num_hint = _resolve_speaker_hint(
         diarization_max_speakers, diarization_num_speakers, sidecar
     )
-    return submit(
+    run = submit(
         session,
         media.id,
         domain_pack=domain_pack,
@@ -613,6 +660,7 @@ def submit_media_item_if_new(
         diarization_max_speakers=max_hint,
         diarization_num_speakers=num_hint,
     )
+    return SubmissionResult(run_id=run.id)
 
 
 def _guard_run_admission(session: Session, media: MediaItem) -> None:
@@ -680,13 +728,16 @@ def requeue_failed_run(
     omits it — there is no gap to race within a single transaction.
 
     DB-only: the caller commits then lazily publishes ``voxint.run_pipeline``.
-    Raises :class:`RunNotFoundError`, :class:`RunNotFailedError`,
-    :class:`MissingStageError`, or — from the CAS — ``StaleRevisionError`` /
-    ``InvalidTransitionError``, which callers map to their own responses.
+    Raises :class:`RunNotFoundError`, :class:`RunArchivedError`,
+    :class:`RunNotFailedError`, :class:`MissingStageError`, or — from the
+    CAS — ``StaleRevisionError`` / ``InvalidTransitionError``, which callers
+    map to their own responses.
     """
     run = session.get(PipelineRun, run_id)
     if run is None:
         raise RunNotFoundError(run_id)
+    if run.archived_at is not None:
+        raise RunArchivedError(run_id)
     held = snapshot(run)
     if held.status is not RunStatus.FAILED:
         raise RunNotFailedError(run_id, held.status)
@@ -1024,7 +1075,7 @@ def _stream_to_temp(dest_dir: Path, stream: BinaryIO, max_bytes: int) -> tuple[P
 
 def _replay_run(
     session: Session, media: MediaItem, *, size: int, sha256: str, domain_pack: dict[str, Any]
-) -> PipelineRun:
+) -> SubmissionResult:
     """Resolve a same-``submission_id`` re-POST to its original run, or 409.
 
     The uuid-namespaced ``source_path`` already exists, so this is a form replay:
@@ -1041,7 +1092,9 @@ def _replay_run(
         .order_by(PipelineRun.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return run if run is not None else submit(session, media.id, domain_pack=domain_pack)
+    if run is None:
+        run = submit(session, media.id, domain_pack=domain_pack)
+    return SubmissionResult(run_id=run.id)
 
 
 def submit_upload(
@@ -1055,7 +1108,7 @@ def submit_upload(
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
     media_folder_id: uuid.UUID | None = None,
-) -> PipelineRun:
+) -> SubmissionResult:
     """Finalize a browser upload into an immutable MediaItem and queue a run.
 
     The bytes land at ``incoming/{submission_id}/{safe_name}`` — the server-issued
@@ -1073,7 +1126,7 @@ def submit_upload(
     exists before calling; the first submission's pick wins on an idempotent replay
     (``_replay_run`` never re-homes an existing row).
 
-    Broker-free: the caller commits, then lazily publishes ``voxint.run_pipeline``
+    Broker-free: the caller commits, then calls :meth:`SubmissionResult.publish`
     (commit-before-publish). Raises :class:`UploadValidationError` (bad name/id),
     :class:`UploadTooLargeError` (over the cap), or :class:`UploadConflictError`
     (replayed id, different bytes).
@@ -1135,7 +1188,8 @@ def submit_upload(
         # caller's commit fails after this replace, the row rolls back but the file
         # stays — a self-healing orphan, since a same-bytes retry re-inserts and
         # re-replaces identically. Durable staging state is Slice 5's job.
-        return submit(session, media.id, domain_pack=domain_pack)
+        run = submit(session, media.id, domain_pack=domain_pack)
+        return SubmissionResult(run_id=run.id)
     finally:
         if not published:
             with contextlib.suppress(FileNotFoundError):
@@ -1144,7 +1198,7 @@ def submit_upload(
 
 def _replay_url_run(
     session: Session, media: MediaItem, *, source_url: str, domain_pack: dict[str, Any]
-) -> PipelineRun:
+) -> SubmissionResult:
     """Resolve a same-``submission_id`` URL re-POST to its original run, or 409.
 
     The uuid-namespaced ``source_path`` (``incoming/{uuid}/source``) already
@@ -1165,7 +1219,9 @@ def _replay_url_run(
         .order_by(PipelineRun.created_at.desc())
         .limit(1)
     ).scalar_one_or_none()
-    return run if run is not None else submit(session, media.id, domain_pack=domain_pack)
+    if run is None:
+        run = submit(session, media.id, domain_pack=domain_pack)
+    return SubmissionResult(run_id=run.id)
 
 
 def submit_url(
@@ -1176,7 +1232,7 @@ def submit_url(
     settings: Settings | None = None,
     domain_pack_name: str | None = None,
     media_folder_id: uuid.UUID | None = None,
-) -> PipelineRun:
+) -> SubmissionResult:
     """Register a URL for acquisition as an immutable MediaItem and queue a run.
 
     The origin ``url`` is validated (:func:`validate_ingest_url`) and stored as
@@ -1199,7 +1255,7 @@ def submit_url(
     DIFFERENT url is a conflict (see :func:`_replay_url_run`). **This module never
     invokes yt-dlp — only the worker's ACQUIRE stage does.**
 
-    Broker-free: the caller commits, then lazily publishes ``voxint.run_pipeline``
+    Broker-free: the caller commits, then calls :meth:`SubmissionResult.publish`
     (commit-before-publish). Raises :class:`UrlValidationError` (bad url) or
     :class:`UploadValidationError` (bad submission id) — both HTTP 422 — or
     :class:`UploadConflictError` (replayed id, different url) — HTTP 409.
@@ -1234,4 +1290,45 @@ def submit_url(
         return _replay_url_run(
             session, winner, source_url=validated_url, domain_pack=domain_pack
         )
-    return submit(session, media.id, domain_pack=domain_pack)
+    run = submit(session, media.id, domain_pack=domain_pack)
+    return SubmissionResult(run_id=run.id)
+
+
+def reconcile_orphaned_incoming(
+    session: Session,
+    media_root: Path,
+) -> list[str]:
+    """Remove files under ``incoming/`` that have no committed MediaItem.
+
+    After a crash between ``os.replace`` (which publishes the uploaded file) and
+    the caller's ``session.commit()`` (which persists the MediaItem row), the
+    file exists on disk but has no DB row. A same-bytes retry re-inserts and
+    re-replaces identically, so these orphans are self-healing for retries of
+    the SAME file. But if the operator never retries, the orphan stays forever.
+
+    Called once at app startup (before any new submissions) so there are no
+    concurrent writers to race with. Returns the list of relative paths removed.
+    """
+    incoming = media_root / "incoming"
+    if not incoming.is_dir():
+        return []
+    removed: list[str] = []
+    for path in sorted(incoming.rglob("*")):
+        if not path.is_file():
+            continue
+        try:
+            rel = str(PurePosixPath(path.relative_to(media_root)))
+        except ValueError:
+            continue
+        exists_in_db = session.execute(
+            select(MediaItem.id).where(MediaItem.source_path == rel).limit(1)
+        ).scalar_one_or_none()
+        if exists_in_db is None:
+            path.unlink()
+            removed.append(rel)
+            logger.info("removed orphaned incoming file: %s", rel)
+    for dirpath in sorted(incoming.rglob("*"), reverse=True):
+        if dirpath.is_dir():
+            with contextlib.suppress(OSError):
+                dirpath.rmdir()
+    return removed

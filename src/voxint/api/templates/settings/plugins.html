@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Voxint — plugins{% endblock %}
 {% block body %}
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings/status" role="tab">Status</a>
+  <a href="/settings/hardware" role="tab">Hardware</a>
+  <a href="/settings/database" role="tab">Database</a>
+  <a href="/settings/plugins" role="tab" aria-current="true">Plugins</a>
+  <a href="/settings/features" role="tab">Features</a>
+  <span class="ft-spacer"></span>
+  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
+</nav>
+
 {# Console 2.0 P6 plugins sub-page (issue #161): the plugin registry. No plugins
    ship yet, so the honest default is an empty list; the machinery is here for the
    first plugin. Kill-switched ids are listed by id only because the registry does

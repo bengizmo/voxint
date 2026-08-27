@@ -63,7 +63,7 @@ merge conflicts. Items touching the same files are sequenced or grouped.
 Low-risk, high-payoff changes. Each is its own PR. Items within Phase 0 are
 parallelizable EXCEPT where noted.
 
-**Batch 0A: Error copy rewrites** (parallelizable, no structural changes)
+**Batch 0A: Error copy rewrites** -- DONE (PR #232, merged)
 - H2-qw: Rewrite 10 worst internal-vocabulary error strings at the route
   boundary. Files: `legacy_review.py`, `legacy_runs.py` (error-handling blocks
   only). Review: single-model. Browser lane: yes (console-visible errors).
@@ -73,22 +73,20 @@ parallelizable EXCEPT where noted.
   from cancel copy. Files: `home.py`, `ingest/service.py:126-130`. Review:
   single-model. Browser: yes (home).
 
-**Batch 0B: Global HTML error renderer** (depends on 0A landing first)
+**Batch 0B: Global HTML error renderer** -- DONE
 - H2-renderer: Add a global HTML error template for `Accept: text/html`
   requests (friendly 4xx/500 with "reload and try again"). Adopt the media
   router's `_reject` pattern. File: `api/app.py` (exception handlers).
-  Review: **multi-model** (new cross-cutting response seam; must preserve JSON
-  content negotiation, status codes, security headers, and information-hiding).
-  Browser lane: **yes**.
+  Review: **multi-model** (codex + grok). Browser lane: **yes**.
 
-**Batch 0C: CSRF persistence** (independent of 0A/0B)
+**Batch 0C: CSRF persistence** -- DONE (PR #234, merged)
 - M8: Persist generated CSRF secret to data dir on first run; change 403 copy
   to "This form expired -- reload the page." Files: `api/app.py:309-315`
   (secret generation), `deps.py:418-424` (403 handler). Review: **full panel**
   (CSRF/security trigger per existing rules). Browser lane: **yes**.
 
-**Batch 0D: Ingest service hardening** (two items share `ingest/service.py`)
-- H5: Make the commit-before-publish contract visible. Add a SubmissionResult
+**Batch 0D: Ingest service hardening** (H5 DONE, M9+M4 PR #239 open)
+- H5: **DONE** (PR #251). Make the commit-before-publish contract visible. Add a SubmissionResult
   that carries the run id and a `publish()` method. Callers are migrated
   atomically. This makes the contract structural and visible, though it does
   not mechanically prevent out-of-order calls. Files: `ingest/service.py`,
@@ -102,17 +100,15 @@ parallelizable EXCEPT where noted.
   MediaItem. Files: `ingest/service.py`, `api/app.py` (startup hook). Review:
   single-model. Browser: no.
 
-**Batch 0E: Worker hardening** (items share `worker/tasks.py`)
+**Batch 0E: Worker hardening** -- DONE
 - M7: Uniform broker OperationalError handling for all `_autogenerate_*`
   post-finalize jobs. Pair with lane-specific stale-job redispatch. File:
-  `worker/tasks.py`. Review: **full panel** (concurrency/reliability trigger).
-  Browser lane: no.
+  `worker/tasks.py`. Review: **full panel** (codex + grok). Browser: no.
 - M11: Centralize config_resolution_version parsing into one helper. Files:
-  `ingest/service.py:380`, `worker/tasks.py:202-216`,
-  `pipeline/stages/context.py:280-283`. Review: single-model if pure
-  extraction; multi-model if fallback semantics change. Browser: no.
+  `worker/tasks.py`, `pipeline/stages/context.py`. Review: codex (pure
+  extraction, behavior-preserving). Browser: no.
 
-**Batch 0F: Legacy submit redirect** (independent)
+**Batch 0F: Legacy submit redirect** (PR #238 open)
 - H4-qw: When `console_media_enabled` is on, render a "New submissions live in
   Media" banner on /runs forms. Consider disabling the legacy submit forms
   server-side. Files: `legacy_runs.py` (submission form rendering), templates.

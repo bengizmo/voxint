@@ -486,6 +486,12 @@
   ]
  ],
  [
+  "/settings/features",
+  [
+   "GET"
+  ]
+ ],
+ [
   "/settings/status",
   [
    "GET"

@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Voxint — hardware{% endblock %}
 {% block body %}
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings/status" role="tab">Status</a>
+  <a href="/settings/hardware" role="tab" aria-current="true">Hardware</a>
+  <a href="/settings/database" role="tab">Database</a>
+  <a href="/settings/plugins" role="tab">Plugins</a>
+  <a href="/settings/features" role="tab">Features</a>
+  <span class="ft-spacer"></span>
+  <span class="oc-muted">Some changes restart parts of Voxint -- it tells you before it does.</span>
+</nav>
+
 {# Console 2.0 P6 hardware sub-page (issue #161): read plus guided edit. It shows
    the effective value, the exact .env key, and the restart needed to apply a
    change. It never edits your environment or restarts anything. The "restart

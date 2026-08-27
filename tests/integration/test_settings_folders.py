@@ -29,7 +29,7 @@ from voxint.api.app import create_app
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.api.routers.settings import _folder_panel_context
 from voxint.config import Settings
-from voxint.db.models import MediaFolder
+from voxint.db.models import MediaFolder, PipelineRun
 from voxint.db.session import session_scope
 from voxint.ingest.service import submit_media_item
 from voxint.media.registration import (
@@ -538,7 +538,8 @@ def test_mapping_reaches_ingest_read_path(
         headers=_HTMX,
     )
     with session_scope(session_factory) as session:
-        run = submit_media_item(session, "interviews/clip.wav", settings=settings)
+        result = submit_media_item(session, "interviews/clip.wav", settings=settings)
+        run = session.get(PipelineRun, result.run_id)
         assert run.domain_pack is not None
         pack_name = run.domain_pack["name"]
     assert pack_name == "interview"  # the mapped pack, not the default
@@ -557,8 +558,10 @@ def test_submit_assigns_folder_membership(
         folder_id = session.execute(
             select(MediaFolder.id).where(MediaFolder.path == "interviews")
         ).scalar_one()
-        inside = submit_media_item(session, "interviews/clip.wav", settings=settings)
-        outside = submit_media_item(session, "loose/elsewhere.wav", settings=settings)
+        inside_result = submit_media_item(session, "interviews/clip.wav", settings=settings)
+        outside_result = submit_media_item(session, "loose/elsewhere.wav", settings=settings)
+        inside = session.get(PipelineRun, inside_result.run_id)
+        outside = session.get(PipelineRun, outside_result.run_id)
         assert inside.media_item.media_folder_id == folder_id
         assert outside.media_item.media_folder_id is None
 

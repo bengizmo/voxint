@@ -32,8 +32,8 @@ run's LLM enhancement with the next run's transcription.
 local or uploaded media (`source_url IS NULL`), and a yt-dlp download for URL runs
 (`voxint fetch` / `POST /fetch`). Making it the first stage, rather than a special
 submit-time step, keeps the "every fresh run starts at `STAGE_ORDER[0]`" invariant
-intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op and
-`submit()` keeps its signature. Download mechanics and the SSRF model are below.
+intact, so legacy `queued`/`current_stage=NULL` rows route safely into the no-op.
+Download mechanics and the SSRF model are below.
 
 ## State machine
 
@@ -100,6 +100,17 @@ queued run and re-publishes it, routing by `current_stage` through the shared
 handoff) uses. A task delivered to the wrong lane is a pure no-op: it takes no
 entry CAS and creates no claims.
 
+### Commit-before-publish
+
+Every submit function in `voxint.ingest.service` (`submit_upload`, `submit_url`,
+`submit_media_item`, `submit_media_item_if_new`) returns a `SubmissionResult`
+carrying `run_id` and a `publish()` method. The caller commits the session
+(creating the durable QUEUED row), then calls `result.publish()` to send the run
+to the broker. `publish()` returns `False` on a broker outage and never raises,
+so a down Redis degrades to "run stays QUEUED for the recovery sweep" rather than
+a failed request. The ingest module never imports Celery at module level; the
+lazy import lives inside `SubmissionResult.publish()`.
+
 The LLM-bound post-run jobs (`voxint.generate_run_asset`,
 `voxint.research_speaker`) are also routed to the `post` queue, so they never
 serialize behind GPU work. So are the beat sweeps (recovery, GC, notify,
@@ -116,11 +127,11 @@ time) and the post lane at a small concurrency of its own, so the GPU no
 longer idles while a previous run's LLM enhancement is in flight. See
 [operations.md](operations.md) for the override recipe.
 
-## Data model (alembic revisions 0001–0029)
+## Data model (alembic revisions 0001–0046)
 
 | Table | Role |
 |---|---|
-| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, registered media folders, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), the per-folder `{media_folder → pack_name}` domain-pack map `folder_domain_packs` (revision 0017; this map and `media_folders` are rollback-only since #153, superseded by the `media_folders` relation, and drop one release later), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen) |
+| `app_settings` | single-row instance configuration set by the first-run setup wizard: onboarding-complete flag, custom vocabulary, LLM-enhancement toggle/endpoint, guided-tutorial state (revision 0006), and (revision 0021) one nullable column per in-UI-editable feature flag (`enrichment_names_enabled`, `enrichment_names_llm_enabled`, `enrichment_run_assets_enabled`, `enrichment_run_assets_autogenerate`, `voxint_web_research`, `enrichment_web_research_enabled`, `ytdlp_enabled`, `source_authority_domains`, `web_search_base_url`, `web_search_api_key`). These resolve **row-over-env** through `app_settings.resolve_effective_<flag>` (NULL/blank inherits the environment default, a stored value overrides it, following the `llm_*` tri-state precedent); `web_search_api_key` is a credential handled like `llm_api_key` (plaintext at rest, resolver-only, never rendered/logged). The cross-flag invariants live in one `validate_effective_flags` shared with the boot-time config validator. Revision **0029** adds a `corrections` JSONB list: the operator's console-authored deterministic correction rules (#84, edited at **Settings → Corrections**). Unlike the row-over-env flags above, corrections are **not** resolved live: at submit they are unioned onto the run's resolved pack and **frozen** into `pipeline_runs.domain_pack`, so #82 composition and #83 provenance read them off the immutable snapshot unchanged (vocabulary is live-unioned; corrections must be per-run-frozen). Registered media folders and per-folder domain-pack selection live in the `media_folders` relation (since #153, revision 0040; the legacy `app_settings` columns were dropped in revision 0046) |
 | `media_items` | media identity, one row per source file. `source_path` (UNIQUE) is already present for local/uploaded media, pre-assigned and materialized by ACQUIRE for URL runs; a nullable, non-unique `source_url` records URL provenance (revision 0005) |
 | `media_source_metadata` | **write-once** acquisition context, 0-or-1 per media item (revision 0009): normalized extractor fields (title, uploader/channel, description, upload date, source-claimed duration, tags, canonical URL, extractor name/version) plus a bounded, allowlisted, schema-versioned `raw` JSONB subset and `acquired_at`. Context, not identity: nothing here feeds attribution, and a MediaItem is per-acquisition, so a snapshot can never rewrite the context a past adjudication was made against |
 | `pipeline_runs` | execution state + CAS revision, plus the reviewer claim (token, holder, expiry), the operator's free-text `operator_notes` (revision 0009: human input, kept structurally apart from scraped metadata, edited last-write-wins outside the CAS), and the **write-once** `domain_pack` JSONB snapshot resolved at submit (revision 0017: the exact pack the run was transcribed with, read by the worker and enrichment; `NULL` on pre-0017 runs) |
@@ -395,10 +406,25 @@ routable network, still wants a host-level egress firewall. See
 **CSRF.** Four mutation forms (`POST /submit`, `/fetch`, `/runs/{id}/requeue`,
 and `POST /review/{id}/claim`) carry a stateless, action-bound HMAC token
 (`api.csrf`, keyed by `csrf_secret`, independent of the Basic-auth password); a
-missing/mis-signed token is refused before any state change. `/claim` needs its
-own because claiming is what *mints* the run's claim token: it has no unguessable
+missing/mis-signed token is refused before any state change. When
+`console_media_enabled` is on, `POST /submit` and `POST /fetch` redirect to
+`/media` (303) before reaching the CSRF-protected handler; the `/media/submit`
+and `/media/fetch` routes carry their own CSRF actions. `/claim` needs its own
+because claiming is what *mints* the run's claim token: it has no unguessable
 token of its own yet. The remaining review-workbench mutations (release, decision,
-enroll) are instead gated by that per-run claim token.
+enroll) are instead gated by that per-run claim token. Since v0.27.0 the CSRF
+secret is auto-generated and persisted to `DATA_DIR/csrf_secret` on first start,
+so forms survive restarts without manual configuration; an explicit `CSRF_SECRET`
+env var overrides the persisted value.
+
+**Startup reconciler.** The app lifespan runs `reconcile_orphaned_incoming` once
+at startup, scanning `media_root/incoming/` for files with no committed
+`MediaItem` row (crash orphans from the `os.replace`-before-commit window) and
+removing them.
+
+**Requeue guard.** `requeue_failed_run` raises `RunArchivedError` before checking
+the FAILED status, so an archived run cannot be requeued from any surface (the
+route-level guard was already present; the service-level guard covers the CLI).
 
 ## Web research egress (issue #39)
 
@@ -557,11 +583,11 @@ carries a `config_resolution_version: 2` key and the worker branches on it:
 version 2 uses the frozen effective vocabulary as-is, an absent key (every run
 predating #153) keeps the exact live-union path, so no `pipeline_runs` row is
 rewritten and requeuing an old run reproduces its original result. The full
-resolution spec is the P2a addendum to ADR 0002. The pre-P2a
-`app_settings.media_folders` and `app_settings.folder_domain_packs` columns are
-now rollback-only and drop one release later; the `media_folders` relation is
+resolution spec is the P2a addendum to ADR 0002. The `media_folders` relation is
 authoritative, edited through the folder browser on the setup wizard's media
-step and under **Settings → Media folders**.
+step and under **Settings → Media folders**. The pre-P2a
+`app_settings.media_folders` and `app_settings.folder_domain_packs` columns were
+dropped in revision 0046.
 
 Console 2.0 P2b (#154) makes `/media` operable behind the same
 `CONSOLE_MEDIA_ENABLED` flag. Upload and URL fetch move onto the page (each may

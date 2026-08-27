@@ -65,6 +65,7 @@
     <div class="gt-row{% if item.status == 'running' %} is-machine-active{% elif item.unresolved_count > 0 and item.status == 'completed' %} is-needs-human{% endif %}">
       <span>
         <a href="/jobs/{{ item.run_id }}" style="color:var(--ink);text-decoration:none">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        {% if item.folder_path %}<br><span class="oc-muted" style="font-size:var(--t-sm)">{{ item.folder_path }}</span>{% endif %}
       </span>
       <span>{{ chip(humanize_status(item.status)) }}</span>
       <span>
@@ -72,12 +73,14 @@
         {{ chip(item.unresolved_count ~ " voices need you") }}
         {% elif item.status == "completed" %}
         {{ chip("reviewed") }}
+        {% elif item.status == "failed" and item.error %}
+        <span class="oc-muted" style="font-size:var(--t-sm)">{{ item.error }}</span>
         {% else %}
         —
         {% endif %}
       </span>
       <span class="num">{{ format_age(item.created_at, now=now) }}</span>
-      <span class="num">…</span>
+      <span class="num">{{ format_compact_duration(item.elapsed_seconds) }}</span>
       <span class="gt-action">
         {% if item.status == "completed" and item.unresolved_count > 0 %}
         <a href="/review">Review →</a>

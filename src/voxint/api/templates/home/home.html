@@ -91,7 +91,7 @@
       <span class="recent-time" title="{{ item.at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_clock_time(item.at, now=now) }}</span>
       <span class="recent-body">
         {% if item.kind == "run_completed" %}
-        Run finished — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
+        Run finished — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>{% if item.unresolved_count %} <span class="chip chip-warn">{{ item.unresolved_count }} voice{{ "s" if item.unresolved_count != 1 else "" }} need you</span>{% endif %}
         {% elif item.kind == "run_failed" %}
         Run failed — <a href="{% if shell.jobs_enabled %}/jobs/{{ item.run_id }}{% else %}/runs/{{ item.run_id }}{% endif %}">{{ friendly_media_label(item.title, item.source_path) }}</a>
         {% elif item.kind == "run_started" %}

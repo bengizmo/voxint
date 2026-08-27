@@ -20,6 +20,67 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   claim tokens embedded in the editor detail page are never cached. Library
   routes (`/media`, `/media/submit`, etc.) are unaffected.
 
+### Changed
+- **Ingest: SubmissionResult makes commit-before-publish visible** (Forgejo #7,
+  finding H5). All submit functions (`submit_upload`, `submit_url`,
+  `submit_media_item`, `submit_media_item_if_new`) now return a
+  `SubmissionResult` carrying `run_id` and a `publish()` method instead of a
+  bare `PipelineRun`. Callers commit, then call `result.publish()`. The three
+  duplicate publish-or-defer implementations (API deps, CLI, worker) are
+  consolidated into the single `publish()` method. The watch sweep no longer
+  needs an injected publish callback. `deps._publish_or_defer` is retained for
+  the requeue handler (which uses a stage parameter).
+- **Worker hardening: uniform broker fault tolerance** (Forgejo #8, finding M7).
+  Post-finalize autogeneration functions now use `.apply_async(ignore_result=True)`
+  instead of `.delay()`, and the recovery sweep redispatches stale QUEUED
+  run-asset and translation jobs alongside the existing embedding lane.
+- **Centralized config-resolution-version parsing** (Forgejo #8, finding M11).
+  The inline parsing in `worker/tasks.py` is now
+  `parse_config_resolution_version()` in `pipeline/stages/context.py`.
+- **Global HTML error renderer** (Forgejo #5, finding H2). HTTP errors and
+  unhandled exceptions now content-negotiate between a styled HTML error page
+  (for browsers) and JSON (for API/CLI clients). The standalone error template
+  shows the status code, a friendly title, and recovery advice for 5xx. Server
+  errors never leak exception details or headers to the client.
+- **Home feed: unresolved voice count on completed runs** (#249, epic #149).
+  Run-completed events in the Home activity feed now show an amber "X voices
+  need you" chip when unresolved speaker labels exist for that run.
+- **Media overview: child-row review state** (#249, epic #149). Child rows and
+  ungrouped rows now render review-oriented chips ("X voices need you" when
+  unresolved labels exist, "reviewed" when all resolved) instead of the raw
+  run status, matching the folder-row treatment.
+- **Media overview: selected-row teal tint** (#249, epic #149). Checking a media
+  row now highlights it with the existing teal-tint background rule.
+- **Jobs page: TOOK column, subfolder line, failure reason** (#244, epic #149).
+  Completed and failed runs now show actual elapsed time (e.g. "3m40s") instead
+  of a placeholder. Runs from a registered settings folder show the folder path
+  below the filename. Failed runs show their error message in the REVIEW column.
+- **Settings status: host-level hardware gauges** (#248, epic #149). The status
+  page now shows five gauges (Processor, Memory, Graphics card, Graphics memory,
+  Disk) instead of two GPU-only gauges. CPU and memory are read from the host
+  via `/proc/meminfo` and `os.getloadavg`; disk usage is the media root
+  partition via `shutil.disk_usage`. No new runtime dependencies.
+- **Settings status: GPU acceleration in install summary** (#248, epic #149).
+  The banner line now includes "GPU acceleration on (16 GB)" (or "off" for
+  CPU-only installs) between the install type and the version number.
+- **Settings status: LLM component description** (#248, epic #149). The Local
+  AI model row shows "off, used for polish & profiles" with a primary "Turn on"
+  button instead of a plain text link.
+- **Settings sub-page nav: Features tab** (#248, epic #149). All four settings
+  sub-pages (Status, Hardware, Database, Plugins) now include a Features tab
+  that links back to the hub page's Features section.
+- **Settings status: Check for updates** (#248, epic #149). The banner button
+  now reads "Check for updates" and links to the GitHub releases page instead
+  of the hardware sub-page.
+
+### Removed
+- **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration
+  0046 drops `app_settings.media_folders` and `app_settings.folder_domain_packs`,
+  which were retained for one release as rollback inputs after #153 moved
+  registered folders into the `media_folders` relation. The CLI
+  `voxint media folders preflight` subcommand and the unused
+  `resolve_folder_pack_name` registry function are also removed.
+
 ### Fixed
 - **Corrections editor: inherit-to-empty silent conversion** (#176, epic #149).
   On the project detail page, opening the corrections editor while a project
@@ -58,6 +119,28 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [0.26.0] - 2026-08-27
 
 ### Added
+- **Synthdetect M1 S7: Platt calibration and holdout evaluation** (#144).
+  Piper-only calibration policy (`w2v2aasist-s6-piper-only`): Chatterbox
+  strata excluded from Platt fitting because near-chance EER (48.25% on
+  holdout) poisons the slope for detectable generators (A flattens from 0.96
+  to 0.32). Holdout opened exactly once (1420 clips): Piper-only EER 18.04%
+  (calibration 19.01%), Brier 0.140 (calibration 0.136), confirming the
+  policy generalizes. Coverage statement documents five findings: VITS-family
+  and commercial TTS detectable at 10-20% EER; Chatterbox-class TTS
+  uncalibrable; ASVspoof benchmark healthy; VoxConverse channel confound; FPR
+  5% operating point is a high-confidence flag (TPR ~16%), not a reliable
+  filter. `calibrate_policy` gains `exclude_strata` parameter for fitting on
+  a generator subset.
+- **Synthdetect M1 S6: spoof corpus, composite assembly, and first EER**
+  (#144). Four TTS generators materialized (Piper 2540, Chatterbox 2540,
+  ElevenLabs 969, Google Cloud TTS 969 clips) plus ASVspoof 2021 DF
+  benchmark anchor (53,392 clips). v3 composite manifest (63,905 clips).
+  First EER measurement: primary 34.31%, benchmark anchor 7.05% (healthy).
+  Per-generator and per-domain EER matrix reveals Chatterbox AR+flow TTS
+  is near-undetectable (EER 45.32%, independently confirmed by DFADD 2024
+  at 44.21% for flow-matching TTS vs AASIST). VoxConverse channel confound
+  identified as a separate issue. Scoring results, 4-model analysis, and
+  proceed-to-calibration decision documented in `gpu-contracts.md`.
 - **Synthdetect M1 S5 PR-5: windowing verdict** (#144). Per-window score
   journaling (`window_scores` field in `ClipOutcome`) and `verdict-windowing`
   subcommand in `synthdetect_eval.py` for comparing upstream vs production
@@ -662,6 +745,21 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   gate, operator auth, CSRF verification, and registration order are pinned
   unchanged by the P0a characterization contracts plus a new
   registration-order golden added in this change.
+- **Legacy submit redirect when Media library is enabled** (#9, refactoring
+  batch 0F). When `console_media_enabled` is on, the `/runs` page replaces
+  its upload and URL-fetch forms with a banner linking to `/media`. POST
+  `/submit` and POST `/fetch` redirect to `/media` (303) instead of
+  processing the upload, so a direct POST or stale browser tab never
+  bypasses the banner.
+- **Requeue refuses archived runs** (#7, refactoring batch 0D M9). A
+  `RunArchivedError` now fires before the FAILED status check in
+  `requeue_failed_run`, so an archived run cannot be driven live from
+  any surface (the API's route-level guard was already there; the
+  service-level guard protects the CLI path too).
+- **Startup reconciler for orphaned incoming/ files** (#7, refactoring
+  batch 0D M4). `reconcile_orphaned_incoming` scans `media_root/incoming/`
+  at app startup and removes files that have no committed MediaItem row
+  (crash orphans from the os.replace-before-commit window).
 
 ### Fixed
 - **Synthdetect M1 S5 PR-4: production windowing fixes** (#144). Two

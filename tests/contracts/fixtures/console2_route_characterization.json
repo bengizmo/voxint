@@ -686,6 +686,14 @@
   [
     "/settings/features",
     [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/features",
+    [
       "POST"
     ],
     "onboarding",

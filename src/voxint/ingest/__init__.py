@@ -1,7 +1,8 @@
-"""Ingest: the DB-only submission + requeue service shared by CLI and API.
+"""Ingest: the submission + requeue service shared by CLI and API.
 
-The broker is never imported here — callers commit, then lazily publish
-``voxint.run_pipeline`` (commit-before-publish). See :mod:`voxint.ingest.service`.
+Submit functions return a :class:`SubmissionResult` carrying the run id and a
+``publish()`` method. The caller commits the session, then calls
+``result.publish()`` (commit-before-publish). See :mod:`voxint.ingest.service`.
 """
 
 from voxint.ingest.service import (
@@ -12,11 +13,13 @@ from voxint.ingest.service import (
     MediaUnlinkResult,
     MissingStageError,
     OperationInProgressError,
+    RunArchivedError,
     RunMediaNotDeletableError,
     RunNotArchivableError,
     RunNotCancellableError,
     RunNotFailedError,
     RunNotFoundError,
+    SubmissionResult,
     UploadConflictError,
     UploadTooLargeError,
     UploadValidationError,
@@ -25,6 +28,7 @@ from voxint.ingest.service import (
     cancel_run,
     delete_run_derived_media,
     preview_effective_config,
+    reconcile_orphaned_incoming,
     requeue_failed_run,
     submit_media_item,
     submit_media_item_if_new,
@@ -44,12 +48,14 @@ __all__ = [
     "MediaUnlinkResult",
     "MissingStageError",
     "OperationInProgressError",
+    "RunArchivedError",
     "RunMediaNotDeletableError",
     "RunNotArchivableError",
     "RunNotCancellableError",
     "RunNotFailedError",
     "RunNotFoundError",
     "RunSnapshot",
+    "SubmissionResult",
     "UploadConflictError",
     "UploadTooLargeError",
     "UploadValidationError",
@@ -58,6 +64,7 @@ __all__ = [
     "cancel_run",
     "delete_run_derived_media",
     "preview_effective_config",
+    "reconcile_orphaned_incoming",
     "requeue_failed_run",
     "submit_media_item",
     "submit_media_item_if_new",

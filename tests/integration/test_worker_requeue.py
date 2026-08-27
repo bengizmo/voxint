@@ -375,7 +375,7 @@ def test_recovery_sweep_redispatches_stale_queued_embedding_job(
     result = tasks.recovery_sweep()
 
     assert result["stale_embedding_jobs"] == 1
-    # With an empty plugin registry the result is the exact pre-#138 four-key dict:
+    # With an empty plugin registry, only the built-in lane counts are present:
     # the `plugin_lanes` key appears only when a plugin declares a job lane, so the
     # dormant seam is byte-identical for result consumers (issue #138).
     assert set(result) == {
@@ -383,6 +383,8 @@ def test_recovery_sweep_redispatches_stale_queued_embedding_job(
         "stale_queued",
         "cancelled_claims_closed",
         "stale_embedding_jobs",
+        "stale_asset_jobs",
+        "stale_translation_jobs",
     }
     assert dispatched == [str(stale_id)]  # the fresh job is spared
     with session_factory() as session:
