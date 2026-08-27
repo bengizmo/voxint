@@ -1920,20 +1920,26 @@ are in `synthdetect_sources.py`; `plan_cohort` and `materialize_cohort` are in
 `synthdetect_corpus.py`. The `freeze` CLI verb runs both dry-run and execution
 mode.
 
-**Production windowing fixes (pre-registered, implemented in S5 PR-4).** The
+**Production windowing fixes (pre-registered, LANDED in S5 PR-4).** The
 production windowing path (`plan_windows(mode="production")` in
-`synthdetect_infer.py`) has two issues that must be fixed and versioned before it
-is scored against the upstream crop:
+`synthdetect_infer.py`) had two issues fixed and versioned before scoring
+against the upstream crop:
 
-- **Tiny-tail window.** A clip a few samples past a window boundary currently emits
-  a final one-sample span, repeat-padded to 64,600 and logit-mean-pooled with equal
-  weight to a full window. The fix drops a trailing partial window when a full
-  window exists and the tail is below a pre-registered floor.
-- **64,000 vs 64,600.** `production_window_s = 4.0` is 64,000 samples, but the model
-  width is 64,600, so every full production window is repeat-padded by 600 samples
-  unlike the upstream crop. The production window is set to exactly the model width
-  (4.0375 s) so a full production window equals the upstream crop content; this is a
-  `WindowingPolicy` data change and is a new inference-space windowing identity.
+- **Tiny-tail window.** A clip a few samples past a window boundary emitted a
+  final one-sample span, repeat-padded to 64,600 and logit-mean-pooled with
+  equal weight to a full window. Fixed: a trailing partial window below
+  `production_tail_floor_samples` (8,000 samples = 0.5 s) is dropped when at
+  least one full window exists. The dropped tail length is journaled per clip
+  (`dropped_tail_samples` in `ClipOutcome`).
+- **64,000 vs 64,600.** `production_window_s` was 4.0 (64,000 samples) but the
+  model width is 64,600, so every full production window was repeat-padded by
+  600 samples unlike the upstream crop. Fixed: `production_window_s` and
+  `production_hop_s` set to 4.0375 s (exactly 64,600 samples at 16 kHz). A
+  contract test enforces `round(production_window_s * sample_rate_hz) ==
+  upstream_window_samples` for every fixed-width model.
+
+Both changes are part of `SOURCES_VERSION = "synthdetect-sources-v6"` and a
+new inference-space windowing identity.
 
 **Windowing-validation scope.** With a bona fide-only corpus, the S5 windowing
 verdict validates false-positive stability (does production windowing raise the
