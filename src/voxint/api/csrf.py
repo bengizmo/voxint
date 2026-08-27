@@ -16,9 +16,11 @@ missing/malformed/mis-signed/expired token is refused *before* any DB write.
 
 The secret is independent of ``voxint_password`` on purpose: a human-memorable
 Basic password would make every rendered token a fast offline password-guessing
-oracle. ``create_app`` uses ``Settings.csrf_secret`` when set (persistent, shared
-by every worker) and otherwise mints a random per-process one (zero-config, but
-open forms break on restart / across workers).
+oracle. ``create_app`` uses ``Settings.csrf_secret`` when set (explicit,
+operator-managed) and otherwise auto-generates one and persists it to
+``media_root/.csrf_secret`` with 0600 permissions on first run, so open forms
+survive restarts and multiple workers share the same key without any
+configuration.
 
 Expiry (finding D2): the signed ``ts`` bounds a leaked token's usefulness to
 ``_CSRF_TTL_SECONDS`` after mint (24h — generous for a console form, so an
@@ -33,6 +35,7 @@ Not defended here: this is not an XSS mitigation (script on the page can read th
 token). Verification is constant-time (``hmac.compare_digest``).
 """
 
+import contextlib
 import hmac
 import logging
 import os
@@ -181,10 +184,11 @@ def load_or_create_csrf_secret(media_root: Path) -> str:
     """Load a persistent CSRF secret from the data directory, generating one
     on first run.
 
-    The file is created with ``O_CREAT | O_EXCL`` (atomic: exactly one process
-    creates it) and 0600 permissions. A concurrent starter that loses the race
-    reads the winner's secret. The operator can rotate by deleting the file and
-    restarting.
+    Publication is atomic: the secret is written to a PID-specific temp file,
+    then hard-linked to the canonical path. ``os.link()`` fails with EEXIST if
+    the target already exists, so exactly one concurrent starter wins and every
+    other process reads the winner's fully-written secret. The operator can
+    rotate by deleting the file and restarting.
     """
     secret_path = media_root / _CSRF_SECRET_FILENAME
 
@@ -192,24 +196,30 @@ def load_or_create_csrf_secret(media_root: Path) -> str:
         content = secret_path.read_text().strip()
         if len(content) >= 16:
             return content
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
         pass
+
+    # A short/empty file (corrupt or partial) blocks exclusive creation;
+    # remove it so the atomic publish below can proceed.
+    with contextlib.suppress(FileNotFoundError, OSError):
+        secret_path.unlink()
 
     candidate = secrets.token_urlsafe(32)
     try:
         media_root.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(secret_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        tmp = secret_path.with_suffix(f".{os.getpid()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             os.write(fd, (candidate + "\n").encode())
         finally:
             os.close(fd)
-        logger.info("generated persistent CSRF secret at %s", secret_path)
-        return candidate
-    except FileExistsError:
-        content = secret_path.read_text().strip()
-        if len(content) >= 16:
-            return content
-        return candidate
+        try:
+            os.link(str(tmp), str(secret_path))
+            logger.info("generated persistent CSRF secret at %s", secret_path)
+        except (FileExistsError, OSError):
+            pass
+        with contextlib.suppress(OSError):
+            os.unlink(str(tmp))
     except OSError:
         logger.warning(
             "could not persist CSRF secret to %s; using an in-memory secret "
@@ -218,6 +228,16 @@ def load_or_create_csrf_secret(media_root: Path) -> str:
             exc_info=True,
         )
         return candidate
+
+    # Canonical read: all processes converge on the file's content.
+    try:
+        content = secret_path.read_text().strip()
+        if len(content) >= 16:
+            return content
+    except OSError:
+        pass
+
+    return candidate
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:

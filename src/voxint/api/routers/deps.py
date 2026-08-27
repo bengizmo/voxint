@@ -423,7 +423,7 @@ def _require_csrf(request: Request, action: str, token: str | None) -> None:
     if not verify_csrf_token(request.app.state.csrf_secret, action, token):
         raise HTTPException(
             status_code=403,
-            detail="this form expired — reload the page and try again",
+            detail="this form is invalid or expired — reload the page and try again",
         )
 
 
