@@ -35,11 +35,13 @@ from voxint.adjudication.resolver import (
 from voxint.api.languages import language_label
 from voxint.api.presentation import title_from_snapshot
 from voxint.db.models import (
+    MediaFolder,
     MediaItem,
     MediaSourceMetadata,
     PipelineRun,
     RunStatus,
     SegmentReviewState,
+    StageRun,
     TranscriptSegment,
 )
 from voxint.db.search import ts_headline, ts_query, ts_vector
@@ -196,6 +198,15 @@ class RunListItem:
     # Detected language code (issue #124); None for runs not yet transcribed or
     # transcribed before the column existed — the template renders an honest "—".
     language: str | None = None
+    # Wall-clock elapsed seconds (created_at to last stage finished_at); None for
+    # runs still in progress or with no stage rows. Template uses
+    # format_compact_duration.
+    elapsed_seconds: float | None = None
+    # Settings folder path (from media_folder via media_item); None for uploads
+    # or media with no folder assignment.
+    folder_path: str | None = None
+    # Run-level error message for failed runs; None otherwise.
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -266,7 +277,7 @@ _START_SEL = "[[voxint-hit[["
 _STOP_SEL = "]]voxint-hit]]"
 _HEADLINE_OPTIONS = (
     f"StartSel={_START_SEL}, StopSel={_STOP_SEL}, "
-    "MaxWords=18, MinWords=6, MaxFragments=2, FragmentDelimiter=\" … \""
+    'MaxWords=18, MinWords=6, MaxFragments=2, FragmentDelimiter=" … "'
 )
 
 
@@ -319,9 +330,7 @@ def _corrected_matches(tsq: ColumnElement[Any]) -> ColumnElement[bool]:
     )
 
 
-def _snippets_for(
-    session: Session, run_ids: list[uuid.UUID], q: str
-) -> dict[uuid.UUID, Snippet]:
+def _snippets_for(session: Session, run_ids: list[uuid.UUID], q: str) -> dict[uuid.UUID, Snippet]:
     """One highlighted hit per displayed run — the first matching segment.
 
     Bounded work: DISTINCT ON over only the page's run ids, so ts_headline
@@ -345,19 +354,13 @@ def _snippets_for(
             case(
                 (
                     corrected_matches,
-                    ts_headline(
-                        SegmentReviewState.corrected_text, tsq, _HEADLINE_OPTIONS
-                    ),
+                    ts_headline(SegmentReviewState.corrected_text, tsq, _HEADLINE_OPTIONS),
                 ),
                 (
                     enhanced_matches,
-                    ts_headline(
-                        TranscriptSegment.enhanced_text, tsq, _HEADLINE_OPTIONS
-                    ),
+                    ts_headline(TranscriptSegment.enhanced_text, tsq, _HEADLINE_OPTIONS),
                 ),
-                else_=ts_headline(
-                    TranscriptSegment.raw_text, tsq, _HEADLINE_OPTIONS
-                ),
+                else_=ts_headline(TranscriptSegment.raw_text, tsq, _HEADLINE_OPTIONS),
             ).label("fragment"),
         )
         .select_from(TranscriptSegment)
@@ -402,6 +405,16 @@ def list_runs(
         PipelineRun.review_claim_expires_at.isnot(None),
         PipelineRun.review_claim_expires_at > func.now(),
     )
+    last_finished = (
+        sa_select(func.max(StageRun.finished_at))
+        .where(StageRun.pipeline_run_id == PipelineRun.id)
+        .correlate(PipelineRun)
+        .scalar_subquery()
+    )
+    elapsed = func.extract(
+        "epoch",
+        func.coalesce(last_finished, PipelineRun.updated_at) - PipelineRun.created_at,
+    )
     stmt = (
         sa_select(
             PipelineRun.id,
@@ -409,19 +422,24 @@ def list_runs(
             PipelineRun.created_at,
             PipelineRun.review_claimed_by,
             PipelineRun.archived_at,
+            PipelineRun.error,
             MediaItem.source_path,
             PipelineRun.sidecar,
             PipelineRun.detected_language,
             MediaSourceMetadata.title.label("source_title"),
+            MediaFolder.path.label("folder_path"),
             unresolved_label_count(PipelineRun.id).label("unresolved_count"),
             label_count(PipelineRun.id).label("label_count"),
             claim_live.label("claim_live"),
+            case(
+                (PipelineRun.status.in_(("completed", "failed")), elapsed),
+                else_=None,
+            ).label("elapsed_seconds"),
         )
         .join(MediaItem, MediaItem.id == PipelineRun.media_item_id)
         # Outer: most media has no metadata snapshot (uploads, pre-#36 runs).
-        .outerjoin(
-            MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id
-        )
+        .outerjoin(MediaSourceMetadata, MediaSourceMetadata.media_item_id == MediaItem.id)
+        .outerjoin(MediaFolder, MediaFolder.id == MediaItem.media_folder_id)
         .order_by(PipelineRun.created_at.desc(), PipelineRun.id.desc())
         .limit(page_size + 1)
     )
@@ -481,9 +499,7 @@ def list_runs(
         )
     if filters is not None and filters.speaker_id is not None:
         stmt = stmt.where(
-            speaker_attributed_exists(
-                PipelineRun.id, alias_ids(session, filters.speaker_id)
-            )
+            speaker_attributed_exists(PipelineRun.id, alias_ids(session, filters.speaker_id))
         )
     if filters is not None and filters.source is not None:
         stmt = stmt.where(
@@ -542,13 +558,14 @@ def list_runs(
             title=title_from_snapshot(row.sidecar) or row.source_title,
             archived=row.archived_at is not None,
             language=row.detected_language,
+            elapsed_seconds=row.elapsed_seconds,
+            folder_path=row.folder_path,
+            error=row.error,
         )
         for row in rows
     ]
     next_cursor = (
-        Cursor(created_at=rows[-1].created_at, run_id=rows[-1].id)
-        if has_more and rows
-        else None
+        Cursor(created_at=rows[-1].created_at, run_id=rows[-1].id) if has_more and rows else None
     )
     return RunsPage(items=items, next_cursor=next_cursor)
 
@@ -599,5 +616,3 @@ def searchable_languages(
         if code is not None
     ]
     return sorted(facets, key=lambda f: f.label)
-
-
