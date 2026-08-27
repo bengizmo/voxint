@@ -165,19 +165,22 @@ def _eligible_clips(
             f"input must be a v{MANIFEST_SCHEMA_VERSION} synthesis manifest, "
             f"got v{manifest.schema_version}"
         )
-    eligible = tuple(
-        sorted(
-            (
-                clip
-                for clip in manifest.clips
-                if clip.label == "bona_fide"
-                and clip.acquire is not None
-                and json.loads(clip.acquire).get("kind") == "turn"
-                and (not eval_only or clip.split == "eval")
-            ),
-            key=lambda clip: clip.clip_id,
-        )
-    )
+    candidates: list[ClipEntry] = []
+    for clip in manifest.clips:
+        if clip.label != "bona_fide" or clip.acquire is None:
+            continue
+        try:
+            acquire = json.loads(clip.acquire)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise TtsGenerateError(
+                f"clip {clip.clip_id!r}: invalid acquire JSON: {exc}"
+            ) from exc
+        if acquire.get("kind") != "turn":
+            continue
+        if eval_only and clip.split != "eval":
+            continue
+        candidates.append(clip)
+    eligible = tuple(sorted(candidates, key=lambda clip: clip.clip_id))
     if not eligible:
         raise TtsGenerateError(
             "manifest has no eligible bona_fide clips acquired as turns"
@@ -297,9 +300,21 @@ def _load_skipped(path: Path) -> set[str]:
     if not path.exists():
         return set()
     skipped: set[str] = set()
-    for line in path.read_text(encoding="utf-8").splitlines():
-        row = json.loads(line)
-        skipped.add(row["clip_id"])
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise TtsGenerateError(f"{path}: cannot read skip cache: {exc}") from exc
+    for number, line in enumerate(lines, 1):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise TtsGenerateError(f"{path}:{number}: invalid JSON: {exc}") from exc
+        if not isinstance(row, dict) or "clip_id" not in row:
+            raise TtsGenerateError(f"{path}:{number}: expected object with clip_id")
+        clip_id = row["clip_id"]
+        if not isinstance(clip_id, str):
+            raise TtsGenerateError(f"{path}:{number}: clip_id must be a string")
+        skipped.add(clip_id)
     return skipped
 
 
@@ -393,12 +408,18 @@ def _piper_synthesizer(model_path: Path, executable: str) -> Synthesize:
         tmp = Path(tmp_name)
         argv = [executable, "--model", str(model_path), "--output_file", str(tmp)]
         try:
-            proc = subprocess.run(argv, input=text + "\n", text=True, capture_output=True)
+            proc = subprocess.run(
+                argv, input=text + "\n", text=True, capture_output=True, timeout=300,
+            )
             if proc.returncode != 0:
                 raise TtsGenerateError(
                     f"piper exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
                 )
             return _read_pcm_wav(tmp)
+        except subprocess.TimeoutExpired as exc:
+            raise TtsGenerateError(
+                f"piper timed out after 300s on {_clip.clip_id!r}"
+            ) from exc
         except OSError as exc:
             raise TtsGenerateError(f"cannot execute piper: {exc}") from exc
         finally:
@@ -412,6 +433,7 @@ def _chatterbox_synthesizer(seed: str) -> Synthesize:
         import perth
         import torch
 
+        # Disable Chatterbox watermarking; must precede the chatterbox import.
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
 
         chatterbox_module = importlib.import_module("chatterbox.tts")
@@ -568,10 +590,15 @@ def _google_synthesizer(
                 f"Google TTS failed after retries: {last_exc}"
             )
         with wave.open(io.BytesIO(wav_bytes), "rb") as wav:
-            if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+            if (
+                wav.getnchannels() != 1
+                or wav.getsampwidth() != 2
+                or wav.getframerate() != CANONICAL_SAMPLE_RATE
+            ):
                 raise TtsGenerateError(
                     f"Google TTS returned unexpected format: "
-                    f"ch={wav.getnchannels()} width={wav.getsampwidth()}"
+                    f"ch={wav.getnchannels()} width={wav.getsampwidth()} "
+                    f"rate={wav.getframerate()}"
                 )
             payload = wav.readframes(wav.getnframes())
         payload_sha_and_count(payload)

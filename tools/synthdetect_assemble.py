@@ -19,7 +19,10 @@ from synthdetect_corpus import (  # noqa: E402
     CORPUS_KIND_COMPOSITE,
     CORPUS_KIND_IMPORTED,
     CORPUS_KIND_SYNTHESIS,
+    CorpusError,
     load_manifest,
+    payload_sha_and_count,
+    read_canonical_wav_payload,
 )
 
 GENERATORS_SEEN = frozenset({"piper", "chatterbox"})
@@ -58,6 +61,14 @@ def _transform_synthesis_clip(
 ) -> dict[str, Any]:
     """Transform a v1 synthesis clip dict into a v3 composite clip dict."""
     clip = dict(raw)
+    gen = raw.get("generator")
+    if gen is not None and isinstance(gen, dict):
+        gen_name = gen.get("name", "")
+        if gen_name in GENERATORS_UNSEEN and raw.get("split") != "eval":
+            raise CorpusError(
+                f"clip {raw.get('clip_id')!r}: unseen generator {gen_name!r} "
+                f"must be eval-only, got split={raw.get('split')!r}"
+            )
     clip["provenance_kind"] = CORPUS_KIND_SYNTHESIS
     clip["component_id"] = component_id
     clip["rel_path"] = f"{subdir}/{raw['rel_path']}"
@@ -94,12 +105,34 @@ def _hardlink_clips(
     composite_root: Path,
     original_rel_paths: list[str],
 ) -> int:
-    """Hardlink clip audio files into the composite directory. Returns count."""
+    """Hardlink clip audio files into the composite directory. Returns count.
+
+    Enforces path containment (source under audio_root, destination under
+    composite_root) and re-audits each linked file against its manifest sha256.
+    """
+    audio_root_resolved = audio_root.resolve()
+    composite_root_resolved = composite_root.resolve()
     count = 0
     for clip, orig_rel in zip(manifest_clips, original_rel_paths, strict=True):
         src = audio_root / orig_rel
         dst = composite_root / clip["rel_path"]
+        if not src.resolve().is_relative_to(audio_root_resolved):
+            raise CorpusError(
+                f"clip {clip['clip_id']!r}: source path {src} escapes audio root"
+            )
         dst.parent.mkdir(parents=True, exist_ok=True)
+        dst_resolved = dst.resolve()
+        if not dst_resolved.is_relative_to(composite_root_resolved):
+            raise CorpusError(
+                f"clip {clip['clip_id']!r}: destination path {dst} escapes composite root"
+            )
+        payload = read_canonical_wav_payload(src)
+        sha, _ = payload_sha_and_count(payload)
+        if sha != clip["sha256"]:
+            raise CorpusError(
+                f"clip {clip['clip_id']!r}: audio sha256 {sha} does not match "
+                f"manifest claim {clip['sha256']}"
+            )
         if dst.exists():
             dst.unlink()
         os.link(src, dst)
@@ -108,28 +141,34 @@ def _hardlink_clips(
 
 
 def assemble(specs: list[ComponentSpec], out_dir: Path, *, dry_run: bool = False) -> Path:
-    """Assemble the v3 composite manifest and corpus directory."""
+    """Assemble the v3 composite manifest and corpus directory.
+
+    Validation-first: every component manifest is loaded through ``load_manifest``
+    and the composite is validated BEFORE any filesystem mutation (hardlinks).
+    Each hardlinked file is then re-audited against its manifest sha256.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Collect all bona fide clip IDs first (needed for partition_group_id)
+    # --- Phase 1: validate all component manifests and transform clips -------
     bonafide_ids: set[str] = set()
+    validated_manifests: list[tuple[ComponentSpec, bytes, list[dict[str, Any]]]] = []
     for spec in specs:
-        if spec.corpus_kind != CORPUS_KIND_SYNTHESIS:
-            continue
-        raw_manifest = json.loads(spec.manifest_path.read_bytes())
-        for clip in raw_manifest["clips"]:
-            if clip["label"] == "bona_fide":
-                bonafide_ids.add(clip["clip_id"])
+        manifest_bytes = spec.manifest_path.read_bytes()
+        raw_manifest = json.loads(manifest_bytes)
+        load_manifest(raw_manifest)
+        validated_manifests.append((spec, manifest_bytes, raw_manifest["clips"]))
+        if spec.corpus_kind == CORPUS_KIND_SYNTHESIS:
+            for clip in raw_manifest["clips"]:
+                if clip["label"] == "bona_fide":
+                    bonafide_ids.add(clip["clip_id"])
 
     components: list[dict[str, Any]] = []
     all_clips: list[dict[str, Any]] = []
     assembly_components: list[dict[str, Any]] = []
+    link_batches: list[tuple[ComponentSpec, list[dict[str, Any]], list[str]]] = []
 
-    for spec in specs:
-        manifest_bytes = spec.manifest_path.read_bytes()
+    for spec, manifest_bytes, raw_clips in validated_manifests:
         manifest_sha = hashlib.sha256(manifest_bytes).hexdigest()
-        raw_manifest = json.loads(manifest_bytes)
-        raw_clips = raw_manifest["clips"]
 
         component_entry: dict[str, Any] = {
             "component_id": spec.component_id,
@@ -154,10 +193,7 @@ def assemble(specs: list[ComponentSpec], out_dir: Path, *, dry_run: bool = False
                 clip = _transform_imported_clip(raw, spec.component_id, spec.subdir)
             component_clips.append(clip)
 
-        if not dry_run:
-            linked = _hardlink_clips(component_clips, spec.audio_root, out_dir, original_rel_paths)
-            print(f"  {spec.component_id}: {linked} clips hardlinked")
-
+        link_batches.append((spec, component_clips, original_rel_paths))
         all_clips.extend(component_clips)
         assembly_components.append({
             "component_id": spec.component_id,
@@ -180,11 +216,19 @@ def assemble(specs: list[ComponentSpec], out_dir: Path, *, dry_run: bool = False
     manifest_bytes_out = (json.dumps(composite, indent=2, sort_keys=True) + "\n").encode("utf-8")
     manifest_sha_out = hashlib.sha256(manifest_bytes_out).hexdigest()
 
-    # Validate the composite manifest through load_manifest (fail-closed)
+    # --- Phase 2: validate composite BEFORE any filesystem mutation ----------
     loaded = load_manifest(json.loads(manifest_bytes_out))
     assert loaded.components is not None
     print(f"  Composite manifest validated: {len(loaded.clips)} clips, "
           f"{len(loaded.components)} components")
+
+    # --- Phase 3: hardlink with SHA re-audit ---------------------------------
+    if not dry_run:
+        for spec, component_clips, original_rel_paths in link_batches:
+            linked = _hardlink_clips(
+                component_clips, spec.audio_root, out_dir, original_rel_paths,
+            )
+            print(f"  {spec.component_id}: {linked} clips hardlinked + re-audited")
 
     manifest_path = out_dir / "manifest.json"
     if not dry_run:
@@ -265,7 +309,11 @@ def main() -> None:
             sys.exit(1)
 
     print(f"Assembling composite from {len(specs)} components into {args.out_dir}")
-    assemble(specs, args.out_dir, dry_run=args.dry_run)
+    try:
+        assemble(specs, args.out_dir, dry_run=args.dry_run)
+    except (CorpusError, OSError) as exc:
+        print(f"assembly failed: {exc}", file=sys.stderr)
+        sys.exit(2)
     print("Done.")
 
 
