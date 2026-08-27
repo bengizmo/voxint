@@ -5,6 +5,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Ops Console COPY: vocabulary contract and stale-term audit** (#209, epic
+  #205). Canonical plain-language vocabulary mapping (`vocabulary.py`): maps
+  12 internal terms to user-facing equivalents (diarization -> "separate
+  voices", adjudication -> "review", embedding -> "voice sample", etc.). A
+  grep-based contract test (`test_vocabulary_contract.py`) catches prohibited
+  terms in rendered template text, stripping Jinja2 constructs, HTML comments,
+  CSS, and scripts before scanning. Legacy templates, Settings detail pages,
+  and the RTTM export disclosure carry explicit allowlists until their R-issue
+  refreshes apply the vocabulary.
+
 ### Changed
 - **Ops Console V3: shared primitives** (#208, epic #205). Semantic chip system
   (`.chip` + 6 semantic variants: ok/warn/danger/info/accent/neutral) with a
