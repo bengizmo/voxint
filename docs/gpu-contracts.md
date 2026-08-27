@@ -2316,6 +2316,88 @@ measured drift tolerance around the threshold: near-threshold fixtures flip
 spuriously across driver, cuDNN, and torch revisions and are covered by the
 raw-logit drift level instead.
 
+#### S7 calibration results (2026-08-27)
+
+**Policy: `w2v2aasist-s6-piper-only`**. Platt scaling fitted on the
+calibration split with Chatterbox strata excluded (1152 clips removed, 2703
+retained: 1551 bona fide + 1152 Piper spoof). Chatterbox is excluded because
+its scores overlap bona fide almost completely (meetingroom EER 48.25 % on
+holdout, mean score 1.82 vs bona fide 1.65), and including it flattens the
+Platt slope from A = 0.96 to A = 0.32, degrading calibration for every
+generator the detector can actually discriminate.
+
+**Platt parameters:** A = 0.9598, B = -3.6155.
+
+**Calibration vs holdout comparison (Piper-only population):**
+
+| Metric | Calibration | Holdout |
+|---|---|---|
+| Piper-only EER | 19.01 % | 18.04 % |
+| Piper-only Brier | 0.136 | 0.140 |
+| Overall EER (incl. Chatterbox) | 32.90 % | 36.04 % |
+
+The holdout estimates track the calibration split closely, confirming
+the fitted policy generalizes within the corpus.
+
+**Holdout per-generator EER (each generator vs all 582 bona fide):**
+
+| Generator | N | EER | Brier | FPR 5 % TPR |
+|---|---|---|---|---|
+| Piper meetingroom | 371 | 18.04 % | 0.137 | 16.2 % |
+| Piper webvideo | 48 | 18.90 % | 0.137 | 12.5 % |
+| Chatterbox meetingroom | 371 | 48.25 % | 0.345 | 1.3 % |
+| Chatterbox webvideo | 48 | 33.33 % | 0.149 | 14.6 % |
+
+**Operating point analysis (Piper-only holdout, 582 bf + 419 Piper spoof):**
+
+| Target FPR | Threshold | Realized FPR | TPR |
+|---|---|---|---|
+| 1 % | 5.966 | 0.9 % | 0.2 % |
+| 5 % (primary) | 5.501 | 4.8 % | 15.8 % |
+| 10 % | 5.065 | 10.0 % | 43.2 % |
+| 20 % (~EER) | 3.402 | 19.9 % | 89.5 % |
+
+At the shipped FPR 5 % operating point, the detector catches approximately
+16 % of Piper spoof on the holdout. This is a high-confidence flag (very
+few false alarms), not a reliable filter (most spoof passes through).
+At the EER threshold (~20 % FPR), TPR rises to ~90 %, suitable for risk
+flagging applications that tolerate a higher false-alarm rate.
+
+#### Coverage statement
+
+The `w2v2-aasist` detector at checkpoint `LA_model.pth` (ASVspoof 2019 LA
+training), evaluated on the S6 composite corpus and calibrated with the
+`w2v2aasist-s6-piper-only` Platt policy:
+
+1. **Reliably identifies VITS-family TTS (Piper)** and commercial neural TTS
+   (ElevenLabs, Google Cloud TTS) with EER 10 to 20 %, validated on the
+   holdout split. Piper holdout EER: 18.04 %. Unseen generators (ElevenLabs,
+   Google) scored 18.06 % and 17.96 % EER on the eval split (not in the
+   holdout; eval-only by design).
+
+2. **Does NOT reliably identify AR + flow-matching TTS** (Chatterbox-class)
+   at the current checkpoint. Holdout EER: 48.25 % (meetingroom), near
+   chance. This is a known OOD gap: the ASVspoof 2019 LA training set
+   contains no flow-matching attacks, and DFADD (2024) independently reports
+   44.21 % avg EER on flow-matching generators. Chatterbox strata are
+   excluded from the calibration fit. Closeable with fine-tuning (issue #252,
+   deferred to M2).
+
+3. **ASVspoof DF benchmark anchor is healthy:** EER 7.05 % on the imported
+   ASVspoof5 DF eval partition (eval-only, not in calibration or holdout).
+
+4. **VoxConverse-sourced bona fide scores higher** (mean raw score 3.62 vs
+   AMI 0.88), raising FPR on compressed or reverberant real speech. This is
+   by design: degraded bona fide strata are included in calibration so the
+   operating point reflects real-world field conditions, not clean studio
+   audio only (issue #253).
+
+5. **At the shipped FPR 5 % operating point**, TPR is approximately 16 %
+   on Piper holdout. The detector at this threshold functions as a
+   high-confidence alert, not a reliable spoof filter. Risk-flagging
+   deployments that tolerate ~20 % FPR achieve ~90 % TPR at the EER
+   threshold.
+
 ## Contract tests
 
 `tests/contracts/` validates (CPU-only, no model deps) that:

@@ -6,6 +6,18 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Synthdetect M1 S7: Platt calibration and holdout evaluation** (#144).
+  Piper-only calibration policy (`w2v2aasist-s6-piper-only`): Chatterbox
+  strata excluded from Platt fitting because near-chance EER (48.25% on
+  holdout) poisons the slope for detectable generators (A flattens from 0.96
+  to 0.32). Holdout opened exactly once (1420 clips): Piper-only EER 18.04%
+  (calibration 19.01%), Brier 0.140 (calibration 0.136), confirming the
+  policy generalizes. Coverage statement documents five findings: VITS-family
+  and commercial TTS detectable at 10-20% EER; Chatterbox-class TTS
+  uncalibrable; ASVspoof benchmark healthy; VoxConverse channel confound; FPR
+  5% operating point is a high-confidence flag (TPR ~16%), not a reliable
+  filter. `calibrate_policy` gains `exclude_strata` parameter for fitting on
+  a generator subset.
 - **Synthdetect M1 S6: spoof corpus, composite assembly, and first EER**
   (#144). Four TTS generators materialized (Piper 2540, Chatterbox 2540,
   ElevenLabs 969, Google Cloud TTS 969 clips) plus ASVspoof 2021 DF

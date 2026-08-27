@@ -19,6 +19,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 
+import synthdetect_corpus as sc  # noqa: E402
 import synthdetect_eval as se  # noqa: E402
 
 _sklearn = pytest.importorskip("sklearn", reason="synthdetect-eval extra not installed")
@@ -243,3 +244,115 @@ def test_rankdata_averages_ties() -> None:
     assert ranks[0] == pytest.approx(1.5)
     assert ranks[1] == pytest.approx(1.5)
     assert ranks[2] == pytest.approx(3.0)
+
+
+# --------------------------------------------------------------------------- #
+# calibrate_policy: exclude_strata
+# --------------------------------------------------------------------------- #
+def _make_calibration_fixtures(
+    bf_scores: list[float],
+    spoof_a_scores: list[float],
+    spoof_b_scores: list[float],
+    stratum_a: str = "spoof|tts|piper|meetingroom",
+    stratum_b: str = "spoof|tts|chatterbox|meetingroom",
+) -> tuple[se.Journal, sc.Manifest]:
+    """Build minimal Journal + Manifest for calibrate_policy tests."""
+
+    clips: list[sc.ClipEntry] = []
+    results: list[se.ClipScore] = []
+
+    for i, s in enumerate(bf_scores):
+        cid = f"bf-{i:04d}"
+        clips.append(sc.ClipEntry(
+            clip_id=cid, rel_path=f"bf/{cid}.wav", sha256="a" * 64,
+            duration_s=3.0, label="bona_fide", language="en",
+            license_spdx="CC-BY-4.0", stratum="organic-bonafide",
+            source="test", speaker_id=f"spk-{i}", split="calibration",
+            generator=None, degradation=None, parent_clip_id=None, acquire=None,
+        ))
+        results.append(se.ClipScore(clip_id=cid, raw_score=s, skip_reason=None, n_windows=1))
+
+    gen = sc.GeneratorProvenance(
+        name="test", version="1.0", checkpoint_sha=None,
+        voice="default", seed=None, text_source="test",
+    )
+    for i, s in enumerate(spoof_a_scores):
+        cid = f"spoof-a-{i:04d}"
+        clips.append(sc.ClipEntry(
+            clip_id=cid, rel_path=f"spoof_a/{cid}.wav", sha256="b" * 64,
+            duration_s=3.0, label="spoof", language="en",
+            license_spdx="CC-BY-4.0", stratum=stratum_a,
+            source="test", speaker_id=f"spk-{i}", split="calibration",
+            generator=gen, degradation=None, parent_clip_id=None, acquire=None,
+        ))
+        results.append(se.ClipScore(clip_id=cid, raw_score=s, skip_reason=None, n_windows=1))
+
+    for i, s in enumerate(spoof_b_scores):
+        cid = f"spoof-b-{i:04d}"
+        clips.append(sc.ClipEntry(
+            clip_id=cid, rel_path=f"spoof_b/{cid}.wav", sha256="c" * 64,
+            duration_s=3.0, label="spoof", language="en",
+            license_spdx="CC-BY-4.0", stratum=stratum_b,
+            source="test", speaker_id=f"spk-{i}", split="calibration",
+            generator=gen, degradation=None, parent_clip_id=None, acquire=None,
+        ))
+        results.append(se.ClipScore(clip_id=cid, raw_score=s, skip_reason=None, n_windows=1))
+
+    manifest = sc.Manifest(schema_version=3, clips=tuple(clips), corpus_kind="composite")
+    header = {
+        "kind": "synthdetect_journal", "schema_version": 1,
+        "inference_space": "synthdetect-w2v2-aasist-v1", "model_id": "w2v2-aasist",
+        "manifest_sha256": "a" * 64,
+        "windowing": {"pooling": "mean"},
+    }
+    journal = se.Journal(header=header, results=tuple(results))
+    return journal, manifest
+
+
+def test_calibrate_exclude_strata_reduces_population() -> None:
+    rng = np.random.default_rng(42)
+    bf = rng.normal(0.0, 1.0, 50).tolist()
+    piper = rng.normal(4.0, 1.0, 30).tolist()
+    chatterbox = rng.normal(0.5, 1.0, 30).tolist()
+    journal, manifest = _make_calibration_fixtures(bf, piper, chatterbox)
+
+    full = se.calibrate_policy(journal, manifest, policy_id="test-full")
+    assert full["n_calibration"] == 110
+    assert "excluded_strata" not in full
+
+    excl = se.calibrate_policy(
+        journal, manifest, policy_id="test-excl",
+        exclude_strata=("chatterbox",),
+    )
+    assert excl["n_calibration"] == 80
+    assert excl["excluded_strata"] == ["chatterbox"]
+    assert excl["n_excluded"] == 30
+    assert excl["cohort_sha256"] != full["cohort_sha256"]
+
+
+def test_calibrate_exclude_strata_steepens_platt() -> None:
+    rng = np.random.default_rng(42)
+    bf = rng.normal(0.0, 1.0, 100).tolist()
+    piper = rng.normal(5.0, 1.0, 60).tolist()
+    chatterbox = rng.normal(0.3, 1.0, 60).tolist()
+    journal, manifest = _make_calibration_fixtures(bf, piper, chatterbox)
+
+    full = se.calibrate_policy(journal, manifest, policy_id="full")
+    excl = se.calibrate_policy(
+        journal, manifest, policy_id="excl", exclude_strata=("chatterbox",),
+    )
+    assert excl["platt"]["A"] > full["platt"]["A"]
+    assert excl["brier"] < full["brier"]
+
+
+def test_calibrate_exclude_all_raises() -> None:
+    rng = np.random.default_rng(42)
+    bf = rng.normal(0.0, 1.0, 20).tolist()
+    piper = rng.normal(4.0, 1.0, 20).tolist()
+    journal, manifest = _make_calibration_fixtures(bf, piper, [], stratum_a="spoof|x")
+
+    with pytest.raises(se.EvalError, match="all clips excluded"):
+        se.calibrate_policy(
+            journal, manifest, policy_id="bad",
+            exclude_strata=("spoof", "bonafide"),
+        )

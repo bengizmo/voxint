@@ -914,7 +914,11 @@ def compare_windowing(
 # `calibrate` command (Platt on raw logits over the calibration split)
 # --------------------------------------------------------------------------- #
 def calibrate_policy(
-    journal: Journal, manifest: Manifest, *, policy_id: str
+    journal: Journal,
+    manifest: Manifest,
+    *,
+    policy_id: str,
+    exclude_strata: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Fit the calibration policy on the CALIBRATION split and report its fit.
 
@@ -922,10 +926,24 @@ def calibrate_policy(
     shipped operating point) and FPR 1% is reported as a diagnostic. The cohort
     hash binds the policy to exactly the clips it was fit on, so a later re-fit on
     a different cohort is a visibly different policy.
+
+    ``exclude_strata`` removes clips whose stratum contains any of the given
+    substrings (case-insensitive). Use this to fit on a generator subset when a
+    generator is uncalibrable (e.g. near-chance EER) and would poison the Platt
+    slope for generators the detector can actually discriminate.
     """
-    scored, _ = join_scores(journal, manifest, split="calibration")
-    if not scored:
+    all_scored, _ = join_scores(journal, manifest, split="calibration")
+    if not all_scored:
         raise EvalError("calibrate: no clips in the calibration split")
+    if exclude_strata:
+        lowered = tuple(p.lower() for p in exclude_strata)
+        scored = [c for c in all_scored if not any(p in c.stratum.lower() for p in lowered)]
+        n_excluded = len(all_scored) - len(scored)
+    else:
+        scored = all_scored
+        n_excluded = 0
+    if not scored:
+        raise EvalError("calibrate: all clips excluded after strata filter")
     labels = [c.label for c in scored]
     scores = [c.raw_score for c in scored]
     a, b = fit_platt(scores, labels)
@@ -944,7 +962,7 @@ def calibrate_policy(
     cohort_hash = hashlib.sha256(
         "\x00".join(sorted(c.clip_id for c in scored)).encode()
     ).hexdigest()
-    return {
+    policy: dict[str, Any] = {
         "schema_version": METRICS_SCHEMA_VERSION,
         "kind": "synthdetect_calibration_policy",
         "calibration_policy_id": policy_id,
@@ -959,6 +977,10 @@ def calibrate_policy(
         "cohort_sha256": cohort_hash,
         "n_calibration": len(scored),
     }
+    if exclude_strata:
+        policy["excluded_strata"] = list(exclude_strata)
+        policy["n_excluded"] = n_excluded
+    return policy
 
 
 # --------------------------------------------------------------------------- #
@@ -1088,7 +1110,10 @@ def cmd_verdict_windowing(args: argparse.Namespace) -> int:
 def cmd_calibrate(args: argparse.Namespace) -> int:
     journal = _read_journal(args.journal)
     manifest = _bind_manifest(journal, args.manifest)
-    policy = calibrate_policy(journal, manifest, policy_id=args.policy_id)
+    exclude = tuple(args.exclude_strata) if args.exclude_strata else ()
+    policy = calibrate_policy(
+        journal, manifest, policy_id=args.policy_id, exclude_strata=exclude,
+    )
     _write(args.out, policy)
     return 0
 
@@ -1133,6 +1158,10 @@ def main(argv: list[str] | None = None) -> int:
     p_cal.add_argument("--journal", required=True)
     p_cal.add_argument("--manifest", required=True)
     p_cal.add_argument("--policy-id", required=True)
+    p_cal.add_argument(
+        "--exclude-strata", nargs="+", default=None,
+        help="exclude clips whose stratum contains any of these substrings (case-insensitive)",
+    )
     p_cal.add_argument("--out", default=None)
     p_cal.set_defaults(func=cmd_calibrate)
 
