@@ -10,6 +10,7 @@ appends; the newest ruling per label wins at read time).
 """
 
 import contextlib
+import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Iterator
 from pathlib import Path
@@ -24,10 +25,12 @@ from fastapi import (
 )
 from fastapi.responses import (
     FileResponse,
+    HTMLResponse,
     Response,
 )
 from fastapi.routing import APIRoute
 from starlette.datastructures import MutableHeaders
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import ClientDisconnect
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -261,15 +264,83 @@ def _apply_security_headers(headers: MutableHeaders, *, review_path: bool) -> No
         headers.setdefault("cache-control", "no-store")
 
 
+def _wants_html(request: Request) -> bool:
+    """Return whether the request's Accept header includes HTML.
+
+    Intentionally simple: ``*/*`` and missing Accept fall through to JSON,
+    which is what scripted clients and curl expect."""
+    return "text/html" in request.headers.get("accept", "").lower()
+
+
+def _error_page_values(status_code: int, detail: Any) -> tuple[str, str]:
+    """Return client-safe title and detail text for an HTML error page."""
+    if status_code >= 500:
+        return "Something went wrong", "Internal Server Error"
+    if status_code == 404:
+        return (
+            "Page not found",
+            "The page you were looking for does not exist or has been moved.",
+        )
+    if status_code == 403:
+        return "Forbidden", str(detail)
+    return "Request error", str(detail)
+
+
+def _html_error_response(request: Request, status_code: int, detail: Any) -> Response:
+    """Render the standalone error template, with a resilient text fallback."""
+    title, safe_detail = _error_page_values(status_code, detail)
+    try:
+        response: HTMLResponse = templates.TemplateResponse(
+            request,
+            "error.html",
+            {
+                "status_code": status_code,
+                "title": title,
+                "detail": safe_detail,
+            },
+            status_code=status_code,
+        )
+        return response
+    except Exception:
+        logger.error("failed to render HTML error page", exc_info=True)
+        return Response(safe_detail, status_code=status_code, media_type="text/plain")
+
+
+async def _http_exception_handler(request: Request, exc: HTTPException) -> Response:
+    """Render HTTP errors as HTML for browsers and JSON for API clients."""
+    detail: Any = "Internal Server Error" if exc.status_code >= 500 else exc.detail
+    if _wants_html(request):
+        response = _html_error_response(request, exc.status_code, detail)
+    else:
+        response = Response(
+            json.dumps({"detail": detail}),
+            status_code=exc.status_code,
+            media_type="application/json",
+        )
+    if exc.headers and exc.status_code < 500:
+        response.headers.update(exc.headers)
+    _apply_security_headers(
+        response.headers, review_path=request.url.path.startswith("/review")
+    )
+    return response
+
+
 async def _security_headers_on_error(request: Request, exc: Exception) -> Response:
-    """Re-apply the D1 headers to an unhandled-exception 500.
+    """Content-negotiate an unhandled 500 and re-apply the D1 headers.
 
     Starlette's ``ServerErrorMiddleware`` wraps the whole app *outside* the
     user-added ``_SecurityHeadersMiddleware``, so a truly-unhandled exception's
     500 would otherwise skip the header stamp. Registering this as the ``Exception``
     handler closes that gap. ``ServerErrorMiddleware`` still re-raises after sending
     this response, so it does not mask exceptions from the server or tests."""
-    response = Response("Internal Server Error", status_code=500, media_type="text/plain")
+    if _wants_html(request):
+        response = _html_error_response(request, 500, "Internal Server Error")
+    else:
+        response = Response(
+            json.dumps({"detail": "Internal Server Error"}),
+            status_code=500,
+            media_type="application/json",
+        )
     _apply_security_headers(
         response.headers, review_path=request.url.path.startswith("/review")
     )
@@ -354,6 +425,12 @@ def create_app(
     # redirects; the Exception handler below covers unhandled 500s, which Starlette
     # generates OUTSIDE this middleware.
     app.add_middleware(_SecurityHeadersMiddleware)
+    # Starlette raises its base HTTPException for router-generated errors such
+    # as a nonexistent path; FastAPI's HTTPException is a subclass used by routes.
+    app.add_exception_handler(
+        StarletteHTTPException, _http_exception_handler  # type: ignore[arg-type]
+    )
+    app.add_exception_handler(HTTPException, _http_exception_handler)  # type: ignore[arg-type]
     app.add_exception_handler(Exception, _security_headers_on_error)
     _register_routes(app)
     return app
