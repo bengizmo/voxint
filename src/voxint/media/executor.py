@@ -166,6 +166,9 @@ def _plan_operation(
     claim_token: str | None,
     operation_id: uuid.UUID | None,
 ) -> MediaOperation:
+    destination = PurePosixPath(destination_path)
+    if destination.is_absolute() or ".." in destination.parts:
+        raise OperationRefused("destination path must stay within the media root")
     media = lock_media_row(session, media_id)
     if media is None:
         raise OperationRefused("media item does not exist")
