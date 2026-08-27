@@ -38,7 +38,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select, text, update
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from voxint.adjudication.resolver import label_states, review_states
@@ -51,6 +50,7 @@ from voxint.db.models import (
     TranscriptSegment,
 )
 from voxint.enrichment.review import ConflictingReplayError
+from voxint.idempotency import savepoint_adopt_or_conflict
 
 SOURCE_SCHEMA_VERSION = 1
 
@@ -614,59 +614,55 @@ def record_asset(
             "scope": str(source.pipeline_run_id),
         },
     )
-    existing = _existing()
-    if existing is not None:
-        return _adopt_or_conflict(existing)
-    generation = (
-        session.execute(
-            select(func.coalesce(func.max(RunEnrichmentAsset.generation), 0)).where(
-                RunEnrichmentAsset.pipeline_run_id == source.pipeline_run_id,
-                RunEnrichmentAsset.asset_kind == kind.value,
-            )
-        ).scalar_one()
-        + 1
-    )
-    asset = RunEnrichmentAsset(
-        pipeline_run_id=source.pipeline_run_id,
-        asset_kind=kind.value,
-        generation=generation,
-        payload=dict(payload),
-        payload_schema_version=payload_schema_version,
-        producer=producer,
-        producer_version=producer_version,
-        model=model,
-        source_content_hash=hash_value,
-        config_schema_version=config_schema_version,
-        idempotency_key=idempotency_key,
-        started_at=started_at,
-        completed_at=completed_at,
-    )
-    # Assign only when present: an explicit ``config=None`` would serialize as
-    # a JSON ``null`` (not SQL NULL) and trip the jsonb_typeof CHECK.
-    if config is not None:
-        asset.config = dict(config)
-    try:
-        # Savepoint, not a bare flush: losing an idempotency race must not
-        # roll back the caller's enclosing transaction (drafts.py pattern).
-        with session.begin_nested():
-            session.add(asset)
-            session.flush()
+
+    def _persist() -> RunEnrichmentAsset:
+        generation = (
             session.execute(
-                update(RunEnrichmentAsset)
-                .where(
+                select(func.coalesce(func.max(RunEnrichmentAsset.generation), 0)).where(
                     RunEnrichmentAsset.pipeline_run_id == source.pipeline_run_id,
                     RunEnrichmentAsset.asset_kind == kind.value,
-                    RunEnrichmentAsset.generation < generation,
-                    RunEnrichmentAsset.superseded_by_asset_id.is_(None),
                 )
-                .values(superseded_by_asset_id=asset.id)
+            ).scalar_one()
+            + 1
+        )
+        asset = RunEnrichmentAsset(
+            pipeline_run_id=source.pipeline_run_id,
+            asset_kind=kind.value,
+            generation=generation,
+            payload=dict(payload),
+            payload_schema_version=payload_schema_version,
+            producer=producer,
+            producer_version=producer_version,
+            model=model,
+            source_content_hash=hash_value,
+            config_schema_version=config_schema_version,
+            idempotency_key=idempotency_key,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        if config is not None:
+            asset.config = dict(config)
+        session.add(asset)
+        session.flush()
+        session.execute(
+            update(RunEnrichmentAsset)
+            .where(
+                RunEnrichmentAsset.pipeline_run_id == source.pipeline_run_id,
+                RunEnrichmentAsset.asset_kind == kind.value,
+                RunEnrichmentAsset.generation < generation,
+                RunEnrichmentAsset.superseded_by_asset_id.is_(None),
             )
-    except IntegrityError:
-        existing = _existing()
-        if existing is None:
-            raise
-        return _adopt_or_conflict(existing)
-    return asset
+            .values(superseded_by_asset_id=asset.id)
+        )
+        return asset
+
+    # The helper's lookup() acts as the post-lock re-check.
+    return savepoint_adopt_or_conflict(
+        session,
+        lookup=_existing,
+        adopt_or_conflict=_adopt_or_conflict,
+        persist=_persist,
+    )
 
 
 def latest_assets(session: Session, pipeline_run_id: uuid.UUID) -> dict[str, RunEnrichmentAsset]:
