@@ -30,8 +30,10 @@ from voxint.api import settings_view
 from voxint.api.csrf import CSRF_SETTINGS, CSRF_SETUP, mint_csrf_token
 from voxint.api.languages import LANGUAGE_NAMES
 from voxint.api.resource_status import (
+    ResourceSnapshot,
     build_resource_strip,
     collect_resource_status_or_empty,
+    vram_percent,
 )
 from voxint.api.routers import deps
 from voxint.api.routers.deps import (
@@ -787,6 +789,115 @@ def _doctor_checks(request: Request, session: Session) -> list[dict[str, Any]]:
         }
         for r in results
     ]
+
+
+# ---- R6 Status page: component list + hardware gauges (issue #215) --------
+
+_COMPONENT_LABELS: dict[str, str] = {
+    "postgres": "Database",
+    "redis": "Task queue",
+    "transcription": "Transcriber",
+    "diarization": "Voice separation",
+    "speaker embedding": "Voice identity",
+    "llm endpoint": "Local AI model",
+}
+
+_COMPONENT_ORDER = (
+    "__api__",
+    "transcription",
+    "diarization",
+    "speaker embedding",
+    "postgres",
+    "redis",
+    "llm endpoint",
+)
+
+
+def _build_components(
+    checks: list[dict[str, Any]], settings: Settings
+) -> list[dict[str, Any]]:
+    """Map doctor checks to the R6 component list with friendly names.
+
+    Adds a synthetic "Console & API" entry (the app is serving this page, so it
+    is always running). Sorts to the stable display order.
+    """
+    by_name: dict[str, dict[str, Any]] = {c["name"]: c for c in checks}
+    llm_enabled = settings.llm_enabled
+    rows: list[dict[str, Any]] = []
+    for key in _COMPONENT_ORDER:
+        if key == "__api__":
+            rows.append({
+                "label": "Console & API",
+                "dot": "ok",
+                "state_text": "running",
+                "action_url": None,
+                "action_label": None,
+            })
+            continue
+        check = by_name.get(key)
+        if check is None:
+            continue
+        state = check["state"]
+        label = _COMPONENT_LABELS.get(key, key)
+        if state == "ready":
+            dot = "ok"
+            state_text = f"running · {check['detail']}" if check["detail"] else "running"
+        elif key == "llm endpoint" and not llm_enabled:
+            dot = "off"
+            state_text = "off"
+        else:
+            dot = "warn"
+            state_text = check["detail"] or state
+        action_url: str | None = None
+        action_label: str | None = None
+        if key == "llm endpoint" and dot == "off":
+            action_url = "/settings#llm"
+            action_label = "Turn on"
+        rows.append({
+            "label": label,
+            "dot": dot,
+            "state_text": state_text,
+            "action_url": action_url,
+            "action_label": action_label,
+        })
+    return rows
+
+
+def _build_gauges(
+    snapshot: ResourceSnapshot,
+) -> list[dict[str, Any]]:
+    """Build the hardware gauge rows from the resource snapshot."""
+
+    gauges: list[dict[str, Any]] = []
+    for gpu in snapshot.gpus:
+        if gpu.utilization_percent is not None:
+            gauges.append({
+                "label": "Graphics card",
+                "value": f"{gpu.utilization_percent}%",
+                "percent": gpu.utilization_percent,
+            })
+        pct = vram_percent(gpu.vram_used_bytes, gpu.vram_total_bytes)
+        if pct is not None:
+            assert gpu.vram_used_bytes is not None
+            assert gpu.vram_total_bytes is not None
+            used_gb = gpu.vram_used_bytes / (1024**3)
+            total_gb = gpu.vram_total_bytes / (1024**3)
+            gauges.append({
+                "label": "Graphics memory",
+                "value": f"{used_gb:.1f} / {total_gb:.0f} GB",
+                "percent": pct,
+            })
+    return gauges
+
+
+def _install_summary(settings: Settings) -> str:
+    """One-line install summary for the status banner."""
+    import voxint
+
+    kind = settings_view.install_kind()
+    parts = [f"{kind} install" if kind != "unknown" else "Install type unknown"]
+    parts.append(f"version {voxint.__version__}")
+    return " · ".join(parts)
 
 
 def _minimal_services_context(request: Request, settings: Settings) -> dict[str, Any]:
@@ -1872,37 +1983,37 @@ def _app_settings_or_none(session: Session) -> AppSettings | None:
 def settings_status_page(
     request: Request, operator: OperatorDep, session: SessionDep
 ) -> Response:
-    # The doctor checks self-contain every dependency failure and the hardware
-    # snapshot strip degrades to empty on a probe failure, so a Redis or
-    # model-service outage renders honestly rather than 500ing. (A full Postgres
-    # outage is handled app-wide by the onboarding gate, which routes to the setup
-    # wizard's diagnostics before this handler runs.)
     settings: Settings = request.app.state.settings
     snapshot = collect_resource_status_or_empty(settings)
-    # The hardware snapshot self-polls this route every 15s (P6b #161, absorbing
-    # the retired /resources view). Answer that HX poll with just the snapshot
-    # fragment, and build ONLY the snapshot context: the doctor checks probe
-    # Postgres/Redis/the model services, and re-running them every 15s would be a
-    # steady background load for no gain (the poll only refreshes the hardware
-    # strip). So branch before _doctor_checks, exactly as /resources used to. A
-    # boosted navigation (HX-Boosted) wants the whole document, so exclude it —
-    # nothing uses hx-boost today, but this keeps the fragment scoped to the poll.
+    gauges = _build_gauges(snapshot)
+    strip = build_resource_strip(snapshot)
+    warnings = list(strip.warnings)
+    # The hardware gauges poll this route every 15s via htmx. Answer the poll
+    # with just the gauge fragment (doctor checks are expensive network probes
+    # and must not re-run on every tick). A boosted navigation wants the whole
+    # document, so exclude it.
     if request.headers.get("HX-Request") and not request.headers.get("HX-Boosted"):
         return templates.TemplateResponse(
             request,
-            "legacy_runs/resource_status.html",
+            "settings/_status_gauges.html",
             {
                 "request": request,
-                "snapshot": snapshot,
-                "resource_strip": build_resource_strip(snapshot),
+                "gauges": gauges,
+                "gauge_note": None,
+                "warnings": warnings,
             },
         )
+    checks = _doctor_checks(request, session)
+    components = _build_components(checks, settings)
+    overall_ok = all(c["dot"] != "warn" for c in components)
     context = _sub_page_context(
         request,
-        install_kind=settings_view.install_kind(),
-        doctor_checks=_doctor_checks(request, session),
-        snapshot=snapshot,
-        resource_strip=build_resource_strip(snapshot),
+        overall_ok=overall_ok,
+        install_summary=_install_summary(settings),
+        components=components,
+        gauges=gauges,
+        gauge_note=None,
+        warnings=warnings,
     )
     return templates.TemplateResponse(request, "settings/status.html", context)
 

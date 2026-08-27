@@ -1,55 +1,56 @@
 {% extends "base.html" %}
 {% block title %}Voxint — status{% endblock %}
+
+{% block cb_breadcrumb %}settings /{% endblock %}
+{% block cb_summary %}{% endblock %}
+{% block cb_search %}{% endblock %}
+{% block cb_actions %}{% endblock %}
+
 {% block body %}
-{# Console 2.0 P6 status sub-page (issue #161): install kind, component health,
-   and the live hardware snapshot. The doctor checks self-contain every dependency
-   failure and the snapshot degrades to empty on a probe failure, so this renders a
-   200 even with Postgres, Redis, or the model services down. #}
-<div class="settings">
-<h1>Status and health</h1>
-<p><a href="/settings">← Settings</a></p>
+<nav class="filter-tabs" role="tablist" aria-label="Settings pages">
+  <a href="/settings/status" role="tab" aria-current="true">Status</a>
+  <a href="/settings/hardware" role="tab">Hardware</a>
+  <a href="/settings/database" role="tab">Database</a>
+  <a href="/settings/plugins" role="tab">Plugins</a>
+  <span class="ft-spacer"></span>
+  <span class="oc-muted">Some changes restart parts of Voxint</span>
+</nav>
 
-<section aria-labelledby="install-heading">
-<h2 id="install-heading">Install</h2>
-<p>Install kind: <strong>{{ install_kind }}</strong>{% if install_kind == "unknown" %}
-   <span class="muted">(not detected on this deployment)</span>{% endif %}</p>
+<section class="oc-section" aria-label="System status">
+  <div class="status-banner">
+    <div class="sb-dot {% if overall_ok %}is-ok{% else %}is-warn{% endif %}"></div>
+    <div class="sb-body">
+      <strong class="sb-headline">{% if overall_ok %}Everything is running normally{% else %}Some parts need attention{% endif %}</strong>
+      <span class="sb-detail">{{ install_summary }}</span>
+    </div>
+    <a class="cb-btn cb-btn-secondary" href="/settings/hardware">Check hardware</a>
+  </div>
 </section>
 
-<section aria-labelledby="health-heading">
-<h2 id="health-heading">Component health</h2>
-<p class="muted">Checked live as this page loads. A failed component means the work
-   that needs it will not run until it is back.</p>
-<div class="table-wrap">
-<table>
-  <thead><tr>
-    <th scope="col">Component</th><th scope="col">State</th><th scope="col">Detail</th>
-  </tr></thead>
-  <tbody>
-    {% for c in doctor_checks %}
-    <tr>
-      <td>{{ c.name }}</td>
-      <td><span class="pill {{ c.state }}">{{ c.state }}</span></td>
-      <td>{{ c.detail }}{% if c.state != "ready" and c.remediation %}<br>
-        <span class="muted">{{ c.remediation }}</span>{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
-</div>
-</section>
+<div class="status-columns">
+  <section class="oc-section" aria-label="Parts of Voxint">
+    <h2 class="oc-section-title">PARTS OF VOXINT</h2>
+    <ul class="component-list">
+      {% for c in components %}
+      <li class="component-row">
+        <span class="cr-dot {% if c.dot == 'ok' %}is-ok{% elif c.dot == 'off' %}is-off{% else %}is-warn{% endif %}"></span>
+        <span class="cr-name">{{ c.label }}</span>
+        <span class="cr-state">{{ c.state_text }}</span>
+        <span class="cr-action">
+          {% if c.action_url %}<a href="{{ c.action_url }}">{{ c.action_label }}</a>{% endif %}
+        </span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
 
-<section aria-labelledby="snapshot-heading">
-<h2 id="snapshot-heading">Hardware snapshot</h2>
-{# The htmx poll re-requests /settings/status every 15s; the route answers the
-   HX-Request with just the fragment below (skipping the doctor checks), swapped
-   into this container so the page chrome, health table, and nav are untouched.
-   innerHTML swaps the contents, so this polling container (and its hx-get)
-   persists unchanged across polls. Absorbs the retired /resources auto-refresh
-   (Console 2.0 P6b, #161). #}
-<div id="resource-status"
-     hx-get="/settings/status" hx-trigger="every 15s" hx-swap="innerHTML">
-  {% include "legacy_runs/resource_status.html" %}
-</div>
-</section>
+  <section class="oc-section" aria-label="Hardware gauges">
+    <h2 class="oc-section-title">THIS COMPUTER RIGHT NOW</h2>
+    <div id="status-gauges"
+         hx-get="/settings/status" hx-trigger="every 15s" hx-swap="innerHTML">
+      {% include "settings/_status_gauges.html" %}
+    </div>
+    <p class="oc-muted" style="margin-top:var(--space-3)">Speed settings (batch size, GPU on/off) live under <a href="/settings/hardware">Hardware</a>.</p>
+  </section>
 </div>
 {% endblock %}
