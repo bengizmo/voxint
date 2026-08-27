@@ -163,6 +163,7 @@
         </td>
         <td>
           <span class="media-title" title="{{ row.source_path }}">{{ friendly_media_label(row.source_title, row.source_path) }}</span>
+          {% if row.id in missing_file_ids %}<span class="pill danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
           <br><code class="muted">{{ row.source_path }}</code>
         </td>
         <td>{% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
@@ -198,6 +199,7 @@
     {# Render-time latest-run baseline (see the table view): idempotent archive. #}
     <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
     <code class="muted">{{ row.source_path }}</code>
+    {% if row.id in missing_file_ids %}<span class="pill danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
     <p class="muted">
       {% if row.folder_path %}<code>{{ row.folder_path }}</code>{% else %}No folder{% endif %}
       · {{ format_duration(row.duration_seconds) }} · {{ format_size(row.size_bytes) }}

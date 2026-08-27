@@ -48,6 +48,7 @@ class MediaLibraryRow:
 
     id: uuid.UUID
     source_path: str
+    current_path: str | None
     source_title: str | None
     media_folder_id: uuid.UUID | None
     folder_path: str | None
@@ -185,6 +186,7 @@ def media_library(
     stmt = sa_select(
         MediaItem.id,
         MediaItem.source_path,
+        MediaItem.current_path,
         MediaItem.media_folder_id,
         MediaItem.duration_seconds,
         MediaItem.size_bytes,
@@ -231,6 +233,7 @@ def media_library(
             MediaLibraryRow(
                 id=row.id,
                 source_path=row.source_path,
+                current_path=row.current_path,
                 source_title=row.source_title,
                 media_folder_id=row.media_folder_id,
                 folder_path=row.folder_path,

@@ -778,6 +778,33 @@ The same API serves a browser console (HTTP Basic, `VOXINT_USER` /
   Use whichever fits, they compose (deleting a run already GC-reclaimed just
   finds its file already gone).
 
+**Media library file management** (`/media`, behind `console_media_enabled`,
+ADR 0007). The library page offers three file operations through a journaled
+operations system that survives crashes at any filesystem boundary:
+
+- **Trash** (`POST /media/trash`): bulk-moves selected files into a managed
+  `_trash/` tree inside `MEDIA_ROOT`. The file stays playable (playback resolves
+  `current_path`, which follows the move). The watcher skips the trash tree.
+  `media_items.trashed_at` is set on completion.
+- **Restore** (`POST /media/restore`, from the trash view): moves each file back
+  to its original location. Refuses if the destination is occupied (an honest
+  "destination occupied" error, never an overwrite).
+- **Empty trash** (`POST /media/empty-trash`): permanently deletes every trashed
+  file and all its derived artifacts (preprocessed WAV, chunks, peaks, clips).
+  Builds a durable per-file manifest first, deletes children one at a time with
+  per-child commits, then removes artifact DB rows and sets `purged_at`. A partial
+  purge is recoverable (the reconciler retries failed children on the next sweep).
+
+Each operation is recorded in the `media_operations` journal. The route plans the
+operation (committing the journal row), then executes it inline. If execution is
+interrupted (crash, I/O error), the `voxint.media_reconcile` beat task drives the
+operation to a consistent terminal state on its next sweep.
+
+The active library view hides trashed and purged items. The trash view
+(`/media?trashed=1`) shows trashed-not-yet-purged items. A "File missing" badge
+appears on any library row whose `current_path` does not resolve to a regular file
+on disk.
+
 Beyond these, the console stays **append-only** for evidence: archive hides but
 never deletes rows, media-delete only removes re-derivable audio files (never the
 ledger), and there is no speaker-roster editing from these pages (roster changes

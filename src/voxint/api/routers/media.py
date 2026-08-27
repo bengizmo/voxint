@@ -369,6 +369,19 @@ def _library_context(
     if not trashed:
         trash_params["trashed"] = "1"
     trash_toggle_url = f"/media?{urlencode(trash_params)}"
+    missing_file_ids: frozenset[uuid.UUID] = frozenset()
+    if not trashed:
+        media_root = settings.media_root
+        missing = set()
+        for row in rows:
+            path = row.current_path if row.current_path is not None else row.source_path
+            resolved = media_root / path
+            try:
+                if not resolved.resolve().is_file():
+                    missing.add(row.id)
+            except OSError:
+                missing.add(row.id)
+        missing_file_ids = frozenset(missing)
     return {
         "request": request,
         "active_nav": "media",
@@ -418,6 +431,7 @@ def _library_context(
         # re-renders, so a rejected bulk action does not drop their work.
         "selected_ids": selected_ids,
         "attempted_folder_id": attempted_folder_id,
+        "missing_file_ids": missing_file_ids,
     }
 
 
