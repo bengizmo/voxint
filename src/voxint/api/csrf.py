@@ -34,9 +34,14 @@ token). Verification is constant-time (``hmac.compare_digest``).
 """
 
 import hmac
+import logging
+import os
 import secrets
 import time
 from hashlib import sha256
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # token_urlsafe (base64url) / decimal ts / hexdigest never emit ".", so it cleanly
 # separates the three parts.
@@ -167,6 +172,52 @@ CSRF_MEDIA_UNARCHIVE = "media-unarchive"
 CSRF_MEDIA_TRASH = "media-trash"
 CSRF_MEDIA_RESTORE = "media-restore"
 CSRF_MEDIA_EMPTY_TRASH = "media-empty-trash"
+
+
+_CSRF_SECRET_FILENAME = ".csrf_secret"
+
+
+def load_or_create_csrf_secret(media_root: Path) -> str:
+    """Load a persistent CSRF secret from the data directory, generating one
+    on first run.
+
+    The file is created with ``O_CREAT | O_EXCL`` (atomic: exactly one process
+    creates it) and 0600 permissions. A concurrent starter that loses the race
+    reads the winner's secret. The operator can rotate by deleting the file and
+    restarting.
+    """
+    secret_path = media_root / _CSRF_SECRET_FILENAME
+
+    try:
+        content = secret_path.read_text().strip()
+        if len(content) >= 16:
+            return content
+    except FileNotFoundError:
+        pass
+
+    candidate = secrets.token_urlsafe(32)
+    try:
+        media_root.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(secret_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, (candidate + "\n").encode())
+        finally:
+            os.close(fd)
+        logger.info("generated persistent CSRF secret at %s", secret_path)
+        return candidate
+    except FileExistsError:
+        content = secret_path.read_text().strip()
+        if len(content) >= 16:
+            return content
+        return candidate
+    except OSError:
+        logger.warning(
+            "could not persist CSRF secret to %s; using an in-memory secret "
+            "(open forms will break on restart)",
+            secret_path,
+            exc_info=True,
+        )
+        return candidate
 
 
 def _sign(secret: str, action: str, nonce: str, ts: int) -> str:
