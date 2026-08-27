@@ -61,13 +61,15 @@ def test_sidebar_media_link_follows_flag(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:
     # On Home (active_nav "home"), the Media link points at /media but carries no
-    # aria-current — you are not on the Media area.
+    # aria-current — you are not on the Media area. V2 icon rail uses aria-label.
     on = _client(session_factory, tmp_path, media_enabled=True).get("/")
-    assert 'href="/media">Media</a>' in on.text
+    assert 'href="/media"' in on.text
+    assert 'aria-label="Media"' in on.text
 
     off = _client(session_factory, tmp_path, media_enabled=False).get("/")
     # Flag off: Media stays the /runs placeholder.
-    assert 'href="/runs">Media</a>' in off.text
+    assert 'href="/runs"' in off.text
+    assert 'aria-label="Media"' in off.text
 
 
 def test_sidebar_media_link_is_current_on_media_page(
@@ -76,7 +78,9 @@ def test_sidebar_media_link_is_current_on_media_page(
     """On /media (active_nav "media"), the flag-on Media link reads as current."""
     media = _client(session_factory, tmp_path, media_enabled=True).get("/media")
     assert media.status_code == 200
-    assert 'href="/media" aria-current="page">Media</a>' in media.text
+    assert 'href="/media"' in media.text
+    assert 'aria-current="page"' in media.text
+    assert 'aria-label="Media"' in media.text
 
 
 def test_flag_off_runs_page_has_no_media_pointer(
