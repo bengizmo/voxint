@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 from markupsafe import Markup, escape
-from sqlalchemy import ColumnElement, and_, case, func, or_
+from sqlalchemy import ColumnElement, Float, and_, case, cast, func, or_
 from sqlalchemy import select as sa_select
 from sqlalchemy.orm import Session
 
@@ -411,9 +411,15 @@ def list_runs(
         .correlate(PipelineRun)
         .scalar_subquery()
     )
-    elapsed = func.extract(
-        "epoch",
-        func.coalesce(last_finished, PipelineRun.updated_at) - PipelineRun.created_at,
+    # updated_at fallback: approximation for legacy/seeded runs with no stage
+    # rows. updated_at has onupdate=func.now(), so a later note/archive edit
+    # can inflate this — acceptable for the rare legacy case.
+    elapsed = cast(
+        func.extract(
+            "epoch",
+            func.coalesce(last_finished, PipelineRun.updated_at) - PipelineRun.created_at,
+        ),
+        Float,
     )
     stmt = (
         sa_select(
