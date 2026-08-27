@@ -443,6 +443,15 @@ def test_compare_identity_mismatch_rejected() -> None:
         se.compare_journals(j1, j2, decision_threshold=0.0)
 
 
+def test_dropped_tail_samples_accepted_by_scorer() -> None:
+    # A journal result with dropped_tail_samples > 0 must be accepted by
+    # parse_journal (the field is optional audit data, not a required key).
+    rec = {"clip_id": "c1", "raw_score": 0.5, "n_windows": 1, "dropped_tail_samples": 100}
+    j = se.parse_journal(_journal_text(_header(), [rec]))
+    assert j.results[0].raw_score == 0.5
+    assert len(j.results) == 1
+
+
 def test_compare_reports_asymmetry() -> None:
     j1 = se.parse_journal(_journal_text(_header(), [
         {"clip_id": "c1", "raw_score": 1.0}, {"clip_id": "c2", "raw_score": 2.0}]))
