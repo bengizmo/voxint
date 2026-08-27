@@ -320,7 +320,7 @@ def test_no_requeue_button_for_queued_run(
     client: TestClient, session_factory: sessionmaker[Session]
 ) -> None:
     with session_factory() as session:
-        run_id = submit_media_item(session, "incoming/notfailed.wav").id
+        run_id = submit_media_item(session, "incoming/notfailed.wav").run_id
         session.commit()
     body = client.get(f"/runs/{run_id}").text
     assert "/requeue" not in body

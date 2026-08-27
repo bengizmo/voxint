@@ -193,11 +193,17 @@ def _submit(args: argparse.Namespace) -> int:
         # Publish AFTER the durable commit and OUTSIDE its transaction; a broker
         # outage degrades cleanly (run stays QUEUED for the recovery sweep).
         published = result.publish()
+        if not published:
+            print(
+                f"warning: broker unavailable; run {run_id} stays QUEUED for "
+                "the recovery sweep to re-enqueue",
+                file=sys.stderr,
+            )
         if args.wait:
             if not published:
                 print(
-                    "note: enqueue deferred (broker unavailable); polling will "
-                    "wait until the recovery sweep re-enqueues the run",
+                    "note: polling will wait until the recovery sweep "
+                    "re-enqueues the run",
                     file=sys.stderr,
                 )
             try:
