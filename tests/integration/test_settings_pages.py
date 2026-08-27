@@ -113,8 +113,9 @@ def test_default_activates_the_hub_and_nav_cutover(
     assert default_settings.console_settings_enabled is True
     body = _client(session_factory).get("/settings").text  # no flag override
     assert "Everyday settings" in body  # the hub, not the flat page
-    assert 'href="/settings/status">Hardware' in body  # nav points at the sub-page
-    assert 'href="/resources"' not in body  # the old link is gone from the shell
+    assert 'href="/settings/status"' in body  # status sub-page link in hub nav
+    assert 'href="/settings/hardware"' in body  # hardware sub-page link in hub nav
+    assert 'href="/resources"' not in body  # the old link is gone
 
 
 def test_flag_on_post_error_rerenders_hub(
