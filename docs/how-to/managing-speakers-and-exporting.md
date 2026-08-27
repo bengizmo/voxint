@@ -30,23 +30,27 @@ Two things to understand from the start:
 ## The roster
 
 Open **Speakers** in the sidebar (or go to
-[http://127.0.0.1:8080/speakers](http://127.0.0.1:8080/speakers)). Each speaker
-is a card showing their name, how many voice samples ("enrollments") Voxint
-holds for them, how many times Voxint has proposed them on recordings, and when
-they were last heard.
+[http://127.0.0.1:8080/speakers](http://127.0.0.1:8080/speakers)). The roster
+is a table showing each speaker's initials badge, name, status (verified,
+needs you, or unknown), file count, minutes of speech, voice match strength,
+and when they were last heard. An amber TO DO strip at the top calls out
+voices waiting for a name and pending name suggestions.
 
-![The speaker roster: one card per enrolled speaker, each showing the speaker's
-name, a small voice-signature strip, a count of enrollments and machine
-proposals, and buttons to rename, merge, or archive that
-speaker.](../images/speakers.png)
+![The speaker roster: a table of enrolled speakers with initials badges, status
+chips, and voice match percentages.](../images/speakers.png)
 
-Here is what you can do from this page.
+Click **Open** on any row to see the speaker's detail page, which shows stat
+tiles (recordings, speaking time, segments, match strength, first and last
+heard), a profile panel, and a heard-in table listing every recording the
+speaker appears in.
+
+Here is what you can do from these pages.
 
 ### Rename a speaker
 
-Type the corrected name into the speaker's name box and click **Rename**. Use
-this to fix a typo, or to replace a placeholder like "Interviewer" with a real
-name once you know it. Renaming only changes the label; it does not disturb any
+Type the corrected name into the name box and click **Rename**. Use this to fix
+a typo, or to replace a placeholder like "Interviewer" with a real name once
+you know it. Renaming only changes the label; it does not disturb any
 recording's decisions.
 
 ### Merge duplicates
@@ -55,8 +59,8 @@ Sometimes the same person gets enrolled twice under two different names, for
 example "Maria" on one recording and "Maria Chen" on another. Merging joins
 them back into one speaker.
 
-On the card for the duplicate you want to remove, pick the speaker to merge it
-**into** from the drop-down, then click **Merge** and confirm. The duplicate's
+On the duplicate speaker's row, pick the speaker to merge it **into** from the
+drop-down, then click **Merge** and confirm. The duplicate's
 voice samples and its machine proposals move over to the speaker you kept. Merge
 **cannot be undone**, so check that the two are truly the same person first.
 
@@ -85,8 +89,8 @@ into.)
 
 ### Remove a bad voice sample
 
-Open a speaker's **Enrollments** list to see the individual voice samples Voxint
-holds for them, each with the date and the recording it came from. If one sample
+Open a speaker's detail page to see the individual voice samples Voxint holds
+for them, each with the date and the recording it came from. If one sample
 was captured from the wrong voice, click **Remove** next to it and confirm. That
 sample and any machine proposals that came from it are removed. The decision
 history on past recordings stays intact.

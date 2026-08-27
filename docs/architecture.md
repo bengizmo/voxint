@@ -214,8 +214,8 @@ repointing (`speakers/profile.py`, `speakers/roster.py`) take the same lock,
 so an accept, an edit, and a merge can never interleave on one speaker. A
 replayed accept fills an absent field or refreshes its own value only; it
 never reverses a later manual edit. Draft-claim history stays in the immutable
-enrichment tables. The Console 2.0 speakers overview and `/speakers/{id}`
-profile pages (behind `CONSOLE_SPEAKERS_ENABLED`) read this table plus
+enrichment tables. The speakers overview (`/speakers`) and detail
+(`/speakers/{id}`) pages read this table plus
 per-speaker aggregates folded from effective resolution
 (`speakers/aggregate.py`: one canonical newest completed run per recording,
 human rulings over automatic matches), with voice-match tiers graded against
