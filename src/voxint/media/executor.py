@@ -385,6 +385,11 @@ def execute_operation(
     }:
         _execute_move_like(session, media_root, operation, claim_token)
         return
+    if operation.operation_type == OperationType.PURGE.value:
+        from voxint.media.purge import execute_purge
+
+        execute_purge(session, media_root, operation, claim_token)
+        return
     raise OperationRefused(f"unsupported operation type: {operation.operation_type}")
 
 

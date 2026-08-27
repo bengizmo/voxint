@@ -319,6 +319,30 @@ def _reenter_retry(
     return target.value
 
 
+def _apply_purge_table(
+    session: Session,
+    media_root: Path,
+    operation: MediaOperation,
+    claim_token: str,
+) -> _Outcome:
+    """Reconcile a purge operation per the ADR 0007 purge table."""
+    from voxint.media.purge import execute_purge
+
+    execute_purge(session, media_root, operation, claim_token)
+    session.expire_all()
+    refreshed = session.get(MediaOperation, operation.id)
+    if refreshed is None or refreshed.state not in OPERATION_TERMINAL_STATES:
+        if (
+            refreshed is not None
+            and refreshed.state == OperationState.AWAITING_RETRY.value
+        ):
+            return "retried"
+        return "skipped"
+    if refreshed.state == OperationState.COMPLETED.value:
+        return "completed"
+    return "failed"
+
+
 def _apply_table(
     session: Session,
     media_root: Path,
@@ -489,11 +513,11 @@ def _process_one(
             return _fail(
                 session, operation, operation.state, claim_token, "superseded"
             )
-        if operation.operation_type == OperationType.PURGE.value:
-            logger.info("skipping purge operation %s", operation.id)
-            session.rollback()
-            return "skipped"
         try:
+            if operation.operation_type == OperationType.PURGE.value:
+                return _apply_purge_table(
+                    session, media_root, operation, claim_token
+                )
             return _apply_table(session, media_root, operation, claim_token)
         except (OSError, OperationRefused, TransitionError) as exc:
             session.rollback()
