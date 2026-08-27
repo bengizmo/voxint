@@ -1166,7 +1166,7 @@ LLM_ENABLED=true              # + LLM_BASE_URL / LLM_MODEL / LLM_API_KEY
 > enrichment producers, so web research and run assets still require
 > `LLM_ENABLED=true` in the environment.
 
-Operate it from the speaker's card on `/speakers`: the "Web research" block
+Operate it from the speaker's detail page (`/speakers/{id}`): the "Web research" block
 shows the exact budget a job will run under (`RESEARCH_MAX_SEARCHES=3`,
 `RESEARCH_MAX_READS=5`, `RESEARCH_MAX_ROUNDS=5`,
 `RESEARCH_DEADLINE_SECONDS=300`; env-tunable, never raisable per job), an
