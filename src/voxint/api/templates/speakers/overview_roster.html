@@ -5,7 +5,12 @@
    preserves both. Operator refusals (RosterError) arrive as roster_error. #}
 {% from "fragments/_chips.html" import chip %}
 {% set qs = "sort=" ~ sort ~ "&view=" ~ view %}
-{% if roster_error %}<p class="notice error" role="alert">{{ roster_error }}</p>{% endif %}
+{% if roster_error %}<p class="error" role="alert">{{ roster_error }}</p>{% endif %}
+{# Mutation CSRF tokens: the overview's action forms live on the detail page,
+   but the route handler re-renders this fragment after mutations, so the tokens
+   must survive here for htmx round-trips. #}
+<input type="hidden" name="csrf_token" value="{{ csrf_rename }}" data-csrf-rename>
+<input type="hidden" name="csrf_token" value="{{ csrf_archive }}" data-csrf-archive>
 
 {# TO DO strip (#159 R4): action reminders the operator needs to address. #}
 {% if overview.unverified_active or overview.name_suggestions %}
