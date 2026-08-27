@@ -32,6 +32,7 @@ from voxint.media.operations import (
     OperationRefused,
     cas_transition,
     claim_operation,
+    has_active_operation,
     has_active_run,
     lock_media_row,
 )
@@ -58,6 +59,8 @@ def plan_purge(
         raise OperationRefused("media item does not exist")
     if has_active_run(session, media_id):
         raise OperationRefused("media item has an active run")
+    if has_active_operation(session, media_id):
+        raise OperationRefused("media item has an active operation")
     if media.purged_at is not None:
         raise OperationRefused("media item is already purged")
     if media.trashed_at is None:

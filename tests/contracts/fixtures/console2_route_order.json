@@ -126,6 +126,24 @@
   ]
  ],
  [
+  "/media/trash",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/restore",
+  [
+   "POST"
+  ]
+ ],
+ [
+  "/media/empty-trash",
+  [
+   "POST"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"

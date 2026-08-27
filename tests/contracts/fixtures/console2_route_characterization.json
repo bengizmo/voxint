@@ -104,6 +104,14 @@
     true
   ],
   [
+    "/media/empty-trash",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/fetch",
     [
       "POST"
@@ -136,7 +144,23 @@
     true
   ],
   [
+    "/media/restore",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/submit",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/media/trash",
     [
       "POST"
     ],

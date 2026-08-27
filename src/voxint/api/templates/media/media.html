@@ -16,10 +16,10 @@
 {% block cb_actions %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}
-  <a href="/media?sort={{ sort }}&view={{ value }}{% if archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
+  <a href="/media?sort={{ sort }}&view={{ value }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
-{% if not archived %}
+{% if not archived and not trashed %}
 <div class="add-media-dd" data-dropdown>
   <button type="button" class="cb-btn cb-btn-primary" data-dropdown-toggle aria-expanded="false" aria-haspopup="true">+ Add media</button>
   <div class="add-media-menu" data-dropdown-menu hidden>
@@ -54,7 +54,12 @@
 </label>
 {% endmacro %}
 
-{% if archived %}
+{% if trashed %}
+<p class="oc-muted" style="margin-bottom:var(--space-3)">
+  Trashed files awaiting permanent deletion.
+  <a href="{{ trash_toggle_url }}">← Back to active media</a>
+</p>
+{% elif archived %}
 <p class="oc-muted" style="margin-bottom:var(--space-3)">
   Archived runs are hidden from the active library.
   <a href="{{ archived_toggle_url }}">← Back to active media</a>
@@ -65,8 +70,7 @@
 <p class="notice {{ notice.kind }}" role="status">{{ notice.text }}</p>
 {% endif %}
 
-{% if not archived %}
-{# Inline add-media panels: each is revealed by the dropdown menu choice. #}
+{% if not archived and not trashed %}
 {% if submitted %}
 <p class="notice" role="status">
   {% if submitted == "deferred" %}Queued for transcription. It will start when the worker is available.
@@ -139,24 +143,24 @@
 {% endif %}
 
 {% if rows %}
-<form method="post" action="{% if archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
+<form method="post" action="{% if trashed %}/media/restore{% elif archived %}/media/unarchive{% else %}/media/assign{% endif %}" id="bulk-form">
   <input type="hidden" name="sort" value="{{ sort }}">
   <input type="hidden" name="view" value="{{ view }}">
 
-  {# Multi-select action bar: visible when items are checked (JS reveals it). #}
   <div class="gt-action-bar" data-action-bar hidden>
     <span class="gt-count" data-selected-count>0 selected</span>
-    {% if archived %}
+    {% if trashed %}
+    <button type="submit" formaction="/media/restore" name="csrf_token" value="{{ csrf_media_restore }}" class="cb-btn cb-btn-secondary">Restore selected</button>
+    {% elif archived %}
     <button type="submit" formaction="/media/unarchive" name="csrf_token" value="{{ csrf_media_unarchive }}" class="cb-btn cb-btn-secondary">Restore latest archived run</button>
     {% else %}
     <button type="button" class="cb-btn cb-btn-secondary" data-show-panel="assign-panel-inline">Move to folder...</button>
     <button type="submit" formaction="/media/rerun" name="csrf_token" value="{{ csrf_media_rerun }}" class="cb-btn cb-btn-secondary">Re-run</button>
-    <button type="submit" formaction="/media/archive" name="csrf_token" value="{{ csrf_media_archive }}" class="cb-btn cb-btn-danger" style="border:0;background:transparent">Delete...</button>
+    <button type="submit" formaction="/media/trash" name="csrf_token" value="{{ csrf_media_trash }}" class="cb-btn cb-btn-danger" style="border:0;background:transparent">Delete...</button>
     {% endif %}
   </div>
 
-  {# Inline assign panel (hidden until "Move to folder..." is clicked). #}
-  {% if not archived %}
+  {% if not archived and not trashed %}
   <div id="assign-panel-inline" class="add-media-panel" hidden style="margin-bottom:var(--space-3)">
     <label for="assign-folder">Assign settings folder
       <select id="assign-folder" name="media_folder_id">
@@ -173,12 +177,15 @@
   <div class="lib-toolbar">
     <nav class="view-toggle" aria-label="Sort by">
       {% for value, label in sorts %}
-      <a href="/media?sort={{ value }}&view={{ view }}{% if archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
+      <a href="/media?sort={{ value }}&view={{ view }}{% if trashed %}&trashed=1{% elif archived %}&archived=1{% endif %}"{% if value == sort %} aria-current="true"{% endif %}>{{ label }}</a>
       {% endfor %}
     </nav>
     <span style="flex:1"></span>
-    {% if not archived %}
+    {% if not trashed and not archived %}
     <a href="{{ archived_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Archived →</a>
+    <a href="{{ trash_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none;margin-left:var(--space-3)">Trash →</a>
+    {% elif archived %}
+    <a href="{{ trash_toggle_url }}" style="font-size:var(--t-sm);color:var(--accent);text-decoration:none">Trash →</a>
     {% endif %}
   </div>
 
@@ -191,11 +198,10 @@
       <span>ITEMS</span>
       <span>LENGTH</span>
       <span>REVIEW</span>
-      <span></span>
+      <span>{% if trashed %}TRASHED{% endif %}</span>
       <span></span>
     </div>
 
-    {# Folder rows: expandable in place with child file rows. #}
     {% for group in folder_groups %}
     <div class="gt-row gt-folder-row" data-folder="{{ group.folder_id }}" role="row">
       <span>
@@ -207,7 +213,7 @@
                 aria-expanded="false" aria-label="Expand {{ group.folder_path }}">▸</button>
         <svg width="16" height="16" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
         <span>{{ group.folder_path }}</span>
-        {% if not archived %}{{ chip("watched") }}{% endif %}
+        {% if not archived and not trashed %}{{ chip("watched") }}{% endif %}
       </span>
       <span class="num">{{ group.item_count }}</span>
       <span class="num">{{ format_compact_duration(group.total_duration_seconds) }}</span>
@@ -227,7 +233,6 @@
       <span class="num">{% if group.latest_date %}{{ format_age(group.latest_date, now=now) }}{% endif %}</span>
       <span class="gt-action"><a href="#" data-expand="{{ group.folder_id }}" class="folder-open">Open →</a></span>
     </div>
-    {# Child file rows: hidden until the folder is expanded. #}
     {% for row in group.items %}
     <div class="gt-row gt-child-row" data-parent="{{ group.folder_id }}" hidden>
       <span>
@@ -239,6 +244,7 @@
       </span>
       <span class="gt-child-indent">
         {{ friendly_media_label(row.source_title, row.source_path) }}
+        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
       </span>
       <span class="num">—</span>
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
@@ -247,7 +253,10 @@
         {{ chip(humanize_status(row.latest_run_status)) }}
         {% else %}<span class="oc-muted">—</span>{% endif %}
       </span>
-      <span class="num">{{ format_age(row.added_at, now=now) }}</span>
+      <span class="num">
+        {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
+        {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
+      </span>
       <span class="gt-action">
         {% if row.latest_run_id %}
         <a href="/runs/{{ row.latest_run_id }}">View →</a>
@@ -257,7 +266,6 @@
     {% endfor %}
     {% endfor %}
 
-    {# Ungrouped files: shown at top level, no folder row. #}
     {% for row in ungrouped_items %}
     <div class="gt-row">
       <span>
@@ -266,7 +274,10 @@
                {% if (row.id|string) in selected_ids %}checked{% endif %}>
         <input type="hidden" name="run_baseline" value="{{ row.id }}:{{ row.latest_run_id or 'none' }}">
       </span>
-      <span>{{ friendly_media_label(row.source_title, row.source_path) }}</span>
+      <span>
+        {{ friendly_media_label(row.source_title, row.source_path) }}
+        {% if row.id in missing_file_ids %}<span class="chip chip-danger" title="The file at {{ row.current_path or row.source_path }} was not found on disk">File missing</span>{% endif %}
+      </span>
       <span class="num">—</span>
       <span class="num">{{ format_duration(row.duration_seconds) }}</span>
       <span>
@@ -274,7 +285,10 @@
         {{ chip(humanize_status(row.latest_run_status)) }}
         {% else %}<span class="oc-muted">—</span>{% endif %}
       </span>
-      <span class="num">{{ format_age(row.added_at, now=now) }}</span>
+      <span class="num">
+        {% if trashed and row.trashed_at %}{{ format_age(row.trashed_at, now=now) }}
+        {% else %}{{ format_age(row.added_at, now=now) }}{% endif %}
+      </span>
       <span class="gt-action">
         {% if row.latest_run_id %}
         <a href="/runs/{{ row.latest_run_id }}">View →</a>
@@ -285,7 +299,6 @@
   </div>
 
 {% else %}
-{# Cards view: deferred (placeholder). #}
 <div class="lib-cards-placeholder">
   <p class="oc-muted">Cards view is coming soon. Switch to Table view above.</p>
 </div>
@@ -297,16 +310,25 @@
 <p class="oc-muted">Showing up to the first {{ limit }} files. Register fewer or smaller folders to narrow the list.</p>
 {% endif %}
 {% else %}
-{% if archived %}
+{% if trashed %}
+<p class="oc-muted">Trash is empty.</p>
+{% elif archived %}
 <p class="oc-muted">No archived runs. Archive a run from the <a href="{{ archived_toggle_url }}">active library</a> to see it here.</p>
 {% else %}
 <p class="oc-muted">No media yet. Add a recording with the button above, or register a folder on the server.</p>
 {% endif %}
 {% endif %}
 
+{% if trashed and rows %}
+<form method="post" action="/media/empty-trash" style="margin-top:var(--space-4)">
+  <input type="hidden" name="csrf_token" value="{{ csrf_media_empty_trash }}">
+  <p class="oc-muted">Emptying the trash permanently deletes the files from disk. This cannot be undone.</p>
+  <button type="submit" class="danger">Empty trash permanently</button>
+</form>
+{% endif %}
+
 <script>
 (function () {
-  /* Dropdown toggle */
   for (var dd of document.querySelectorAll('[data-dropdown]')) {
     var btn = dd.querySelector('[data-dropdown-toggle]');
     var menu = dd.querySelector('[data-dropdown-menu]');
@@ -321,17 +343,14 @@
     });
   }
 
-  /* "Show panel" buttons: reveal inline panels from dropdown choices. */
   for (var choice of document.querySelectorAll('[data-show-panel]') ) {
     choice.addEventListener('click', function () {
       var id = this.getAttribute('data-show-panel');
       var panel = document.getElementById(id);
       if (!panel) return;
       var wasHidden = panel.hidden;
-      /* Hide all panels first */
       for (var p of document.querySelectorAll('.add-media-panel')) { p.hidden = true; }
       panel.hidden = !wasHidden;
-      /* Close the dropdown menu if it is open */
       var ddMenu = document.querySelector('[data-dropdown-menu]');
       if (ddMenu) ddMenu.hidden = true;
       var ddBtn = document.querySelector('[data-dropdown-toggle]');
@@ -339,7 +358,6 @@
     });
   }
 
-  /* Folder expand/collapse */
   function toggleFolder(folderId) {
     var btn = document.querySelector('button.folder-toggle[data-expand="' + folderId + '"]');
     if (!btn) return;
@@ -359,7 +377,6 @@
     });
   }
 
-  /* Dropzone */
   for (var zone of document.querySelectorAll('[data-dropzone]')) {
     var input = zone.querySelector('input[type=file]');
     if (!input) continue;
@@ -371,7 +388,6 @@
     });
   }
 
-  /* Multi-select: count and action bar */
   var form = document.getElementById('bulk-form');
   if (!form) return;
   var boxes = Array.from(form.querySelectorAll('input[name=media_id]'));
@@ -393,7 +409,6 @@
     });
   }
 
-  /* Folder checkboxes: check/uncheck all children */
   for (var fc of document.querySelectorAll('[data-folder-check]')) {
     fc.addEventListener('change', function () {
       var fid = this.getAttribute('data-folder-check');

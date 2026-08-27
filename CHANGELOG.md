@@ -86,6 +86,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   metadata, cleanup. Destination-collision handling per R3 (replay detection,
   owned-temp cleanup). Transient-error retry with exponential backoff. Purge
   refused (step 5). `_trash` added to setup wizard reserved trees.
+  Library UI (step 6): trash, restore, and empty-trash routes behind the
+  `console_media_enabled` flag. Active view excludes trashed/purged items; new
+  trash view shows trashed-not-yet-purged items with trashed-at timestamps.
+  Each operation is planned durably, then executed inline for immediate feedback;
+  the reconciler beat is the crash-safety net. Missing-file warning: the library
+  row surfaces a visual indicator when a media file's `current_path` does not
+  resolve to a regular file, rather than crashing.
 - **Synthdetect M1 S5 PR-2b: degrade executor** (#144). Materializes
   codec/telephony/speed-degraded children of bona fide clips via the frozen
   `build_recipe_argv` ffmpeg round trips inside a digest-pinned container
