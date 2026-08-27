@@ -207,9 +207,7 @@ def _export_raw_host_only(raw: dict[str, Any] | None) -> dict[str, Any] | None:
 def _publish_translation_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed translation job, returning False on a broker outage.
 
-    Mirrors ``_publish_run_asset_job``: no recovery sweep (v1), so the console
-    shows a deferred job as queued with its age and the operator cancels and
-    retries."""
+    The recovery sweep republishes stale QUEUED jobs after the grace period."""
     from celery.exceptions import OperationalError
 
     from voxint.worker.tasks import translate_run
@@ -229,9 +227,7 @@ def _publish_translation_job(job_id: uuid.UUID) -> bool:
 def _publish_run_asset_job(job_id: uuid.UUID) -> bool:
     """Enqueue a committed run-asset job, returning False on a broker outage.
 
-    Mirrors ``_publish_research_job``: no recovery sweep (v1), so the console
-    shows a deferred job as queued with its age and the operator cancels and
-    retries."""
+    The recovery sweep republishes stale QUEUED jobs after the grace period."""
     from celery.exceptions import OperationalError
 
     from voxint.worker.tasks import generate_run_asset
@@ -1740,4 +1736,3 @@ def media_peaks(
     row_id = store_peaks(session, run_id, media_root, payload, fingerprint)
     session.commit()
     return _peaks_cache_response(request, payload.to_json_bytes(), row_id)
-
