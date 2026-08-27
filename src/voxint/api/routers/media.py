@@ -67,6 +67,7 @@ from voxint.db.models import (
     MediaItem,
     MediaOperation,
     OperationState,
+    OperationType,
     PipelineRun,
 )
 from voxint.domain_packs.base import DomainPackError
@@ -378,19 +379,17 @@ def _library_context(
     if not trashed:
         trash_params["trashed"] = "1"
     trash_toggle_url = f"/media?{urlencode(trash_params)}"
-    missing_file_ids: frozenset[uuid.UUID] = frozenset()
-    if not trashed:
-        media_root = settings.media_root
-        missing = set()
-        for row in rows:
-            path = row.current_path if row.current_path is not None else row.source_path
-            resolved = media_root / path
-            try:
-                if not resolved.resolve().is_file():
-                    missing.add(row.id)
-            except OSError:
+    media_root = settings.media_root
+    missing: set[uuid.UUID] = set()
+    for row in rows:
+        path = row.current_path if row.current_path is not None else row.source_path
+        resolved = media_root / path
+        try:
+            if not resolved.resolve().is_file():
                 missing.add(row.id)
-        missing_file_ids = frozenset(missing)
+        except (OSError, RuntimeError):
+            missing.add(row.id)
+    missing_file_ids = frozenset(missing)
     return {
         "request": request,
         "active_nav": "media",
@@ -1444,10 +1443,10 @@ def media_restore(
                 select(MediaOperation)
                 .where(
                     MediaOperation.media_id == media_uuid,
-                    MediaOperation.operation_type == "trash",
-                    MediaOperation.state == "completed",
+                    MediaOperation.operation_type == OperationType.TRASH.value,
+                    MediaOperation.state == OperationState.COMPLETED.value,
                 )
-                .order_by(MediaOperation.created_at.desc())
+                .order_by(MediaOperation.created_at.desc(), MediaOperation.id.desc())
                 .limit(1)
             ).scalar_one_or_none()
             if trash_operation is None:
