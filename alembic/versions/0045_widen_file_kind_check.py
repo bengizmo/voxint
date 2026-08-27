@@ -39,6 +39,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "DELETE FROM media_operation_files "
+        "WHERE file_kind IN ('chunk', 'transcript_export')"
+    )
     op.drop_constraint(
         "media_operation_files_file_kind_check", "media_operation_files"
     )

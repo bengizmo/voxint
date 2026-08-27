@@ -182,8 +182,11 @@ def _attempt_children(
     session: Session,
     operation_id: uuid.UUID,
     media_root: Path,
+    claim_token: str,
 ) -> None:
     """Attempt all pending/failed children, committing per child."""
+    from voxint.media.executor import _lease_still_held
+
     rows = session.execute(
         select(MediaOperationFile.id, MediaOperationFile.file_path)
         .where(
@@ -196,6 +199,10 @@ def _attempt_children(
     ).all()
 
     for child_id, file_path in rows:
+        if not _lease_still_held(session, operation_id, claim_token):
+            logger.warning("lease lost during purge children for %s", operation_id)
+            return
+
         confined = _confined_path(media_root, file_path)
         if confined is None:
             session.execute(
@@ -283,12 +290,12 @@ def execute_purge(
         build_manifest(session, operation)
         session.commit()
 
-        _attempt_children(session, operation.id, media_root)
+        attempts = operation.attempt_count or 0
+        _attempt_children(session, operation.id, media_root, claim_token)
 
         if not _check_convergence(session, operation.id):
-            attempts = operation.attempt_count or 0
             delay = min(300 * (2**attempts), 3600)
-            cas_transition(
+            if not cas_transition(
                 session,
                 operation.id,
                 from_state,
@@ -298,8 +305,10 @@ def execute_purge(
                 attempt_count=attempts + 1,
                 last_attempt_at=func.now(),
                 next_attempt_at=func.now() + timedelta(seconds=delay),
-            )
-            session.commit()
+            ):
+                session.rollback()
+            else:
+                session.commit()
             return
 
         if not cas_transition(
@@ -334,11 +343,13 @@ def execute_purge(
         from_state = OperationState.DB_APPLIED.value
 
     if from_state == OperationState.DB_APPLIED.value:
-        cas_transition(
+        if not cas_transition(
             session,
             operation.id,
             OperationState.DB_APPLIED,
             OperationState.COMPLETED,
             claim_token,
-        )
+        ):
+            session.rollback()
+            return
         session.commit()

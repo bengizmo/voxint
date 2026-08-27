@@ -78,13 +78,12 @@ def _renameat2_noreplace(src: Path, dst: Path) -> None:
 
 
 def _link_no_clobber(src: Path, dst: Path) -> None:
-    """Publish src at dst atomically without replacing dst."""
-    try:
-        os.link(src, dst)
-    except OSError as exc:
-        if exc.errno != errno.EXDEV:
-            raise
-        _renameat2_noreplace(src, dst)
+    """Publish src at dst atomically without replacing dst.
+
+    Uses hard link (fails EEXIST if dst exists).  EXDEV propagates to the
+    caller so the cross-device handler takes over.
+    """
+    os.link(src, dst)
 
 
 def _publish_same_device(origin: Path, destination: Path) -> None:
@@ -117,8 +116,8 @@ def _publish_cross_device(
         raise OSError(errno.EIO, "cross-device copy digest mismatch", temp)
 
     os.link(temp, destination)
-    temp.unlink()
     _fsync_directory(destination.parent)
+    temp.unlink()
 
 
 def _safe_unlink(path: Path) -> bool:
@@ -128,6 +127,32 @@ def _safe_unlink(path: Path) -> bool:
     except FileNotFoundError:
         return False
     return True
+
+
+def _lease_still_held(
+    session: Session,
+    operation_id: uuid.UUID,
+    claim_token: str,
+) -> bool:
+    """Re-check that this executor still holds the lease (ADR 0007 §2c).
+
+    Must be called before every destructive filesystem action (origin unlink,
+    temp cleanup) so a stale executor whose lease expired does not race with
+    the new lease holder.
+    """
+    from datetime import UTC, datetime
+
+    row = session.execute(
+        select(MediaOperation.claimed_by, MediaOperation.lease_expires_at)
+        .where(MediaOperation.id == operation_id)
+    ).one_or_none()
+    if row is None:
+        return False
+    if row.claimed_by != claim_token:
+        return False
+    return row.lease_expires_at is None or row.lease_expires_at >= datetime.now(
+        tz=UTC
+    )
 
 
 def _plan_operation(
@@ -492,6 +517,9 @@ def _execute_move_like(
         session.commit()
         from_state = OperationState.DB_APPLIED
 
+        if not _lease_still_held(session, operation.id, claim_token):
+            logger.warning("lease lost before cleanup for operation %s", operation.id)
+            return
         _safe_unlink(origin)
         _fsync_directory(origin.parent)
         _safe_unlink(temp)
