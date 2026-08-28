@@ -1,15 +1,122 @@
-"""Scaffold for the editor area (/editor routes).
+"""Media detail and editor page (Console 2.0 P3a, issue #156).
 
-Empty by design: P3 introduces the editor that replaces review
-(Console 2.0 epic #149). Until then this router
-carries no routes and is not registered; the module exists so the P0b layout
-is complete and later phases only add routes.
+``GET /media/{media_id}`` is the media detail page that will host the editor
+island (#157). Until the island ships, it renders a server-side transcript
+fallback with run metadata, a run chooser, and progress state. The existing
+``/review/{run_id}/*`` endpoints remain the only mutation surface; the editor
+island will call them directly.
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+import uuid
 
-from voxint.api.routers.deps import require_onboarded
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 
-router = APIRouter(dependencies=[Depends(require_onboarded)])
+from voxint.adjudication.review_state import verified_progress
+from voxint.adjudication.slots import ClaimMismatchError, verify_claim
+from voxint.adjudication.transcript import TranscriptText, attributed_transcript
+from voxint.api.editor_query import media_detail
+from voxint.api.playback import playback_capability
+from voxint.api.presentation import friendly_media_label
+from voxint.api.routers.deps import (
+    OperatorDep,
+    SessionDep,
+    _get_media_gate,
+    require_media_enabled,
+    require_onboarded,
+    templates,
+)
+from voxint.api.speaker_colors import speaker_palette
+from voxint.api.transcript_view import (
+    _run_label_universe,
+    _transcript_island_props,
+)
+from voxint.config import Settings
+from voxint.db.models import PipelineRun, RunStatus
+from voxint.speakers.roster import active_speakers
+
+router = APIRouter(
+    dependencies=[Depends(require_onboarded), Depends(require_media_enabled)]
+)
+
+
+@router.get("/media/{media_id}/editor", name="media_detail")
+def media_detail_page(
+    media_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    run: uuid.UUID | None = None,
+    token: uuid.UUID | None = None,
+) -> Response:
+    """The media detail page with run selection and transcript display.
+
+    Defaults to the latest completed run; ``?run=`` overrides. An optional
+    ``?token=`` is verified against the selected run for edit capability;
+    stale or absent tokens render read-only.
+    """
+    detail = media_detail(session, media_id, run_override=run)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    settings: Settings = request.app.state.settings
+    media_label = friendly_media_label(None, detail.media.source_path)
+
+    island_props: dict[str, object] | None = None
+    verified_n = 0
+    total = 0
+    selected_run_obj: PipelineRun | None = None
+    claim_valid = False
+
+    if detail.selected_run is not None:
+        run_id = detail.selected_run.id
+        selected_run_obj = session.get(PipelineRun, run_id)
+        if selected_run_obj is None:
+            raise HTTPException(status_code=404, detail="not found")
+
+        if detail.selected_run.status == RunStatus.COMPLETED.value:
+            if token is not None:
+                try:
+                    verify_claim(session, run_id, token)
+                    claim_valid = True
+                except ClaimMismatchError:
+                    token = None
+
+            lines = attributed_transcript(
+                session, run_id, text=TranscriptText.CORRECTED
+            )
+            palette = speaker_palette(_run_label_universe(session, run_id))
+            verified_n, total = verified_progress(session, run_id)
+            capability = playback_capability(
+                session, selected_run_obj, settings, _get_media_gate(request)
+            )
+
+            island_props = _transcript_island_props(
+                session, run_id, lines, palette, capability, settings
+            )
+            island_props["reviewToken"] = str(token) if claim_valid else None
+            island_props["initialProgress"] = {
+                "verified": verified_n,
+                "total": total,
+            }
+            island_props["speakers"] = [
+                {"id": str(sp.id), "displayName": sp.display_name}
+                for sp in active_speakers(session)
+            ]
+
+    return templates.TemplateResponse(
+        request,
+        "editor/detail.html",
+        {
+            "request": request,
+            "detail": detail,
+            "media_label": media_label,
+            "selected_run": selected_run_obj,
+            "island_props": island_props,
+            "token": token if claim_valid else None,
+            "progress": {"verified": verified_n, "total": total},
+            "active_nav": "media",
+        },
+    )

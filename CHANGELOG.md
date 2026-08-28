@@ -6,6 +6,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Media detail page** (`GET /media/{id}/editor`, #156, epic #149). The editor
+  backend contract: run selection (latest completed by default, `?run=`
+  override validated against the media item), claim-token verification
+  (stale/absent tokens degrade to read-only), transcript display with
+  speaker palette and verified-progress counter, run chooser, and media
+  metadata rail. Existing `/review/{run_id}/*` endpoints remain the only
+  mutation surface. The media library's "View" links now open the detail
+  page instead of the legacy run page.
+- **Security: token-sensitive path classifier** (#156). `Cache-Control:
+  no-store` now covers both `/review/*` and `/media/{uuid}/editor*` paths, so
+  claim tokens embedded in the editor detail page are never cached. Library
+  routes (`/media`, `/media/submit`, etc.) are unaffected.
+
 ### Changed
 - **Idempotent insert helper extracted** (Phase 2, finding M10). The
   savepoint-adopt-or-conflict skeleton that was duplicated across ledger,
