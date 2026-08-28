@@ -198,9 +198,8 @@ class RunListItem:
     # Detected language code (issue #124); None for runs not yet transcribed or
     # transcribed before the column existed — the template renders an honest "—".
     language: str | None = None
-    # Wall-clock elapsed seconds (created_at to last stage finished_at); None for
-    # runs still in progress or with no stage rows. Template uses
-    # format_compact_duration.
+    # Wall-clock seconds since created_at. Completed/failed: to last stage
+    # finished_at. Running: to now (live elapsed). Other statuses: None.
     elapsed_seconds: float | None = None
     # Settings folder path (from media_folder via media_item); None for uploads
     # or media with no folder assignment.

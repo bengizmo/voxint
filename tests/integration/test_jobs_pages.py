@@ -202,7 +202,8 @@ def test_running_run_shows_elapsed_duration(
     _make_run(session_factory, status=RunStatus.RUNNING, current_stage=Stage.TRANSCRIBE.value)
     resp = client_flag_off.get("/jobs")
     assert resp.status_code == 200
-    assert "…" not in resp.text or "0s" in resp.text
+    import re
+    assert re.search(r"\d+[smh]", resp.text), "expected a duration token in the page"
 
 
 def test_failed_run_shows_humanized_error(

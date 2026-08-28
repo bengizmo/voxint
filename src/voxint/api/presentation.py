@@ -275,7 +275,12 @@ def humanize_error(error: str | None) -> str | None:
     for pattern, label in _ERROR_PATTERNS:
         if pattern.search(error):
             return label
-    cleaned = error.split("\n")[-1].strip()
+    lines = error.strip().splitlines()
+    if not lines:
+        return None
+    cleaned = lines[-1].strip()
+    if not cleaned:
+        return None
     if len(cleaned) > 80:
         cleaned = cleaned[:77] + "…"
-    return cleaned.lower() if cleaned else None
+    return cleaned

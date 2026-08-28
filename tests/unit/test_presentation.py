@@ -251,8 +251,11 @@ def test_humanize_empty_string_is_returned_verbatim() -> None:
         ("empty audio track detected", "audio track was empty"),
         ("audio file was empty after decode", "audio track was empty"),
         ("cancelled before commit", "cancelled"),
-        ("RuntimeError: something unusual happened", "runtimeerror: something unusual happened"),
+        ("RuntimeError: something unusual happened", "RuntimeError: something unusual happened"),
         ("x" * 100, "x" * 77 + "…"),
+        ("ValueError: bad audio\n", "ValueError: bad audio"),
+        ("traceback line 1\ntraceback line 2\nValueError: actual", "ValueError: actual"),
+        ("   \n  \n  ", None),
     ],
 )
 def test_humanize_error(error: str | None, expected: str | None) -> None:

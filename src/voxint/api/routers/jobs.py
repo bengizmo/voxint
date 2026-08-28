@@ -241,12 +241,14 @@ def jobs(
         collect_resource_status_or_empty(request.app.state.settings)
     )
 
+    raw_activity = stage_activity(session)
+
     context = {
         "request": request,
         "active_nav": "jobs",
         "now": datetime.now(UTC),
         "display_stages": _collapse_stages(
-            stage_activity(session),
+            raw_activity,
             degraded_stages=degraded_stage_keys,
             stage_avg_seconds=stage_avg or None,
         ),
@@ -259,7 +261,7 @@ def jobs(
         "jobs_badge_count": badge,
         "active_filter": active_filter,
         "filter_labels": _FILTER_LABELS,
-        "stage_activity": stage_activity(session),
+        "stage_activity": raw_activity,
     }
     return templates.TemplateResponse(request, "jobs/jobs.html", context)
 
