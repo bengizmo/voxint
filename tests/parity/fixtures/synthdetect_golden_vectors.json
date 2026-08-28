@@ -1,0 +1,37 @@
+{
+  "note": "Golden parity vectors for the synthdetect service (w2v2-aasist-df-m2-s0e11). Generated from a deterministic 440Hz sine wave scored on darkboi RTX 3060 (GPU 2) using voxint-synthdetect:dev. Determinism verified (bit-identical across cold calls). These vectors pin the service's numerical output for the fine-tuned M2 checkpoint.",
+  "inference_space": "w2v2-aasist-df-m2-s0e11",
+  "fixtures": [
+    {
+      "name": "single_window_440hz",
+      "description": "Exactly one model window (64,600 samples = 4.0375s). No tiling, no pooling.",
+      "generator": "440Hz sine wave at half amplitude (int16), deterministic from sample index",
+      "n_samples": 64600,
+      "duration_s": 4.0375,
+      "pcm_payload_sha256": "5049a48ba684bff1e2a0b8c94a11643b791d824d4e215881983ee16b27e57444",
+      "expected_raw_score": -3.966287851333618,
+      "expected_window_count": 1
+    },
+    {
+      "name": "multi_window_440hz",
+      "description": "Two full windows + scorable tail (145,200 samples = 9.075s). Tests mean-pooling across 3 windows.",
+      "generator": "440Hz sine wave at half amplitude (int16), deterministic from sample index",
+      "n_samples": 145200,
+      "duration_s": 9.075,
+      "pcm_payload_sha256": "35c3a2ab4f834dc375789691eba2b26bc604d9eb0aade8da329bf1a74dff26dc",
+      "expected_raw_score": -3.960309902826945,
+      "expected_window_count": 3
+    },
+    {
+      "name": "too_short_440hz",
+      "description": "Below MIN_SCORABLE_SAMPLES (4,000 < 8,000). Must be skipped.",
+      "generator": "440Hz sine wave at half amplitude (int16), deterministic from sample index",
+      "n_samples": 4000,
+      "duration_s": 0.25,
+      "pcm_payload_sha256": "6b93d8c65a1424eecd472d2b47d37f2bb0f2c275b78edeb1dbecdd6f2e3caeea",
+      "expected_raw_score": null,
+      "expected_window_count": 0,
+      "expected_skip_reason": "too_short"
+    }
+  ]
+}
