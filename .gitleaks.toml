@@ -61,6 +61,7 @@ paths = [
 description = "Repo-level allowlist"
 paths = [
     '''^\.gitleaks\.toml$''',
+    '''^\.gitleaksbaseline$''',
     '''(^|/)uv\.lock$''',
     # The nested PRIVATE maintainer-notes repo (gitignored, never part of this
     # repo's git): hostnames are allowed there by design, and `gitleaks dir .`
@@ -111,4 +112,10 @@ commits = [
     "29ce5b5a3c0b2a65c5442c467ca5b8c1b177bcfc",
     "33c4dc2a01934f9a534b3658c5c71e3e861a73e5",
     "2c6307eb139a3a2d05b4eb9d67af2bfeb0867618",
+    # 9945c8a6: #145 synthdetect service golden vectors fixture named the GPU
+    # host used for determinism verification in a prose note field, not an
+    # infrastructure reference. The fixture file will be scrubbed in a follow-up;
+    # the historical commit is allowlisted because published history is never
+    # rewritten.
+    "9945c8a649d09c8c8ab8b7c1d85bec270fac358d",
 ]
