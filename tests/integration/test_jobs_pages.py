@@ -193,3 +193,112 @@ def test_sidebar_jobs_entry_points_at_jobs_when_flag_on(
     jobs = client_flag_on.get("/jobs")
     assert 'href="/jobs"' in jobs.text
     assert 'aria-current="page"' in jobs.text
+
+
+def test_running_run_shows_elapsed_duration(
+    client_flag_off: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """#244 Delta 2: running runs show elapsed time, not '...'."""
+    _make_run(session_factory, status=RunStatus.RUNNING, current_stage=Stage.TRANSCRIBE.value)
+    resp = client_flag_off.get("/jobs")
+    assert resp.status_code == 200
+    import re
+    assert re.search(r"\d+[smh]", resp.text), "expected a duration token in the page"
+
+
+def test_failed_run_shows_humanized_error(
+    client_flag_off: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    """#244 Delta 7: failed runs show plain-language error, not raw exception."""
+    with session_factory() as session:
+        media = MediaItem(source_path=f"incoming/{uuid.uuid4()}.wav")
+        session.add(media)
+        session.flush()
+        run = PipelineRun(
+            media_item_id=media.id,
+            status=RunStatus.FAILED.value,
+            error="interrupted: lease expired",
+        )
+        session.add(run)
+        session.commit()
+    resp = client_flag_off.get("/jobs")
+    assert resp.status_code == 200
+    assert "worker timed out" in resp.text
+    assert "interrupted: lease expired" not in resp.text
+
+
+def test_pipeline_summary_includes_gpu_busy(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """#244 Delta 8: GPU busy appears in the pipeline summary."""
+    from voxint.api.resource_status import GpuActivity, ResourceStripView
+    from voxint.api.routers.jobs import _pipeline_summary
+
+    strip = ResourceStripView(
+        telemetry_present=True,
+        gpus=(GpuActivity(
+            gpu_uuid="GPU-abc", short_uuid="abc",
+            state="busy", utilization_percent=95, services=("transcription",),
+        ),),
+        warnings=(),
+        unavailable_services=(),
+        collected_age_seconds=1.0,
+    )
+    summary = _pipeline_summary({"running": 1}, 0, resource_strip=strip)
+    assert "GPU busy" in summary
+
+
+def test_pipeline_summary_no_gpu_when_idle(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """GPU busy is omitted when GPUs are idle."""
+    from voxint.api.resource_status import GpuActivity, ResourceStripView
+    from voxint.api.routers.jobs import _pipeline_summary
+
+    strip = ResourceStripView(
+        telemetry_present=True,
+        gpus=(GpuActivity(
+            gpu_uuid="GPU-abc", short_uuid="abc",
+            state="idle", utilization_percent=5, services=("transcription",),
+        ),),
+        warnings=(),
+        unavailable_services=(),
+        collected_age_seconds=1.0,
+    )
+    summary = _pipeline_summary({"running": 1}, 0, resource_strip=strip)
+    assert "GPU busy" not in summary
+
+
+def test_collapse_stages_with_degraded(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#244 Delta 4: degraded services mark their display stages."""
+    from voxint.api.jobs_query import StageActivity
+    from voxint.api.routers.jobs import _collapse_stages
+
+    raw = [StageActivity(stage="transcribe", queued=2, active=0)]
+    result = _collapse_stages(raw, degraded_stages=frozenset({"transcribe"}))
+    transcribe = next(s for s in result if s.key == "transcribe")
+    assert transcribe.is_degraded is True
+    assert transcribe.queued == 2
+
+    not_degraded = [s for s in result if s.key != "transcribe"]
+    assert all(not s.is_degraded for s in not_degraded)
+
+
+def test_collapse_stages_with_wait_estimate(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """#244 Delta 6: queued stages get a wait estimate from averages."""
+    from voxint.api.jobs_query import StageActivity
+    from voxint.api.routers.jobs import _collapse_stages
+
+    raw = [StageActivity(stage="transcribe", queued=3, active=1)]
+    result = _collapse_stages(
+        raw, stage_avg_seconds={"transcribe": 120.0}
+    )
+    transcribe = next(s for s in result if s.key == "transcribe")
+    assert transcribe.wait_estimate_seconds == pytest.approx(360.0)
+
+    enrich = next(s for s in result if s.key == "enrich")
+    assert enrich.wait_estimate_seconds is None
