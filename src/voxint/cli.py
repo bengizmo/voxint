@@ -202,8 +202,7 @@ def _submit(args: argparse.Namespace) -> int:
         if args.wait:
             if not published:
                 print(
-                    "note: polling will wait until the recovery sweep "
-                    "re-enqueues the run",
+                    "note: polling will wait until the recovery sweep re-enqueues the run",
                     file=sys.stderr,
                 )
             try:
@@ -583,8 +582,7 @@ def _enrich_assets(args: argparse.Namespace) -> int:
         print(f"error: {exc}")
         return 2
     kinds = tuple(
-        RunAssetKind(value)
-        for value in (args.kind or ["summary", "topics", "entity_mentions"])
+        RunAssetKind(value) for value in (args.kind or ["summary", "topics", "entity_mentions"])
     )
     factory = build_session_factory(build_engine(settings.database_url))
     with factory() as session:
@@ -876,6 +874,55 @@ def _tutorial_seed(args: argparse.Namespace) -> int:
     return 0
 
 
+def _devenv_apply(args: argparse.Namespace) -> int:
+    """Seed the database from a development-environment bundle."""
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.session import build_engine, build_session_factory, session_scope
+    from voxint.dev_env.importer import apply_bundle
+
+    try:
+        settings = get_settings()
+        with session_scope(build_session_factory(build_engine())) as session:
+            result = apply_bundle(
+                session,
+                args.bundle,
+                settings.media_root,
+                settings,
+                profile=args.profile,
+                dry_run=args.dry_run,
+            )
+    except (OSError, SettingsError, ValueError) as exc:
+        print(f"error: {exc}")
+        return 2
+    if not args.dry_run:
+        print(
+            f"created: settings={int(result.settings_created)}, "
+            f"projects={len(result.projects_created)}, folders={len(result.folders_created)}; "
+            f"skipped folders={len(result.folders_skipped)}"
+        )
+    return 0
+
+
+def _devenv_verify(args: argparse.Namespace) -> int:
+    """Check a development-environment bundle's integrity."""
+    from voxint.config import SettingsError, get_settings
+    from voxint.dev_env.importer import verify_bundle
+
+    try:
+        result = verify_bundle(args.bundle, get_settings().media_root)
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+    for warning in result.warnings:
+        print(f"warning: {warning}")
+    for error in result.errors:
+        print(f"error: {error}")
+    if result.ok:
+        print("bundle verified")
+        return 0
+    return 2
+
+
 def _media_backfill_hashes(args: argparse.Namespace) -> int:
     """Compute and store ``sha256`` for media rows missing it (issue #150).
 
@@ -1005,9 +1052,7 @@ def _export(args: argparse.Namespace) -> int:
     # check is not silently overwritten (nor a symlink followed). newline="" keeps
     # text mode (utf-8 + x/w semantics) while disabling newline translation.
     try:
-        with open(
-            out_path, "w" if args.force else "x", encoding="utf-8", newline=""
-        ) as fh:
+        with open(out_path, "w" if args.force else "x", encoding="utf-8", newline="") as fh:
             fh.write(output)
     except FileExistsError:
         print(f"error: {out_path} exists (use --force to overwrite)")
@@ -1121,9 +1166,7 @@ def _doctor(args: argparse.Namespace) -> int:
             format_resource_status_text,
         )
 
-        with httpx.Client(
-            timeout=httpx.Timeout(settings.health_probe_timeout_seconds)
-        ) as client:
+        with httpx.Client(timeout=httpx.Timeout(settings.health_probe_timeout_seconds)) as client:
             snapshot = collect_resource_status(settings, client=client, force=True)
         print()
         print(format_resource_status_text(snapshot))
@@ -1426,9 +1469,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fetch_p.set_defaults(fn=_fetch)
 
-    export_p = sub.add_parser(
-        "export", help="export a run's transcript (txt/md/srt/vtt/json/rttm)"
-    )
+    export_p = sub.add_parser("export", help="export a run's transcript (txt/md/srt/vtt/json/rttm)")
     export_p.add_argument("run_id", type=uuid.UUID)
     export_p.add_argument(
         "--format",
@@ -1585,6 +1626,23 @@ def build_parser() -> argparse.ArgumentParser:
         "seed", help="idempotently seed the bundled 3-speaker tutorial run"
     )
     seed_p.set_defaults(fn=_tutorial_seed)
+    devenv_p = sub.add_parser("dev-env", help="development environment bundle tools")
+    devenv_sub = devenv_p.add_subparsers(dest="devenv_command", required=True)
+    apply_p = devenv_sub.add_parser("apply", help="seed DB from a dev-env bundle")
+    apply_p.add_argument("--bundle", required=True, type=Path, help="path to the bundle directory")
+    apply_p.add_argument(
+        "--profile",
+        default="all",
+        choices=["smoke", "realistic", "all"],
+        help="which media profile to register",
+    )
+    apply_p.add_argument(
+        "--dry-run", action="store_true", help="show what would be created without writing"
+    )
+    apply_p.set_defaults(fn=_devenv_apply)
+    verify_p = devenv_sub.add_parser("verify", help="check bundle integrity")
+    verify_p.add_argument("--bundle", required=True, type=Path, help="path to the bundle directory")
+    verify_p.set_defaults(fn=_devenv_verify)
 
     # File-based scoring harness: no settings, no DB, no worker (docs/harness.md).
     from voxint.harness import score_cli
