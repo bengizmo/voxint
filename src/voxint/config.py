@@ -281,6 +281,10 @@ class Settings(BaseSettings):
     grounded_min_margin: Ratio = 0.08
     grounded_min_vote_agreement: Ratio = 0.67
 
+    # Auto-enrollment (#275): create unnamed roster speakers from unmatched
+    # labels when a run completes. Uses grounding-tier gates.
+    auto_enroll: bool = True
+
     # Pipeline
     # How long a worker may hold a stage before recovery may reclaim it.
     # Must exceed the longest realistic single-stage duration — for
