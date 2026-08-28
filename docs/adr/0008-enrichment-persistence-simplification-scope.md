@@ -1,6 +1,7 @@
 # ADR 0008: Enrichment persistence simplification scope
 
-> **Status:** Proposed (refactoring plan Phase 2 Step 2, finding H7)
+> **Status:** Accepted (refactoring plan Phase 2 Step 2, finding H7).
+> Reviewed by codex, grok, and deepseek-v4-pro.
 
 ## Context
 
@@ -37,6 +38,20 @@ Three constraints make most of the machinery load-bearing:
    finalizes first (generation 1) and A finalizes last (generation 2), A
    supersedes B. This is the intended policy for a single-operator system: the
    most recent completed analysis wins.
+
+Not all three constraints apply equally to every family:
+
+| Constraint | Drafts | Assets | Translations |
+|---|---|---|---|
+| Advisory lock + generation + append-only | yes | yes | yes |
+| `superseded_by IS NULL` read-time derivation | yes | yes | yes |
+| Decided-candidate immunity (`FOR UPDATE` then `UPDATE`) | yes | no | no |
+| Per-field `covered_fields` supersession scoping | yes | no | no |
+| Whole-row head retirement | no | yes | yes |
+
+The remaining H7 "machinery" items, evidence ordinals and scope-XOR kinds, are
+domain-model rules (stable evidence ordering, target-scope integrity), not
+persistence-layer complexity. They are out of scope for this ADR.
 
 ## Decision
 
@@ -77,6 +92,13 @@ For translations, where payloads can reach several megabytes, the replay check
 should use a stored canonical digest rather than loading and comparing the full
 `lines` JSONB.
 
+The replay comparison surface should include identity, source hash, normalized
+payload, schema version, producer/model provenance, and configuration. Process
+timestamps (`started_at`, `completed_at`) participate only if the idempotency
+key is derived from durable job state that also preserves those timestamps. If
+a legitimate retry recomputes timestamps, they become a false-conflict source.
+Implementation should verify this for each family.
+
 ### 4. Transaction choreography is extracted
 
 The advisory-lock, generation-allocation, idempotency-lookup, and
@@ -106,12 +128,16 @@ standardize only comments and tests.
 savepoint, no idempotency key, and no replay detection. The job system's
 `claim_job()` CAS prevents LLM re-invocation on Celery redelivery (a succeeded
 job returns no row to the claimer), so this is not a crash-retry data-loss
-scenario. The gap is defense-in-depth and API consistency: every other
-enrichment writer has replay protection, and translations should too.
+scenario provided `record_translation` and the job completion state update
+happen in one transaction. That atomicity should be verified before treating
+translation idempotency as purely defense-in-depth; if the boundary is not
+atomic, idempotency becomes a primary correctness guard.
 
-One migration adds a nullable `idempotency_key TEXT UNIQUE` column.
+One migration adds a nullable `idempotency_key TEXT UNIQUE` column and a
+`replay_digest TEXT` column (canonical sha256 of the translation payload, used
+for replay comparison instead of loading the full multi-megabyte `lines` JSONB).
 Existing rows receive no backfill (they are completed generations needing no
-replay protection). The writer populates it for all new rows. The key derives
+replay protection). The writer populates both for all new rows. The key derives
 from the translation job ID, matching the asset-job convention.
 
 **Missing immutability trigger.** `enrichment_candidates` and
@@ -132,8 +158,9 @@ work is committed. Removing it would push all error reporting to opaque
 
 - No data migration for the main refactoring. Code-only helper extraction.
 - One Alembic migration for `run_translations`: nullable `idempotency_key`
-  column with UNIQUE constraint, plus an immutability/supersession-integrity
-  trigger matching the asset pattern.
+  column with UNIQUE constraint, a `replay_digest` column for efficient replay
+  comparison, plus an immutability/supersession-integrity trigger matching the
+  asset pattern.
 - Reduced code duplication across the three persistence families, contingent on
   the net-complexity gate.
 - Translation integrity brought to parity with assets and candidates.
