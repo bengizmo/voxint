@@ -377,14 +377,12 @@ Below the banner, the page has two panels:
   separation, Voice identity, Database, Task queue, Local AI model) with a
   colored dot showing its health. The Local AI model row has a **Turn on**
   button when it is not yet enabled.
-- **This computer right now** shows five live gauges that refresh every 15
-  seconds: Processor, Memory, Graphics card, Graphics memory, and Disk (media).
-  The first three tell you how hard the machine is working; the last two show
-  how much storage is left.
+- **This computer right now** shows live gauges that refresh every 15 seconds:
+  Processor, Memory, and Disk (media) on every install; Graphics card and
+  Graphics memory appear when a GPU is available.
 
-![The Voxint status page, listing each component's health and five hardware
-gauges for processor, memory, graphics card, graphics memory, and
-disk.](../images/resources.png)
+![The Voxint status page, listing each component's health and hardware gauges
+for processor, memory, and disk.](../images/resources.png)
 
 The page speaks up in only two cases, each with one plain fix:
 

@@ -637,12 +637,13 @@ service reports telemetry the strip says "hardware status unavailable" rather
 than claiming all-clear.
 
 The **Status** page (`GET /settings/status`, authenticated, 15s htmx refresh) is
-the fuller live view behind the strip. It shows five hardware gauges: Processor
-(load-average percentage), Memory (used / total), Graphics card (GPU
-utilization), Graphics memory (VRAM used / total), and Disk (media root
-partition used / total). CPU, memory, and disk are read from the host via
-stdlib (`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come
-from the model services' `/healthz` telemetry. A "Parts of Voxint" component
+the fuller live view behind the strip. It shows up to five hardware gauges:
+Processor (load-average percentage), Memory (used / total), and Disk (media
+root partition used / total) are always present; Graphics card (GPU
+utilization) and Graphics memory (VRAM used / total) appear when a GPU is
+available. CPU, memory, and disk are read from the host via stdlib
+(`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come from
+the model services' `/healthz` telemetry. A "Parts of Voxint" component
 list shows live health for the console, each model service, the database, the
 task queue, and the Local AI model (with a primary "Turn on" button when
 disabled). The banner includes an install summary with GPU acceleration status
@@ -1387,6 +1388,7 @@ mutations are gated by their per-run claim token.
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
 | `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
+| `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |

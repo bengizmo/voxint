@@ -1,8 +1,9 @@
 # ADR 0004: Claim lifecycle
 
-> **Status:** Accepted (Console 2.0 P0a, issue #150). The editor claim endpoints
-> land in a later phase (P3a); the no-store generalization precedes any
-> token-bearing `/media` page.
+> **Status:** Accepted and partially implemented (Console 2.0 P0a, issue #150).
+> PR #242 (issue #156) landed claim-token verification on the editor detail page
+> and the `no-store` generalization to `/media/{uuid}/editor*` paths. The full
+> claim lifecycle (heartbeat, release) lands in a later phase.
 
 ## Context
 
