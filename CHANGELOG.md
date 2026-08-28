@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Speakers overview and profiles activated** (#159). The new speakers overview
+  (aggregation numbers, named/unnamed grouping, tier chips, verified badges) and
+  per-speaker profile pages are now on by default. Set
+  `CONSOLE_SPEAKERS_ENABLED=false` to roll back to the legacy roster.
 - **Jobs page: TOOK column shows elapsed time for running runs** (#244). Running
   runs now display their wall-clock elapsed instead of "...".
 - **Jobs page: degraded pipeline cells** (#244). When a model service is down,
@@ -23,6 +27,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and progress percentage (#244 delta 5, needs stage-level progress callbacks).
 
 ### Added
+- **Quote provenance manifest** (#122). Pull-quote and clip exports now have a
+  JSON sidecar (`export.json`) carrying per-line speaker attribution, timecodes,
+  clip integrity digest, per-stage model identity from the pipeline run, and
+  input-media SHA-256. Single-annotation and bulk (tag-filtered) endpoints.
 - **Benchmark feature** (CLI + DB + scorer + console). Shipped 12-clip benchmark
   corpus (~3 MB, CC-BY-4.0 / CC0) with `voxint benchmark run` (serial
   submission, pooled micro-WER, hallucination resistance scoring),

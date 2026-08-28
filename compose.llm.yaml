@@ -41,7 +41,7 @@ services:
       LLM_BUNDLED_MODEL: qwen3-4b-instruct-2507
 
   voxint-llm:
-    image: ghcr.io/bengizmo/voxint-llm:${VOXINT_IMAGE_TAG:-0.28.0}
+    image: ghcr.io/bengizmo/voxint-llm:${VOXINT_IMAGE_TAG:-0.29.0}
     pull_policy: missing
     # Self-heal after a transient crash, like the other model services (#23).
     restart: unless-stopped

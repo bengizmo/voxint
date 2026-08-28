@@ -596,6 +596,7 @@ export function useAnnotations({
 
   const panel: ReactNode = (
     <HighlightsPanel
+      runId={runId}
       annotations={filterByTags(ordered, filterTags)}
       total={annotations.length}
       tags={visibleTags}
@@ -796,6 +797,7 @@ function AnnotationToolbar({
 }
 
 interface HighlightsPanelProps {
+  runId: string;
   annotations: AnnotationShape[];
   total: number;
   tags: AnnotationTagShape[];
@@ -827,6 +829,7 @@ interface HighlightsPanelProps {
 // the mutating actions render only when the tab holds the claim, but Jump and Copy
 // (both reads) always render.
 function HighlightsPanel({
+  runId,
   annotations,
   total,
   tags,
@@ -985,6 +988,15 @@ function HighlightsPanel({
                       {clippingId === a.id ? "Extracting…" : "Extract clip"}
                     </button>
                   )}
+                {!a.stale && (
+                  <a
+                    href={`/review/${runId}/annotations/${a.id}/export.json`}
+                    className="btn-link"
+                    title="Download provenance manifest (JSON)"
+                  >
+                    Manifest
+                  </a>
+                )}
                 {writable && (
                   <button
                     type="button"
