@@ -15,5 +15,6 @@ sorts by ``manifest.id`` for a deterministic route/task order.
 from __future__ import annotations
 
 from voxint.plugins.base import VoxintPlugin
+from voxint.plugins.synthdetect import SynthdetectPlugin
 
-BUILTIN: tuple[type[VoxintPlugin], ...] = ()
+BUILTIN: tuple[type[VoxintPlugin], ...] = (SynthdetectPlugin,)
