@@ -16,7 +16,6 @@ from voxint.adjudication.transcript import display_name
 from voxint.db.models import Decision
 from voxint.harness_export.export import _truth_from_state
 
-
 # -- Decision enum -----------------------------------------------------------
 
 def test_auto_enroll_in_decision_enum() -> None:
@@ -176,7 +175,7 @@ def test_speaker_aggregate_auto_enrolled_flag() -> None:
 
 
 def test_speaker_aggregate_auto_enrolled_default_false() -> None:
-    from voxint.speakers.aggregate import SpeakerAggregate, empty_aggregate
+    from voxint.speakers.aggregate import empty_aggregate
 
     agg = empty_aggregate(uuid.uuid4())
     assert agg.auto_enrolled is False
@@ -245,6 +244,7 @@ def test_auto_enroll_setting_default_true() -> None:
     from voxint.config import Settings
 
     s = Settings(
+        _env_file=None,
         database_url="postgresql+psycopg://x:x@localhost/x",
         redis_url="redis://localhost:6379/0",
     )
@@ -256,6 +256,7 @@ def test_auto_enroll_setting_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("AUTO_ENROLL", "false")
     s = Settings(
+        _env_file=None,
         database_url="postgresql+psycopg://x:x@localhost/x",
         redis_url="redis://localhost:6379/0",
     )

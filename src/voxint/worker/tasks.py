@@ -256,10 +256,10 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             # Only the owning post lane performs completion side effects. A
             # late/redelivered GPU task may observe an already-COMPLETED row;
             # treating that observation as completion would enqueue assets twice.
+            _auto_enroll_speakers(factory, run_id, settings)
             _autogenerate_run_assets(factory, run_id, settings)
             _autogenerate_segment_embeddings(factory, run_id, settings)
             _autogenerate_translation(factory, run_id, settings)
-            _auto_enroll_speakers(factory, run_id, settings)
             # Generic post-completion fan-out (issue #138): each active plugin's
             # on_run_completed runs alongside the three hard-coded producers above
             # (which convert into plugins in #139-#141). Per-plugin failures are

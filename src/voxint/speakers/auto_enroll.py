@@ -35,6 +35,7 @@ from voxint.speakers.matching import (
     label_centroid,
     roster_centroids,
 )
+from voxint.speakers.roster import is_active
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _next_voice_number(session: Session) -> int:
     result = session.execute(
         text(
             "SELECT COALESCE(MAX("
-            "  CAST((regexp_match(display_name, '^Voice (\\d+)$'))[1] AS int)"
+            "  CAST((regexp_match(display_name, '^Voice (\\d{1,9})$'))[1] AS int)"
             "), 0) + 1"
             " FROM speakers"
         )
@@ -118,13 +119,20 @@ def _lock_run(session: Session, run_id: uuid.UUID) -> None:
     )
 
 
-def _lock_speaker(session: Session, speaker_id: uuid.UUID) -> None:
-    """FOR SHARE on the speaker row, preventing concurrent archive/merge."""
-    session.execute(
-        select(Speaker.id)
+def _lock_speaker(session: Session, speaker_id: uuid.UUID) -> Speaker | None:
+    """FOR SHARE on the speaker row, preventing concurrent archive/merge.
+
+    Returns the Speaker if still active, None if archived/merged since the
+    roster was read.
+    """
+    speaker = session.execute(
+        select(Speaker)
         .where(Speaker.id == speaker_id)
         .with_for_update(read=True)
-    )
+    ).scalar_one_or_none()
+    if speaker is None or not is_active(speaker):
+        return None
+    return speaker
 
 
 def _label_has_decision(
@@ -184,7 +192,7 @@ def auto_enroll_run(
 
     created = 0
     matched = 0
-    skipped = 0
+    skipped = len(unresolved) - len(candidate_labels)
 
     for label in candidate_labels:
         space, centroid, entries = centroids_by_label[label]
@@ -199,7 +207,10 @@ def auto_enroll_run(
                 match_speaker_id = _cosine_match(centroid, roster, entries, gates)
 
                 if match_speaker_id is not None:
-                    _lock_speaker(session, match_speaker_id)
+                    locked = _lock_speaker(session, match_speaker_id)
+                    if locked is None:
+                        skipped += 1
+                        continue
                     record_decision(
                         session,
                         pipeline_run_id=run_id,
