@@ -142,21 +142,20 @@ parallelizable EXCEPT where noted.
   `enrichment/run_assets.py`, `tests/unit/test_idempotency.py` (new).
 - Review: single-model (codex, behavior-preserving extraction).
 
-**Step 2: H7 design spike** (ADR, not implementation)
-- Before implementation, produce a focused ADR answering:
-  - What is the target persistence model? ("One current row, optional history"
-    is unresolved.)
-  - Prove the writer topology: can concurrent writers race on generation
-    allocation or supersession? (Advisory locks currently prevent this.)
-  - How do existing installations with multiple generations and partially
-    completed jobs migrate?
-  - How does ordering/provenance work without generation counters?
-  - What is the rollback/refusal policy?
-- Require representative pre-migration fixtures, concurrent database tests,
-  and upgrade/downgrade validation.
-- Only after the ADR is reviewed should implementation be scheduled.
-- Review: multi-model for the ADR; **full panel** for any implementation PR
-  (migration, locking, concurrency, data-integrity contracts).
+**Step 2: H7 design spike** (ADR, not implementation) -- DONE (ADR 0008)
+- ADR 0008 (`docs/adr/0008-enrichment-persistence-simplification-scope.md`)
+  answers all five questions. Decision: preserve the append-only persistence
+  model (it is proportionate to real concurrency, decision immutability, and
+  finalization-order constraints); extract narrow transaction choreography;
+  close two translation integrity gaps (missing idempotency key, missing
+  immutability trigger). Codex reviewed and caught three corrections
+  (finalization-order semantics, translation retry justification, translation
+  trigger gap) incorporated into the final ADR.
+- Review: codex (planner role). Multi-model review of the ADR itself is the
+  next step before scheduling implementation.
+- Implementation scope (from ADR): code-only helper extraction (~10-12 files)
+  plus one migration for translation idempotency_key + immutability trigger.
+  **Full panel** required for the implementation PR.
 
 ### Phase 3: Console migration + config architecture (blocked)
 
