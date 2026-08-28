@@ -7,6 +7,7 @@ const registry: Record<string, () => Promise<{ mount: (el: HTMLElement) => void 
   "workbench-player": () => import("./entries/workbench-player"),
   "review-stepper": () => import("./entries/review-stepper"),
   "corrections-editor": () => import("./entries/corrections-editor"),
+  "media-editor": () => import("./entries/media-editor"),
 };
 
 for (const el of document.querySelectorAll<HTMLElement>("[data-island]")) {

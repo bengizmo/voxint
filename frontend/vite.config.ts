@@ -27,6 +27,7 @@ export default defineConfig({
         "workbench-player": "src/entries/workbench-player.tsx",
         "review-stepper": "src/entries/review-stepper.tsx",
         "corrections-editor": "src/entries/corrections-editor.tsx",
+        "media-editor": "src/entries/media-editor.tsx",
       },
     },
   },
