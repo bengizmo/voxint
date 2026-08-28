@@ -7,7 +7,7 @@ import uuid
 from voxint.worker.app import app
 
 
-@app.task(name="voxint.plugin.synthdetect.score_run", ignore_result=True)
+@app.task(name="voxint.plugin.synthdetect.score_run", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
 def score_run(job_id_str: str) -> None:
     from voxint.config import get_settings
     from voxint.plugins.synthdetect.jobs import execute_job

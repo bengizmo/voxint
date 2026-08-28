@@ -25,7 +25,7 @@ class HttpSynthdetectClient:
         with httpx.Client(timeout=self._timeout) as client:
             resp = client.get(f"{self._base_url}/healthz")
             resp.raise_for_status()
-            return resp.json()
+            return dict(resp.json())
 
     def score(
         self,
@@ -41,7 +41,7 @@ class HttpSynthdetectClient:
             with httpx.Client(timeout=self._timeout) as client:
                 resp = client.post(f"{self._base_url}/v1/score", json=body)
                 resp.raise_for_status()
-                return resp.json()
+                return dict(resp.json())
         except httpx.HTTPStatusError as exc:
             raise SynthdetectServiceError(
                 f"synthdetect service returned {exc.response.status_code}"
