@@ -38,6 +38,7 @@ from voxint.enrichment.translation_jobs import (
     translation_needed,
 )
 from voxint.enrichment.translations import (
+    ConflictingReplayError,
     TranslationError,
     current_translation,
     current_translations,
@@ -85,7 +86,11 @@ def seed_run(
 
 
 def record_spanish(
-    session: Session, run_id: uuid.UUID, *, suffix: str = ""
+    session: Session,
+    run_id: uuid.UUID,
+    *,
+    suffix: str = "",
+    idempotency_key: str | None = None,
 ) -> RunTranslation:
     from datetime import UTC, datetime, timedelta
 
@@ -101,6 +106,7 @@ def record_spanish(
         producer_version="1",
         started_at=now,
         completed_at=now + timedelta(seconds=1),
+        idempotency_key=idempotency_key or str(uuid.uuid4()),
     )
 
 
@@ -159,6 +165,7 @@ class TestWriter:
                 producer_version="1",
                 started_at=now,
                 completed_at=now,
+                idempotency_key=str(uuid.uuid4()),
             )
             second = record_spanish(session, run_id, suffix=" v2")
             session.commit()
@@ -199,6 +206,7 @@ class TestWriter:
                         producer_version="1",
                         started_at=now,
                         completed_at=now,
+                        idempotency_key=str(uuid.uuid4()),
                     )
 
     def test_display_case_target_language_is_normalized(
@@ -220,6 +228,7 @@ class TestWriter:
                 producer_version="1",
                 started_at=now,
                 completed_at=now,
+                idempotency_key=str(uuid.uuid4()),
             )
             assert row.target_language == "es"
 
@@ -733,3 +742,211 @@ class TestCancelHardening:
         execute_job(session_factory, job_id, settings=make_settings(), llm=FakeLLM())
         with session_factory() as session:
             assert request_cancel(session, job_id) is False
+
+
+class TestTranslationIdempotency:
+    """ADR 0008 verification: idempotency replay, conflicting replay, and
+    the immutability trigger on run_translations."""
+
+    def test_identical_replay_returns_existing_row(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            source = load_translation_source(session, run_id)
+            now = datetime.now(tz=UTC)
+            key = str(uuid.uuid4())
+            translated = {ln.line_index: f"ES:{ln.text}" for ln in source.lines}
+            first = record_translation(
+                session,
+                source=source,
+                target_language="es",
+                translated=translated,
+                model="test-model",
+                producer="translation.llm",
+                producer_version="1",
+                started_at=now,
+                completed_at=now + timedelta(seconds=1),
+                idempotency_key=key,
+            )
+            session.commit()
+            replay = record_translation(
+                session,
+                source=source,
+                target_language="es",
+                translated=translated,
+                model="test-model",
+                producer="translation.llm",
+                producer_version="1",
+                started_at=now,
+                completed_at=now + timedelta(seconds=2),
+                idempotency_key=key,
+            )
+            assert replay.id == first.id
+            assert replay.generation == first.generation
+
+    def test_conflicting_replay_raises(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            source = load_translation_source(session, run_id)
+            now = datetime.now(tz=UTC)
+            key = str(uuid.uuid4())
+            record_translation(
+                session,
+                source=source,
+                target_language="es",
+                translated={ln.line_index: f"ES:{ln.text}" for ln in source.lines},
+                model="test-model",
+                producer="translation.llm",
+                producer_version="1",
+                started_at=now,
+                completed_at=now + timedelta(seconds=1),
+                idempotency_key=key,
+            )
+            session.commit()
+            with pytest.raises(ConflictingReplayError):
+                record_translation(
+                    session,
+                    source=source,
+                    target_language="es",
+                    translated={ln.line_index: f"DIFFERENT:{ln.text}" for ln in source.lines},
+                    model="test-model",
+                    producer="translation.llm",
+                    producer_version="1",
+                    started_at=now,
+                    completed_at=now + timedelta(seconds=1),
+                    idempotency_key=key,
+                )
+
+    def test_empty_idempotency_key_refused(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import UTC, datetime
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            source = load_translation_source(session, run_id)
+            now = datetime.now(tz=UTC)
+            with pytest.raises(TranslationError, match="idempotency_key"):
+                record_translation(
+                    session,
+                    source=source,
+                    target_language="es",
+                    translated={ln.line_index: f"ES:{ln.text}" for ln in source.lines},
+                    model="m",
+                    producer="p",
+                    producer_version="1",
+                    started_at=now,
+                    completed_at=now,
+                    idempotency_key="   ",
+                )
+
+
+class TestTranslationImmutabilityTrigger:
+    """ADR 0008 verification: the database trigger rejects UPDATE of content
+    columns and DELETE, permits write-once supersession stamps, and rejects
+    rows born already-superseded."""
+
+    def test_content_update_rejected(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            row = record_spanish(session, run_id)
+            session.commit()
+            from sqlalchemy import update as sa_update
+            from sqlalchemy.exc import DBAPIError
+
+            with pytest.raises(DBAPIError, match="immutable"):
+                session.execute(
+                    sa_update(RunTranslation)
+                    .where(RunTranslation.id == row.id)
+                    .values(model="tampered")
+                )
+                session.flush()
+
+    def test_delete_rejected(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            row = record_spanish(session, run_id)
+            session.commit()
+            from sqlalchemy import delete as sa_delete
+            from sqlalchemy.exc import DBAPIError
+
+            with pytest.raises(DBAPIError, match="immutable"):
+                session.execute(
+                    sa_delete(RunTranslation).where(RunTranslation.id == row.id)
+                )
+                session.flush()
+
+    def test_supersession_stamp_once_succeeds(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            first = record_spanish(session, run_id)
+            second = record_spanish(session, run_id, suffix=" v2")
+            session.commit()
+            session.expire_all()
+            stamped = session.get(RunTranslation, first.id)
+            assert stamped.superseded_by_translation_id == second.id
+
+    def test_supersession_stamp_twice_rejected(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        with session_factory() as session:
+            run_id = seed_run(session)
+            first = record_spanish(session, run_id)
+            record_spanish(session, run_id, suffix=" v2")
+            third = record_spanish(session, run_id, suffix=" v3")
+            session.commit()
+            session.expire_all()
+            from sqlalchemy import update as sa_update
+            from sqlalchemy.exc import DBAPIError
+
+            with pytest.raises(DBAPIError, match="write-once"):
+                session.execute(
+                    sa_update(RunTranslation)
+                    .where(RunTranslation.id == first.id)
+                    .values(superseded_by_translation_id=third.id)
+                )
+                session.flush()
+
+    def test_born_superseded_rejected(
+        self, session_factory: sessionmaker[Session]
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from sqlalchemy.exc import DBAPIError
+
+        with session_factory() as session:
+            run_id = seed_run(session)
+            existing = record_spanish(session, run_id)
+            session.commit()
+            with pytest.raises(DBAPIError, match="unsuperseded"):
+                bad = RunTranslation(
+                    pipeline_run_id=run_id,
+                    target_language="es",
+                    generation=99,
+                    lines=[],
+                    payload_schema_version=1,
+                    producer="p",
+                    producer_version="1",
+                    model="m",
+                    source_content_hash="a" * 64,
+                    idempotency_key=str(uuid.uuid4()),
+                    replay_digest="b" * 64,
+                    started_at=datetime.now(tz=UTC),
+                    completed_at=datetime.now(tz=UTC),
+                    superseded_by_translation_id=existing.id,
+                )
+                session.add(bad)
+                session.flush()

@@ -4,6 +4,11 @@
 one immutable ``run_translations`` row per (run, target language, generation),
 validated up front and fail-closed, mirroring ``run_assets.record_asset``:
 
+- replays idempotently: the same ``idempotency_key`` with the same payload
+  returns the existing row; a mismatched replay raises
+  :class:`ConflictingReplayError`. Replay comparison uses the stored
+  ``replay_digest`` (canonical sha256 of the ``lines`` JSONB) instead of
+  loading the full multi-megabyte payload.
 - serializes per (run, target language) with a transaction-scoped advisory
   lock so generation allocation, insertion, and supersession are one atomic
   step;
@@ -36,6 +41,7 @@ from sqlalchemy.orm import Session, defer
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
 from voxint.api.languages import LANGUAGE_NAMES
 from voxint.db.models import PipelineRun, RunTranslation
+from voxint.idempotency import savepoint_adopt_or_conflict
 
 SOURCE_SCHEMA_VERSION = 1
 PAYLOAD_SCHEMA_VERSION = 1
@@ -50,6 +56,16 @@ MAX_LINES_PAYLOAD_BYTES = 8_000_000
 
 class TranslationError(Exception):
     """A generation submitted something the translation layer refuses to persist."""
+
+
+class ConflictingReplayError(TranslationError):
+    """An idempotency key was reused with a different payload."""
+
+    def __init__(self, idempotency_key: str) -> None:
+        super().__init__(
+            f"idempotency key {idempotency_key!r} already used with a different payload"
+        )
+        self.idempotency_key = idempotency_key
 
 
 def translated_size_ceiling(source_text: str) -> int:
@@ -189,6 +205,48 @@ def _validate_translated(source: TranslationSource, translated: Mapping[int, str
             )
 
 
+def _payload_digest(lines: list[dict[str, object]] | list[dict[str, str | int | None]]) -> str:
+    """Canonical sha256 of the translation payload for efficient replay
+    comparison without loading the full multi-MB ``lines`` JSONB."""
+    canonical = json.dumps(lines, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _replay_matches(
+    row: RunTranslation,
+    *,
+    pipeline_run_id: uuid.UUID,
+    target_language: str,
+    source_language: str | None,
+    digest: str,
+    payload_schema_version: int,
+    producer: str,
+    producer_version: str,
+    model: str,
+    hash_value: str,
+    started_at: datetime,
+) -> bool:
+    """Replay equality for translations.
+
+    ``completed_at`` is intentionally excluded: the executor stamps it at
+    finalization from the DB clock, so a redelivery after a successful-but-
+    unacked commit would mint a new value and falsely conflict. ``started_at``
+    is stable (frozen at claim) and IS compared. ``lines`` are compared via
+    ``replay_digest`` rather than the full JSONB."""
+    return (
+        row.pipeline_run_id == pipeline_run_id
+        and row.target_language == target_language
+        and row.source_language == source_language
+        and row.replay_digest == digest
+        and row.payload_schema_version == payload_schema_version
+        and row.producer == producer
+        and row.producer_version == producer_version
+        and row.model == model
+        and row.source_content_hash == hash_value
+        and row.started_at == started_at
+    )
+
+
 def record_translation(
     session: Session,
     *,
@@ -200,22 +258,26 @@ def record_translation(
     producer_version: str,
     started_at: datetime,
     completed_at: datetime,
+    idempotency_key: str,
 ) -> RunTranslation:
     """Atomically persist one successful generation and supersede its
     predecessor for the same target language.
 
-    The freshness hash is computed here from ``source`` — the writer, not the
+    The freshness hash is computed here from ``source`` -- the writer, not the
     caller, owns the hash so it always describes what was actually frozen.
     Only complete generations persist: ``translated`` must cover every source
     line exactly (the executor's batch validation should already guarantee
     this; the writer re-checks so no caller can smuggle a partial generation).
+
+    Returns the existing row on an identical replay. Raises
+    :class:`ConflictingReplayError` when ``idempotency_key`` was already used
+    with a different payload.
     """
-    # Defensive normalization: the job path already stores canonical codes,
-    # but a future caller passing display case must not fail here — AFTER
-    # the LLM work is already paid for.
     target_language = target_language.strip().lower()
     if target_language not in LANGUAGE_NAMES:
         raise TranslationError(f"unknown target language code: {target_language!r}")
+    if not idempotency_key.strip():
+        raise TranslationError("idempotency_key must be non-empty")
     for label, value, cap in (
         ("producer", producer, MAX_PRODUCER_CHARS),
         ("producer_version", producer_version, MAX_PRODUCER_CHARS),
@@ -245,10 +307,37 @@ def record_translation(
         raise TranslationError(
             f"translation payload over {MAX_LINES_PAYLOAD_BYTES} bytes"
         )
+    hash_value = translation_source_hash(source)
+    digest = _payload_digest(lines)
 
-    # One finalization at a time per (run, target language): generation
-    # allocation, insertion, and supersession must be atomic even when the pair
-    # has no prior rows to lock. Transaction-scoped, releases on commit/rollback.
+    def _existing() -> RunTranslation | None:
+        return session.execute(
+            select(RunTranslation)
+            .options(defer(RunTranslation.lines))
+            .where(RunTranslation.idempotency_key == idempotency_key)
+        ).scalar_one_or_none()
+
+    def _adopt_or_conflict(row: RunTranslation) -> RunTranslation:
+        if _replay_matches(
+            row,
+            pipeline_run_id=source.pipeline_run_id,
+            target_language=target_language,
+            source_language=source.source_language,
+            digest=digest,
+            payload_schema_version=PAYLOAD_SCHEMA_VERSION,
+            producer=producer,
+            producer_version=producer_version,
+            model=model,
+            hash_value=hash_value,
+            started_at=started_at,
+        ):
+            return row
+        raise ConflictingReplayError(idempotency_key)
+
+    existing = _existing()
+    if existing is not None:
+        return _adopt_or_conflict(existing)
+
     session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:producer), hashtext(:scope))"),
         {
@@ -256,42 +345,53 @@ def record_translation(
             "scope": str(source.pipeline_run_id),
         },
     )
-    generation = (
+
+    def _persist() -> RunTranslation:
+        generation = (
+            session.execute(
+                select(func.coalesce(func.max(RunTranslation.generation), 0)).where(
+                    RunTranslation.pipeline_run_id == source.pipeline_run_id,
+                    RunTranslation.target_language == target_language,
+                )
+            ).scalar_one()
+            + 1
+        )
+        row = RunTranslation(
+            pipeline_run_id=source.pipeline_run_id,
+            target_language=target_language,
+            generation=generation,
+            source_language=source.source_language,
+            lines=lines,
+            payload_schema_version=PAYLOAD_SCHEMA_VERSION,
+            producer=producer,
+            producer_version=producer_version,
+            model=model,
+            source_content_hash=hash_value,
+            idempotency_key=idempotency_key,
+            replay_digest=digest,
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+        session.add(row)
+        session.flush()
         session.execute(
-            select(func.coalesce(func.max(RunTranslation.generation), 0)).where(
+            update(RunTranslation)
+            .where(
                 RunTranslation.pipeline_run_id == source.pipeline_run_id,
                 RunTranslation.target_language == target_language,
+                RunTranslation.generation < generation,
+                RunTranslation.superseded_by_translation_id.is_(None),
             )
-        ).scalar_one()
-        + 1
-    )
-    row = RunTranslation(
-        pipeline_run_id=source.pipeline_run_id,
-        target_language=target_language,
-        generation=generation,
-        source_language=source.source_language,
-        lines=lines,
-        payload_schema_version=PAYLOAD_SCHEMA_VERSION,
-        producer=producer,
-        producer_version=producer_version,
-        model=model,
-        source_content_hash=translation_source_hash(source),
-        started_at=started_at,
-        completed_at=completed_at,
-    )
-    session.add(row)
-    session.flush()
-    session.execute(
-        update(RunTranslation)
-        .where(
-            RunTranslation.pipeline_run_id == source.pipeline_run_id,
-            RunTranslation.target_language == target_language,
-            RunTranslation.generation < generation,
-            RunTranslation.superseded_by_translation_id.is_(None),
+            .values(superseded_by_translation_id=row.id)
         )
-        .values(superseded_by_translation_id=row.id)
+        return row
+
+    return savepoint_adopt_or_conflict(
+        session,
+        lookup=_existing,
+        adopt_or_conflict=_adopt_or_conflict,
+        persist=_persist,
     )
-    return row
 
 
 def current_translations(session: Session, pipeline_run_id: uuid.UUID) -> list[RunTranslation]:
