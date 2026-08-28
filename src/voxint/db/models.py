@@ -1846,6 +1846,12 @@ class AppSettings(Base):
         ForeignKey("pipeline_runs.id", ondelete="SET NULL")
     )
     tutorial_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Synthdetect plugin (#145). Same tri-state as semantic_index: NULL inherits
+    # env default, non-NULL overrides. OFF by default (requires GPU service).
+    synthdetect_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    synthdetect_autogenerate: Mapped[bool | None] = mapped_column(Boolean)
+    synthdetect_url: Mapped[str | None] = mapped_column(Text)
+    synthdetect_http_timeout_seconds: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -2461,6 +2467,93 @@ class EmbeddingJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SynthdetectJobStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SynthdetectJob(Base):
+    """One synthdetect scoring attempt for a pipeline run (#145)."""
+
+    __tablename__ = "synthdetect_jobs"
+    __table_args__ = (
+        Index(
+            "synthdetect_jobs_one_active_per_run",
+            "pipeline_run_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        CheckConstraint(
+            f"status IN ({_enum_values(SynthdetectJobStatus)})",
+            name="synthdetect_jobs_status_check",
+        ),
+        CheckConstraint(
+            "started_at IS NULL OR started_at >= created_at",
+            name="synthdetect_jobs_started_after_created_check",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR started_at IS NOT NULL",
+            name="synthdetect_jobs_finished_requires_started_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    inference_space: Mapped[str] = mapped_column(Text)
+    calibration_policy_id: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, default=SynthdetectJobStatus.QUEUED.value)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    total_turns: Mapped[int | None] = mapped_column(Integer)
+    scored_turns: Mapped[int | None] = mapped_column(Integer)
+    skipped_turns: Mapped[int | None] = mapped_column(Integer)
+    mean_risk: Mapped[float | None] = mapped_column(Float)
+    max_risk: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SynthdetectScore(Base):
+    """One per-turn synthdetect score row (#145)."""
+
+    __tablename__ = "synthdetect_scores"
+    __table_args__ = (
+        UniqueConstraint(
+            "synthdetect_job_id",
+            "diarization_turn_id",
+            name="synthdetect_scores_job_turn_key",
+        ),
+        CheckConstraint(
+            "(raw_logit IS NULL) = (skip_reason IS NOT NULL)",
+            name="synthdetect_scores_logit_xor_skip_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    synthdetect_job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("synthdetect_jobs.id", ondelete="CASCADE"), index=True
+    )
+    pipeline_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
+    diarization_turn_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("diarization_turns.id", ondelete="SET NULL")
+    )
+    speaker_label: Mapped[str | None] = mapped_column(Text)
+    raw_logit: Mapped[float | None] = mapped_column(Float)
+    calibrated_score: Mapped[float | None] = mapped_column(Float)
+    window_count: Mapped[int] = mapped_column(Integer)
+    skip_reason: Mapped[str | None] = mapped_column(Text)
+    inference_space: Mapped[str] = mapped_column(Text)
+    calibration_policy_id: Mapped[str] = mapped_column(Text)
 
 
 class NotificationDelivery(Base):
