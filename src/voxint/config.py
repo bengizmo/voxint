@@ -604,6 +604,12 @@ class Settings(BaseSettings):
     translation_target_language: str | None = None
     translation_autogenerate: bool = False
 
+    # Synthdetect plugin (#145). OFF by default: requires the GPU service.
+    synthdetect_url: str = "http://localhost:8025"
+    synthdetect_enabled: bool = False
+    synthdetect_autogenerate: bool = False
+    synthdetect_http_timeout_seconds: int = 120
+
     # Plugin kill switch (#137, epic #136). Comma-separated ids of builtin
     # plugins to remove entirely from this process — their routes 404, their
     # background tasks re-check their gate and no-op. This is the operator's

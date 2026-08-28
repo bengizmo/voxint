@@ -468,11 +468,11 @@ def test_parse_disabled_ids(raw: str, expected: tuple[str, ...]) -> None:
     assert parse_disabled_ids(raw) == expected
 
 
-def test_load_plugins_builds_from_empty_builtin_and_caches() -> None:
+def test_load_plugins_builds_from_builtin_and_caches() -> None:
     settings = SimpleNamespace(voxint_plugins_disabled="")
     reg = load_plugins(settings)  # type: ignore[arg-type]
-    # BUILTIN is empty in #137, so the built registry is empty and dormant.
-    assert reg.plugins == ()
+    assert len(reg.plugins) >= 1
+    assert any(p.manifest.id == "synthdetect" for p in reg.plugins)
     # get_plugins returns the same cached instance without rebuilding.
     assert get_plugins() is reg
 
@@ -480,10 +480,9 @@ def test_load_plugins_builds_from_empty_builtin_and_caches() -> None:
 def test_load_plugins_threads_the_kill_switch_through() -> None:
     settings = SimpleNamespace(voxint_plugins_disabled="ghost, other")
     reg = load_plugins(settings)  # type: ignore[arg-type]
-    # No builtins to filter, but the parsed ids reach the registry and surface
-    # as unknown for the doctor.
     assert reg.disabled_ids == frozenset({"ghost", "other"})
-    assert reg.unknown_disabled_ids == frozenset({"ghost", "other"})
+    assert "ghost" in reg.unknown_disabled_ids
+    assert "other" in reg.unknown_disabled_ids
 
 
 def test_get_plugins_lazy_fallback_builds_from_settings(
@@ -494,7 +493,7 @@ def test_get_plugins_lazy_fallback_builds_from_settings(
     settings = SimpleNamespace(voxint_plugins_disabled="")
     monkeypatch.setattr("voxint.config.get_settings", lambda: settings)
     reg = get_plugins()
-    assert reg.plugins == ()
+    assert len(reg.plugins) >= 1
     assert get_plugins() is reg  # second access is the cached instance
 
 

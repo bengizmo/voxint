@@ -13,6 +13,9 @@ export interface KeymapHelpProps {
   // fires when there are speakers to assign, so the cheat-sheet says so honestly
   // rather than promising a key that would no-op on a roster-less run.
   hasRoster: boolean;
+  // Extra shortcut rows appended after the shared set (e.g. walk-mode toggle in
+  // the media editor, which ReviewStepper does not have).
+  extraShortcuts?: readonly { keys: string; desc: string }[];
 }
 
 // One shortcut row: a <kbd> and its plain-language description. Rendered as a
@@ -36,7 +39,12 @@ function Row({ keys, desc }: { keys: string; desc: string }) {
 // a keyboard operator never loses their place. Theme-adaptive via the same CSS
 // system colors base.html uses (Canvas/CanvasText), so it follows OS light/dark
 // without a media query.
-export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
+export function KeymapHelp({
+  open,
+  onClose,
+  hasRoster,
+  extraShortcuts = [],
+}: KeymapHelpProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
@@ -172,9 +180,9 @@ export function KeymapHelp({ open, onClose, hasRoster }: KeymapHelpProps) {
               desc={shortcutDesc(shortcut, { hasRoster })}
             />
           ))}
-          {/* The edit-box save chord (issue #51): listed here so the one shortcut
-              that fires *while* typing is discoverable via `?`, not just the
-              inline hints. Same label as the handler + hints (keymap.ts). */}
+          {extraShortcuts.map((s) => (
+            <Row key={s.keys} keys={s.keys} desc={s.desc} />
+          ))}
           <Row keys={SAVE_EDIT_LABEL} desc={SAVE_EDIT_DESC} />
         </dl>
         <p className="muted text-sm" style={{ marginBottom: 0 }}>

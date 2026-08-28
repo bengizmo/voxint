@@ -76,11 +76,12 @@ def test_route_inventory_matches_golden() -> None:
     )
 
 
-def test_framework_is_dormant() -> None:
-    # #137 lands the framework with an empty builtin set, so core-only and
-    # all-enabled route inventories are the same app. #138 wires the registry into
-    # create_app and this invariant becomes the with/without-plugins comparison.
-    assert load_registry().plugins == ()
+def test_framework_has_synthdetect_plugin() -> None:
+    # The first builtin plugin (#145) activates the framework; the registry is
+    # no longer dormant.
+    reg = load_registry()
+    assert len(reg.plugins) >= 1
+    assert any(p.manifest.id == "synthdetect" for p in reg.plugins)
 
 
 def test_inventory_captures_nested_plugin_routes(

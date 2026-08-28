@@ -17,6 +17,11 @@ from fastapi.responses import Response
 from voxint.adjudication.review_state import verified_progress
 from voxint.adjudication.slots import ClaimMismatchError, verify_claim
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
+from voxint.api.csrf import (
+    CSRF_ANNOTATION_TAGS,
+    CSRF_CLIP_EXTRACT,
+    mint_csrf_token,
+)
 from voxint.api.editor_query import media_detail
 from voxint.api.playback import playback_capability
 from voxint.api.presentation import friendly_media_label
@@ -28,6 +33,7 @@ from voxint.api.routers.deps import (
     require_onboarded,
     templates,
 )
+from voxint.api.routers.legacy_review import _annotation_limits, _annotations_payload
 from voxint.api.speaker_colors import speaker_palette
 from voxint.api.transcript_view import (
     _run_label_universe,
@@ -105,6 +111,18 @@ def media_detail_page(
                 {"id": str(sp.id), "displayName": sp.display_name}
                 for sp in active_speakers(session)
             ]
+
+            annotations_payload = _annotations_payload(session, run_id, [])
+            island_props["annotations"] = annotations_payload["annotations"]
+            island_props["annotationTags"] = annotations_payload["tags"]
+            island_props["annotationLimits"] = _annotation_limits()
+            if claim_valid:
+                island_props["tagCsrf"] = mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS
+                )
+                island_props["clipCsrf"] = mint_csrf_token(
+                    request.app.state.csrf_secret, CSRF_CLIP_EXTRACT
+                )
 
     return templates.TemplateResponse(
         request,

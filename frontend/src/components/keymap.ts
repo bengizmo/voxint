@@ -19,6 +19,7 @@ export const REVIEW_KEY = {
   previous: "k",
   resetSpeaker: "0",
   annotate: "h",
+  walkMode: "w",
   help: "?",
 } as const;
 
