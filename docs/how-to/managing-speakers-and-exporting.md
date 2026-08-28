@@ -34,7 +34,10 @@ Open **Speakers** in the sidebar (or go to
 is a table showing each speaker's initials badge, name, status (verified,
 needs you, or unknown), file count, minutes of speech, voice match strength,
 and when they were last heard. An amber TO DO strip at the top calls out
-voices waiting for a name and pending name suggestions.
+voices waiting for a name and pending name suggestions. If two or more
+speakers look like they might be the same person (high voice-match similarity),
+a **Possible duplicates** card appears below the TO DO strip, prompting you to
+review and merge them if appropriate.
 
 ![The speaker roster: a table of enrolled speakers with initials badges, status
 chips, and voice match percentages.](../images/speakers.png)

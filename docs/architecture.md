@@ -162,7 +162,9 @@ Three invariants worth naming:
   a cosine proposal with a concrete speaker can claim `grounded`, and machine
   proposals are never merged into the human ledger. The ledger itself is
   append-only at the database level (a trigger rejects UPDATE/DELETE) and writes
-  go through one idempotent-replay operation.
+  go through one idempotent-replay operation. The savepoint-adopt-or-conflict
+  skeleton shared by the ledger, annotations, drafts, and run-asset writers is
+  extracted into `voxint.idempotency.savepoint_adopt_or_conflict()`.
 - **One embedding space at a time.** Cosine similarity is only meaningful within a
   single `embedding_space`; all vector SQL lives in one module and always filters
   by space.
@@ -635,6 +637,13 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   AND-composes with status/review and the `(created_at, id)` keyset cursor;
   results stay newest-first, no relevance ranking; matching runs get one
   escaped `ts_headline` snippet (first matching segment).
+- **Media detail page** (`GET /media/{id}/editor`, issue #156): a read-only
+  entry point into a media item's best run. Selects the latest completed run
+  by default (`?run=` overrides, validated against the media item). Renders the
+  transcript with the speaker palette and a verified-progress counter, a run
+  chooser, and a metadata rail. Claim-token verification degrades to read-only
+  when the token is stale or absent. No mutations: existing
+  `/review/{run_id}/*` endpoints remain the only write surface.
 - **Reviewer slot**: claim columns on `pipeline_runs`, guarded by the same CAS
   `revision` as pipeline transitions. The claim token is an opaque per-claim
   secret required on every mutation; a re-claim rotates it, so a stale tab
@@ -744,8 +753,10 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   stamps a deliberately minimal set on every response, and re-applies it on an
   unhandled 500. `Referrer-Policy: no-referrer` on every response (the review
   token rides in the URL, so no navigation or subresource may leak it in a
-  `Referer`); `Cache-Control: no-store` on every `/review` response
-  (token-bearing pages and redirects are never cached); `X-Content-Type-Options:
+  `Referer`); `Cache-Control: no-store` on every token-sensitive response
+  (`/review/*` and `/media/{uuid}/editor*`, where claim tokens ride in the URL
+  or response body; the path classifier is `_is_token_sensitive_path` in
+  `app.py`); `X-Content-Type-Options:
   nosniff` on every response (#103), so the browser honours the declared
   `Content-Type` instead of sniffing operator-controlled transcript exports or
   first-party assets into HTML. `X-Frame-Options` and a content-security policy

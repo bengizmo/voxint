@@ -19,6 +19,9 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   no-store` now covers both `/review/*` and `/media/{uuid}/editor*` paths, so
   claim tokens embedded in the editor detail page are never cached. Library
   routes (`/media`, `/media/submit`, etc.) are unaffected.
+- **Possible-duplicates reminder card** (#181). The speakers overview page shows
+  a reminder card when two or more roster speakers share a high cosine
+  similarity, prompting the operator to review whether they should be merged.
 
 ### Changed
 - **Idempotent insert helper extracted** (Phase 2, finding M10). The
