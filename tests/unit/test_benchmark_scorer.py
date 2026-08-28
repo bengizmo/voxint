@@ -157,17 +157,18 @@ class TestProtocolHash:
 class TestNormalizerGolden:
     """Pin normalizer behavior so a code change without a version bump fails CI."""
 
-    GOLDEN_VECTORS = [
-        ("HELLO WORLD", "hello world"),
-        ("It's a test!", "its a test"),
-        ("  multiple   spaces  ", "multiple spaces"),
-        ("123-456", "123456"),
-        ("", ""),
-    ]
-
-    def test_normalize_golden(self) -> None:
-        for raw, expected in self.GOLDEN_VECTORS:
-            assert normalize(raw) == expected, f"normalize({raw!r}) drifted"
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("HELLO WORLD", "hello world"),
+            ("It's a test!", "its a test"),
+            ("  multiple   spaces  ", "multiple spaces"),
+            ("123-456", "123456"),
+            ("", ""),
+        ],
+    )
+    def test_normalize_golden(self, raw: str, expected: str) -> None:
+        assert normalize(raw) == expected, f"normalize({raw!r}) drifted"
 
 
 class TestWERCounts:
