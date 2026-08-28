@@ -206,9 +206,15 @@ quote code points, 4,000 note code points, 8 tags per annotation.
 Reads (list, exports, stored quotes) require operator auth and onboarding
 only, with no claim, so Copy works in a read-only review tab. The read routes
 are `GET /review/{run_id}/annotations` (the panel list), `GET
-/review/{run_id}/annotations/{annotation_id}/export.md` (one pull-quote), and
-`GET /review/{run_id}/annotations/export.md` (all filtered pull-quotes, honoring
-the same `?tag=` OR-union). Run-scoped writes require the active review claim
+/review/{run_id}/annotations/{annotation_id}/export.md` (one pull-quote), `GET
+/review/{run_id}/annotations/export.md` (all filtered pull-quotes, honoring
+the same `?tag=` OR-union), `GET
+/review/{run_id}/annotations/{annotation_id}/export.json` (one provenance
+manifest), and `GET /review/{run_id}/annotations/export.json` (all filtered
+manifests as a bundle). The JSON manifest (#122) carries per-line speaker
+attribution, timecodes, clip integrity digest, per-stage model identity from
+the pipeline run, and input-media SHA-256; the bulk route places run-level
+provenance at the envelope level. Run-scoped writes require the active review claim
 token; a lost claim is a 409 marked `X-Voxint-Conflict: claim`. Creates carry a
 client nonce;
 replaying the same nonce with the same fingerprint returns the original row
