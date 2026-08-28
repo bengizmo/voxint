@@ -38,6 +38,12 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Project detail: "+ add speaker" and "+ link folder" links** (#247).
   Navigation links in the sidebar section headers.
 
+### Changed
+- **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)
+  of maintainer evaluation infrastructure moved. Zero runtime dependencies on
+  voxint app code. The compact public summary in `docs/gpu-contracts.md`
+  retains model limitations, coverage gaps, and M2 fine-tuning outcomes.
+
 ## [0.28.0] - 2026-08-27
 
 ### Added
