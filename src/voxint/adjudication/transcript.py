@@ -198,7 +198,11 @@ def display_name(state: LabelState | None, seg: TranscriptSegment) -> str:
     label = seg.diarization_label or "(no speaker)"
     if state is None:
         return label
-    if state.resolution in (Resolution.HUMAN_ASSIGN, Resolution.GROUNDED_COSINE):
+    if state.resolution in (
+        Resolution.HUMAN_ASSIGN,
+        Resolution.GROUNDED_COSINE,
+        Resolution.AUTO_ENROLL,
+    ):
         return state.speaker_name or label
     if state.resolution is Resolution.HUMAN_EXCLUDE:
         return f"(excluded) {label}"

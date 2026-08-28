@@ -1,5 +1,5 @@
 {
-  "note": "Golden parity vectors for the synthdetect service (w2v2-aasist-df-m2-s0e11). Generated from a deterministic 440Hz sine wave scored on darkboi RTX 3060 (GPU 2) using voxint-synthdetect:dev. Determinism verified (bit-identical across cold calls). These vectors pin the service's numerical output for the fine-tuned M2 checkpoint.",
+  "note": "Golden parity vectors for the synthdetect service (w2v2-aasist-df-m2-s0e11). Generated from a deterministic 440Hz sine wave scored on the reporting host RTX 3060 (GPU 2) using voxint-synthdetect:dev. Determinism verified (bit-identical across cold calls). These vectors pin the service's numerical output for the fine-tuned M2 checkpoint.",
   "inference_space": "w2v2-aasist-df-m2-s0e11",
   "fixtures": [
     {

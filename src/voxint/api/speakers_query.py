@@ -283,7 +283,10 @@ def speakers_overview(
             r
             for r in rows
             if not r.aggregate.verified
-            and r.aggregate.seconds >= UNVERIFIED_FLOOR_SECONDS
+            and (
+                r.aggregate.seconds >= UNVERIFIED_FLOOR_SECONDS
+                or r.aggregate.auto_enrolled
+            )
         ),
         key=lambda r: (-r.aggregate.seconds, r.entry.speaker.display_name.casefold()),
     )

@@ -136,6 +136,8 @@
       <span class="pill grounded">machine: {{ s.speaker_name }}</span>
     {% elif s.resolution.value == "human_assign" %}
       <span class="pill human">assigned: {{ s.speaker_name }}</span>
+    {% elif s.resolution.value == "auto_enroll" %}
+      <span class="pill grounded">auto: {{ s.speaker_name }}</span>
     {% elif s.resolution.value == "human_exclude" %}
       <span class="pill human">excluded</span>
     {% else %}

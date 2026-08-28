@@ -160,7 +160,9 @@ def speaker_attributed_exists(
         .where(
             AdjudicationDecision.pipeline_run_id == run_id,
             AdjudicationDecision.diarization_label == DiarizationTurn.label,
-            AdjudicationDecision.decision == Decision.ASSIGN.value,
+            AdjudicationDecision.decision.in_(
+                [Decision.ASSIGN.value, Decision.AUTO_ENROLL.value]
+            ),
             AdjudicationDecision.speaker_id.in_(ids),
             # LABEL scope only (issue #54 Phase B): speaker search stays a
             # label-grain fact. Segment-scope overrides are deliberately not
@@ -242,6 +244,7 @@ class Resolution(enum.StrEnum):
     HUMAN_EXCLUDE = "human_exclude"
     HUMAN_UNKNOWN = "human_unknown"
     GROUNDED_COSINE = "grounded_cosine"
+    AUTO_ENROLL = "auto_enroll"
     UNRESOLVED = "unresolved"
 
 
@@ -515,8 +518,13 @@ def label_states(session: Session, run_id: uuid.UUID) -> list[LabelState]:
                 speaker_id = canonical(decision.speaker_id)
             elif decision.decision == Decision.EXCLUDE.value:
                 resolution = Resolution.HUMAN_EXCLUDE
-            else:
+            elif decision.decision == Decision.UNKNOWN.value:
                 resolution = Resolution.HUMAN_UNKNOWN
+            elif decision.decision == Decision.AUTO_ENROLL.value:
+                resolution = Resolution.AUTO_ENROLL
+                speaker_id = canonical(decision.speaker_id)
+            else:
+                raise AssertionError(f"unhandled decision type: {decision.decision!r}")
         elif cosine is not None and cosine.grounded:
             resolution = Resolution.GROUNDED_COSINE
             speaker_id = canonical(cosine.speaker_id)

@@ -256,6 +256,7 @@ def _drive_segment(task: object, run_id_str: str, segment: frozenset[Stage]) -> 
             # Only the owning post lane performs completion side effects. A
             # late/redelivered GPU task may observe an already-COMPLETED row;
             # treating that observation as completion would enqueue assets twice.
+            _auto_enroll_speakers(factory, run_id, settings)
             _autogenerate_run_assets(factory, run_id, settings)
             _autogenerate_segment_embeddings(factory, run_id, settings)
             _autogenerate_translation(factory, run_id, settings)
@@ -726,6 +727,26 @@ def _autogenerate_segment_embeddings(
             generate_segment_embeddings.apply_async((job_id,), ignore_result=True)
     except Exception:
         logger.exception("post-finalize embedding enqueue failed for run %s", run_id)
+
+
+def _auto_enroll_speakers(
+    factory: sessionmaker[Session], run_id: uuid.UUID, settings: Settings
+) -> None:
+    """Post-completion side effect: auto-enroll unmatched voices (#275).
+
+    Best-effort: a failure is logged and swallowed, never fails the run.
+    """
+    if not settings.auto_enroll:
+        return
+    try:
+        from voxint.speakers.auto_enroll import auto_enroll_run
+        from voxint.speakers.matching import gates_from_settings
+
+        with factory() as session:
+            auto_enroll_run(session, run_id, gates_from_settings(settings))
+            session.commit()
+    except Exception:
+        logger.exception("post-finalize auto-enrollment failed for run %s", run_id)
 
 
 @app.task(name="voxint.research_speaker", ignore_result=True)  # type: ignore[misc, untyped-decorator, unused-ignore]
