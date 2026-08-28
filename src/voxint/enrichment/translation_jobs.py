@@ -528,6 +528,7 @@ def execute_job(
                 # that CHECK under clock skew — failing the job AFTER a
                 # fully paid-for generation.
                 completed_at=_db_now(session),
+                idempotency_key=str(job_id),
             )
             session.flush()
             stamped = cast(

@@ -2204,6 +2204,7 @@ class RunTranslation(Base):
             "completed_at >= started_at",
             name="run_translations_completed_after_started_check",
         ),
+        UniqueConstraint("idempotency_key", name="run_translations_idempotency_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -2222,6 +2223,8 @@ class RunTranslation(Base):
     # The exact model identifier the generation ran with (provenance).
     model: Mapped[str] = mapped_column(Text)
     source_content_hash: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    replay_digest: Mapped[str | None] = mapped_column(Text)
     superseded_by_translation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("run_translations.id")
     )

@@ -157,6 +157,29 @@ parallelizable EXCEPT where noted.
   plus one migration for translation idempotency_key + immutability trigger.
   **Full panel** required for the implementation PR.
 
+**Step 3: Translation integrity gap closure** -- DONE
+- Migration 0047: nullable `idempotency_key TEXT UNIQUE` + `replay_digest TEXT`
+  on `run_translations`, plus immutability/supersession-integrity trigger
+  matching the asset pattern (reject UPDATE except write-once supersession
+  stamp, reject DELETE, reject born-superseded inserts).
+- `record_translation` wired through `savepoint_adopt_or_conflict`: early
+  lookup by key, replay matching via `replay_digest` (excludes `completed_at`
+  which is unstable across retries), advisory-lock acquisition, then
+  savepoint-protected persist with post-lock re-check.
+- `execute_job` passes `str(job_id)` as idempotency key (matching the
+  asset-job convention).
+- Atomicity verified: `record_translation` and the job SUCCEEDED stamp share
+  a single `session.commit()` in `execute_job`, so idempotency is
+  defense-in-depth, not primary.
+- Integration tests: identical replay, conflicting replay, empty key refusal,
+  trigger content-update rejection, delete rejection, write-once supersession,
+  double-stamp rejection, born-superseded rejection.
+- Files changed: `alembic/versions/0047_translation_idempotency.py` (new),
+  `src/voxint/db/models.py`, `src/voxint/enrichment/translations.py`,
+  `src/voxint/enrichment/translation_jobs.py`,
+  `tests/integration/test_translation_jobs.py`.
+- Review: pending (full panel required per ADR).
+
 ### Phase 3: Console migration + config architecture (blocked)
 
 Depends on Console 2.0 P5 (legacy route retirement). Documented for
