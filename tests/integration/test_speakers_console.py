@@ -191,10 +191,16 @@ def test_view_toggle_and_cross_preservation(
 
 
 def _csrf(client: TestClient, marker: str) -> str:
-    """Scrape a minted token out of the rendered page (test_projects idiom)."""
+    """Scrape a minted token out of the rendered page by data-csrf-{marker}."""
     import re
 
     page = client.get("/speakers")
+    match = re.search(
+        rf'name="csrf_token" value="([^"]+)"\s*data-csrf-{re.escape(marker)}',
+        page.text,
+    )
+    if match:
+        return match.group(1)
     fields = re.findall(r'name="csrf_token" value="([^"]+)"', page.text)
     assert fields, "no csrf token rendered"
     return fields[0]
@@ -742,3 +748,126 @@ def test_possible_duplicates_card_absent_when_no_pairs(
     page = client.get("/speakers")
     assert page.status_code == 200
     assert "sound alike" not in page.text
+
+
+# ---- #245 Speaker creation from overview ------------------------------------
+
+
+def _csrf_create(client: TestClient) -> str:
+    """Scrape the create-speaker CSRF token from the rendered overview page."""
+    import re
+
+    page = client.get("/speakers")
+    pattern = r'class="spk-create-form".*?name="csrf_token" value="([^"]+)"'
+    match = re.search(pattern, page.text, re.S)
+    assert match, "no create-speaker csrf token rendered"
+    return match.group(1)
+
+
+def test_create_speaker_success(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    token = _csrf_create(client)
+    resp = client.post(
+        "/speakers",
+        data={"display_name": "New Person", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    assert "/speakers/" in resp.headers["location"]
+    with session_factory() as session:
+        speaker = session.execute(
+            select(Speaker).where(Speaker.display_name == "New Person")
+        ).scalar_one()
+        assert speaker is not None
+
+
+def test_create_speaker_empty_name_rejected(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    token = _csrf_create(client)
+    resp = client.post(
+        "/speakers",
+        data={"display_name": "   ", "csrf_token": token},
+    )
+    assert resp.status_code == 200
+    assert "1-120 characters" in resp.text
+
+
+def test_create_speaker_duplicate_name_409(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        session.add(Speaker(display_name="Existing"))
+        session.commit()
+    token = _csrf_create(client)
+    resp = client.post(
+        "/speakers",
+        data={"display_name": "Existing", "csrf_token": token},
+    )
+    assert resp.status_code == 200
+    assert "already exists" in resp.text
+
+
+# ---- #245 Verified / unverified grouping ------------------------------------
+
+
+def test_overview_groups_verified_and_unverified(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        _seed_speaker_with_activity(session, "VerifiedAlice", minutes_rank=2, human=True)
+        _seed_speaker_with_activity(session, "UnverifiedBob", minutes_rank=1, human=False)
+        session.commit()
+    page = client.get("/speakers?view=table")
+    assert page.status_code == 200
+    assert "Known speakers" in page.text
+    assert "Unnamed voices" in page.text
+    known_pos = page.text.index("Known speakers")
+    unnamed_pos = page.text.index("Unnamed voices")
+    assert known_pos < unnamed_pos
+    assert "VerifiedAlice" in page.text[known_pos:unnamed_pos]
+    assert "UnverifiedBob" in page.text[unnamed_pos:]
+
+
+# ---- #245 Heard-name annotation ---------------------------------------------
+
+
+def test_heard_name_annotation_shown(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    with session_factory() as session:
+        speaker_id = _seed_speaker_with_activity(
+            session, "Unknown voice 1", minutes_rank=1, human=False
+        )
+        run_id = session.execute(
+            select(SpeakerAssignment.pipeline_run_id).where(
+                SpeakerAssignment.speaker_id == speaker_id
+            )
+        ).scalar_one()
+        session.add(
+            SpeakerAssignment(
+                pipeline_run_id=run_id,
+                diarization_label="S0",
+                method="llm_hint",
+                proposed_name="Sam",
+            )
+        )
+        session.commit()
+    page = client.get("/speakers?view=table")
+    assert page.status_code == 200
+    assert '"Sam?" heard name' in page.text
+    assert "Rule →" in page.text
+
+
+def test_create_speaker_requires_csrf(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    client = _make_client(session_factory, tmp_path, speakers_enabled=True)
+    resp = client.post("/speakers", data={"display_name": "No Token"})
+    assert resp.status_code == 403
