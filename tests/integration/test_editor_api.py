@@ -263,3 +263,28 @@ def test_editor_island_no_csrf_without_claim(
     assert "annotationLimits" in props
     assert props.get("tagCsrf") is None
     assert props.get("clipCsrf") is None
+
+
+# ---- Label states (#157 Slice 3) ----
+
+
+def test_editor_island_includes_label_states(
+    session_factory: sessionmaker[Session],
+) -> None:
+    """The editor's island_props include labelStates for the speaker rail."""
+    import json
+
+    media_id, _ = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
+    assert resp.status_code == 200
+
+    text = resp.text
+    start = text.find("data-props='") + len("data-props='")
+    end = text.find("'", start)
+    props = json.loads(text[start:end])
+
+    assert "labelStates" in props
+    assert isinstance(props["labelStates"], list)
