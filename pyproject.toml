@@ -153,6 +153,7 @@ src = ["src", "tests"]
 # ad-hoc `ruff check <path>`), not only during a directory scan.
 extend-exclude = [
     "tests/parity/bakeoff/_vendor/openai_whisper_normalizers",
+    "services/synthdetect/app/vendor",
 ]
 force-exclude = true
 

@@ -55,6 +55,10 @@ services/pyannote/models/*.bin
 # asset release; sha256 in services/llama-cpp/provenance.json — the Dockerfile,
 # provenance, and NOTICE ARE tracked, only the 2.89 GB weight stays out of git)
 services/llama-cpp/models/*.gguf
+# Synthdetect weights (reconstituted full checkpoint + XLS-R base; sha256s in
+# services/synthdetect/provenance.json — provenance IS tracked, the ~5 GB
+# weights stay out of git)
+services/synthdetect/weights/
 # Vendored MiniLM text-embedding weights for the semantic-search spine (#121;
 # fetched from the minilm-onnx-v1 asset release; sha256s in
 # src/voxint/embeddings/models/provenance.json — provenance IS tracked, the
