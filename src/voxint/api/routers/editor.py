@@ -14,6 +14,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
+from voxint.adjudication.resolver import label_states
 from voxint.adjudication.review_state import verified_progress
 from voxint.adjudication.slots import ClaimMismatchError, verify_claim
 from voxint.adjudication.transcript import TranscriptText, attributed_transcript
@@ -116,6 +117,24 @@ def media_detail_page(
             island_props["annotations"] = annotations_payload["annotations"]
             island_props["annotationTags"] = annotations_payload["tags"]
             island_props["annotationLimits"] = _annotation_limits()
+            states = label_states(session, run_id)
+            island_props["labelStates"] = [
+                {
+                    "label": s.label,
+                    "paletteIndex": palette.get(s.label),
+                    "turnCount": s.turn_count,
+                    "totalSeconds": s.total_seconds,
+                    "resolution": s.resolution.value,
+                    "speakerId": str(s.speaker_id) if s.speaker_id else None,
+                    "speakerName": s.speaker_name,
+                    "cosineConfidence": s.cosine_confidence,
+                    "cosineSpeakerName": s.cosine_speaker_name,
+                    "cosineGrounded": s.cosine_grounded,
+                    "llmHintName": s.llm_hint_name,
+                }
+                for s in states
+            ]
+
             if claim_valid:
                 island_props["tagCsrf"] = mint_csrf_token(
                     request.app.state.csrf_secret, CSRF_ANNOTATION_TAGS

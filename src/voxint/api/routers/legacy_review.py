@@ -525,6 +525,22 @@ def _verify_annotation_claim(session: Session, run_id: uuid.UUID, token: uuid.UU
         ) from exc
 
 
+def _label_state_shape(s: LabelState) -> dict[str, Any]:
+    """One label's island/JSON shape (camelCase, matching the frontend SpeakerRail)."""
+    return {
+        "label": s.label,
+        "turnCount": s.turn_count,
+        "totalSeconds": s.total_seconds,
+        "resolution": s.resolution.value,
+        "speakerId": str(s.speaker_id) if s.speaker_id else None,
+        "speakerName": s.speaker_name,
+        "cosineConfidence": s.cosine_confidence,
+        "cosineSpeakerName": s.cosine_speaker_name,
+        "cosineGrounded": s.cosine_grounded,
+        "llmHintName": s.llm_hint_name,
+    }
+
+
 def _labels_response(
     request: Request,
     session: Session,
@@ -532,7 +548,11 @@ def _labels_response(
     token: uuid.UUID,
 ) -> Response:
     """Post-mutation response: htmx gets the refreshed label list, a plain
-    form POST gets a redirect back to the workbench."""
+    form POST gets a redirect back to the workbench, JSON accept gets the
+    updated label states for the editor island."""
+    if "application/json" in request.headers.get("accept", ""):
+        states = label_states(session, run.id)
+        return JSONResponse([_label_state_shape(s) for s in states])
     if request.headers.get("HX-Request"):
         return templates.TemplateResponse(
             request,
@@ -926,6 +946,16 @@ def merge_preview(
             for impact in preview.labels
         }
     )
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({
+            "labels": [impact.label for impact in preview.labels],
+            "speakerId": str(target_speaker.id) if target_speaker else None,
+            "speakerName": (
+                target_speaker.display_name if target_speaker else display_name
+            ),
+            "turnsMoved": preview.total_turns,
+            "expected": json.loads(expected),
+        })
     return templates.TemplateResponse(
         request,
         "legacy_review/merge_confirm.html",
