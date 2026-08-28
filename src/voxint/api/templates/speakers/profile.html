@@ -4,9 +4,21 @@
 
 {% block cb_breadcrumb %}speakers / <strong>{{ speaker.display_name|lower|replace(" ", "-") }}</strong>{% endblock %}
 {% block cb_summary %}
-{%- if aggregate.verified %}{{ chip("verified") }}{% elif aggregate.files > 0 %}{{ chip("needs you") }}{% endif -%}
+{%- if aggregate.verified %}{{ chip("verified by you") }}{% elif aggregate.files > 0 %}{{ chip("needs you") }}{% endif -%}
 {% endblock %}
-{% block cb_actions %}{% endblock %}
+{% block cb_actions %}
+{% if not archived %}
+<a href="#profile-panel" class="cb-btn cb-btn-secondary">Edit profile</a>
+<details class="cb-overflow">
+  <summary class="cb-btn cb-btn-secondary">Merge ▾</summary>
+  <div class="cb-overflow-menu">
+    <p class="oc-muted" style="padding: var(--space-2) var(--space-3); font-size: var(--t-xs);">
+      Merge this speaker into another from their profile page.
+    </p>
+  </div>
+</details>
+{% endif %}
+{% endblock %}
 
 {% block body %}
 {% if archived %}
@@ -72,9 +84,10 @@ and web research is off. Restore the speaker from the
   <h2 class="oc-section-title">HEARD IN</h2>
   {% if aggregate.appearances %}
   <div class="grid-table spk-heardin-grid" role="region" aria-label="Recordings featuring {{ speaker.display_name }}" tabindex="0"
-       style="grid-template-columns: 1fr auto auto auto auto;">
+       style="grid-template-columns: 1fr auto auto auto auto auto;">
     <div class="gt-header">
       <span>RECORDING</span>
+      <span>FOLDER</span>
       <span class="num">SPOKE</span>
       <span class="num">SEGMENTS</span>
       <span class="num">MATCH</span>
@@ -87,6 +100,12 @@ and web research is off. Restore the speaker from the
         <a href="/runs/{{ a.run_id }}">{{ run_source_title(runs_by_id[a.run_id]) }}</a>
         {% else %}<span class="oc-muted">recording removed</span>{% endif %}
         {% if a.human_assigned %}{{ chip("verified") }}{% endif %}
+      </span>
+      <span>
+        {%- set run = runs_by_id.get(a.run_id) -%}
+        {%- if run and run.media_item and run.media_item.media_folder -%}
+          {{ run.media_item.media_folder.path }}
+        {%- else -%}<span class="oc-muted">–</span>{%- endif -%}
       </span>
       <span class="num">{{ format_duration(a.seconds) }}</span>
       <span class="num">{{ a.segments }}</span>

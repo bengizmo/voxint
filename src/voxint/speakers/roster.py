@@ -84,6 +84,26 @@ def active_speakers(session: Session) -> list[Speaker]:
     )
 
 
+def create_speaker(session: Session, raw_name: str) -> Speaker:
+    """Create a bare roster entry with just a display name (no embeddings)."""
+    try:
+        name = normalize_display_name(raw_name)
+    except ValueError as exc:
+        raise RosterError(str(exc)) from exc
+    owner = session.execute(
+        select(Speaker).where(Speaker.display_name == name)
+    ).scalar_one_or_none()
+    if owner is not None:
+        raise RosterConflictError(describe_name_owner(owner))
+    speaker = Speaker(display_name=name)
+    try:
+        with session.begin_nested():
+            session.add(speaker)
+    except IntegrityError as exc:
+        raise RosterConflictError(f"speaker {name!r} already exists") from exc
+    return speaker
+
+
 def describe_name_owner(owner: Speaker) -> str:
     """Operator guidance when a name is taken: what owns it and what to do.
 

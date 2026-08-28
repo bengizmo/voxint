@@ -88,6 +88,7 @@ CSRF_SETTINGS = "settings"
 # detail page's notes form — an independent mutation surface, so it never
 # shares a token with requeue/claim on the same page.
 CSRF_NOTES = "notes"
+CSRF_ROSTER_CREATE = "roster-create"
 CSRF_ROSTER_RENAME = "roster-rename"
 CSRF_ROSTER_MERGE = "roster-merge"
 CSRF_ROSTER_ARCHIVE = "roster-archive"
@@ -139,7 +140,9 @@ CSRF_PLUGIN = "plugin"
 # radii (a create token must not be replayable to move a folder), so each form
 # mints and verifies under its own action.
 CSRF_PROJECT_CREATE = "project-create"
+CSRF_PROJECT_RENAME = "project-rename"
 CSRF_PROJECT_ASSIGN = "project-assign"
+CSRF_PROJECT_UNLINK = "project-unlink"
 # Project-scoped config editors (issue #153, P2a precedence freeze). The
 # vocabulary and corrections overrides are independent mutations under their own
 # per-action tokens; each also carries an "inherit" reset (write NULL) under the

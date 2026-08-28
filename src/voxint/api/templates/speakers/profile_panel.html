@@ -1,56 +1,63 @@
-{# The speaker's profile fields (#159): current value + provenance chip per
-   field, manual edit/clear forms. Included by profile.html and ALSO rendered
-   out-of-band (profile_oob=true) by the research-decision response, so an
-   accepted claim shows up here without a reload. Archived speakers render
-   read-only (no forms). #}
+{# The speaker's profile fields (#159, #246): aggregate provenance chip,
+   3-column grid (ROLE / ORGANIZATION / LINKS), manual edit/clear forms.
+   Included by profile.html and ALSO rendered out-of-band (profile_oob=true) by
+   the research-decision response, so an accepted claim shows up here without a
+   reload. Archived speakers render read-only (no forms). #}
 <section id="profile-panel" class="card"{% if profile_oob %} hx-swap-oob="true"{% endif %}>
-  <h2>Profile</h2>
+  <div class="profile-panel-head">
+    <h2>Profile</h2>
+    {% if profile.values()|list %}
+    {% set has_accepted = profile.values()|selectattr("provenance", "eq", "enrichment")|list %}
+    <span class="pill{% if has_accepted %} completed{% endif %}">{% if has_accepted %}filled in by web research{% else %}entered by hand{% endif %} — edit anything</span>
+    {% endif %}
+  </div>
   {% if profile_error %}<p class="error" role="alert">{{ profile_error }}</p>{% endif %}
-  <dl class="def-grid">
-    {% for field in profile_fields %}
-    {% set row = profile.get(field) %}
-    <dt>{{ field|capitalize }}</dt>
-    <dd>
-      {% if row %}
-        {% if field == "link" and (row.value.startswith("https://") or row.value.startswith("http://")) %}
-        <a href="{{ row.value }}" target="_blank" rel="noreferrer noopener">{{ row.value }}</a>
-        {% else %}{{ row.value }}{% endif %}
-        {% if row.provenance == "manual" %}
-        <span class="pill" title="Set by {{ row.operator }}">entered by hand</span>
-        {% else %}
-        <span class="pill completed" title="Accepted by {{ row.operator }} from a web-research draft">accepted claim</span>
-        {% endif %}
-      {% else %}
-        <span class="muted">not set</span>
-      {% endif %}
-      {% if not archived %}
-      <form class="inline" method="post"
-            action="/speakers/{{ speaker.id }}/profile"
-            hx-post="/speakers/{{ speaker.id }}/profile"
-            hx-target="#profile-panel" hx-swap="outerHTML">
-        <input type="hidden" name="csrf_token" value="{{ csrf_profile_edit }}">
-        <input type="hidden" name="field" value="{{ field }}">
-        <input type="text" name="value" value="{{ row.value if row else "" }}"
-               maxlength="4000" required
-               aria-label="New {{ field }} for {{ speaker.display_name }}">
-        <button type="submit">Save</button>
-      </form>
-      {% if row %}
-      <form class="inline" method="post"
-            action="/speakers/{{ speaker.id }}/profile"
-            hx-post="/speakers/{{ speaker.id }}/profile"
-            hx-target="#profile-panel" hx-swap="outerHTML"
-            hx-confirm="Clear this speaker's {{ field }}? Accepted-claim history stays in the review trail.">
-        <input type="hidden" name="csrf_token" value="{{ csrf_profile_edit }}">
-        <input type="hidden" name="field" value="{{ field }}">
-        <input type="hidden" name="action" value="clear">
-        <button type="submit" class="danger">Clear</button>
-      </form>
-      {% endif %}
-      {% endif %}
-    </dd>
-    {% endfor %}
-  </dl>
+  <details class="profile-collapse" open>
+    <summary><span class="when-open">hide</span><span class="when-closed">show</span></summary>
+    <div class="profile-columns">
+      {% for field in profile_fields %}
+      {% set row = profile.get(field) %}
+      {% set col_label = {"bio": "ROLE", "affiliation": "ORGANIZATION", "link": "LINKS"} %}
+      <div class="profile-col">
+        <div class="profile-col-label">{{ col_label.get(field, field|upper) }}</div>
+        <div class="profile-col-value">
+          {% if row %}
+            {% if field == "link" and (row.value.startswith("https://") or row.value.startswith("http://")) %}
+            <a href="{{ row.value }}" target="_blank" rel="noreferrer noopener">{{ row.value }}</a>
+            {% else %}{{ row.value }}{% endif %}
+          {% else %}
+            <span class="muted">not set</span>
+          {% endif %}
+          {% if not archived %}
+          <form class="inline" method="post"
+                action="/speakers/{{ speaker.id }}/profile"
+                hx-post="/speakers/{{ speaker.id }}/profile"
+                hx-target="#profile-panel" hx-swap="outerHTML">
+            <input type="hidden" name="csrf_token" value="{{ csrf_profile_edit }}">
+            <input type="hidden" name="field" value="{{ field }}">
+            <input type="text" name="value" value="{{ row.value if row else "" }}"
+                   maxlength="4000" required
+                   aria-label="New {{ field }} for {{ speaker.display_name }}">
+            <button type="submit">Save</button>
+          </form>
+          {% if row %}
+          <form class="inline" method="post"
+                action="/speakers/{{ speaker.id }}/profile"
+                hx-post="/speakers/{{ speaker.id }}/profile"
+                hx-target="#profile-panel" hx-swap="outerHTML"
+                hx-confirm="Clear this speaker's {{ field }}? Accepted-claim history stays in the review trail.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_profile_edit }}">
+            <input type="hidden" name="field" value="{{ field }}">
+            <input type="hidden" name="action" value="clear">
+            <button type="submit" class="danger">Clear</button>
+          </form>
+          {% endif %}
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </details>
   {% if speaker.notes %}
   <h3>Notes</h3>
   <p class="muted">{{ speaker.notes }}</p>

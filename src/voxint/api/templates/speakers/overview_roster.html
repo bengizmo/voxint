@@ -2,7 +2,11 @@
    htmx post-mutation refresh target (#roster). Numbers come from effective
    resolution (the canonical-run fold), never raw machine proposals. Every
    mutating form's action carries the current ?sort/?view so its re-render
-   preserves both. Operator refusals (RosterError) arrive as roster_error. #}
+   preserves both. Operator refusals (RosterError) arrive as roster_error.
+
+   #245: the roster splits into two visual groups — verified ("Known speakers")
+   and unverified ("Unnamed voices", collapsed by default). Heard-name
+   annotation shows the machine-proposed name for unverified speakers. #}
 {% from "fragments/_chips.html" import chip %}
 {% set qs = "sort=" ~ sort ~ "&view=" ~ view %}
 {% if roster_error %}<p class="error" role="alert">{{ roster_error }}</p>{% endif %}
@@ -19,6 +23,8 @@
   {% if overview.unverified_active %}
   <span class="spk-todo-item">
     {{ overview.unverified_active_total }} voice{{ "s" if overview.unverified_active_total != 1 }} waiting for a name
+    <a href="#unnamed-voices" class="spk-todo-action"
+       onclick="document.getElementById('unnamed-voices').open=true">Review them</a>
   </span>
   {% endif %}
   {% if overview.name_suggestions %}
@@ -28,9 +34,10 @@
   {% endif %}
   {% if overview.possible_duplicates %}
   <span class="spk-todo-item">
-    {{ overview.possible_duplicates_total }} pair{{ "s" if overview.possible_duplicates_total != 1 }} of voices sound alike —
+    {{ overview.possible_duplicates_total }} pair{{ "s" if overview.possible_duplicates_total != 1 }} of voices sound alike
+    <a href="/speakers/{{ overview.possible_duplicates[0].speaker_a_id }}" class="spk-todo-action">Compare</a>
     {% for d in overview.possible_duplicates %}
-    <a href="/speakers/{{ d.speaker_a_id }}">{{ d.speaker_a_name }}</a> &amp;
+    — <a href="/speakers/{{ d.speaker_a_id }}">{{ d.speaker_a_name }}</a> &amp;
     <a href="/speakers/{{ d.speaker_b_id }}">{{ d.speaker_b_name }}</a>{% if not loop.last %}, {% endif %}
     {% endfor %}
     {% if overview.possible_duplicates_total > overview.possible_duplicates|length %}
@@ -42,6 +49,10 @@
 {% endif %}
 
 {% if overview.rows %}
+{# Partition into verified (known) and unverified (unnamed) groups. #}
+{% set verified_rows = overview.rows|selectattr("aggregate.verified")|list %}
+{% set unverified_rows = overview.rows|rejectattr("aggregate.verified")|list %}
+
 <div class="lib-toolbar">
   <nav class="view-toggle" aria-label="Sort by">
     {% for value, label in sorts %}
@@ -83,25 +94,15 @@
   {%- endif -%}
 {% endmacro %}
 
-{% if view == "table" %}
-<div class="grid-table spk-roster-grid" role="region" aria-label="Speakers" tabindex="0"
-     style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
-  <div class="gt-header">
-    <span></span>
-    <span>NAME</span>
-    <span>STATUS</span>
-    <span class="num">FILES</span>
-    <span class="num">MINUTES</span>
-    <span class="num">VOICE MATCH</span>
-    <span>LAST HEARD</span>
-    <span></span>
-  </div>
-
-  {% for row in overview.rows %}
-  <div class="gt-row">
+{# --- Table row macro (reused by both groups) --- #}
+{% macro table_row(row) %}
+  <div class="gt-row{% if not row.aggregate.verified %} is-needs-human{% endif %}">
     <span>{{ spk_badge(row) }}</span>
     <span>
       <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
+      {% if row.heard_name and not row.aggregate.verified %}
+      <span class="spk-heard-annotation">"{{ row.heard_name }}?" heard name, unconfirmed</span>
+      {% endif %}
     </span>
     <span>{{ status_chip(row) }}</span>
     <span class="num">{{ row.aggregate.files }}</span>
@@ -113,20 +114,26 @@
       {% else %}<span class="oc-muted">never</span>{% endif %}
     </span>
     <span class="gt-action">
+      {% if row.heard_name and not row.aggregate.verified %}
+      <a href="/speakers/{{ row.entry.speaker.id }}">Rule →</a>
+      {% else %}
       <a href="/speakers/{{ row.entry.speaker.id }}">Open →</a>
+      {% endif %}
     </span>
   </div>
-  {% endfor %}
-</div>
-{% else %}
-<ul class="lib-cards" aria-label="Speakers">
-  {% for row in overview.rows %}
+{% endmacro %}
+
+{# --- Card macro (reused by both groups) --- #}
+{% macro card_item(row) %}
   <li>
     <div class="spk-card-header">
       {{ spk_badge(row) }}
       <div>
         <a href="/speakers/{{ row.entry.speaker.id }}">{{ row.entry.speaker.display_name }}</a>
         {{ status_chip(row) }}
+        {% if row.heard_name and not row.aggregate.verified %}
+        <span class="spk-heard-annotation">"{{ row.heard_name }}?" heard name</span>
+        {% endif %}
       </div>
     </div>
     <p class="oc-muted">
@@ -136,9 +143,68 @@
     </p>
     <p>{{ match_pct(row) }}</p>
   </li>
-  {% endfor %}
-</ul>
+{% endmacro %}
+
+{# --- Table header (shared between groups) --- #}
+{% macro table_header() %}
+  <div class="gt-header">
+    <span></span>
+    <span>NAME</span>
+    <span>STATUS</span>
+    <span class="num">FILES</span>
+    <span class="num">MINUTES</span>
+    <span class="num">VOICE MATCH</span>
+    <span>LAST HEARD</span>
+    <span></span>
+  </div>
+{% endmacro %}
+
+{# === Known speakers (verified) === #}
+{% if verified_rows %}
+<div class="spk-group">
+  <div class="spk-group-header">Known speakers <span class="oc-muted">({{ verified_rows|length }})</span></div>
+  {% if view == "table" %}
+  <div class="grid-table spk-roster-grid" role="region" aria-label="Known speakers" tabindex="0"
+       style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
+    {{ table_header() }}
+    {% for row in verified_rows %}
+    {{ table_row(row) }}
+    {% endfor %}
+  </div>
+  {% else %}
+  <ul class="lib-cards" aria-label="Known speakers">
+    {% for row in verified_rows %}
+    {{ card_item(row) }}
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% else %}
+<p class="oc-muted spk-group-empty">No verified speakers yet. Name a voice during review to add someone here.</p>
 {% endif %}
+
+{# === Unnamed voices (unverified, collapsed by default) === #}
+{% if unverified_rows %}
+<details class="spk-group spk-group-unnamed" id="unnamed-voices">
+  <summary class="spk-group-header">Unnamed voices <span class="oc-muted">({{ unverified_rows|length }})</span></summary>
+  {% if view == "table" %}
+  <div class="grid-table spk-roster-grid" role="region" aria-label="Unnamed voices" tabindex="0"
+       style="grid-template-columns: auto 1fr auto auto auto auto auto auto;">
+    {{ table_header() }}
+    {% for row in unverified_rows %}
+    {{ table_row(row) }}
+    {% endfor %}
+  </div>
+  {% else %}
+  <ul class="lib-cards" aria-label="Unnamed voices">
+    {% for row in unverified_rows %}
+    {{ card_item(row) }}
+    {% endfor %}
+  </ul>
+  {% endif %}
+</details>
+{% endif %}
+
 {% else %}
 <p class="oc-muted">No speakers yet. Voices join the roster when you name them while reviewing a recording.</p>
 {% endif %}
