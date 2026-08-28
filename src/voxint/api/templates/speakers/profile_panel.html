@@ -7,7 +7,7 @@
   <div class="profile-panel-head">
     <h2>Profile</h2>
     {% if profile.values()|list %}
-    {% set has_accepted = profile.values()|selectattr("provenance", "eq", "accepted")|list %}
+    {% set has_accepted = profile.values()|selectattr("provenance", "eq", "enrichment")|list %}
     <span class="pill{% if has_accepted %} completed{% endif %}">{% if has_accepted %}filled in by web research{% else %}entered by hand{% endif %} — edit anything</span>
     {% endif %}
   </div>
