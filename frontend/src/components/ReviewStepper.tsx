@@ -9,6 +9,7 @@ import {
 import { ApiError, apiFetch } from "../lib/api-client";
 import { writeClipboard } from "../lib/clipboard";
 import {
+  type SegmentPatchResult,
   nextTarget,
   siblingCount,
   useBusyGuard,
@@ -233,9 +234,9 @@ export function ReviewStepper({
     (
       path: string,
       body: Record<string, string>,
-    ): Promise<Parameters<typeof applyResult>[1] | null> =>
-      postForm<Parameters<typeof applyResult>[1]>(path, body),
-    [postForm, applyResult],
+    ): Promise<SegmentPatchResult | null> =>
+      postForm<SegmentPatchResult>(path, body),
+    [postForm],
   );
 
   const verifyAndAdvance = useCallback(async () => {
@@ -273,6 +274,8 @@ export function ReviewStepper({
     runId,
     applyResult,
     goTo,
+    busyRef,
+    setBusy,
   ]);
 
   const saveEdit = useCallback(async () => {
@@ -305,7 +308,7 @@ export function ReviewStepper({
       busyRef.current = false;
       setBusy(false);
     }
-  }, [current, cursor, postJson, runId, editText, applyResult, segments]);
+  }, [current, cursor, postJson, runId, editText, applyResult, segments, busyRef, setBusy]);
 
   // Copy the current segment's immutable raw text to the clipboard (issue #83).
   // navigator.clipboard is undefined on a non-secure LAN context (plain http) —
@@ -447,7 +450,7 @@ export function ReviewStepper({
         setBusy(false);
       }
     },
-    [postForm, runId, current, editText, confirmDiscard],
+    [postForm, runId, current, editText, confirmDiscard, busyRef, setBusy, setCursor],
   );
 
   // Reassign ONE derived split child to a roster speaker — or reset it to inherit
@@ -499,7 +502,7 @@ export function ReviewStepper({
         setBusy(false);
       }
     },
-    [postForm, runId],
+    [postForm, runId, busyRef, setBusy],
   );
 
   // Assign the WHOLE focused segment to a roster speaker — or reset it to inherit
@@ -568,7 +571,7 @@ export function ReviewStepper({
         setBusy(false);
       }
     },
-    [postForm, runId, focusParentId, isSplitParent, speakers],
+    [postForm, runId, focusParentId, isSplitParent, speakers, busyRef, setBusy],
   );
 
   // A claim-loss during an annotation write bubbles here so the whole surface stops

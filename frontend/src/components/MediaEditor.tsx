@@ -8,6 +8,7 @@ import {
 } from "../lib/annotations";
 import { apiFetch } from "../lib/api-client";
 import {
+  type SegmentPatchResult,
   nextTarget,
   siblingCount,
   useBusyGuard,
@@ -137,9 +138,9 @@ export function MediaEditor({
     (
       path: string,
       body: Record<string, string>,
-    ): Promise<Parameters<typeof applyResult>[1] | null> =>
-      postForm<Parameters<typeof applyResult>[1]>(path, body),
-    [postForm, applyResult],
+    ): Promise<SegmentPatchResult | null> =>
+      postForm<SegmentPatchResult>(path, body),
+    [postForm],
   );
 
   const verifyAndAdvance = useCallback(async () => {
