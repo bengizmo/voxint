@@ -693,6 +693,7 @@ def _parser() -> argparse.ArgumentParser:
     fit.add_argument("--decision-threshold", type=float, default=DEFAULT_DECISION_THRESHOLD)
     fit.add_argument("--baseline-piper-eer", type=float)
     fit.add_argument("--baseline-bf-fpr", type=float)
+    fit.add_argument("--seed", default=SELECTION_SEED)
 
     evaluate = subparsers.add_parser("evaluate")
     _add_manifest_cache_args(evaluate)
@@ -734,6 +735,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             decision_threshold=args.decision_threshold,
             baseline_piper_eer=args.baseline_piper_eer,
             baseline_bf_fpr=args.baseline_bf_fpr,
+            seed=args.seed,
         )
         print(train(config))
         return 0
