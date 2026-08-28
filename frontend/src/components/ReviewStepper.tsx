@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   FALLBACK_ANNOTATION_LIMITS,
@@ -8,6 +8,14 @@ import {
 } from "../lib/annotations";
 import { ApiError, apiFetch } from "../lib/api-client";
 import { writeClipboard } from "../lib/clipboard";
+import {
+  nextTarget,
+  siblingCount,
+  useBusyGuard,
+  useFormPost,
+  useSegmentPatch,
+  useWalkCursor,
+} from "../lib/editor-mutations";
 import { makeNonce } from "../lib/nonce";
 import type { PlaybackCapability } from "../lib/playback";
 import type { Turn } from "../lib/peaks";
@@ -87,39 +95,6 @@ export interface ReviewStepperProps {
   } | null;
 }
 
-// A segment is a REVIEW TARGET when it is the queue entry for its parent and is
-// not yet verified. `reviewTarget` is true on exactly one line per parent (issue
-// #59): an unsplit line, or the FIRST child of a split parent — so a split
-// parent's children never double-count the queue. Low-confidence segments carry
-// the "uncertain" chip in the list (they draw the eye), but the terminating
-// condition of the loop is verified — the counter is verified/total, so the
-// queue empties exactly when every parent is confirmed.
-function isTarget(seg: Segment): boolean {
-  return seg.reviewTarget && !seg.verified;
-}
-
-// How many rendered lines share this parent id (issue #59). >1 ⇒ the parent has
-// been split into derived children; splitting further and editing are disabled
-// on such a parent this slice, and its children keep their word-derived text.
-function siblingCount(
-  segments: Segment[],
-  sourceSegmentId: string | null,
-): number {
-  if (sourceSegmentId === null) return 0;
-  return segments.filter((s) => s.sourceSegmentId === sourceSegmentId).length;
-}
-
-// Next review target at or after `from` (document order), else the first target
-// before it (wrap once), else -1 when the queue is empty.
-function nextTarget(segments: Segment[], from: number): number {
-  for (let i = Math.max(from, 0); i < segments.length; i += 1) {
-    if (isTarget(segments[i])) return i;
-  }
-  for (let i = 0; i < Math.min(from, segments.length); i += 1) {
-    if (isTarget(segments[i])) return i;
-  }
-  return -1;
-}
 
 // Verify-and-advance triage loop (issue #53) + inline text correction (issue
 // #58). Composes the pure TranscriptPlayer (playback/highlight/auto-scroll) and
@@ -149,23 +124,10 @@ export function ReviewStepper({
   outline,
   translate = null,
 }: ReviewStepperProps) {
-  // Own the segments so a correction re-renders its line without reaching into
-  // the (pure) player. Verify/correct responses patch this array in place.
   const [segments, setSegments] = useState<Segment[]>(initialSegments);
-  const [cursor, setCursor] = useState<number>(() =>
-    Math.max(nextTarget(initialSegments, 0), 0),
-  );
   const [progress, setProgress] = useState(initialProgress);
   const [editText, setEditText] = useState<string>("");
-  const [busy, setBusy] = useState<boolean>(false);
-  // Guards re-entry synchronously: a state `busy` flips a render too late to stop
-  // a second key that fires before React re-renders, so two writes could overlap
-  // and apply out of order. The ref is set/cleared around the WHOLE operation
-  // (fetch + parse + apply), so a second action is refused until the first has
-  // fully landed. `busy` state still drives the disabled buttons.
-  const busyRef = useRef<boolean>(false);
-  // Set when a write 409s (claim expired or reclaimed elsewhere). The loop stops
-  // and keeps the operator's place + edit — never advances against a dead claim.
+  const { busy, busyRef, setBusy } = useBusyGuard();
   const [claimLost, setClaimLost] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   // Armed when `v` is pressed with an unsaved edit in the box: the first press
@@ -222,18 +184,26 @@ export function ReviewStepper({
 
   const playerRef = useRef<TranscriptPlayerHandle>(null);
   const editRef = useRef<HTMLTextAreaElement>(null);
-  // The annotation layer resolves a text selection relative to this root (an
-  // ancestor of the transcript lines); attached to the outer div below.
   const annotationRootRef = useRef<HTMLDivElement>(null);
-  // A bridge to useAnnotations().reload — the hook is created AFTER the transcript
-  // write callbacks that must trigger it (text edit / split / relabel change the
-  // render, so annotations must re-resolve). The ref decouples that ordering.
   const reloadAnnotationsRef = useRef<(() => Promise<void>) | null>(null);
+
+  const play = useCallback((index: number) => {
+    playerRef.current?.playSegment(index);
+  }, []);
+
+  const writable = reviewToken !== null && !claimLost;
+
+  const { cursor, setCursor, goTo, jumpNext, remaining } = useWalkCursor(
+    segments,
+    initialSegments,
+    play,
+  );
+
+  const postForm = useFormPost(reviewToken, writable, () => setClaimLost(true), setError);
+  const applyResult = useSegmentPatch(segments, setSegments, setProgress);
 
   const current =
     cursor >= 0 && cursor < segments.length ? segments[cursor] : null;
-  const remaining = useMemo(() => segments.filter(isTarget).length, [segments]);
-  const writable = reviewToken !== null && !claimLost;
   // The focused line's parent (its write target) and whether that parent has
   // already been split — the latter gates both re-splitting and editing (issue
   // #59): a split parent's text is word-derived, so free-form correction is
@@ -259,144 +229,13 @@ export function ReviewStepper({
     setCopyStatus(null);
   }, [current?.segmentId, current?.text]);
 
-  const play = useCallback((index: number) => {
-    playerRef.current?.playSegment(index);
-  }, []);
-
-  const goTo = useCallback(
-    (index: number) => {
-      if (index < 0) return;
-      setCursor(index);
-      play(index);
-    },
-    [play],
-  );
-
-  const jumpNext = useCallback(() => {
-    const next = nextTarget(segments, cursor + 1);
-    if (next >= 0) goTo(next);
-  }, [segments, cursor, goTo]);
-
-  // Apply a verify/correct JSON response to local state: patch the segment,
-  // refresh the counter. Returns the patched array so the caller can pick the
-  // next target from post-write truth (a just-verified segment is no longer a
-  // target).
-  //
-  // The write targets a PARENT id, so the response's verified/corrected flags
-  // apply to EVERY line sharing that parent — a split parent's derived children
-  // are verified together (issue #59). But the response's `text` is the parent's
-  // full effective text; a split parent's children keep their own word-derived
-  // text and must NOT be clobbered with it. So: patch flags across all siblings;
-  // adopt the response text only in the unsplit single-line case.
-  const applyResult = useCallback(
-    (
-      index: number,
-      result: {
-        verified: boolean;
-        corrected: boolean;
-        text: string;
-        progress: { verified: number; total: number };
-      },
-      opts?: { supersedeProvenance?: boolean },
-    ): Segment[] => {
-      const parentId = segments[index]?.sourceSegmentId ?? null;
-      const split = siblingCount(segments, parentId) > 1;
-      const patched = segments.map((seg, i) => {
-        const isSibling =
-          parentId !== null ? seg.sourceSegmentId === parentId : i === index;
-        if (!isSibling) return seg;
-        return {
-          ...seg,
-          verified: result.verified,
-          corrected: result.corrected,
-          text: split ? seg.text : result.text,
-          // Operator-edit supersedes deterministic provenance (issue #83): once the
-          // operator saves their own text via /text, the domain-pack correction
-          // trace's spans no longer address the effective text, so the "corrected by
-          // domain pack" marker would be stale (and misleading — it is a PIPELINE
-          // edit, not this operator's). Clear it on a text-save — but ONLY when the
-          // save actually left a correction (`result.corrected`): a save that reverts
-          // to the pipeline text clears the correction server-side (corrected=false),
-          // where the pack provenance is valid again and the server keeps emitting it,
-          // so mirror that here rather than hiding it until reload. A plain verify
-          // (supersedeProvenance unset) always leaves the provenance intact.
-          corrections:
-            opts?.supersedeProvenance && result.corrected && !split
-              ? null
-              : seg.corrections,
-        };
-      });
-      setSegments(patched);
-      setProgress(result.progress);
-      return patched;
-    },
-    [segments],
-  );
-
-  // POST a form-encoded write and return its parsed JSON body (of whatever
-  // shape), or null on any failure. Parsing lives INSIDE the try so a bad body is
-  // handled, never an unhandled rejection. Busy is owned by the callers (they
-  // hold the ref across the whole operation), so this helper does not touch it.
-  //
-  // A 409 has TWO meanings on these routes and the caller says which applies. For
-  // verify/correct it is always a stale/reclaimed claim (default) → stop the loop
-  // and prompt a re-claim. For /split it can instead be a segment-STATE conflict
-  // (e.g. the parent was corrected in another tab between the words fetch and the
-  // click); `claimLostOnConflict:false` surfaces the server's honest reason inline
-  // and keeps the claim, rather than falsely locking the whole surface. Every
-  // other error (network, a non-JSON body from a proxy) surfaces inline.
-  const postForm = useCallback(
-    async <T,>(
-      path: string,
-      body: Record<string, string>,
-      opts?: { claimLostOnConflict?: boolean },
-    ): Promise<T | null> => {
-      if (!writable || reviewToken === null) return null;
-      try {
-        const res = await apiFetch(path, {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            // Ask for JSON explicitly: the write routes redirect a plain HTML
-            // form navigation (JS-off fallback) but must return JSON to us.
-            accept: "application/json",
-          },
-          body: new URLSearchParams({ token: reviewToken, ...body }).toString(),
-        });
-        return (await res.json()) as T;
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 409) {
-          if (err.conflictKind === "claim") {
-            // The server explicitly marked this 409 as a lost/taken claim (even on
-            // a route whose OTHER 409s are state conflicts): stop the loop and
-            // prompt a re-claim, regardless of claimLostOnConflict.
-            setClaimLost(true);
-          } else if (opts?.claimLostOnConflict === false) {
-            // Segment-state conflict, not a claim loss: show the server reason
-            // (e.g. "cannot split a corrected segment") and keep the claim.
-            setError(err.detail);
-          } else {
-            // Stale/reclaimed: stop the loop, keep place + edit. The operator must
-            // re-claim from the workbench; we say so rather than silently failing.
-            setClaimLost(true);
-          }
-        } else {
-          setError(err instanceof ApiError ? err.detail : "Request failed.");
-        }
-        return null;
-      }
-    },
-    [writable, reviewToken],
-  );
-
-  // Verify/correct writes: the parent-scoped review-state shape applyResult eats.
   const postJson = useCallback(
     (
       path: string,
       body: Record<string, string>,
     ): Promise<Parameters<typeof applyResult>[1] | null> =>
       postForm<Parameters<typeof applyResult>[1]>(path, body),
-    [postForm],
+    [postForm, applyResult],
   );
 
   const verifyAndAdvance = useCallback(async () => {
