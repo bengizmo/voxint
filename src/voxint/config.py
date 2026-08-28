@@ -539,7 +539,11 @@ class Settings(BaseSettings):
     # roster renders byte-identically; on = the new overview replaces it and
     # the /speakers/{id} profile pages open (those new routes 404 while off,
     # via require_speakers_enabled, keeping the route inventory stable).
-    console_speakers_enabled: bool = False
+    #
+    # Activated at P4 (#159): the default is on. The new overview renders by
+    # default, and profile pages are live. Set False to restore the legacy
+    # roster; the nav link and route inventory are unchanged either way.
+    console_speakers_enabled: bool = True
 
     # The settings hub + sub-pages (Console 2.0 P6, #161). Like /speakers, this
     # flag branches CONTENT, not access: /settings is ALREADY a live page, so off

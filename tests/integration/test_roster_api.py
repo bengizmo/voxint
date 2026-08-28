@@ -41,6 +41,7 @@ def client(session_factory: sessionmaker[Session]) -> TestClient:
         voxint_user=CREDS[0],
         voxint_password=CREDS[1],
         csrf_secret=_CSRF_KEY,
+        console_speakers_enabled=False,
     )
     test_client = TestClient(
         create_app(settings=settings, session_factory=session_factory)

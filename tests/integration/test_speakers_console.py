@@ -119,6 +119,31 @@ def _seed_speaker_with_activity(
     return speaker.id
 
 
+def test_speakers_enabled_default_is_true() -> None:
+    """Tripwire: the default flipped to True at P4 activation (#159)."""
+    default_settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        voxint_user=CREDS[0],
+        voxint_password=CREDS[1],
+        csrf_secret="speakers-test-csrf-key",
+    )
+    assert default_settings.console_speakers_enabled is True
+
+
+def test_explicit_false_restores_legacy_roster(
+    session_factory: sessionmaker[Session], tmp_path: Path
+) -> None:
+    """Rollback: explicit False restores the legacy roster."""
+    client = _make_client(session_factory, tmp_path, speakers_enabled=False)
+    with session_factory() as session:
+        _seed_speaker_with_activity(session, "Alice", minutes_rank=1, human=True)
+        session.commit()
+    page = client.get("/speakers")
+    assert page.status_code == 200
+    assert "roster-card" in page.text
+    assert 'class="lib-toolbar"' not in page.text
+
+
 def test_flag_off_renders_legacy_roster(
     session_factory: sessionmaker[Session], tmp_path: Path
 ) -> None:

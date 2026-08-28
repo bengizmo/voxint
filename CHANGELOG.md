@@ -7,6 +7,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Changed
+- **Speakers overview and profiles activated** (#159). The new speakers overview
+  (aggregation numbers, named/unnamed grouping, tier chips, verified badges) and
+  per-speaker profile pages are now on by default. Set
+  `CONSOLE_SPEAKERS_ENABLED=false` to roll back to the legacy roster.
 - **Jobs page: TOOK column shows elapsed time for running runs** (#244). Running
   runs now display their wall-clock elapsed instead of "...".
 - **Jobs page: degraded pipeline cells** (#244). When a model service is down,
