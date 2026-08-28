@@ -507,7 +507,7 @@ def test_profile_decision_refreshes_panel_out_of_band(
     assert f'id="research-{speaker_id}"' in resp.text
     assert 'hx-swap-oob="true"' in resp.text
     assert 'id="profile-panel"' in resp.text
-    assert "accepted claim" in resp.text
+    assert "filled in by web research" in resp.text
     assert "Wrote the book on birds." in resp.text
     # No-JS decision from the profile page: a full-page 303, never a bare fragment.
     nojs = client.post(
