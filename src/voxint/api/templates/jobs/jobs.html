@@ -10,17 +10,20 @@
 <section class="oc-section" aria-label="Pipeline board">
   <div class="pipeline-board" role="region" aria-label="Pipeline stages">
     {% for stage in display_stages %}
-    <div class="pipeline-cell{% if stage.active %} is-active{% endif %}">
+    <div class="pipeline-cell{% if stage.is_degraded %} is-degraded{% elif stage.active %} is-active{% endif %}">
       <div class="pc-header">
-        <span class="pc-dot {% if stage.active %}pc-dot-ok{% elif stage.queued %}pc-dot-ok{% else %}pc-dot-idle{% endif %}"></span>
+        <span class="pc-dot {% if stage.is_degraded %}pc-dot-warn{% elif stage.active or stage.queued %}pc-dot-ok{% else %}pc-dot-idle{% endif %}"></span>
         <span class="pc-stage">{{ stage.label }}</span>
       </div>
-      {% if stage.active %}
+      {% if stage.is_degraded %}
+      <div class="pc-count">{{ stage.active + stage.queued }}</div>
+      <div class="pc-sub">paused</div>
+      {% elif stage.active %}
       <div class="pc-count">{{ stage.active }} <span style="font-size:var(--t-sm);color:var(--ink-2)">active</span></div>
-      <div class="pc-sub">{{ stage.queued }} waiting</div>
+      <div class="pc-sub">{{ stage.queued }} waiting{% if stage.wait_estimate_seconds %} · ~{{ format_compact_duration(stage.wait_estimate_seconds) }}{% endif %}</div>
       {% elif stage.queued %}
       <div class="pc-count">{{ stage.queued }}</div>
-      <div class="pc-sub">waiting</div>
+      <div class="pc-sub">waiting{% if stage.wait_estimate_seconds %} · ~{{ format_compact_duration(stage.wait_estimate_seconds) }}{% endif %}</div>
       {% else %}
       <div class="pc-count">0</div>
       <div class="pc-sub">idle</div>
@@ -74,7 +77,7 @@
         {% elif item.status == "completed" %}
         {{ chip("reviewed") }}
         {% elif item.status == "failed" and item.error %}
-        <span class="oc-muted" style="font-size:var(--t-sm)">{{ item.error }}</span>
+        <span class="oc-muted" style="font-size:var(--t-sm)">{{ humanize_error(item.error) }}</span>
         {% else %}
         —
         {% endif %}

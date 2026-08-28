@@ -7,6 +7,9 @@ into text a non-technical operator can read. Every function is a pure transform
 over primitives — no DB, no HTTP, no clock of its own — so the whole module
 unit-tests without a database (like ``tests/unit/test_runs_cursor.py``).
 
+.. versionchanged:: 0.29
+   Added :func:`humanize_error` (#244).
+
 Two rules the callers rely on:
 
 - ``now`` is always injected (never read from the wall clock here) so relative
@@ -248,3 +251,31 @@ def humanize_status(value: str) -> str:
     value stays in ``class=`` and the machine outputs; this is the label text.
     """
     return _humanize_enum(value)
+
+
+_ERROR_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"^interrupted: lease expired", re.IGNORECASE), "worker timed out"),
+    (re.compile(r"^interrupted: worker died", re.IGNORECASE), "worker restarted mid-stage"),
+    (re.compile(r"downloaded file is empty", re.IGNORECASE), "downloaded file was empty"),
+    (re.compile(r"AcquisitionError|URL acquisition", re.IGNORECASE), "download failed"),
+    (re.compile(r"FileNotFoundError|No such file", re.IGNORECASE), "file not found"),
+    (re.compile(r"ConnectionError|connect.*refused", re.IGNORECASE), "service unreachable"),
+    (re.compile(
+        r"(?:empty|zero[- ]duration).*audio|audio.*(?:empty|zero[- ]duration)",
+        re.IGNORECASE,
+    ), "audio track was empty"),
+    (re.compile(r"cancelled before commit", re.IGNORECASE), "cancelled"),
+]
+
+
+def humanize_error(error: str | None) -> str | None:
+    """Raw pipeline error text as a plain-language label. Display only."""
+    if error is None:
+        return None
+    for pattern, label in _ERROR_PATTERNS:
+        if pattern.search(error):
+            return label
+    cleaned = error.split("\n")[-1].strip()
+    if len(cleaned) > 80:
+        cleaned = cleaned[:77] + "…"
+    return cleaned.lower() if cleaned else None

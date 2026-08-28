@@ -6,6 +6,22 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Jobs page: TOOK column shows elapsed time for running runs** (#244). Running
+  runs now display their wall-clock elapsed instead of "...".
+- **Jobs page: degraded pipeline cells** (#244). When a model service is down,
+  the corresponding pipeline board cell renders with an amber border, amber dot,
+  and "paused" subtitle instead of appearing idle.
+- **Jobs page: estimated wait time** (#244). Pipeline board cells with queued
+  runs show "~Xm left" based on historical stage durations.
+- **Jobs page: plain-language failure reasons** (#244). Failed runs in the REVIEW
+  column now show a human-readable label ("worker timed out", "file not found",
+  etc.) instead of raw Python exception text.
+- **Jobs page: GPU busy in pipeline summary** (#244). The command bar summary
+  includes "GPU busy" when GPU telemetry reports high utilization.
+- **Deferred**: Pause queue button (#244 delta 1, needs Celery control surface)
+  and progress percentage (#244 delta 5, needs stage-level progress callbacks).
+
 ### Added
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed

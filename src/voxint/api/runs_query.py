@@ -421,6 +421,10 @@ def list_runs(
         ),
         Float,
     )
+    running_elapsed = cast(
+        func.extract("epoch", func.now() - PipelineRun.created_at),
+        Float,
+    )
     stmt = (
         sa_select(
             PipelineRun.id,
@@ -439,6 +443,7 @@ def list_runs(
             claim_live.label("claim_live"),
             case(
                 (PipelineRun.status.in_(("completed", "failed")), elapsed),
+                (PipelineRun.status == "running", running_elapsed),
                 else_=None,
             ).label("elapsed_seconds"),
         )
