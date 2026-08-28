@@ -2463,12 +2463,14 @@ training), evaluated on the S6 composite corpus and calibrated with the
    holdout; eval-only by design).
 
 2. **Does NOT reliably identify AR + flow-matching TTS** (Chatterbox-class)
-   at the current checkpoint. Holdout EER: 48.25 % (meetingroom), near
+   at the production checkpoint. Holdout EER: 48.25 % (meetingroom), near
    chance. This is a known OOD gap: the ASVspoof 2019 LA training set
    contains no flow-matching attacks, and DFADD (2024) independently reports
    44.21 % avg EER on flow-matching generators. Chatterbox strata are
-   excluded from the calibration fit. Closeable with fine-tuning (issue #252,
-   deferred to M2).
+   excluded from the calibration fit. **Fine-tuning (issue #252, M2) reduces
+   Chatterbox eval EER to 25.90 % on the backend-only fine-tuned checkpoint
+   (seed 0); see the M2 section below.** Threshold recalibration for the
+   fine-tuned checkpoint is pending.
 
 3. **ASVspoof DF benchmark anchor is healthy:** EER 7.05 % on the imported
    ASVspoof5 DF eval partition (eval-only, not in calibration or holdout).
@@ -2484,6 +2486,81 @@ training), evaluated on the S6 composite corpus and calibrated with the
    high-confidence alert, not a reliable spoof filter. Risk-flagging
    deployments that tolerate ~20 % FPR achieve ~90 % TPR at the EER
    threshold.
+
+### M2 fine-tuning: Chatterbox evasion gap (issue #252)
+
+The coverage statement above flags Chatterbox-class (AR + flow-matching) TTS
+as a known OOD gap at ~45 % EER. This section documents the fine-tuning
+experiment to close that gap.
+
+**Approach (3-model consult: codex + deepseek-v4-pro + kimi-k3, converged):**
+Freeze the XLS-R-300M backbone and fine-tune only the AASIST backend (~18 M
+params) on precomputed `(201, 1024)` frame embeddings. The DF checkpoint
+(`Best_LA_model_for_DF.pth`, ASVspoof 2021 DF training) was selected as the
+initialization over the LA checkpoint because it scored lower on Chatterbox
+(43.98 % vs 45.32 % EER on the S6 composite corpus), consistent with its
+broader vocoder diversity. Mixed replay batches preserve Piper and bona-fide
+performance: 50/50 bf/spoof, 70/30 Chatterbox/Piper within spoof, 25/75
+VoxConverse/other within bona fide.
+
+**Training configuration:** AdamW (lr 1e-4, wd 1e-4), linear warmup (500
+steps) + cosine decay, gradient clipping 1.0, BatchNorm running stats frozen.
+Constrained Pareto checkpoint selection: minimize Chatterbox dev EER subject
+to Piper EER regression <= +2 pp and bona-fide FPR regression <= +1 pp
+relative to the untrained baseline. Baseline treated as initial incumbent.
+Speaker-disjoint train/dev split (~80/20) with source stratification. 3,855
+calibration clips (1,551 bf + 1,152 Chatterbox + 1,152 Piper).
+
+**Implementation:** `tools/synthdetect_finetune.py` (751 lines),
+`tests/unit/test_synthdetect_finetune.py` (11 tests). Pipeline: `cache-features`
+(extract XLS-R embeddings once), `train` (on precomputed features, fits on
+12 GB), `evaluate`. The vendored model file is NOT modified; the upstream
+`extract_feat` train-mode bug (ssl_model forced to eval before each extraction)
+is fixed in the wrapper. Codex code review applied 4 findings: baseline as
+initial incumbent, training-group coverage validation in SpeakerSplit,
+corrected epoch-length formula for subdivided groups, minimum batch size raised
+to 8.
+
+#### Training results (3 seeds, 20 epochs, batch_size 32, patience 5)
+
+Best checkpoint: **seed 0, epoch 11.**
+
+| Split | Chatterbox EER | Piper EER | BF FPR | Notes |
+|---|---|---|---|---|
+| Dev (seed 0) | 2.47 % | 1.35 % | 44.94 % | Same-distribution, seen speakers |
+| Holdout | 5.97 % | 0.52 % | 35.74 % | Unseen speakers, same generators |
+| Eval (subset) | 25.90 % | 8.04 % | 76.34 % | Unseen speakers + codecs |
+
+Cross-seed variance (dev Chatterbox EER): 2.47 % / 15.23 % / 3.11 % (seeds
+0/1/2). Seed 1 stopped early at epoch 5 with lower FPR (1.32 %) but higher
+Chatterbox EER.
+
+#### Eval per-generator EER (seed 0 vs DF baseline, same eval subset)
+
+| Generator | DF Baseline | Fine-tuned | Improvement |
+|---|---|---|---|
+| Chatterbox | 37.77 % | 25.90 % | -11.87 pp |
+| Piper | 34.43 % | 8.04 % | -26.39 pp |
+| ElevenLabs (unseen) | 24.39 % | 11.20 % | -13.19 pp |
+| Google (unseen) | 25.18 % | 10.28 % | -14.90 pp |
+| ASVspoof DF (anchor) | 37.37 % | 33.52 % | -3.85 pp |
+
+Fine-tuning improved EER across all generators including unseen (ElevenLabs,
+Google), confirming generalization beyond the training distribution. The
+ASVspoof DF anchor regressed by only 3.85 pp. The BF FPR tradeoff (76.34 %
+at threshold 0.0) indicates the decision threshold needs recalibration for the
+fine-tuned checkpoint.
+
+**Eval subset composition:** 8,725 clips from the eval split (969 each of
+Chatterbox/Piper/ElevenLabs/Google + 2,849 bona fide + 2,000 sampled ASVspoof
+DF anchor clips). Full 54,754 bona-fide eval was omitted for compute
+efficiency; the subset covers all generators at their full eval count.
+
+**Remaining work:** Decision-threshold recalibration for the fine-tuned
+checkpoint (the 0.0 threshold from the LA/DF training is no longer appropriate).
+Degradation augmentation (session prompt step 7) was not needed: Chatterbox
+eval EER 25.90 % is under the 30 % trigger. Progressive XLS-R unfreezing
+(Phase 3) is available on a 24 GB GPU if further improvement is needed.
 
 ## Contract tests
 
