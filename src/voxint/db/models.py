@@ -211,6 +211,9 @@ class Decision(enum.StrEnum):
     # label's resolution" — the append-only reset that clears a per-segment
     # override without freezing a copied identity. Never used at label scope.
     INHERIT = "inherit"
+    # System-initiated: post-completion auto-enrollment of unmatched voices
+    # into the roster (#275). Label-scope only.
+    AUTO_ENROLL = "auto_enroll"
 
 
 class EnrichmentTargetKind(enum.StrEnum):
@@ -1090,7 +1093,7 @@ class AdjudicationDecision(Base):
             f"decision IN ({_enum_values(Decision)})", name="adjudication_decisions_check"
         ),
         CheckConstraint(
-            "(decision = 'assign') = (speaker_id IS NOT NULL)",
+            "(decision IN ('assign', 'auto_enroll')) = (speaker_id IS NOT NULL)",
             name="adjudication_decisions_assign_speaker_check",
         ),
         # INHERIT is a segment-scope reset only; it is meaningless at label scope

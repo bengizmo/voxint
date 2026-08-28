@@ -38,6 +38,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (migration 0048) for cross-run comparison. Benchmark runs excluded from the
   review queue via reserved `benchmark/` source path prefix. Minimal Settings
   page integration (recent runs table). See `docs/benchmark.md`.
+- **Auto-enrollment: cross-run voice clustering** (#275). When a pipeline run
+  completes, unmatched diarization labels with sufficient speaker audio are
+  automatically enrolled as unnamed roster speakers ("Voice 1", "Voice 2", ...).
+  Future runs match against these centroids naturally through the existing
+  pipeline. Uses grounding-tier gates (cosine >= 0.70, margin >= 0.08, vote
+  agreement >= 0.67, min 3 eligible turns, 10s eligible speech). Controlled by
+  `AUTO_ENROLL` env var (default: true). Auto-enrolled speakers are exempt from
+  the 5-minute unverified floor so they always appear in the "Unnamed voices"
+  section for operator review. New `Decision.AUTO_ENROLL` and
+  `Resolution.AUTO_ENROLL` types keep system-initiated enrollments distinct from
+  human rulings (migration 0049).
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
   voices" (unverified) collapsed by default in a `<details>` disclosure.

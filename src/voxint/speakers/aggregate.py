@@ -51,6 +51,7 @@ class SpeakerAppearance:
     seconds: float
     segments: int
     human_assigned: bool  # ≥1 surviving human-assign interval in this media
+    auto_enrolled: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class SpeakerAggregate:
     # (won ≥1 positive-duration interval) — the tier module's evidence keys
     # (issue #159): a fully overridden label contributes no voice evidence.
     grounded_keys: tuple[tuple[uuid.UUID, str], ...] = ()
+    auto_enrolled: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,7 @@ class _Tally:
     seconds: float = 0.0
     segments: int = 0
     human: bool = False
+    auto_enrolled: bool = False
 
 
 def aggregate_speakers(session: Session) -> AggregateResult:
@@ -142,6 +145,8 @@ def aggregate_speakers(session: Session) -> AggregateResult:
             tally.segments += 1
             if interval.resolution is Resolution.HUMAN_ASSIGN:
                 tally.human = True
+            elif interval.resolution is Resolution.AUTO_ENROLL:
+                tally.auto_enrolled = True
             elif (
                 interval.resolution is Resolution.GROUNDED_COSINE
                 and interval.diarization_label is not None
@@ -158,6 +163,7 @@ def aggregate_speakers(session: Session) -> AggregateResult:
                     seconds=tally.seconds,
                     segments=tally.segments,
                     human_assigned=tally.human,
+                    auto_enrolled=tally.auto_enrolled,
                 )
             )
     by_speaker = {
@@ -171,6 +177,7 @@ def aggregate_speakers(session: Session) -> AggregateResult:
             verified=any(a.human_assigned for a in appearances),
             appearances=tuple(appearances),
             grounded_keys=tuple(sorted(grounded.get(speaker_id, set()), key=str)),
+            auto_enrolled=any(a.auto_enrolled for a in appearances),
         )
         for speaker_id, appearances in per_speaker.items()
     }
