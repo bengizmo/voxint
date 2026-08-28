@@ -4,7 +4,17 @@
 
 {% block cb_breadcrumb %}projects / <strong>{{ detail.name }}</strong>{% endblock %}
 {% block cb_summary %}{{ chip("active") }}{% endblock %}
-{% block cb_actions %}{% endblock %}
+{% block cb_actions %}
+<details class="cb-overflow">
+  <summary class="cb-btn cb-btn-secondary">Rename</summary>
+  <form class="cb-overflow-menu" style="padding: var(--space-3); display: flex; gap: var(--space-2); align-items: center;"
+        method="post" action="/projects/{{ detail.id }}/rename">
+    <input type="hidden" name="csrf_token" value="{{ csrf_rename }}">
+    <input type="text" name="name" value="{{ detail.name }}" required maxlength="200">
+    <button type="submit" class="cb-btn cb-btn-primary">Save</button>
+  </form>
+</details>
+{% endblock %}
 
 {% block body %}
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
@@ -37,6 +47,8 @@
       {% for term in detail.vocabulary %}
       <span class="vocab-chip">{{ term }}</span>
       {% endfor %}
+      <span class="vocab-chip vocab-chip-add" tabindex="0" role="button"
+            onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true">+ add term</span>
     </div>
     {% elif detail.vocabulary is not none %}
     <p class="oc-muted">No terms (explicitly set to none).</p>
@@ -75,7 +87,7 @@
     {% if corrections_error %}<p class="notice error" role="alert">{{ corrections_error }}</p>{% endif %}
 
     <div data-island="corrections-editor" data-props='{{ corrections_props|tojson }}'>
-      <noscript><p class="oc-muted">Editing corrections needs JavaScript. Current rules are shown below.</p></noscript>
+      <noscript><p class="oc-muted">Editing corrections needs JavaScript. Current rules are shown below. <a href="#" class="oc-section-link">+ add rule</a> (requires JavaScript)</p></noscript>
       {% if detail.corrections %}
       <div class="grid-table pd-rules-grid" role="region" aria-label="Correction rules" tabindex="0"
            style="grid-template-columns: 1fr auto 1fr auto auto;">
@@ -117,6 +129,7 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">MEDIA FOLDERS</h2>
+      {% if detail.assignable %}<a href="#" class="oc-section-link" onclick="this.closest('section').querySelector('details.pd-edit-toggle').open=true; return false;">+ link folder</a>{% endif %}
     </div>
     {% if detail.folders %}
     <ul class="pd-sidebar-list">
@@ -126,6 +139,11 @@
           <svg class="pd-folder-icon" width="16" height="16" viewBox="0 0 16 16" fill="var(--ink-2)" aria-hidden="true"><path d="M1.5 2A1.5 1.5 0 000 3.5v9A1.5 1.5 0 001.5 14h13a1.5 1.5 0 001.5-1.5V5a1.5 1.5 0 00-1.5-1.5H7.71L6.85 2.64A1.5 1.5 0 005.57 2H1.5z"/></svg>
           <strong>{{ folder.path }}</strong>
           <span class="oc-muted">{{ folder.media_count }} item{{ "" if folder.media_count == 1 else "s" }}</span>
+          <form class="inline" method="post"
+                action="/projects/{{ detail.id }}/folders/{{ folder.id }}/unlink">
+            <input type="hidden" name="csrf_token" value="{{ csrf_unlink }}">
+            <button type="submit" class="link-btn">unlink</button>
+          </form>
         </div>
         {% if folder.domain_pack %}
         <span class="oc-muted pd-pack-note">{{ folder.domain_pack }} pack{% if detail.has_own_config %} · {{ own_fields }} superseded by this project{% endif %}</span>
@@ -161,6 +179,7 @@
   <section class="oc-section">
     <div class="oc-section-header">
       <h2 class="oc-section-title">PROJECT SPEAKERS</h2>
+      <a href="/speakers" class="oc-section-link">+ add speaker</a>
     </div>
     {% if detail.speakers %}
     <ul class="pd-sidebar-list">
@@ -169,7 +188,7 @@
         <span class="pd-spk-badge{% if speaker.name %} pd-spk-named{% endif %}">{{ (speaker.name or "?")[:2]|upper }}</span>
         <span class="pd-spk-name">
           {% if speaker.name %}
-          <a href="/speakers">{{ speaker.name }}</a>
+          <a href="/speakers/{{ speaker.id }}">{{ speaker.name }}</a>
           {% else %}
           <span class="oc-muted">Unnamed voice</span>
           {% endif %}
