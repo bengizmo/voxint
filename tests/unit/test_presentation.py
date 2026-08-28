@@ -235,6 +235,35 @@ def test_humanize_empty_string_is_returned_verbatim() -> None:
     assert humanize_status("") == ""
 
 
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (None, None),
+        ("", None),
+        ("interrupted: lease expired", "worker timed out"),
+        ("interrupted: worker died mid-stage", "worker restarted mid-stage"),
+        ("FileNotFoundError: /data/media/clip.wav", "file not found"),
+        ("No such file or directory: '/tmp/audio.mp3'", "file not found"),
+        ("ConnectionError: [Errno 111] Connection refused", "service unreachable"),
+        ("connect ECONNREFUSED 127.0.0.1:8000", "service unreachable"),
+        ("downloaded file is empty", "downloaded file was empty"),
+        ("AcquisitionError: URL acquisition timed out", "download failed"),
+        ("empty audio track detected", "audio track was empty"),
+        ("audio file was empty after decode", "audio track was empty"),
+        ("cancelled before commit", "cancelled"),
+        ("RuntimeError: something unusual happened", "RuntimeError: something unusual happened"),
+        ("x" * 100, "x" * 77 + "…"),
+        ("ValueError: bad audio\n", "ValueError: bad audio"),
+        ("traceback line 1\ntraceback line 2\nValueError: actual", "ValueError: actual"),
+        ("   \n  \n  ", None),
+    ],
+)
+def test_humanize_error(error: str | None, expected: str | None) -> None:
+    from voxint.api.presentation import humanize_error
+
+    assert humanize_error(error) == expected
+
+
 def test_title_from_snapshot_reads_and_cleans() -> None:
     from voxint.api.presentation import title_from_snapshot
 

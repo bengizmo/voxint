@@ -44,6 +44,7 @@ from voxint.api.presentation import (
     format_duration,
     format_size,
     friendly_media_label,
+    humanize_error,
     humanize_stage,
     humanize_status,
     title_from_snapshot,
@@ -336,6 +337,7 @@ templates.env.globals["format_clock_time"] = format_clock_time
 templates.env.globals["format_compact_duration"] = format_compact_duration
 templates.env.globals["humanize_stage"] = humanize_stage
 templates.env.globals["humanize_status"] = humanize_status
+templates.env.globals["humanize_error"] = humanize_error
 templates.env.globals["language_label"] = language_label
 templates.env.globals["run_source_title"] = run_source_title
 # Hardware-telemetry display helpers (W3): bytes -> GiB number, used-VRAM %.

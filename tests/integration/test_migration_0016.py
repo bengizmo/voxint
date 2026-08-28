@@ -129,6 +129,7 @@ def test_single_alembic_head() -> None:
     # 0043 = widen activity_events.kind for speaker_identified, issue #162;
     # 0044 = media_operations journal + media_operation_files, issue #155;
     # 0045 = widen file_kind CHECK for chunk + transcript_export, issue #155;
-    # 0046 = drop legacy app_settings.media_folders / folder_domain_packs, #177);
-    # 0047 = translation idempotency_key + replay_digest + immutability trigger, ADR 0008).
-    assert list(heads) == ["0047"]
+    # 0046 = drop legacy app_settings.media_folders / folder_domain_packs, #177).
+    # 0047 = translation idempotency_key + replay_digest + immutability trigger, ADR 0008.
+    # 0048 = benchmark_runs + benchmark_items tables.
+    assert list(heads) == ["0048"]

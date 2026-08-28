@@ -591,6 +591,11 @@ def adjudication_queue(session: Session, *, sort: str = "oldest") -> list[QueueE
             PipelineRun.status == RunStatus.COMPLETED.value,
             # Soft-archived runs (issue #5) are hidden from the review queue.
             PipelineRun.archived_at.is_(None),
+            # Benchmark runs use a reserved source_path prefix and are not
+            # operator media -- exclude them from the review queue.
+            ~PipelineRun.media_item.has(
+                MediaItem.source_path.startswith("benchmark/")
+            ),
         )
         # ``id`` is a deterministic secondary key: Postgres makes no ordering
         # promise among rows sharing a ``created_at`` (reachable when several

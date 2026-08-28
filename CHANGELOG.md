@@ -6,7 +6,38 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Changed
+- **Speakers overview and profiles activated** (#159). The new speakers overview
+  (aggregation numbers, named/unnamed grouping, tier chips, verified badges) and
+  per-speaker profile pages are now on by default. Set
+  `CONSOLE_SPEAKERS_ENABLED=false` to roll back to the legacy roster.
+- **Jobs page: TOOK column shows elapsed time for running runs** (#244). Running
+  runs now display their wall-clock elapsed instead of "...".
+- **Jobs page: degraded pipeline cells** (#244). When a model service is down,
+  the corresponding pipeline board cell renders with an amber border, amber dot,
+  and "paused" subtitle instead of appearing idle.
+- **Jobs page: estimated wait time** (#244). Pipeline board cells with queued
+  runs show "~Xm left" based on historical stage durations.
+- **Jobs page: plain-language failure reasons** (#244). Failed runs in the REVIEW
+  column now show a human-readable label ("worker timed out", "file not found",
+  etc.) instead of raw Python exception text.
+- **Jobs page: GPU busy in pipeline summary** (#244). The command bar summary
+  includes "GPU busy" when GPU telemetry reports high utilization.
+- **Deferred**: Pause queue button (#244 delta 1, needs Celery control surface)
+  and progress percentage (#244 delta 5, needs stage-level progress callbacks).
+
 ### Added
+- **Quote provenance manifest** (#122). Pull-quote and clip exports now have a
+  JSON sidecar (`export.json`) carrying per-line speaker attribution, timecodes,
+  clip integrity digest, per-stage model identity from the pipeline run, and
+  input-media SHA-256. Single-annotation and bulk (tag-filtered) endpoints.
+- **Benchmark feature** (CLI + DB + scorer + console). Shipped 12-clip benchmark
+  corpus (~3 MB, CC-BY-4.0 / CC0) with `voxint benchmark run` (serial
+  submission, pooled micro-WER, hallucination resistance scoring),
+  `voxint benchmark list`, and `voxint benchmark compare`. DB-backed results
+  (migration 0048) for cross-run comparison. Benchmark runs excluded from the
+  review queue via reserved `benchmark/` source path prefix. Minimal Settings
+  page integration (recent runs table). See `docs/benchmark.md`.
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
   voices" (unverified) collapsed by default in a `<details>` disclosure.
