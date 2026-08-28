@@ -164,7 +164,11 @@ def _impacts(
     for label in labels:
         state = states[label]
         decision = decisions.get(label)
-        if state.resolution is Resolution.HUMAN_ASSIGN and state.speaker_id is not None:
+        if state.resolution in (
+            Resolution.HUMAN_ASSIGN,
+            Resolution.AUTO_ENROLL,
+            Resolution.GROUNDED_COSINE,
+        ) and state.speaker_id is not None:
             distinct_speakers.add(state.speaker_id)
         impacts.append(
             LabelImpact(

@@ -33,6 +33,13 @@ regexes = [
 id = "voxint-internal-hostname"
 description = "Internal hostname or service DNS from the private upstream environment"
 regex = '''(?i)\b(thinktank|darkboi|smolboi|worker-node-beast|gpu-workstation-1|ben-control-plane|tealmaker|compendium[-_](core|av|ai|classification|scrapers)|\.svc\.cluster\.local)\b'''
+[rules.allowlist]
+# synthdetect golden vectors fixture names the GPU host in a prose note
+# describing where the determinism vectors were measured. The hostname is
+# provenance metadata, not an infrastructure reference.
+paths = [
+    '''(^|/)tests/parity/fixtures/synthdetect_golden_vectors\.json$''',
+]
 
 [[rules]]
 id = "voxint-nas-path"
@@ -105,17 +112,17 @@ regexes = [
 # rewritten.
 # 2c6307eb: #133 slice A translation tests raised a RuntimeError carrying an
 # RFC1918 literal (10.0.0.1) as the "leaky internals" payload the honest-error
-# test asserts is redacted — a fake example IP, not internal infrastructure.
+# test asserts is redacted -- a fake example IP, not internal infrastructure.
 # Scrubbed to an RFC 5737 TEST-NET address in a follow-up commit; the historical
 # commit is allowlisted because published history is never rewritten.
+# 9945c8a6: #145 synthdetect service golden vectors fixture named the GPU
+# host used for determinism verification in a prose note field, not an
+# infrastructure reference. The fixture file will be scrubbed in a follow-up;
+# the historical commit is allowlisted because published history is never
+# rewritten.
 commits = [
     "29ce5b5a3c0b2a65c5442c467ca5b8c1b177bcfc",
     "33c4dc2a01934f9a534b3658c5c71e3e861a73e5",
     "2c6307eb139a3a2d05b4eb9d67af2bfeb0867618",
-    # 9945c8a6: #145 synthdetect service golden vectors fixture named the GPU
-    # host used for determinism verification in a prose note field, not an
-    # infrastructure reference. The fixture file will be scrubbed in a follow-up;
-    # the historical commit is allowlisted because published history is never
-    # rewritten.
     "9945c8a649d09c8c8ab8b7c1d85bec270fac358d",
 ]

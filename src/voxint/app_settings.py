@@ -253,6 +253,18 @@ def semantic_index_flags_ok(*, enabled: bool, autogenerate: bool) -> str | None:
     return None
 
 
+def resolve_effective_synthdetect_enabled(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "synthdetect_enabled")
+
+
+def resolve_effective_synthdetect_autogenerate(
+    row: AppSettings | None, settings: Settings
+) -> bool:
+    return _resolve_bool_flag(row, settings, "synthdetect_autogenerate")
+
+
 def resolve_effective_translation_target_language(
     row: AppSettings | None, settings: Settings
 ) -> str | None:

@@ -132,4 +132,6 @@ def test_single_alembic_head() -> None:
     # 0046 = drop legacy app_settings.media_folders / folder_domain_packs, #177).
     # 0047 = translation idempotency_key + replay_digest + immutability trigger, ADR 0008.
     # 0048 = benchmark_runs + benchmark_items tables.
-    assert list(heads) == ["0048"]
+    # 0049 = widen adjudication_decisions CHECK constraints for auto_enroll, #275.
+    # 0050 = synthdetect_jobs + synthdetect_scores + AppSettings columns (#145).
+    assert list(heads) == ["0050"]

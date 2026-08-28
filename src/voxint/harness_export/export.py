@@ -255,6 +255,8 @@ def _truth_from_state(state: LabelState) -> str | None:
     decision = state.effective_decision
     if decision is None:
         return None
+    if decision.decision == Decision.AUTO_ENROLL.value:
+        return None
     if decision.decision == Decision.ASSIGN.value:
         return state.speaker_name
     if decision.decision == Decision.EXCLUDE.value:

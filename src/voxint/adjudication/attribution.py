@@ -162,7 +162,11 @@ def winning_attribution(
     state = emission.label_state
     if state is None:
         return (AttributionScope.LABEL, Resolution.UNRESOLVED, None, None)
-    if state.resolution in (Resolution.HUMAN_ASSIGN, Resolution.GROUNDED_COSINE):
+    if state.resolution in (
+        Resolution.HUMAN_ASSIGN,
+        Resolution.GROUNDED_COSINE,
+        Resolution.AUTO_ENROLL,
+    ):
         return (AttributionScope.LABEL, state.resolution, state.speaker_id, state.speaker_name)
     return (AttributionScope.LABEL, state.resolution, None, None)
 

@@ -281,6 +281,10 @@ class Settings(BaseSettings):
     grounded_min_margin: Ratio = 0.08
     grounded_min_vote_agreement: Ratio = 0.67
 
+    # Auto-enrollment (#275): create unnamed roster speakers from unmatched
+    # labels when a run completes. Uses grounding-tier gates.
+    auto_enroll: bool = True
+
     # Pipeline
     # How long a worker may hold a stage before recovery may reclaim it.
     # Must exceed the longest realistic single-stage duration — for
@@ -599,6 +603,12 @@ class Settings(BaseSettings):
     # enablement itself is runtime-togglable.
     translation_target_language: str | None = None
     translation_autogenerate: bool = False
+
+    # Synthdetect plugin (#145). OFF by default: requires the GPU service.
+    synthdetect_url: str = "http://localhost:8025"
+    synthdetect_enabled: bool = False
+    synthdetect_autogenerate: bool = False
+    synthdetect_http_timeout_seconds: int = 120
 
     # Plugin kill switch (#137, epic #136). Comma-separated ids of builtin
     # plugins to remove entirely from this process — their routes 404, their
