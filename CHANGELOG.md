@@ -6,6 +6,8 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-27
+
 ### Added
 - **ADR 0008: enrichment persistence simplification scope** (Phase 2, finding
   H7). Preserves the append-only generation model (proportionate to real
