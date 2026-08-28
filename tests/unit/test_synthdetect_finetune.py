@@ -6,8 +6,9 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
-import torch.nn as nn
+
+torch = pytest.importorskip("torch", reason="synthdetect fine-tuning tests require torch")
+import torch.nn as nn  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
