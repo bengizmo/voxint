@@ -38,6 +38,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Project detail: "+ add speaker" and "+ link folder" links** (#247).
   Navigation links in the sidebar section headers.
 
+### Changed
+- **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)
+  of maintainer evaluation infrastructure moved. Zero runtime dependencies on
+  voxint app code. The compact public summary in `docs/gpu-contracts.md`
+  retains model limitations, coverage gaps, and M2 fine-tuning outcomes.
+- **Translation integrity gaps closed** (ADR 0008, Phase 2 Step 3).
+  `run_translations` now has an `idempotency_key` (nullable UNIQUE) and
+  `replay_digest` (canonical sha256 of the `lines` JSONB for efficient replay
+  comparison without loading multi-MB payloads). `record_translation` is wired
+  through `savepoint_adopt_or_conflict` with full replay matching (minus
+  `completed_at`, which is unstable across retries). A database immutability
+  trigger rejects UPDATE (except the write-once supersession stamp) and DELETE,
+  matching the `run_enrichment_assets` pattern. Migration 0047.
+
 ## [0.28.0] - 2026-08-27
 
 ### Added
