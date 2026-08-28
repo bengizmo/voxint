@@ -972,6 +972,97 @@ def _media_backfill_hashes(args: argparse.Namespace) -> int:
     return 0
 
 
+def _speakers_auto_enroll_backfill(args: argparse.Namespace) -> int:
+    """Auto-enroll unresolved labels from completed pipeline runs (#280)."""
+    from sqlalchemy import select
+
+    from voxint.adjudication.resolver import _label_unresolved
+    from voxint.config import SettingsError, get_settings
+    from voxint.db.models import DiarizationTurn, PipelineRun, RunStatus
+    from voxint.db.session import build_session_factory
+    from voxint.speakers.auto_enroll import auto_enroll_run
+    from voxint.speakers.matching import gates_from_settings
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    if not settings.auto_enroll:
+        print("error: auto-enrollment is disabled (AUTO_ENROLL is off)")
+        return 2
+    if args.limit is not None and args.limit < 1:
+        print("error: --limit must be at least 1")
+        return 2
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    factory = build_session_factory(engine)
+    try:
+        query = (
+            select(PipelineRun.id)
+            .where(
+                PipelineRun.status == RunStatus.COMPLETED.value,
+                select(DiarizationTurn.id)
+                .where(
+                    DiarizationTurn.pipeline_run_id == PipelineRun.id,
+                    _label_unresolved(PipelineRun.id, DiarizationTurn.label),
+                )
+                .correlate(PipelineRun)
+                .exists(),
+            )
+            .order_by(PipelineRun.id)
+        )
+        if args.run_id is not None:
+            query = query.where(PipelineRun.id == args.run_id)
+        if args.limit is not None:
+            query = query.limit(args.limit)
+
+        try:
+            with factory() as session:
+                run_ids = session.execute(query).scalars().all()
+        except Exception:
+            print("error: could not query runs needing auto-enrollment")
+            return 1
+
+        totals = {"created": 0, "matched": 0, "skipped": 0}
+        failures = 0
+        gates = gates_from_settings(settings)
+        for run_id in run_ids:
+            with factory() as session:
+                try:
+                    result = auto_enroll_run(session, run_id, gates)
+                    if args.dry_run:
+                        session.rollback()
+                    else:
+                        session.commit()
+                except Exception as exc:
+                    session.rollback()
+                    failures += 1
+                    print(f"{run_id}: failed - {exc}")
+                    continue
+            totals["created"] += result.created
+            totals["matched"] += result.matched
+            totals["skipped"] += result.skipped
+            print(
+                f"{run_id}: {result.created} created, {result.matched} matched, "
+                f"{result.skipped} skipped"
+            )
+
+        print(
+            f"summary: {len(run_ids)} run(s), {totals['created']} created, "
+            f"{totals['matched']} matched, {totals['skipped']} skipped, "
+            f"{failures} failed"
+        )
+        if args.dry_run:
+            print("dry run: all changes rolled back")
+        return 1 if failures else 0
+    finally:
+        engine.dispose()
+
+
 def _serve(args: argparse.Namespace) -> int:
     """Run the review console. The bind host/port come from Settings, so the
     default-credentials-off-loopback refusal inspects the REAL bind address —
@@ -1827,6 +1918,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="compute sha256 for media rows missing it (integrity aid; idempotent)",
     )
     media_bf_p.set_defaults(fn=_media_backfill_hashes)
+    speakers_p = sub.add_parser("speakers", help="speaker roster maintenance")
+    speakers_sub = speakers_p.add_subparsers(dest="speakers_command", required=True)
+    backfill_ae_p = speakers_sub.add_parser(
+        "auto-enroll-backfill",
+        help="auto-enroll unmatched voices on completed runs",
+    )
+    backfill_ae_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report changes without writing them",
+    )
+    backfill_ae_p.add_argument(
+        "--run-id",
+        type=uuid.UUID,
+        help="process only this pipeline run UUID",
+    )
+    backfill_ae_p.add_argument(
+        "--limit",
+        type=int,
+        help="process at most N runs",
+    )
+    backfill_ae_p.set_defaults(fn=_speakers_auto_enroll_backfill)
     tutorial_p = sub.add_parser("tutorial", help="bundled guided-tutorial fixtures")
     tutorial_sub = tutorial_p.add_subparsers(dest="tutorial_command", required=True)
     seed_p = tutorial_sub.add_parser(

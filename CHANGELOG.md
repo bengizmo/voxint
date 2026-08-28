@@ -49,6 +49,10 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   section for operator review. New `Decision.AUTO_ENROLL` and
   `Resolution.AUTO_ENROLL` types keep system-initiated enrollments distinct from
   human rulings (migration 0049).
+- **Auto-enrollment backfill** (#280). `voxint speakers auto-enroll-backfill`
+  runs auto-enrollment against all completed runs with unresolved labels,
+  letting existing deployments benefit without reprocessing. Supports
+  `--dry-run`, `--run-id`, and `--limit`.
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
   voices" (unverified) collapsed by default in a `<details>` disclosure.
