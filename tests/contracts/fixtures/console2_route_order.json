@@ -144,6 +144,12 @@
   ]
  ],
  [
+  "/media/{media_id}/editor",
+  [
+   "GET"
+  ]
+ ],
+ [
   "/projects",
   [
    "GET"
@@ -475,6 +481,12 @@
  ],
  [
   "/settings",
+  [
+   "GET"
+  ]
+ ],
+ [
+  "/settings/features",
   [
    "GET"
   ]

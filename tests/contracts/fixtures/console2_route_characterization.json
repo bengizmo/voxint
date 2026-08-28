@@ -176,6 +176,14 @@
     true
   ],
   [
+    "/media/{media_id}/editor",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/media/{run_id}",
     [],
     "onboarding",
@@ -669,6 +677,14 @@
   ],
   [
     "/settings/database",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/settings/features",
     [
       "GET"
     ],

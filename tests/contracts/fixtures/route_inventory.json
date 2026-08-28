@@ -132,6 +132,12 @@
     ]
   ],
   [
+    "/media/{media_id}/editor",
+    [
+      "GET"
+    ]
+  ],
+  [
     "/media/{run_id}",
     []
   ],
@@ -501,6 +507,12 @@
   ],
   [
     "/settings/database",
+    [
+      "GET"
+    ]
+  ],
+  [
+    "/settings/features",
     [
       "GET"
     ]

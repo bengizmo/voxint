@@ -6,7 +6,43 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-08-27
+
+### Added
+- **ADR 0008: enrichment persistence simplification scope** (Phase 2, finding
+  H7). Preserves the append-only generation model (proportionate to real
+  concurrency and decision immutability constraints); scopes implementation to
+  narrow transaction-choreography extraction and two translation integrity gaps
+  (idempotency key, immutability trigger). See `docs/adr/0008-*`.
+- **Media detail page** (`GET /media/{id}/editor`, #156, epic #149). The editor
+  backend contract: run selection (latest completed by default, `?run=`
+  override validated against the media item), claim-token verification
+  (stale/absent tokens degrade to read-only), transcript display with
+  speaker palette and verified-progress counter, run chooser, and media
+  metadata rail. Existing `/review/{run_id}/*` endpoints remain the only
+  mutation surface. The media library's "View" links now open the detail
+  page instead of the legacy run page.
+- **Security: token-sensitive path classifier** (#156). `Cache-Control:
+  no-store` now covers both `/review/*` and `/media/{uuid}/editor*` paths, so
+  claim tokens embedded in the editor detail page are never cached. Library
+  routes (`/media`, `/media/submit`, etc.) are unaffected.
+- **Possible-duplicates reminder card** (#181). The speakers overview page shows
+  a reminder card when two or more roster speakers share a high cosine
+  similarity, prompting the operator to review whether they should be merged.
+
 ### Changed
+- **Idempotent insert helper extracted** (Phase 2, finding M10). The
+  savepoint-adopt-or-conflict skeleton that was duplicated across ledger,
+  annotations, drafts, and run assets is now a single
+  `savepoint_adopt_or_conflict()` in `voxint.idempotency`. Each site calls
+  it with its own lookup, match, and persist callbacks. Behavior-preserving:
+  same key, fingerprint, savepoint, and advisory-lock semantics.
+- **Stage graph contract tests and runtime guard** (Phase 1 H6). Twelve
+  contract tests lock the pipeline stage invariants: enum/STAGE_ORDER
+  agreement, GPU/POST lane partition completeness and contiguity,
+  build_stage_fns coverage, and lane routing correctness. A runtime guard in
+  `build_stage_fns` fails at startup if a new Stage member is missing a
+  function mapping.
 - **Ingest: SubmissionResult makes commit-before-publish visible** (Forgejo #7,
   finding H5). All submit functions (`submit_upload`, `submit_url`,
   `submit_media_item`, `submit_media_item_if_new`) now return a
@@ -41,6 +77,23 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   Completed and failed runs now show actual elapsed time (e.g. "3m40s") instead
   of a placeholder. Runs from a registered settings folder show the folder path
   below the filename. Failed runs show their error message in the REVIEW column.
+- **Settings status: host-level hardware gauges** (#248, epic #149). The status
+  page now shows five gauges (Processor, Memory, Graphics card, Graphics memory,
+  Disk) instead of two GPU-only gauges. CPU and memory are read from the host
+  via `/proc/meminfo` and `os.getloadavg`; disk usage is the media root
+  partition via `shutil.disk_usage`. No new runtime dependencies.
+- **Settings status: GPU acceleration in install summary** (#248, epic #149).
+  The banner line now includes "GPU acceleration on (16 GB)" (or "off" for
+  CPU-only installs) between the install type and the version number.
+- **Settings status: LLM component description** (#248, epic #149). The Local
+  AI model row shows "off, used for polish & profiles" with a primary "Turn on"
+  button instead of a plain text link.
+- **Settings sub-page nav: Features tab** (#248, epic #149). All four settings
+  sub-pages (Status, Hardware, Database, Plugins) now include a Features tab
+  that links back to the hub page's Features section.
+- **Settings status: Check for updates** (#248, epic #149). The banner button
+  now reads "Check for updates" and links to the GitHub releases page instead
+  of the hardware sub-page.
 
 ### Added
 - **Synthetic-speech detection: feature-cached AASIST fine-tuning pipeline**

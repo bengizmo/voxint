@@ -637,13 +637,21 @@ service reports telemetry the strip says "hardware status unavailable" rather
 than claiming all-clear.
 
 The **Status** page (`GET /settings/status`, authenticated, 15s htmx refresh) is
-the fuller live view behind the strip: the aggregated per-GPU card with
-utilization, VRAM, and temperature labeled as instantaneous (now) readings, peak
-temperature and throttle-event counts labeled as cumulative-since-restart, and
-each service's admission depth and rejected-since-restart count. It is reachable
-from the sidebar "Hardware" shortcut; the older `GET /resources` address still
-works and redirects here. Warnings are warn-only in v1; the NVIDIA driver already
-protects the hardware, so Voxint advises rather than pausing work.
+the fuller live view behind the strip. It shows up to five hardware gauges:
+Processor (load-average percentage), Memory (used / total), and Disk (media
+root partition used / total) are always present; Graphics card (GPU
+utilization) and Graphics memory (VRAM used / total) appear when a GPU is
+available. CPU, memory, and disk are read from the host via stdlib
+(`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come from
+the model services' `/healthz` telemetry. A "Parts of Voxint" component
+list shows live health for the console, each model service, the database, the
+task queue, and the Local AI model (with a primary "Turn on" button when
+disabled). The banner includes an install summary with GPU acceleration status
+and a "Check for updates" link to the GitHub releases page. The page is
+reachable from the sidebar "Hardware" shortcut; the older `GET /resources`
+address still works and redirects here. Warnings are warn-only in v1; the NVIDIA
+driver already protects the hardware, so Voxint advises rather than pausing
+work.
 
 ### Exporting transcripts
 
@@ -1380,10 +1388,12 @@ mutations are gated by their per-run claim token.
 | `POST /review/{run_id}/labels/{label}/enroll` | Enroll a label's audio as a roster speaker |
 | `GET /review/{run_id}/export.{txt,md,srt,vtt,json}?text=corrected\|raw\|enhanced` | Speaker-attributed transcript export (plain text, Markdown, SubRip, WebVTT, JSON); `txt`/`md` accept `&timestamps=false` for the reading copy |
 | `GET /review/{run_id}/export.rttm` | Diarization RTTM (raw labels, run-UUID file id) |
+| `GET /media/{id}/editor` | Media detail page: run selection (latest completed by default, `?run=` override), claim-token verification (stale/absent = read-only), transcript with speaker palette and verified-progress counter, run chooser, media metadata rail (#156) |
 | `GET /media/{run_id}` | Gated media serving (Range-aware) for the workbench player |
 | `GET /setup` · `POST /setup/{media,scan,vocabulary,llm,finish}` | First-run setup wizard; held by the onboarding gate until finished (own `CSRF_SETUP` token) |
 | `GET /settings` | Post-onboarding settings hub: edit features / media folders / corrections / LLM / sources, re-run the wizard, start/replay/complete the tutorial, and reach the read-only sub-pages below |
 | `GET /settings/status` | Status and health: install kind, live component health (Postgres / Redis / model services), and the live hardware snapshot (absorbs the old `/resources`; answers an `HX-Request` poll with just the hardware fragment, 15s auto-refresh) |
+| `GET /settings/features` | 303 redirect to `/settings#features` (the Features section on the hub page) |
 | `GET /settings/{hardware,database,plugins}`, `GET /settings/plugins/{id}` | Read-only settings sub-pages: effective hardware config, database size/retention, and the plugin registry |
 | `GET /activity/events?since={id}` | Activity feed poll (JSON): run-completion and speaker-identification events after a cursor plus the live-jobs badge count. Dark-shipped behind `CONSOLE_ACTIVITY_ENABLED` (answers 404 until on); no `since` bootstraps at the high-water mark so a fresh tab does not replay history (#162) |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |

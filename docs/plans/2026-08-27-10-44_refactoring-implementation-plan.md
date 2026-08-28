@@ -73,7 +73,7 @@ parallelizable EXCEPT where noted.
   from cancel copy. Files: `home.py`, `ingest/service.py:126-130`. Review:
   single-model. Browser: yes (home).
 
-**Batch 0B: Global HTML error renderer** -- DONE
+**Batch 0B: Global HTML error renderer** -- DONE (PR #256, merged)
 - H2-renderer: Add a global HTML error template for `Accept: text/html`
   requests (friendly 4xx/500 with "reload and try again"). Adopt the media
   router's `_reject` pattern. File: `api/app.py` (exception handlers).
@@ -85,7 +85,7 @@ parallelizable EXCEPT where noted.
   (secret generation), `deps.py:418-424` (403 handler). Review: **full panel**
   (CSRF/security trigger per existing rules). Browser lane: **yes**.
 
-**Batch 0D: Ingest service hardening** (H5 DONE, M9+M4 PR #239 open)
+**Batch 0D: Ingest service hardening** -- DONE (H5 PR #251, M9+M4 PR #239, all merged)
 - H5: **DONE** (PR #251). Make the commit-before-publish contract visible. Add a SubmissionResult
   that carries the run id and a `publish()` method. Callers are migrated
   atomically. This makes the contract structural and visible, though it does
@@ -100,7 +100,7 @@ parallelizable EXCEPT where noted.
   MediaItem. Files: `ingest/service.py`, `api/app.py` (startup hook). Review:
   single-model. Browser: no.
 
-**Batch 0E: Worker hardening** -- DONE
+**Batch 0E: Worker hardening** -- DONE (PR #257, merged)
 - M7: Uniform broker OperationalError handling for all `_autogenerate_*`
   post-finalize jobs. Pair with lane-specific stale-job redispatch. File:
   `worker/tasks.py`. Review: **full panel** (codex + grok). Browser: no.
@@ -108,7 +108,7 @@ parallelizable EXCEPT where noted.
   `worker/tasks.py`, `pipeline/stages/context.py`. Review: codex (pure
   extraction, behavior-preserving). Browser: no.
 
-**Batch 0F: Legacy submit redirect** (PR #238 open)
+**Batch 0F: Legacy submit redirect** -- DONE (PR #238, merged)
 - H4-qw: When `console_media_enabled` is on, render a "New submissions live in
   Media" banner on /runs forms. Consider disabling the legacy submit forms
   server-side. Files: `legacy_runs.py` (submission form rendering), templates.
@@ -116,44 +116,46 @@ parallelizable EXCEPT where noted.
 
 ### Phase 1: Pipeline internals
 
-**H6: Stage graph consolidation**
-- Identify the exact remaining duplication beyond the existing STAGE_ORDER,
-  GPU_SEGMENT, POST_SEGMENT in db/models.py. Add exhaustive equivalence
-  contract tests. Derive consumer mappings where safe; avoid placing executable
-  pipeline registration in the ORM module.
-- Files: `db/models.py` (Stage enum area only), `pipeline/transitions.py`,
-  `pipeline/stages/context.py`, `worker/tasks.py` (lane routing only).
-- Review: **multi-model** (cross-cutting seam spanning enums, lanes, Celery
-  routing). Browser lane: no.
-- Can run in parallel with Phase 0 batches that don't touch worker/tasks.py
-  (i.e., after Batch 0E lands).
+**H6: Stage graph consolidation** -- DONE
+- Survey found the original 4-model analysis overstated the duplication:
+  STAGE_ORDER, GPU_SEGMENT, and POST_SEGMENT in db/models.py are already the
+  single source of truth; next_stage() and pipeline_task_for_stage() derive
+  from them. The real gap was the absence of contract tests and a missing
+  runtime guard in build_stage_fns(). Added 12 contract tests
+  (tests/contracts/test_stage_graph.py) and a startup guard in context.py.
+- Files changed: `pipeline/stages/context.py` (runtime guard),
+  `tests/contracts/test_stage_graph.py` (new).
+- Review: multi-model (codex + grok planned). Browser lane: no.
 
 ### Phase 2: Enrichment simplification
 
-**Step 1: M10 helper extraction ONLY** (no semantic relaxation)
-- Extract the adopt-or-conflict pattern into a shared helper. Byte-for-byte
-  behavior-preserving: same key + fingerprint + savepoint logic.
-- Files: `adjudication/ledger.py`, `annotations.py`, `enrichment/drafts.py`,
-  `enrichment/run_assets.py`, `merge.py`, `ingest/service.py`.
-- Review: single-model (behavior-preserving extraction with existing tests).
-- Any key-only relaxation (weakening fingerprint checks) is a **separate**
-  follow-up requiring full panel review and concurrent-insert test evidence.
+**Step 1: M10 helper extraction ONLY** (no semantic relaxation) -- DONE
+- Extracted `savepoint_adopt_or_conflict()` to `voxint/idempotency.py`.
+  Survey found 4 true adopt-or-conflict sites (ledger, annotations, drafts,
+  run_assets) sharing a common skeleton; `merge.py` delegates to ledger and
+  `ingest/service.py` uses a different get-or-create pattern.
+  `enrichment/review.py` has dual-UNIQUE + materialization-repair logic that
+  doesn't fit the generic helper. All 4 sites refactored; 6 helper unit tests
+  + full suite green (4065 passed).
+- Files changed: `idempotency.py` (new), `adjudication/ledger.py`,
+  `adjudication/annotations.py`, `enrichment/drafts.py`,
+  `enrichment/run_assets.py`, `tests/unit/test_idempotency.py` (new).
+- Review: single-model (codex, behavior-preserving extraction).
 
-**Step 2: H7 design spike** (ADR, not implementation)
-- Before implementation, produce a focused ADR answering:
-  - What is the target persistence model? ("One current row, optional history"
-    is unresolved.)
-  - Prove the writer topology: can concurrent writers race on generation
-    allocation or supersession? (Advisory locks currently prevent this.)
-  - How do existing installations with multiple generations and partially
-    completed jobs migrate?
-  - How does ordering/provenance work without generation counters?
-  - What is the rollback/refusal policy?
-- Require representative pre-migration fixtures, concurrent database tests,
-  and upgrade/downgrade validation.
-- Only after the ADR is reviewed should implementation be scheduled.
-- Review: multi-model for the ADR; **full panel** for any implementation PR
-  (migration, locking, concurrency, data-integrity contracts).
+**Step 2: H7 design spike** (ADR, not implementation) -- DONE (ADR 0008)
+- ADR 0008 (`docs/adr/0008-enrichment-persistence-simplification-scope.md`)
+  answers all five questions. Decision: preserve the append-only persistence
+  model (it is proportionate to real concurrency, decision immutability, and
+  finalization-order constraints); extract narrow transaction choreography;
+  close two translation integrity gaps (missing idempotency key, missing
+  immutability trigger). Codex reviewed and caught three corrections
+  (finalization-order semantics, translation retry justification, translation
+  trigger gap) incorporated into the final ADR.
+- Review: codex (planner role). Multi-model review of the ADR itself is the
+  next step before scheduling implementation.
+- Implementation scope (from ADR): code-only helper extraction (~10-12 files)
+  plus one migration for translation idempotency_key + immutability trigger.
+  **Full panel** required for the implementation PR.
 
 ### Phase 3: Console migration + config architecture (blocked)
 
