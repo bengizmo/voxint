@@ -2007,19 +2007,19 @@ def export_annotations_json(
     for row in ordered:
         resolved = resolved_map[row.id]
         ann_clip: ClipRef | None = None
-        cr = clips_by_ann.get(str(row.id))
-        if cr is not None:
-            meta = cr.meta or {}
-            clip_path = settings.media_root / cr.path
+        matched_clip = clips_by_ann.get(str(row.id))
+        if matched_clip is not None:
+            meta = matched_clip.meta or {}
+            clip_path = settings.media_root / matched_clip.path
             clip_sha256 = ""
             if clip_path.is_file():
                 import hashlib
 
                 clip_sha256 = hashlib.sha256(clip_path.read_bytes()).hexdigest()
             ann_clip = ClipRef(
-                id=cr.id,
-                download_url=f"/runs/{run_id}/clips/{cr.id}",
-                filename=clip_download_filename(run_id, cr.id),
+                id=matched_clip.id,
+                download_url=f"/runs/{run_id}/clips/{matched_clip.id}",
+                filename=clip_download_filename(run_id, matched_clip.id),
                 sha256=clip_sha256,
                 sample_rate=meta.get("sample_rate", 16000),
                 channels=1,
