@@ -1,7 +1,8 @@
 # ADR 0003: Editor run selection
 
-> **Status:** Accepted (Console 2.0 P0a, issue #150). The `/media/{id}` editor and
-> its backend endpoints land in a later phase (P3a/P3b).
+> **Status:** Accepted and implemented (Console 2.0 P0a, issue #150). The editor
+> backend contract landed in PR #242 (issue #156): `GET /media/{id}/editor` with
+> run selection, claim-token verification, and transcript display.
 
 ## Context
 
