@@ -1,0 +1,59 @@
+{
+  "service": "synthdetect",
+  "inference_space": "w2v2-aasist-df-m2-s0e11",
+  "model_family": "w2v2-aasist",
+  "description": "Wav2Vec2 XLS-R front-end + AASIST back-end for synthetic speech detection. Fine-tuned (M2, seed 0, epoch 11) on Piper + Chatterbox TTS from the DF checkpoint init.",
+  "weights": {
+    "aasist_checkpoint": {
+      "filename": "finetuned_aasist.pth",
+      "sha256": "e178446b640b8e9f9cf6dd359428b2243f49e24e613e1ae952cd706216b8111e",
+      "size_bytes": 1271580996,
+      "description": "Reconstituted full state dict: XLS-R keys from DF init + fine-tuned AASIST backend (245 backend keys, 175 changed from init). No module. prefix (stripped during reconstitution).",
+      "init_checkpoint": "Best_LA_model_for_DF.pth",
+      "init_checkpoint_sha256": "1cf904f1d84c867c1e8f4cf4de98206f13fb67e1c27e32c9c2a61d39082a5e3a",
+      "fine_tune_backend_sha256": "432f6aab6de52e3bc87c1c05e0575eeb600b3dda525aa33cef11a9ede30947ef",
+      "fine_tune_seed": 0,
+      "fine_tune_epoch": 11,
+      "fine_tune_method": "feature-cached (XLS-R frozen, AASIST backend only)",
+      "state_dict_key_prefix": null,
+      "total_keys": 674,
+      "ssl_keys": 429,
+      "backend_keys": 245
+    },
+    "xlsr_ssl_base": {
+      "filename": "xlsr2_300m.pt",
+      "sha256": "b08927597f2c9eb2ebd7dcc3ac78ee4b5f6021cbac4b3a6c5a9deec445d80ed9",
+      "size_bytes": 3808868242,
+      "description": "XLS-R 300M (wav2vec 2.0 pretrained). Loaded by the vendored SSLModel from a hard-coded relative path at model construction time.",
+      "upstream_url": "https://huggingface.co/facebook/wav2vec2-xls-r-300m"
+    }
+  },
+  "vendored_model": {
+    "file": "app/vendor/ssl_antispoofing_model.py",
+    "upstream_repo": "https://github.com/TakHemlata/SSL_Anti-spoofing",
+    "upstream_commit": "4acaa61dcef5f7610f43aa4d0b29c4559b970cd2",
+    "upstream_path": "model.py",
+    "sha256": "08b2b99b9cc0e90732746471325185f2eb144795ee35338e0a02951015a856c6",
+    "license_spdx": "MIT",
+    "attribution": "Tak et al., SSL_Anti-spoofing (MIT); AASIST back end: Jung et al., ICASSP 2022."
+  },
+  "runtime": {
+    "base_image": "nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04",
+    "torch_version": "2.1.2+cu118",
+    "fairseq_commit": "a5402130",
+    "python_version": "3.10"
+  },
+  "windowing": {
+    "model_window_samples": 64600,
+    "sample_rate": 16000,
+    "min_scorable_samples": 8000,
+    "padding": "repeat",
+    "pooling": "mean",
+    "tail_policy": "include if >= min_scorable_samples, else drop"
+  },
+  "scoring": {
+    "convention": "higher = more synthetic (-bona_fide_logit)",
+    "output": "raw logits (pre-calibration)",
+    "calibration": "applied by plugin task, not service"
+  }
+}
