@@ -10,6 +10,7 @@ import json
 import math
 import random
 import sys
+import types
 from collections import defaultdict
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ def _load_vendor() -> Any:
     name = "synthdetect_finetune_vendor"
     if name in sys.modules:
         return sys.modules[name]
+    if "fairseq" not in sys.modules:
+        sys.modules["fairseq"] = types.ModuleType("fairseq")
     spec = importlib.util.spec_from_file_location(name, _VENDOR_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load vendored model at {_VENDOR_PATH}")
