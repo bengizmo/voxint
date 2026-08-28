@@ -239,12 +239,12 @@ def test_hardware_view_redacts_url_credentials() -> None:
 # --------------------------------------------------------------------------- #
 # Plugins: honest empty state, kill-switch cases, and a real per-plugin page.
 # --------------------------------------------------------------------------- #
-def test_plugins_page_empty_registry_is_honest(
+def test_plugins_page_shows_synthdetect(
     session_factory: sessionmaker[Session],
 ) -> None:
     client = _client(session_factory)
     body = client.get("/settings/plugins").text
-    assert "No plugins are installed" in body
+    assert "Synthetic Speech Detection" in body
 
 
 def test_plugins_page_reports_unknown_kill_switch_id(
