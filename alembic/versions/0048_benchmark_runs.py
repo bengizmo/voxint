@@ -3,8 +3,8 @@
 DB-backed benchmark results for cross-run comparison of pipeline
 transcription accuracy (WER) and throughput.
 
-Revision ID: 0047
-Revises: 0046
+Revision ID: 0048
+Revises: 0047
 Create Date: 2026-08-28
 """
 
@@ -16,8 +16,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0047"
-down_revision: str = "0046"
+revision: str = "0048"
+down_revision: str = "0047"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
