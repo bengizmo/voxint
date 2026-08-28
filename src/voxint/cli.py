@@ -1404,6 +1404,204 @@ def _enrich_names(args: argparse.Namespace) -> int:
         engine.dispose()
 
 
+def _benchmark_run(args: argparse.Namespace) -> int:
+    from voxint.benchmark.runner import run_benchmark
+    from voxint.config import SettingsError, get_settings
+
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        print(f"error: {exc}")
+        return 2
+
+    engine, code = _engine_or_report(connect_timeout=5)
+    if engine is None:
+        return code
+    try:
+        from voxint.db.session import build_session_factory
+
+        factory = build_session_factory(engine)
+        try:
+            run_id = run_benchmark(
+                factory,
+                settings.media_root.resolve(),
+                tag=args.tag,
+                timeout_per_file=args.timeout,
+                quick=args.quick,
+            )
+        except KeyboardInterrupt:
+            return 130
+        print(run_id)
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _benchmark_list(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.db.models import BenchmarkRun
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        from voxint.db.session import build_session_factory
+
+        factory = build_session_factory(engine)
+        with factory() as session:
+            runs = session.execute(
+                select(BenchmarkRun)
+                .order_by(BenchmarkRun.created_at.desc())
+                .limit(args.limit)
+            ).scalars().all()
+
+        if not runs:
+            print("No benchmark runs found.")
+            return 0
+
+        print(
+            f"{'TAG':<20} {'STATUS':<12} {'WER':>8} "
+            f"{'TIME':>8} {'FILES':>5} {'DATE':<20}"
+        )
+        print("-" * 80)
+        for run in runs:
+            tag = (run.tag or "")[:20]
+            wer_str = ""
+            time_str = ""
+            files_str = ""
+            if run.summary:
+                wer_val = run.summary.get("pooled_wer")
+                if wer_val is not None:
+                    wer_str = f"{wer_val:.1%}"
+                time_val = run.summary.get("total_time_s")
+                if time_val is not None:
+                    time_str = f"{time_val:.0f}s"
+                speech = run.summary.get("speech_file_count", 0)
+                halluc = run.summary.get("hallucination_file_count", 0)
+                files_str = str(speech + halluc)
+            created = run.created_at.strftime("%Y-%m-%d %H:%M") if run.created_at else ""
+            print(
+                f"{tag:<20} {run.status:<12} {wer_str:>8} "
+                f"{time_str:>8} {files_str:>5} {created:<20}"
+            )
+        return 0
+    finally:
+        engine.dispose()
+
+
+def _benchmark_compare(args: argparse.Namespace) -> int:
+    from sqlalchemy import select
+
+    from voxint.db.models import BenchmarkItem, BenchmarkRun
+
+    engine, code = _engine_or_report()
+    if engine is None:
+        return code
+    try:
+        from voxint.db.session import build_session_factory
+
+        factory = build_session_factory(engine)
+        with factory() as session:
+            run1 = session.get(BenchmarkRun, args.run_id_1)
+            run2 = session.get(BenchmarkRun, args.run_id_2)
+            if run1 is None:
+                print(f"error: run {args.run_id_1} not found")
+                return 2
+            if run2 is None:
+                print(f"error: run {args.run_id_2} not found")
+                return 2
+
+            if run1.corpus_version != run2.corpus_version:
+                print(
+                    f"warning: different corpus versions "
+                    f"({run1.corpus_version} vs {run2.corpus_version})",
+                    file=sys.stderr,
+                )
+            if run1.protocol_hash != run2.protocol_hash:
+                print(
+                    f"warning: different scorer protocols "
+                    f"({run1.protocol_hash} vs {run2.protocol_hash})",
+                    file=sys.stderr,
+                )
+
+            items1 = {
+                i.corpus_file_id: i
+                for i in session.execute(
+                    select(BenchmarkItem).where(
+                        BenchmarkItem.benchmark_run_id == run1.id
+                    )
+                ).scalars().all()
+            }
+            items2 = {
+                i.corpus_file_id: i
+                for i in session.execute(
+                    select(BenchmarkItem).where(
+                        BenchmarkItem.benchmark_run_id == run2.id
+                    )
+                ).scalars().all()
+            }
+
+        tag1 = run1.tag or str(run1.id)[:8]
+        tag2 = run2.tag or str(run2.id)[:8]
+
+        print(f"Comparing: {tag1} vs {tag2}")
+        print(f"{'FILE':<25} {'WER 1':>8} {'WER 2':>8} {'DELTA':>8}")
+        print("-" * 55)
+
+        all_ids = sorted(set(items1) | set(items2))
+        for fid in all_ids:
+            i1 = items1.get(fid)
+            i2 = items2.get(fid)
+            wer1 = ""
+            wer2 = ""
+            delta = ""
+            w1_val = None
+            w2_val = None
+            if i1 and i1.wer_counts:
+                ref = i1.wer_counts.get("reference_words", 0)
+                if ref > 0:
+                    errs = sum(
+                        i1.wer_counts.get(k, 0)
+                        for k in ("substitutions", "insertions", "deletions")
+                    )
+                    w1_val = errs / ref
+                    wer1 = f"{w1_val:.1%}"
+            if i2 and i2.wer_counts:
+                ref = i2.wer_counts.get("reference_words", 0)
+                if ref > 0:
+                    errs = sum(
+                        i2.wer_counts.get(k, 0)
+                        for k in ("substitutions", "insertions", "deletions")
+                    )
+                    w2_val = errs / ref
+                    wer2 = f"{w2_val:.1%}"
+            if w1_val is not None and w2_val is not None:
+                d = w2_val - w1_val
+                sign = "+" if d > 0 else ""
+                delta = f"{sign}{d:.1%}"
+            print(f"{fid:<25} {wer1:>8} {wer2:>8} {delta:>8}")
+
+        # Summary
+        if run1.summary and run2.summary:
+            s1 = run1.summary.get("pooled_wer", 0)
+            s2 = run2.summary.get("pooled_wer", 0)
+            d = s2 - s1
+            sign = "+" if d > 0 else ""
+            print("-" * 55)
+            print(
+                f"{'POOLED':<25} {s1:>7.1%} {s2:>7.1%} "
+                f"{sign}{d:>7.1%}"
+            )
+            t1 = run1.summary.get("total_time_s", 0)
+            t2 = run2.summary.get("total_time_s", 0)
+            print(f"{'TIME':<25} {t1:>7.0f}s {t2:>7.0f}s")
+
+        return 0
+    finally:
+        engine.dispose()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="voxint", description="Voxint audio pipeline")
     parser.add_argument("--version", action="version", version=f"voxint {__version__}")
@@ -1643,6 +1841,25 @@ def build_parser() -> argparse.ArgumentParser:
     verify_p = devenv_sub.add_parser("verify", help="check bundle integrity")
     verify_p.add_argument("--bundle", required=True, type=Path, help="path to the bundle directory")
     verify_p.set_defaults(fn=_devenv_verify)
+
+    bench_p = sub.add_parser("benchmark", help="run/compare pipeline benchmarks")
+    bench_sub = bench_p.add_subparsers(dest="benchmark_command", required=True)
+    bench_run_p = bench_sub.add_parser("run", help="run the benchmark corpus through the pipeline")
+    bench_run_p.add_argument(
+        "--quick", action="store_true", help="speech files only (skip synthetics)"
+    )
+    bench_run_p.add_argument("--tag", help="label for this run (max 60 chars)")
+    bench_run_p.add_argument(
+        "--timeout", type=float, default=300.0, help="per-file timeout in seconds (default 300)"
+    )
+    bench_run_p.set_defaults(fn=_benchmark_run)
+    bench_list_p = bench_sub.add_parser("list", help="list recent benchmark runs")
+    bench_list_p.add_argument("--limit", type=int, default=10, help="max rows (default 10)")
+    bench_list_p.set_defaults(fn=_benchmark_list)
+    bench_cmp_p = bench_sub.add_parser("compare", help="compare two benchmark runs side by side")
+    bench_cmp_p.add_argument("run_id_1", type=uuid.UUID, help="first run UUID")
+    bench_cmp_p.add_argument("run_id_2", type=uuid.UUID, help="second run UUID")
+    bench_cmp_p.set_defaults(fn=_benchmark_compare)
 
     # File-based scoring harness: no settings, no DB, no worker (docs/harness.md).
     from voxint.harness import score_cli

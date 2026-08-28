@@ -22,7 +22,7 @@ from urllib.parse import urlencode
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy import Engine
+from sqlalchemy import Engine, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import RedirectResponse
@@ -1977,6 +1977,22 @@ def _settings_context(
     # sections by the section loop in settings.html. Empty registry => () =>
     # nothing rendered, and the core sections are untouched.
     context["plugin_settings_sections"] = request.app.state.plugins.settings_sections()
+    # Benchmark section: most recent runs for the settings page.
+    try:
+        from voxint.db.models import BenchmarkRun
+
+        recent_runs = (
+            session.execute(
+                select(BenchmarkRun)
+                .order_by(BenchmarkRun.created_at.desc())
+                .limit(5)
+            )
+            .scalars()
+            .all()
+        )
+        context["benchmark_runs"] = recent_runs
+    except Exception:
+        context["benchmark_runs"] = []
     context.update(overrides)
     return context
 

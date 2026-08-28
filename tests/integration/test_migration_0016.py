@@ -130,4 +130,5 @@ def test_single_alembic_head() -> None:
     # 0044 = media_operations journal + media_operation_files, issue #155;
     # 0045 = widen file_kind CHECK for chunk + transcript_export, issue #155;
     # 0046 = drop legacy app_settings.media_folders / folder_domain_packs, #177).
-    assert list(heads) == ["0046"]
+    # 0047 = benchmark_runs + benchmark_items tables.
+    assert list(heads) == ["0047"]

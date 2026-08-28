@@ -37,8 +37,9 @@ htmlcov/
 *.mkv
 *.flac
 *.m4a
-# Except the bundled guided-tutorial sample (package data, must ship in the wheel).
+# Except bundled package-data WAVs (must ship in the wheel).
 !src/voxint/tutorial/assets/*.wav
+!src/voxint/benchmark/assets/*.wav
 !tests/parity/fixtures/corpus/*.wav
 # Except the synthetic (CC0) whisper-bakeoff fixtures — silence/bait/short-clean
 # audio IS committed (like the parity corpus); AMI/TED audio never is (the global
