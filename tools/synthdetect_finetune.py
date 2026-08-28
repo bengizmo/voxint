@@ -22,7 +22,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from synthdetect_corpus import ClipEntry, Manifest, load_manifest
-from synthdetect_eval import compute_eer
+from synthdetect_eval import (
+    apply_platt,
+    brier_score,
+    compute_eer,
+    fit_platt,
+    operating_point,
+    reliability_curve,
+)
 from synthdetect_infer import read_canonical_pcm, verify_clip_sha
 from synthdetect_sources import MODELS, SELECTION_SEED
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -664,6 +671,114 @@ def train(config: TrainConfig) -> Path:
     return best_path
 
 
+PRIMARY_FPR = 0.05
+DIAGNOSTIC_FPR = 0.01
+
+
+def score_clips(
+    model: nn.Module,
+    dataset: FeatureDataset,
+    device: torch.device | str,
+) -> dict[str, float]:
+    """Score each clip through the model and return ``{clip_id: raw_score}``."""
+    loader = DataLoader(dataset, batch_size=1, shuffle=False)
+    scores: dict[str, float] = {}
+    was_training = model.training
+    model.eval()
+    with torch.inference_mode():
+        for clip_id, (features, _) in zip(dataset.clip_ids, loader, strict=True):
+            logits = model(features.to(device))
+            scores[clip_id] = float((-logits[:, 1]).item())
+    if was_training:
+        model.train()
+        _freeze_batch_norm(model)
+    return scores
+
+
+def recalibrate(
+    checkpoint: Path,
+    manifest: Manifest,
+    cache_dir: Path,
+    device: str,
+    seed: str = SELECTION_SEED,
+) -> dict[str, Any]:
+    """Score the dev partition and fit a calibration policy for the fine-tuned checkpoint.
+
+    Returns a JSON-serialisable dict with the EER threshold, Platt parameters,
+    operating points at FPR 5% and 1%, and BF FPR comparisons between the old
+    threshold (0.0) and the recalibrated one.
+    """
+    _, dev_ids = SpeakerSplit(seed=seed)(manifest.clips)
+    metadata = {clip.clip_id: clip for clip in manifest.clips}
+    dev_dataset = FeatureDataset(dev_ids, cache_dir, metadata)
+
+    model = FeatureAASIST.from_checkpoint(checkpoint, device)
+    raw_scores = score_clips(model, dev_dataset, device)
+
+    bf_ids = [cid for cid in dev_dataset.clip_ids if metadata[cid].label == "bona_fide"]
+    spoof_ids = [cid for cid in dev_dataset.clip_ids if metadata[cid].label != "bona_fide"]
+
+    all_labels = [
+        LABEL_SPOOF if metadata[cid].label != "bona_fide" else LABEL_BONAFIDE
+        for cid in dev_dataset.clip_ids
+    ]
+    all_scores = [raw_scores[cid] for cid in dev_dataset.clip_ids]
+
+    # sklearn convention: label 1 = positive class. Remap for roc_curve:
+    # spoof is the positive class (detection target).
+    detection_labels = [0 if lbl == LABEL_BONAFIDE else 1 for lbl in all_labels]
+
+    overall_eer, eer_threshold = compute_eer(detection_labels, all_scores)
+
+    per_generator: dict[str, Any] = {}
+    for generator in ("chatterbox", "piper"):
+        gen_spoof = [cid for cid in spoof_ids if _generator_name(metadata[cid]) == generator]
+        if gen_spoof and bf_ids:
+            gen_ids = bf_ids + gen_spoof
+            gen_labels = [0] * len(bf_ids) + [1] * len(gen_spoof)
+            gen_scores = [raw_scores[cid] for cid in gen_ids]
+            gen_eer, gen_thr = compute_eer(gen_labels, gen_scores)
+            per_generator[generator] = {"eer": gen_eer, "eer_threshold": gen_thr}
+
+    bf_scores = [raw_scores[cid] for cid in bf_ids]
+    bf_fpr_at_zero = float(np.mean([s >= DEFAULT_DECISION_THRESHOLD for s in bf_scores]))
+    bf_fpr_at_eer = float(np.mean([s >= eer_threshold for s in bf_scores]))
+
+    a, b = fit_platt(all_scores, detection_labels)
+    primary = operating_point(detection_labels, all_scores, PRIMARY_FPR)
+    diagnostic = operating_point(detection_labels, all_scores, DIAGNOSTIC_FPR)
+
+    bf_fpr_at_primary = float(np.mean([s >= primary["threshold"] for s in bf_scores]))
+
+    probs = apply_platt(all_scores, a, b)
+    brier = brier_score(probs, detection_labels)
+    reliability = reliability_curve(probs, detection_labels)
+
+    cohort_hash = hashlib.sha256(
+        "\x00".join(sorted(dev_dataset.clip_ids)).encode()
+    ).hexdigest()
+
+    return {
+        "seed": seed,
+        "checkpoint": str(checkpoint),
+        "n_dev_clips": len(dev_dataset),
+        "n_bona_fide": len(bf_ids),
+        "n_spoof": len(spoof_ids),
+        "overall_eer": overall_eer,
+        "eer_threshold": eer_threshold,
+        "bf_fpr_at_threshold_0.0": bf_fpr_at_zero,
+        "bf_fpr_at_eer_threshold": bf_fpr_at_eer,
+        "bf_fpr_at_primary_threshold": bf_fpr_at_primary,
+        "per_generator": per_generator,
+        "platt": {"A": a, "B": b},
+        "primary_threshold_fpr5": primary,
+        "diagnostic_threshold_fpr1": diagnostic,
+        "brier": brier,
+        "reliability": reliability,
+        "cohort_sha256": cohort_hash,
+    }
+
+
 def _add_manifest_cache_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, required=True)
@@ -704,6 +819,13 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--device", default="cuda:0")
     evaluate.add_argument("--split", default="calibration")
     evaluate.add_argument("--decision-threshold", type=float, default=DEFAULT_DECISION_THRESHOLD)
+
+    recal = subparsers.add_parser("recalibrate")
+    _add_manifest_cache_args(recal)
+    recal.add_argument("--checkpoint", type=Path, required=True)
+    recal.add_argument("--device", default="cuda:0")
+    recal.add_argument("--seed", default=SELECTION_SEED)
+    recal.add_argument("--out", type=Path, default=None)
     return parser
 
 
@@ -743,6 +865,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(train(config))
         return 0
     manifest = _manifest(args.manifest)
+    if args.command == "recalibrate":
+        policy = recalibrate(
+            args.checkpoint, manifest, args.cache_dir, args.device, args.seed,
+        )
+        payload = json.dumps(policy, indent=2, sort_keys=True) + "\n"
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(payload, encoding="utf-8")
+            print(f"wrote {args.out}")
+        else:
+            print(payload)
+        return 0
     clip_ids = [clip.clip_id for clip in manifest.clips if clip.split == args.split]
     dataset = FeatureDataset(clip_ids, args.cache_dir, manifest.clips)
     model = FeatureAASIST.from_checkpoint(args.checkpoint, args.device)

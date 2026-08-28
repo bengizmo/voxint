@@ -14,6 +14,7 @@ sys.path.insert(0, str(REPO / "tools"))
 
 from synthdetect_corpus import ClipEntry, GeneratorProvenance  # noqa: E402
 from synthdetect_finetune import (  # noqa: E402
+    FEATURE_DIM,
     LABEL_BONAFIDE,
     LABEL_SPOOF,
     MODEL_WIDTH_SAMPLES,
@@ -23,6 +24,7 @@ from synthdetect_finetune import (  # noqa: E402
     SpeakerSplit,
     _freeze_batch_norm,
     _repeat_pad,
+    score_clips,
 )
 
 
@@ -247,6 +249,27 @@ def test_balanced_batch_sampler_rejects_small_batch_size(
 ) -> None:
     with pytest.raises(ValueError, match="at least eight"):
         BalancedBatchSampler(feature_dataset, batch_size=4, seed="unit")
+
+
+def test_score_clips_returns_negated_column_1_per_clip(
+    tmp_path: Path, calibration_clips: list[ClipEntry]
+) -> None:
+    bf = next(c for c in calibration_clips if c.label == "bona_fide")
+    sp = next(c for c in calibration_clips if c.label == "spoof")
+    for clip in (bf, sp):
+        torch.save(torch.randn(3, FEATURE_DIM), tmp_path / f"{clip.clip_id}.pt")
+    dataset = FeatureDataset([bf.clip_id, sp.clip_id], tmp_path, calibration_clips)
+
+    class StubModel(nn.Module):
+        def forward(self, x: torch.Tensor) -> torch.Tensor:
+            return torch.tensor([[0.5, -2.0]])
+
+    model = StubModel()
+    scores = score_clips(model, dataset, "cpu")
+
+    assert set(scores) == {bf.clip_id, sp.clip_id}
+    for score in scores.values():
+        assert score == pytest.approx(2.0)
 
 
 def test_freeze_batch_norm_keeps_all_batch_norm_layers_in_eval_mode() -> None:

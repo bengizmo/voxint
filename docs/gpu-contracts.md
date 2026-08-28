@@ -2511,10 +2511,10 @@ relative to the untrained baseline. Baseline treated as initial incumbent.
 Speaker-disjoint train/dev split (~80/20) with source stratification. 3,855
 calibration clips (1,551 bf + 1,152 Chatterbox + 1,152 Piper).
 
-**Implementation:** `tools/synthdetect_finetune.py` (751 lines),
-`tests/unit/test_synthdetect_finetune.py` (11 tests). Pipeline: `cache-features`
+**Implementation:** `tools/synthdetect_finetune.py` (890 lines),
+`tests/unit/test_synthdetect_finetune.py` (12 tests). Pipeline: `cache-features`
 (extract XLS-R embeddings once), `train` (on precomputed features, fits on
-12 GB), `evaluate`. The vendored model file is NOT modified; the upstream
+12 GB), `evaluate`, `recalibrate` (Platt scaling + operating-point selection). The vendored model file is NOT modified; the upstream
 `extract_feat` train-mode bug (ssl_model forced to eval before each extraction)
 is fixed in the wrapper. Codex code review applied 4 findings: baseline as
 initial incumbent, training-group coverage validation in SpeakerSplit,
@@ -2556,11 +2556,34 @@ Chatterbox/Piper/ElevenLabs/Google + 2,849 bona fide + 2,000 sampled ASVspoof
 DF anchor clips). Full 54,754 bona-fide eval was omitted for compute
 efficiency; the subset covers all generators at their full eval count.
 
-**Remaining work:** Decision-threshold recalibration for the fine-tuned
-checkpoint (the 0.0 threshold from the LA/DF training is no longer appropriate).
-Degradation augmentation (session prompt step 7) was not needed: Chatterbox
-eval EER 25.90 % is under the 30 % trigger. Progressive XLS-R unfreezing
-(Phase 3) is available on a 24 GB GPU if further improvement is needed.
+#### Threshold recalibration (Platt scaling on dev partition)
+
+The fine-tuned checkpoint shifts the score distribution: at the old threshold
+(0.0), BF FPR reaches 76.34 % on eval. The `recalibrate` subcommand fits
+Platt scaling on the dev partition (572 clips, 271 bf / 301 spoof) and selects
+operating points at FPR 5 % and FPR 1 % targets.
+
+| Threshold | Dev BF FPR | Holdout BF FPR | Eval BF FPR | Eval BF FPR (AMI) | Eval BF FPR (ASVspoof DF) |
+|---|---|---|---|---|---|
+| 0.0 (old) | 52.8 % | 35.7 % | 76.3 % | -- | -- |
+| 2.66 (EER) | 1.1 % | 0.86 % | 23.6 % | 1.1 % | 42.4 % |
+| 2.38 (FPR 5 %) | 3.3 % | 2.06 % | 30.5 % | 3.7 % | 51.6 % |
+
+The EER threshold (2.66) is the better operating point: in-domain BF FPR stays
+under 7 % across all splits (AMI 1.1 %, VoxConverse 6.9 %) while the FPR 5 %
+threshold is more aggressive and actually lets more through on eval. The high
+overall eval BF FPR (23.6 %) is driven by the ASVspoof DF anchor clips
+(42.4 %), whose bona fide speech occupies a different score region from the
+in-domain AMI/VoxConverse corpora. This is expected: the DF anchor was included
+as a regression diagnostic, not as a calibration target.
+
+Platt parameters: A = 4.28, B = -11.42; Brier score 0.0066. Calibration
+policy written to `finetune-runs/seed-0/calibration_policy.json`.
+
+**Remaining work:** Degradation augmentation (session prompt step 7) was not
+needed: Chatterbox eval EER 25.90 % is under the 30 % trigger. Progressive
+XLS-R unfreezing (Phase 3) is available on a 24 GB GPU if further improvement
+is needed.
 
 ## Contract tests
 

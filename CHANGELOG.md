@@ -47,12 +47,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   (#252, M2). `tools/synthdetect_finetune.py` freezes the XLS-R-300M backbone
   and fine-tunes the AASIST backend (~18 M params) on precomputed frame
   embeddings to close the Chatterbox flow-matching TTS evasion gap. Fits on a
-  12 GB GPU. Three subcommands: `cache-features` (extract and persist XLS-R
+  12 GB GPU. Four subcommands: `cache-features` (extract and persist XLS-R
   embeddings), `train` (constrained Pareto checkpoint selection: minimize
-  Chatterbox dev EER subject to Piper regression and bona-fide FPR gates), and
-  `evaluate`. Includes speaker-disjoint hash partitioning, balanced batch
-  sampling (70/30 Chatterbox/Piper, 25/75 VoxConverse/other), and multi-seed
-  support. 11 unit tests.
+  Chatterbox dev EER subject to Piper regression and bona-fide FPR gates),
+  `evaluate`, and `recalibrate` (Platt scaling + operating-point selection for
+  the fine-tuned checkpoint). Includes speaker-disjoint hash partitioning,
+  balanced batch sampling (70/30 Chatterbox/Piper, 25/75 VoxConverse/other),
+  and multi-seed support. 12 unit tests.
 
 ### Removed
 - **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration
