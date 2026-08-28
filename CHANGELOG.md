@@ -7,6 +7,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **Benchmark feature** (CLI + DB + scorer + console). Shipped 12-clip benchmark
+  corpus (~3 MB, CC-BY-4.0 / CC0) with `voxint benchmark run` (serial
+  submission, pooled micro-WER, hallucination resistance scoring),
+  `voxint benchmark list`, and `voxint benchmark compare`. DB-backed results
+  (migration 0048) for cross-run comparison. Benchmark runs excluded from the
+  review queue via reserved `benchmark/` source path prefix. Minimal Settings
+  page integration (recent runs table). See `docs/benchmark.md`.
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
   voices" (unverified) collapsed by default in a `<details>` disclosure.

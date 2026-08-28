@@ -1,0 +1,138 @@
+{
+  "corpus_version": 1,
+  "scorer_protocol": "voxint-wer-v1",
+  "files": [
+    {
+      "id": "libri_01_spk1089",
+      "filename": "libri_01_spk1089.wav",
+      "sha256": "2f36f05bb94bb0c6ce967faa303ab9430a1ae8e36c593daeb428f4abe285f4ac",
+      "duration_s": 5.215,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "NUMBER TEN FRESH NELLY IS WAITING ON YOU GOOD NIGHT HUSBAND",
+      "source": "LibriSpeech test-clean, speaker 1089",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_02_spk1188",
+      "filename": "libri_02_spk1188.wav",
+      "sha256": "8ca06c5cc29b76ebb8ca76a5dd40a13a5c67d3aa9af1f2120fa701bbcb986304",
+      "duration_s": 6.095,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "BUT IN THIS VIGNETTE COPIED FROM TURNER YOU HAVE THE TWO PRINCIPLES BROUGHT OUT PERFECTLY",
+      "source": "LibriSpeech test-clean, speaker 1188",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_03_spk121",
+      "filename": "libri_03_spk121.wav",
+      "sha256": "f8009954905b97c45709e03d8d4b4b198829a358c70eb2660d929be8f33396bb",
+      "duration_s": 6.755,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "HAY FEVER A HEART TROUBLE CAUSED BY FALLING IN LOVE WITH A GRASS WIDOW",
+      "source": "LibriSpeech test-clean, speaker 121",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_04_spk1221",
+      "filename": "libri_04_spk1221.wav",
+      "sha256": "5256e443abd3c87923a219e754e6ca53b562248568bf82bf612a00a042427aec",
+      "duration_s": 4.750,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "PEARL SAW AND GAZED INTENTLY BUT NEVER SOUGHT TO MAKE ACQUAINTANCE",
+      "source": "LibriSpeech test-clean, speaker 1221",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_05_spk1284",
+      "filename": "libri_05_spk1284.wav",
+      "sha256": "196391cf580b5545b248da030e21418377ec8e10bfc98675ba9d878e1d35e9a6",
+      "duration_s": 4.825,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "AT THE EMERALD CITY WHERE OUR PRINCESS OZMA LIVES GREEN IS THE POPULAR COLOR",
+      "source": "LibriSpeech test-clean, speaker 1284",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_06_spk1320",
+      "filename": "libri_06_spk1320.wav",
+      "sha256": "87ba5137317a792b18978b1d00b2d935dd99202090cdbfec3d860a0d287be71f",
+      "duration_s": 4.845,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "LET US RETRACE OUR STEPS AND EXAMINE AS WE GO WITH KEENER EYES",
+      "source": "LibriSpeech test-clean, speaker 1320",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_07_spk1580",
+      "filename": "libri_07_spk1580.wav",
+      "sha256": "1f69fba3a10a69877e5df3cb431e0bbcae0f885f93083bb7ce6150aeb6d58f6e",
+      "duration_s": 4.360,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "HE WAS STILL SUFFERING FROM THIS SUDDEN DISTURBANCE OF THE QUIET ROUTINE OF HIS LIFE",
+      "source": "LibriSpeech test-clean, speaker 1580",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_08_spk1995",
+      "filename": "libri_08_spk1995.wav",
+      "sha256": "9ea30201c1ad43124901edd71270e3e669406b5a645671ba8b6e85af3536a735",
+      "duration_s": 5.385,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "FOR A WHILE SHE LAY IN HER CHAIR IN HAPPY DREAMY PLEASURE AT SUN AND BIRD AND TREE",
+      "source": "LibriSpeech test-clean, speaker 1995",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "libri_09_spk2094",
+      "filename": "libri_09_spk2094.wav",
+      "sha256": "9392b760925c363195faafbbe2ff602440e39ab7a0f5199a318ea7487464c8b3",
+      "duration_s": 5.335,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "THAT'S THE WAY WITH YOU THAT'S THE ROAD YOU'D ALL LIKE TO GO HEADLONGS TO RUIN",
+      "source": "LibriSpeech test-clean, speaker 2094",
+      "license_spdx": "CC-BY-4.0"
+    },
+    {
+      "id": "short_clean_00",
+      "filename": "short_clean_00.wav",
+      "sha256": "7a2320c0da1ae1e92a77ee9b6111c75270019ee82b31da20650ad6cd6f45d54b",
+      "duration_s": 4.049,
+      "num_speakers": 1,
+      "category": "speech",
+      "reference_transcript": "The lighthouse keeper recorded the tide at dawn and again at dusk.",
+      "source": "Voxint bakeoff synthetic (espeak-ng TTS)",
+      "license_spdx": "CC0-1.0"
+    },
+    {
+      "id": "silence_00",
+      "filename": "silence_00.wav",
+      "sha256": "262d1f34f300560a4c82ba8127ddea9e1d72946f187fdbd3e8f70ee096077aec",
+      "duration_s": 5.000,
+      "num_speakers": 0,
+      "category": "silence",
+      "reference_transcript": null,
+      "source": "Voxint bakeoff synthetic (generated silence)",
+      "license_spdx": "CC0-1.0"
+    },
+    {
+      "id": "bait_00_applause",
+      "filename": "bait_00_applause.wav",
+      "sha256": "145458f7bb0d8542d2fe36af36bec482f0547a4de179fbf7e7890a893b096bfa",
+      "duration_s": 8.000,
+      "num_speakers": 0,
+      "category": "bait",
+      "reference_transcript": null,
+      "source": "Voxint bakeoff synthetic (non-speech audio)",
+      "license_spdx": "CC0-1.0"
+    }
+  ]
+}
