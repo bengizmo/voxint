@@ -1405,8 +1405,13 @@ def _enrich_names(args: argparse.Namespace) -> int:
 
 
 def _benchmark_run(args: argparse.Namespace) -> int:
-    from voxint.benchmark.runner import run_benchmark
+    from voxint.benchmark.runner import run_benchmark, validate_timeout
     from voxint.config import SettingsError, get_settings
+
+    timeout_err = validate_timeout(args.timeout)
+    if timeout_err:
+        print(f"error: {timeout_err}")
+        return 2
 
     try:
         settings = get_settings()
@@ -1422,7 +1427,7 @@ def _benchmark_run(args: argparse.Namespace) -> int:
 
         factory = build_session_factory(engine)
         try:
-            run_id = run_benchmark(
+            run_id, all_succeeded = run_benchmark(
                 factory,
                 settings.media_root.resolve(),
                 tag=args.tag,
@@ -1432,7 +1437,7 @@ def _benchmark_run(args: argparse.Namespace) -> int:
         except KeyboardInterrupt:
             return 130
         print(run_id)
-        return 0
+        return 0 if all_succeeded else 1
     finally:
         engine.dispose()
 
@@ -1441,6 +1446,10 @@ def _benchmark_list(args: argparse.Namespace) -> int:
     from sqlalchemy import select
 
     from voxint.db.models import BenchmarkRun
+
+    if args.limit < 1 or args.limit > 500:
+        print("error: --limit must be between 1 and 500")
+        return 2
 
     engine, code = _engine_or_report()
     if engine is None:

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
 import os
 import platform
 import time
@@ -30,6 +32,8 @@ from voxint.db.models import (
     BenchmarkRunStatus,
     PipelineRun,
     RunStatus,
+    StageRun,
+    StageStatus,
     TranscriptSegment,
 )
 
@@ -68,6 +72,20 @@ def _extract_hypothesis(session: Session, pipeline_run_id: uuid.UUID) -> str:
     return " ".join(s for s in segments if s)
 
 
+def _cancel_pipeline_run(
+    factory: sessionmaker[Session], run_id: uuid.UUID,
+) -> None:
+    """Best-effort cancel of a live pipeline run."""
+    from voxint.ingest.service import cancel_run
+
+    try:
+        with factory() as session:
+            cancel_run(session, run_id)
+            session.commit()
+    except Exception:
+        logger.debug("cancel_run(%s) failed (may already be terminal)", run_id)
+
+
 def _poll_run(
     factory: sessionmaker[Session],
     run_id: uuid.UUID,
@@ -102,7 +120,7 @@ def _poll_run(
 def _copy_assets_to_media_root(
     media_root: Path, manifest: dict[str, Any],
 ) -> dict[str, str]:
-    """Copy benchmark WAVs into MEDIA_ROOT/benchmark/, return {file_id: relative_path}."""
+    """Copy benchmark WAVs into MEDIA_ROOT/benchmark/, verifying sha256."""
     benchmark_dir = media_root / "benchmark"
     benchmark_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,11 +128,64 @@ def _copy_assets_to_media_root(
     for entry in manifest["files"]:
         file_id: str = entry["id"]
         filename: str = entry["filename"]
+        expected_sha: str = entry["sha256"]
         dest = benchmark_dir / filename
-        if not dest.exists():
+        if dest.exists():
+            actual_sha = hashlib.sha256(dest.read_bytes()).hexdigest()
+            if actual_sha != expected_sha:
+                logger.warning(
+                    "benchmark/%s sha256 mismatch, replacing", filename,
+                )
+                dest.unlink()
+                dest.write_bytes(corpus_wav_bytes(file_id))
+        else:
             dest.write_bytes(corpus_wav_bytes(file_id))
         paths[file_id] = f"benchmark/{filename}"
     return paths
+
+
+def _finalize_run(
+    factory: sessionmaker[Session],
+    benchmark_run_id: uuid.UUID,
+    *,
+    status: str,
+    summary: dict[str, object],
+) -> None:
+    """Mark the benchmark run terminal with summary and finished_at."""
+    with factory() as session:
+        run = session.get(BenchmarkRun, benchmark_run_id)
+        if run is None:
+            return
+        run.status = status
+        run.summary = summary
+        run.finished_at = datetime.now(tz=UTC)
+        session.commit()
+
+
+def _skip_pending_items(
+    factory: sessionmaker[Session], benchmark_run_id: uuid.UUID,
+) -> None:
+    """Mark all pending/submitted items as skipped."""
+    with factory() as session:
+        pending = session.execute(
+            select(BenchmarkItem).where(
+                BenchmarkItem.benchmark_run_id == benchmark_run_id,
+                BenchmarkItem.status.in_([
+                    BenchmarkItemStatus.PENDING.value,
+                    BenchmarkItemStatus.SUBMITTED.value,
+                ]),
+            )
+        ).scalars().all()
+        for item in pending:
+            item.status = BenchmarkItemStatus.SKIPPED.value
+        session.commit()
+
+
+def validate_timeout(timeout: float) -> str | None:
+    """Return an error message if timeout is invalid, else None."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        return "timeout must be a finite number greater than 0"
+    return None
 
 
 def run_benchmark(
@@ -126,11 +197,12 @@ def run_benchmark(
     quick: bool = False,
     config_snapshot: dict[str, Any] | None = None,
     write: Callable[[str], object] | None = None,
-) -> uuid.UUID:
+) -> tuple[uuid.UUID, bool]:
     """Execute a full benchmark run: submit, poll, score, record.
 
-    Returns the benchmark_run id. Handles Ctrl+C by marking in-flight items
-    as skipped and the run as failed.
+    Returns (benchmark_run_id, all_succeeded). Handles Ctrl+C and
+    unexpected exceptions by marking in-flight items as skipped and
+    the run as failed.
     """
     import sys
 
@@ -186,7 +258,9 @@ def run_benchmark(
     hallucination_nonempty = 0
     hallucination_file_count = 0
     speech_count = 0
+    failed_count = 0
     interrupted = False
+    current_pipeline_run_id: uuid.UUID | None = None
 
     try:
         for i, entry in enumerate(files, 1):
@@ -210,11 +284,20 @@ def run_benchmark(
 
                 result = submit_media_item(session, source_path)
                 run_id = result.run_id
+                current_pipeline_run_id = run_id
                 item.pipeline_run_id = run_id
                 session.commit()
-                result.publish()
+
+                published = result.publish()
+                if not published:
+                    _write("warning: broker unavailable, waiting for recovery sweep\n")
 
             terminal = _poll_run(factory, run_id, timeout=timeout_per_file)
+
+            if terminal == "timeout":
+                _cancel_pipeline_run(factory, run_id)
+
+            current_pipeline_run_id = None
 
             with factory() as session:
                 item = session.execute(
@@ -230,22 +313,21 @@ def run_benchmark(
                 if terminal == RunStatus.COMPLETED.value:
                     item.status = BenchmarkItemStatus.COMPLETED.value
 
-                    # Extract stage timings
-                    from voxint.db.models import StageRun
-
                     stage_runs = session.execute(
-                        select(StageRun).where(
+                        select(StageRun)
+                        .where(
                             StageRun.pipeline_run_id == run_id,
+                            StageRun.status == StageStatus.COMPLETED.value,
                         )
+                        .order_by(StageRun.stage, StageRun.attempt.desc())
                     ).scalars().all()
                     timings: dict[str, float] = {}
                     for sr in stage_runs:
-                        if sr.started_at and sr.finished_at:
+                        if sr.stage not in timings and sr.started_at and sr.finished_at:
                             delta = (sr.finished_at - sr.started_at).total_seconds()
                             timings[sr.stage] = delta
                     item.stage_timings = timings
 
-                    # Score
                     hypothesis = _extract_hypothesis(session, run_id)
                     ref_transcript = entry.get("reference_transcript")
 
@@ -256,7 +338,6 @@ def run_benchmark(
                         speech_count += 1
                         _write(f"WER {wer.wer:.1%} ({elapsed:.1f}s)\n")
                     else:
-                        # silence or bait
                         words = len(hypothesis.split()) if hypothesis.strip() else 0
                         item.hallucination_words = words
                         hallucination_total += words
@@ -268,6 +349,7 @@ def run_benchmark(
                 else:
                     item.status = BenchmarkItemStatus.FAILED.value
                     item.error = f"pipeline {terminal}"
+                    failed_count += 1
                     _write(f"FAILED ({terminal})\n")
 
                 session.commit()
@@ -275,19 +357,16 @@ def run_benchmark(
     except KeyboardInterrupt:
         interrupted = True
         _write("\ninterrupted; saving partial results...\n")
-        with factory() as session:
-            pending = session.execute(
-                select(BenchmarkItem).where(
-                    BenchmarkItem.benchmark_run_id == benchmark_run.id,
-                    BenchmarkItem.status.in_([
-                        BenchmarkItemStatus.PENDING.value,
-                        BenchmarkItemStatus.SUBMITTED.value,
-                    ]),
-                )
-            ).scalars().all()
-            for item in pending:
-                item.status = BenchmarkItemStatus.SKIPPED.value
-            session.commit()
+        if current_pipeline_run_id is not None:
+            _cancel_pipeline_run(factory, current_pipeline_run_id)
+        _skip_pending_items(factory, benchmark_run.id)
+
+    except Exception:
+        logger.exception("benchmark run failed with unexpected error")
+        if current_pipeline_run_id is not None:
+            _cancel_pipeline_run(factory, current_pipeline_run_id)
+        _skip_pending_items(factory, benchmark_run.id)
+        failed_count += 1
 
     total_time = time.monotonic() - run_start
     pooled = pool_wer(speech_wer_counts) if speech_wer_counts else 0.0
@@ -305,22 +384,25 @@ def run_benchmark(
         total_time_s=round(total_time, 2),
     )
 
+    all_succeeded = not interrupted and failed_count == 0
     final_status = (
-        BenchmarkRunStatus.FAILED.value
-        if interrupted
-        else BenchmarkRunStatus.COMPLETED.value
+        BenchmarkRunStatus.COMPLETED.value
+        if all_succeeded
+        else BenchmarkRunStatus.FAILED.value
     )
 
-    with factory() as session:
-        run = session.get(BenchmarkRun, benchmark_run.id)
-        assert run is not None
-        run.status = final_status
-        run.summary = summary.to_dict()
-        run.finished_at = datetime.now(tz=UTC)
-        session.commit()
+    _finalize_run(
+        factory, benchmark_run.id,
+        status=final_status, summary=summary.to_dict(),
+    )
 
     _write(f"\n{'=' * 50}\n")
-    _write(f"Benchmark {'INTERRUPTED' if interrupted else 'complete'}\n")
+    if interrupted:
+        _write("Benchmark INTERRUPTED\n")
+    elif failed_count:
+        _write(f"Benchmark completed with {failed_count} failures\n")
+    else:
+        _write("Benchmark complete\n")
     if speech_wer_counts:
         _write(f"  Pooled WER: {pooled:.1%}\n")
         _write(f"  Speech files: {speech_count}\n")
@@ -332,4 +414,4 @@ def run_benchmark(
     _write(f"  Total time: {total_time:.1f}s\n")
     _write(f"  Run ID: {benchmark_run.id}\n")
 
-    return benchmark_run.id
+    return benchmark_run.id, all_succeeded

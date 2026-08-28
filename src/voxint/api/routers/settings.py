@@ -1991,7 +1991,9 @@ def _settings_context(
             .all()
         )
         context["benchmark_runs"] = recent_runs
-    except Exception:
+    except SQLAlchemyError:
+        logger.debug("benchmark query failed; degrading to empty list", exc_info=True)
+        session.rollback()
         context["benchmark_runs"] = []
     context.update(overrides)
     return context

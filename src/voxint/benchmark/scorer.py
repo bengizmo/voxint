@@ -96,18 +96,6 @@ def compute_wer(reference: str, hypothesis: str) -> WERCounts:
     n = len(ref_words)
     m = len(hyp_words)
 
-    dp = list(range(m + 1))
-    for i in range(1, n + 1):
-        prev = dp[:]
-        dp[0] = i
-        for j in range(1, m + 1):
-            if ref_words[i - 1] == hyp_words[j - 1]:
-                dp[j] = prev[j - 1]
-            else:
-                dp[j] = 1 + min(prev[j - 1], prev[j], dp[j - 1])
-
-    # Backtrace to get S/I/D breakdown
-    # Rebuild the full matrix for the backtrace
     full = [[0] * (m + 1) for _ in range(n + 1)]
     for j in range(m + 1):
         full[0][j] = j
