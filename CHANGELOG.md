@@ -7,6 +7,11 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 ## [Unreleased]
 
 ### Added
+- **ADR 0008: enrichment persistence simplification scope** (Phase 2, finding
+  H7). Preserves the append-only generation model (proportionate to real
+  concurrency and decision immutability constraints); scopes implementation to
+  narrow transaction-choreography extraction and two translation integrity gaps
+  (idempotency key, immutability trigger). See `docs/adr/0008-*`.
 - **Media detail page** (`GET /media/{id}/editor`, #156, epic #149). The editor
   backend contract: run selection (latest completed by default, `?run=`
   override validated against the media item), claim-token verification

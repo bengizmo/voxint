@@ -21,9 +21,11 @@ superseded rather than edited away.
 | [`0005-speaker-profile-provenance.md`](0005-speaker-profile-provenance.md) | Speaker aggregation reads effective-resolution output, and `speaker_profiles` carries per-field provenance for manual vs accepted-enrichment values. |
 | [`0006-plugin-scope-native-vs-greenfield.md`](0006-plugin-scope-native-vs-greenfield.md) | The existing optional features (translation, semantic search, LLM enrichment) stay native; the merged plugin framework ships dormant and is reserved for greenfield features that render on their own surface. |
 | [`0007-media-operations-journal.md`](0007-media-operations-journal.md) | Byte-touching file operations (move, trash, restore, purge) are recorded in a durable journal with a state machine, CAS-based concurrency, and a reconciler that drives interrupted rows to a consistent terminal state. |
+| [`0008-enrichment-persistence-simplification-scope.md`](0008-enrichment-persistence-simplification-scope.md) | The enrichment append-only persistence model is proportionate and stays; implementation scoped to narrow transaction-choreography extraction and two translation integrity gaps (idempotency key, immutability trigger). |
 
 Records 0001-0005 back the Console 2.0 refactor (epic #149); their current-state
 contracts are tested in [`tests/contracts/test_console2_characterization.py`](../../tests/contracts/test_console2_characterization.py).
 Record 0006 fixes the scope of the plugin architecture (epic #136). Record 0007
-covers the journaled media operations (P2c, issue #155). The full phased plans
-live in the maintainer's internal notes.
+covers the journaled media operations (P2c, issue #155). Record 0008 scopes the
+enrichment simplification (refactoring plan Phase 2, finding H7). The full
+phased plans live in the maintainer's internal notes.
