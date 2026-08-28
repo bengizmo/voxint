@@ -861,9 +861,9 @@ class TestTranslationImmutabilityTrigger:
             row = record_spanish(session, run_id)
             session.commit()
             from sqlalchemy import update as sa_update
-            from sqlalchemy.exc import InternalError
+            from sqlalchemy.exc import DBAPIError
 
-            with pytest.raises(InternalError, match="immutable"):
+            with pytest.raises(DBAPIError, match="immutable"):
                 session.execute(
                     sa_update(RunTranslation)
                     .where(RunTranslation.id == row.id)
@@ -879,9 +879,9 @@ class TestTranslationImmutabilityTrigger:
             row = record_spanish(session, run_id)
             session.commit()
             from sqlalchemy import delete as sa_delete
-            from sqlalchemy.exc import InternalError
+            from sqlalchemy.exc import DBAPIError
 
-            with pytest.raises(InternalError, match="immutable"):
+            with pytest.raises(DBAPIError, match="immutable"):
                 session.execute(
                     sa_delete(RunTranslation).where(RunTranslation.id == row.id)
                 )
@@ -910,9 +910,9 @@ class TestTranslationImmutabilityTrigger:
             session.commit()
             session.expire_all()
             from sqlalchemy import update as sa_update
-            from sqlalchemy.exc import InternalError
+            from sqlalchemy.exc import DBAPIError
 
-            with pytest.raises(InternalError, match="write-once"):
+            with pytest.raises(DBAPIError, match="write-once"):
                 session.execute(
                     sa_update(RunTranslation)
                     .where(RunTranslation.id == first.id)
@@ -925,13 +925,13 @@ class TestTranslationImmutabilityTrigger:
     ) -> None:
         from datetime import UTC, datetime
 
-        from sqlalchemy.exc import InternalError
+        from sqlalchemy.exc import DBAPIError
 
         with session_factory() as session:
             run_id = seed_run(session)
             existing = record_spanish(session, run_id)
             session.commit()
-            with pytest.raises(InternalError, match="unsuperseded"):
+            with pytest.raises(DBAPIError, match="unsuperseded"):
                 bad = RunTranslation(
                     pipeline_run_id=run_id,
                     target_language="es",
