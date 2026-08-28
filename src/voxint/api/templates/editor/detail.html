@@ -25,36 +25,38 @@
   <div class="lib-main">
 
     {% if selected_run and island_props %}
-      {# Server-rendered transcript fallback (read-only display). The editor
-         island (#157) will replace this with a full interactive surface. #}
-      <div class="card" id="transcript-document">
-        {% if token %}
-        <p class="notice">Editing enabled. Mutations go through the
-        <a href="/review/{{ selected_run.id }}?token={{ token }}">legacy review page</a>
-        until the editor island ships.</p>
-        {% else %}
-        <p class="notice">Read-only view.
-        <a href="/review/{{ selected_run.id }}">Claim this run</a> to edit.</p>
-        {% endif %}
+      {# Media editor island (#157). The server-rendered table inside is the
+         JS-off / hydration-failure fallback. #}
+      <div data-island="media-editor" data-props='{{ island_props|tojson }}'>
+        <div class="card" id="transcript-document">
+          {% if token %}
+          <p class="notice">Editing enabled. Mutations go through the
+          <a href="/review/{{ selected_run.id }}?token={{ token }}">legacy review page</a>
+          until the editor island ships.</p>
+          {% else %}
+          <p class="notice">Read-only view.
+          <a href="/review/{{ selected_run.id }}">Claim this run</a> to edit.</p>
+          {% endif %}
 
-        <table class="grid-table transcript-table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Speaker</th>
-              <th>Text</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for seg in island_props.segments %}
-            <tr{% if seg.verified %} class="verified"{% endif %}>
-              <td class="mono">{{ "%.1f"|format(seg.start) }}s</td>
-              <td>{{ seg.speaker or seg.label or "—" }}</td>
-              <td>{{ seg.text }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
+          <table class="grid-table transcript-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Speaker</th>
+                <th>Text</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for seg in island_props.segments %}
+              <tr{% if seg.verified %} class="verified"{% endif %}>
+                <td class="mono">{{ "%.1f"|format(seg.start) }}s</td>
+                <td>{{ seg.speaker or seg.label or "—" }}</td>
+                <td>{{ seg.text }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
       </div>
 
     {% elif selected_run %}

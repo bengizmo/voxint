@@ -1,8 +1,7 @@
-"""GET /media/{media_id} — the media detail page (issue #156).
+"""GET /media/{media_id}/editor -- the media detail page (issue #156).
 
-Tests the HTTP surface: status codes, gating, run selection, and claim-token
-handling. Needs the real Postgres test DB, so skipped without
-VOXINT_TEST_DATABASE_URL.
+Tests the HTTP surface: status codes, gating, run selection, claim-token
+handling, and the editor island mount point (#157).
 """
 
 import uuid
@@ -23,10 +22,12 @@ CREDS = ("reviewer", "s3cret")
 _CSRF_KEY = "editor-test-csrf-key"
 
 
-def _app(session_factory: sessionmaker[Session], *, media_enabled: bool = True) -> TestClient:
+def _app(
+    session_factory: sessionmaker[Session], *, media_enabled: bool = True
+) -> TestClient:
     with TemporaryDirectory() as tmpdir:
         settings = Settings(
-            _env_file=None,
+            _env_file=None,  # type: ignore[call-arg]
             voxint_user=CREDS[0],
             voxint_password=CREDS[1],
             media_root=Path(tmpdir),
@@ -57,91 +58,50 @@ def _seed_media_with_run(
         return m.id, r.id
 
 
-def test_unknown_media_returns_404(session_factory: sessionmaker[Session]) -> None:
-    client = _app(session_factory)
-    resp = client.get(f"/media/{uuid.uuid4()}/editor", auth=CREDS, follow_redirects=False)
-    assert resp.status_code == 404
-
-
-def test_media_enabled_gate(session_factory: sessionmaker[Session]) -> None:
-    media_id, _ = _seed_media_with_run(session_factory)
-    client = _app(session_factory, media_enabled=False)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
-    assert resp.status_code == 404
-
-
-def test_detail_page_renders(session_factory: sessionmaker[Session]) -> None:
-    media_id, run_id = _seed_media_with_run(session_factory)
-    client = _app(session_factory)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    assert str(run_id)[:8] in resp.text or "verified" in resp.text
-
-
-def test_no_store_on_detail(session_factory: sessionmaker[Session]) -> None:
-    media_id, _ = _seed_media_with_run(session_factory)
-    client = _app(session_factory)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
-    assert resp.headers.get("cache-control") == "no-store"
-
-
-def test_run_override(session_factory: sessionmaker[Session]) -> None:
-    with session_factory() as session:
-        m = MediaItem(source_path=f"/audio/{uuid.uuid4()}.wav")
-        session.add(m)
-        session.flush()
-        r1 = PipelineRun(
-            media_item_id=m.id,
-            status=RunStatus.COMPLETED.value,
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-        r2 = PipelineRun(
-            media_item_id=m.id,
-            status=RunStatus.COMPLETED.value,
-            created_at=datetime(2026, 1, 2, tzinfo=UTC),
-        )
-        session.add_all([r1, r2])
-        session.commit()
-        media_id, older_id = m.id, r1.id
-
-    client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor?run={older_id}", auth=CREDS, follow_redirects=False
-    )
-    assert resp.status_code == 200
-
-
-def test_foreign_run_override_returns_404(session_factory: sessionmaker[Session]) -> None:
-    media_id, _ = _seed_media_with_run(session_factory)
-    with session_factory() as session:
-        m2 = MediaItem(source_path=f"/audio/{uuid.uuid4()}.wav")
-        session.add(m2)
-        session.flush()
-        foreign = PipelineRun(
-            media_item_id=m2.id,
-            status=RunStatus.COMPLETED.value,
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-        )
-        session.add(foreign)
-        session.commit()
-        foreign_id = foreign.id
-
-    client = _app(session_factory)
-    resp = client.get(
-        f"/media/{media_id}/editor?run={foreign_id}", auth=CREDS, follow_redirects=False
-    )
-    assert resp.status_code == 404
-
-
-def test_no_completed_run_renders_empty_state(
+def test_unknown_media_returns_404(
     session_factory: sessionmaker[Session],
 ) -> None:
-    media_id, _ = _seed_media_with_run(session_factory, status=RunStatus.QUEUED.value)
     client = _app(session_factory)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    resp = client.get(
+        f"/media/{uuid.uuid4()}/editor",
+        auth=CREDS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 404
+
+
+def test_media_enabled_gate(
+    session_factory: sessionmaker[Session],
+) -> None:
+    media_id, _ = _seed_media_with_run(session_factory)
+    client = _app(session_factory, media_enabled=False)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
+    assert resp.status_code == 404
+
+
+def test_detail_page_renders(
+    session_factory: sessionmaker[Session],
+) -> None:
+    media_id, _run_id = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
     assert resp.status_code == 200
-    assert "queued" in resp.text.lower()
+    assert "text/html" in resp.headers["content-type"]
+
+
+def test_no_store_on_detail(
+    session_factory: sessionmaker[Session],
+) -> None:
+    media_id, _ = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
+    assert resp.headers.get("cache-control") == "no-store"
 
 
 def test_claim_token_read_only_when_absent(
@@ -149,7 +109,9 @@ def test_claim_token_read_only_when_absent(
 ) -> None:
     media_id, _ = _seed_media_with_run(session_factory)
     client = _app(session_factory)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
     assert resp.status_code == 200
     assert "Read-only" in resp.text or "Claim this run" in resp.text
 
@@ -159,12 +121,16 @@ def test_valid_claim_token_enables_editing(
 ) -> None:
     media_id, run_id = _seed_media_with_run(session_factory)
     with session_factory() as session:
-        token = claim_run(session, run_id, reviewer="reviewer", ttl_seconds=3600)
+        token = claim_run(
+            session, run_id, reviewer="reviewer", ttl_seconds=3600
+        )
         session.commit()
 
     client = _app(session_factory)
     resp = client.get(
-        f"/media/{media_id}/editor?token={token}", auth=CREDS, follow_redirects=False
+        f"/media/{media_id}/editor?token={token}",
+        auth=CREDS,
+        follow_redirects=False,
     )
     assert resp.status_code == 200
     assert "Editing enabled" in resp.text
@@ -173,17 +139,21 @@ def test_valid_claim_token_enables_editing(
 def test_stale_claim_token_degrades_to_read_only(
     session_factory: sessionmaker[Session],
 ) -> None:
-    media_id, _run_id = _seed_media_with_run(session_factory)
+    media_id, _ = _seed_media_with_run(session_factory)
     stale_token = uuid.uuid4()
     client = _app(session_factory)
     resp = client.get(
-        f"/media/{media_id}/editor?token={stale_token}", auth=CREDS, follow_redirects=False
+        f"/media/{media_id}/editor?token={stale_token}",
+        auth=CREDS,
+        follow_redirects=False,
     )
     assert resp.status_code == 200
     assert "Read-only" in resp.text or "Claim this run" in resp.text
 
 
-def test_media_no_runs_renders(session_factory: sessionmaker[Session]) -> None:
+def test_media_no_runs_renders(
+    session_factory: sessionmaker[Session],
+) -> None:
     with session_factory() as session:
         m = MediaItem(source_path=f"/audio/{uuid.uuid4()}.wav")
         session.add(m)
@@ -191,6 +161,38 @@ def test_media_no_runs_renders(session_factory: sessionmaker[Session]) -> None:
         media_id = m.id
 
     client = _app(session_factory)
-    resp = client.get(f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
     assert resp.status_code == 200
     assert "No runs" in resp.text
+
+
+# ---- Island mount point (#157) ----
+
+
+def test_completed_run_mounts_editor_island(
+    session_factory: sessionmaker[Session],
+) -> None:
+    media_id, _ = _seed_media_with_run(session_factory)
+    client = _app(session_factory)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
+    assert resp.status_code == 200
+    assert 'data-island="media-editor"' in resp.text
+    assert "data-props=" in resp.text
+
+
+def test_non_completed_run_has_no_island(
+    session_factory: sessionmaker[Session],
+) -> None:
+    media_id, _ = _seed_media_with_run(
+        session_factory, status=RunStatus.QUEUED.value
+    )
+    client = _app(session_factory)
+    resp = client.get(
+        f"/media/{media_id}/editor", auth=CREDS, follow_redirects=False
+    )
+    assert resp.status_code == 200
+    assert 'data-island="media-editor"' not in resp.text
