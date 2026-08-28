@@ -318,6 +318,14 @@
     true
   ],
   [
+    "/review/{run_id}/annotations/export.json",
+    [
+      "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/review/{run_id}/annotations/export.md",
     [
       "GET"
@@ -353,6 +361,14 @@
     "/review/{run_id}/annotations/{annotation_id}/clips",
     [
       "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/review/{run_id}/annotations/{annotation_id}/export.json",
+    [
+      "GET"
     ],
     "onboarding",
     true

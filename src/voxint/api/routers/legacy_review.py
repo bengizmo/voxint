@@ -109,6 +109,7 @@ from voxint.api.csrf import (
     mint_csrf_token,
 )
 from voxint.api.languages import LANGUAGE_NAMES, language_label
+from voxint.api.model_provenance import select_run_model_identity
 from voxint.api.playback import playback_capability, representative_turns
 from voxint.api.routers.deps import (
     _TRANSLATION_ACTIVE_STATUSES,
@@ -151,6 +152,8 @@ from voxint.db.models import (
     MAX_TAG_NAME_CHARS,
     MAX_TAGS_PER_ANNOTATION,
     AnnotationTag,
+    ArtifactKind,
+    AudioArtifact,
     ClaimField,
     Decision,
     DiarizationTurn,
@@ -160,6 +163,7 @@ from voxint.db.models import (
     SegmentReviewState,
     SegmentSplitBoundary,
     Speaker,
+    StageRun,
     TranscriptAnnotation,
     TranscriptSegment,
 )
@@ -186,6 +190,14 @@ from voxint.export import (
     annotation_pull_quote,
     render_transcript,
     to_rttm,
+)
+from voxint.export.manifest import (
+    ClipRef,
+    QuoteLine,
+    StageProvenance,
+    StageRole,
+    build_quote_bundle,
+    build_quote_manifest,
 )
 from voxint.speakers.matching import gates_from_settings
 from voxint.speakers.roster import active_speakers
@@ -1740,6 +1752,312 @@ def export_annotation_md(
         note=row.note,
     )
     return Response(content=markdown, media_type=ANNOTATION_MEDIA_TYPES["md"])
+
+
+# ---------------------------------------------------------------------------
+# JSON provenance manifest (issue #122)
+# ---------------------------------------------------------------------------
+
+def _stage_provenance_from_run(
+    session: Session, run_id: uuid.UUID
+) -> dict[str, StageProvenance]:
+    """Read per-stage model identity from the latest completed attempt."""
+    stage_runs = (
+        session.execute(
+            select(StageRun).where(StageRun.pipeline_run_id == run_id)
+        )
+        .scalars()
+        .all()
+    )
+    stages: dict[str, StageProvenance] = {}
+    for sm in select_run_model_identity(stage_runs):
+        if not sm.recorded:
+            stages[sm.stage] = StageProvenance(
+                attempt=sm.attempt or 0,
+                finished_at=None,
+                roles={},
+            )
+            continue
+        best = None
+        for sr in stage_runs:
+            if sr.stage == sm.stage and sr.attempt == sm.attempt:
+                best = sr
+                break
+        roles: dict[str, StageRole] = {}
+        for mr in sm.roles:
+            roles[mr.role] = StageRole(
+                reachable=mr.reachable,
+                model=mr.model,
+                revision=mr.revision,
+                engine=mr.engine,
+            )
+        stages[sm.stage] = StageProvenance(
+            attempt=sm.attempt or 0,
+            finished_at=best.finished_at if best else None,
+            roles=roles,
+        )
+    return stages
+
+
+def _clip_ref_for_annotation(
+    session: Session,
+    run_id: uuid.UUID,
+    annotation_id: uuid.UUID,
+    settings: Settings,
+) -> ClipRef | None:
+    """Look up the latest non-reclaimed clip for an annotation."""
+    row = (
+        session.execute(
+            select(AudioArtifact)
+            .where(
+                AudioArtifact.pipeline_run_id == run_id,
+                AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
+                AudioArtifact.reclaimed_at.is_(None),
+                AudioArtifact.meta["annotation_id"].as_string()
+                == str(annotation_id),
+            )
+            .order_by(AudioArtifact.created_at.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    if row is None:
+        return None
+    meta = row.meta or {}
+    clip_path = settings.media_root / row.path
+    clip_sha256: str | None = None
+    if clip_path.is_file():
+        import hashlib
+
+        clip_sha256 = hashlib.sha256(clip_path.read_bytes()).hexdigest()
+    return ClipRef(
+        id=row.id,
+        download_url=f"/runs/{run_id}/clips/{row.id}",
+        filename=clip_download_filename(run_id, row.id),
+        sha256=clip_sha256 or "",
+        sample_rate=meta.get("sample_rate", 16000),
+        channels=1,
+        start_sample=meta.get("start_sample", 0),
+        end_sample=meta.get("end_sample", 0),
+    )
+
+
+def _manifest_for_resolved(
+    resolved: ResolvedAnnotation,
+    row: TranscriptAnnotation,
+    lines: Sequence[TranscriptLine],
+    *,
+    source_title: str,
+    tags: Sequence[str],
+    clip: ClipRef | None,
+    media_id: uuid.UUID,
+    run_id: uuid.UUID,
+    media_sha256: str | None,
+    app_version: str,
+    stages: dict[str, StageProvenance],
+    exported_at: datetime,
+) -> dict[str, Any]:
+    """Build a manifest dict for one resolved annotation."""
+    clipped = clip_lines_for_export(resolved, lines)
+    if (
+        resolved.stale
+        or not clipped
+        or resolved.start_seconds is None
+        or resolved.end_seconds is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="highlight is stale; refresh or re-anchor it before exporting",
+            headers=_ANNOTATION_STALE_HEADERS,
+        )
+    quote_lines = [
+        QuoteLine(
+            text=ln.text,
+            speaker=ln.speaker,
+            start_seconds=ln.start_seconds,
+            end_seconds=ln.end_seconds,
+        )
+        for ln in clipped
+    ]
+    return build_quote_manifest(
+        exported_at=exported_at,
+        annotation_id=row.id,
+        source_text_hash=row.source_text_hash,
+        annotation_updated_at=row.updated_at,
+        lines=quote_lines,
+        timing_precision=resolved.timing_precision,
+        tags=list(tags),
+        note=row.note,
+        clip=clip,
+        media_id=media_id,
+        run_id=run_id,
+        source_title=source_title,
+        media_sha256=media_sha256,
+        app_version=app_version,
+        stages=stages,
+    )
+
+
+@router.get("/review/{run_id}/annotations/{annotation_id}/export.json")
+def export_annotation_json(
+    run_id: uuid.UUID,
+    annotation_id: uuid.UUID,
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+) -> JSONResponse:
+    """One highlight as a JSON provenance manifest (issue #122)."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    try:
+        row = live_annotation_or_404(session, run_id, annotation_id)
+    except AnnotationError as exc:
+        raise _annotation_http_error(exc) from exc
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved = resolve_annotation_spans(lines, covered, [stored_anchor_from_row(row)])[0]
+    tags = [t.name for t in tags_for_annotations(session, [row.id]).get(row.id, [])]
+    settings: Settings = request.app.state.settings
+    clip = _clip_ref_for_annotation(session, run_id, annotation_id, settings)
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+    manifest = _manifest_for_resolved(
+        resolved,
+        row,
+        lines,
+        source_title=_run_source_title(run),
+        tags=tags,
+        clip=clip,
+        media_id=media_item.id,
+        run_id=run_id,
+        media_sha256=media_item.sha256,
+        app_version=__version__,
+        stages=stages,
+        exported_at=datetime.now(UTC),
+    )
+    fn = f"voxint-{run_id.hex[:8]}-manifest-{annotation_id.hex[:8]}.json"
+    return JSONResponse(
+        content=manifest,
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
+
+@router.get("/review/{run_id}/annotations/export.json")
+def export_annotations_json(
+    run_id: uuid.UUID,
+    operator: OperatorDep,
+    session: SessionDep,
+    request: Request,
+    tag: Annotated[list[uuid.UUID] | None, Query()] = None,
+) -> JSONResponse:
+    """All (filtered) highlights as a JSON provenance bundle (issue #122)."""
+    from voxint import __version__
+
+    run = _run_or_404(session, run_id)
+    tag_ids = tag or []
+    _require_filter_tags_exist(session, tag_ids)
+    rows = annotations_for_run(session, run_id, tag_ids=tag_ids or None)
+    if not rows:
+        empty = {
+            "schema_version": 1,
+            "kind": "quote_provenance_bundle",
+            "quotes": [],
+        }
+        return JSONResponse(content=empty)
+    lines = attributed_transcript(session, run_id, text=TranscriptText.CORRECTED)
+    covered = load_covered_segments(session, run_id)
+    resolved_map = {
+        r.annotation_id: r
+        for r in resolve_annotation_spans(
+            lines, covered, [stored_anchor_from_row(row) for row in rows]
+        )
+    }
+    tags_by_id = tags_for_annotations(session, [row.id for row in rows])
+    settings: Settings = request.app.state.settings
+    stages = _stage_provenance_from_run(session, run_id)
+    media_item = run.media_item
+    exported_at = datetime.now(UTC)
+
+    # Batch clip lookup: one query for all annotation clips in this run.
+    clip_rows = (
+        session.execute(
+            select(AudioArtifact)
+            .where(
+                AudioArtifact.pipeline_run_id == run_id,
+                AudioArtifact.kind == ArtifactKind.AUDIO_CLIP.value,
+                AudioArtifact.reclaimed_at.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+    clips_by_ann: dict[str, AudioArtifact] = {}
+    for cr in clip_rows:
+        ann_id_str = (cr.meta or {}).get("annotation_id")
+        if ann_id_str and (
+            ann_id_str not in clips_by_ann
+            or cr.created_at > clips_by_ann[ann_id_str].created_at
+        ):
+            clips_by_ann[ann_id_str] = cr
+
+    ordered = sorted(rows, key=lambda row: resolved_order_key(resolved_map[row.id]))
+    quote_entries: list[dict[str, Any]] = []
+    for row in ordered:
+        resolved = resolved_map[row.id]
+        ann_clip: ClipRef | None = None
+        cr = clips_by_ann.get(str(row.id))
+        if cr is not None:
+            meta = cr.meta or {}
+            clip_path = settings.media_root / cr.path
+            clip_sha256 = ""
+            if clip_path.is_file():
+                import hashlib
+
+                clip_sha256 = hashlib.sha256(clip_path.read_bytes()).hexdigest()
+            ann_clip = ClipRef(
+                id=cr.id,
+                download_url=f"/runs/{run_id}/clips/{cr.id}",
+                filename=clip_download_filename(run_id, cr.id),
+                sha256=clip_sha256,
+                sample_rate=meta.get("sample_rate", 16000),
+                channels=1,
+                start_sample=meta.get("start_sample", 0),
+                end_sample=meta.get("end_sample", 0),
+            )
+        entry = _manifest_for_resolved(
+            resolved,
+            row,
+            lines,
+            source_title=_run_source_title(run),
+            tags=[t.name for t in tags_by_id.get(row.id, [])],
+            clip=ann_clip,
+            media_id=media_item.id,
+            run_id=run_id,
+            media_sha256=media_item.sha256,
+            app_version=__version__,
+            stages=stages,
+            exported_at=exported_at,
+        )
+        quote_entries.append({"quote": entry["quote"], "clip": entry["clip"]})
+
+    bundle = build_quote_bundle(
+        exported_at=exported_at,
+        media_id=media_item.id,
+        run_id=run_id,
+        source_title=_run_source_title(run),
+        media_sha256=media_item.sha256,
+        app_version=__version__,
+        stages=stages,
+        quotes=quote_entries,
+    )
+    fn = f"voxint-{run_id.hex[:8]}-manifests.json"
+    return JSONResponse(
+        content=bundle,
+        headers={"Content-Disposition": f'attachment; filename="{fn}"'},
+    )
+
 
 @router.post("/review/{run_id}/annotations/{annotation_id}/clips")
 def extract_annotation_clip(
