@@ -11,9 +11,53 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   corpus (~3 MB, CC-BY-4.0 / CC0) with `voxint benchmark run` (serial
   submission, pooled micro-WER, hallucination resistance scoring),
   `voxint benchmark list`, and `voxint benchmark compare`. DB-backed results
-  (migration 0047) for cross-run comparison. Benchmark runs excluded from the
+  (migration 0048) for cross-run comparison. Benchmark runs excluded from the
   review queue via reserved `benchmark/` source path prefix. Minimal Settings
   page integration (recent runs table). See `docs/benchmark.md`.
+- **Speakers overview: named/unnamed grouping** (#245). The roster splits into
+  two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
+  voices" (unverified) collapsed by default in a `<details>` disclosure.
+- **Speakers overview: heard-name annotation** (#245). Unverified speakers with
+  an LLM-proposed name show `"Sam?" heard name, unconfirmed` and a "Rule" link
+  instead of "Open".
+- **Speakers overview: TO DO action buttons** (#245). The TO DO strip now
+  includes `[Review them]` and `[Compare]` action links.
+- **Speakers overview: "+ New speaker" button** (#245). Creates a bare roster
+  entry from the overview page (name only, no audio).
+- **Speakers overview: search placeholder** (#245). Shows "Find a person"
+  instead of the generic "Search everything".
+- **Speaker detail: "verified by you" chip** (#246). The profile page chip now
+  reads "verified by you" for confirmed speakers.
+- **Speaker detail: profile panel redesign** (#246). Aggregate provenance chip,
+  3-column ROLE/ORGANIZATION/LINKS grid, and a hide/show collapsible.
+- **Speaker detail: command bar actions** (#246). "Edit profile" and "Merge"
+  dropdown in the command bar.
+- **Speaker detail: FOLDER column** (#246). The Heard In table now shows which
+  folder each recording belongs to.
+- **Project detail: rename** (#247). "Rename" button in the command bar with
+  inline form.
+- **Project detail: folder unlink** (#247). Each assigned folder now has an
+  "unlink" action to remove it from the project.
+- **Project detail: vocabulary "+ add term" chip** (#247). Dashed inline chip
+  that opens the vocabulary editor.
+- **Project detail: speaker links** (#247). Speaker names in the sidebar now
+  link to their individual profile pages.
+- **Project detail: "+ add speaker" and "+ link folder" links** (#247).
+  Navigation links in the sidebar section headers.
+
+### Changed
+- **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)
+  of maintainer evaluation infrastructure moved. Zero runtime dependencies on
+  voxint app code. The compact public summary in `docs/gpu-contracts.md`
+  retains model limitations, coverage gaps, and M2 fine-tuning outcomes.
+- **Translation integrity gaps closed** (ADR 0008, Phase 2 Step 3).
+  `run_translations` now has an `idempotency_key` (nullable UNIQUE) and
+  `replay_digest` (canonical sha256 of the `lines` JSONB for efficient replay
+  comparison without loading multi-MB payloads). `record_translation` is wired
+  through `savepoint_adopt_or_conflict` with full replay matching (minus
+  `completed_at`, which is unstable across retries). A database immutability
+  trigger rejects UPDATE (except the write-once supersession stamp) and DELETE,
+  matching the `run_enrichment_assets` pattern. Migration 0047.
 
 ## [0.28.0] - 2026-08-27
 
@@ -103,6 +147,19 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Settings status: Check for updates** (#248, epic #149). The banner button
   now reads "Check for updates" and links to the GitHub releases page instead
   of the hardware sub-page.
+
+### Added
+- **Synthetic-speech detection: feature-cached AASIST fine-tuning pipeline**
+  (#252, M2). `tools/synthdetect_finetune.py` freezes the XLS-R-300M backbone
+  and fine-tunes the AASIST backend (~18 M params) on precomputed frame
+  embeddings to close the Chatterbox flow-matching TTS evasion gap. Fits on a
+  12 GB GPU. Four subcommands: `cache-features` (extract and persist XLS-R
+  embeddings), `train` (constrained Pareto checkpoint selection: minimize
+  Chatterbox dev EER subject to Piper regression and bona-fide FPR gates),
+  `evaluate`, and `recalibrate` (Platt scaling + operating-point selection for
+  the fine-tuned checkpoint). Includes speaker-disjoint hash partitioning,
+  balanced batch sampling (70/30 Chatterbox/Piper, 25/75 VoxConverse/other),
+  and multi-seed support. 12 unit tests.
 
 ### Removed
 - **Legacy `app_settings` folder columns dropped** (#177, epic #149). Migration

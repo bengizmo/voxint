@@ -6,12 +6,29 @@
 {% block cb_summary %}
 {%- if overview.rows %}{{ overview.rows|length }} people · {{ overview.verified_count }} verified by you{% endif -%}
 {% endblock %}
+{% block cb_search %}
+<div class="cb-search" aria-hidden="true">
+  <span>Find a person</span>
+  <kbd>&#8984;K</kbd>
+</div>
+{% endblock %}
 {% block cb_actions %}
 <nav class="view-toggle" aria-label="Show as">
   {% for value in views %}
   <a href="/speakers?sort={{ sort }}&view={{ value }}"{% if value == view %} aria-current="true"{% endif %}>{{ value|capitalize }}</a>
   {% endfor %}
 </nav>
+<details class="spk-create-dd" ontoggle="if(this.open)this.querySelector('input[type=text]').focus()">
+  <summary class="cb-btn cb-btn-primary">+ New speaker</summary>
+  <form class="spk-create-form" method="post" action="/speakers?{{ "sort=" ~ sort ~ "&view=" ~ view }}"
+        hx-post="/speakers?{{ "sort=" ~ sort ~ "&view=" ~ view }}"
+        hx-target="#roster" hx-swap="innerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_create }}">
+    <label class="visually-hidden" for="new-speaker-name">Name</label>
+    <input id="new-speaker-name" type="text" name="display_name" placeholder="Speaker name" required maxlength="120">
+    <button type="submit" class="cb-btn cb-btn-primary">Add</button>
+  </form>
+</details>
 {% endblock %}
 
 {% block body %}

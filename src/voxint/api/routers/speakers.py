@@ -23,6 +23,7 @@ from voxint.api.csrf import (
     CSRF_RESEARCH_CANCEL,
     CSRF_RESEARCH_START,
     CSRF_ROSTER_ARCHIVE,
+    CSRF_ROSTER_CREATE,
     CSRF_ROSTER_EMBEDDING_DELETE,
     CSRF_ROSTER_MERGE,
     CSRF_ROSTER_RENAME,
@@ -89,6 +90,7 @@ from voxint.speakers.roster import (
     alias_ids,
     archive_speaker,
     canonicalize,
+    create_speaker,
     delete_embedding,
     merge_map,
     merge_speakers,
@@ -314,6 +316,7 @@ def _overview_context(
         "roster_error": error,
         "active_nav": "speakers",
         "now": datetime.now(UTC),
+        "csrf_create": mint_csrf_token(secret, CSRF_ROSTER_CREATE),
         "csrf_rename": mint_csrf_token(secret, CSRF_ROSTER_RENAME),
         "csrf_merge": mint_csrf_token(secret, CSRF_ROSTER_MERGE),
         "csrf_archive": mint_csrf_token(secret, CSRF_ROSTER_ARCHIVE),
@@ -377,6 +380,25 @@ def speakers_page(request: Request, operator: OperatorDep, session: SessionDep) 
     return templates.TemplateResponse(
         request, "speakers/speakers.html", _roster_context(request, session)
     )
+
+@router.post("/speakers")
+def speaker_create(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    display_name: Annotated[str, Form()],
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_ROSTER_CREATE, csrf_token)
+    try:
+        speaker = create_speaker(session, display_name)
+    except RosterError as exc:
+        session.rollback()
+        return _roster_response(request, session, error=str(exc))
+    if request.headers.get("HX-Request"):
+        return _roster_response(request, session)
+    target = f"/speakers/{speaker.id}" if _speakers_flag_on(request) else "/speakers"
+    return RedirectResponse(target, status_code=303)
 
 @router.post("/speakers/{speaker_id}/rename")
 def speaker_rename(
@@ -686,6 +708,9 @@ def _profile_context(
             .options(
                 selectinload(PipelineRun.media_item).selectinload(
                     MediaItem.source_metadata
+                ),
+                selectinload(PipelineRun.media_item).selectinload(
+                    MediaItem.media_folder
                 )
             )
         ).scalars()

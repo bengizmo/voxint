@@ -30,6 +30,8 @@ from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
     CSRF_PROJECT_CREATE,
+    CSRF_PROJECT_RENAME,
+    CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
 )
@@ -165,7 +167,9 @@ def _detail_context(
         "active_nav": "projects",
         "now": datetime.now(UTC),
         "detail": detail,
+        "csrf_rename": mint_csrf_token(secret, CSRF_PROJECT_RENAME),
         "csrf_assign": mint_csrf_token(secret, CSRF_PROJECT_ASSIGN),
+        "csrf_unlink": mint_csrf_token(secret, CSRF_PROJECT_UNLINK),
         "csrf_vocab": mint_csrf_token(secret, CSRF_PROJECT_VOCAB),
         "csrf_corrections": corrections_token,
         "corrections_props": corrections_props,
@@ -241,6 +245,68 @@ def assign_folder(
     return RedirectResponse(
         f"/projects/{project_id}?assigned={folder.id}", status_code=303
     )
+
+
+@router.post("/projects/{project_id}/folders/{folder_id}/unlink")
+def unlink_folder(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_PROJECT_UNLINK, csrf_token)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    folder = session.get(MediaFolder, folder_id)
+    if folder is None or folder.project_id != project_id:
+        raise HTTPException(status_code=404, detail="folder not found in this project")
+    folder.project_id = None
+    session.commit()
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
+
+
+@router.post("/projects/{project_id}/rename")
+def rename_project(
+    request: Request,
+    operator: OperatorDep,
+    session: SessionDep,
+    project_id: uuid.UUID,
+    name: Annotated[str, Form(max_length=200)] = "",
+    csrf_token: Annotated[str | None, Form()] = None,
+) -> Response:
+    _require_csrf(request, CSRF_PROJECT_RENAME, csrf_token)
+    project = session.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"no project {project_id}")
+    clean = name.strip()
+    if not clean:
+        detail = project_detail(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "projects/project_detail.html",
+            _detail_context(request, session, detail, error="Name cannot be empty."),
+            status_code=400,
+        )
+    if clean == project.name:
+        return RedirectResponse(f"/projects/{project_id}", status_code=303)
+    try:
+        with session.begin_nested():
+            project.name = clean
+    except IntegrityError:
+        detail = project_detail(session, project_id)
+        return templates.TemplateResponse(
+            request,
+            "projects/project_detail.html",
+            _detail_context(
+                request, session, detail, error=f"A project named {clean!r} already exists."
+            ),
+            status_code=409,
+        )
+    session.commit()
+    return RedirectResponse(f"/projects/{project_id}", status_code=303)
 
 
 @router.post("/projects/{project_id}/vocabulary")

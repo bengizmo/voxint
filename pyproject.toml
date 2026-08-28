@@ -112,23 +112,6 @@ eval-quality = [
     # are compiled extensions with wheels for linux-x86_64 and macos-arm64.
     "meeteval==0.4.3",
 ]
-# Host-side synthetic-speech-detection eval scorer (tools/synthdetect_eval.py,
-# issue #144): EER / bootstrap-CI / operating points / Platt calibration over a
-# raw-score journal. Maintainer instrument only, NEVER shipped to users and
-# NEVER installed into a service image. Kept in its own extra, isolated from the
-# service runtime pins (the detector container ships pinned fairseq + torch,
-# resolved separately in services/synthdetect/, and never shares this env). Only
-# scikit-learn's roc_curve / roc_auc_score are used from the extra; every other
-# metric (EER crossing, seeded bootstrap, Platt, Brier, reliability) is pure
-# numpy in the tool, so the surface that can drift the committed fixture scores
-# is a single vetted implementation. numpy is already a main dep; it is listed
-# here so the extra is self-contained. Run: `uv run --isolated --extra
-# synthdetect-eval tools/synthdetect_eval.py score …`.
-synthdetect-eval = [
-    "numpy>=1.26",
-    "scikit-learn>=1.4,<2",
-]
-
 [project.scripts]
 voxint = "voxint.cli:main"
 
@@ -170,11 +153,6 @@ src = ["src", "tests"]
 # ad-hoc `ruff check <path>`), not only during a directory scan.
 extend-exclude = [
     "tests/parity/bakeoff/_vendor/openai_whisper_normalizers",
-    # Verbatim, sha-pinned SSL_Anti-spoofing model definition for the synthdetect
-    # eval runtime (issue #144); its integrity check is the digest in the sibling
-    # provenance.json, not lint. Byte-identity to the pinned upstream commit is
-    # what makes the vendored hash meaningful.
-    "tools/synthdetect_vendor",
 ]
 force-exclude = true
 
@@ -190,9 +168,6 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 # (the v0.22.0 model-service boot bug). Keep pyupgrade off the py3.10 service
 # code; the static guard in tests/contracts/test_resource_telemetry.py backs it.
 "services/*/app/*.py" = ["UP017"]
-# The synthdetect eval runner executes inside the py3.10 eval image
-# (services/synthdetect/Dockerfile.eval), so it has the same datetime.UTC hazard.
-"tools/synthdetect_infer.py" = ["UP017"]
 
 [tool.mypy]
 strict = true
@@ -206,26 +181,6 @@ ignore_missing_imports = true
 # The in-process text embedder (#121) runtime deps ship no type stubs.
 [[tool.mypy.overrides]]
 module = ["onnxruntime", "onnxruntime.*", "tokenizers", "tokenizers.*"]
-ignore_missing_imports = true
-
-# scikit-learn (synthdetect-eval extra, tools/synthdetect_eval.py) ships no
-# py.typed marker; only its roc_curve/roc_auc_score are used, behind lazy imports.
-[[tool.mypy.overrides]]
-module = ["sklearn", "sklearn.*"]
-ignore_missing_imports = true
-
-# torch + fairseq are the synthdetect eval-container runtime (tools/synthdetect_infer.py,
-# issue #144): they live ONLY inside services/synthdetect/Dockerfile.eval, never in the
-# host env or the voxint package, and are imported lazily so the pure runner orchestration
-# type-checks and runs without them. No stubs on the host; ignore the missing imports.
-[[tool.mypy.overrides]]
-module = ["torch", "torch.*", "fairseq", "fairseq.*"]
-ignore_missing_imports = true
-
-# TTS generation tool (tools/synthdetect_tts_generate.py, #144 S6) runs in a
-# separate venv; these deps have no py.typed marker.
-[[tool.mypy.overrides]]
-module = ["perth", "perth.*", "google", "google.auth", "google.auth.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
