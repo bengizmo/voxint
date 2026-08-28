@@ -637,12 +637,13 @@ service reports telemetry the strip says "hardware status unavailable" rather
 than claiming all-clear.
 
 The **Status** page (`GET /settings/status`, authenticated, 15s htmx refresh) is
-the fuller live view behind the strip. It shows five hardware gauges: Processor
-(load-average percentage), Memory (used / total), Graphics card (GPU
-utilization), Graphics memory (VRAM used / total), and Disk (media root
-partition used / total). CPU, memory, and disk are read from the host via
-stdlib (`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come
-from the model services' `/healthz` telemetry. A "Parts of Voxint" component
+the fuller live view behind the strip. It shows up to five hardware gauges:
+Processor (load-average percentage), Memory (used / total), and Disk (media
+root partition used / total) are always present; Graphics card (GPU
+utilization) and Graphics memory (VRAM used / total) appear when a GPU is
+available. CPU, memory, and disk are read from the host via stdlib
+(`os.getloadavg`, `/proc/meminfo`, `shutil.disk_usage`); GPU metrics come from
+the model services' `/healthz` telemetry. A "Parts of Voxint" component
 list shows live health for the console, each model service, the database, the
 task queue, and the Local AI model (with a primary "Turn on" button when
 disabled). The banner includes an install summary with GPU acceleration status
