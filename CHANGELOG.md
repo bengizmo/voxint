@@ -23,6 +23,13 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and progress percentage (#244 delta 5, needs stage-level progress callbacks).
 
 ### Added
+- **Benchmark feature** (CLI + DB + scorer + console). Shipped 12-clip benchmark
+  corpus (~3 MB, CC-BY-4.0 / CC0) with `voxint benchmark run` (serial
+  submission, pooled micro-WER, hallucination resistance scoring),
+  `voxint benchmark list`, and `voxint benchmark compare`. DB-backed results
+  (migration 0048) for cross-run comparison. Benchmark runs excluded from the
+  review queue via reserved `benchmark/` source path prefix. Minimal Settings
+  page integration (recent runs table). See `docs/benchmark.md`.
 - **Speakers overview: named/unnamed grouping** (#245). The roster splits into
   two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
   voices" (unverified) collapsed by default in a `<details>` disclosure.
@@ -53,6 +60,20 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   link to their individual profile pages.
 - **Project detail: "+ add speaker" and "+ link folder" links** (#247).
   Navigation links in the sidebar section headers.
+
+### Changed
+- **Synthdetect eval tooling extracted to private repo.** 46 files (21k lines)
+  of maintainer evaluation infrastructure moved. Zero runtime dependencies on
+  voxint app code. The compact public summary in `docs/gpu-contracts.md`
+  retains model limitations, coverage gaps, and M2 fine-tuning outcomes.
+- **Translation integrity gaps closed** (ADR 0008, Phase 2 Step 3).
+  `run_translations` now has an `idempotency_key` (nullable UNIQUE) and
+  `replay_digest` (canonical sha256 of the `lines` JSONB for efficient replay
+  comparison without loading multi-MB payloads). `record_translation` is wired
+  through `savepoint_adopt_or_conflict` with full replay matching (minus
+  `completed_at`, which is unstable across retries). A database immutability
+  trigger rejects UPDATE (except the write-once supersession stamp) and DELETE,
+  matching the `run_enrichment_assets` pattern. Migration 0047.
 
 ## [0.28.0] - 2026-08-27
 

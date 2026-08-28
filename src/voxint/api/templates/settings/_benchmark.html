@@ -1,0 +1,52 @@
+{# Settings → Benchmark: most recent runs and a link to the CLI.
+   Read-only in v1; the runner is CLI-driven. #}
+<section id="benchmark" aria-labelledby="benchmark-heading">
+<h2 id="benchmark-heading">Benchmark</h2>
+<p class="muted">Run the built-in benchmark corpus through the pipeline
+   to measure transcription accuracy (WER) and throughput. Compare results
+   across configuration changes or hardware upgrades.</p>
+
+{% if benchmark_runs %}
+<table class="runs-table" role="grid">
+  <thead>
+    <tr>
+      <th>Tag</th>
+      <th>Status</th>
+      <th>WER</th>
+      <th>Time</th>
+      <th>Date</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for run in benchmark_runs %}
+    <tr>
+      <td>{{ run.tag or '—' }}</td>
+      <td>{{ run.status }}</td>
+      <td>
+        {% if run.summary and run.summary.pooled_wer is not none %}
+          {{ "%.1f%%"|format(run.summary.pooled_wer * 100) }}
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      <td>
+        {% if run.summary and run.summary.total_time_s is not none %}
+          {{ "%.0f"|format(run.summary.total_time_s) }}s
+        {% else %}
+          —
+        {% endif %}
+      </td>
+      <td>{{ run.created_at.strftime("%Y-%m-%d %H:%M") if run.created_at else '—' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No benchmark runs yet.</p>
+{% endif %}
+
+<p class="muted">Run from the command line:
+   <code>voxint benchmark run</code> (full corpus) or
+   <code>voxint benchmark run --quick</code> (speech files only).
+   Compare two runs: <code>voxint benchmark compare ID1 ID2</code>.</p>
+</section>

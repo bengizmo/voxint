@@ -1,0 +1,40 @@
+{
+  "corpus_version": 1,
+  "created": "2026-08-28",
+  "sources": {
+    "librispeech_test_clean": {
+      "url": "https://www.openslr.org/12",
+      "citation": "Panayotov et al., \"Librispeech: An ASR corpus based on public domain audio books\", ICASSP 2015",
+      "license_spdx": "CC-BY-4.0",
+      "subset": "test-clean",
+      "speakers": ["1089", "1188", "121", "1221", "1284", "1320", "1580", "1995", "2094"],
+      "selection": "All 9 clips from the project's corpus-src/refs.json (deterministic, no hand-selection)",
+      "format": "16 kHz mono PCM WAV (converted from FLAC originals)"
+    },
+    "voxint_bakeoff_synthetic": {
+      "url": null,
+      "description": "Synthetic audio generated for the Voxint bakeoff evaluation suite",
+      "license_spdx": "CC0-1.0",
+      "files": {
+        "short_clean_00.wav": {
+          "generator": "espeak-ng TTS",
+          "text": "The lighthouse keeper recorded the tide at dawn and again at dusk."
+        },
+        "silence_00.wav": {
+          "generator": "numpy zeros, 16 kHz mono PCM",
+          "text": null
+        },
+        "bait_00_applause.wav": {
+          "generator": "numpy synthesized non-speech (applause-like noise)",
+          "text": null
+        }
+      }
+    }
+  },
+  "audio_format": {
+    "sample_rate": 16000,
+    "channels": 1,
+    "encoding": "pcm_s16le",
+    "container": "wav"
+  }
+}

@@ -2204,6 +2204,7 @@ class RunTranslation(Base):
             "completed_at >= started_at",
             name="run_translations_completed_after_started_check",
         ),
+        UniqueConstraint("idempotency_key", name="run_translations_idempotency_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
@@ -2222,6 +2223,8 @@ class RunTranslation(Base):
     # The exact model identifier the generation ran with (provenance).
     model: Mapped[str] = mapped_column(Text)
     source_content_hash: Mapped[str] = mapped_column(Text)
+    idempotency_key: Mapped[str | None] = mapped_column(Text)
+    replay_digest: Mapped[str | None] = mapped_column(Text)
     superseded_by_translation_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("run_translations.id")
     )
@@ -2917,3 +2920,93 @@ class MediaOperationFile(Base):
     )
 
     operation: Mapped["MediaOperation"] = relationship(back_populates="files")
+
+
+class BenchmarkRunStatus(enum.StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class BenchmarkItemStatus(enum.StrEnum):
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class BenchmarkRun(Base):
+    __tablename__ = "benchmark_runs"
+    __table_args__ = (
+        CheckConstraint(
+            f"status IN ({_enum_values(BenchmarkRunStatus)})",
+            name="benchmark_runs_status_check",
+        ),
+        CheckConstraint(
+            "corpus_version >= 1",
+            name="benchmark_runs_corpus_version_positive_check",
+        ),
+        CheckConstraint(
+            "tag IS NULL OR length(tag) <= 60",
+            name="benchmark_runs_tag_length_check",
+        ),
+        Index("ix_benchmark_runs_created_at", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    tag: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(
+        Text, default=BenchmarkRunStatus.PENDING.value
+    )
+    corpus_version: Mapped[int] = mapped_column(Integer)
+    protocol_hash: Mapped[str] = mapped_column(Text)
+    voxint_version: Mapped[str] = mapped_column(Text)
+    config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    system_info: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    summary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    items: Mapped[list["BenchmarkItem"]] = relationship(
+        back_populates="benchmark_run", cascade="all, delete-orphan"
+    )
+
+
+class BenchmarkItem(Base):
+    __tablename__ = "benchmark_items"
+    __table_args__ = (
+        CheckConstraint(
+            f"status IN ({_enum_values(BenchmarkItemStatus)})",
+            name="benchmark_items_status_check",
+        ),
+        UniqueConstraint(
+            "benchmark_run_id", "corpus_file_id",
+            name="uq_benchmark_items_run_file",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    benchmark_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("benchmark_runs.id", ondelete="CASCADE")
+    )
+    corpus_file_id: Mapped[str] = mapped_column(Text)
+    pipeline_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("pipeline_runs.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(
+        Text, default=BenchmarkItemStatus.PENDING.value
+    )
+    stage_timings: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    wer_counts: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    hallucination_words: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    benchmark_run: Mapped["BenchmarkRun"] = relationship(back_populates="items")
+    pipeline_run: Mapped["PipelineRun | None"] = relationship()
