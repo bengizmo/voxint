@@ -22,6 +22,8 @@ from voxint.api.app import create_app
 from voxint.api.csrf import (
     CSRF_PROJECT_ASSIGN,
     CSRF_PROJECT_CORRECTIONS,
+    CSRF_PROJECT_RENAME,
+    CSRF_PROJECT_UNLINK,
     CSRF_PROJECT_VOCAB,
     mint_csrf_token,
 )
@@ -745,5 +747,126 @@ def test_project_corrections_requires_csrf(
         f"/projects/{pid}/corrections",
         data={"rules": "[]", "csrf_token": "forged"},
         headers={"accept": "application/json"},
+    )
+    assert resp.status_code == 403
+
+
+# ---- #247 Project rename ---------------------------------------------------
+
+
+def test_rename_project_success(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RENAME)
+    resp = client.post(
+        f"/projects/{pid}/rename",
+        data={"name": "New Name", "csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        project = session.get(Project, pid)
+        assert project is not None
+        assert project.name == "New Name"
+
+
+def test_rename_project_empty_name(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RENAME)
+    resp = client.post(
+        f"/projects/{pid}/rename",
+        data={"name": "  ", "csrf_token": token},
+    )
+    assert resp.status_code == 400
+    assert "cannot be empty" in resp.text
+
+
+def test_rename_project_duplicate(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        _make_project(session, name="Taken")
+        pid = _make_project(session, name="Mine").id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_RENAME)
+    resp = client.post(
+        f"/projects/{pid}/rename",
+        data={"name": "Taken", "csrf_token": token},
+    )
+    assert resp.status_code == 409
+    assert "already exists" in resp.text
+
+
+# ---- #247 Folder unlink ---------------------------------------------------
+
+
+def test_unlink_folder_success(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        folder = MediaFolder(path="incoming/test", project_id=project.id)
+        session.add(folder)
+        session.commit()
+        pid, fid = project.id, folder.id
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_UNLINK)
+    resp = client.post(
+        f"/projects/{pid}/folders/{fid}/unlink",
+        data={"csrf_token": token},
+        follow_redirects=False,
+    )
+    assert resp.status_code == 303
+    with session_factory() as session:
+        folder = session.get(MediaFolder, fid)
+        assert folder is not None
+        assert folder.project_id is None
+
+
+def test_unlink_folder_not_found(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    token = mint_csrf_token(client.app.state.csrf_secret, CSRF_PROJECT_UNLINK)
+    resp = client.post(
+        f"/projects/{pid}/folders/{uuid.uuid4()}/unlink",
+        data={"csrf_token": token},
+    )
+    assert resp.status_code == 404
+
+
+def test_rename_project_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        pid = _make_project(session).id
+        session.commit()
+    resp = client.post(
+        f"/projects/{pid}/rename",
+        data={"name": "X", "csrf_token": "forged"},
+    )
+    assert resp.status_code == 403
+
+
+def test_unlink_folder_requires_csrf(
+    client: TestClient, session_factory: sessionmaker[Session]
+) -> None:
+    with session_factory() as session:
+        project = _make_project(session)
+        folder = MediaFolder(path="incoming/csrf-test", project_id=project.id)
+        session.add(folder)
+        session.commit()
+        pid, fid = project.id, folder.id
+    resp = client.post(
+        f"/projects/{pid}/folders/{fid}/unlink",
+        data={"csrf_token": "forged"},
     )
     assert resp.status_code == 403

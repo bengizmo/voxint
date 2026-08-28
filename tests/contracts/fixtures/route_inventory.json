@@ -190,6 +190,18 @@
     ]
   ],
   [
+    "/projects/{project_id}/folders/{folder_id}/unlink",
+    [
+      "POST"
+    ]
+  ],
+  [
+    "/projects/{project_id}/rename",
+    [
+      "POST"
+    ]
+  ],
+  [
     "/projects/{project_id}/vocabulary",
     [
       "POST"
@@ -665,6 +677,12 @@
     "/speakers",
     [
       "GET"
+    ]
+  ],
+  [
+    "/speakers",
+    [
+      "POST"
     ]
   ],
   [

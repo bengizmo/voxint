@@ -12,10 +12,15 @@ import uuid
 from dataclasses import dataclass
 from typing import TypeGuard
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.orm import Session
 
-from voxint.db.models import ClaimField, EnrichmentCandidate, ProfileReviewDecision
+from voxint.db.models import (
+    ClaimField,
+    EnrichmentCandidate,
+    ProfileReviewDecision,
+    SpeakerAssignment,
+)
 from voxint.enrichment.queries import CandidateState, effective_state_sql
 from voxint.speakers.aggregate import (
     AggregateResult,
@@ -59,6 +64,7 @@ class OverviewRow:
     entry: RosterEntry
     aggregate: SpeakerAggregate
     tier: TierSummary
+    heard_name: str | None = None
 
 
 # Reminders (#159, #181): flat caps + honest truncation (the lib-kit convention).
@@ -162,6 +168,49 @@ def _possible_duplicate_reminders(
     return reminders[:DUPLICATE_CAP], len(reminders)
 
 
+def _heard_names_for_speakers(
+    session: Session,
+    rows: list[OverviewRow],
+) -> dict[uuid.UUID, str]:
+    """For each unverified speaker, find the most recent llm_hint proposed_name
+    on any of their attributed (run, label) appearances. Returns speaker_id ->
+    proposed_name for speakers that have one."""
+    all_keys: list[tuple[uuid.UUID, str]] = []
+    speaker_by_key: dict[tuple[uuid.UUID, str], uuid.UUID] = {}
+    for row in rows:
+        if row.aggregate.verified:
+            continue
+        for key in row.aggregate.grounded_keys:
+            all_keys.append(key)
+            speaker_by_key[key] = row.entry.speaker.id
+    if not all_keys:
+        return {}
+    unique_keys = list(set(all_keys))
+    hints = session.execute(
+        select(
+            SpeakerAssignment.pipeline_run_id,
+            SpeakerAssignment.diarization_label,
+            SpeakerAssignment.proposed_name,
+            SpeakerAssignment.created_at,
+        )
+        .where(
+            SpeakerAssignment.method == "llm_hint",
+            tuple_(
+                SpeakerAssignment.pipeline_run_id,
+                SpeakerAssignment.diarization_label,
+            ).in_(unique_keys),
+        )
+        .order_by(SpeakerAssignment.created_at.desc(), SpeakerAssignment.id.desc())
+    ).all()
+    result: dict[uuid.UUID, str] = {}
+    for hint in hints:
+        key = (hint.pipeline_run_id, hint.diarization_label)
+        speaker_id = speaker_by_key.get(key)
+        if speaker_id is not None and speaker_id not in result and hint.proposed_name:
+            result[speaker_id] = hint.proposed_name
+    return result
+
+
 def _sort_rows(rows: list[OverviewRow], sort: str) -> list[OverviewRow]:
     # Every ordering ends on display name for a deterministic tiebreak.
     if sort == "name":
@@ -213,6 +262,19 @@ def speakers_overview(
         rows.append(
             OverviewRow(entry=entry, aggregate=aggregate, tier=tier_for(evidence, gates))
         )
+    heard_names = _heard_names_for_speakers(session, rows)
+    if heard_names:
+        rows = [
+            OverviewRow(
+                entry=r.entry,
+                aggregate=r.aggregate,
+                tier=r.tier,
+                heard_name=heard_names.get(r.entry.speaker.id),
+            )
+            if r.entry.speaker.id in heard_names
+            else r
+            for r in rows
+        ]
     name_suggestions, name_total = _pending_name_suggestions(session)
     # Unverified high-activity (#159): much attributed speech, no confirming
     # human ruling anywhere — the voices most worth an operator look.

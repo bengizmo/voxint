@@ -254,6 +254,22 @@
     true
   ],
   [
+    "/projects/{project_id}/folders/{folder_id}/unlink",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/projects/{project_id}/rename",
+    [
+      "POST"
+    ],
+    "onboarding",
+    true
+  ],
+  [
     "/projects/{project_id}/vocabulary",
     [
       "POST"
@@ -887,6 +903,14 @@
     "/speakers",
     [
       "GET"
+    ],
+    "onboarding",
+    true
+  ],
+  [
+    "/speakers",
+    [
+      "POST"
     ],
     "onboarding",
     true

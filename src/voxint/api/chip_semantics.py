@@ -10,6 +10,7 @@ from __future__ import annotations
 
 CHIP_SEMANTICS: dict[str, str] = {
     "verified": "ok",
+    "verified by you": "ok",
     "reviewed": "ok",
     "all reviewed": "ok",
     "done": "ok",

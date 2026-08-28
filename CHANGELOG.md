@@ -6,6 +6,38 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 
 ## [Unreleased]
 
+### Added
+- **Speakers overview: named/unnamed grouping** (#245). The roster splits into
+  two visual groups: "Known speakers" (verified) shown in full, and "Unnamed
+  voices" (unverified) collapsed by default in a `<details>` disclosure.
+- **Speakers overview: heard-name annotation** (#245). Unverified speakers with
+  an LLM-proposed name show `"Sam?" heard name, unconfirmed` and a "Rule" link
+  instead of "Open".
+- **Speakers overview: TO DO action buttons** (#245). The TO DO strip now
+  includes `[Review them]` and `[Compare]` action links.
+- **Speakers overview: "+ New speaker" button** (#245). Creates a bare roster
+  entry from the overview page (name only, no audio).
+- **Speakers overview: search placeholder** (#245). Shows "Find a person"
+  instead of the generic "Search everything".
+- **Speaker detail: "verified by you" chip** (#246). The profile page chip now
+  reads "verified by you" for confirmed speakers.
+- **Speaker detail: profile panel redesign** (#246). Aggregate provenance chip,
+  3-column ROLE/ORGANIZATION/LINKS grid, and a hide/show collapsible.
+- **Speaker detail: command bar actions** (#246). "Edit profile" and "Merge"
+  dropdown in the command bar.
+- **Speaker detail: FOLDER column** (#246). The Heard In table now shows which
+  folder each recording belongs to.
+- **Project detail: rename** (#247). "Rename" button in the command bar with
+  inline form.
+- **Project detail: folder unlink** (#247). Each assigned folder now has an
+  "unlink" action to remove it from the project.
+- **Project detail: vocabulary "+ add term" chip** (#247). Dashed inline chip
+  that opens the vocabulary editor.
+- **Project detail: speaker links** (#247). Speaker names in the sidebar now
+  link to their individual profile pages.
+- **Project detail: "+ add speaker" and "+ link folder" links** (#247).
+  Navigation links in the sidebar section headers.
+
 ## [0.28.0] - 2026-08-27
 
 ### Added
