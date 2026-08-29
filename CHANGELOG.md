@@ -27,6 +27,15 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
   and progress percentage (#244 delta 5, needs stage-level progress callbacks).
 
 ### Added
+- **Multi-user authentication and roles** (#9). Opt-in via
+  `VOXINT_MULTI_USER=true`. Adds a local user table (Argon2id password
+  hashing), DB-backed session cookies, a login/logout form, and two roles
+  (reviewer/admin). The single-operator HTTP Basic path is unchanged when the
+  flag is off (the default). Per-user attribution: a nullable `user_id` FK on
+  `adjudication_decisions` links human rulings to the authenticated user (system
+  decisions stay `user_id=NULL`). Settings area is admin-only. User management
+  via CLI: `voxint user create/list/delete/set-role/set-password`. First user is
+  forced to admin. Migration 0051.
 - **Quote provenance manifest** (#122). Pull-quote and clip exports now have a
   JSON sidecar (`export.json`) carrying per-line speaker attribution, timecodes,
   clip integrity digest, per-stage model identity from the pipeline run, and
