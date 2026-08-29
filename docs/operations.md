@@ -1336,7 +1336,8 @@ docker compose -f compose.yaml -f compose.gpu.yaml \
 Enable it in **Settings → Synthetic-speech detection** (or
 `SYNTHDETECT_ENABLED=true`). With `SYNTHDETECT_AUTOGENERATE=true`, completed
 pipeline runs are scored automatically; otherwise, use the **Score** button on a
-run's detail page.
+run's detail page. In multi-user mode, toggling these settings and triggering
+manual scoring are admin-only actions (reviewers get 403).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -1559,13 +1560,15 @@ rejected. Passwords are hashed with Argon2id.
 
 ### Roles
 
-| Role | Console access | Settings page |
-|---|---|---|
-| `admin` | Full | Yes |
-| `reviewer` | Full | No (403) |
+| Role | Console access | Settings page | Plugin mutations |
+|---|---|---|---|
+| `admin` | Full | Yes | Yes |
+| `reviewer` | Full | No (403) | No (403) |
 
 Both roles can claim runs, make decisions, enroll speakers, and export
-transcripts. The Settings page (`/settings`) is restricted to admins.
+transcripts. The Settings page (`/settings`) and plugin mutation routes
+(synthdetect settings toggle, manual scoring trigger) are restricted to
+admins.
 
 The CLI user-management commands (`voxint user create`, `set-role`, etc.) are
 not role-gated: anyone with host shell and database access can run them.
@@ -1639,6 +1642,9 @@ by their per-run claim token.
 | `GET /activity/events?since={id}` | Activity feed poll (JSON): run-completion and speaker-identification events after a cursor plus the live-jobs badge count. Dark-shipped behind `CONSOLE_ACTIVITY_ENABLED` (answers 404 until on); no `since` bootstraps at the high-water mark so a fresh tab does not replay history (#162) |
 | `POST /settings/tutorial/{complete,replay}` | Complete / non-destructively replay the guided tutorial (own `CSRF_SETTINGS` token) |
 | `POST /settings/corrections` | Replace the operator's console-authored correction rules (#84; whole list validated through the pack #80 gate, own `CSRF_SETTINGS` token; a pack collision returns a plain-language 422) |
+| `GET /synthdetect/report/{run_id}` | Per-run synthdetect report: all scored turns with calibrated risk and raw logits |
+| `POST /synthdetect/score/{run_id}` | Trigger manual synthdetect scoring for a completed run (admin-only in multi-user mode; own `CSRF_PLUGIN` token) |
+| `POST /synthdetect/settings` | Toggle synthdetect enabled/autogenerate flags in `AppSettings` (admin-only in multi-user mode; own `CSRF_SETTINGS` token) |
 
 ## Media retention / garbage collection (issue #15; off by default)
 

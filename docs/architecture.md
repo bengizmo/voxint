@@ -756,7 +756,14 @@ flow that genuinely blocks downstream processing; nothing enters it today.)
   `reviewer`). The `_resolve_identity` dependency in `deps.py` branches once;
   downstream code uses `CurrentUserDep` (the resolved `AuthContext`) and
   `OperatorDep` (the username string) regardless of mode. `AdminDep` gates
-  the settings page. Adjudication routes pass `user_id` through to
+  every route that mutates installation-wide state: the settings page and
+  plugin mutation routes (synthdetect settings toggle, manual scoring
+  trigger). Plugin routes that mutate installation-wide state must depend on
+  `AdminDep`; read-only plugin routes (reports, panels) do not.
+  The login redirect target (`?next=`) is validated by `_validate_next()`,
+  which rejects protocol-relative paths, backslash normalization, control
+  characters, and scheme-bearing URLs to prevent open-redirect attacks.
+  Adjudication routes pass `user_id` through to
   `record_decision`, `apply_merge`, and `enroll_new_speaker` so the immutable
   ledger carries per-user attribution. See
   [operations.md](operations.md#multi-user-authentication) for setup.

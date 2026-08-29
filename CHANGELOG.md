@@ -26,6 +26,17 @@ versioning: [SemVer](https://semver.org/) (0.x; expect breaking changes between 
 - **Deferred**: Pause queue button (#244 delta 1, needs Celery control surface)
   and progress percentage (#244 delta 5, needs stage-level progress callbacks).
 
+### Security
+- **Open-redirect bypass in login redirect hardened** (#304). `_validate_next()`
+  now rejects backslash normalization (`/\evil.com`), control-character injection
+  (response splitting), and scheme-bearing paths via `urlparse`. Previously only
+  `//` was blocked. 20 unit tests cover the bypass vectors.
+- **Admin gate added to synthdetect mutation routes** (#305). `POST
+  /synthdetect/settings` and `POST /synthdetect/score/{run_id}` now require the
+  `AdminDep` dependency. In multi-user mode, only admins can toggle synthdetect
+  settings or trigger manual scoring. Route characterization golden updated.
+  Three integration tests.
+
 ### Added
 - **Multi-user authentication and roles** (#9). Opt-in via
   `VOXINT_MULTI_USER=true`. Adds a local user table (Argon2id password

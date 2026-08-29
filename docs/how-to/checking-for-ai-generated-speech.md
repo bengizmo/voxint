@@ -35,6 +35,10 @@ adjudicate](reviewing-and-adjudicating.md). Technical details:
    finishes processing is scored automatically. With it off, you score recordings
    one at a time (see below).
 
+> If your installation uses multi-user accounts, only an admin can change these
+> settings. A reviewer account can view scores but cannot turn the feature on or
+> off.
+
 ## Scoring a recording
 
 ### Automatic scoring (autogenerate on)
@@ -51,7 +55,8 @@ enabled the feature:
 
 1. Open the recording's detail page.
 2. Find the **Synthetic speech detection** panel.
-3. Click **Score for synthetic speech**.
+3. Click **Score for synthetic speech**. (In multi-user mode, only admins can
+   trigger manual scoring.)
 
 Scoring runs in the background. Reload the page after a moment to see the
 result.
