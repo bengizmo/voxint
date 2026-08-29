@@ -45,6 +45,8 @@ EXEMPT_PATHS = {
     "/setup/vocabulary",
     "/setup/llm",
     "/setup/finish",
+    "/login",
+    "/logout",
 }
 
 

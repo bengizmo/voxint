@@ -6,7 +6,7 @@ and ``setup_router``. When ``voxint_multi_user`` is false, both routes return
 404 so the route inventory is stable but the form is unreachable.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -32,7 +32,7 @@ def _login_context(
     error: str = "",
     submitted_username: str = "",
     next_url: str = "/",
-) -> dict:
+) -> dict[str, Any]:
     csrf_secret: str = request.app.state.csrf_secret
     return {
         "request": request,

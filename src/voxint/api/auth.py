@@ -99,4 +99,4 @@ def cleanup_expired_sessions(db: Session) -> int:
     result = db.execute(
         delete(AuthSession).where(AuthSession.expires_at <= now)
     )
-    return result.rowcount  # type: ignore[return-value]
+    return result.rowcount  # type: ignore[attr-defined, no-any-return]
