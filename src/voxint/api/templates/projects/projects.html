@@ -1,41 +1,44 @@
 {% extends "base.html" %}
 {% block title %}Voxint — projects{% endblock %}
-{% block body %}
-<h1>Projects</h1>
-<p class="muted">Group folders into a project to see its speakers together and give it its own vocabulary later.</p>
 
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
-
-<section class="card">
-  <h2>New project</h2>
-  <form method="post" action="/projects" class="upload">
+{% block cb_breadcrumb %}projects /{% endblock %}
+{% block cb_summary %}
+{%- if projects %}{{ projects|length }} project{{ "s" if projects|length != 1 else "" }}{% else %}no projects yet{% endif -%}
+{% endblock %}
+{% block cb_actions %}
+<details class="spk-create-dd"{% if error %} open{% endif %} ontoggle="if(this.open)this.querySelector('input[type=text]').focus()">
+  <summary class="cb-btn cb-btn-primary">+ New project</summary>
+  <form class="spk-create-form" method="post" action="/projects">
     <input type="hidden" name="csrf_token" value="{{ csrf_create }}">
-    <label>Name
-      <input type="text" name="name" maxlength="200" required value="{{ name_value }}">
-    </label>
-    <label>Description (optional)
-      <input type="text" name="description" maxlength="2000">
-    </label>
-    <div class="action-row">
-      <button type="submit" class="primary">Create project</button>
-    </div>
+    <label class="visually-hidden" for="new-project-name">Name</label>
+    <input id="new-project-name" type="text" name="name" placeholder="Project name" required maxlength="200" value="{{ name_value }}">
+    <label class="visually-hidden" for="new-project-desc">Description</label>
+    <input id="new-project-desc" type="text" name="description" placeholder="Description (optional)" maxlength="2000">
+    <button type="submit" class="cb-btn cb-btn-primary">Create</button>
   </form>
-</section>
+</details>
+{% endblock %}
+
+{% block body %}
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 
 {% if projects %}
-<ul class="lib-cards" aria-label="Projects">
-  {% for project in projects %}
-  <li>
-    <div class="media-title"><a href="/projects/{{ project.id }}">{{ project.name }}</a></div>
-    {% if project.description %}<p class="muted">{{ project.description }}</p>{% endif %}
-    <p class="muted">
-      {{ project.folder_count }} folder{{ "" if project.folder_count == 1 else "s" }}
-      · added <span title="{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(project.created_at, now=now) }}</span>
-    </p>
-  </li>
-  {% endfor %}
-</ul>
+<section class="oc-section" aria-label="All projects">
+  <h2 class="oc-section-title">ALL PROJECTS</h2>
+  <ul class="lib-cards" aria-label="Projects">
+    {% for project in projects %}
+    <li>
+      <div class="media-title"><a href="/projects/{{ project.id }}">{{ project.name }}</a></div>
+      {% if project.description %}<p class="oc-muted">{{ project.description }}</p>{% endif %}
+      <p class="oc-muted">
+        {{ project.folder_count }} folder{{ "" if project.folder_count == 1 else "s" }}
+        · added <span title="{{ project.created_at.strftime('%Y-%m-%d %H:%M UTC') }}">{{ format_age(project.created_at, now=now) }}</span>
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
 {% else %}
-<p class="muted">No projects yet. Create one above, then assign folders to it.</p>
+<p class="oc-muted">No projects yet. Create one above, then assign folders to it.</p>
 {% endif %}
 {% endblock %}
