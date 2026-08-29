@@ -65,6 +65,7 @@ _CSRF_FIELDS = {"csrf_token", "token"}
 # enforcement test until it is added (the safe direction).
 _VERIFICATION_SINKS = (
     "_require_csrf",
+    "verify_csrf_token",
     "verify_claim",
     "_verify_annotation_claim",
     "release_run",

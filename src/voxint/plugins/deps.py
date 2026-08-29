@@ -33,10 +33,14 @@ class PluginRouteDeps:
       rollback-on-exception), used verbatim as a FastAPI ``Depends`` target.
     * ``verify_csrf`` — the CSRF check a mutating route calls before acting.
     * ``render_settings_page`` — re-render the settings page (a plugin POST that
-      updates settings returns the same page the core handler would).
+      updates settings returns the same page the core handler would). Accepts
+      optional ``**overrides`` forwarded to the settings context builder, so a
+      plugin POST can pass section-specific errors or submitted values for
+      re-render after a validation failure (e.g.
+      ``render_settings_page(request, session, synthdetect_errors=[...])``).
     """
 
     templates: Jinja2Templates
     get_session: Callable[[Request], Iterator[Session]]
     verify_csrf: Callable[[Request], None]
-    render_settings_page: Callable[[Request, Session], Response]
+    render_settings_page: Callable[..., Response]
